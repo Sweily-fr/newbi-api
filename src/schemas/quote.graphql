@@ -1,0 +1,94 @@
+# Importe les types communs
+# Note: GraphQL n'a pas de directive d'importation native, 
+# mais la fusion des schémas gère cela pour nous
+
+type Quote {
+  id: ID!
+  prefix: String
+  number: String!
+  issueDate: String!
+  validUntil: String
+  client: Client!
+  companyInfo: Company!
+  items: [Item!]!
+  status: QuoteStatus!
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  customFields: [CustomField!]
+  totalHT: Float!
+  totalTTC: Float!
+  totalVAT: Float!
+  finalTotalHT: Float!
+  finalTotalTTC: Float!
+  discountAmount: Float
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+  convertedToInvoice: Invoice
+  linkedInvoices: [Invoice]
+}
+
+type QuotePagination {
+  quotes: [Quote!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+}
+
+input CreateQuoteInput {
+  prefix: String
+  number: String
+  issueDate: String
+  validUntil: String
+  client: ClientInput!
+  companyInfo: CompanyInput
+  items: [ItemInput!]!
+  status: QuoteStatus = PENDING
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  customFields: [CustomFieldInput!]
+}
+
+input UpdateQuoteInput {
+  prefix: String
+  number: String
+  issueDate: String
+  validUntil: String
+  client: ClientInput
+  companyInfo: CompanyInput
+  items: [ItemInput!]
+  status: QuoteStatus
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  customFields: [CustomFieldInput!]
+}
+
+extend type Query {
+  quote(id: ID!): Quote!
+  quotes(startDate: String, endDate: String, status: QuoteStatus, search: String, page: Int, limit: Int): QuotePagination!
+  quoteStats: QuoteStats!
+  nextQuoteNumber(prefix: String): String!
+}
+
+extend type Mutation {
+  createQuote(input: CreateQuoteInput!): Quote!
+  updateQuote(id: ID!, input: UpdateQuoteInput!): Quote!
+  deleteQuote(id: ID!): Boolean!
+  convertQuoteToInvoice(id: ID!, distribution: [Float], isDeposit: Boolean, skipValidation: Boolean): Invoice!
+  changeQuoteStatus(id: ID!, status: QuoteStatus!): Quote!
+  sendQuote(id: ID!, email: String!): Boolean!
+}

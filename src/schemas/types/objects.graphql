@@ -1,0 +1,73 @@
+type Address {
+  street: String!
+  city: String!
+  postalCode: String!
+  country: String!
+}
+
+type BankDetails {
+  iban: String!
+  bic: String!
+  bankName: String!
+}
+
+type Client {
+  id: ID!
+  name: String!
+  email: String!
+  address: Address!
+  type: ClientType!
+  # Champs spécifiques aux entreprises
+  siret: String
+  vatNumber: String
+  # Champs spécifiques aux particuliers
+  firstName: String
+  lastName: String
+}
+
+type Item {
+  description: String!
+  quantity: Float!
+  unitPrice: Float!
+  vatRate: Float!
+  unit: String!
+  discount: Float
+  discountType: DiscountType
+  details: String
+}
+
+type CustomField {
+  key: String!
+  value: String!
+}
+
+type Company {
+  name: String
+  email: String
+  phone: String
+  website: String
+  logo: String
+  siret: String
+  vatNumber: String
+  address: Address
+  bankDetails: BankDetails
+}
+
+# Statistiques pour les factures
+type InvoiceStats {
+  totalCount: Int!
+  draftCount: Int!
+  pendingCount: Int!
+  completedCount: Int!
+  totalAmount: Float!
+}
+
+# Statistiques pour les devis
+type QuoteStats {
+  totalCount: Int!
+  draftCount: Int!
+  pendingCount: Int!
+  canceledCount: Int!
+  completedCount: Int!
+  totalAmount: Float!
+}

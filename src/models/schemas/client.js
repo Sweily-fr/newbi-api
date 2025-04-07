@@ -1,0 +1,98 @@
+const mongoose = require('mongoose');
+const { EMAIL_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } = require('../../utils/validators');
+const addressSchema = require('./address');
+
+/**
+ * Types de client
+ */
+const CLIENT_TYPES = {
+  INDIVIDUAL: 'INDIVIDUAL',
+  COMPANY: 'COMPANY'
+};
+
+/**
+ * Schéma pour les informations du client
+ */
+const clientSchema = new mongoose.Schema({
+  // Type de client (particulier ou entreprise)
+  type: {
+    type: String,
+    enum: Object.values(CLIENT_TYPES),
+    default: CLIENT_TYPES.COMPANY,
+    required: true
+  },
+  // Champs spécifiques aux particuliers
+  firstName: {
+    type: String,
+    trim: true,
+    // Requis uniquement pour les particuliers
+    validate: {
+      validator: function(v) {
+        // Si c'est un particulier, le prénom est obligatoire
+        return this.type !== CLIENT_TYPES.INDIVIDUAL || (v && v.trim().length > 0);
+      },
+      message: 'Le prénom est requis pour un client particulier'
+    }
+  },
+  lastName: {
+    type: String,
+    trim: true,
+    // Requis uniquement pour les particuliers
+    validate: {
+      validator: function(v) {
+        // Si c'est un particulier, le nom est obligatoire
+        return this.type !== CLIENT_TYPES.INDIVIDUAL || (v && v.trim().length > 0);
+      },
+      message: 'Le nom est requis pour un client particulier'
+    }
+  },
+  // Nom (obligatoire pour les entreprises, généré pour les particuliers)
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+    match: [NAME_REGEX, 'Le nom du client est invalide']
+  },
+  email: {
+    type: String,
+    required: true,
+    trim: true,
+    lowercase: true,
+    match: [EMAIL_REGEX, 'Veuillez fournir une adresse email valide']
+  },
+  address: {
+    type: addressSchema,
+    required: true
+  },
+  // Champs spécifiques aux entreprises
+  siret: {
+    type: String,
+    trim: true,
+    match: [SIRET_REGEX, 'Veuillez fournir un numéro SIRET valide (14 chiffres)'],
+    // Requis uniquement pour les entreprises
+    validate: {
+      validator: function(v) {
+        // Si ce n'est pas une entreprise, pas besoin de SIRET
+        // Si c'est une entreprise, le SIRET est obligatoire
+        return this.type !== CLIENT_TYPES.COMPANY || (v && v.trim().length > 0);
+      },
+      message: 'Le numéro SIRET est requis pour une entreprise'
+    }
+  },
+  vatNumber: {
+    type: String,
+    trim: true,
+    match: [VAT_FR_REGEX, 'Veuillez fournir un numéro de TVA valide (format FR)'],
+    // Requis uniquement pour les entreprises
+    validate: {
+      validator: function(v) {
+        // Si ce n'est pas une entreprise, pas besoin de numéro de TVA
+        // Si c'est une entreprise, le numéro de TVA est obligatoire
+        return this.type !== CLIENT_TYPES.COMPANY || (v && v.trim().length > 0);
+      },
+      message: 'Le numéro de TVA est requis pour une entreprise'
+    }
+  }
+});
+
+module.exports = clientSchema;

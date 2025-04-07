@@ -1,0 +1,54 @@
+input AddressInput {
+  street: String!
+  city: String!
+  postalCode: String!
+  country: String!
+}
+
+input BankDetailsInput {
+  iban: String
+  bic: String
+  bankName: String
+}
+
+input ClientInput {
+  id: ID
+  name: String!
+  email: String!
+  address: AddressInput!
+  type: ClientType!
+  # Champs spécifiques aux entreprises
+  siret: String
+  vatNumber: String
+  # Champs spécifiques aux particuliers
+  firstName: String
+  lastName: String
+}
+
+input ItemInput {
+  description: String!
+  quantity: Float!
+  unitPrice: Float!
+  vatRate: Float!
+  unit: String!
+  discount: Float
+  discountType: DiscountType
+  details: String
+}
+
+input CustomFieldInput {
+  key: String!
+  value: String!
+}
+
+input CompanyInput {
+  name: String
+  email: String
+  phone: String
+  website: String
+  logo: String
+  siret: String
+  vatNumber: String
+  address: AddressInput
+  bankDetails: BankDetailsInput
+}

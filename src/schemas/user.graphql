@@ -1,0 +1,111 @@
+# Importe les types communs
+# Note: GraphQL n'a pas de directive d'importation native, 
+# mais la fusion des schémas gère cela pour nous
+
+type Subscription {
+  licence: Boolean!
+  trial: Boolean!
+  stripeCustomerId: String
+}
+
+type User {
+  id: ID!
+  email: String!
+  isEmailVerified: Boolean!
+  isDisabled: Boolean!
+  profile: UserProfile
+  company: Company
+  subscription: Subscription
+  createdAt: String!
+  updatedAt: String!
+}
+
+type UserProfile {
+  firstName: String
+  lastName: String
+  phone: String
+  profilePicture: String
+}
+
+input RegisterInput {
+  email: String!
+  password: String!
+  profile: UserProfileInput
+  company: CompanyInput
+}
+
+input UserProfileInput {
+  firstName: String
+  lastName: String
+  phone: String
+  profilePicture: String
+}
+
+input LoginInput {
+  email: String!
+  password: String!
+  rememberMe: Boolean
+}
+
+input ResetPasswordInput {
+  email: String!
+}
+
+input UpdatePasswordInput {
+  token: String!
+  newPassword: String!
+}
+
+type AuthPayload {
+  token: String!
+  user: User!
+}
+
+type RegisterResponse {
+  user: User!
+  message: String!
+}
+
+type ResetPasswordResponse {
+  success: Boolean!
+  message: String!
+}
+
+type EmailVerificationResponse {
+  success: Boolean!
+  message: String!
+}
+
+type DisableAccountResponse {
+  success: Boolean!
+  message: String!
+}
+
+type ReactivateAccountResponse {
+  success: Boolean!
+  message: String!
+  user: User
+}
+
+extend type Query {
+  me: User
+}
+
+extend type Mutation {
+  register(input: RegisterInput!): RegisterResponse!
+  login(input: LoginInput!): AuthPayload!
+  requestPasswordReset(input: ResetPasswordInput!): Boolean!
+  resetPassword(input: UpdatePasswordInput!): ResetPasswordResponse!
+  updateProfile(input: UserProfileInput!): User!
+  updateCompany(input: CompanyInput!): User!
+  uploadCompanyLogo(base64Image: String!): User!
+  deleteCompanyLogo: User!
+  uploadProfilePicture(base64Image: String!): User!
+  deleteProfilePicture: User!
+  updatePassword(currentPassword: String!, newPassword: String!): ResetPasswordResponse!
+  verifyEmail(token: String!): EmailVerificationResponse!
+  resendVerificationEmail(email: String!): Boolean!
+  disableAccount(password: String!): DisableAccountResponse!
+  reactivateAccount(email: String!, password: String!): ReactivateAccountResponse!
+  setStripeCustomerId(stripeCustomerId: String!): User!
+}

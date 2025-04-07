@@ -1,0 +1,10 @@
+# Types de base pour Query et Mutation
+# Ces types doivent être définis avant de pouvoir être étendus
+
+type Query {
+  _empty: String
+}
+
+type Mutation {
+  _empty: String
+}

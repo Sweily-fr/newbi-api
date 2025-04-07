@@ -1,0 +1,15 @@
+extend type Mutation {
+  sendContactMessage(input: ContactInput!): ContactResponse!
+}
+
+input ContactInput {
+  name: String!
+  email: String!
+  subject: String!
+  message: String!
+}
+
+type ContactResponse {
+  success: Boolean!
+  message: String
+}

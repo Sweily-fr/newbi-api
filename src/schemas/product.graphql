@@ -1,0 +1,50 @@
+type Product {
+  id: ID!
+  name: String!
+  description: String
+  unitPrice: Float!
+  vatRate: Float!
+  unit: String!
+  category: String
+  reference: String
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ProductPagination {
+  products: [Product!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+}
+
+input CreateProductInput {
+  name: String!
+  description: String
+  unitPrice: Float!
+  vatRate: Float!
+  unit: String!
+  category: String
+  reference: String
+}
+
+input UpdateProductInput {
+  name: String
+  description: String
+  unitPrice: Float
+  vatRate: Float
+  unit: String
+  category: String
+  reference: String
+}
+
+extend type Query {
+  product(id: ID!): Product!
+  products(search: String, category: String, page: Int, limit: Int): ProductPagination!
+}
+
+extend type Mutation {
+  createProduct(input: CreateProductInput!): Product!
+  updateProduct(id: ID!, input: UpdateProductInput!): Product!
+  deleteProduct(id: ID!): Boolean!
+}

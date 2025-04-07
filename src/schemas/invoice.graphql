@@ -1,0 +1,101 @@
+# Importe les types communs
+# Note: GraphQL n'a pas de directive d'importation native, 
+# mais la fusion des schémas gère cela pour nous
+
+type Invoice {
+  id: ID!
+  number: String!
+  prefix: String
+  purchaseOrderNumber: String
+  isDeposit: Boolean!
+  client: Client!
+  companyInfo: Company!
+  items: [Item!]!
+  status: InvoiceStatus!
+  issueDate: String!
+  executionDate: String
+  dueDate: String!
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  totalHT: Float!
+  totalTTC: Float!
+  totalVAT: Float!
+  finalTotalHT: Float!
+  finalTotalTTC: Float!
+  customFields: [CustomField!]
+  discountAmount: Float
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type InvoicePagination {
+  invoices: [Invoice!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+}
+
+input CreateInvoiceInput {
+  isDeposit: Boolean
+  client: ClientInput!
+  companyInfo: CompanyInput
+  items: [ItemInput!]!
+  status: InvoiceStatus = DRAFT
+  issueDate: String!
+  executionDate: String
+  dueDate: String!
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  customFields: [CustomFieldInput!]
+  number: String
+  prefix: String
+  purchaseOrderNumber: String
+}
+
+input UpdateInvoiceInput {
+  isDeposit: Boolean
+  client: ClientInput
+  companyInfo: CompanyInput
+  items: [ItemInput!]
+  status: InvoiceStatus
+  issueDate: String
+  executionDate: String
+  dueDate: String
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  customFields: [CustomFieldInput!]
+  number: String
+  prefix: String
+  purchaseOrderNumber: String
+}
+
+extend type Query {
+  invoice(id: ID!): Invoice!
+  invoices(startDate: String, endDate: String, status: InvoiceStatus, search: String, page: Int, limit: Int): InvoicePagination!
+  invoiceStats: InvoiceStats!
+  nextInvoiceNumber(prefix: String): String!
+}
+
+extend type Mutation {
+  createInvoice(input: CreateInvoiceInput!): Invoice!
+  updateInvoice(id: ID!, input: UpdateInvoiceInput!): Invoice!
+  deleteInvoice(id: ID!): Boolean!
+  sendInvoice(id: ID!, email: String!): Boolean!
+  markInvoiceAsPaid(id: ID!, paymentDate: String!): Invoice!
+  changeInvoiceStatus(id: ID!, status: InvoiceStatus!): Invoice!
+}

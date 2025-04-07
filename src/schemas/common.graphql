@@ -1,0 +1,73 @@
+type Address {
+  street: String!
+  city: String!
+  postalCode: String!
+  country: String!
+}
+
+input AddressInput {
+  street: String!
+  city: String!
+  postalCode: String!
+  country: String!
+}
+
+type Client {
+  id: ID!
+  name: String!
+  email: String!
+  address: Address!
+  type: ClientType!
+  # Champs spécifiques aux entreprises
+  siret: String
+  vatNumber: String
+  # Champs spécifiques aux particuliers
+  firstName: String
+  lastName: String
+}
+
+input ClientInput {
+  id: ID
+  name: String!
+  email: String!
+  address: AddressInput!
+  type: ClientType!
+  # Champs spécifiques aux entreprises
+  siret: String
+  vatNumber: String
+  # Champs spécifiques aux particuliers
+  firstName: String
+  lastName: String
+}
+
+enum ClientType {
+  INDIVIDUAL
+  COMPANY
+}
+
+enum DiscountType {
+  FIXED
+  PERCENTAGE
+}
+
+type Item {
+  description: String!
+  quantity: Float!
+  unitPrice: Float!
+  vatRate: Float!
+  unit: String!
+  discount: Float
+  discountType: DiscountType
+  details: String
+}
+
+input ItemInput {
+  description: String!
+  quantity: Float!
+  unitPrice: Float!
+  vatRate: Float!
+  unit: String!
+  discount: Float
+  discountType: DiscountType
+  details: String
+}

@@ -1,0 +1,30 @@
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  COMPLETED
+}
+
+enum QuoteStatus {
+  DRAFT
+  PENDING
+  COMPLETED
+  CANCELED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CHECK
+  CASH
+  CARD
+  OTHER
+}
+
+enum ClientType {
+  INDIVIDUAL
+  COMPANY
+}

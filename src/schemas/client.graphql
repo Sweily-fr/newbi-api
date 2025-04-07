@@ -1,0 +1,22 @@
+# Importe les types communs
+# Note: GraphQL n'a pas de directive d'importation native, 
+# mais la fusion des schémas gère cela pour nous
+
+extend type Query {
+  # Get a single client by ID
+  client(id: ID!): Client!
+  
+  # Get all clients for the current user's company
+  clients: [Client!]!
+}
+
+extend type Mutation {
+  # Create a new client
+  createClient(input: ClientInput!): Client!
+  
+  # Update an existing client
+  updateClient(id: ID!, input: ClientInput!): Client!
+  
+  # Delete a client
+  deleteClient(id: ID!): Boolean!
+}
