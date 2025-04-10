@@ -1,0 +1,24 @@
+# Schéma pour la recherche d'entreprises françaises
+
+extend type Query {
+  # Recherche une entreprise française par son SIRET
+  searchCompanyBySiret(siret: String!): CompanySearchResult
+  
+  # Recherche des entreprises françaises par nom
+  searchCompaniesByName(name: String!): [CompanyNameResult!]!
+}
+
+# Résultat de recherche d'entreprise par SIRET
+type CompanySearchResult {
+  name: String!
+  siret: String!
+  vatNumber: String
+  address: Address!
+}
+
+# Résultat de recherche d'entreprises par nom
+type CompanyNameResult {
+  name: String!
+  siret: String!
+  siren: String!
+}
