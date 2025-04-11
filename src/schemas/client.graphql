@@ -6,8 +6,16 @@ extend type Query {
   # Get a single client by ID
   client(id: ID!): Client!
   
-  # Get all clients for the current user's company
-  clients: [Client!]!
+  # Get all clients for the current user's company with pagination
+  clients(page: Int, limit: Int, search: String): ClientsResult!
+}
+
+# Type pour les résultats paginés des clients
+type ClientsResult {
+  items: [Client!]!
+  totalItems: Int!
+  currentPage: Int!
+  totalPages: Int!
 }
 
 extend type Mutation {

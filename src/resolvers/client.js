@@ -16,7 +16,7 @@ const clientResolvers = {
       return client;
     }),
 
-    clients: isAuthenticated(async (_, { search }, { user }) => {
+    clients: isAuthenticated(async (_, { page = 1, limit = 10, search }, { user }) => {
       const query = { createdBy: user.id };
       
       if (search) {
@@ -26,7 +26,28 @@ const clientResolvers = {
         ];
       }
       
-      return await Client.find(query).sort({ name: 1 });
+      // Convertir en nombres pour éviter les problèmes de type
+      const currentPage = parseInt(page, 10);
+      const itemsPerPage = parseInt(limit, 10);
+      
+      // Calculer le nombre total de clients correspondant à la requête
+      const totalItems = await Client.countDocuments(query);
+      
+      // Calculer le nombre total de pages
+      const totalPages = Math.ceil(totalItems / itemsPerPage);
+      
+      // Récupérer les clients pour la page demandée
+      const items = await Client.find(query)
+        .sort({ name: 1 })
+        .skip((currentPage - 1) * itemsPerPage)
+        .limit(itemsPerPage);
+      
+      return {
+        items,
+        totalItems,
+        currentPage,
+        totalPages
+      };
     })
   },
 
