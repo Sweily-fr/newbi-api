@@ -139,7 +139,7 @@ const clientResolvers = {
       
       // Vérifier si le client est utilisé dans des factures
       const invoiceCount = await Invoice.countDocuments({ 
-        'client.email': client.email,
+        'client.id': id, // Utiliser l'ID du client plutôt que l'email
         createdBy: user.id
       });
       
@@ -149,7 +149,7 @@ const clientResolvers = {
       
       // Vérifier si le client est utilisé dans des devis
       const quoteCount = await Quote.countDocuments({ 
-        'client.email': client.email,
+        'client.id': id, // Utiliser l'ID du client plutôt que l'email
         createdBy: user.id
       });
       
