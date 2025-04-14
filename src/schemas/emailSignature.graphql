@@ -1,0 +1,90 @@
+type EmailSignature {
+  id: ID!
+  name: String!
+  fullName: String!
+  jobTitle: String!
+  email: String!
+  phone: String
+  mobilePhone: String
+  website: String
+  address: String
+  companyName: String
+  socialLinks: SocialLinks
+  template: String!
+  primaryColor: String!
+  secondaryColor: String!
+  logoUrl: String
+  isDefault: Boolean!
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type SocialLinks {
+  linkedin: String
+  twitter: String
+  facebook: String
+  instagram: String
+}
+
+input SocialLinksInput {
+  linkedin: String
+  twitter: String
+  facebook: String
+  instagram: String
+}
+
+type EmailSignaturePagination {
+  signatures: [EmailSignature!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+}
+
+input CreateEmailSignatureInput {
+  name: String!
+  fullName: String!
+  jobTitle: String!
+  email: String!
+  phone: String
+  mobilePhone: String
+  website: String
+  address: String
+  companyName: String
+  socialLinks: SocialLinksInput
+  template: String!
+  primaryColor: String
+  secondaryColor: String
+  logoUrl: String
+  isDefault: Boolean
+}
+
+input UpdateEmailSignatureInput {
+  name: String
+  fullName: String
+  jobTitle: String
+  email: String
+  phone: String
+  mobilePhone: String
+  website: String
+  address: String
+  companyName: String
+  socialLinks: SocialLinksInput
+  template: String
+  primaryColor: String
+  secondaryColor: String
+  logoUrl: String
+  isDefault: Boolean
+}
+
+extend type Query {
+  emailSignature(id: ID!): EmailSignature!
+  emailSignatures(search: String, page: Int, limit: Int): EmailSignaturePagination!
+  defaultEmailSignature: EmailSignature
+}
+
+extend type Mutation {
+  createEmailSignature(input: CreateEmailSignatureInput!): EmailSignature!
+  updateEmailSignature(id: ID!, input: UpdateEmailSignatureInput!): EmailSignature!
+  deleteEmailSignature(id: ID!): Boolean!
+  setDefaultEmailSignature(id: ID!): EmailSignature!
+}

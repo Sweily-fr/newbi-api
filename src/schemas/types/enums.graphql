@@ -28,3 +28,10 @@ enum ClientType {
   INDIVIDUAL
   COMPANY
 }
+
+enum EmailSignatureTemplate {
+  SIMPLE
+  PROFESSIONAL
+  MODERN
+  CREATIVE
+}
