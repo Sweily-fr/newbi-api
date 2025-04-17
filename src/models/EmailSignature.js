@@ -69,6 +69,36 @@ const emailSignatureSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  showLogo: {
+    type: Boolean,
+    default: true
+  },
+  profilePhotoUrl: {
+    type: String,
+    trim: true
+  },
+  profilePhotoSize: {
+    type: Number,
+    default: 80 // Taille par défaut en pixels
+  },
+  socialLinksDisplayMode: {
+    type: String,
+    enum: ['icons', 'text'],
+    default: 'text'
+  },
+  socialLinksIconStyle: {
+    type: String,
+    enum: ['plain', 'rounded', 'circle'],
+    default: 'plain'
+  },
+  socialLinksIconBgColor: {
+    type: String,
+    default: ''
+  },
+  socialLinksIconColor: {
+    type: String,
+    default: ''
+  },
   isDefault: {
     type: Boolean,
     default: false

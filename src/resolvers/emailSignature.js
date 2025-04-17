@@ -4,6 +4,7 @@ const {
   createNotFoundError, 
   createAlreadyExistsError
 } = require('../utils/errors');
+const { saveEmailSignaturePhoto, deleteFile } = require('../utils/fileUpload');
 
 const emailSignatureResolvers = {
   Query: {
@@ -74,8 +75,20 @@ const emailSignatureResolvers = {
       const signatureCount = await EmailSignature.countDocuments({ createdBy: user.id });
       const isDefault = input.isDefault !== undefined ? input.isDefault : (signatureCount === 0);
       
+      // Traiter l'upload de la photo de profil si présente
+      let profilePhotoUrl = input.profilePhotoUrl;
+      if (input.profilePhotoBase64) {
+        try {
+          profilePhotoUrl = saveEmailSignaturePhoto(input.profilePhotoBase64);
+        } catch (error) {
+          console.error('Erreur lors de l\'upload de la photo de profil:', error);
+          // Continuer sans la photo de profil en cas d'erreur
+        }
+      }
+      
       const signature = new EmailSignature({
         ...input,
+        profilePhotoUrl,
         isDefault,
         createdBy: user.id
       });
@@ -104,6 +117,29 @@ const emailSignatureResolvers = {
         }
       }
       
+      // Traiter l'upload de la photo de profil si présente
+      if (input.profilePhotoBase64) {
+        try {
+          // Supprimer l'ancienne photo si elle existe
+          if (signature.profilePhotoUrl) {
+            deleteFile(signature.profilePhotoUrl);
+          }
+          // Sauvegarder la nouvelle photo
+          input.profilePhotoUrl = saveEmailSignaturePhoto(input.profilePhotoBase64);
+        } catch (error) {
+          console.error('Erreur lors de l\'upload de la photo de profil:', error);
+          // Continuer sans la photo de profil en cas d'erreur
+        }
+      } else if (input.profilePhotoToDelete && signature.profilePhotoUrl) {
+        // Supprimer la photo si demandé
+        try {
+          deleteFile(signature.profilePhotoUrl);
+          input.profilePhotoUrl = null;
+        } catch (error) {
+          console.error('Erreur lors de la suppression de la photo de profil:', error);
+        }
+      }
+      
       // Mettre à jour la signature
       Object.keys(input).forEach(key => {
         if (key === 'socialLinks' && input[key]) {
@@ -111,7 +147,8 @@ const emailSignatureResolvers = {
           Object.keys(input[key]).forEach(socialKey => {
             signature.socialLinks[socialKey] = input[key][socialKey];
           });
-        } else {
+        } else if (key !== 'profilePhotoBase64' && key !== 'profilePhotoToDelete') {
+          // Ne pas copier ces propriétés dans le modèle
           signature[key] = input[key];
         }
       });
@@ -138,6 +175,16 @@ const emailSignatureResolvers = {
         if (otherSignature) {
           otherSignature.isDefault = true;
           await otherSignature.save();
+        }
+      }
+      
+      // Supprimer la photo de profil si elle existe
+      if (signature.profilePhotoUrl) {
+        try {
+          deleteFile(signature.profilePhotoUrl);
+        } catch (error) {
+          console.error('Erreur lors de la suppression de la photo de profil:', error);
+          // Continuer même en cas d'erreur
         }
       }
       
