@@ -99,6 +99,42 @@ const emailSignatureSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  socialLinksPosition: {
+    type: String,
+    enum: ['bottom', 'right'],
+    default: 'bottom'
+  },
+  layout: {
+    type: String,
+    enum: ['horizontal', 'vertical'],
+    default: 'vertical'
+  },
+  horizontalSpacing: {
+    type: Number,
+    default: 20
+  },
+  verticalSpacing: {
+    type: Number,
+    default: 10
+  },
+  verticalAlignment: {
+    type: String,
+    enum: ['left', 'center', 'right'],
+    default: 'left'
+  },
+  imagesLayout: {
+    type: String,
+    enum: ['horizontal', 'vertical'],
+    default: 'vertical'
+  },
+  fontFamily: {
+    type: String,
+    default: 'Arial, sans-serif'
+  },
+  fontSize: {
+    type: Number,
+    default: 14
+  },
   isDefault: {
     type: Boolean,
     default: false

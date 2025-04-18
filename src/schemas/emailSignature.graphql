@@ -21,6 +21,14 @@ type EmailSignature {
   socialLinksIconStyle: String
   socialLinksIconBgColor: String
   socialLinksIconColor: String
+  socialLinksPosition: String
+  layout: String
+  horizontalSpacing: Int
+  verticalSpacing: Int
+  verticalAlignment: String
+  imagesLayout: String
+  fontFamily: String
+  fontSize: Int
   isDefault: Boolean!
   createdBy: User!
   createdAt: String!
@@ -71,6 +79,14 @@ input CreateEmailSignatureInput {
   socialLinksIconStyle: String
   socialLinksIconBgColor: String
   socialLinksIconColor: String
+  socialLinksPosition: String
+  layout: String
+  horizontalSpacing: Int
+  verticalSpacing: Int
+  verticalAlignment: String
+  imagesLayout: String
+  fontFamily: String
+  fontSize: Int
   isDefault: Boolean
 }
 
@@ -98,6 +114,14 @@ input UpdateEmailSignatureInput {
   socialLinksIconStyle: String
   socialLinksIconBgColor: String
   socialLinksIconColor: String
+  socialLinksPosition: String
+  layout: String
+  horizontalSpacing: Int
+  verticalSpacing: Int
+  verticalAlignment: String
+  imagesLayout: String
+  fontFamily: String
+  fontSize: Int
   isDefault: Boolean
 }
 
