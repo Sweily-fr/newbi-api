@@ -20,7 +20,8 @@ const PHONE_REGEX = /^\+\d{1,3}\s?\d{9,}$/;
 const PHONE_FR_REGEX = /^(?:(?:\+|00)33[ .-]?|0[ .-]?)([1-9])[ .-]?(\d{2})[ .-]?(\d{2})[ .-]?(\d{2})[ .-]?(\d{2})$/;
 
 // Regex pour la validation des noms et prénoms (lettres, espaces, tirets, apostrophes)
-const NAME_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s\-']{2,50}$/;
+// Exclut explicitement les caractères < et > pour prévenir les risques d'injection XSS
+const NAME_REGEX = /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ\s\-'.(),&]{2,50}$/;
 
 // Regex pour la validation de SIRET (14 chiffres)
 const SIRET_REGEX = /^\d{14}$/;

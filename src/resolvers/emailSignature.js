@@ -2,9 +2,17 @@ const EmailSignature = require('../models/EmailSignature');
 const { isAuthenticated } = require('../middlewares/auth');
 const { 
   createNotFoundError, 
-  createAlreadyExistsError
+  createAlreadyExistsError,
+  createValidationError
 } = require('../utils/errors');
 const { saveEmailSignaturePhoto, deleteFile } = require('../utils/fileUpload');
+const { 
+  NAME_REGEX, 
+  EMAIL_REGEX, 
+  PHONE_REGEX, 
+  PHONE_FR_REGEX, 
+  URL_REGEX 
+} = require('../utils/validators');
 
 const emailSignatureResolvers = {
   Query: {
@@ -61,6 +69,61 @@ const emailSignatureResolvers = {
 
   Mutation: {
     createEmailSignature: isAuthenticated(async (_, { input }, { user }) => {
+      // Validation explicite des champs sensibles
+      const validationErrors = {};
+      
+      if (input.name && !NAME_REGEX.test(input.name)) {
+        validationErrors.name = 'Le nom contient des caractères non autorisés';
+      }
+      
+      if (input.fullName && !NAME_REGEX.test(input.fullName)) {
+        validationErrors.fullName = 'Le nom complet contient des caractères non autorisés';
+      }
+      
+      if (input.jobTitle && !NAME_REGEX.test(input.jobTitle)) {
+        validationErrors.jobTitle = 'Le titre du poste contient des caractères non autorisés';
+      }
+      
+      if (input.email && !EMAIL_REGEX.test(input.email)) {
+        validationErrors.email = 'Format d\'email invalide';
+      }
+      
+      if (input.phone && input.phone.trim() !== '' && !PHONE_FR_REGEX.test(input.phone)) {
+        validationErrors.phone = 'Format de numéro de téléphone invalide';
+      }
+      
+      if (input.mobilePhone && input.mobilePhone.trim() !== '' && !PHONE_FR_REGEX.test(input.mobilePhone)) {
+        validationErrors.mobilePhone = 'Format de numéro de mobile invalide';
+      }
+      
+      if (input.website && input.website.trim() !== '' && !URL_REGEX.test(input.website)) {
+        validationErrors.website = 'Format d\'URL invalide';
+      }
+      
+      // Vérifier les liens sociaux si présents
+      if (input.socialLinks) {
+        if (input.socialLinks.linkedin && !URL_REGEX.test(input.socialLinks.linkedin)) {
+          validationErrors['socialLinks.linkedin'] = 'Format d\'URL LinkedIn invalide';
+        }
+        
+        if (input.socialLinks.twitter && !URL_REGEX.test(input.socialLinks.twitter)) {
+          validationErrors['socialLinks.twitter'] = 'Format d\'URL Twitter invalide';
+        }
+        
+        if (input.socialLinks.facebook && !URL_REGEX.test(input.socialLinks.facebook)) {
+          validationErrors['socialLinks.facebook'] = 'Format d\'URL Facebook invalide';
+        }
+        
+        if (input.socialLinks.instagram && !URL_REGEX.test(input.socialLinks.instagram)) {
+          validationErrors['socialLinks.instagram'] = 'Format d\'URL Instagram invalide';
+        }
+      }
+      
+      // Si des erreurs de validation sont détectées, lancer une exception
+      if (Object.keys(validationErrors).length > 0) {
+        throw createValidationError('Certains champs contiennent des erreurs de validation', validationErrors);
+      }
+      
       // Vérifier si une signature avec ce nom existe déjà pour cet utilisateur
       const existingSignature = await EmailSignature.findOne({ 
         name: input.name,
@@ -102,6 +165,61 @@ const emailSignatureResolvers = {
       
       if (!signature) {
         throw createNotFoundError('Signature email');
+      }
+      
+      // Validation explicite des champs sensibles
+      const validationErrors = {};
+      
+      if (input.name && !NAME_REGEX.test(input.name)) {
+        validationErrors.name = 'Le nom contient des caractères non autorisés';
+      }
+      
+      if (input.fullName && !NAME_REGEX.test(input.fullName)) {
+        validationErrors.fullName = 'Le nom complet contient des caractères non autorisés';
+      }
+      
+      if (input.jobTitle && !NAME_REGEX.test(input.jobTitle)) {
+        validationErrors.jobTitle = 'Le titre du poste contient des caractères non autorisés';
+      }
+      
+      if (input.email && !EMAIL_REGEX.test(input.email)) {
+        validationErrors.email = 'Format d\'email invalide';
+      }
+      
+      if (input.phone && input.phone.trim() !== '' && !PHONE_FR_REGEX.test(input.phone)) {
+        validationErrors.phone = 'Format de numéro de téléphone invalide';
+      }
+      
+      if (input.mobilePhone && input.mobilePhone.trim() !== '' && !PHONE_FR_REGEX.test(input.mobilePhone)) {
+        validationErrors.mobilePhone = 'Format de numéro de mobile invalide';
+      }
+      
+      if (input.website && input.website.trim() !== '' && !URL_REGEX.test(input.website)) {
+        validationErrors.website = 'Format d\'URL invalide';
+      }
+      
+      // Vérifier les liens sociaux si présents
+      if (input.socialLinks) {
+        if (input.socialLinks.linkedin && !URL_REGEX.test(input.socialLinks.linkedin)) {
+          validationErrors['socialLinks.linkedin'] = 'Format d\'URL LinkedIn invalide';
+        }
+        
+        if (input.socialLinks.twitter && !URL_REGEX.test(input.socialLinks.twitter)) {
+          validationErrors['socialLinks.twitter'] = 'Format d\'URL Twitter invalide';
+        }
+        
+        if (input.socialLinks.facebook && !URL_REGEX.test(input.socialLinks.facebook)) {
+          validationErrors['socialLinks.facebook'] = 'Format d\'URL Facebook invalide';
+        }
+        
+        if (input.socialLinks.instagram && !URL_REGEX.test(input.socialLinks.instagram)) {
+          validationErrors['socialLinks.instagram'] = 'Format d\'URL Instagram invalide';
+        }
+      }
+      
+      // Si des erreurs de validation sont détectées, lancer une exception
+      if (Object.keys(validationErrors).length > 0) {
+        throw createValidationError('Certains champs contiennent des erreurs de validation', validationErrors);
       }
       
       // Si le nom est modifié, vérifier qu'il n'existe pas déjà

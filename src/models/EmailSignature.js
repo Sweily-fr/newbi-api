@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
-const { NAME_REGEX } = require('../utils/validators');
+const { 
+  NAME_REGEX, 
+  EMAIL_REGEX, 
+  PHONE_REGEX, 
+  PHONE_FR_REGEX, 
+  URL_REGEX, 
+  STREET_REGEX
+} = require('../utils/validators');
 
 /**
  * Schéma principal de la signature email
@@ -24,33 +31,55 @@ const emailSignatureSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
-    trim: true
+    trim: true,
+    match: [EMAIL_REGEX, 'Veuillez fournir une adresse email valide']
   },
   phone: {
     type: String,
-    trim: true
+    trim: true,
+    match: [PHONE_REGEX, 'Veuillez fournir un numéro de téléphone valide (format international)']
   },
   mobilePhone: {
     type: String,
-    trim: true
+    trim: true,
+    match: [PHONE_FR_REGEX, 'Veuillez fournir un numéro de mobile valide (format français)']
   },
   website: {
     type: String,
-    trim: true
+    trim: true,
+    match: [URL_REGEX, 'Veuillez fournir une URL valide']
   },
   address: {
     type: String,
-    trim: true
+    trim: true,
+    match: [STREET_REGEX, 'Veuillez fournir une adresse valide']
   },
   companyName: {
     type: String,
-    trim: true
+    trim: true,
+    match: [NAME_REGEX, 'Veuillez fournir un nom d\'entreprise valide']
   },
   socialLinks: {
-    linkedin: { type: String, trim: true },
-    twitter: { type: String, trim: true },
-    facebook: { type: String, trim: true },
-    instagram: { type: String, trim: true }
+    linkedin: { 
+      type: String, 
+      trim: true,
+      match: [URL_REGEX, 'Veuillez fournir une URL LinkedIn valide']
+    },
+    twitter: { 
+      type: String, 
+      trim: true,
+      match: [URL_REGEX, 'Veuillez fournir une URL Twitter valide']
+    },
+    facebook: { 
+      type: String, 
+      trim: true,
+      match: [URL_REGEX, 'Veuillez fournir une URL Facebook valide']
+    },
+    instagram: { 
+      type: String, 
+      trim: true,
+      match: [URL_REGEX, 'Veuillez fournir une URL Instagram valide']
+    }
   },
   template: {
     type: String,
@@ -59,11 +88,13 @@ const emailSignatureSchema = new mongoose.Schema({
   },
   primaryColor: {
     type: String,
-    default: '#0066cc'
+    default: '#5b50ff',
+    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
   },
   secondaryColor: {
     type: String,
-    default: '#f5f5f5'
+    default: '#f5f5f5',
+    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
   },
   logoUrl: {
     type: String,
@@ -79,7 +110,9 @@ const emailSignatureSchema = new mongoose.Schema({
   },
   profilePhotoSize: {
     type: Number,
-    default: 80 // Taille par défaut en pixels
+    default: 80, // Taille par défaut en pixels
+    min: [40, 'La taille minimale est de 40px'],
+    max: [120, 'La taille maximale est de 120px']
   },
   socialLinksDisplayMode: {
     type: String,
@@ -93,11 +126,13 @@ const emailSignatureSchema = new mongoose.Schema({
   },
   socialLinksIconBgColor: {
     type: String,
-    default: ''
+    default: '#5b50ff',
+    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
   },
   socialLinksIconColor: {
     type: String,
-    default: ''
+    default: '#FFFFFF',
+    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
   },
   socialLinksPosition: {
     type: String,
@@ -111,11 +146,15 @@ const emailSignatureSchema = new mongoose.Schema({
   },
   horizontalSpacing: {
     type: Number,
-    default: 20
+    default: 20,
+    min: [0, 'L\'espacement horizontal ne peut pas être négatif'],
+    max: [60, 'L\'espacement horizontal maximum est de 60px']
   },
   verticalSpacing: {
     type: Number,
-    default: 10
+    default: 10,
+    min: [0, 'L\'espacement vertical ne peut pas être négatif'],
+    max: [40, 'L\'espacement vertical maximum est de 40px']
   },
   verticalAlignment: {
     type: String,
@@ -129,15 +168,27 @@ const emailSignatureSchema = new mongoose.Schema({
   },
   fontFamily: {
     type: String,
-    default: 'Arial, sans-serif'
+    default: 'Arial, sans-serif',
+    enum: {
+      values: ['Arial, sans-serif', 'Helvetica, sans-serif', 'Georgia, serif', 'Times New Roman, serif', 'Courier New, monospace', 'Verdana, sans-serif'],
+      message: 'Police de caractères non supportée'
+    }
   },
   fontSize: {
     type: Number,
-    default: 14
+    default: 14,
+    min: [10, 'La taille de police minimale est de 10px'],
+    max: [20, 'La taille de police maximale est de 20px']
   },
   isDefault: {
     type: Boolean,
     default: false
+  },
+  socialLinksIconSize: {
+    type: Number,
+    default: 24,
+    min: [16, 'La taille d\'icône minimale est de 16px'],
+    max: [48, 'La taille d\'icône maximale est de 48px']
   },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
