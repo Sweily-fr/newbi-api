@@ -1,0 +1,25 @@
+const { gql } = require('apollo-server-express');
+
+module.exports = gql`
+  type Integration {
+    id: ID!
+    provider: String!
+    isConnected: Boolean!
+    lastUpdated: String!
+  }
+
+  type IntegrationResponse {
+    success: Boolean!
+    message: String
+    integration: Integration
+  }
+
+  extend type Query {
+    integrations: [Integration]!
+  }
+
+  extend type Mutation {
+    connectStripe(apiKey: String!): IntegrationResponse!
+    disconnectStripe: IntegrationResponse!
+  }
+`;
