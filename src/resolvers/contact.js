@@ -77,7 +77,7 @@ const contactResolvers = {
               <div class="container">
                 <div class="header">
                   <div style="text-align: center; margin-bottom: 20px;">
-                    <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Generation Business" style="width: 200px; height: auto;">
+                    <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
                   </div>
                   <h1 style="color: #3b82f6; margin: 0;">Nouveau message de contact</h1>
                 </div>
@@ -100,7 +100,7 @@ const contactResolvers = {
                   </div>
                 </div>
                 <div class="footer">
-                  <p>Ce message a été envoyé depuis le formulaire de contact du site Generation Business.</p>
+                  <p>Ce message a été envoyé depuis le formulaire de contact du site Newbi.</p>
                 </div>
               </div>
             </body>
@@ -115,7 +115,7 @@ const contactResolvers = {
         const confirmationMailOptions = {
           from: process.env.FROM_EMAIL,
           to: email,
-          subject: 'Confirmation de votre message - Generation Business',
+          subject: 'Confirmation de votre message - Newbi',
           html: `
             <!DOCTYPE html>
             <html>
@@ -170,7 +170,7 @@ const contactResolvers = {
               <div class="container">
                 <div class="header">
                   <div style="text-align: center; margin-bottom: 20px;">
-                    <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Generation Business" style="width: 200px; height: auto;">
+                    <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
                   </div>
                   <h1 style="color: #3b82f6; margin: 0;">Confirmation de réception</h1>
                 </div>
@@ -184,7 +184,7 @@ const contactResolvers = {
                   </div>
                 </div>
                 <div class="footer">
-                  <p>© ${new Date().getFullYear()} Generation Business. Tous droits réservés.</p>
+                  <p>© ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
                 </div>
               </div>
             </body>

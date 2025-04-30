@@ -15,7 +15,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
   const mailOptions = {
     from: process.env.FROM_EMAIL,
     to: email,
-    subject: 'Réinitialisation de votre mot de passe - Generation Business',
+    subject: 'Réinitialisation de votre mot de passe - Newbi',
     html: `
       <!DOCTYPE html>
       <html>
@@ -117,14 +117,14 @@ const sendPasswordResetEmail = async (email, resetToken) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Generation Business" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           
           <div class="content">
             <h1>Réinitialisation de votre mot de passe</h1>
             <p>Bonjour,</p>
-            <p>Nous avons reçu une demande de réinitialisation de mot de passe pour votre compte Generation Business.</p>
+            <p>Nous avons reçu une demande de réinitialisation de mot de passe pour votre compte Newbi.</p>
             <p>Cliquez sur le bouton ci-dessous pour définir un nouveau mot de passe :</p>
             
             <div style="text-align: center;">
@@ -142,7 +142,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
           </div>
           
           <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} Generation Business. Tous droits réservés.</p>
+            <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
             <p>Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
           </div>
         </div>
@@ -166,7 +166,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
   const mailOptions = {
     from: process.env.FROM_EMAIL,
     to: email,
-    subject: 'Vérification de votre adresse email - Generation Business',
+    subject: 'Vérification de votre adresse email - Newbi',
     html: `
       <!DOCTYPE html>
       <html>
@@ -268,22 +268,22 @@ const sendVerificationEmail = async (email, verificationToken) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Generation Business" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           <div class="content">
           <h1>Vérification de votre adresse email</h1>
             <p>Bonjour,</p>
-            <p>Merci de vous être inscrit sur Generation Business. Pour activer votre compte et accéder à toutes les fonctionnalités, veuillez vérifier votre adresse email en cliquant sur le bouton ci-dessous :</p>
+            <p>Merci de vous être inscrit sur Newbi. Pour activer votre compte et accéder à toutes les fonctionnalités, veuillez vérifier votre adresse email en cliquant sur le bouton ci-dessous :</p>
             <p style="text-align: center;">
               <a href="${verificationLink}" class="btn">Vérifier mon adresse email</a>
             </p>
-            <p>Si vous n'avez pas créé de compte sur Generation Business, vous pouvez ignorer cet email.</p>
+            <p>Si vous n'avez pas créé de compte sur Newbi, vous pouvez ignorer cet email.</p>
             <p>Si le bouton ne fonctionne pas, vous pouvez également copier et coller le lien suivant dans votre navigateur :</p>
             <p>${verificationLink}</p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} Generation Business. Tous droits réservés.</p>
+            <p>© ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
           </div>
         </div>
       </body>
@@ -306,7 +306,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
   const mailOptions = {
     from: process.env.FROM_EMAIL,
     to: email,
-    subject: 'Confirmation de réinitialisation de mot de passe - Generation Business',
+    subject: 'Confirmation de réinitialisation de mot de passe - Newbi',
     html: `
       <!DOCTYPE html>
       <html>
@@ -406,7 +406,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Generation Business" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           <div class="content">
@@ -417,11 +417,11 @@ const sendPasswordResetConfirmationEmail = async (email) => {
             <a href="${loginLink}" class="btn">Se connecter</a>
             <p>Si vous n'avez pas demandé cette réinitialisation de mot de passe, veuillez contacter immédiatement notre support à <a href="mailto:support@generation-business.com">support@generation-business.com</a>.</p>
             <div class="security-notice">
-              <strong>Note de sécurité :</strong> Pour protéger votre compte, ne partagez jamais votre mot de passe avec qui que ce soit, y compris le personnel de Generation Business. Nous ne vous demanderons jamais votre mot de passe par email ou par téléphone.
+              <strong>Note de sécurité :</strong> Pour protéger votre compte, ne partagez jamais votre mot de passe avec qui que ce soit, y compris le personnel de Newbi. Nous ne vous demanderons jamais votre mot de passe par email ou par téléphone.
             </div>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} Generation Business. Tous droits réservés.</p>
+            <p>© ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
             <p>Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
           </div>
         </div>
@@ -432,7 +432,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`Email de confirmation de réinitialisation de mot de passe envoyé à ${email}`);
+    // Email de confirmation de réinitialisation de mot de passe envoyé à ${email}
   } catch (error) {
     console.error('Erreur lors de l\'envoi de l\'email de confirmation de réinitialisation:', error);
     throw error;
