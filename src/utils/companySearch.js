@@ -3,25 +3,55 @@ const axios = require('axios');
 const { findCompanyBySiret, findCompaniesByName } = require('./mockCompanyData');
 
 // Mode de fonctionnement : 'mock' pour les données fictives, 'api' pour l'API réelle
-const MODE = process.env.NODE_ENV === 'production' ? 'api' : 'mock';
+// Peut être contrôlé via la variable d'environnement COMPANY_SEARCH_MODE
+const MODE = process.env.COMPANY_SEARCH_MODE || (process.env.NODE_ENV === 'production' ? 'api' : 'mock');
 
-// Configuration des URLs de l'API (utilisé uniquement en mode 'api')
-const API_URLS = {
-  primary: 'https://entreprise.data.gouv.fr/api/sirene/v3',
-  fallback: 'https://api.insee.fr/entreprises/sirene/V3'
-};
+// Configuration de l'URL de l'API (utilisé uniquement en mode 'api')
+const API_URL = 'https://recherche-entreprises.api.gouv.fr';
 
-// Configuration d'axios avec un timeout et retry
+// Configuration des retries
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 seconde entre les tentatives
+
+// Configuration d'axios avec un timeout
 const apiClient = axios.create({
-  timeout: 10000, // 10 secondes de timeout
+  timeout: 15000, // 15 secondes de timeout (augmenté)
   headers: {
     'Accept': 'application/json',
-    'User-Agent': 'Generation-Business-App/1.0'
+    'User-Agent': 'Newbi-Business-App/1.0'
   }
 });
 
 /**
- * Tente une requête API avec fallback en cas d'échec
+ * Fonction utilitaire pour attendre un délai spécifié
+ * @param {number} ms - Délai en millisecondes
+ * @returns {Promise<void>}
+ */
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Calcule le numéro de TVA intracommunautaire français à partir du SIREN
+ * @param {string} siren - Le numéro SIREN (9 chiffres)
+ * @returns {string} - Le numéro de TVA intracommunautaire complet
+ */
+const calculateFrenchVatNumber = (siren) => {
+  if (!siren || !/^\d{9}$/.test(siren)) {
+    return `FR${siren}`; // Retour par défaut si le SIREN n'est pas valide
+  }
+  
+  // Calcul de la clé de contrôle (2 chiffres)
+  // La formule est : (12 + 3 * (SIREN % 97)) % 97
+  const sirenNumber = parseInt(siren, 10);
+  const key = (12 + 3 * (sirenNumber % 97)) % 97;
+  
+  // Formater la clé sur 2 chiffres
+  const formattedKey = key.toString().padStart(2, '0');
+  
+  return `FR${formattedKey}${siren}`;
+};
+
+/**
+ * Effectue une requête à l'API data.gouv.fr avec mécanisme de retry
  * @param {string} endpoint - Le point de terminaison de l'API
  * @returns {Promise<Object>} - La réponse de l'API
  */
@@ -31,24 +61,63 @@ async function makeApiRequest(endpoint) {
     throw new Error('Mode mock activé - pas d\'appel API réel');
   }
   
-  try {
-    // Essayer d'abord l'URL principale
-    return await apiClient.get(`${API_URLS.primary}${endpoint}`);
-  } catch (primaryError) {
-    console.warn(`Échec de la requête à l'URL principale: ${primaryError.message}`);
-    console.warn('Tentative avec l\'URL de secours...');
-    
+  let lastError;
+  
+  // Tentatives avec retry
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      // Si l'URL principale échoue, essayer l'URL de secours
-      // Note: Dans un cas réel, l'URL de secours pourrait nécessiter une clé API
-      // que nous n'avons pas ici, donc cette partie est illustrative
-      return await apiClient.get(`${API_URLS.fallback}${endpoint}`);
-    } catch (fallbackError) {
-      // Si les deux échouent, propager l'erreur originale
-      console.error(`Échec de la requête à l'URL de secours: ${fallbackError.message}`);
-      throw primaryError;
+      console.log(`Tentative d'appel API ${attempt}/${MAX_RETRIES}: ${API_URL}${endpoint}`);
+      return await apiClient.get(`${API_URL}${endpoint}`);
+    } catch (error) {
+      lastError = error;
+      console.error(`Échec de la tentative ${attempt}/${MAX_RETRIES}: ${error.message}`);
+      
+      // Vérifier si l'erreur est temporaire et peut bénéficier d'un retry
+      const isRetryableError = error.code === 'ECONNRESET' || 
+                              error.code === 'ETIMEDOUT' || 
+                              error.code === 'ECONNABORTED' ||
+                              error.message.includes('timeout') ||
+                              (error.response && error.response.status >= 500);
+      
+      // Si c'est la dernière tentative ou si l'erreur n'est pas retryable, on arrête
+      if (attempt === MAX_RETRIES || !isRetryableError) {
+        break;
+      }
+      
+      // Attendre avant la prochaine tentative (délai exponentiel)
+      const delay = RETRY_DELAY * Math.pow(2, attempt - 1);
+      console.log(`Attente de ${delay}ms avant la prochaine tentative...`);
+      await sleep(delay);
     }
   }
+  
+  // Gestion des erreurs après épuisement des tentatives
+  if (lastError) {
+    console.error(`Toutes les tentatives ont échoué: ${lastError.message}`);
+    
+    // Amélioration des messages d'erreur
+    if (lastError.code === 'ECONNRESET') {
+      throw new Error('La connexion au service de recherche d\'entreprises a été interrompue. Veuillez réessayer plus tard.');
+    } else if (lastError.code === 'ECONNREFUSED' || lastError.code === 'ETIMEDOUT' || lastError.message.includes('timeout')) {
+      throw new Error('Impossible de se connecter au service de recherche d\'entreprises. Veuillez réessayer plus tard.');
+    } else if (lastError.response) {
+      // Erreur de réponse du serveur (4xx, 5xx)
+      if (lastError.response.status === 429) {
+        throw new Error('Trop de requêtes vers le service de recherche d\'entreprises. Veuillez réessayer dans quelques instants.');
+      } else if (lastError.response.status >= 500) {
+        throw new Error('Le service de recherche d\'entreprises est temporairement indisponible. Veuillez réessayer plus tard.');
+      } else if (lastError.response.status === 404) {
+        return { data: null }; // Entreprise non trouvée
+      } else {
+        throw new Error(`Erreur lors de la recherche: ${lastError.response.status} - ${lastError.response.statusText}`);
+      }
+    } else {
+      throw new Error(`Impossible de rechercher les entreprises: ${lastError.message}`);
+    }
+  }
+  
+  // Ne devrait jamais arriver ici
+  throw new Error('Erreur inattendue lors de la recherche d\'entreprises');
 }
 
 /**
@@ -78,33 +147,36 @@ const searchCompanyBySiret = async (siret) => {
     }
     
     // Mode API: utilisation de notre fonction avec gestion d'erreur améliorée
-    const response = await makeApiRequest(`/etablissements/${siret}`);
+    // Avec la nouvelle API, on utilise le paramètre q pour la recherche textuelle
+    const response = await makeApiRequest(`/search?q=${siret}&per_page=1`);
     
-    if (!response.data || !response.data.etablissement) {
+    if (!response.data || !response.data.results || response.data.results.length === 0) {
       return null;
     }
 
-    const etablissement = response.data.etablissement;
-    const uniteLegale = etablissement.unite_legale;
+    // Trouver l'entreprise avec le SIRET exact dans les résultats
+    const company = response.data.results.find(result => 
+      result.siege && result.siege.siret === siret
+    );
     
-    // Formatage des données de l'entreprise
+    if (!company) {
+      return null;
+    }
+    
+    // Formatage des données de l'entreprise selon la nouvelle structure de l'API
     return {
-      name: uniteLegale.denomination || 
-            `${uniteLegale.prenom_usuel || ''} ${uniteLegale.nom || ''}`.trim(),
-      siret: etablissement.siret,
-      vatNumber: uniteLegale.numero_tva_intra || `FR${etablissement.siren}`,
+      name: company.nom_complet || company.nom || '',
+      siret: company.siege?.siret || '',
+      vatNumber: company.numero_tva_intra || calculateFrenchVatNumber(company.siren),
       address: {
-        street: `${etablissement.numero_voie || ''} ${etablissement.type_voie || ''} ${etablissement.libelle_voie || ''}`.trim(),
-        city: etablissement.libelle_commune || '',
-        postalCode: etablissement.code_postal || '',
+        street: company.siege?.adresse || '',
+        city: company.siege?.commune || '',
+        postalCode: company.siege?.code_postal || '',
         country: 'France'
       }
     };
   } catch (error) {
     console.error('Erreur lors de la recherche de l\'entreprise par SIRET:', error.message);
-    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-      throw new Error('Impossible de se connecter au service de recherche d\'entreprises. Veuillez réessayer plus tard.');
-    }
     throw error;
   }
 };
@@ -136,23 +208,28 @@ const searchCompaniesByName = async (name) => {
     }
     
     // Mode API: utilisation de notre fonction avec gestion d'erreur améliorée
-    const response = await makeApiRequest(`/unites_legales?per_page=5&q=${encodeURIComponent(name)}`);
+    // Avec la nouvelle API, on utilise le paramètre q pour la recherche textuelle
+    const response = await makeApiRequest(`/search?q=${encodeURIComponent(name)}&per_page=5`);
     
-    if (!response.data || !response.data.unites_legales || response.data.unites_legales.length === 0) {
+    if (!response.data || !response.data.results || response.data.results.length === 0) {
       return [];
     }
 
-    // Formatage des résultats
-    return response.data.unites_legales.map(unite => ({
-      name: unite.denomination || `${unite.prenom_usuel || ''} ${unite.nom || ''}`.trim(),
-      siret: unite.etablissement_siege?.siret || '',
-      siren: unite.siren || ''
+    // Formatage des résultats selon la nouvelle structure de l'API avec adresse
+    return response.data.results.map(company => ({
+      name: company.nom_complet || company.nom || '',
+      siret: company.siege?.siret || '',
+      siren: company.siren || '',
+      vatNumber: company.numero_tva_intra || calculateFrenchVatNumber(company.siren),
+      address: {
+        street: company.siege?.adresse || '',
+        city: company.siege?.commune || '',
+        postalCode: company.siege?.code_postal || '',
+        country: 'France'
+      }
     }));
   } catch (error) {
     console.error('Erreur lors de la recherche des entreprises par nom:', error.message);
-    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-      throw new Error('Impossible de se connecter au service de recherche d\'entreprises. Veuillez réessayer plus tard.');
-    }
     throw error;
   }
 };

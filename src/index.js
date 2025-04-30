@@ -166,6 +166,11 @@ async function startServer() {
         code: error.extensions?.code || 'INTERNAL_ERROR',
         path: error.path
       };
+    },
+    // Résoudre l'avertissement concernant les requêtes persistantes
+    cache: 'bounded',
+    persistedQueries: {
+      ttl: 900 // 15 minutes en secondes
     }
   });
 
