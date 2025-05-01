@@ -30,11 +30,11 @@ const sendPasswordResetEmail = async (email, resetToken) => {
             color: #333;
             margin: 0;
             padding: 0;
-            background-color: #f9fafb;
+            background-color: #f0eeff;
           }
           .container {
             max-width: 600px;
-            margin: 0 auto;
+            margin: 40px auto;
             padding: 20px;
             background-color: #ffffff;
             border-radius: 8px;
@@ -78,7 +78,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
           }
           .btn {
             display: inline-block;
-            background-color: #3b82f6;
+            background-color: #5b50ff;
             color: white;
             font-weight: 600;
             text-decoration: none;
@@ -88,7 +88,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
             text-align: center;
           }
           .btn:hover {
-            background-color: #2563eb;
+            background-color: #4a41e0;
           }
           .link-fallback {
             word-break: break-all;
@@ -117,7 +117,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_Texte_Purple.png" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           
@@ -181,11 +181,11 @@ const sendVerificationEmail = async (email, verificationToken) => {
             color: #333;
             margin: 0;
             padding: 0;
-            background-color: #f9fafb;
+            background-color: #f0eeff;
           }
           .container {
             max-width: 600px;
-            margin: 0 auto;
+            margin: 40px auto;
             padding: 20px;
             background-color: #ffffff;
             border-radius: 8px;
@@ -229,7 +229,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
           }
           .btn {
             display: inline-block;
-            background-color: #3b82f6;
+            background-color: #5b50ff;
             color: white;
             font-weight: 600;
             text-decoration: none;
@@ -239,7 +239,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
             text-align: center;
           }
           .btn:hover {
-            background-color: #2563eb;
+            background-color: #4a41e0;
           }
           .link-fallback {
             word-break: break-all;
@@ -268,7 +268,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_Texte_Purple.png" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           <div class="content">
@@ -321,11 +321,11 @@ const sendPasswordResetConfirmationEmail = async (email) => {
             color: #333;
             margin: 0;
             padding: 0;
-            background-color: #f9fafb;
+            background-color: #f0eeff;
           }
           .container {
             max-width: 600px;
-            margin: 0 auto;
+            margin: 40px auto;
             padding: 20px;
             background-color: #ffffff;
             border-radius: 8px;
@@ -369,7 +369,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
           }
           .btn {
             display: inline-block;
-            background-color: #3b82f6;
+            background-color: #5b50ff;
             color: white;
             font-weight: 600;
             text-decoration: none;
@@ -379,7 +379,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
             text-align: center;
           }
           .btn:hover {
-            background-color: #2563eb;
+            background-color: #4a41e0;
           }
           .link-fallback {
             word-break: break-all;
@@ -394,7 +394,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
             border-top: 1px solid #e5e7eb;
           }
           .security-notice {
-            background-color: #f3f4f6;
+            background-color: #e6e1ff;
             padding: 15px;
             border-radius: 6px;
             margin-top: 30px;
@@ -406,7 +406,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_Texte_Purple.png" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           <div class="content">
@@ -415,7 +415,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
             <p>Nous vous confirmons que votre mot de passe a été réinitialisé avec succès.</p>
             <p>Vous pouvez maintenant vous connecter à votre compte avec votre nouveau mot de passe.</p>
             <a href="${loginLink}" class="btn">Se connecter</a>
-            <p>Si vous n'avez pas demandé cette réinitialisation de mot de passe, veuillez contacter immédiatement notre support à <a href="mailto:support@generation-business.com">support@generation-business.com</a>.</p>
+            <p>Si vous n'avez pas demandé cette réinitialisation de mot de passe, veuillez contacter immédiatement notre support à <a href="mailto:support@newbi.com">support@newbi.com</a>.</p>
             <div class="security-notice">
               <strong>Note de sécurité :</strong> Pour protéger votre compte, ne partagez jamais votre mot de passe avec qui que ce soit, y compris le personnel de Newbi. Nous ne vous demanderons jamais votre mot de passe par email ou par téléphone.
             </div>
