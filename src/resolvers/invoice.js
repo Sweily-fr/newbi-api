@@ -143,6 +143,7 @@ const invoiceResolvers = {
     createInvoice: isAuthenticated(async (_, { input }, { user }) => {
       // Utiliser le préfixe fourni ou 'F' par défaut
       const prefix = input.prefix || 'F';
+      console.log(`Création de facture pour l'utilisateur ${user.id} avec préfixe ${prefix}`);
       
       // Si le statut est PENDING, vérifier d'abord s'il existe des factures en DRAFT 
       // qui pourraient entrer en conflit avec le numéro qui sera généré
@@ -186,9 +187,16 @@ const invoiceResolvers = {
         // Si le statut n'est pas DRAFT, un numéro est requis
         if (input.number) {
           // Vérifier si le numéro fourni existe déjà
-          const existingInvoice = await Invoice.findOne({ number: input.number });
+          const existingInvoice = await Invoice.findOne({ 
+            number: input.number,
+            createdBy: user.id,
+            $expr: { $eq: [{ $year: '$issueDate' }, new Date().getFullYear()] }
+          });
+          console.log(`Vérification du numéro ${input.number}: ${existingInvoice ? 'Existe déjà' : 'N\'existe pas'}`);
+          
           if (existingInvoice) {
             // Si le numéro existe déjà, générer un nouveau numéro
+            console.log(`Le numéro ${input.number} existe déjà, génération d'un nouveau numéro`);
             number = await generateInvoiceNumber(prefix, { userId: user.id });
           } else {
             // Si le statut est PENDING, utiliser la nouvelle fonctionnalité
@@ -217,8 +225,16 @@ const invoiceResolvers = {
         }
       } else if (input.number) {
         // Si c'est un brouillon mais qu'un numéro est fourni, le valider
-        const existingInvoice = await Invoice.findOne({ number: input.number });
+        const existingInvoice = await Invoice.findOne({ 
+          number: input.number,
+          createdBy: user.id,
+          $expr: { $eq: [{ $year: '$issueDate' }, new Date().getFullYear()] }
+        });
+        
+        console.log(`Vérification du numéro de brouillon ${input.number}: ${existingInvoice ? 'Existe déjà' : 'N\'existe pas'}`);
+        
         if (existingInvoice) {
+          console.log(`Erreur: Le numéro ${input.number} existe déjà pour l'utilisateur ${user.id}`);
           throw new AppError(
             'Ce numéro de facture est déjà utilisé',
             ERROR_CODES.DUPLICATE_RESOURCE

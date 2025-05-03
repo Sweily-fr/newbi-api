@@ -14,7 +14,6 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
   if (options.manualNumber && options.isPending) {
     // Vérifier s'il existe déjà des factures en statut PENDING ou COMPLETED pour cet utilisateur
     const existingPendingOrCompleted = await model.findOne({
-      prefix,
       status: { $in: ['PENDING', 'COMPLETED'] },
       createdBy: options.userId // Filtrer par utilisateur
     });
@@ -23,7 +22,6 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     if (!existingPendingOrCompleted) {
       // Vérifier si le numéro manuel est déjà utilisé par cet utilisateur dans l'année courante
       const existingWithManualNumber = await model.findOne({
-        prefix,
         number: options.manualNumber,
         createdBy: options.userId, // Filtrer par utilisateur
         $expr: { $eq: [{ $year: '$issueDate' }, currentYear] } // Filtrer par année courante
@@ -37,8 +35,17 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     // La suite de la fonction s'en chargera
   }
 
-  // Pour les factures en statut PENDING, on ne considère que les factures PENDING ou COMPLETED pour la séquence
-  const query = { prefix };
+  // Construire la requête de base
+  const query = {};
+  
+  // Pour les devis, on ignore le préfixe pour assurer la continuité des numéros séquentiels
+  // Pour les factures, on conserve le filtre par préfixe pour assurer la séquence par mois
+  if (model.modelName !== 'Quote' || options.useExactPrefix) {
+    query.prefix = prefix;
+  } else if (model.modelName === 'Quote') {
+    // Pour les devis, on filtre uniquement sur le type de préfixe (D-) pour assurer la continuité
+    query.prefix = { $regex: '^D-' };
+  }
   
   // Ajouter le filtre par utilisateur si disponible
   if (options.userId) {
@@ -111,6 +118,9 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     // Ajouter le filtre par utilisateur si disponible
     if (options.userId) {
       existingQuery.createdBy = options.userId;
+      console.log(`Vérification du numéro ${generatedNumber} pour l'utilisateur ${options.userId} et l'année ${currentYear}`);
+    } else {
+      console.log(`Attention: Vérification du numéro ${generatedNumber} sans filtre utilisateur!`);
     }
     
     // Si on traite un document qui passe en PENDING, on ne vérifie que parmi les documents avec statut officiel
@@ -143,6 +153,7 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
   if (customPrefix) {
     prefix = customPrefix;
   } else {
+    // Toujours générer un préfixe basé sur le mois actuel pour les factures
     const now = new Date();
     const year = now.getFullYear();
     // Le mois est indexé à partir de 0, donc +1 pour obtenir le mois réel
@@ -151,7 +162,8 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
     prefix = `F-${year}${month}-`;
   }
   // Passer l'année courante aux options pour la génération du numéro séquentiel
-  return generateSequentialNumber(prefix, Invoice, { ...options, year: currentYear });
+  // Pour les factures, on utilise le préfixe exact (par mois)
+  return generateSequentialNumber(prefix, Invoice, { ...options, year: currentYear, useExactPrefix: true });
 };
 
 const generateQuoteNumber = async (customPrefix, options = {}) => {
@@ -171,6 +183,7 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
     prefix = `D-${year}${month}-`;
   }
   // Passer l'année courante aux options pour la génération du numéro séquentiel
+  // Pour les devis, on ne force pas l'utilisation du préfixe exact pour assurer la continuité des numéros
   return generateSequentialNumber(prefix, Quote, { ...options, year: currentYear });
 };
 
