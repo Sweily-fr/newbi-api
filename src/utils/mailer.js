@@ -13,7 +13,8 @@ const sendPasswordResetEmail = async (email, resetToken) => {
   const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
   const mailOptions = {
-    from: process.env.FROM_EMAIL,
+    from: 'Newbi',
+    replyTo: process.env.FROM_EMAIL,
     to: email,
     subject: 'Réinitialisation de votre mot de passe - Newbi',
     html: `
@@ -117,7 +118,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_Texte_Purple.png" alt="Newbi" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           
@@ -164,7 +165,8 @@ const sendVerificationEmail = async (email, verificationToken) => {
   const verificationLink = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
 
   const mailOptions = {
-    from: process.env.FROM_EMAIL,
+    from: 'Newbi',
+    replyTo: process.env.FROM_EMAIL,
     to: email,
     subject: 'Vérification de votre adresse email - Newbi',
     html: `
@@ -268,7 +270,7 @@ const sendVerificationEmail = async (email, verificationToken) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_Texte_Purple.png" alt="Newbi" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           <div class="content">
@@ -304,7 +306,8 @@ const sendPasswordResetConfirmationEmail = async (email) => {
   const loginLink = `${process.env.FRONTEND_URL}/auth`;
 
   const mailOptions = {
-    from: process.env.FROM_EMAIL,
+    from: 'Newbi',
+    replyTo: process.env.FROM_EMAIL,
     to: email,
     subject: 'Confirmation de réinitialisation de mot de passe - Newbi',
     html: `
@@ -406,7 +409,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
         <div class="container">
           <div class="header">
             <div class="logo">
-              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_Texte_Purple.png" alt="Newbi" style="width: 200px; height: auto;">
+              <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 200px; height: auto;">
             </div>
           </div>
           <div class="content">
