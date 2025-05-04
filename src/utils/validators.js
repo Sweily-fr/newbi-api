@@ -85,6 +85,14 @@ const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-²³]{1,20}$/;
 // Limite de 2000 caractères
 const FOOTER_NOTES_REGEX = /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t]{0,2000}$/u;
 
+// Regex pour la validation du capital social (montant avec ou sans décimales, jusqu'à 20 chiffres)
+// Exemples: 1000, 10000.50, 1000000
+const CAPITAL_SOCIAL_REGEX = /^\d{1,20}(\.\d{1,2})?$/;
+
+// Regex pour la validation du RCS (Registre du Commerce et des Sociétés)
+// Format: Accepte les formats courants comme "981 576 549 R.C.S. Paris" ou "Paris B 123 456 789"
+const RCS_REGEX = /^(\d{3}\s?\d{3}\s?\d{3}\s?R\.?C\.?S\.?\s[A-Za-zÀ-ÖØ-öø-ÿ\s]{2,30}|[A-Za-zÀ-ÖØ-öø-ÿ\s]{2,30}\s[A-Z]?\s?\d{3}\s?\d{3}\s?\d{3})$/;
+
 // Validation d'email
 const isValidEmail = (email) => {
   return EMAIL_REGEX.test(String(email).toLowerCase());
@@ -226,6 +234,18 @@ const isValidFooterNotes = (value) => {
   return FOOTER_NOTES_REGEX.test(value);
 };
 
+// Validation du capital social
+const isValidCapitalSocial = (capital) => {
+  if (!capital) return true;
+  return CAPITAL_SOCIAL_REGEX.test(capital);
+};
+
+// Validation du RCS
+const isValidRCS = (rcs) => {
+  if (!rcs) return true;
+  return RCS_REGEX.test(rcs);
+};
+
 module.exports = {
   // Regex
   EMAIL_REGEX,
@@ -247,6 +267,8 @@ module.exports = {
   ITEM_DESCRIPTION_REGEX,
   UNIT_REGEX,
   FOOTER_NOTES_REGEX,
+  CAPITAL_SOCIAL_REGEX,
+  RCS_REGEX,
   
   // Fonctions de validation
   isValidEmail,
@@ -276,5 +298,7 @@ module.exports = {
   isValidCustomFieldValue,
   isValidItemDescription,
   isValidUnit,
-  isValidFooterNotes
+  isValidFooterNotes,
+  isValidCapitalSocial,
+  isValidRCS
 };

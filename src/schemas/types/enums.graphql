@@ -36,3 +36,30 @@ enum EmailSignatureTemplate {
   MODERN
   CREATIVE
 }
+
+enum TransactionCategory {
+  GOODS
+  SERVICES
+  MIXED
+}
+
+enum VatPaymentCondition {
+  ENCAISSEMENTS
+  DEBITS
+  EXONERATION
+}
+
+enum CompanyStatus {
+  SARL
+  SAS
+  EURL
+  SASU
+  EI
+  EIRL
+  SA
+  SNC
+  SCI
+  SCOP
+  ASSOCIATION
+  AUTRE
+}

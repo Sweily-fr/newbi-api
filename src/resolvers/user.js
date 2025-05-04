@@ -271,6 +271,41 @@ const userResolvers = {
           ...input
         };
         
+        // S'assurer que transactionCategory est correctement défini
+        console.log('Input complet:', JSON.stringify(input));
+        console.log('Transaction Category reçue:', input.transactionCategory);
+        
+        // Traiter explicitement le champ transactionCategory
+        // Si la valeur est définie (même vide), l'utiliser
+        if (Object.prototype.hasOwnProperty.call(input, 'transactionCategory')) {
+          userDoc.company.transactionCategory = input.transactionCategory || null;
+          console.log('Transaction Category après traitement:', userDoc.company.transactionCategory);
+        }
+        
+        // Traiter explicitement le champ vatPaymentCondition
+        if (Object.prototype.hasOwnProperty.call(input, 'vatPaymentCondition')) {
+          userDoc.company.vatPaymentCondition = input.vatPaymentCondition || null;
+          console.log('VAT Payment Condition après traitement:', userDoc.company.vatPaymentCondition);
+        }
+        
+        // Traiter explicitement le champ companyStatus
+        if (Object.prototype.hasOwnProperty.call(input, 'companyStatus')) {
+          userDoc.company.companyStatus = input.companyStatus || 'AUTRE';
+          console.log('Company Status après traitement:', userDoc.company.companyStatus);
+        }
+        
+        // Traiter explicitement le champ capitalSocial
+        if (Object.prototype.hasOwnProperty.call(input, 'capitalSocial')) {
+          userDoc.company.capitalSocial = input.capitalSocial || null;
+          console.log('Capital Social après traitement:', userDoc.company.capitalSocial);
+        }
+        
+        // Traiter explicitement le champ rcs
+        if (Object.prototype.hasOwnProperty.call(input, 'rcs')) {
+          userDoc.company.rcs = input.rcs || null;
+          console.log('RCS après traitement:', userDoc.company.rcs);
+        }
+        
         // Sauvegarder avec validation
         await userDoc.save();
         

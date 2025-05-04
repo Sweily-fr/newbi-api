@@ -174,6 +174,44 @@ const userSchema = new mongoose.Schema({
         message: 'Veuillez fournir un numéro de TVA valide (format FR)'
       }
     },
+    transactionCategory: {
+      type: String,
+      enum: ['GOODS', 'SERVICES', 'MIXED'],
+      default: 'SERVICES'
+    },
+    vatPaymentCondition: {
+      type: String,
+      enum: ['ENCAISSEMENTS', 'DEBITS', 'EXONERATION']
+    },
+    companyStatus: {
+      type: String,
+      enum: ['SARL', 'SAS', 'EURL', 'SASU', 'EI', 'EIRL', 'SA', 'SNC', 'SCI', 'SCOP', 'ASSOCIATION', 'AUTRE'],
+      default: 'AUTRE'
+    },
+    capitalSocial: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: function(v) {
+          // Validation uniquement si une valeur est fournie
+          const { CAPITAL_SOCIAL_REGEX } = require('../utils/validators');
+          return !v || CAPITAL_SOCIAL_REGEX.test(v);
+        },
+        message: 'Veuillez fournir un capital social valide (ex: 10000)'
+      }
+    },
+    rcs: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: function(v) {
+          // Validation uniquement si une valeur est fournie
+          const { RCS_REGEX } = require('../utils/validators');
+          return !v || RCS_REGEX.test(v);
+        },
+        message: 'Veuillez fournir un RCS valide (ex: 981 576 549 R.C.S. Paris)'
+      }
+    },
     address: addressSchema,
     bankDetails: bankDetailsSchema
   },

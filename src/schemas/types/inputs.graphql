@@ -49,6 +49,11 @@ input CompanyInput {
   logo: String
   siret: String
   vatNumber: String
+  transactionCategory: TransactionCategory
+  vatPaymentCondition: VatPaymentCondition
+  companyStatus: CompanyStatus
   address: AddressInput
   bankDetails: BankDetailsInput
+  capitalSocial: String
+  rcs: String
 }

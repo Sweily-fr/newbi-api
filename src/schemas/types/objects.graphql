@@ -49,8 +49,13 @@ type Company {
   logo: String
   siret: String
   vatNumber: String
+  transactionCategory: TransactionCategory
+  vatPaymentCondition: VatPaymentCondition
+  companyStatus: CompanyStatus
   address: Address
   bankDetails: BankDetails
+  capitalSocial: String
+  rcs: String
 }
 
 # Statistiques pour les factures
