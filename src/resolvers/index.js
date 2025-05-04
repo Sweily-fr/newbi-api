@@ -8,6 +8,7 @@ const contactResolvers = require('./contact');
 const companySearchResolvers = require('./companySearch');
 const emailSignatureResolvers = require('./emailSignature');
 const integrationResolvers = require('./integration');
+const documentSettingsResolvers = require('./documentSettings');
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -18,7 +19,8 @@ const resolvers = mergeResolvers([
   contactResolvers,
   companySearchResolvers,
   emailSignatureResolvers,
-  integrationResolvers
+  integrationResolvers,
+  documentSettingsResolvers
 ]);
 
 module.exports = resolvers;

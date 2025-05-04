@@ -7,6 +7,7 @@ enum InvoiceStatus {
   DRAFT
   PENDING
   COMPLETED
+  CANCELED
 }
 
 enum QuoteStatus {

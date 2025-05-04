@@ -5,8 +5,12 @@
 // Regex pour la validation d'email
 const EMAIL_REGEX = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
 
-// Regex pour la validation de numéro de téléphone (format international)
-const PHONE_REGEX = /^\+\d{1,3}\s?\d{9,}$/;
+// Regex pour la validation de numéro de téléphone (format international ou national)
+// Accepte les formats avec ou sans préfixe international
+// - +33 1 23 45 67 89
+// - 01 23 45 67 89
+// - 0123456789
+const PHONE_REGEX = /^(?:\+\d{1,3}\s?)?\d{9,}$/;
 
 // Regex pour la validation de numéro de téléphone (format français)
 // Accepte les formats:
@@ -73,8 +77,8 @@ const CUSTOM_FIELD_VALUE_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\
 const ITEM_DESCRIPTION_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\]{1,200}$/;
 
 // Regex pour la validation des unités de mesure
-// Accepte les lettres, chiffres, espaces, tirets, slashs et points
-const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-]{1,20}$/;
+// Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)
+const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-²³]{1,20}$/;
 
 // Regex pour la validation des notes de pied de page
 // Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations et espaces)

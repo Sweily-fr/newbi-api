@@ -76,7 +76,14 @@ const invoiceResolvers = {
         if (endDate) query.createdAt.$lte = new Date(endDate);
       }
 
-      if (status) query.status = status;
+      if (status) {
+        // Si on filtre par COMPLETED, inclure aussi les factures CANCELED
+        if (status === 'COMPLETED') {
+          query.status = { $in: ['COMPLETED', 'CANCELED'] };
+        } else {
+          query.status = status;
+        }
+      }
 
       if (search) {
         const searchRegex = new RegExp(search, 'i');
@@ -117,7 +124,10 @@ const invoiceResolvers = {
               $sum: { $cond: [{ $eq: ['$status', 'PENDING'] }, 1, 0] }
             },
             completedCount: {
-              $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] }
+              $sum: { $cond: [{ $or: [{ $eq: ['$status', 'COMPLETED'] }, { $eq: ['$status', 'CANCELED'] }] }, 1, 0] }
+            },
+            canceledCount: {
+              $sum: { $cond: [{ $eq: ['$status', 'CANCELED'] }, 1, 0] }
             },
             totalAmount: { $sum: '$totalTTC' }
           }
@@ -129,6 +139,7 @@ const invoiceResolvers = {
         draftCount: 0,
         pendingCount: 0,
         completedCount: 0,
+        canceledCount: 0,
         totalAmount: 0
       };
     }),
@@ -142,40 +153,51 @@ const invoiceResolvers = {
   Mutation: {
     createInvoice: isAuthenticated(async (_, { input }, { user }) => {
       // Utiliser le préfixe fourni ou 'F' par défaut
-      const prefix = input.prefix || 'F';
-      console.log(`Création de facture pour l'utilisateur ${user.id} avec préfixe ${prefix}`);
+      let prefix = input.prefix;
+      if (!prefix) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        prefix = `F-${year}${month}-`;
+      }
+      
+      // Récupérer l'utilisateur avec les informations de l'entreprise
+      const userWithCompany = await User.findById(user.id);
+      if (!userWithCompany) {
+        throw createNotFoundError('Utilisateur');
+      }
       
       // Si le statut est PENDING, vérifier d'abord s'il existe des factures en DRAFT 
       // qui pourraient entrer en conflit avec le numéro qui sera généré
       const handleDraftConflicts = async (newNumber) => {
-        // Vérifier s'il existe une facture en DRAFT avec le même numéro
-        const conflictingDrafts = await Invoice.find({
+        // Vérifier si une facture en DRAFT existe avec ce numéro
+        const conflictingDraft = await Invoice.findOne({
           prefix,
           number: newNumber,
           status: 'DRAFT',
           createdBy: user.id
         });
         
-        // S'il y a des factures en conflit, mettre à jour leur numéro
-        for (const draft of conflictingDrafts) {
-          // Ajouter le suffixe -DRAFT au numéro existant
-          const newDraftNumber = `${newNumber}-DRAFT`;
-          
-          // Vérifier que le nouveau numéro n'existe pas déjà
-          const existingWithNewNumber = await Invoice.findOne({
+        if (conflictingDraft) {
+          // Trouver le dernier numéro de brouillon avec ce préfixe
+          const lastDraftNumber = await Invoice.findOne({
             prefix,
-            number: newDraftNumber,
+            status: 'DRAFT',
             createdBy: user.id
-          });
+          }).sort({ number: -1 });
           
-          // Si le numéro existe déjà, générer un numéro unique avec timestamp
-          const finalDraftNumber = existingWithNewNumber 
-            ? `DRAFT-${Date.now().toString().slice(-6)}` 
-            : newDraftNumber;
+          // Générer un nouveau numéro pour le brouillon en conflit
+          let newDraftNumber;
+          if (lastDraftNumber) {
+            // Ajouter un suffixe -DRAFT au numéro existant
+            newDraftNumber = `${newNumber}-DRAFT`;
+          } else {
+            newDraftNumber = `DRAFT-${Math.floor(Math.random() * 10000)}`;
+          }
           
-          // Mettre à jour la facture en brouillon avec le nouveau numéro
-          await Invoice.findByIdAndUpdate(draft._id, { number: finalDraftNumber });
-          console.log(`Facture en brouillon mise à jour avec le numéro ${finalDraftNumber}`);
+          // Mettre à jour la facture en conflit
+          conflictingDraft.number = newDraftNumber;
+          await conflictingDraft.save();
         }
         
         return newNumber;
@@ -188,27 +210,18 @@ const invoiceResolvers = {
         if (input.number) {
           // Vérifier si le numéro fourni existe déjà
           const existingInvoice = await Invoice.findOne({ 
+            prefix, 
             number: input.number,
             createdBy: user.id,
-            $expr: { $eq: [{ $year: '$issueDate' }, new Date().getFullYear()] }
+            status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
           });
-          console.log(`Vérification du numéro ${input.number}: ${existingInvoice ? 'Existe déjà' : 'N\'existe pas'}`);
           
           if (existingInvoice) {
-            // Si le numéro existe déjà, générer un nouveau numéro
-            console.log(`Le numéro ${input.number} existe déjà, génération d'un nouveau numéro`);
-            number = await generateInvoiceNumber(prefix, { userId: user.id });
+            throw createAlreadyExistsError('Facture', 'numéro', input.number);
           } else {
-            // Si le statut est PENDING, utiliser la nouvelle fonctionnalité
+            // Si le statut est PENDING, vérifier les conflits avec les factures en DRAFT
             if (input.status === 'PENDING') {
-              number = await generateInvoiceNumber(prefix, {
-                manualNumber: input.number,
-                isPending: true,
-                userId: user.id
-              });
-              
-              // Gérer les conflits avec les factures en DRAFT
-              number = await handleDraftConflicts(number);
+              number = await handleDraftConflicts(input.number);
             } else {
               // Sinon, utiliser le numéro fourni
               number = input.number;
@@ -226,30 +239,33 @@ const invoiceResolvers = {
       } else if (input.number) {
         // Si c'est un brouillon mais qu'un numéro est fourni, le valider
         const existingInvoice = await Invoice.findOne({ 
+          prefix, 
           number: input.number,
           createdBy: user.id,
-          $expr: { $eq: [{ $year: '$issueDate' }, new Date().getFullYear()] }
+          status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
         });
         
-        console.log(`Vérification du numéro de brouillon ${input.number}: ${existingInvoice ? 'Existe déjà' : 'N\'existe pas'}`);
-        
         if (existingInvoice) {
-          console.log(`Erreur: Le numéro ${input.number} existe déjà pour l'utilisateur ${user.id}`);
-          throw new AppError(
-            'Ce numéro de facture est déjà utilisé',
-            ERROR_CODES.DUPLICATE_RESOURCE
-          );
+          throw createAlreadyExistsError('Facture', 'numéro', input.number);
+        } else {
+          number = input.number;
         }
-        number = input.number;
-      }
-      // Pour les brouillons sans numéro fourni, on laisse number undefined
-      
-      const userWithCompany = await User.findById(user.id).select('company');
-      if (!userWithCompany?.company) {
-        throw new AppError(
-          'Les informations de votre entreprise doivent être configurées avant de créer une facture',
-          ERROR_CODES.COMPANY_INFO_REQUIRED
-        );
+      } else {
+        // Pour les brouillons sans numéro, générer un numéro temporaire
+        // Trouver le dernier numéro de brouillon
+        const lastDraft = await Invoice.findOne({
+          createdBy: user.id,
+          status: 'DRAFT'
+        }).sort({ createdAt: -1 });
+        
+        if (lastDraft && lastDraft.number && lastDraft.number.startsWith('DRAFT-')) {
+          // Incrémenter le dernier numéro
+          const lastNumber = parseInt(lastDraft.number.replace('DRAFT-', ''), 10);
+          number = `DRAFT-${lastNumber + 1}`;
+        } else {
+          // Créer un nouveau numéro de brouillon
+          number = `DRAFT-1`;
+        }
       }
 
       // Calculer les totaux avec la remise
@@ -276,7 +292,7 @@ const invoiceResolvers = {
         // Rechercher tous les devis de l'utilisateur
         const quotes = await Quote.find({ createdBy: user.id });
         
-        // Chercher un devis dont la concaténation du préfixe et du numéro correspond exactement au numéro de bon de commande
+        // Trouver un devis dont le préfixe+numéro correspond au numéro de bon de commande
         const matchingQuote = quotes.find(quote => {
           // Construire l'identifiant complet du devis (préfixe + numéro)
           const quoteFullId = `${quote.prefix}${quote.number}`;
@@ -290,23 +306,18 @@ const invoiceResolvers = {
           const linkedInvoicesCount = matchingQuote.linkedInvoices ? matchingQuote.linkedInvoices.length : 0;
           
           if (linkedInvoicesCount < 3) {
-            // Ajouter la facture à la liste des factures liées au devis
+            // Ajouter cette facture aux factures liées du devis
             if (!matchingQuote.linkedInvoices) {
               matchingQuote.linkedInvoices = [];
             }
             
-            // Éviter les doublons
-            if (!matchingQuote.linkedInvoices.includes(invoice._id)) {
+            // Vérifier que la facture n'est pas déjà liée
+            const alreadyLinked = matchingQuote.linkedInvoices.some(
+              linkedInvoice => linkedInvoice.toString() === invoice._id.toString()
+            );
+            
+            if (!alreadyLinked) {
               matchingQuote.linkedInvoices.push(invoice._id);
-              
-              // Si le devis n'a pas encore été converti en facture, définir cette facture comme la facture principale
-              if (!matchingQuote.convertedToInvoice) {
-                matchingQuote.convertedToInvoice = invoice._id;
-                // Le devis a été converti en facture
-              } else {
-                // La facture a été liée au devis
-              }
-              
               await matchingQuote.save();
             }
           } else {
@@ -328,8 +339,8 @@ const invoiceResolvers = {
         throw createNotFoundError('Facture');
       }
 
-      if (invoiceData.status === 'COMPLETED') {
-        throw createResourceLockedError('Facture', 'une facture terminée ne peut pas être modifiée');
+      if (invoiceData.status === 'COMPLETED' || invoiceData.status === 'CANCELED') {
+        throw createResourceLockedError('Facture', `une facture ${invoiceData.status === 'COMPLETED' ? 'terminée' : 'annulée'} ne peut pas être modifiée`);
       }
       
       // Vérifier si l'utilisateur tente de modifier le numéro de facture
@@ -337,104 +348,95 @@ const invoiceResolvers = {
         // Vérifier si des factures avec le statut PENDING ou COMPLETED existent déjà
         const pendingInvoicesCount = await Invoice.countDocuments({
           createdBy: user.id,
-          status: { $in: ['PENDING', 'COMPLETED'] }
+          status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
         });
         
-        if (pendingInvoicesCount > 0) {
-          throw new AppError(
-            'Vous ne pouvez pas modifier le numéro de facture car des factures en attente ou terminées existent déjà',
-            ERROR_CODES.RESOURCE_LOCKED
-          );
-        }
-        
-        // Vérifier si le nouveau numéro existe déjà
-        const existingInvoice = await Invoice.findOne({
-          _id: { $ne: id },
-          number: input.number
-        });
-        
-        if (existingInvoice) {
-          throw new AppError(
-            'Ce numéro de facture est déjà utilisé',
-            ERROR_CODES.DUPLICATE_RESOURCE
-          );
+        if (pendingInvoicesCount > 0 && invoiceData.status === 'DRAFT') {
+          // Si des factures en attente ou terminées existent, vérifier que le numéro n'est pas déjà utilisé
+          const existingInvoice = await Invoice.findOne({
+            _id: { $ne: id },
+            prefix: invoiceData.prefix,
+            number: input.number,
+            createdBy: user.id
+          });
+          
+          if (existingInvoice) {
+            throw createAlreadyExistsError('Facture', 'numéro', input.number);
+          }
         }
       }
-
-      // Si des items sont fournis, recalculer les totaux
-      if (input.items) {
+      
+      // Recalculer les totaux si nécessaire
+      let updatedInput = { ...input };
+      if (input.items || input.discount || input.discountType) {
+        const items = input.items || invoiceData.items;
         const totals = calculateInvoiceTotals(
-          input.items,
+          items,
           input.discount !== undefined ? input.discount : invoiceData.discount,
           input.discountType || invoiceData.discountType
         );
-        input = { ...input, ...totals };
+        updatedInput = { ...updatedInput, ...totals };
       }
 
       // Préparer les données à mettre à jour
       const updateData = { ...invoiceData };
       
       // Mettre à jour les informations de l'entreprise si fournies
-      if (input.companyInfo) {
+      if (updatedInput.companyInfo) {
         updateData.companyInfo = {
           ...updateData.companyInfo,
-          ...input.companyInfo
+          ...updatedInput.companyInfo
         };
       }
 
-      // Mettre à jour les informations du client si fournies
-      if (input.client) {
-        // Préserver le type de client
-        const clientType = input.client.type || updateData.client.type;
-        
+      // Mettre à jour le client si fourni
+      if (updatedInput.client) {
         updateData.client = {
           ...updateData.client,
-          ...input.client,
-          type: clientType
+          ...updatedInput.client
         };
         
-        // Si c'est un particulier, s'assurer que les champs d'entreprise sont définis
-        if (clientType === 'INDIVIDUAL') {
-          updateData.client.siret = 'N/A-INDIVIDUAL';
-          updateData.client.vatNumber = 'N/A-INDIVIDUAL';
+        // Mettre à jour l'adresse du client si fournie
+        if (updatedInput.client.address) {
+          updateData.client.address = {
+            ...(updateData.client.address || {}),
+            ...updatedInput.client.address
+          };
         }
       }
-
-      // Traiter le lien des conditions générales
-      if (input.termsAndConditionsLink !== undefined) {
-        if (input.termsAndConditionsLink === '') {
-          updateData.termsAndConditionsLink = null;
-        } else if (input.termsAndConditionsLink && !input.termsAndConditionsLink.startsWith('http')) {
-          updateData.termsAndConditionsLink = 'https://' + input.termsAndConditionsLink;
+      
+      // Gérer le lien des conditions générales
+      if (updatedInput.termsAndConditionsLink !== undefined) {
+        if (updatedInput.termsAndConditionsLink === '') {
+          // Si une chaîne vide est fournie, supprimer le lien
+          delete updateData.termsAndConditionsLink;
         } else {
-          updateData.termsAndConditionsLink = input.termsAndConditionsLink;
+          updateData.termsAndConditionsLink = updatedInput.termsAndConditionsLink;
         }
       }
       
       // Fusionner toutes les autres mises à jour
-      Object.keys(input).forEach(key => {
+      Object.keys(updatedInput).forEach(key => {
         if (key !== 'client' && key !== 'companyInfo' && key !== 'termsAndConditionsLink') {
-          updateData[key] = input[key];
+          updateData[key] = updatedInput[key];
         }
       });
       
       try {
-        // Utiliser updateOne pour contourner les validations de Mongoose
-        const result = await Invoice.updateOne(
-          { _id: id },
+        // Mettre à jour la facture en utilisant findOneAndUpdate pour éviter les validations
+        const updatedInvoice = await Invoice.findOneAndUpdate(
+          { _id: id, createdBy: user.id },
           { $set: updateData },
-          { runValidators: false }
-        );
+          { new: true, runValidators: true }
+        ).populate('createdBy');
         
-        if (result.modifiedCount === 0) {
-          throw new AppError('Aucune modification n\'a été effectuée', ERROR_CODES.VALIDATION_ERROR);
+        if (!updatedInvoice) {
+          throw createNotFoundError('Facture');
         }
         
-        // Récupérer la facture mise à jour
-        const updatedInvoice = await Invoice.findById(id).populate('createdBy');
         return updatedInvoice;
       } catch (error) {
-        console.error('Erreur lors de la mise à jour de la facture:', error);
+        // Gérer les erreurs de validation
         throw new AppError(
           `Erreur de mise à jour: ${error.message}`,
           ERROR_CODES.VALIDATION_ERROR
@@ -449,8 +451,8 @@ const invoiceResolvers = {
         throw createNotFoundError('Facture');
       }
 
-      if (invoice.status === 'COMPLETED') {
-        throw createResourceLockedError('Facture', 'une facture terminée ne peut pas être supprimée');
+      if (invoice.status === 'COMPLETED' || invoice.status === 'CANCELED') {
+        throw createResourceLockedError('Facture', `une facture ${invoice.status === 'COMPLETED' ? 'terminée' : 'annulée'} ne peut pas être supprimée`);
       }
 
       await Invoice.deleteOne({ _id: id });
@@ -458,17 +460,23 @@ const invoiceResolvers = {
     }),
 
     changeInvoiceStatus: isAuthenticated(async (_, { id, status }, { user }) => {
-      const invoice = await Invoice.findOne({ _id: id, createdBy: user.id });
+      const invoice = await Invoice.findOne({ _id: id, createdBy: user.id }).populate('createdBy');
       
       if (!invoice) {
         throw createNotFoundError('Facture');
       }
+      
+      // Vérifier les transitions de statut autorisées
+      if (invoice.status === 'COMPLETED' || invoice.status === 'CANCELED') {
+        throw createStatusTransitionError('Facture', `Une facture ${invoice.status === 'COMPLETED' ? 'terminée' : 'annulée'} ne peut pas changer de statut`);
+      }
 
       // Vérifier si le changement de statut est valide
       const validTransitions = {
-        'DRAFT': ['PENDING', 'COMPLETED'],
-        'PENDING': ['DRAFT', 'COMPLETED'],
-        'COMPLETED': [] // Une facture terminée ne peut pas changer de statut
+        'DRAFT': ['PENDING', 'COMPLETED', 'CANCELED'],
+        'PENDING': ['DRAFT', 'COMPLETED', 'CANCELED'],
+        'COMPLETED': [], // Une facture terminée ne peut pas changer de statut
+        'CANCELED': []  // Une facture annulée ne peut pas changer de statut
       };
 
       if (!validTransitions[invoice.status].includes(status)) {
@@ -485,8 +493,8 @@ const invoiceResolvers = {
         
         if (issueDate < today) {
           throw createValidationError(
-            'La date d\'\u00e9mission ne peut pas \u00eatre ant\u00e9rieure \u00e0 la date actuelle pour une facture en statut \'PENDING\'',
-            { issueDate: 'La date d\'\u00e9mission doit \u00eatre \u00e9gale ou post\u00e9rieure \u00e0 la date actuelle' }
+            'La date d\'émission ne peut pas être antérieure à la date actuelle pour une facture en statut \'PENDING\'',
+            { issueDate: 'La date d\'émission doit être égale ou postérieure à la date actuelle' }
           );
         }
       }

@@ -1,0 +1,36 @@
+enum DocumentType {
+  INVOICE
+  QUOTE
+}
+
+type DocumentSettings {
+  id: ID!
+  documentType: DocumentType!
+  defaultHeaderNotes: String
+  defaultFooterNotes: String
+  defaultTermsAndConditions: String
+  defaultTermsAndConditionsLinkTitle: String
+  defaultTermsAndConditionsLink: String
+  createdBy: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+extend type Query {
+  # Récupérer les paramètres d'un type de document (facture ou devis)
+  getDocumentSettings(documentType: DocumentType!): DocumentSettings
+}
+
+input DocumentSettingsInput {
+  documentType: DocumentType!
+  defaultHeaderNotes: String
+  defaultFooterNotes: String
+  defaultTermsAndConditions: String
+  defaultTermsAndConditionsLinkTitle: String
+  defaultTermsAndConditionsLink: String
+}
+
+extend type Mutation {
+  # Créer ou mettre à jour les paramètres d'un document
+  saveDocumentSettings(input: DocumentSettingsInput!): DocumentSettings!
+}
