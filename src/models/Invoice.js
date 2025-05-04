@@ -8,6 +8,7 @@ const {
 
 const clientSchema = require('./schemas/client');
 const itemSchema = require('./schemas/item');
+const addressSchema = require('./schemas/address');
 const companyInfoSchema = require('./schemas/companyInfo');
 const customFieldSchema = require('./schemas/customField');
 const { INVOICE_STATUS, PAYMENT_METHOD, DISCOUNT_TYPE } = require('./constants/enums');
@@ -103,6 +104,20 @@ const invoiceSchema = new mongoose.Schema({
   client: {
     type: clientSchema,
     required: true
+  },
+  hasDifferentShippingAddress: {
+    type: Boolean,
+    default: false
+  },
+  shippingAddress: {
+    type: addressSchema,
+    // Requis uniquement si hasDifferentShippingAddress est true
+    validate: {
+      validator: function(value) {
+        return !this.hasDifferentShippingAddress || (value && Object.keys(value).length > 0);
+      },
+      message: 'L\'adresse de livraison est requise lorsque l\'option est activée'
+    }
   },
   status: {
     type: String,
