@@ -152,6 +152,10 @@ const invoiceResolvers = {
 
   Mutation: {
     createInvoice: isAuthenticated(async (_, { input }, { user }) => {
+      // Logs pour déboguer les données d'adresse de livraison
+      console.log('Création de facture avec données d’adresse de livraison:');
+      console.log('hasDifferentShippingAddress:', input.hasDifferentShippingAddress);
+      console.log('shippingAddress:', input.shippingAddress);
       // Utiliser le préfixe fourni ou 'F' par défaut
       let prefix = input.prefix;
       if (!prefix) {
@@ -275,60 +279,157 @@ const invoiceResolvers = {
         input.discountType
       );
 
-      // Create invoice with company info from user's profile if not provided
-      const invoice = new Invoice({
-        ...input,
-        number,
-        prefix,
-        companyInfo: input.companyInfo || userWithCompany.company,
-        createdBy: user.id,
-        ...totals // Ajouter tous les totaux calculés
-      });
+      // Préparer et valider les données d'adresse de livraison
+      let shippingAddressData = null;
       
-      await invoice.save();
-      
-      // Vérifier si le numéro de bon de commande correspond à un devis existant
-      if (input.purchaseOrderNumber) {
-        // Rechercher tous les devis de l'utilisateur
-        const quotes = await Quote.find({ createdBy: user.id });
+      if (input.hasDifferentShippingAddress && input.shippingAddress) {
+        // Validation des champs d'adresse de livraison
+        const { 
+          isValidStreet, 
+          isValidCity, 
+          isValidPostalCodeFR, 
+          isValidCountry 
+        } = require('../utils/validators');
         
-        // Trouver un devis dont le préfixe+numéro correspond au numéro de bon de commande
-        const matchingQuote = quotes.find(quote => {
-          // Construire l'identifiant complet du devis (préfixe + numéro)
-          const quoteFullId = `${quote.prefix}${quote.number}`;
-          
-          // Comparer avec le numéro de bon de commande (insensible à la casse)
-          return quoteFullId.toLowerCase() === input.purchaseOrderNumber.toLowerCase();
-        });
+        const validationErrors = {};
         
-        if (matchingQuote) {
-          // Vérifier si le devis n'a pas déjà trop de factures liées
-          const linkedInvoicesCount = matchingQuote.linkedInvoices ? matchingQuote.linkedInvoices.length : 0;
-          
-          if (linkedInvoicesCount < 3) {
-            // Ajouter cette facture aux factures liées du devis
-            if (!matchingQuote.linkedInvoices) {
-              matchingQuote.linkedInvoices = [];
-            }
-            
-            // Vérifier que la facture n'est pas déjà liée
-            const alreadyLinked = matchingQuote.linkedInvoices.some(
-              linkedInvoice => linkedInvoice.toString() === invoice._id.toString()
-            );
-            
-            if (!alreadyLinked) {
-              matchingQuote.linkedInvoices.push(invoice._id);
-              await matchingQuote.save();
-            }
-          } else {
-            // Le devis a déjà 3 factures liées, impossible d'en ajouter davantage
-          }
-        } else {
-          // Aucun devis trouvé correspondant au numéro de bon de commande
+        // Valider la rue
+        if (!input.shippingAddress.street || !isValidStreet(input.shippingAddress.street)) {
+          validationErrors.street = 'Veuillez fournir une adresse valide (3 à 100 caractères)';
         }
+        
+        // Valider la ville
+        if (!input.shippingAddress.city || !isValidCity(input.shippingAddress.city)) {
+          validationErrors.city = 'Veuillez fournir un nom de ville valide (2 à 50 caractères)';
+        }
+        
+        // Valider le code postal
+        if (!input.shippingAddress.postalCode || !isValidPostalCodeFR(input.shippingAddress.postalCode)) {
+          validationErrors.postalCode = 'Veuillez fournir un code postal français valide (5 chiffres)';
+        }
+        
+        // Valider le pays
+        if (!input.shippingAddress.country || !isValidCountry(input.shippingAddress.country)) {
+          validationErrors.country = 'Veuillez fournir un nom de pays valide (2 à 50 caractères)';
+        }
+        
+        // Si des erreurs de validation sont trouvées, lever une exception
+        if (Object.keys(validationErrors).length > 0) {
+          throw createValidationError(
+            'L\'adresse de livraison contient des erreurs de format',
+            validationErrors
+          );
+        }
+        
+        // Si toutes les validations sont passées, créer l'objet d'adresse
+        shippingAddressData = {
+          street: input.shippingAddress.street,
+          city: input.shippingAddress.city,
+          postalCode: input.shippingAddress.postalCode,
+          country: input.shippingAddress.country
+        };
+      } else if (input.hasDifferentShippingAddress) {
+        // Si l'option est activée mais que l'adresse n'est pas fournie
+        throw createValidationError(
+          'L\'adresse de livraison est requise lorsque l\'option est activée',
+          { shippingAddress: 'L\'adresse de livraison est requise' }
+        );
       }
       
-      return await invoice.populate('createdBy');
+      console.log('Données d\'adresse de livraison préparées:', {
+        hasDifferentShippingAddress: input.hasDifferentShippingAddress || false,
+        shippingAddress: shippingAddressData
+      });
+      
+      try {
+        // Create invoice with company info from user's profile if not provided
+        const invoice = new Invoice({
+          ...input,
+          number,
+          prefix,
+          companyInfo: input.companyInfo || userWithCompany.company,
+          // S'assurer que les champs d'adresse de livraison sont correctement définis
+          hasDifferentShippingAddress: input.hasDifferentShippingAddress || false,
+          shippingAddress: shippingAddressData,
+          createdBy: user.id,
+          ...totals // Ajouter tous les totaux calculés
+        });
+        
+        console.log('Objet facture avant sauvegarde:', {
+          hasDifferentShippingAddress: invoice.hasDifferentShippingAddress,
+          shippingAddress: invoice.shippingAddress
+        });
+        
+        await invoice.save();
+        
+        // Vérifier que les données ont été correctement enregistrées
+        const savedInvoice = await Invoice.findById(invoice._id);
+        
+        console.log('Facture enregistrée en BDD:', {
+          hasDifferentShippingAddress: savedInvoice.hasDifferentShippingAddress,
+          shippingAddress: savedInvoice.shippingAddress
+        });
+        
+        // Vérifier si le numéro de bon de commande correspond à un devis existant
+        if (input.purchaseOrderNumber) {
+          // Rechercher tous les devis de l'utilisateur
+          const quotes = await Quote.find({ createdBy: user.id });
+          
+          // Trouver un devis dont le préfixe+numéro correspond au numéro de bon de commande
+          const matchingQuote = quotes.find(quote => {
+            // Construire l'identifiant complet du devis (préfixe + numéro)
+            const quoteFullId = `${quote.prefix}${quote.number}`;
+            
+            // Comparer avec le numéro de bon de commande (insensible à la casse)
+            return quoteFullId.toLowerCase() === input.purchaseOrderNumber.toLowerCase();
+          });
+          
+          if (matchingQuote) {
+            // Vérifier si le devis n'a pas déjà trop de factures liées
+            const linkedInvoicesCount = matchingQuote.linkedInvoices ? matchingQuote.linkedInvoices.length : 0;
+            
+            if (linkedInvoicesCount < 3) {
+              // Ajouter cette facture aux factures liées du devis
+              if (!matchingQuote.linkedInvoices) {
+                matchingQuote.linkedInvoices = [];
+              }
+              
+              // Vérifier que la facture n'est pas déjà liée
+              const alreadyLinked = matchingQuote.linkedInvoices.some(
+                linkedInvoice => linkedInvoice.toString() === invoice._id.toString()
+              );
+              
+              if (!alreadyLinked) {
+                matchingQuote.linkedInvoices.push(invoice._id);
+                await matchingQuote.save();
+              }
+            }
+          }
+        }
+        
+        return await invoice.populate('createdBy');
+      } catch (error) {
+        // Intercepter les erreurs de validation Mongoose
+        console.error('Erreur lors de la création de la facture:', error);
+        
+        // Si c'est une erreur de validation Mongoose
+        if (error.name === 'ValidationError') {
+          const validationErrors = {};
+          
+          // Transformer les erreurs Mongoose en format attendu par notre API
+          for (const field in error.errors) {
+            validationErrors[field.replace('shippingAddress.', '')] = error.errors[field].message;
+          }
+          
+          throw createValidationError(
+            'La facture contient des erreurs de validation',
+            validationErrors
+          );
+        }
+        
+        // Si c'est une autre erreur, la propager
+        throw error;
+      }
     }),
 
     updateInvoice: isAuthenticated(async (_, { id, input }, { user }) => {
@@ -415,9 +516,75 @@ const invoiceResolvers = {
         }
       }
       
+      // Traiter spécifiquement l'adresse de livraison
+      if (updatedInput.hasDifferentShippingAddress !== undefined) {
+        updateData.hasDifferentShippingAddress = updatedInput.hasDifferentShippingAddress;
+      }
+      
+      if (updatedInput.shippingAddress) {
+        // Si hasDifferentShippingAddress est true, valider et mettre à jour l'adresse de livraison
+        if (updateData.hasDifferentShippingAddress) {
+          // Validation des champs d'adresse de livraison
+          const { 
+            isValidStreet, 
+            isValidCity, 
+            isValidPostalCodeFR, 
+            isValidCountry 
+          } = require('../utils/validators');
+          
+          const validationErrors = {};
+          
+          // Valider la rue
+          if (!updatedInput.shippingAddress.street || !isValidStreet(updatedInput.shippingAddress.street)) {
+            validationErrors.street = 'Veuillez fournir une adresse valide (3 à 100 caractères)';
+          }
+          
+          // Valider la ville
+          if (!updatedInput.shippingAddress.city || !isValidCity(updatedInput.shippingAddress.city)) {
+            validationErrors.city = 'Veuillez fournir un nom de ville valide (2 à 50 caractères)';
+          }
+          
+          // Valider le code postal
+          if (!updatedInput.shippingAddress.postalCode || !isValidPostalCodeFR(updatedInput.shippingAddress.postalCode)) {
+            validationErrors.postalCode = 'Veuillez fournir un code postal français valide (5 chiffres)';
+          }
+          
+          // Valider le pays
+          if (!updatedInput.shippingAddress.country || !isValidCountry(updatedInput.shippingAddress.country)) {
+            validationErrors.country = 'Veuillez fournir un nom de pays valide (2 à 50 caractères)';
+          }
+          
+          // Si des erreurs de validation sont trouvées, lever une exception
+          if (Object.keys(validationErrors).length > 0) {
+            throw createValidationError(
+              'L\'adresse de livraison contient des erreurs de format',
+              validationErrors
+            );
+          }
+          
+          // Si toutes les validations sont passées, créer l'objet d'adresse
+          updateData.shippingAddress = {
+            ...(updateData.shippingAddress || {}),
+            ...updatedInput.shippingAddress
+          };
+        } else {
+          // Si hasDifferentShippingAddress est false, supprimer l'adresse de livraison
+          updateData.shippingAddress = null;
+        }
+      } else if (updateData.hasDifferentShippingAddress === true && (!updateData.shippingAddress || Object.keys(updateData.shippingAddress).length === 0)) {
+        // Si l'option est activée mais que l'adresse n'est pas fournie
+        throw createValidationError(
+          'L\'adresse de livraison est requise lorsque l\'option est activée',
+          { shippingAddress: 'L\'adresse de livraison est requise' }
+        );
+      } else if (updateData.hasDifferentShippingAddress === false) {
+        // Si hasDifferentShippingAddress est explicitement mis à false, supprimer l'adresse de livraison
+        updateData.shippingAddress = null;
+      }
+      
       // Fusionner toutes les autres mises à jour
       Object.keys(updatedInput).forEach(key => {
-        if (key !== 'client' && key !== 'companyInfo' && key !== 'termsAndConditionsLink') {
+        if (key !== 'client' && key !== 'companyInfo' && key !== 'termsAndConditionsLink' && key !== 'hasDifferentShippingAddress' && key !== 'shippingAddress') {
           updateData[key] = updatedInput[key];
         }
       });
@@ -436,7 +603,25 @@ const invoiceResolvers = {
         
         return updatedInvoice;
       } catch (error) {
-        // Gérer les erreurs de validation
+        // Intercepter les erreurs de validation Mongoose
+        console.error('Erreur lors de la mise à jour de la facture:', error);
+        
+        // Si c'est une erreur de validation Mongoose
+        if (error.name === 'ValidationError') {
+          const validationErrors = {};
+          
+          // Transformer les erreurs Mongoose en format attendu par notre API
+          for (const field in error.errors) {
+            validationErrors[field.replace('shippingAddress.', '')] = error.errors[field].message;
+          }
+          
+          throw createValidationError(
+            'La facture contient des erreurs de validation',
+            validationErrors
+          );
+        }
+        
+        // Si c'est une autre erreur, la propager
         throw new AppError(
           `Erreur de mise à jour: ${error.message}`,
           ERROR_CODES.VALIDATION_ERROR
