@@ -105,20 +105,6 @@ const invoiceSchema = new mongoose.Schema({
     type: clientSchema,
     required: true
   },
-  hasDifferentShippingAddress: {
-    type: Boolean,
-    default: false
-  },
-  shippingAddress: {
-    type: addressSchema,
-    // Requis uniquement si hasDifferentShippingAddress est true
-    validate: {
-      validator: function(value) {
-        return !this.hasDifferentShippingAddress || (value && Object.keys(value).length > 0);
-      },
-      message: 'L\'adresse de livraison est requise lorsque l\'option est activée'
-    }
-  },
   status: {
     type: String,
     enum: Object.values(INVOICE_STATUS),

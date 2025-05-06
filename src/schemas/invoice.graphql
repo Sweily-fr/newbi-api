@@ -29,8 +29,6 @@ type Invoice {
   finalTotalTTC: Float!
   customFields: [CustomField!]
   discountAmount: Float
-  hasDifferentShippingAddress: Boolean
-  shippingAddress: Address
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -62,8 +60,6 @@ input CreateInvoiceInput {
   number: String
   prefix: String
   purchaseOrderNumber: String
-  hasDifferentShippingAddress: Boolean
-  shippingAddress: AddressInput
 }
 
 input UpdateInvoiceInput {
@@ -86,8 +82,6 @@ input UpdateInvoiceInput {
   number: String
   prefix: String
   purchaseOrderNumber: String
-  hasDifferentShippingAddress: Boolean
-  shippingAddress: AddressInput
 }
 
 extend type Query {
