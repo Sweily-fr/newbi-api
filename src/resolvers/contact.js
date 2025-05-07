@@ -18,8 +18,8 @@ const contactResolvers = {
       try {
         // Configuration du message
         const mailOptions = {
-          from: process.env.FROM_EMAIL,
-          to: 'contact@generation-business.com', // Adresse email de réception des messages de contact
+          from: 'Newbi <' + process.env.FROM_EMAIL+'>',
+          to: 'contact@newbi.fr', // Adresse email de réception des messages de contact
           replyTo: email,
           subject: `Formulaire de contact: ${subject}`,
           html: `
@@ -35,8 +35,8 @@ const contactResolvers = {
                   line-height: 1.6;
                   color: #333;
                   margin: 0;
-                  padding: 0;
-                  background-color: #f9fafb;
+                  padding: 40px;
+                  background-color: #f0eeff;
                 }
                 .container {
                   max-width: 600px;
@@ -45,11 +45,12 @@ const contactResolvers = {
                   background-color: #ffffff;
                   border-radius: 8px;
                   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                  border: 1px solid #e6e1ff;
                 }
                 .header {
                   text-align: center;
                   padding: 20px 0;
-                  border-bottom: 1px solid #e5e7eb;
+                  border-bottom: 1px solid #e6e1ff;
                 }
                 .content {
                   padding: 20px 0;
@@ -59,7 +60,7 @@ const contactResolvers = {
                 }
                 .field-label {
                   font-weight: bold;
-                  color: #4b5563;
+                  color: #5b50ff;
                 }
                 .field-value {
                   margin-top: 5px;
@@ -69,7 +70,7 @@ const contactResolvers = {
                   padding: 20px 0;
                   color: #6b7280;
                   font-size: 14px;
-                  border-top: 1px solid #e5e7eb;
+                  border-top: 1px solid #e6e1ff;
                 }
               </style>
             </head>
@@ -77,9 +78,9 @@ const contactResolvers = {
               <div class="container">
                 <div class="header">
                   <div style="text-align: center; margin-bottom: 20px;">
-                    <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
+                    <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_square_PW.png" alt="Newbi icon square" style="width: 80px; height: auto;">
                   </div>
-                  <h1 style="color: #3b82f6; margin: 0;">Nouveau message de contact</h1>
+                  <h1 style="color: #333333; margin: 0;">Nouveau message de contact</h1>
                 </div>
                 <div class="content">
                   <div class="field">
@@ -113,7 +114,7 @@ const contactResolvers = {
         
         // Envoi d'un email de confirmation à l'expéditeur
         const confirmationMailOptions = {
-          from: process.env.FROM_EMAIL,
+          from: 'Newbi <' + process.env.FROM_EMAIL+'>',
           to: email,
           subject: 'Confirmation de votre message - Newbi',
           html: `
@@ -129,8 +130,8 @@ const contactResolvers = {
                   line-height: 1.6;
                   color: #333;
                   margin: 0;
-                  padding: 0;
-                  background-color: #f9fafb;
+                  padding: 40px;
+                  background-color: #f0eeff;
                 }
                 .container {
                   max-width: 600px;
@@ -139,11 +140,12 @@ const contactResolvers = {
                   background-color: #ffffff;
                   border-radius: 8px;
                   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                  border: 1px solid #e6e1ff;
                 }
                 .header {
                   text-align: center;
                   padding: 20px 0;
-                  border-bottom: 1px solid #e5e7eb;
+                  border-bottom: 1px solid #e6e1ff;
                 }
                 .content {
                   padding: 20px 0;
@@ -153,16 +155,20 @@ const contactResolvers = {
                   padding: 20px 0;
                   color: #6b7280;
                   font-size: 14px;
-                  border-top: 1px solid #e5e7eb;
+                  border-top: 1px solid #e6e1ff;
                 }
                 .button {
                   display: inline-block;
-                  background-color: #3b82f6;
+                  background-color: #5b50ff;
                   color: white;
                   text-decoration: none;
                   padding: 10px 20px;
                   border-radius: 5px;
                   margin-top: 15px;
+                  font-weight: 500;
+                }
+                .button:hover {
+                  background-color: #4a41e0;
                 }
               </style>
             </head>
@@ -170,9 +176,9 @@ const contactResolvers = {
               <div class="container">
                 <div class="header">
                   <div style="text-align: center; margin-bottom: 20px;">
-                    <img src="${process.env.FRONTEND_URL}/images/logo_gb/PNG/Logo+texte_black.png" alt="Newbi" style="width: 200px; height: auto;">
+                    <img src="${process.env.FRONTEND_URL}/images/logo_newbi/PNG/Logo_square_PW.png" alt="Newbi" style="width: 80px; height: auto;">
                   </div>
-                  <h1 style="color: #3b82f6; margin: 0;">Confirmation de réception</h1>
+                  <h1 style="color: #333333; margin: 0;">Confirmation de réception</h1>
                 </div>
                 <div class="content">
                   <p>Bonjour ${name},</p>
@@ -184,7 +190,7 @@ const contactResolvers = {
                   </div>
                 </div>
                 <div class="footer">
-                  <p>© ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
+                  <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
                 </div>
               </div>
             </body>
