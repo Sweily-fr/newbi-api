@@ -43,7 +43,7 @@ async function startServer() {
     origin: ['http://localhost:5173', 'http://localhost:4000', 'https://studio.apollographql.com', process.env.FRONTEND_URL].filter(Boolean),
     credentials: true,
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization'] 
   }));
 
   // Middleware pour ajouter les en-têtes CORS spécifiques aux images
