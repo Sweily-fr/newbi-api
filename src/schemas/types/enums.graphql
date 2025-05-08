@@ -47,6 +47,7 @@ enum VatPaymentCondition {
   ENCAISSEMENTS
   DEBITS
   EXONERATION
+  NONE
 }
 
 enum CompanyStatus {
@@ -61,5 +62,6 @@ enum CompanyStatus {
   SCI
   SCOP
   ASSOCIATION
+  AUTO_ENTREPRENEUR
   AUTRE
 }

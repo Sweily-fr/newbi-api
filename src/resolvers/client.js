@@ -22,7 +22,15 @@ const clientResolvers = {
       if (search) {
         query.$or = [
           { name: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } }
+          { email: { $regex: search, $options: 'i' } },
+          { 'address.city': { $regex: search, $options: 'i' } },
+          { 'address.country': { $regex: search, $options: 'i' } },
+          { 'address.postalCode': { $regex: search, $options: 'i' } },
+          { 'address.street': { $regex: search, $options: 'i' } },
+          { firstName: { $regex: search, $options: 'i' } },
+          { lastName: { $regex: search, $options: 'i' } },
+          { siret: { $regex: search, $options: 'i' } },
+          { vatNumber: { $regex: search, $options: 'i' } }
         ];
       }
       

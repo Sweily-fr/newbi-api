@@ -50,7 +50,7 @@ type Company {
   siret: String
   vatNumber: String
   transactionCategory: TransactionCategory
-  vatPaymentCondition: VatPaymentCondition
+  vatPaymentCondition: String
   companyStatus: CompanyStatus
   address: Address
   bankDetails: BankDetails

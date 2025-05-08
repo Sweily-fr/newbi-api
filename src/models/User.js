@@ -7,7 +7,10 @@ const {
   PHONE_FR_REGEX,
   NAME_REGEX,
   URL_REGEX,
-  STRONG_PASSWORD_REGEX
+  STRONG_PASSWORD_REGEX,
+  CAPITAL_SOCIAL_REGEX,
+  RCS_REGEX,
+  isFieldRequiredForCompanyStatus
 } = require('../utils/validators');
 const addressSchema = require('./schemas/address');
 const bankDetailsSchema = require('./schemas/bankDetails');
@@ -157,10 +160,21 @@ const userSchema = new mongoose.Schema({
       trim: true,
       validate: {
         validator: function(v) {
-          // Validation uniquement si une valeur est fournie
-          return !v || SIRET_REGEX.test(v);
+          // Si aucune valeur n'est fournie, vérifier si elle est obligatoire selon le statut
+          if (!v) {
+            // Vérifier si le champ est obligatoire pour ce statut juridique
+            if (this.company && this.company.companyStatus && 
+                isFieldRequiredForCompanyStatus('siret', this.company.companyStatus)) {
+              return false;
+            }
+            // Sinon c'est valide (champ optionnel)
+            return true;
+          }
+          
+          // Si une valeur est fournie, vérifier qu'elle est au bon format
+          return SIRET_REGEX.test(v);
         },
-        message: 'Veuillez fournir un numéro SIRET valide (14 chiffres)'
+        message: 'Le numéro SIRET est obligatoire pour ce statut juridique et doit être valide (14 chiffres)'
       }
     },
     vatNumber: {
@@ -168,10 +182,21 @@ const userSchema = new mongoose.Schema({
       trim: true,
       validate: {
         validator: function(v) {
-          // Validation uniquement si une valeur est fournie
-          return !v || VAT_FR_REGEX.test(v);
+          // Si aucune valeur n'est fournie, vérifier si elle est obligatoire selon le statut
+          if (!v) {
+            // Vérifier si le champ est obligatoire pour ce statut juridique
+            if (this.company && this.company.companyStatus && 
+                isFieldRequiredForCompanyStatus('vatNumber', this.company.companyStatus)) {
+              return false;
+            }
+            // Sinon c'est valide (champ optionnel)
+            return true;
+          }
+          
+          // Si une valeur est fournie, vérifier qu'elle est au bon format
+          return VAT_FR_REGEX.test(v);
         },
-        message: 'Veuillez fournir un numéro de TVA valide (format FR)'
+        message: 'Le numéro de TVA est obligatoire pour ce statut juridique et doit être valide (format FR)'
       }
     },
     transactionCategory: {
@@ -181,11 +206,12 @@ const userSchema = new mongoose.Schema({
     },
     vatPaymentCondition: {
       type: String,
-      enum: ['ENCAISSEMENTS', 'DEBITS', 'EXONERATION']
+      enum: ['ENCAISSEMENTS', 'DEBITS', 'EXONERATION', 'NONE'],
+      default: 'NONE'
     },
     companyStatus: {
       type: String,
-      enum: ['SARL', 'SAS', 'EURL', 'SASU', 'EI', 'EIRL', 'SA', 'SNC', 'SCI', 'SCOP', 'ASSOCIATION', 'AUTRE'],
+      enum: ['SARL', 'SAS', 'EURL', 'SASU', 'EI', 'EIRL', 'SA', 'SNC', 'SCI', 'SCOP', 'ASSOCIATION', 'AUTO_ENTREPRENEUR', 'AUTRE'],
       default: 'AUTRE'
     },
     capitalSocial: {
@@ -193,11 +219,21 @@ const userSchema = new mongoose.Schema({
       trim: true,
       validate: {
         validator: function(v) {
-          // Validation uniquement si une valeur est fournie
-          const { CAPITAL_SOCIAL_REGEX } = require('../utils/validators');
-          return !v || CAPITAL_SOCIAL_REGEX.test(v);
+          // Si aucune valeur n'est fournie, vérifier si elle est obligatoire selon le statut
+          if (!v) {
+            // Vérifier si le champ est obligatoire pour ce statut juridique
+            if (this.company && this.company.companyStatus && 
+                isFieldRequiredForCompanyStatus('capitalSocial', this.company.companyStatus)) {
+              return false;
+            }
+            // Sinon c'est valide (champ optionnel)
+            return true;
+          }
+          
+          // Si une valeur est fournie, vérifier qu'elle est au bon format
+          return CAPITAL_SOCIAL_REGEX.test(v);
         },
-        message: 'Veuillez fournir un capital social valide (ex: 10000)'
+        message: 'Le capital social est obligatoire pour ce statut juridique et doit être valide (ex: 10000)'
       }
     },
     rcs: {
@@ -205,11 +241,21 @@ const userSchema = new mongoose.Schema({
       trim: true,
       validate: {
         validator: function(v) {
-          // Validation uniquement si une valeur est fournie
-          const { RCS_REGEX } = require('../utils/validators');
-          return !v || RCS_REGEX.test(v);
+          // Si aucune valeur n'est fournie, vérifier si elle est obligatoire selon le statut
+          if (!v) {
+            // Vérifier si le champ est obligatoire pour ce statut juridique
+            if (this.company && this.company.companyStatus && 
+                isFieldRequiredForCompanyStatus('rcs', this.company.companyStatus)) {
+              return false;
+            }
+            // Sinon c'est valide (champ optionnel)
+            return true;
+          }
+          
+          // Si une valeur est fournie, vérifier qu'elle est au bon format
+          return RCS_REGEX.test(v);
         },
-        message: 'Veuillez fournir un RCS valide (ex: 981 576 549 R.C.S. Paris)'
+        message: 'Le RCS est obligatoire pour ce statut juridique et doit être valide (ex: Paris B 123 456 789)'
       }
     },
     address: addressSchema,

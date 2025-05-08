@@ -5,8 +5,9 @@ const { isAuthenticated } = require('../middlewares/auth');
 const { sendPasswordResetEmail, sendVerificationEmail, sendPasswordResetConfirmationEmail } = require('../utils/mailer');
 const { saveBase64Image, deleteFile } = require('../utils/fileUpload');
 const path = require('path');
-const { 
-  AppError, 
+const CryptoJS = require('crypto-js');
+const {
+  AppError,
   ERROR_CODES,
   createNotFoundError,
   createAlreadyExistsError,
@@ -16,7 +17,7 @@ const {
 const generateToken = (user, rememberMe = false) => {
   // Définir la durée d'expiration en fonction de l'option "Se souvenir de moi"
   const expiresIn = rememberMe ? '30d' : '24h'; // 30 jours si "Se souvenir de moi" est activé, sinon 24 heures
-  
+
   return jwt.sign(
     { id: user.id, email: user.email, isEmailVerified: user.isEmailVerified },
     process.env.JWT_SECRET,
@@ -38,71 +39,180 @@ const userResolvers = {
 
   Mutation: {
     register: async (_, { input }) => {
-      const existingUser = await User.findOne({ email: input.email.toLowerCase() });
-      if (existingUser) {
-        throw createAlreadyExistsError('utilisateur', 'email', input.email);
+      try {
+        const existingUser = await User.findOne({ email: input.email.toLowerCase() });
+        if (existingUser) {
+          throw createAlreadyExistsError('utilisateur', 'email', input.email);
+        }
+
+        // Déchiffrer le mot de passe si nécessaire
+        let password = input.password;
+        if (input.passwordEncrypted) {
+          try {
+            const parts = password.split(':');
+            if (parts.length !== 2) {
+              throw new Error('Format de mot de passe chiffré invalide');
+            }
+
+            // SHA256 sur la clé, comme côté front !
+            const keyRaw = process.env.PASSWORD_ENCRYPTION_KEY || 'newbi-public-key';
+            const key = CryptoJS.SHA256(keyRaw);
+
+            const iv = CryptoJS.enc.Base64.parse(parts[0]);
+            const cipherText = CryptoJS.enc.Base64.parse(parts[1]);
+
+            const cipherParams = CryptoJS.lib.CipherParams.create({
+              ciphertext: cipherText,
+            });
+
+            const decrypted = CryptoJS.AES.decrypt(
+              cipherParams,
+              key,
+              { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+            );
+
+            const clearPassword = decrypted.toString(CryptoJS.enc.Utf8);
+
+            if (!clearPassword) {
+              throw new Error('Échec du déchiffrement du mot de passe');
+            }
+            password = clearPassword;
+          } catch (error) {
+            console.error('Erreur lors du déchiffrement du mot de passe:', error);
+            throw new AppError(
+              'Erreur lors du traitement de votre demande. Veuillez réessayer.',
+              ERROR_CODES.INTERNAL_ERROR
+            );
+          }
+        }
+
+        // Générer un token de vérification d'email
+        const emailVerificationToken = generateVerificationToken();
+        const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 heures
+
+        // Créer un nouvel utilisateur avec les données fournies
+        const user = new User({
+          ...input,
+          password, // Utiliser le mot de passe déchiffré
+          email: input.email.toLowerCase(),
+          emailVerificationToken,
+          emailVerificationExpires
+        });
+
+        await user.save();
+
+        // Envoyer l'email de vérification
+        await sendVerificationEmail(user.email, emailVerificationToken);
+
+        // Ne pas générer de token, l'utilisateur doit d'abord vérifier son email
+        return {
+          user,
+          message: "Inscription réussie ! Veuillez vérifier votre boîte mail pour confirmer votre adresse email avant de vous connecter."
+        };
+      } catch (error) {
+        console.error('Erreur lors de l\'inscription:', error);
+        if (error.name === 'AppError') throw error;
+
+        throw new AppError(
+          'Une erreur est survenue lors de l\'inscription.',
+          ERROR_CODES.INTERNAL_ERROR,
+          error.message
+        );
       }
-
-      // Générer un token de vérification d'email
-      const emailVerificationToken = generateVerificationToken();
-      const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 heures
-
-      const user = new User({
-        ...input,
-        email: input.email.toLowerCase(),
-        emailVerificationToken,
-        emailVerificationExpires
-      });
-      await user.save();
-
-      // Envoyer l'email de vérification
-      await sendVerificationEmail(user.email, emailVerificationToken);
-
-      // Ne pas générer de token, l'utilisateur doit d'abord vérifier son email
-      return { 
-        user,
-        message: "Inscription réussie ! Veuillez vérifier votre boîte mail pour confirmer votre adresse email avant de vous connecter."
-      };
     },
 
     login: async (_, { input }) => {
-      const user = await User.findOne({ email: input.email.toLowerCase() });
-      if (!user) {
+      try {
+        const user = await User.findOne({ email: input.email.toLowerCase() });
+        if (!user) {
+          throw new AppError(
+            'L\'email n\'existe pas',
+            ERROR_CODES.UNAUTHENTICATED
+          );
+        }
+
+        // Déchiffrer le mot de passe si nécessaire
+        let password = input.password;
+        if (input.passwordEncrypted) {
+          try {
+            // Déchiffrer avec AES-CBC
+            // Format attendu: "iv_base64:encrypted_base64"
+            const parts = password.split(':');
+            if (parts.length !== 2) {
+              throw new Error('Format de mot de passe chiffré invalide');
+            }
+
+            // SHA256 sur la clé, comme côté front !
+            const keyRaw = process.env.PASSWORD_ENCRYPTION_KEY || 'newbi-public-key';
+            const key = CryptoJS.SHA256(keyRaw);
+
+            const iv = CryptoJS.enc.Base64.parse(parts[0]);
+            const cipherText = CryptoJS.enc.Base64.parse(parts[1]);
+
+            const cipherParams = CryptoJS.lib.CipherParams.create({
+              ciphertext: cipherText,
+            });
+
+            const decrypted = CryptoJS.AES.decrypt(
+              cipherParams,
+              key,
+              { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+            );
+
+            const clearPassword = decrypted.toString(CryptoJS.enc.Utf8);
+
+            if (!clearPassword) {
+              throw new Error('Échec du déchiffrement du mot de passe');
+            }
+            password = clearPassword;
+          } catch (error) {
+            console.error('Erreur lors du déchiffrement du mot de passe:', error);
+            throw new AppError(
+              'Erreur lors du traitement de votre demande. Veuillez réessayer.',
+              ERROR_CODES.INTERNAL_ERROR
+            );
+          }
+        }
+
+        const validPassword = await user.comparePassword(password);
+        if (!validPassword) {
+          throw new AppError(
+            'Le mot de passe ne correspond pas',
+            ERROR_CODES.UNAUTHENTICATED
+          );
+        }
+
+        // Vérifier si le compte est désactivé
+        if (user.isDisabled) {
+          throw new AppError(
+            'Ce compte a été désactivé. Utilisez la mutation reactivateAccount pour le réactiver.',
+            ERROR_CODES.ACCOUNT_DISABLED
+          );
+        }
+
+        // Vérifier si l'email est vérifié
+        if (!user.isEmailVerified) {
+          throw new AppError(
+            'Veuillez vérifier votre adresse email avant de vous connecter. Consultez votre boîte de réception.',
+            ERROR_CODES.EMAIL_NOT_VERIFIED
+          );
+        }
+
+        // Utiliser l'option rememberMe pour générer un token avec une durée appropriée
+        const rememberMe = input.rememberMe || false;
+        const token = generateToken(user, rememberMe);
+
+        return { token, user };
+      } catch (error) {
+        if (error.name === 'AppError') throw error;
+
+        console.error('Erreur lors de la connexion:', error);
         throw new AppError(
-          'L\'email n\'existe pas',
-          ERROR_CODES.UNAUTHENTICATED
+          'Une erreur est survenue lors de la connexion.',
+          ERROR_CODES.INTERNAL_ERROR,
+          error.message
         );
       }
-
-      const validPassword = await user.comparePassword(input.password);
-      if (!validPassword) {
-        throw new AppError(
-          'Le mot de passe ne correspond pas',
-          ERROR_CODES.UNAUTHENTICATED
-        );
-      }
-
-      // Vérifier si le compte est désactivé
-      if (user.isDisabled) {
-        throw new AppError(
-          'Ce compte a été désactivé. Utilisez la mutation reactivateAccount pour le réactiver.',
-          ERROR_CODES.ACCOUNT_DISABLED
-        );
-      }
-
-      // Vérifier si l'email est vérifié
-      if (!user.isEmailVerified) {
-        throw new AppError(
-          'Veuillez vérifier votre adresse email avant de vous connecter. Consultez votre boîte de réception.',
-          ERROR_CODES.EMAIL_NOT_VERIFIED
-        );
-      }
-
-      // Utiliser l'option rememberMe pour générer un token avec une durée appropriée
-      const rememberMe = input.rememberMe || false;
-      const token = generateToken(user, rememberMe);
-      
-      return { token, user };
     },
 
     requestPasswordReset: async (_, { input }) => {
@@ -130,7 +240,7 @@ const userResolvers = {
       }
     },
 
-    resetPassword: async (_, { input: { token, newPassword } }) => {
+    resetPassword: async (_, { input: { token, newPassword, passwordEncrypted } }) => {
       try {
         // Hash le token reçu pour le comparer avec celui stocké dans la base
         const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
@@ -148,31 +258,71 @@ const userResolvers = {
           );
         }
 
-        // Assigner le nouveau mot de passe (sera hashé par le middleware pre-save)
-        user.password = newPassword;
+        // Déchiffrer le mot de passe si nécessaire
+        let password = newPassword;
+        if (passwordEncrypted) {
+          try {
+            const parts = password.split(':');
+            if (parts.length !== 2) {
+              throw new Error('Format de mot de passe chiffré invalide');
+            }
+
+            // SHA256 sur la clé, comme côté front !
+            const keyRaw = process.env.PASSWORD_ENCRYPTION_KEY || 'newbi-public-key';
+            const key = CryptoJS.SHA256(keyRaw);
+
+            const iv = CryptoJS.enc.Base64.parse(parts[0]);
+            const cipherText = CryptoJS.enc.Base64.parse(parts[1]);
+
+            const cipherParams = CryptoJS.lib.CipherParams.create({
+              ciphertext: cipherText,
+            });
+
+            const decrypted = CryptoJS.AES.decrypt(
+              cipherParams,
+              key,
+              { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+            );
+
+            const clearPassword = decrypted.toString(CryptoJS.enc.Utf8);
+
+            if (!clearPassword) {
+              throw new Error('Échec du déchiffrement du mot de passe');
+            }
+            password = clearPassword;
+          } catch (error) {
+            console.error('Erreur lors du déchiffrement du mot de passe:', error);
+            throw new AppError(
+              'Erreur lors du traitement de votre demande. Veuillez réessayer.',
+              ERROR_CODES.INTERNAL_ERROR
+            );
+          }
+        }
+
+        // Mettre à jour le mot de passe de l'utilisateur
+        user.password = password;
         user.resetPasswordToken = undefined;
         user.resetPasswordExpires = undefined;
         await user.save();
-        
+
         // Envoyer un email de confirmation à l'utilisateur
         try {
           await sendPasswordResetConfirmationEmail(user.email);
-          console.log(`Email de confirmation de réinitialisation de mot de passe envoyé à ${user.email}`);
         } catch (emailError) {
           console.error('Erreur lors de l\'envoi de l\'email de confirmation:', emailError);
-          // Ne pas bloquer le processus si l'envoi de l'email échoue
+          // Continuer même si l'envoi de l'email échoue
         }
 
         return {
           success: true,
-          message: 'Votre mot de passe a été réinitialisé avec succès.'
+          message: "Votre mot de passe a été réinitialisé avec succès. Vous pouvez maintenant vous connecter avec votre nouveau mot de passe."
         };
       } catch (error) {
-        console.error('Erreur lors de la réinitialisation du mot de passe:', error);
-        throw new AppError(
-          'Une erreur est survenue lors de la réinitialisation du mot de passe.',
-          ERROR_CODES.INTERNAL_ERROR
-        );
+        console.error('Error in resetPassword:', error);
+        return {
+          success: false,
+          message: "Une erreur est survenue lors de la réinitialisation du mot de passe."
+        };
       }
     },
 
@@ -180,11 +330,11 @@ const userResolvers = {
       try {
         // Récupérer d'abord l'utilisateur
         const userDoc = await User.findById(user.id);
-        
+
         if (!userDoc) {
           throw createNotFoundError('Utilisateur');
         }
-        
+
         // Gérer l'upload de la photo de profil si présente dans l'input
         if (input.profilePicture !== undefined) {
           // Si la photo de profil est une chaîne vide, cela signifie que l'utilisateur veut la supprimer
@@ -200,10 +350,10 @@ const userResolvers = {
                 // Continuer même si la suppression échoue
               }
             }
-            
+
             // Mettre à jour le champ profilePicture à une chaîne vide
             input.profilePicture = '';
-          } 
+          }
           // Si la photo de profil est une chaîne base64, cela signifie que l'utilisateur veut la mettre à jour
           else if (input.profilePicture.startsWith('data:image')) {
             // Si une photo de profil existe déjà, la supprimer
@@ -217,11 +367,11 @@ const userResolvers = {
                 // Continuer même si la suppression échoue
               }
             }
-            
+
             // Sauvegarder la nouvelle image
             const picturePath = await saveBase64Image(input.profilePicture, 'profile-pictures');
             console.log('Nouvelle photo de profil sauvegardée:', picturePath);
-            
+
             // Mettre à jour le champ profilePicture avec le chemin de la nouvelle image
             input.profilePicture = picturePath;
           }
@@ -230,24 +380,24 @@ const userResolvers = {
             delete input.profilePicture;
           }
         }
-        
+
         // Mettre à jour les champs du profil
         userDoc.profile = {
           ...userDoc.profile.toObject(),
           ...input
         };
-        
+
         // Sauvegarder avec validation
         await userDoc.save();
-        
+
         return userDoc;
       } catch (error) {
         if (error.name === 'ValidationError') {
           throw createValidationError(error);
         }
-        
+
         if (error.name === 'AppError') throw error;
-        
+
         console.error('Erreur lors de la mise à jour du profil:', error);
         throw new AppError(
           'Une erreur est survenue lors de la mise à jour du profil.',
@@ -260,63 +410,73 @@ const userResolvers = {
       try {
         // Récupérer d'abord l'utilisateur
         const userDoc = await User.findById(user.id);
-        
+
         if (!userDoc) {
           throw createNotFoundError('Utilisateur');
         }
-        
+
         // Mettre à jour les champs de l'entreprise
         userDoc.company = {
           ...userDoc.company.toObject(),
           ...input
         };
-        
+
         // S'assurer que transactionCategory est correctement défini
         console.log('Input complet:', JSON.stringify(input));
         console.log('Transaction Category reçue:', input.transactionCategory);
-        
+
         // Traiter explicitement le champ transactionCategory
         // Si la valeur est définie (même vide), l'utiliser
         if (Object.prototype.hasOwnProperty.call(input, 'transactionCategory')) {
           userDoc.company.transactionCategory = input.transactionCategory || null;
           console.log('Transaction Category après traitement:', userDoc.company.transactionCategory);
         }
-        
+
         // Traiter explicitement le champ vatPaymentCondition
         if (Object.prototype.hasOwnProperty.call(input, 'vatPaymentCondition')) {
-          userDoc.company.vatPaymentCondition = input.vatPaymentCondition || null;
+          // Si la valeur est vide ou null, utiliser 'NONE' comme valeur par défaut
+          // Sinon, utiliser la valeur fournie si elle est valide
+          const validValues = ['ENCAISSEMENTS', 'DEBITS', 'EXONERATION', 'NONE'];
+          const value = input.vatPaymentCondition || 'NONE';
+
+          // Vérifier si la valeur est valide
+          userDoc.company.vatPaymentCondition = validValues.includes(value) ? value : 'NONE';
           console.log('VAT Payment Condition après traitement:', userDoc.company.vatPaymentCondition);
+        } else if (userDoc.company && userDoc.company.vatPaymentCondition === '') {
+          // Si la valeur est une chaîne vide, la remplacer par 'NONE'
+          userDoc.company.vatPaymentCondition = 'NONE';
         }
-        
+        // Ne pas définir de valeur par défaut si le champ n'existe pas du tout
+
         // Traiter explicitement le champ companyStatus
         if (Object.prototype.hasOwnProperty.call(input, 'companyStatus')) {
           userDoc.company.companyStatus = input.companyStatus || 'AUTRE';
           console.log('Company Status après traitement:', userDoc.company.companyStatus);
         }
-        
+
         // Traiter explicitement le champ capitalSocial
         if (Object.prototype.hasOwnProperty.call(input, 'capitalSocial')) {
           userDoc.company.capitalSocial = input.capitalSocial || null;
           console.log('Capital Social après traitement:', userDoc.company.capitalSocial);
         }
-        
+
         // Traiter explicitement le champ rcs
         if (Object.prototype.hasOwnProperty.call(input, 'rcs')) {
           userDoc.company.rcs = input.rcs || null;
           console.log('RCS après traitement:', userDoc.company.rcs);
         }
-        
+
         // Sauvegarder avec validation
         await userDoc.save();
-        
+
         return userDoc;
       } catch (error) {
         if (error.name === 'ValidationError') {
           throw createValidationError(error);
         }
-        
+
         if (error.name === 'AppError') throw error;
-        
+
         console.error('Erreur lors de la mise à jour des informations de l\'entreprise:', error);
         throw new AppError(
           'Une erreur est survenue lors de la mise à jour des informations de l\'entreprise.',
@@ -352,7 +512,7 @@ const userResolvers = {
         userDoc.company = userDoc.company || {};
         userDoc.company.logo = logoPath;
         console.log('Logo path sauvegardé dans userDoc:', userDoc.company.logo);
-        
+
         await userDoc.save();
         console.log('Utilisateur sauvegardé avec logo:', userDoc.company.logo);
 
@@ -393,7 +553,7 @@ const userResolvers = {
         userDoc.profile = userDoc.profile || {};
         userDoc.profile.profilePicture = picturePath;
         console.log('Photo path sauvegardé dans userDoc:', userDoc.profile.profilePicture);
-        
+
         await userDoc.save();
         console.log('Utilisateur sauvegardé avec photo de profil:', userDoc.profile.profilePicture);
 
@@ -514,7 +674,7 @@ const userResolvers = {
     resendVerificationEmail: async (_, { email }) => {
       // Rechercher l'utilisateur par email
       const user = await User.findOne({ email: email.toLowerCase() });
-      
+
       if (!user) {
         // Pour des raisons de sécurité, ne pas indiquer si l'email existe ou non
         return true;
@@ -543,11 +703,11 @@ const userResolvers = {
     updatePassword: isAuthenticated(async (_, { currentPassword, newPassword }, { user }) => {
       try {
         const userDoc = await User.findById(user.id);
-        
+
         if (!userDoc) {
           throw createNotFoundError('Utilisateur');
         }
-        
+
         const validPassword = await userDoc.comparePassword(currentPassword);
         if (!validPassword) {
           throw new AppError(
@@ -556,17 +716,17 @@ const userResolvers = {
             { field: 'currentPassword' }
           );
         }
-        
+
         userDoc.password = newPassword;
         await userDoc.save();
-        
+
         return {
           success: true,
           message: 'Mot de passe mis à jour avec succès'
         };
       } catch (error) {
         if (error.name === 'AppError') throw error;
-        
+
         console.error('Erreur lors de la mise à jour du mot de passe:', error);
         throw new AppError(
           'Une erreur est survenue lors de la mise à jour du mot de passe.',
@@ -578,11 +738,11 @@ const userResolvers = {
     disableAccount: isAuthenticated(async (_, { password }, { user }) => {
       try {
         const userDoc = await User.findById(user.id);
-        
+
         if (!userDoc) {
           throw createNotFoundError('Utilisateur');
         }
-        
+
         // Vérifier le mot de passe pour confirmer l'action
         const validPassword = await userDoc.comparePassword(password);
         if (!validPassword) {
@@ -592,18 +752,18 @@ const userResolvers = {
             { field: 'password' }
           );
         }
-        
+
         // Désactiver le compte
         userDoc.isDisabled = true;
         await userDoc.save();
-        
+
         return {
           success: true,
           message: 'Votre compte a été désactivé avec succès'
         };
       } catch (error) {
         if (error.name === 'AppError') throw error;
-        
+
         console.error('Erreur lors de la désactivation du compte:', error);
         throw new AppError(
           'Une erreur est survenue lors de la désactivation de votre compte.',
@@ -615,11 +775,11 @@ const userResolvers = {
     reactivateAccount: async (_, { email, password }) => {
       try {
         const user = await User.findOne({ email: email.toLowerCase() });
-        
+
         if (!user) {
           throw createNotFoundError('Utilisateur');
         }
-        
+
         // Vérifier si le compte est bien désactivé
         if (!user.isDisabled) {
           return {
@@ -628,7 +788,7 @@ const userResolvers = {
             user: null
           };
         }
-        
+
         // Vérifier le mot de passe pour confirmer l'action
         const validPassword = await user.comparePassword(password);
         if (!validPassword) {
@@ -638,11 +798,11 @@ const userResolvers = {
             { field: 'password' }
           );
         }
-        
+
         // Réactiver le compte
         user.isDisabled = false;
         await user.save();
-        
+
         return {
           success: true,
           message: 'Votre compte a été réactivé avec succès',
@@ -650,7 +810,7 @@ const userResolvers = {
         };
       } catch (error) {
         if (error.name === 'AppError') throw error;
-        
+
         console.error('Erreur lors de la réactivation du compte:', error);
         throw new AppError(
           'Une erreur est survenue lors de la réactivation de votre compte.',
@@ -658,7 +818,7 @@ const userResolvers = {
         );
       }
     },
-    
+
     // Nouvelle mutation pour associer un ID client Stripe à un utilisateur
     setStripeCustomerId: isAuthenticated(async (_, { stripeCustomerId }, { user }) => {
       try {
@@ -667,16 +827,16 @@ const userResolvers = {
         if (!userDoc) {
           throw createNotFoundError('Utilisateur non trouvé');
         }
-        
+
         // Mettre à jour le Stripe Customer ID
         userDoc.subscription = userDoc.subscription || {};
         userDoc.subscription.stripeCustomerId = stripeCustomerId;
-        
+
         // Sauvegarder les modifications
         await userDoc.save();
-        
+
         console.log(`Stripe Customer ID associé à l'utilisateur ${userDoc.email}: ${stripeCustomerId}`);
-        
+
         return userDoc;
       } catch (error) {
         console.error('Erreur lors de l\'association du Stripe Customer ID:', error);

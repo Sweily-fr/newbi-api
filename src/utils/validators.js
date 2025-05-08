@@ -246,6 +246,49 @@ const isValidRCS = (rcs) => {
   return RCS_REGEX.test(rcs);
 };
 
+/**
+ * Configuration des champs obligatoires par statut juridique
+ * Cette constante définit quels champs sont obligatoires pour chaque statut juridique
+ */
+const REQUIRED_FIELDS_BY_COMPANY_STATUS = {
+  // Sociétés commerciales
+  'SARL': ['siret', 'vatNumber', 'capitalSocial', 'rcs'],
+  'SAS': ['siret', 'vatNumber', 'capitalSocial', 'rcs'],
+  'EURL': ['siret', 'vatNumber', 'capitalSocial', 'rcs'],
+  'SASU': ['siret', 'vatNumber', 'capitalSocial', 'rcs'],
+  'SA': ['siret', 'vatNumber', 'capitalSocial', 'rcs'],
+  'SNC': ['siret', 'vatNumber', 'capitalSocial', 'rcs'],
+  
+  // Sociétés civiles
+  'SCI': ['siret', 'rcs'],
+  
+  // Sociétés coopératives
+  'SCOP': ['siret', 'vatNumber', 'capitalSocial', 'rcs'],
+  
+  // Autres formes juridiques
+  'EI': ['siret'],
+  'EIRL': ['siret'],
+  'ASSOCIATION': [],
+  'AUTO_ENTREPRENEUR': ['siret'],
+  'AUTRE': []
+};
+
+/**
+ * Vérifie si un champ est obligatoire pour un statut juridique donné
+ * @param {string} field - Le nom du champ à vérifier
+ * @param {string} companyStatus - Le statut juridique de l'entreprise
+ * @returns {boolean} - True si le champ est obligatoire, false sinon
+ */
+const isFieldRequiredForCompanyStatus = (field, companyStatus) => {
+  // Si le statut n'est pas défini ou n'existe pas dans la configuration, aucun champ n'est obligatoire
+  if (!companyStatus || !REQUIRED_FIELDS_BY_COMPANY_STATUS[companyStatus]) {
+    return false;
+  }
+  
+  // Vérifier si le champ est dans la liste des champs obligatoires pour ce statut
+  return REQUIRED_FIELDS_BY_COMPANY_STATUS[companyStatus].includes(field);
+};
+
 module.exports = {
   // Regex
   EMAIL_REGEX,
@@ -300,5 +343,9 @@ module.exports = {
   isValidUnit,
   isValidFooterNotes,
   isValidCapitalSocial,
-  isValidRCS
+  isValidRCS,
+  
+  // Configuration et validation des champs obligatoires par statut juridique
+  REQUIRED_FIELDS_BY_COMPANY_STATUS,
+  isFieldRequiredForCompanyStatus
 };
