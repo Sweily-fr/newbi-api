@@ -8,7 +8,6 @@ const {
 
 const clientSchema = require('./schemas/client');
 const itemSchema = require('./schemas/item');
-const addressSchema = require('./schemas/address');
 const companyInfoSchema = require('./schemas/companyInfo');
 const customFieldSchema = require('./schemas/customField');
 const { INVOICE_STATUS, PAYMENT_METHOD, DISCOUNT_TYPE } = require('./constants/enums');

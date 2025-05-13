@@ -427,10 +427,25 @@ const invoiceResolvers = {
       
       // Mettre à jour les informations de l'entreprise si fournies
       if (updatedInput.companyInfo) {
+        // Créer une copie des données de l'entreprise pour la mise à jour
         updateData.companyInfo = {
           ...updateData.companyInfo,
           ...updatedInput.companyInfo
         };
+        
+        // Gestion spéciale des coordonnées bancaires
+        if (updatedInput.companyInfo.bankDetails === null) {
+          // Si bankDetails est explicitement null, le supprimer complètement
+          delete updateData.companyInfo.bankDetails;
+        } else if (updatedInput.companyInfo.bankDetails) {
+          // Si bankDetails est fourni, vérifier que tous les champs requis sont présents
+          const { iban, bic, bankName } = updatedInput.companyInfo.bankDetails;
+          
+          // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
+          if (!iban || !bic || !bankName) {
+            delete updateData.companyInfo.bankDetails;
+          }
+        }
       }
       
       // Mettre à jour le client si fourni
@@ -483,12 +498,40 @@ const invoiceResolvers = {
       });
       
       try {
-        // Mettre à jour la facture en utilisant findOneAndUpdate pour éviter les validations
+        // Désactiver temporairement les validations pour les coordonnées bancaires
+        // car elles sont gérées manuellement dans le code ci-dessus
+        const originalValidate = Invoice.schema.path('companyInfo.bankDetails.iban')?.validators;
+        const originalValidateBic = Invoice.schema.path('companyInfo.bankDetails.bic')?.validators;
+        const originalValidateBankName = Invoice.schema.path('companyInfo.bankDetails.bankName')?.validators;
+        
+        // Supprimer temporairement les validateurs
+        if (originalValidate) {
+          Invoice.schema.path('companyInfo.bankDetails.iban').validators = [];
+        }
+        if (originalValidateBic) {
+          Invoice.schema.path('companyInfo.bankDetails.bic').validators = [];
+        }
+        if (originalValidateBankName) {
+          Invoice.schema.path('companyInfo.bankDetails.bankName').validators = [];
+        }
+        
+        // Mettre à jour la facture
         const updatedInvoice = await Invoice.findOneAndUpdate(
           { _id: id, createdBy: user.id },
           { $set: updateData },
           { new: true, runValidators: true }
         ).populate('createdBy');
+        
+        // Rétablir les validateurs
+        if (originalValidate) {
+          Invoice.schema.path('companyInfo.bankDetails.iban').validators = originalValidate;
+        }
+        if (originalValidateBic) {
+          Invoice.schema.path('companyInfo.bankDetails.bic').validators = originalValidateBic;
+        }
+        if (originalValidateBankName) {
+          Invoice.schema.path('companyInfo.bankDetails.bankName').validators = originalValidateBankName;
+        }
         
         if (!updatedInvoice) {
           throw createNotFoundError('Facture');

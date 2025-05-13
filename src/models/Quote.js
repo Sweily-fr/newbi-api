@@ -2,15 +2,9 @@ const mongoose = require('mongoose');
 const { 
   isDateAfter, 
   URL_REGEX, 
-  isNonEmptyTrimmedString, 
   isPositiveAmount,
-  isPositiveNonZeroAmount,
-  NAME_REGEX,
-  STREET_REGEX,
   isValidFooterNotes
 } = require('../utils/validators');
-const addressSchema = require('./schemas/address');
-const bankDetailsSchema = require('./schemas/bankDetails');
 const clientSchema = require('./schemas/client');
 const itemSchema = require('./schemas/item');
 const companyInfoSchema = require('./schemas/companyInfo');
