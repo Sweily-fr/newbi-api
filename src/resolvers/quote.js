@@ -8,6 +8,7 @@ const {
   createNotFoundError, 
   createResourceLockedError,
   createStatusTransitionError,
+  createValidationError,
   AppError,
   ERROR_CODES
 } = require('../utils/errors');
@@ -361,7 +362,18 @@ const quoteResolvers = {
         input.discount,
         input.discountType
       );
-
+      
+      // Vérifier si le client a une adresse de livraison différente
+      const clientData = input.client;
+      
+      // Si le client a une adresse de livraison différente, s'assurer qu'elle est bien fournie
+      if (clientData.hasDifferentShippingAddress === true && !clientData.shippingAddress) {
+        throw createValidationError(
+          'L\'adresse de livraison est requise lorsque l\'option "Adresse de livraison différente" est activée',
+          { 'client.shippingAddress': 'L\'adresse de livraison est requise' }
+        );
+      }
+      
       // Créer le devis avec les informations de l'entreprise du profil utilisateur si non fournies
       const quote = new Quote({
         ...input,
@@ -417,8 +429,18 @@ const quoteResolvers = {
         input = { ...input, ...totals };
       }
 
-      // Si les informations de l'entreprise sont fournies dans la mise à jour, les utiliser, sinon conserver les existantes
-      const updateData = { ...input };
+      // Préparer les données à mettre à jour
+      let updateData = { ...input };
+      
+      // Vérifier si le client a une adresse de livraison différente
+      if (updateData.client && updateData.client.hasDifferentShippingAddress === true && !updateData.client.shippingAddress) {
+        throw createValidationError(
+          'L\'adresse de livraison est requise lorsque l\'option "Adresse de livraison différente" est activée',
+          { 'client.shippingAddress': 'L\'adresse de livraison est requise' }
+        );
+      }
+      
+      // Si les informations de l'entreprise ne sont pas fournies, les supprimer pour ne pas écraser les existantes
       if (!updateData.companyInfo) {
         delete updateData.companyInfo;
       }

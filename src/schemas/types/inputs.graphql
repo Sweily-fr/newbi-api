@@ -17,6 +17,10 @@ input ClientInput {
   email: String!
   address: AddressInput!
   type: ClientType!
+  # Indique si l'adresse de livraison est différente de l'adresse de facturation
+  hasDifferentShippingAddress: Boolean
+  # Adresse de livraison (obligatoire si hasDifferentShippingAddress est true)
+  shippingAddress: AddressInput
   # Champs spécifiques aux entreprises
   siret: String
   vatNumber: String

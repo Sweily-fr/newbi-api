@@ -64,6 +64,23 @@ const clientSchema = new mongoose.Schema({
     type: addressSchema,
     required: true
   },
+  // Indique si l'adresse de livraison est différente de l'adresse de facturation
+  hasDifferentShippingAddress: {
+    type: Boolean,
+    default: false
+  },
+  // Adresse de livraison (obligatoire si hasDifferentShippingAddress est true)
+  shippingAddress: {
+    type: addressSchema,
+    // Validation conditionnelle: obligatoire uniquement si hasDifferentShippingAddress est true
+    validate: {
+      validator: function(v) {
+        // Si hasDifferentShippingAddress est true, shippingAddress doit être défini
+        return !this.hasDifferentShippingAddress || (v && Object.keys(v).length > 0);
+      },
+      message: 'L\'adresse de livraison est requise lorsque l\'option "Adresse de livraison différente" est activée'
+    }
+  },
   // Champs spécifiques aux entreprises
   siret: {
     type: String,
