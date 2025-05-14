@@ -38,6 +38,7 @@ type Item {
   discount: Float
   discountType: DiscountType
   details: String
+  vatExemptionText: String
 }
 
 type CustomField {
