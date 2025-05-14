@@ -38,6 +38,7 @@ input ItemInput {
   discount: Float
   discountType: DiscountType
   details: String
+  vatExemptionText: String
 }
 
 input CustomFieldInput {

@@ -45,6 +45,25 @@ const itemSchema = new mongoose.Schema({
       message: 'Le taux de TVA doit être un pourcentage valide (entre 0 et 100)'
     }
   },
+  vatExemptionText: {
+    type: String,
+    trim: true,
+    required: function() {
+      // Le champ est obligatoire uniquement lorsque vatRate est à 0
+      return this.vatRate === 0;
+    },
+    validate: {
+      validator: function(value) {
+        // La mention d'exonération n'est utilisée que lorsque vatRate est à 0
+        if (this.vatRate !== 0) {
+          return !value; // Si vatRate n'est pas 0, vatExemptionText doit être vide
+        }
+        // Si vatRate est 0, vatExemptionText doit être présent et ne pas dépasser 500 caractères
+        return value && value.length > 0 && value.length <= 500;
+      },
+      message: 'La mention d\'exonération de TVA est obligatoire lorsque le taux de TVA est à 0, ne doit pas dépasser 500 caractères, et ne peut être utilisée que lorsque le taux de TVA est à 0'
+    }
+  },
   unit: {
     type: String,
     trim: true,
