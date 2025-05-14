@@ -29,6 +29,12 @@ type EmailSignature {
   imagesLayout: String
   fontFamily: String
   fontSize: Int
+  textStyle: String
+  showEmailIcon: Boolean
+  showPhoneIcon: Boolean
+  showAddressIcon: Boolean
+  showWebsiteIcon: Boolean
+  iconTextSpacing: Int
   isDefault: Boolean!
   createdBy: User!
   createdAt: String!
@@ -87,6 +93,12 @@ input CreateEmailSignatureInput {
   imagesLayout: String
   fontFamily: String
   fontSize: Int
+  textStyle: String
+  showEmailIcon: Boolean
+  showPhoneIcon: Boolean
+  showAddressIcon: Boolean
+  showWebsiteIcon: Boolean
+  iconTextSpacing: Int
   isDefault: Boolean
 }
 
@@ -122,6 +134,12 @@ input UpdateEmailSignatureInput {
   imagesLayout: String
   fontFamily: String
   fontSize: Int
+  textStyle: String
+  showEmailIcon: Boolean
+  showPhoneIcon: Boolean
+  showAddressIcon: Boolean
+  showWebsiteIcon: Boolean
+  iconTextSpacing: Int
   isDefault: Boolean
 }
 

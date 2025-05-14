@@ -168,17 +168,18 @@ const emailSignatureSchema = new mongoose.Schema({
   },
   fontFamily: {
     type: String,
-    default: 'Arial, sans-serif',
-    enum: {
-      values: ['Arial, sans-serif', 'Helvetica, sans-serif', 'Georgia, serif', 'Times New Roman, serif', 'Courier New, monospace', 'Verdana, sans-serif'],
-      message: 'Police de caractères non supportée'
-    }
+    default: 'Arial, sans-serif'
   },
   fontSize: {
     type: Number,
     default: 14,
-    min: [10, 'La taille de police minimale est de 10px'],
-    max: [20, 'La taille de police maximale est de 20px']
+    min: [8, 'La taille de police minimale est de 8px'],
+    max: [24, 'La taille de police maximale est de 24px']
+  },
+  textStyle: {
+    type: String,
+    enum: ['normal', 'overline', 'underline', 'strikethrough'],
+    default: 'normal'
   },
   isDefault: {
     type: Boolean,
@@ -189,6 +190,29 @@ const emailSignatureSchema = new mongoose.Schema({
     default: 24,
     min: [16, 'La taille d\'icône minimale est de 16px'],
     max: [48, 'La taille d\'icône maximale est de 48px']
+  },
+  // Options d'affichage des icônes
+  showEmailIcon: {
+    type: Boolean,
+    default: true
+  },
+  showPhoneIcon: {
+    type: Boolean,
+    default: true
+  },
+  showAddressIcon: {
+    type: Boolean,
+    default: true
+  },
+  showWebsiteIcon: {
+    type: Boolean,
+    default: true
+  },
+  iconTextSpacing: {
+    type: Number,
+    default: 5,
+    min: [0, 'L\'espacement minimum est de 0px'],
+    max: [20, 'L\'espacement maximum est de 20px']
   },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
