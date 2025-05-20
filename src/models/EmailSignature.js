@@ -56,8 +56,9 @@ const emailSignatureSchema = new mongoose.Schema({
   },
   companyName: {
     type: String,
-    trim: true,
-    match: [NAME_REGEX, 'Veuillez fournir un nom d\'entreprise valide']
+    trim: true
+    // Suppression de la validation restrictive pour permettre des noms d'entreprise comme "Sweily45"
+    // match: [NAME_REGEX, 'Veuillez fournir un nom d\'entreprise valide']
   },
   socialLinks: {
     linkedin: { 

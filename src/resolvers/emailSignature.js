@@ -149,12 +149,24 @@ const emailSignatureResolvers = {
         }
       }
       
-      const signature = new EmailSignature({
+      // Log des données reçues pour débogage
+      console.log('Données reçues pour création de signature email:', {
+        companyName: input.companyName,
+        website: input.website,
+        address: input.address
+      });
+      
+      // S'assurer que companyName est correctement défini
+      const signatureData = {
         ...input,
         profilePhotoUrl,
         isDefault,
-        createdBy: user.id
-      });
+        createdBy: user.id,
+        // Forcer l'utilisation du companyName fourni par le client
+        companyName: input.companyName || ''
+      };
+      
+      const signature = new EmailSignature(signatureData);
       
       await signature.save();
       return signature;
@@ -258,6 +270,14 @@ const emailSignatureResolvers = {
         }
       }
       
+      // Log des données reçues pour débogage
+      console.log('Données reçues pour mise à jour de signature email:', {
+        id,
+        companyName: input.companyName,
+        website: input.website,
+        address: input.address
+      });
+      
       // Mettre à jour la signature
       Object.keys(input).forEach(key => {
         if (key === 'socialLinks' && input[key]) {
@@ -270,6 +290,11 @@ const emailSignatureResolvers = {
           signature[key] = input[key];
         }
       });
+      
+      // S'assurer explicitement que companyName est correctement défini
+      if (input.companyName !== undefined) {
+        signature.companyName = input.companyName;
+      }
       
       await signature.save();
       return signature;
