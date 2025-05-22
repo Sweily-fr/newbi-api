@@ -54,7 +54,7 @@ const userSchema = new mongoose.Schema({
   subscription: {
     licence: {
       type: Boolean,
-      default: false
+      default: true
     },
     trial: {
       type: Boolean,
