@@ -9,6 +9,8 @@ const companySearchResolvers = require('./companySearch');
 const emailSignatureResolvers = require('./emailSignature');
 const integrationResolvers = require('./integration');
 const documentSettingsResolvers = require('./documentSettings');
+const expenseResolvers = require('./expense');
+const scalarResolvers = require('./scalars');
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -20,7 +22,9 @@ const resolvers = mergeResolvers([
   companySearchResolvers,
   emailSignatureResolvers,
   integrationResolvers,
-  documentSettingsResolvers
+  documentSettingsResolvers,
+  expenseResolvers,
+  scalarResolvers
 ]);
 
 module.exports = resolvers;

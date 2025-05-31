@@ -1,0 +1,245 @@
+# Schéma GraphQL pour la gestion des dépenses
+
+# Types d'énumération pour les dépenses
+enum ExpenseCategory {
+  OFFICE_SUPPLIES
+  TRAVEL
+  MEALS
+  ACCOMMODATION
+  SOFTWARE
+  HARDWARE
+  SERVICES
+  MARKETING
+  TAXES
+  RENT
+  UTILITIES
+  SALARIES
+  INSURANCE
+  MAINTENANCE
+  TRAINING
+  SUBSCRIPTIONS
+  OTHER
+}
+
+enum ExpenseStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum ExpensePaymentMethod {
+  CREDIT_CARD
+  BANK_TRANSFER
+  CASH
+  CHECK
+  PAYPAL
+  OTHER
+}
+
+# Type pour les fichiers associés aux dépenses
+type ExpenseFile {
+  id: ID!
+  filename: String!
+  originalFilename: String!
+  mimetype: String!
+  path: String!
+  size: Int!
+  url: String!
+  ocrProcessed: Boolean!
+  ocrData: JSON
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Type pour les métadonnées extraites par OCR
+type OCRMetadata {
+  vendorName: String
+  vendorAddress: String
+  vendorVatNumber: String
+  invoiceNumber: String
+  invoiceDate: String
+  totalAmount: Float
+  vatAmount: Float
+  currency: String
+  confidenceScore: Float
+  rawExtractedText: String
+}
+
+# Type principal pour les dépenses
+type Expense {
+  id: ID!
+  title: String!
+  description: String
+  amount: Float!
+  currency: String!
+  category: ExpenseCategory!
+  date: String!
+  vendor: String
+  vendorVatNumber: String
+  invoiceNumber: String
+  vatAmount: Float
+  vatRate: Float
+  isVatDeductible: Boolean!
+  status: ExpenseStatus!
+  paymentMethod: ExpensePaymentMethod!
+  paymentDate: String
+  files: [ExpenseFile!]
+  ocrMetadata: OCRMetadata
+  notes: String
+  tags: [String!]
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Type pour la pagination des dépenses
+type ExpensePagination {
+  expenses: [Expense!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+}
+
+# Type pour les statistiques des dépenses
+type ExpenseStats {
+  totalAmount: Float!
+  totalCount: Int!
+  byCategory: [CategoryStat!]!
+  byMonth: [MonthStat!]!
+  byStatus: [StatusStat!]!
+}
+
+type CategoryStat {
+  category: ExpenseCategory!
+  amount: Float!
+  count: Int!
+}
+
+type MonthStat {
+  month: String!
+  amount: Float!
+  count: Int!
+}
+
+type StatusStat {
+  status: ExpenseStatus!
+  amount: Float!
+  count: Int!
+}
+
+# Input pour la création d'une dépense
+input CreateExpenseInput {
+  title: String!
+  description: String
+  amount: Float!
+  currency: String = "EUR"
+  category: ExpenseCategory = OTHER
+  date: String!
+  vendor: String
+  vendorVatNumber: String
+  invoiceNumber: String
+  vatAmount: Float
+  vatRate: Float
+  isVatDeductible: Boolean = true
+  status: ExpenseStatus = DRAFT
+  paymentMethod: ExpensePaymentMethod = BANK_TRANSFER
+  paymentDate: String
+  notes: String
+  tags: [String!]
+}
+
+# Input pour la mise à jour d'une dépense
+input UpdateExpenseInput {
+  title: String
+  description: String
+  amount: Float
+  currency: String
+  category: ExpenseCategory
+  date: String
+  vendor: String
+  vendorVatNumber: String
+  invoiceNumber: String
+  vatAmount: Float
+  vatRate: Float
+  isVatDeductible: Boolean
+  status: ExpenseStatus
+  paymentMethod: ExpensePaymentMethod
+  paymentDate: String
+  notes: String
+  tags: [String!]
+}
+
+# Input pour le téléchargement de fichiers
+input FileUploadInput {
+  file: Upload!
+  processOCR: Boolean = true
+}
+
+# Input pour la mise à jour des métadonnées OCR
+input OCRMetadataInput {
+  vendorName: String
+  vendorAddress: String
+  vendorVatNumber: String
+  invoiceNumber: String
+  invoiceDate: String
+  totalAmount: Float
+  vatAmount: Float
+  currency: String
+  confidenceScore: Float
+  rawExtractedText: String
+}
+
+# Requêtes pour les dépenses
+extend type Query {
+  # Récupérer une dépense par son ID
+  expense(id: ID!): Expense!
+  
+  # Récupérer une liste paginée de dépenses avec filtres
+  expenses(
+    startDate: String, 
+    endDate: String, 
+    category: ExpenseCategory, 
+    status: ExpenseStatus, 
+    search: String, 
+    tags: [String!],
+    page: Int, 
+    limit: Int
+  ): ExpensePagination!
+  
+  # Récupérer les statistiques des dépenses
+  expenseStats(
+    startDate: String, 
+    endDate: String
+  ): ExpenseStats!
+}
+
+# Mutations pour les dépenses
+extend type Mutation {
+  # Créer une nouvelle dépense
+  createExpense(input: CreateExpenseInput!): Expense!
+  
+  # Mettre à jour une dépense existante
+  updateExpense(id: ID!, input: UpdateExpenseInput!): Expense!
+  
+  # Supprimer une dépense
+  deleteExpense(id: ID!): Boolean!
+  
+  # Changer le statut d'une dépense
+  changeExpenseStatus(id: ID!, status: ExpenseStatus!): Expense!
+  
+  # Ajouter un fichier à une dépense
+  addExpenseFile(expenseId: ID!, input: FileUploadInput!): Expense!
+  
+  # Supprimer un fichier d'une dépense
+  removeExpenseFile(expenseId: ID!, fileId: ID!): Expense!
+  
+  # Mettre à jour les métadonnées OCR d'une dépense
+  updateExpenseOCRMetadata(expenseId: ID!, metadata: OCRMetadataInput!): Expense!
+  
+  # Déclencher manuellement l'analyse OCR d'un fichier
+  processExpenseFileOCR(expenseId: ID!, fileId: ID!): Expense!
+  
+  # Appliquer les données OCR aux champs de la dépense
+  applyOCRDataToExpense(expenseId: ID!): Expense!
+}

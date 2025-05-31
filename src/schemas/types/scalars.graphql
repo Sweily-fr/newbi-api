@@ -1,0 +1,7 @@
+# Types scalaires personnalisés
+
+# Type scalaire pour les données JSON
+scalar JSON
+
+# Type scalaire pour les téléchargements de fichiers
+scalar Upload

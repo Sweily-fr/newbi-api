@@ -7,6 +7,7 @@ const baseTypes = loadFilesSync(path.join(__dirname, './types/base.graphql'));
 
 // Charger ensuite les autres fichiers de schéma
 const otherTypes = loadFilesSync([
+  path.join(__dirname, './types/scalars.graphql'),
   path.join(__dirname, './types/enums.graphql'),
   path.join(__dirname, './types/objects.graphql'),
   path.join(__dirname, './types/inputs.graphql'),

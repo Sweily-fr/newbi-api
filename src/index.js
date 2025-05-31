@@ -35,6 +35,13 @@ if (!fs.existsSync(uploadProfileDir)) {
   console.log('Dossier d\'upload pour photos de profil créé:', uploadProfileDir);
 }
 
+// Assurer que le dossier d'upload pour les dépenses existe
+const uploadExpensesDir = path.resolve(__dirname, '../public/uploads/expenses');
+if (!fs.existsSync(uploadExpensesDir)) {
+  fs.mkdirSync(uploadExpensesDir, { recursive: true });
+  console.log('Dossier d\'upload pour les dépenses créé:', uploadExpensesDir);
+}
+
 async function startServer() {
   const app = express();
 
