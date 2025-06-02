@@ -1,5 +1,6 @@
 const { GraphQLScalarType } = require('graphql');
 const { GraphQLUpload } = require('graphql-upload');
+const { Kind } = require('graphql/language');
 
 // Fonction récursive pour analyser les littéraux JSON
 const parseLiteralHelper = (ast) => {
@@ -47,7 +48,35 @@ const JSONScalar = new GraphQLScalarType({
   }
 });
 
+// Résolveur pour le type scalaire DateTime
+const DateTimeScalar = new GraphQLScalarType({
+  name: 'DateTime',
+  description: 'Le type scalaire DateTime représente une date et une heure au format ISO-8601',
+  
+  // Conversion des dates en chaînes ISO pour le client
+  serialize(value) {
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    return value;
+  },
+  
+  // Analyse des chaînes ISO reçues du client
+  parseValue(value) {
+    return new Date(value);
+  },
+  
+  // Analyse des littéraux de date dans les requêtes GraphQL
+  parseLiteral(ast) {
+    if (ast.kind === Kind.STRING) {
+      return new Date(ast.value);
+    }
+    return null;
+  }
+});
+
 module.exports = {
   JSON: JSONScalar,
-  Upload: GraphQLUpload
+  Upload: GraphQLUpload,
+  DateTime: DateTimeScalar
 };

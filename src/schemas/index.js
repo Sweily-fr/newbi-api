@@ -15,7 +15,10 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, './*.graphql')
 ]);
 
+// Charger les définitions de types du dossier typeDefs
+const typeDefsFiles = loadFilesSync(path.join(__dirname, '../typeDefs/*.js'));
+
 // Fusionner les schémas en s'assurant que les types de base sont traités en premier
-const typeDefs = mergeTypeDefs([...baseTypes, ...otherTypes]);
+const typeDefs = mergeTypeDefs([...baseTypes, ...otherTypes, ...typeDefsFiles]);
 
 module.exports = typeDefs;

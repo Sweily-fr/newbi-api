@@ -2,13 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const { ApolloServer } = require('apollo-server-express');
 const mongoose = require('mongoose');
-const { mergeTypeDefs } = require('@graphql-tools/merge');
-const { loadFilesSync } = require('@graphql-tools/load-files');
 const path = require('path');
+const { graphqlUploadExpress } = require('graphql-upload');
 const fs = require('fs');
 const cors = require('cors');
 const stripe = require('./utils/stripe');
 const { handleStripeWebhook } = require('./controllers/webhookController');
+const { handleStripeWebhook: handleFileTransferStripeWebhook, downloadFile, downloadAllFiles, validatePayment } = require('./controllers/fileTransferController');
 
 const { authMiddleware } = require('./middlewares/auth');
 const typeDefs = require('./schemas');
@@ -40,6 +40,13 @@ const uploadExpensesDir = path.resolve(__dirname, '../public/uploads/expenses');
 if (!fs.existsSync(uploadExpensesDir)) {
   fs.mkdirSync(uploadExpensesDir, { recursive: true });
   console.log('Dossier d\'upload pour les dépenses créé:', uploadExpensesDir);
+}
+
+// Assurer que le dossier d'upload pour les transferts de fichiers existe
+const uploadFileTransfersDir = path.resolve(__dirname, '../public/uploads/file-transfers');
+if (!fs.existsSync(uploadFileTransfersDir)) {
+  fs.mkdirSync(uploadFileTransfersDir, { recursive: true });
+  console.log('Dossier d\'upload pour les transferts de fichiers créé:', uploadFileTransfersDir);
 }
 
 async function startServer() {
@@ -96,10 +103,23 @@ async function startServer() {
       res.status(400).send(`Webhook Error: ${error.message}`);
     }
   });
+  
+  // Route pour les webhooks Stripe des transferts de fichiers
+  app.post('/webhook/file-transfer', express.raw({type: 'application/json'}), handleFileTransferStripeWebhook);
+  
+  // Routes pour le téléchargement de fichiers
+  app.get('/file-transfer/download/:shareLink/:accessKey/:fileId', downloadFile);
+  app.get('/file-transfer/download-all/:shareLink/:accessKey', downloadAllFiles);
+  
+  // Route pour valider un paiement de transfert de fichiers
+  app.get('/file-transfer/validate-payment', validatePayment);
 
   app.use(express.static(path.resolve(__dirname, '../public')));
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ limit: '10mb', extended: true }));
+  
+  // Middleware pour les uploads GraphQL
+  app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 })); // 10GB max par fichier, 20 fichiers max
 
   // Route pour créer une session de portail client Stripe
   app.post('/create-customer-portal-session', async (req, res) => {
@@ -130,6 +150,12 @@ async function startServer() {
       res.status(500).json({ error: 'Erreur lors de la création de la session de portail client' });
     }
   });
+
+  // Définir la constante BASE_URL pour l'API
+  const BASE_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`;
+
+  // Exporter BASE_URL pour une utilisation dans d'autres modules
+  module.exports.BASE_URL = BASE_URL;
 
   const server = new ApolloServer({
     typeDefs,

@@ -5,3 +5,6 @@ scalar JSON
 
 # Type scalaire pour les téléchargements de fichiers
 scalar Upload
+
+# Type scalaire pour les dates et heures
+scalar DateTime

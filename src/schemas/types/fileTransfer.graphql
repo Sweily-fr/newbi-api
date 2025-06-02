@@ -1,0 +1,84 @@
+# Types pour le transfert de fichiers volumineux
+
+# Enum pour le statut du transfert de fichiers
+enum FileTransferStatus {
+  ACTIVE
+  EXPIRED
+  DELETED
+}
+
+# Type pour représenter un fichier individuel dans un transfert
+type File {
+  id: ID!
+  filename: String!
+  originalFilename: String!
+  mimeType: String!
+  size: Int!
+  filePath: String!
+  downloadUrl: String
+}
+
+# Type principal pour le transfert de fichiers
+type FileTransfer {
+  id: ID!
+  userId: ID!
+  files: [File!]!
+  totalSize: Int!
+  shareLink: String!
+  accessKey: String!
+  expiryDate: Date!
+  status: FileTransferStatus!
+  requiresPayment: Boolean!
+  paymentAmount: Float
+  paymentCurrency: String
+  isPaid: Boolean!
+  paymentSessionId: String
+  paymentSessionUrl: String
+  downloadCount: Int!
+  createdAt: Date!
+  updatedAt: Date!
+  zipDownloadUrl: String
+}
+
+# Type pour la réponse de création d'un transfert de fichiers
+type FileTransferResponse {
+  fileTransfer: FileTransfer!
+  shareLink: String!
+  accessKey: String!
+}
+
+# Type pour la réponse de génération d'un lien de paiement
+type FileTransferPaymentResponse {
+  fileTransfer: FileTransfer!
+  paymentSessionUrl: String!
+}
+
+# Étendre le type Query
+extend type Query {
+  # Obtenir tous les transferts de fichiers de l'utilisateur connecté
+  myFileTransfers: [FileTransfer!]!
+  
+  # Obtenir un transfert de fichiers par son ID
+  fileTransferById(id: ID!): FileTransfer
+  
+  # Obtenir un transfert de fichiers par son lien de partage et sa clé d'accès
+  getFileTransferByLink(shareLink: String!, accessKey: String!): FileTransfer
+}
+
+# Étendre le type Mutation
+extend type Mutation {
+  # Créer un nouveau transfert de fichiers
+  createFileTransfer(
+    files: [Upload!]!
+    expiryDays: Int
+    requiresPayment: Boolean
+    paymentAmount: Float
+    paymentCurrency: String
+  ): FileTransferResponse!
+  
+  # Supprimer un transfert de fichiers
+  deleteFileTransfer(id: ID!): Boolean!
+  
+  # Générer un lien de paiement pour un transfert de fichiers
+  generateFileTransferPaymentLink(id: ID!): FileTransferPaymentResponse!
+}
