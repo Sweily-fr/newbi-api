@@ -1,4 +1,4 @@
-// /Users/joaquimgameiro/Downloads/Generation-business/graphql-api/src/models/constants/enums.js
+// /Users/joaquimgameiro/Downloads/Newbi/graphql-api/src/models/constants/enums.js
 
 /**
  * Statuts possibles pour une facture
@@ -14,6 +14,16 @@ const INVOICE_STATUS = {
  * Statuts possibles pour un devis
  */
 const QUOTE_STATUS = {
+  DRAFT: 'DRAFT',
+  PENDING: 'PENDING',
+  COMPLETED: 'COMPLETED',
+  CANCELED: 'CANCELED'
+};
+
+/**
+ * Statuts possibles pour un bon de commande
+ */
+const PURCHASE_ORDER_STATUS = {
   DRAFT: 'DRAFT',
   PENDING: 'PENDING',
   COMPLETED: 'COMPLETED',
@@ -42,6 +52,7 @@ const PAYMENT_METHOD = {
 module.exports = {
   INVOICE_STATUS,
   QUOTE_STATUS,
+  PURCHASE_ORDER_STATUS,
   DISCOUNT_TYPE,
   PAYMENT_METHOD
 };
