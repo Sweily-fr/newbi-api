@@ -13,6 +13,7 @@ const documentSettingsResolvers = require('./documentSettings');
 const expenseResolvers = require('./expense');
 const scalarResolvers = require('./scalars');
 const fileTransferResolvers = require('./fileTransfer');
+const kanbanResolvers = require('./kanban');
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -28,7 +29,8 @@ const resolvers = mergeResolvers([
   documentSettingsResolvers,
   expenseResolvers,
   scalarResolvers,
-  fileTransferResolvers
+  fileTransferResolvers,
+  kanbanResolvers
 ]);
 
 module.exports = resolvers;
