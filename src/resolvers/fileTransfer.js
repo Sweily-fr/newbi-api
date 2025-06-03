@@ -137,7 +137,6 @@ module.exports = {
         
         // Extraire les options du transfert
         const { 
-          expiryDays = 7, 
           isPaymentRequired = false, 
           paymentAmount = 0, 
           paymentCurrency = 'EUR',
@@ -153,8 +152,8 @@ module.exports = {
         const shareLink = generateShareLink();
         const accessKey = generateAccessKey();
         
-        // Calculer la date d'expiration
-        const expiryDate = calculateExpiryDate(expiryDays);
+        // Calculer la date d'expiration (48 heures)
+        const expiryDate = calculateExpiryDate();
         
         // Sauvegarder les fichiers
         const uploadedFiles = [];

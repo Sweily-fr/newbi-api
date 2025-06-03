@@ -80,7 +80,6 @@ module.exports = gql`
 
   # Inputs pour le transfert de fichiers
   input FileTransferInput {
-    expiryDays: Int = 7
     isPaymentRequired: Boolean = false
     paymentAmount: Float = 0
     paymentCurrency: String = "EUR"

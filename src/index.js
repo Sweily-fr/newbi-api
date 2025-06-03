@@ -9,6 +9,8 @@ const cors = require('cors');
 const stripe = require('./utils/stripe');
 const { handleStripeWebhook } = require('./controllers/webhookController');
 const { handleStripeWebhook: handleFileTransferStripeWebhook, downloadFile, downloadAllFiles, validatePayment } = require('./controllers/fileTransferController');
+const { setupScheduledJobs } = require('./jobs/scheduler');
+const logger = require('./utils/logger');
 
 const { authMiddleware } = require('./middlewares/auth');
 const typeDefs = require('./schemas');
@@ -213,6 +215,10 @@ async function startServer() {
   const PORT = process.env.PORT || 4000;
   app.listen(PORT, () => {
     console.log(`🚀 Serveur démarré sur http://localhost:${PORT}${server.graphqlPath}`);
+    
+    // Initialiser les jobs planifiés pour la suppression automatique des fichiers expirés
+    setupScheduledJobs();
+    logger.info('Planificateur de tâches initialisé avec succès');
   });
 }
 

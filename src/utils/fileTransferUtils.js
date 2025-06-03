@@ -24,10 +24,10 @@ const generateShareLink = () => {
   return crypto.randomBytes(16).toString('hex');
 };
 
-// Calculer la date d'expiration
-const calculateExpiryDate = (days = 7) => {
+// Calculer la date d'expiration (fixée à 48 heures)
+const calculateExpiryDate = () => {
   const expiryDate = new Date();
-  expiryDate.setDate(expiryDate.getDate() + days);
+  expiryDate.setHours(expiryDate.getHours() + 48);
   return expiryDate;
 };
 
