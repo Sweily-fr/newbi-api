@@ -117,8 +117,8 @@ async function startServer() {
   app.get('/file-transfer/validate-payment', validatePayment);
 
   app.use(express.static(path.resolve(__dirname, '../public')));
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ limit: '10mb', extended: true }));
+  app.use(express.json({ limit: '100mb' }));
+  app.use(express.urlencoded({ limit: '100mb', extended: true }));
   
   // Middleware pour les uploads GraphQL
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 })); // 10GB max par fichier, 20 fichiers max

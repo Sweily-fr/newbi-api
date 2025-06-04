@@ -62,6 +62,36 @@ const saveUploadedFile = async (file, userId) => {
   };
 };
 
+// Sauvegarder un fichier en base64
+const saveBase64File = async (fileInput, userId) => {
+  const { name, type, size, base64 } = fileInput;
+  
+  // Générer un nom de fichier unique
+  const uniqueFilename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}-${name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+  
+  // Créer le dossier d'upload pour l'utilisateur
+  const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'file-transfers', userId.toString());
+  ensureDirectoryExists(uploadDir);
+  
+  // Chemin complet du fichier
+  const filePath = path.join(uploadDir, uniqueFilename);
+  
+  // Chemin relatif pour l'accès via URL
+  const fileUrl = `/uploads/file-transfers/${userId.toString()}/${uniqueFilename}`;
+  
+  // Décoder et écrire le fichier base64
+  const base64Data = base64.split(';base64,').pop() || base64;
+  fs.writeFileSync(filePath, base64Data, { encoding: 'base64' });
+  
+  return {
+    originalName: name,
+    fileName: uniqueFilename,
+    filePath: fileUrl,
+    mimeType: type,
+    size: size || fs.statSync(filePath).size
+  };
+};
+
 // Supprimer un fichier
 const deleteFile = (filePath) => {
   try {
@@ -130,6 +160,7 @@ module.exports = {
   generateShareLink,
   calculateExpiryDate,
   saveUploadedFile,
+  saveBase64File,
   deleteFile,
   createZipArchive
 };

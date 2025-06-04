@@ -3,6 +3,7 @@ const FileTransfer = require('../models/FileTransfer');
 const { isAuthenticated } = require('../middlewares/auth');
 const { 
   saveUploadedFile, 
+  saveBase64File,
   generateShareLink, 
   generateAccessKey, 
   calculateExpiryDate,
@@ -242,6 +243,96 @@ module.exports = {
         throw new ApolloError(
           'Une erreur est survenue lors de la suppression du transfert de fichiers.',
           'FILE_TRANSFER_DELETION_ERROR'
+        );
+      }
+    }),
+    
+    // Créer un nouveau transfert de fichiers avec des fichiers en base64
+    createFileTransferBase64: isAuthenticated(async (_, { files, input = {} }, { user }) => {
+      try {
+        // Vérifier que des fichiers ont été fournis
+        if (!files || files.length === 0) {
+          throw new UserInputError('Aucun fichier fourni');
+        }
+        
+        // Extraire les options du transfert
+        const { 
+          expiryDays = 2, // 48 heures par défaut
+          isPaymentRequired = false,
+          paymentAmount = 0,
+          paymentCurrency = 'EUR',
+          recipientEmail
+        } = input;
+        
+        // Vérifier les valeurs
+        if (expiryDays <= 0) {
+          throw new UserInputError('La durée d\'expiration doit être supérieure à 0');
+        }
+        
+        if (isPaymentRequired && paymentAmount <= 0) {
+          throw new UserInputError('Le montant du paiement doit être supérieur à 0');
+        }
+        
+        // Sauvegarder les fichiers
+        const uploadedFiles = [];
+        let totalSize = 0;
+        
+        for (const file of files) {
+          const fileData = await saveBase64File(file, user.id);
+          uploadedFiles.push(fileData);
+          totalSize += fileData.size;
+        }
+        
+        // Vérifier la taille totale
+        if (totalSize > MAX_FILE_SIZE) {
+          // Supprimer les fichiers téléchargés
+          for (const file of uploadedFiles) {
+            deleteFile(file.filePath);
+          }
+          
+          throw new UserInputError(`La taille totale des fichiers dépasse la limite autorisée (${MAX_FILE_SIZE / (1024 * 1024 * 1024)} GB)`);
+        }
+        
+        // Générer le lien de partage et la clé d'accès
+        const shareLink = generateShareLink();
+        const accessKey = generateAccessKey();
+        const expiryDate = calculateExpiryDate(expiryDays);
+        
+        // Créer le transfert de fichiers
+        const fileTransfer = new FileTransfer({
+          userId: user.id,
+          files: uploadedFiles,
+          totalSize,
+          shareLink,
+          accessKey,
+          expiryDate,
+          isPaymentRequired,
+          paymentAmount: isPaymentRequired ? paymentAmount : 0,
+          paymentCurrency: isPaymentRequired ? paymentCurrency : 'EUR',
+          isPaid: false,
+          status: 'active',
+          recipientEmail,
+          downloadLink: `${shareLink}-${Date.now()}` // Ajout d'un downloadLink unique pour éviter l'erreur d'index
+        });
+        
+        await fileTransfer.save();
+        
+        return {
+          success: true,
+          message: 'Transfert de fichiers créé avec succès',
+          fileTransfer,
+          shareLink,
+          accessKey
+        };
+      } catch (error) {
+        if (error instanceof UserInputError) {
+          throw error;
+        }
+        
+        console.error('Erreur lors de la création du transfert de fichiers (base64):', error);
+        throw new ApolloError(
+          'Une erreur est survenue lors de la création du transfert de fichiers.',
+          'FILE_TRANSFER_CREATION_ERROR'
         );
       }
     }),

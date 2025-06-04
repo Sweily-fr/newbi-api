@@ -49,6 +49,13 @@ const FileTransferSchema = new Schema(
       required: true,
       unique: true
     },
+    downloadLink: {
+      type: String,
+      unique: true,
+      default: function() {
+        return `dl-${this.shareLink}-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+      }
+    },
     accessKey: {
       type: String,
       required: true

@@ -53,6 +53,15 @@ type FileTransferPaymentResponse {
   paymentSessionUrl: String!
 }
 
+# Input pour la création d'un transfert de fichiers
+input FileTransferInput {
+  expiryDays: Int
+  isPaymentRequired: Boolean = false
+  paymentAmount: Float = 0
+  paymentCurrency: String = "EUR"
+  recipientEmail: String
+}
+
 # Étendre le type Query
 extend type Query {
   # Obtenir tous les transferts de fichiers de l'utilisateur connecté
@@ -70,10 +79,7 @@ extend type Mutation {
   # Créer un nouveau transfert de fichiers
   createFileTransfer(
     files: [Upload!]!
-    expiryDays: Int
-    requiresPayment: Boolean
-    paymentAmount: Float
-    paymentCurrency: String
+    input: FileTransferInput
   ): FileTransferResponse!
   
   # Supprimer un transfert de fichiers

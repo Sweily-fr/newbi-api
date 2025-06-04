@@ -80,6 +80,7 @@ module.exports = gql`
 
   # Inputs pour le transfert de fichiers
   input FileTransferInput {
+    expiryDays: Int
     isPaymentRequired: Boolean = false
     paymentAmount: Float = 0
     paymentCurrency: String = "EUR"
@@ -98,9 +99,20 @@ module.exports = gql`
     getFileTransferByLink(shareLink: String!, accessKey: String!): FileTransferAccessResponse
   }
 
+  # Input pour un fichier en base64
+  input Base64FileInput {
+    name: String!
+    type: String!
+    size: Float!
+    base64: String!
+  }
+
   extend type Mutation {
     # Créer un nouveau transfert de fichiers
     createFileTransfer(files: [Upload!]!, input: FileTransferInput): FileTransferCreationResponse
+    
+    # Créer un nouveau transfert de fichiers avec des fichiers en base64
+    createFileTransferBase64(files: [Base64FileInput!]!, input: FileTransferInput): FileTransferCreationResponse
     
     # Supprimer un transfert de fichiers
     deleteFileTransfer(id: ID!): Boolean
