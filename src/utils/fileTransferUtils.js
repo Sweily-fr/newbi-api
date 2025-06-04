@@ -66,8 +66,12 @@ const saveUploadedFile = async (file, userId) => {
 const saveBase64File = async (fileInput, userId) => {
   const { name, type, size, base64 } = fileInput;
   
-  // Générer un nom de fichier unique
-  const uniqueFilename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}-${name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+  // Extraire l'extension du fichier original
+  const originalExt = path.extname(name);
+  const nameWithoutExt = path.basename(name, originalExt);
+  
+  // Générer un nom de fichier unique en préservant l'extension
+  const uniqueFilename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}-${nameWithoutExt.replace(/[^a-zA-Z0-9.-]/g, '_')}${originalExt}`;
   
   // Créer le dossier d'upload pour l'utilisateur
   const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'file-transfers', userId.toString());
@@ -79,17 +83,73 @@ const saveBase64File = async (fileInput, userId) => {
   // Chemin relatif pour l'accès via URL
   const fileUrl = `/uploads/file-transfers/${userId.toString()}/${uniqueFilename}`;
   
-  // Décoder et écrire le fichier base64
-  const base64Data = base64.split(';base64,').pop() || base64;
-  fs.writeFileSync(filePath, base64Data, { encoding: 'base64' });
-  
-  return {
-    originalName: name,
-    fileName: uniqueFilename,
-    filePath: fileUrl,
-    mimeType: type,
-    size: size || fs.statSync(filePath).size
-  };
+  try {
+    // Déterminer le type MIME à partir de l'extension si non fourni
+    let mimeType = type;
+    if (!mimeType || mimeType === 'application/octet-stream') {
+      // Déterminer le type MIME à partir de l'extension
+      const ext = originalExt.toLowerCase();
+      if (['.jpg', '.jpeg'].includes(ext)) mimeType = 'image/jpeg';
+      else if (ext === '.png') mimeType = 'image/png';
+      else if (ext === '.gif') mimeType = 'image/gif';
+      else if (ext === '.pdf') mimeType = 'application/pdf';
+      else if (['.doc', '.docx'].includes(ext)) mimeType = 'application/msword';
+      else if (['.xls', '.xlsx'].includes(ext)) mimeType = 'application/vnd.ms-excel';
+      else if (ext === '.zip') mimeType = 'application/zip';
+      else mimeType = 'application/octet-stream';
+    }
+    
+    // Décoder et écrire le fichier base64
+    let base64Data;
+    let contentType = '';
+    
+    // Vérifier si la chaîne contient un en-tête data URI (comme "data:image/jpeg;base64,")
+    if (base64.includes(';base64,')) {
+      // Extraire le type de contenu et les données base64
+      const parts = base64.split(';base64,');
+      contentType = parts[0].replace('data:', '');
+      base64Data = parts[1];
+    } else if (base64.startsWith('data:') && base64.includes(',')) {
+      // Format alternatif possible
+      const parts = base64.split(',');
+      contentType = parts[0].replace('data:', '').replace(';', '');
+      base64Data = parts[1];
+    } else {
+      // Supposer que c'est déjà une chaîne base64 pure
+      base64Data = base64;
+    }
+    
+    // S'assurer que base64Data n'est pas undefined
+    if (!base64Data) {
+      throw new Error('Format base64 invalide');
+    }
+    
+    // Écrire le fichier décodé
+    fs.writeFileSync(filePath, base64Data, { encoding: 'base64' });
+    
+    // Vérifier que le fichier a été correctement écrit
+    if (!fs.existsSync(filePath)) {
+      throw new Error('Échec de l\'écriture du fichier');
+    }
+    
+    // Si le type MIME a été détecté à partir du data URI, l'utiliser
+    if (contentType && !mimeType) {
+      mimeType = contentType;
+    }
+    
+    console.log(`Fichier sauvegardé avec succès: ${filePath} (type: ${mimeType})`);
+    
+    return {
+      originalName: name,
+      fileName: uniqueFilename,
+      filePath: fileUrl,
+      mimeType: mimeType,
+      size: size || fs.statSync(filePath).size
+    };
+  } catch (error) {
+    console.error('Erreur lors de la sauvegarde du fichier base64:', error);
+    throw new Error(`Erreur lors de la sauvegarde du fichier: ${error.message}`);
+  }
 };
 
 // Supprimer un fichier

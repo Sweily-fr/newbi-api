@@ -116,7 +116,34 @@ async function startServer() {
   // Route pour valider un paiement de transfert de fichiers
   app.get('/file-transfer/validate-payment', validatePayment);
 
-  app.use(express.static(path.resolve(__dirname, '../public')));
+  // Configuration améliorée pour servir les fichiers statiques avec les bons types MIME
+  app.use(express.static(path.resolve(__dirname, '../public'), {
+    setHeaders: (res, filePath) => {
+      // Définir les en-têtes appropriés selon le type de fichier
+      const ext = path.extname(filePath).toLowerCase();
+      
+      // Ajouter des en-têtes spécifiques pour les types de fichiers courants
+      if (ext === '.pdf') {
+        res.setHeader('Content-Type', 'application/pdf');
+      } else if (['.jpg', '.jpeg'].includes(ext)) {
+        res.setHeader('Content-Type', 'image/jpeg');
+      } else if (ext === '.png') {
+        res.setHeader('Content-Type', 'image/png');
+      } else if (ext === '.gif') {
+        res.setHeader('Content-Type', 'image/gif');
+      } else if (['.doc', '.docx'].includes(ext)) {
+        res.setHeader('Content-Type', 'application/msword');
+      } else if (['.xls', '.xlsx'].includes(ext)) {
+        res.setHeader('Content-Type', 'application/vnd.ms-excel');
+      } else if (ext === '.zip') {
+        res.setHeader('Content-Type', 'application/zip');
+      }
+      
+      // Ajouter des en-têtes pour permettre le téléchargement
+      res.setHeader('Content-Disposition', 'attachment');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+  }));
   app.use(express.json({ limit: '100mb' }));
   app.use(express.urlencoded({ limit: '100mb', extended: true }));
   
