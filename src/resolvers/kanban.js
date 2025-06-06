@@ -125,7 +125,9 @@ const kanbanResolvers = {
         const defaultColumns = [
           { title: 'À faire', order: 0, tasks: [] },
           { title: 'En cours', order: 1, tasks: [] },
-          { title: 'Terminé', order: 2, tasks: [] }
+          { title: 'En attente', order: 2, tasks: [] },
+          { title: 'Terminée', order: 3, tasks: [] },
+          { title: 'Corbeille', order: 4, tasks: [] }
         ];
         
         // Créer le tableau Kanban
