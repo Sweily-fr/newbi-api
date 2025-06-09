@@ -219,7 +219,13 @@ const kanbanResolvers = {
     }),
 
     updateKanbanColumn: isAuthenticated(async (_, { boardId, columnId, input }, { user }) => {
-      const board = await KanbanBoard.findOne({ _id: boardId, createdBy: user.id });
+      const board = await KanbanBoard.findOne({ 
+        _id: boardId, 
+        $or: [
+          { createdBy: user.id },
+          { members: user.id }
+        ]
+      });
       
       if (!board) throw createNotFoundError('Tableau Kanban');
       
@@ -233,8 +239,13 @@ const kanbanResolvers = {
         board.columns[columnIndex][key] = input[key];
       });
       
-      await board.save();
-      return await board.populate('createdBy members');
+      try {
+        await board.save();
+        return await board.populate('createdBy members');
+      } catch (error) {
+        console.error('Erreur lors de la mise à jour de la colonne:', error);
+        throw error;
+      }
     }),
 
     deleteKanbanColumn: isAuthenticated(async (_, { boardId, columnId }, { user }) => {
