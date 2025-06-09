@@ -50,6 +50,8 @@ exports.downloadFile = async (req, res) => {
   try {
     const { shareLink, accessKey, fileId } = req.params;
     
+    console.log(`[DEBUG] Demande de téléchargement - shareLink: ${shareLink}, accessKey: ${accessKey}, fileId: ${fileId}`);
+    
     // Vérifier le transfert de fichiers
     const fileTransfer = await FileTransfer.findOne({ 
       shareLink,
@@ -58,11 +60,15 @@ exports.downloadFile = async (req, res) => {
     });
     
     if (!fileTransfer) {
+      console.log(`[ERROR] Transfert non trouvé - shareLink: ${shareLink}, accessKey: ${accessKey}`);
       return res.status(404).send('Transfert de fichiers non trouvé ou expiré');
     }
     
+    console.log(`[DEBUG] Transfert trouvé - ID: ${fileTransfer._id}, status: ${fileTransfer.status}`);
+    
     // Vérifier si le transfert est accessible
     if (!fileTransfer.isAccessible()) {
+      console.log(`[ERROR] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`);
       return res.status(403).send('Accès refusé. Le paiement est requis ou le transfert a expiré.');
     }
     
@@ -70,25 +76,70 @@ exports.downloadFile = async (req, res) => {
     const file = fileTransfer.files.find(f => f._id.toString() === fileId);
     
     if (!file) {
+      console.log(`[ERROR] Fichier non trouvé dans le transfert - fileId: ${fileId}`);
+      console.log(`[DEBUG] Fichiers disponibles: ${JSON.stringify(fileTransfer.files.map(f => ({ id: f._id.toString(), name: f.originalName })))}`);
       return res.status(404).send('Fichier non trouvé');
     }
     
+    console.log(`[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}`);
+    
     // Construire le chemin du fichier
     const filePath = path.join(process.cwd(), 'public', file.filePath);
+    console.log(`[DEBUG] Chemin du fichier: ${filePath}`);
     
     // Vérifier si le fichier existe
     if (!fs.existsSync(filePath)) {
+      console.log(`[ERROR] Fichier physique non trouvé sur le serveur: ${filePath}`);
       return res.status(404).send('Fichier non trouvé sur le serveur');
+    }
+    
+    // Vérifier la taille du fichier
+    const fileStats = fs.statSync(filePath);
+    console.log(`[DEBUG] Taille du fichier sur disque: ${fileStats.size} octets`);
+    
+    if (fileStats.size === 0) {
+      console.log(`[ERROR] Fichier vide sur le serveur: ${filePath}`);
+      return res.status(500).send('Fichier vide sur le serveur');
     }
     
     // Incrémenter le compteur de téléchargements
     await fileTransfer.incrementDownloadCount();
     
-    // Envoyer le fichier
-    res.download(filePath, file.originalName);
+    // Définir les en-têtes appropriés pour le téléchargement
+    const contentType = file.mimeType || 'application/octet-stream';
+    const fileName = encodeURIComponent(file.originalName);
+    
+    console.log(`[DEBUG] En-têtes de réponse - Content-Type: ${contentType}, fileName: ${fileName}, Content-Length: ${fileStats.size}`);
+    
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Length', fileStats.size);
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    // Utiliser un stream pour envoyer le fichier au lieu de res.download
+    // Cela évite les problèmes potentiels de mémoire tampon et de corruption
+    const fileStream = fs.createReadStream(filePath);
+    
+    // Gérer les erreurs de stream
+    fileStream.on('error', (err) => {
+      console.error('[ERROR] Erreur de stream lors du téléchargement:', err);
+      if (!res.headersSent) {
+        res.status(500).send('Erreur lors de la lecture du fichier');
+      }
+    });
+    
+    // Gérer la fin du stream
+    fileStream.on('end', () => {
+      console.log(`[DEBUG] Téléchargement terminé avec succès - ${file.originalName}`);
+    });
+    
+    // Pipe le stream vers la réponse
+    fileStream.pipe(res);
   } catch (error) {
-    console.error('Erreur lors du téléchargement du fichier:', error);
-    res.status(500).send('Une erreur est survenue lors du téléchargement du fichier');
+    console.error('[ERROR] Erreur lors du téléchargement du fichier:', error);
+    if (!res.headersSent) {
+      res.status(500).send('Une erreur est survenue lors du téléchargement du fichier');
+    }
   }
 };
 
@@ -124,25 +175,47 @@ exports.downloadAllFiles = async (req, res) => {
       return res.status(500).send('Erreur lors de la création de l\'archive');
     }
     
+    // Obtenir la taille de l'archive
+    const archiveSize = fs.statSync(fullArchivePath).size;
+    const archiveFileName = `newbi-files-${Date.now()}.zip`;
+    
     // Incrémenter le compteur de téléchargements
     await fileTransfer.incrementDownloadCount();
     
-    // Envoyer l'archive
-    res.download(fullArchivePath, `files-${Date.now()}.zip`, (err) => {
-      if (err) {
-        console.error('Erreur lors de l\'envoi de l\'archive:', err);
-      } else {
-        // Supprimer l'archive après le téléchargement (optionnel)
-        setTimeout(() => {
-          fs.unlink(fullArchivePath, (err) => {
-            if (err) console.error('Erreur lors de la suppression de l\'archive temporaire:', err);
-          });
-        }, 60000); // Attendre 1 minute avant de supprimer
+    // Définir les en-têtes appropriés pour le téléchargement
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(archiveFileName)}"`);
+    res.setHeader('Content-Length', archiveSize);
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    // Utiliser un stream pour envoyer l'archive
+    const archiveStream = fs.createReadStream(fullArchivePath);
+    
+    // Gérer les erreurs de stream
+    archiveStream.on('error', (err) => {
+      console.error('Erreur de stream lors du téléchargement de l\'archive:', err);
+      if (!res.headersSent) {
+        res.status(500).send('Erreur lors de la lecture de l\'archive');
       }
     });
+    
+    // Gérer la fin du téléchargement
+    res.on('finish', () => {
+      // Supprimer l'archive après le téléchargement (optionnel)
+      setTimeout(() => {
+        fs.unlink(fullArchivePath, (err) => {
+          if (err) console.error('Erreur lors de la suppression de l\'archive temporaire:', err);
+        });
+      }, 60000); // Attendre 1 minute avant de supprimer
+    });
+    
+    // Pipe le stream vers la réponse
+    archiveStream.pipe(res);
   } catch (error) {
     console.error('Erreur lors du téléchargement des fichiers:', error);
-    res.status(500).send('Une erreur est survenue lors du téléchargement des fichiers');
+    if (!res.headersSent) {
+      res.status(500).send('Une erreur est survenue lors du téléchargement des fichiers');
+    }
   }
 };
 

@@ -66,6 +66,13 @@ const saveUploadedFile = async (file, userId) => {
 const saveBase64File = async (fileInput, userId) => {
   const { name, type, size, base64 } = fileInput;
   
+  // Debug: Afficher les informations du fichier reçu
+  if (global.logger) {
+    global.logger.info(`Sauvegarde du fichier: ${name}, type: ${type}, taille déclarée: ${size}`);
+    global.logger.info(`Longueur de la chaîne base64: ${base64.length}`);
+    global.logger.info(`Début de la chaîne base64: ${base64.substring(0, 50)}...`);
+  }
+  
   // Extraire l'extension du fichier original
   const originalExt = path.extname(name);
   const nameWithoutExt = path.basename(name, originalExt);
@@ -100,7 +107,7 @@ const saveBase64File = async (fileInput, userId) => {
     }
     
     // Décoder et écrire le fichier base64
-    let base64Data;
+    let base64Data = base64;
     let contentType = '';
     
     // Vérifier si la chaîne contient un en-tête data URI (comme "data:image/jpeg;base64,")
@@ -109,14 +116,25 @@ const saveBase64File = async (fileInput, userId) => {
       const parts = base64.split(';base64,');
       contentType = parts[0].replace('data:', '');
       base64Data = parts[1];
+      
+      if (global.logger) {
+        global.logger.info(`En-tête MIME détecté: ${contentType}`);
+        global.logger.info(`Longueur des données base64 après extraction: ${base64Data.length}`);
+      }
     } else if (base64.startsWith('data:') && base64.includes(',')) {
       // Format alternatif possible
       const parts = base64.split(',');
       contentType = parts[0].replace('data:', '').replace(';', '');
       base64Data = parts[1];
+      
+      if (global.logger) {
+        global.logger.info(`En-tête MIME alternatif détecté: ${contentType}`);
+        global.logger.info(`Longueur des données base64 après extraction: ${base64Data.length}`);
+      }
     } else {
-      // Supposer que c'est déjà une chaîne base64 pure
-      base64Data = base64;
+      if (global.logger) {
+        global.logger.warn('Aucun en-tête MIME détecté dans la chaîne base64');
+      }
     }
     
     // S'assurer que base64Data n'est pas undefined
@@ -124,30 +142,66 @@ const saveBase64File = async (fileInput, userId) => {
       throw new Error('Format base64 invalide');
     }
     
-    // Écrire le fichier décodé
-    fs.writeFileSync(filePath, base64Data, { encoding: 'base64' });
+    // Nettoyer la chaîne base64 (retirer les espaces, retours à la ligne, etc.)
+    base64Data = base64Data.replace(/\s/g, '');
     
-    // Vérifier que le fichier a été correctement écrit
-    if (!fs.existsSync(filePath)) {
-      throw new Error('Échec de l\'écriture du fichier');
+    // Vérifier si la chaîne base64 contient des caractères non valides
+    const base64Regex = /^[A-Za-z0-9+/=]+$/;
+    if (!base64Regex.test(base64Data)) {
+      if (global.logger) {
+        global.logger.error('La chaîne base64 contient des caractères non valides');
+        // Afficher les premiers caractères non valides pour le débogage
+        const invalidChars = [];
+        for (let i = 0; i < Math.min(base64Data.length, 1000); i++) {
+          const char = base64Data[i];
+          if (!/[A-Za-z0-9+/=]/.test(char)) {
+            invalidChars.push(`Position ${i}: '${char}' (code ${char.charCodeAt(0)})`);
+            if (invalidChars.length >= 10) break;
+          }
+        }
+        global.logger.error(`Caractères non valides: ${invalidChars.join(', ')}`);
+      }
+      throw new Error('La chaîne base64 contient des caractères non valides');
     }
+    
+    // Décoder les données base64 en buffer
+    const buffer = Buffer.from(base64Data, 'base64');
+    
+    if (global.logger) {
+      global.logger.info(`Taille du buffer après décodage: ${buffer.length} octets`);
+    }
+    
+    // Écrire le fichier sur le disque
+    fs.writeFileSync(filePath, buffer);
+    
+    // Vérifier la taille du fichier écrit
+    const stats = fs.statSync(filePath);
     
     // Si le type MIME a été détecté à partir du data URI, l'utiliser
     if (contentType && !mimeType) {
       mimeType = contentType;
     }
     
-    console.log(`Fichier sauvegardé avec succès: ${filePath} (type: ${mimeType})`);
+    // Utiliser la taille réelle du fichier écrit
+    const actualSize = stats.size;
+    
+    if (global.logger) {
+      global.logger.info(`Fichier sauvegardé: ${filePath}`);
+      global.logger.info(`Taille déclarée: ${size}, taille réelle: ${actualSize}`);
+    }
     
     return {
       originalName: name,
       fileName: uniqueFilename,
       filePath: fileUrl,
       mimeType: mimeType,
-      size: size || fs.statSync(filePath).size
+      size: actualSize
     };
   } catch (error) {
-    console.error('Erreur lors de la sauvegarde du fichier base64:', error);
+    // Utiliser logger au lieu de console.error
+    if (global.logger) {
+      global.logger.error('Erreur lors de la sauvegarde du fichier base64:', error);
+    }
     throw new Error(`Erreur lors de la sauvegarde du fichier: ${error.message}`);
   }
 };
