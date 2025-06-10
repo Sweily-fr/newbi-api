@@ -17,15 +17,41 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024 * 1024;
 
 module.exports = {
   Query: {
-    // Obtenir les transferts de fichiers de l'utilisateur connecté
-    myFileTransfers: isAuthenticated(async (_, __, { user }) => {
+    // Obtenir les transferts de fichiers de l'utilisateur connecté avec pagination
+    myFileTransfers: isAuthenticated(async (_, { page = 1, limit = 10 }, { user }) => {
       try {
+        // S'assurer que page et limit sont des nombres positifs
+        const validPage = Math.max(1, page);
+        const validLimit = Math.max(1, Math.min(100, limit)); // Limiter à 100 éléments maximum par page
+        const skip = (validPage - 1) * validLimit;
+        
+        // Compter le nombre total d'éléments pour la pagination
+        const totalItems = await FileTransfer.countDocuments({ 
+          userId: user.id,
+          status: { $ne: 'deleted' }
+        });
+        
+        // Récupérer les transferts de fichiers avec pagination
         const fileTransfers = await FileTransfer.find({ 
           userId: user.id,
           status: { $ne: 'deleted' }
-        }).sort({ createdAt: -1 });
+        })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(validLimit);
         
-        return fileTransfers;
+        // Calculer les métadonnées de pagination
+        const totalPages = Math.ceil(totalItems / validLimit);
+        const hasNextPage = validPage < totalPages;
+        
+        // Retourner l'objet paginé
+        return {
+          items: fileTransfers,
+          totalItems,
+          currentPage: validPage,
+          totalPages,
+          hasNextPage
+        };
       } catch (error) {
         console.error('Erreur lors de la récupération des transferts de fichiers:', error);
         throw new ApolloError(

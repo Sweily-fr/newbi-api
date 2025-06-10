@@ -87,10 +87,19 @@ module.exports = gql`
     recipientEmail: String
   }
 
+  # Type pour la réponse paginée des transferts de fichiers
+  type FileTransferPaginatedResponse {
+    items: [FileTransfer!]!
+    totalItems: Int!
+    currentPage: Int!
+    totalPages: Int!
+    hasNextPage: Boolean!
+  }
+
   # Requêtes et mutations
   extend type Query {
-    # Obtenir les transferts de fichiers de l'utilisateur connecté
-    myFileTransfers: [FileTransfer]
+    # Obtenir les transferts de fichiers de l'utilisateur connecté avec pagination
+    myFileTransfers(page: Int = 1, limit: Int = 10): FileTransferPaginatedResponse!
     
     # Obtenir les informations d'un transfert de fichiers par son ID
     fileTransferById(id: ID!): FileTransfer

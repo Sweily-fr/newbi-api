@@ -40,6 +40,15 @@ type FileTransfer {
   zipDownloadUrl: String
 }
 
+# Type pour la réponse paginée des transferts de fichiers
+type FileTransferPaginatedResponse {
+  items: [FileTransfer!]!
+  totalItems: Int!
+  currentPage: Int!
+  totalPages: Int!
+  hasNextPage: Boolean!
+}
+
 # Type pour la réponse de création d'un transfert de fichiers
 type FileTransferResponse {
   fileTransfer: FileTransfer!
@@ -64,8 +73,8 @@ input FileTransferInput {
 
 # Étendre le type Query
 extend type Query {
-  # Obtenir tous les transferts de fichiers de l'utilisateur connecté
-  myFileTransfers: [FileTransfer!]!
+  # Obtenir tous les transferts de fichiers de l'utilisateur connecté avec pagination
+  myFileTransfers(page: Int = 1, limit: Int = 10): FileTransferPaginatedResponse!
   
   # Obtenir un transfert de fichiers par son ID
   fileTransferById(id: ID!): FileTransfer
