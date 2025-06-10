@@ -148,6 +148,10 @@ exports.downloadAllFiles = async (req, res) => {
   try {
     const { shareLink, accessKey } = req.params;
     
+    if (global.logger) {
+      global.logger.info(`Demande de téléchargement ZIP - shareLink: ${shareLink}, accessKey: ${accessKey}`);
+    }
+    
     // Vérifier le transfert de fichiers
     const fileTransfer = await FileTransfer.findOne({ 
       shareLink,
@@ -156,63 +160,131 @@ exports.downloadAllFiles = async (req, res) => {
     });
     
     if (!fileTransfer) {
+      if (global.logger) {
+        global.logger.error(`Transfert non trouvé - shareLink: ${shareLink}, accessKey: ${accessKey}`);
+      }
       return res.status(404).send('Transfert de fichiers non trouvé ou expiré');
+    }
+    
+    if (global.logger) {
+      global.logger.info(`Transfert trouvé - ID: ${fileTransfer._id}, nombre de fichiers: ${fileTransfer.files.length}`);
     }
     
     // Vérifier si le transfert est accessible
     if (!fileTransfer.isAccessible()) {
+      if (global.logger) {
+        global.logger.error(`Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`);
+      }
       return res.status(403).send('Accès refusé. Le paiement est requis ou le transfert a expiré.');
     }
     
-    // Créer une archive ZIP des fichiers
-    const archivePath = await createZipArchive(fileTransfer.files, fileTransfer.userId);
-    
-    // Construire le chemin de l'archive
-    const fullArchivePath = path.join(process.cwd(), 'public', archivePath);
-    
-    // Vérifier si l'archive existe
-    if (!fs.existsSync(fullArchivePath)) {
-      return res.status(500).send('Erreur lors de la création de l\'archive');
+    // Vérifier si des fichiers existent
+    if (!fileTransfer.files || fileTransfer.files.length === 0) {
+      if (global.logger) {
+        global.logger.error(`Aucun fichier à télécharger - ID: ${fileTransfer._id}`);
+      }
+      return res.status(404).send('Aucun fichier disponible pour ce transfert');
     }
     
-    // Obtenir la taille de l'archive
-    const archiveSize = fs.statSync(fullArchivePath).size;
-    const archiveFileName = `newbi-files-${Date.now()}.zip`;
-    
-    // Incrémenter le compteur de téléchargements
-    await fileTransfer.incrementDownloadCount();
-    
-    // Définir les en-têtes appropriés pour le téléchargement
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(archiveFileName)}"`);
-    res.setHeader('Content-Length', archiveSize);
-    res.setHeader('Cache-Control', 'no-cache');
-    
-    // Utiliser un stream pour envoyer l'archive
-    const archiveStream = fs.createReadStream(fullArchivePath);
-    
-    // Gérer les erreurs de stream
-    archiveStream.on('error', (err) => {
-      console.error('Erreur de stream lors du téléchargement de l\'archive:', err);
-      if (!res.headersSent) {
-        res.status(500).send('Erreur lors de la lecture de l\'archive');
+    // Vérifier que tous les fichiers existent physiquement
+    const missingFiles = [];
+    for (const file of fileTransfer.files) {
+      const filePath = path.join(process.cwd(), 'public', file.filePath);
+      if (!fs.existsSync(filePath)) {
+        missingFiles.push(file.originalName);
       }
-    });
+    }
     
-    // Gérer la fin du téléchargement
-    res.on('finish', () => {
-      // Supprimer l'archive après le téléchargement (optionnel)
-      setTimeout(() => {
-        fs.unlink(fullArchivePath, (err) => {
-          if (err) console.error('Erreur lors de la suppression de l\'archive temporaire:', err);
-        });
-      }, 60000); // Attendre 1 minute avant de supprimer
-    });
+    if (missingFiles.length > 0) {
+      if (global.logger) {
+        global.logger.error(`Fichiers manquants: ${missingFiles.join(', ')}`);
+      }
+      return res.status(404).send(`Certains fichiers sont manquants: ${missingFiles.join(', ')}`);
+    }
     
-    // Pipe le stream vers la réponse
-    archiveStream.pipe(res);
+    try {
+      // Créer une archive ZIP des fichiers
+      const archivePath = await createZipArchive(fileTransfer.files, fileTransfer.userId);
+      
+      // Construire le chemin de l'archive
+      const fullArchivePath = path.join(process.cwd(), 'public', archivePath);
+      
+      // Vérifier si l'archive existe
+      if (!fs.existsSync(fullArchivePath)) {
+        if (global.logger) {
+          global.logger.error(`Archive non créée: ${fullArchivePath}`);
+        }
+        return res.status(500).send('Erreur lors de la création de l\'archive');
+      }
+      
+      // Obtenir la taille de l'archive
+      const archiveStats = fs.statSync(fullArchivePath);
+      const archiveSize = archiveStats.size;
+      
+      if (archiveSize === 0) {
+        if (global.logger) {
+          global.logger.error(`Archive vide: ${fullArchivePath}`);
+        }
+        return res.status(500).send('L\'archive créée est vide');
+      }
+      
+      const archiveFileName = `newbi-files-${Date.now()}.zip`;
+      
+      if (global.logger) {
+        global.logger.info(`Archive prête - Chemin: ${fullArchivePath}, Taille: ${archiveSize} octets`);
+      }
+      
+      // Incrémenter le compteur de téléchargements
+      await fileTransfer.incrementDownloadCount();
+      
+      // Définir les en-têtes appropriés pour le téléchargement
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(archiveFileName)}"`);
+      res.setHeader('Content-Length', archiveSize);
+      res.setHeader('Cache-Control', 'no-cache');
+      
+      // Utiliser un stream pour envoyer l'archive
+      const archiveStream = fs.createReadStream(fullArchivePath);
+      
+      // Gérer les erreurs de stream
+      archiveStream.on('error', (err) => {
+        if (global.logger) {
+          global.logger.error('Erreur de stream lors du téléchargement de l\'archive:', err);
+        }
+        if (!res.headersSent) {
+          res.status(500).send('Erreur lors de la lecture de l\'archive');
+        }
+      });
+      
+      // Gérer la fin du téléchargement
+      res.on('finish', () => {
+        if (global.logger) {
+          global.logger.info(`Téléchargement terminé: ${archiveFileName}`);
+        }
+        // Supprimer l'archive après le téléchargement
+        setTimeout(() => {
+          fs.unlink(fullArchivePath, (err) => {
+            if (err && global.logger) {
+              global.logger.error('Erreur lors de la suppression de l\'archive temporaire:', err);
+            }
+          });
+        }, 60000); // Attendre 1 minute avant de supprimer
+      });
+      
+      // Pipe le stream vers la réponse
+      archiveStream.pipe(res);
+    } catch (zipError) {
+      if (global.logger) {
+        global.logger.error('Erreur lors de la création de l\'archive ZIP:', zipError);
+      }
+      if (!res.headersSent) {
+        res.status(500).send(`Erreur lors de la création de l'archive: ${zipError.message}`);
+      }
+    }
   } catch (error) {
-    console.error('Erreur lors du téléchargement des fichiers:', error);
+    if (global.logger) {
+      global.logger.error('Erreur lors du téléchargement des fichiers:', error);
+    }
     if (!res.headersSent) {
       res.status(500).send('Une erreur est survenue lors du téléchargement des fichiers');
     }

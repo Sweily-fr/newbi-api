@@ -233,23 +233,61 @@ const createZipArchive = async (files, userId) => {
   const archiveName = `archive-${Date.now()}.zip`;
   const archivePath = path.join(archiveDir, archiveName);
   
+  // Vérifier si des fichiers existent
+  if (!files || files.length === 0) {
+    throw new Error('Aucun fichier à archiver');
+  }
+
+  // Vérifier que tous les fichiers existent physiquement
+  const missingFiles = [];
+  for (const file of files) {
+    const filePath = path.join(process.cwd(), 'public', file.filePath);
+    if (!fs.existsSync(filePath)) {
+      missingFiles.push(file.originalName);
+    }
+  }
+
+  if (missingFiles.length > 0) {
+    throw new Error(`Certains fichiers sont manquants: ${missingFiles.join(', ')}`);
+  }
+  
   // Créer l'archive
   const output = createWriteStream(archivePath);
   const archive = archiver('zip', {
-    zlib: { level: 9 } // Niveau de compression maximum
+    zlib: { level: 6 } // Niveau de compression équilibré (performance/taille)
   });
   
-  // Gérer les événements
-  archive.on('warning', (err) => {
-    if (err.code === 'ENOENT') {
-      console.warn('Archive warning:', err);
-    } else {
-      throw err;
-    }
-  });
-  
-  archive.on('error', (err) => {
-    throw err;
+  // Créer une promesse pour attendre la fin de l'écriture
+  const archivePromise = new Promise((resolve, reject) => {
+    // Gérer les événements
+    output.on('close', () => {
+      if (global.logger) {
+        global.logger.info(`Archive créée avec succès: ${archivePath}, taille: ${archive.pointer()} octets`);
+      }
+      resolve();
+    });
+    
+    output.on('error', (err) => {
+      if (global.logger) {
+        global.logger.error('Erreur lors de la création de l\'archive:', err);
+      }
+      reject(err);
+    });
+    
+    archive.on('warning', (err) => {
+      if (err.code === 'ENOENT') {
+        console.warn('Archive warning:', err);
+      } else {
+        reject(err);
+      }
+    });
+    
+    archive.on('error', (err) => {
+      if (global.logger) {
+        global.logger.error('Erreur d\'archivage:', err);
+      }
+      reject(err);
+    });
   });
   
   // Pipe l'archive vers le fichier de sortie
@@ -257,12 +295,39 @@ const createZipArchive = async (files, userId) => {
   
   // Ajouter les fichiers à l'archive
   for (const file of files) {
-    const filePath = path.join(process.cwd(), 'public', file.filePath);
-    archive.file(filePath, { name: file.originalName });
+    try {
+      const filePath = path.join(process.cwd(), 'public', file.filePath);
+      // Utiliser un nom de fichier sécurisé pour l'archive
+      const safeFileName = file.originalName.replace(/[\\/:*?"<>|]/g, '_');
+      if (global.logger) {
+        global.logger.info(`Ajout du fichier à l'archive: ${filePath} -> ${safeFileName}`);
+      }
+      archive.file(filePath, { name: safeFileName });
+    } catch (error) {
+      if (global.logger) {
+        global.logger.error(`Erreur lors de l'ajout du fichier ${file.originalName} à l'archive:`, error);
+      }
+      // Continuer avec les autres fichiers
+    }
   }
   
-  // Finaliser l'archive
+  // Finaliser l'archive et attendre la fin de l'écriture
   await archive.finalize();
+  await archivePromise;
+  
+  // Vérifier que l'archive a bien été créée
+  if (!fs.existsSync(archivePath)) {
+    throw new Error('L\'archive n\'a pas été créée correctement');
+  }
+  
+  const archiveStats = fs.statSync(archivePath);
+  if (archiveStats.size === 0) {
+    throw new Error('L\'archive créée est vide');
+  }
+  
+  if (global.logger) {
+    global.logger.info(`Archive finalisée: ${archivePath}, taille: ${archiveStats.size} octets`);
+  }
   
   // Retourner le chemin relatif de l'archive
   return `/uploads/file-transfers/${userId.toString()}/archives/${archiveName}`;
