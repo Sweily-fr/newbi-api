@@ -10,8 +10,8 @@ enum FileTransferStatus {
 # Type pour représenter un fichier individuel dans un transfert
 type File {
   id: ID!
-  filename: String!
-  originalFilename: String!
+  fileName: String!
+  originalName: String!
   mimeType: String!
   size: Int!
   filePath: String!
@@ -62,6 +62,13 @@ type FileTransferPaymentResponse {
   paymentSessionUrl: String!
 }
 
+# Type pour la réponse d'accès à un transfert de fichiers
+type FileTransferAccessResponse {
+  success: Boolean!
+  message: String
+  fileTransfer: FileTransfer
+}
+
 # Input pour la création d'un transfert de fichiers
 input FileTransferInput {
   expiryDays: Int
@@ -80,7 +87,7 @@ extend type Query {
   fileTransferById(id: ID!): FileTransfer
   
   # Obtenir un transfert de fichiers par son lien de partage et sa clé d'accès
-  getFileTransferByLink(shareLink: String!, accessKey: String!): FileTransfer
+  getFileTransferByLink(shareLink: String!, accessKey: String!): FileTransferAccessResponse
 }
 
 # Étendre le type Mutation

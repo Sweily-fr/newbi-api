@@ -110,8 +110,8 @@ async function startServer() {
   app.post('/webhook/file-transfer', express.raw({type: 'application/json'}), handleFileTransferStripeWebhook);
   
   // Routes pour le téléchargement de fichiers
-  app.get('/file-transfer/download/:shareLink/:accessKey/:fileId', downloadFile);
-  app.get('/file-transfer/download-all/:shareLink/:accessKey', downloadAllFiles);
+  app.get('/file-transfer/download-file', downloadFile);
+  app.get('/file-transfer/download-all', downloadAllFiles);
   
   // Route pour valider un paiement de transfert de fichiers
   app.get('/file-transfer/validate-payment', validatePayment);

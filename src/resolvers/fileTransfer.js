@@ -114,6 +114,13 @@ module.exports = {
           };
         }
         
+        console.log('Débogage FileTransfer:', {
+          id: fileTransfer.id,
+          isPaymentRequired: fileTransfer.isPaymentRequired,
+          paymentAmount: fileTransfer.paymentAmount,
+          isPaid: fileTransfer.isPaid
+        });
+        
         // Préparer les informations de paiement
         const paymentInfo = {
           isPaymentRequired: fileTransfer.isPaymentRequired,

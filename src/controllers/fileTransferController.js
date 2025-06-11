@@ -19,6 +19,10 @@ exports.handleStripeWebhook = async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
   
+  console.log('Données de l\'événement:', JSON.stringify(event.data.object, null, 2));
+  
+  let result = { status: 'ignored', message: `Événement non géré: ${event.type}` };
+  
   // Gérer l'événement de paiement réussi
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
@@ -32,23 +36,56 @@ exports.handleStripeWebhook = async (req, res) => {
       
       if (fileTransfer) {
         await fileTransfer.markAsPaid(session.id);
-        // Webhook Stripe reçu pour le transfert de fichiers
+        result = { status: 'success', message: 'Transfert marqué comme payé' };
       } else {
-        // Transfert de fichiers non trouvé
+        result = { status: 'error', message: 'Transfert de fichiers non trouvé' };
       }
     } catch (error) {
-      // Erreur lors du traitement du paiement
+      result = { status: 'error', message: `Erreur lors du traitement du paiement: ${error.message}` };
+    }
+  }
+  // Gérer l'événement de frais d'application créé
+  else if (event.type === 'application_fee.created') {
+    const fee = event.data.object;
+    
+    try {
+      // Récupérer la charge associée
+      const charge = fee.charge;
+      
+      // Récupérer la session de paiement associée à cette charge
+      const paymentIntent = await stripe.paymentIntents.retrieve(fee.originating_transaction);
+      
+      if (paymentIntent && paymentIntent.metadata && paymentIntent.metadata.fileTransferId) {
+        const fileTransferId = paymentIntent.metadata.fileTransferId;
+        
+        // Mettre à jour le transfert de fichiers
+        const fileTransfer = await FileTransfer.findById(fileTransferId);
+        
+        if (fileTransfer && !fileTransfer.isPaid) {
+          await fileTransfer.markAsPaid(charge);
+          result = { status: 'success', message: 'Transfert marqué comme payé via application_fee' };
+        } else if (fileTransfer && fileTransfer.isPaid) {
+          result = { status: 'ignored', message: 'Transfert déjà marqué comme payé' };
+        } else {
+          result = { status: 'error', message: 'Transfert de fichiers non trouvé' };
+        }
+      }
+    } catch (error) {
+      result = { status: 'error', message: `Erreur lors du traitement des frais: ${error.message}` };
     }
   }
   
+  console.log('Résultat du traitement:', result);
+  
   // Répondre pour confirmer la réception
-  res.status(200).json({ received: true });
+  res.status(200).json({ received: true, result });
 };
 
 // Télécharger un fichier individuel
 exports.downloadFile = async (req, res) => {
   try {
-    const { shareLink, accessKey, fileId } = req.params;
+    // Utiliser req.query au lieu de req.params pour les query parameters
+    const { link: shareLink, key: accessKey, file: fileId } = req.query;
     
     console.log(`[DEBUG] Demande de téléchargement - shareLink: ${shareLink}, accessKey: ${accessKey}, fileId: ${fileId}`);
     
@@ -146,7 +183,8 @@ exports.downloadFile = async (req, res) => {
 // Télécharger tous les fichiers en tant qu'archive ZIP
 exports.downloadAllFiles = async (req, res) => {
   try {
-    const { shareLink, accessKey } = req.params;
+    // Utiliser req.query au lieu de req.params pour les query parameters
+    const { link: shareLink, key: accessKey } = req.query;
     
     if (global.logger) {
       global.logger.info(`Demande de téléchargement ZIP - shareLink: ${shareLink}, accessKey: ${accessKey}`);

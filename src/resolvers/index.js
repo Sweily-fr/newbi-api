@@ -14,6 +14,7 @@ const expenseResolvers = require('./expense');
 const scalarResolvers = require('./scalars');
 const fileTransferResolvers = require('./fileTransfer');
 const kanbanResolvers = require('./kanban');
+const stripeConnectResolvers = require('./stripeConnectResolvers');
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -30,7 +31,8 @@ const resolvers = mergeResolvers([
   expenseResolvers,
   scalarResolvers,
   fileTransferResolvers,
-  kanbanResolvers
+  kanbanResolvers,
+  stripeConnectResolvers
 ]);
 
 module.exports = resolvers;

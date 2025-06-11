@@ -1,0 +1,73 @@
+# Types pour l'intégration Stripe Connect
+
+# Type pour représenter un compte Stripe Connect
+type StripeConnectAccount {
+  id: ID!
+  userId: ID!
+  accountId: String!
+  isOnboarded: Boolean!
+  chargesEnabled: Boolean!
+  payoutsEnabled: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Type pour la réponse de création d'un compte Stripe Connect
+type StripeConnectAccountResponse {
+  success: Boolean!
+  message: String
+  accountId: String
+}
+
+# Type pour la réponse de génération d'un lien d'onboarding
+type StripeOnboardingLinkResponse {
+  success: Boolean!
+  message: String
+  url: String
+}
+
+# Type pour la réponse de vérification du statut d'un compte
+type StripeConnectAccountStatusResponse {
+  success: Boolean!
+  message: String
+  isOnboarded: Boolean!
+  chargesEnabled: Boolean!
+  payoutsEnabled: Boolean!
+  accountStatus: String
+}
+
+# Type pour la réponse de création d'une session de paiement
+type StripePaymentSessionResponse {
+  success: Boolean!
+  message: String
+  sessionId: String
+  sessionUrl: String
+}
+
+# Étendre le type Query
+extend type Query {
+  # Obtenir le compte Stripe Connect de l'utilisateur connecté
+  myStripeConnectAccount: StripeConnectAccount
+}
+
+# Étendre le type Mutation
+extend type Mutation {
+  # Créer un nouveau compte Stripe Connect pour l'utilisateur connecté
+  createStripeConnectAccount: StripeConnectAccountResponse!
+  
+  # Générer un lien d'onboarding pour un compte Stripe Connect
+  generateStripeOnboardingLink(
+    accountId: String!
+    returnUrl: String!
+  ): StripeOnboardingLinkResponse!
+  
+  # Vérifier le statut d'un compte Stripe Connect
+  checkStripeConnectAccountStatus(
+    accountId: String!
+  ): StripeConnectAccountStatusResponse!
+  
+  # Créer une session de paiement pour un transfert de fichiers
+  createPaymentSessionForFileTransfer(
+    transferId: ID!
+  ): StripePaymentSessionResponse!
+}
