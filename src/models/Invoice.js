@@ -235,6 +235,12 @@ const invoiceSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  stripeInvoiceId: {
+    type: String,
+    trim: true,
+    sparse: true,
+    index: true
   }
 }, {
   timestamps: true

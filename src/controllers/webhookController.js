@@ -1,4 +1,6 @@
 const User = require('../models/User');
+const Invoice = require('../models/Invoice');
+const FileTransfer = require('../models/FileTransfer');
 const { AppError } = require('../utils/errors');
 const stripe = require('../utils/stripe'); // Importer la configuration Stripe
 
@@ -36,6 +38,9 @@ async function handleStripeWebhook(event) {
     
     case 'customer.subscription.trial_will_end':
       return await handleTrialWillEnd(event.data.object);
+    
+    case 'checkout.session.completed':
+      return await handleCheckoutSessionCompleted(event.data.object);
     
     default:
       return { status: 'ignored', message: `Événement non géré: ${event.type}` };
@@ -324,6 +329,59 @@ async function findUserByCustomerId(customerId) {
   } catch (error) {
     console.error('Erreur lors de la recherche d\'utilisateur:', error);
     return null;
+  }
+}
+
+/**
+ * Gère l'événement de paiement réussi (checkout.session.completed)
+ * @param {Object} session - L'objet session de Stripe
+ * @returns {Promise<Object>} - Résultat du traitement
+ */
+async function handleCheckoutSessionCompleted(session) {
+  try {
+    console.log('Traitement du paiement pour la session:', session.id);
+    
+    // Vérifier que le paiement est bien réussi
+    if (session.payment_status !== 'paid') {
+      console.log('Paiement non effectué pour la session:', session.id);
+      return { status: 'ignored', message: 'Paiement non effectué' };
+    }
+    
+    // Récupérer les métadonnées de la session
+    const { fileTransferId } = session.metadata || {};
+    
+    if (!fileTransferId) {
+      console.error('ID de transfert de fichier manquant dans les métadonnées');
+      return { status: 'error', message: 'ID de transfert de fichier manquant' };
+    }
+    
+    // Mettre à jour le statut de paiement dans la base de données
+    const updatedTransfer = await FileTransfer.findByIdAndUpdate(
+      fileTransferId,
+      { 
+        isPaid: true,
+        paymentId: session.payment_intent || session.id,
+        paymentDate: new Date(),
+        status: 'active'
+      },
+      { new: true }
+    );
+    
+    if (!updatedTransfer) {
+      console.error('Transfert de fichier non trouvé avec l\'ID:', fileTransferId);
+      return { status: 'error', message: 'Transfert de fichier non trouvé' };
+    }
+    
+    console.log('Paiement enregistré avec succès pour le transfert:', fileTransferId);
+    return { 
+      status: 'success', 
+      message: 'Paiement enregistré avec succès',
+      fileTransferId
+    };
+    
+  } catch (error) {
+    console.error('Erreur lors du traitement du paiement:', error);
+    throw new AppError('Erreur lors du traitement du paiement', 'PAYMENT_PROCESSING_ERROR', error.message);
   }
 }
 
