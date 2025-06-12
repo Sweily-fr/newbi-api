@@ -73,6 +73,11 @@ const saveBase64File = async (fileInput, userId) => {
     global.logger.info(`Début de la chaîne base64: ${base64.substring(0, 50)}...`);
   }
   
+  // Vérifier que la chaîne base64 est valide
+  if (!base64 || typeof base64 !== 'string') {
+    throw new Error('Données base64 invalides ou manquantes');
+  }
+  
   // Extraire l'extension du fichier original
   const originalExt = path.extname(name);
   const nameWithoutExt = path.basename(name, originalExt);
@@ -107,22 +112,22 @@ const saveBase64File = async (fileInput, userId) => {
     }
     
     // Décoder et écrire le fichier base64
-    let base64Data = base64;
+    let base64Data = '';
     let contentType = '';
     
     // Vérifier si la chaîne contient un en-tête data URI (comme "data:image/jpeg;base64,")
     if (base64.includes(';base64,')) {
-      // Extraire le type de contenu et les données base64
+      // Format standard: data:image/jpeg;base64,/9j/4AAQSkZJRg...
       const parts = base64.split(';base64,');
       contentType = parts[0].replace('data:', '');
       base64Data = parts[1];
       
       if (global.logger) {
-        global.logger.info(`En-tête MIME détecté: ${contentType}`);
+        global.logger.info(`En-tête MIME standard détecté: ${contentType}`);
         global.logger.info(`Longueur des données base64 après extraction: ${base64Data.length}`);
       }
     } else if (base64.startsWith('data:') && base64.includes(',')) {
-      // Format alternatif possible
+      // Format alternatif: data:image/jpeg,/9j/4AAQSkZJRg...
       const parts = base64.split(',');
       contentType = parts[0].replace('data:', '').replace(';', '');
       base64Data = parts[1];
@@ -132,14 +137,16 @@ const saveBase64File = async (fileInput, userId) => {
         global.logger.info(`Longueur des données base64 après extraction: ${base64Data.length}`);
       }
     } else {
+      // Aucun en-tête détecté, considérer comme des données brutes
       if (global.logger) {
-        global.logger.warn('Aucun en-tête MIME détecté dans la chaîne base64');
+        global.logger.warn('Aucun en-tête MIME détecté dans la chaîne base64, traitement comme données brutes');
       }
+      base64Data = base64;
     }
     
-    // S'assurer que base64Data n'est pas undefined
+    // S'assurer que base64Data n'est pas undefined ou vide
     if (!base64Data) {
-      throw new Error('Format base64 invalide');
+      throw new Error('Format base64 invalide: données manquantes après extraction');
     }
     
     // Nettoyer la chaîne base64 (retirer les espaces, retours à la ligne, etc.)
@@ -169,6 +176,16 @@ const saveBase64File = async (fileInput, userId) => {
     
     if (global.logger) {
       global.logger.info(`Taille du buffer après décodage: ${buffer.length} octets`);
+      global.logger.info(`Taille déclarée vs taille réelle: ${size} vs ${buffer.length} octets`);
+      
+      // Vérifier si la taille du buffer est cohérente avec la taille déclarée
+      // Une différence de taille peut indiquer un problème d'encodage/décodage
+      const sizeDiff = Math.abs(buffer.length - size);
+      const sizeRatio = buffer.length / size;
+      
+      if (sizeDiff > 1024 && (sizeRatio < 0.9 || sizeRatio > 1.1)) {
+        global.logger.warn(`Différence de taille importante détectée: ${sizeDiff} octets (ratio: ${sizeRatio.toFixed(2)})`);
+      }
     }
     
     // Écrire le fichier sur le disque
