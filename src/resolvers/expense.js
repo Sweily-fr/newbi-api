@@ -308,7 +308,8 @@ module.exports = {
         }
       }
       
-      await expense.remove();
+      // Use deleteOne instead of the deprecated remove() method
+      await Expense.deleteOne({ _id: expense._id });
       return true;
     },
     
