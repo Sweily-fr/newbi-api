@@ -79,6 +79,8 @@ type Expense {
   vendor: String
   vendorVatNumber: String
   invoiceNumber: String
+  documentNumber: String
+  accountingAccount: String
   vatAmount: Float
   vatRate: Float
   isVatDeductible: Boolean!
@@ -139,6 +141,8 @@ input CreateExpenseInput {
   vendor: String
   vendorVatNumber: String
   invoiceNumber: String
+  documentNumber: String
+  accountingAccount: String
   vatAmount: Float
   vatRate: Float
   isVatDeductible: Boolean = true
@@ -160,6 +164,8 @@ input UpdateExpenseInput {
   vendor: String
   vendorVatNumber: String
   invoiceNumber: String
+  documentNumber: String
+  accountingAccount: String
   vatAmount: Float
   vatRate: Float
   isVatDeductible: Boolean

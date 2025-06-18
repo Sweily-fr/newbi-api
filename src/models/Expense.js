@@ -221,6 +221,26 @@ const expenseSchema = new mongoose.Schema({
       message: 'Le numéro de facture ne doit pas dépasser 50 caractères'
     }
   },
+  documentNumber: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(value) {
+        return !value || value.length <= 50;
+      },
+      message: 'Le numéro de pièce justificative ne doit pas dépasser 50 caractères'
+    }
+  },
+  accountingAccount: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(value) {
+        return !value || value.length <= 20;
+      },
+      message: 'Le compte comptable ne doit pas dépasser 20 caractères'
+    }
+  },
   vatAmount: {
     type: Number,
     default: 0,

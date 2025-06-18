@@ -262,19 +262,29 @@ module.exports = {
     updateExpense: async (_, { id, input }, { user }) => {
       if (!user) throw new ForbiddenError('Vous devez être connecté');
       
-      const expense = await checkExpenseAccess(id, user.id);
+      await checkExpenseAccess(id, user.id);
+      
+      // Log pour déboguer
+      console.log('updateExpense - input reçu:', JSON.stringify(input));
+      console.log('updateExpense - champs disponibles:', Object.keys(input));
       
       // Convertir les dates
       if (input.date) input.date = new Date(input.date);
       if (input.paymentDate) input.paymentDate = new Date(input.paymentDate);
       
       try {
-        Object.keys(input).forEach(key => {
-          expense[key] = input[key];
-        });
+        // Utiliser findByIdAndUpdate au lieu de save() pour éviter les problèmes de détection de modifications
+        const updatedExpense = await Expense.findByIdAndUpdate(
+          id,
+          { $set: input },
+          { new: true, runValidators: true }
+        );
         
-        await expense.save();
-        return expense;
+        if (!updatedExpense) {
+          throw new UserInputError('Dépense non trouvée');
+        }
+        
+        return updatedExpense;
       } catch (error) {
         if (error.name === 'ValidationError') {
           throw new UserInputError('Données de dépense invalides', { errors: error.errors });
