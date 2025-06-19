@@ -3,6 +3,7 @@ const fs = require('fs');
 const FileTransfer = require('../models/FileTransfer');
 const { createZipArchive } = require('../utils/fileTransferUtils');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const logger = console; // Utilisation de console comme logger de base
 
 // Webhook Stripe pour les paiements
 exports.handleStripeWebhook = async (req, res) => {
@@ -84,38 +85,57 @@ exports.handleStripeWebhook = async (req, res) => {
 // Télécharger un fichier individuel
 exports.downloadFile = async (req, res) => {
   try {
-    // Utiliser req.query au lieu de req.params pour les query parameters
-    const { link: shareLink, key: accessKey, file: fileId } = req.query;
+    // Utiliser req.query pour les paramètres de requête
+    const { link: shareLink, key: accessKey, fileId } = req.query;
     
-    console.log(`[DEBUG] Demande de téléchargement - shareLink: ${shareLink}, accessKey: ${accessKey}, fileId: ${fileId}`);
+    logger.info(`[FileTransfer] Demande de téléchargement - shareLink: ${shareLink}, accessKey: ${accessKey ? '***' + accessKey.slice(-4) : 'non fourni'}, fileId: ${fileId}`);
+    
+    if (!shareLink || !accessKey || !fileId) {
+      logger.error('[FileTransfer] Paramètres manquants pour le téléchargement');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Paramètres de téléchargement manquants' 
+      });
+    }
     
     // Vérifier le transfert de fichiers
     const fileTransfer = await FileTransfer.findOne({ 
       shareLink,
       accessKey,
-      status: 'active'
+      status: 'active',
+      expiryDate: { $gt: new Date() }
     });
     
     if (!fileTransfer) {
-      console.log(`[ERROR] Transfert non trouvé - shareLink: ${shareLink}, accessKey: ${accessKey}`);
+      logger.error(`[FileTransfer] Transfert non trouvé ou expiré - shareLink: ${shareLink}`);
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Transfert non trouvé ou expiré' 
+      });
       return res.status(404).send('Transfert de fichiers non trouvé ou expiré');
     }
     
-    console.log(`[DEBUG] Transfert trouvé - ID: ${fileTransfer._id}, status: ${fileTransfer.status}`);
+    logger.info(`[FileTransfer] Transfert trouvé - ID: ${fileTransfer._id}, status: ${fileTransfer.status}`);
     
     // Vérifier si le transfert est accessible
     if (!fileTransfer.isAccessible()) {
-      console.log(`[ERROR] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`);
-      return res.status(403).send('Accès refusé. Le paiement est requis ou le transfert a expiré.');
+      logger.error(`[FileTransfer] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Accès refusé. Le paiement est requis ou le transfert a expiré.'
+      });
     }
     
     // Trouver le fichier demandé
     const file = fileTransfer.files.find(f => f._id.toString() === fileId);
     
     if (!file) {
-      console.log(`[ERROR] Fichier non trouvé dans le transfert - fileId: ${fileId}`);
-      console.log(`[DEBUG] Fichiers disponibles: ${JSON.stringify(fileTransfer.files.map(f => ({ id: f._id.toString(), name: f.originalName })))}`);
-      return res.status(404).send('Fichier non trouvé');
+      logger.error(`[FileTransfer] Fichier non trouvé dans le transfert - fileId: ${fileId}`);
+      logger.debug(`[FileTransfer] Fichiers disponibles: ${JSON.stringify(fileTransfer.files.map(f => ({ id: f._id.toString(), name: f.originalName })))}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Fichier non trouvé dans le transfert'
+      });
     }
     
     console.log(`[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}`);
@@ -183,37 +203,43 @@ exports.downloadFile = async (req, res) => {
 // Télécharger tous les fichiers en tant qu'archive ZIP
 exports.downloadAllFiles = async (req, res) => {
   try {
-    // Utiliser req.query au lieu de req.params pour les query parameters
     const { link: shareLink, key: accessKey } = req.query;
     
-    if (global.logger) {
-      global.logger.info(`Demande de téléchargement ZIP - shareLink: ${shareLink}, accessKey: ${accessKey}`);
+    logger.info(`[FileTransfer] Demande de téléchargement groupé - shareLink: ${shareLink}, accessKey: ${accessKey ? '***' + accessKey.slice(-4) : 'non fourni'}`);
+    
+    if (!shareLink || !accessKey) {
+      logger.error('[FileTransfer] Paramètres manquants pour le téléchargement groupé');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Paramètres de téléchargement manquants' 
+      });
     }
     
     // Vérifier le transfert de fichiers
     const fileTransfer = await FileTransfer.findOne({ 
       shareLink,
       accessKey,
-      status: 'active'
+      status: 'active',
+      expiryDate: { $gt: new Date() }
     });
     
     if (!fileTransfer) {
-      if (global.logger) {
-        global.logger.error(`Transfert non trouvé - shareLink: ${shareLink}, accessKey: ${accessKey}`);
-      }
-      return res.status(404).send('Transfert de fichiers non trouvé ou expiré');
+      logger.error(`[FileTransfer] Transfert non trouvé ou expiré - shareLink: ${shareLink}`);
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Transfert non trouvé ou expiré' 
+      });
     }
     
-    if (global.logger) {
-      global.logger.info(`Transfert trouvé - ID: ${fileTransfer._id}, nombre de fichiers: ${fileTransfer.files.length}`);
-    }
+    logger.info(`[FileTransfer] Transfert trouvé - ID: ${fileTransfer._id}, nombre de fichiers: ${fileTransfer.files.length}`);
     
     // Vérifier si le transfert est accessible
     if (!fileTransfer.isAccessible()) {
-      if (global.logger) {
-        global.logger.error(`Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`);
-      }
-      return res.status(403).send('Accès refusé. Le paiement est requis ou le transfert a expiré.');
+      logger.error(`[FileTransfer] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Accès refusé. Le paiement est requis ou le transfert a expiré.'
+      });
     }
     
     // Vérifier si des fichiers existent

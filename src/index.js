@@ -17,8 +17,8 @@ const typeDefs = require('./schemas');
 
 // Connexion à MongoDB
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('Connecté à MongoDB'))
-  .catch(err => console.error('Erreur de connexion MongoDB:', err));
+  .then(() => logger.info('Connecté à MongoDB'))
+  .catch(err => logger.error('Erreur de connexion MongoDB:', err));
 
 // Chargement des resolvers
 const resolvers = require('./resolvers');
@@ -27,46 +27,69 @@ const resolvers = require('./resolvers');
 const uploadLogoDir = path.resolve(__dirname, '../public/uploads/company-logos');
 if (!fs.existsSync(uploadLogoDir)) {
   fs.mkdirSync(uploadLogoDir, { recursive: true });
-  console.log('Dossier d\'upload pour logos créé:', uploadLogoDir);
+  logger.info(`Dossier d'upload pour logos créé: ${uploadLogoDir}`);
 }
 
 // Assurer que le dossier d'upload pour les photos de profil existe
 const uploadProfileDir = path.resolve(__dirname, '../public/uploads/profile-pictures');
 if (!fs.existsSync(uploadProfileDir)) {
   fs.mkdirSync(uploadProfileDir, { recursive: true });
-  console.log('Dossier d\'upload pour photos de profil créé:', uploadProfileDir);
+  logger.info(`Dossier d'upload pour photos de profil créé: ${uploadProfileDir}`);
 }
 
 // Assurer que le dossier d'upload pour les dépenses existe
 const uploadExpensesDir = path.resolve(__dirname, '../public/uploads/expenses');
 if (!fs.existsSync(uploadExpensesDir)) {
   fs.mkdirSync(uploadExpensesDir, { recursive: true });
-  console.log('Dossier d\'upload pour les dépenses créé:', uploadExpensesDir);
+  logger.info(`Dossier d'upload pour les dépenses créé: ${uploadExpensesDir}`);
 }
 
 // Assurer que le dossier d'upload pour les transferts de fichiers existe
 const uploadFileTransfersDir = path.resolve(__dirname, '../public/uploads/file-transfers');
 if (!fs.existsSync(uploadFileTransfersDir)) {
   fs.mkdirSync(uploadFileTransfersDir, { recursive: true });
-  console.log('Dossier d\'upload pour les transferts de fichiers créé:', uploadFileTransfersDir);
+  logger.info(`Dossier d'upload pour les transferts de fichiers créé: ${uploadFileTransfersDir}`);
 }
 
 async function startServer() {
   const app = express();
 
   // Configuration CORS pour permettre l'accès aux ressources statiques
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:4000',
+    'https://studio.apollographql.com',
+    'https://www.newbi.fr',
+    'https://newbi.fr',
+    'https://api.newbi.fr',
+    process.env.FRONTEND_URL
+  ].filter(Boolean);
+
+  // Configuration CORS pour toutes les routes
   app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:4000', 'https://studio.apollographql.com', process.env.FRONTEND_URL].filter(Boolean),
+    origin: function(origin, callback) {
+      // Autoriser les requêtes sans origine (comme les applications mobiles ou Postman)
+      if (!origin) return callback(null, true);
+      
+      // Vérifier si l'origine est dans la liste des origines autorisées
+      if (allowedOrigins.indexOf(origin) === -1) {
+        const msg = `L'origine ${origin} n'est pas autorisée par CORS`;
+        return callback(new Error(msg), false);
+      }
+      return callback(null, true);
+    },
     credentials: true,
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'] 
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Range'],
+    exposedHeaders: ['Content-Disposition', 'Content-Length', 'Content-Type']
   }));
 
-  // Middleware pour ajouter les en-têtes CORS spécifiques aux images
+  // Middleware pour ajouter les en-têtes CORS spécifiques aux fichiers statiques
   app.use('/uploads', (req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+    res.header('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
     next();
   });
 
@@ -76,17 +99,17 @@ async function startServer() {
       const signature = req.headers['stripe-signature'];
       
       if (!signature) {
-        console.error('Signature Stripe manquante');
+        logger.error('Signature Stripe manquante');
         return res.status(400).send('Webhook Error: Signature manquante');
       }
       
       if (!process.env.STRIPE_WEBHOOK_SECRET) {
-        console.error('STRIPE_WEBHOOK_SECRET non défini');
+        logger.error('STRIPE_WEBHOOK_SECRET non défini');
         return res.status(500).send('Configuration Error: STRIPE_WEBHOOK_SECRET manquant');
       }
       
-      console.log('Signature reçue:', signature);
-      console.log('Secret utilisé:', process.env.STRIPE_WEBHOOK_SECRET.substring(0, 5) + '...');
+      logger.debug(`Signature reçue: ${signature}`);
+      logger.debug(`Secret utilisé: ${process.env.STRIPE_WEBHOOK_SECRET.substring(0, 5)}...`);
       
       const event = stripe.webhooks.constructEvent(
         req.body,
@@ -94,20 +117,39 @@ async function startServer() {
         process.env.STRIPE_WEBHOOK_SECRET
       );
       
-      console.log('Événement construit avec succès:', event.type);
+      logger.info(`Événement construit avec succès: ${event.type}`);
       
       const result = await handleStripeWebhook(event);
-      console.log('Résultat du traitement:', result);
+      logger.info('Résultat du traitement du webhook:', result);
       
       res.status(200).send({ received: true, result });
     } catch (error) {
-      console.error('Erreur webhook Stripe:', error.message);
+      logger.error(`Erreur webhook Stripe: ${error.message}`, { stack: error.stack });
       res.status(400).send(`Webhook Error: ${error.message}`);
     }
   });
   
   // Route pour les webhooks Stripe des transferts de fichiers
   app.post('/webhook/file-transfer', express.raw({type: 'application/json'}), handleFileTransferStripeWebhook);
+  
+  // Middleware pour les routes de téléchargement de fichiers
+  const fileTransferRoutes = ['/file-transfer/download-file', '/file-transfer/download-all', '/file-transfer/validate-payment'];
+  
+  // Appliquer des en-têtes CORS spécifiques pour les routes de téléchargement
+  app.use(fileTransferRoutes, (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+    res.header('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    // Répondre immédiatement aux requêtes OPTIONS
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+    
+    next();
+  });
   
   // Routes pour le téléchargement de fichiers
   app.get('/file-transfer/download-file', downloadFile);
