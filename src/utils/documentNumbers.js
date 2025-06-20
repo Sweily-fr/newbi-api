@@ -1,6 +1,6 @@
 const Quote = require('../models/Quote');
 const Invoice = require('../models/Invoice'); // Ajout de l'import manquant
-const PurchaseOrder = require('../models/PurchaseOrder'); // Import du modèle de bon de commande
+
 
 /**
  * Génère un numéro séquentiel pour un document (facture ou devis)
@@ -119,9 +119,6 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     // Ajouter le filtre par utilisateur si disponible
     if (options.userId) {
       existingQuery.createdBy = options.userId;
-      console.log(`Vérification du numéro ${generatedNumber} pour l'utilisateur ${options.userId} et l'année ${currentYear}`);
-    } else {
-      console.log(`Attention: Vérification du numéro ${generatedNumber} sans filtre utilisateur!`);
     }
     
     // Si on traite un document qui passe en PENDING, on ne vérifie que parmi les documents avec statut officiel
@@ -188,29 +185,9 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
   return generateSequentialNumber(prefix, Quote, { ...options, year: currentYear });
 };
 
-const generatePurchaseOrderNumber = async (customPrefix, options = {}) => {
-  // Obtenir l'année courante pour la génération du numéro
-  const currentYear = options.year || new Date().getFullYear();
-  
-  // Si aucun préfixe personnalisé n'est fourni, générer un préfixe au format "BC-AAAAMM-"
-  let prefix;
-  if (customPrefix) {
-    prefix = customPrefix;
-  } else {
-    const now = new Date();
-    const year = now.getFullYear();
-    // Le mois est indexé à partir de 0, donc +1 pour obtenir le mois réel
-    // padStart pour s'assurer que le mois est toujours sur 2 chiffres (ex: 03 pour mars)
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    prefix = `BC-${year}${month}-`;
-  }
-  // Passer l'année courante aux options pour la génération du numéro séquentiel
-  // Pour les bons de commande, on utilise le préfixe exact (par mois)
-  return generateSequentialNumber(prefix, PurchaseOrder, { ...options, year: currentYear, useExactPrefix: true });
-};
+
 
 module.exports = {
   generateInvoiceNumber,
-  generateQuoteNumber,
-  generatePurchaseOrderNumber
+  generateQuoteNumber
 };

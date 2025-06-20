@@ -20,15 +20,7 @@ const QUOTE_STATUS = {
   CANCELED: 'CANCELED'
 };
 
-/**
- * Statuts possibles pour un bon de commande
- */
-const PURCHASE_ORDER_STATUS = {
-  DRAFT: 'DRAFT',
-  PENDING: 'PENDING',
-  COMPLETED: 'COMPLETED',
-  CANCELED: 'CANCELED'
-};
+
 
 /**
  * Types de remise possibles
@@ -52,7 +44,6 @@ const PAYMENT_METHOD = {
 module.exports = {
   INVOICE_STATUS,
   QUOTE_STATUS,
-  PURCHASE_ORDER_STATUS,
   DISCOUNT_TYPE,
   PAYMENT_METHOD
 };
