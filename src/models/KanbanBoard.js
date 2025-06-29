@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
 /**
  * Schéma pour les commentaires sur une tâche
@@ -153,4 +153,4 @@ kanbanBoardSchema.index({ members: 1 });
 kanbanBoardSchema.index({ 'columns.tasks.assignedTo': 1 });
 kanbanBoardSchema.index({ 'columns.tasks.dueDate': 1 });
 
-module.exports = mongoose.model('KanbanBoard', kanbanBoardSchema);
+export default mongoose.model('KanbanBoard', kanbanBoardSchema);

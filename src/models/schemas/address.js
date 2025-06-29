@@ -1,10 +1,10 @@
-const mongoose = require('mongoose');
-const { 
+import mongoose from 'mongoose';
+import { 
   POSTAL_CODE_FR_REGEX, 
   STREET_REGEX, 
   CITY_REGEX, 
   COUNTRY_REGEX 
-} = require('../../utils/validators');
+} from '../../utils/validators.js';
 
 /**
  * Schéma d'adresse réutilisable
@@ -32,4 +32,4 @@ const addressSchema = new mongoose.Schema({
   }
 });
 
-module.exports = addressSchema;
+export default addressSchema;

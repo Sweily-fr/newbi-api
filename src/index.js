@@ -1,293 +1,398 @@
-require('dotenv').config();
-const express = require('express');
-const { ApolloServer } = require('apollo-server-express');
-const mongoose = require('mongoose');
-const path = require('path');
-const { graphqlUploadExpress } = require('graphql-upload');
-const fs = require('fs');
-const cors = require('cors');
-const stripe = require('./utils/stripe');
-const { handleStripeWebhook } = require('./controllers/webhookController');
-const { handleStripeWebhook: handleFileTransferStripeWebhook, downloadFile, downloadAllFiles, validatePayment } = require('./controllers/fileTransferController');
-const { setupScheduledJobs } = require('./jobs/scheduler');
-const logger = require('./utils/logger');
+import dotenv from "dotenv";
+// Charger les variables d'environnement depuis le fichier .env
+dotenv.config();
+import express from "express";
+import { ApolloServer } from "apollo-server-express";
+import mongoose from "mongoose";
+import path from "path";
+import { fileURLToPath } from "url";
+import { graphqlUploadExpress } from "graphql-upload";
+import fs from "fs";
+import cors from "cors";
+import stripe from "./utils/stripe.js";
+import { handleStripeWebhook } from "./controllers/webhookController.js";
+import {
+  handleStripeWebhook as handleFileTransferStripeWebhook,
+  downloadFile,
+  downloadAllFiles,
+  validatePayment,
+} from "./controllers/fileTransferController.js";
+import { setupScheduledJobs } from "./jobs/scheduler.js";
+import logger from "./utils/logger.js";
+import { auth } from "./lib/auth.js";
+import { toNodeHandler } from "better-auth/node";
+import { authMiddleware } from "./middlewares/auth.js";
+import typeDefs from "./schemas/index.js";
+import { connect } from "./config/database.js";
 
-const { authMiddleware } = require('./middlewares/auth');
-const typeDefs = require('./schemas');
+// Pour remplacer __dirname dans ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Connexion à MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => logger.info('Connecté à MongoDB'))
-  .catch(err => logger.error('Erreur de connexion MongoDB:', err));
+connect()
+  .then(() => logger.info("Connecté à MongoDB via le module de configuration"))
+  .catch((err) => logger.error("Erreur de connexion MongoDB:", err));
 
 // Chargement des resolvers
-const resolvers = require('./resolvers');
+import resolvers from "./resolvers/index.js";
 
 // Assurer que le dossier d'upload existe
-const uploadLogoDir = path.resolve(__dirname, '../public/uploads/company-logos');
+const uploadLogoDir = path.resolve(
+  __dirname,
+  "../public/uploads/company-logos"
+);
 if (!fs.existsSync(uploadLogoDir)) {
   fs.mkdirSync(uploadLogoDir, { recursive: true });
   logger.info(`Dossier d'upload pour logos créé: ${uploadLogoDir}`);
 }
 
 // Assurer que le dossier d'upload pour les photos de profil existe
-const uploadProfileDir = path.resolve(__dirname, '../public/uploads/profile-pictures');
+const uploadProfileDir = path.resolve(
+  __dirname,
+  "../public/uploads/profile-pictures"
+);
 if (!fs.existsSync(uploadProfileDir)) {
   fs.mkdirSync(uploadProfileDir, { recursive: true });
-  logger.info(`Dossier d'upload pour photos de profil créé: ${uploadProfileDir}`);
+  logger.info(
+    `Dossier d'upload pour photos de profil créé: ${uploadProfileDir}`
+  );
 }
 
 // Assurer que le dossier d'upload pour les dépenses existe
-const uploadExpensesDir = path.resolve(__dirname, '../public/uploads/expenses');
+const uploadExpensesDir = path.resolve(__dirname, "../public/uploads/expenses");
 if (!fs.existsSync(uploadExpensesDir)) {
   fs.mkdirSync(uploadExpensesDir, { recursive: true });
   logger.info(`Dossier d'upload pour les dépenses créé: ${uploadExpensesDir}`);
 }
 
 // Assurer que le dossier d'upload pour les transferts de fichiers existe
-const uploadFileTransfersDir = path.resolve(__dirname, '../public/uploads/file-transfers');
+const uploadFileTransfersDir = path.resolve(
+  __dirname,
+  "../public/uploads/file-transfers"
+);
 if (!fs.existsSync(uploadFileTransfersDir)) {
   fs.mkdirSync(uploadFileTransfersDir, { recursive: true });
-  logger.info(`Dossier d'upload pour les transferts de fichiers créé: ${uploadFileTransfersDir}`);
+  logger.info(
+    `Dossier d'upload pour les transferts de fichiers créé: ${uploadFileTransfersDir}`
+  );
 }
 
 async function startServer() {
   const app = express();
 
+  // Middleware pour parser le JSON pour la plupart des routes (sauf webhooks)
+
   // Configuration CORS pour permettre l'accès aux ressources statiques
   const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:4000',
-    'https://studio.apollographql.com',
-    'https://www.newbi.fr',
-    'https://newbi.fr',
-    'https://api.newbi.fr',
-    process.env.FRONTEND_URL
+    "http://localhost:5173",
+    "http://localhost:4000",
+    "http://localhost:3000",
+    "https://studio.apollographql.com",
+    "https://www.newbi.fr",
+    "https://newbi.fr",
+    "https://api.newbi.fr",
+    process.env.FRONTEND_URL,
   ].filter(Boolean);
 
   // Configuration CORS pour toutes les routes
-  app.use(cors({
-    origin: function(origin, callback) {
-      // Autoriser les requêtes sans origine (comme les applications mobiles ou Postman)
-      if (!origin) return callback(null, true);
-      
-      // Vérifier si l'origine est dans la liste des origines autorisées
-      if (allowedOrigins.indexOf(origin) === -1) {
-        const msg = `L'origine ${origin} n'est pas autorisée par CORS`;
-        return callback(new Error(msg), false);
-      }
-      return callback(null, true);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Range'],
-    exposedHeaders: ['Content-Disposition', 'Content-Length', 'Content-Type']
-  }));
+  app.use(
+    cors({
+      origin: function (origin, callback) {
+        // Autoriser les requêtes sans origine (comme les applications mobiles ou Postman)
+        if (!origin) return callback(null, true);
+
+        // Vérifier si l'origine est dans la liste des origines autorisées
+        if (allowedOrigins.indexOf(origin) === -1) {
+          const msg = `L'origine ${origin} n'est pas autorisée par CORS`;
+          return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+      },
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "Accept", "Range"],
+      exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
+    })
+  );
+
+  // Configurer Better Auth pour toutes les routes /api/auth/*
+  app.all("/graphql/api/auth/*", toNodeHandler(auth));
 
   // Middleware pour ajouter les en-têtes CORS spécifiques aux fichiers statiques
-  app.use('/uploads', (req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
-    res.header('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+  app.use("/uploads", (req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, Range"
+    );
+    res.header(
+      "Access-Control-Expose-Headers",
+      "Content-Disposition, Content-Length, Content-Type"
+    );
     next();
   });
 
   // Route pour les webhooks Stripe - DOIT être avant express.json() middleware
-  app.post('/webhook/stripe', express.raw({type: 'application/json'}), async (req, res) => {
-    try {
-      const signature = req.headers['stripe-signature'];
-      
-      if (!signature) {
-        logger.error('Signature Stripe manquante');
-        return res.status(400).send('Webhook Error: Signature manquante');
+  app.post(
+    "/webhook/stripe",
+    express.raw({ type: "application/json" }),
+    async (req, res) => {
+      try {
+        const signature = req.headers["stripe-signature"];
+
+        if (!signature) {
+          logger.error("Signature Stripe manquante");
+          return res.status(400).send("Webhook Error: Signature manquante");
+        }
+
+        if (!process.env.STRIPE_WEBHOOK_SECRET) {
+          logger.error("STRIPE_WEBHOOK_SECRET non défini");
+          return res
+            .status(500)
+            .send("Configuration Error: STRIPE_WEBHOOK_SECRET manquant");
+        }
+
+        logger.debug(`Signature reçue: ${signature}`);
+        logger.debug(
+          `Secret utilisé: ${process.env.STRIPE_WEBHOOK_SECRET.substring(
+            0,
+            5
+          )}...`
+        );
+
+        const event = stripe.webhooks.constructEvent(
+          req.body,
+          signature,
+          process.env.STRIPE_WEBHOOK_SECRET
+        );
+
+        logger.info(`Événement construit avec succès: ${event.type}`);
+
+        const result = await handleStripeWebhook(event);
+        logger.info("Résultat du traitement du webhook:", result);
+
+        res.status(200).send({ received: true, result });
+      } catch (error) {
+        logger.error(`Erreur webhook Stripe: ${error.message}`, {
+          stack: error.stack,
+        });
+        res.status(400).send(`Webhook Error: ${error.message}`);
       }
-      
-      if (!process.env.STRIPE_WEBHOOK_SECRET) {
-        logger.error('STRIPE_WEBHOOK_SECRET non défini');
-        return res.status(500).send('Configuration Error: STRIPE_WEBHOOK_SECRET manquant');
-      }
-      
-      logger.debug(`Signature reçue: ${signature}`);
-      logger.debug(`Secret utilisé: ${process.env.STRIPE_WEBHOOK_SECRET.substring(0, 5)}...`);
-      
-      const event = stripe.webhooks.constructEvent(
-        req.body,
-        signature,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-      
-      logger.info(`Événement construit avec succès: ${event.type}`);
-      
-      const result = await handleStripeWebhook(event);
-      logger.info('Résultat du traitement du webhook:', result);
-      
-      res.status(200).send({ received: true, result });
-    } catch (error) {
-      logger.error(`Erreur webhook Stripe: ${error.message}`, { stack: error.stack });
-      res.status(400).send(`Webhook Error: ${error.message}`);
     }
-  });
-  
+  );
+
   // Route pour les webhooks Stripe des transferts de fichiers
-  app.post('/webhook/file-transfer', express.raw({type: 'application/json'}), handleFileTransferStripeWebhook);
-  
+  app.post(
+    "/webhook/file-transfer",
+    express.raw({ type: "application/json" }),
+    handleFileTransferStripeWebhook
+  );
+
   // Middleware pour les routes de téléchargement de fichiers
-  const fileTransferRoutes = ['/file-transfer/download-file', '/file-transfer/download-all', '/file-transfer/validate-payment'];
-  
+  const fileTransferRoutes = [
+    "/file-transfer/download-file",
+    "/file-transfer/download-all",
+    "/file-transfer/validate-payment",
+  ];
+
   // Appliquer des en-têtes CORS spécifiques pour les routes de téléchargement
   app.use(fileTransferRoutes, (req, res, next) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
-    res.header('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    
+    res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+    res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, Range"
+    );
+    res.header(
+      "Access-Control-Expose-Headers",
+      "Content-Disposition, Content-Length, Content-Type"
+    );
+    res.header("Access-Control-Allow-Credentials", "true");
+
     // Répondre immédiatement aux requêtes OPTIONS
-    if (req.method === 'OPTIONS') {
+    if (req.method === "OPTIONS") {
       return res.status(200).end();
     }
-    
+
     next();
   });
-  
+
   // Routes pour le téléchargement de fichiers
-  app.get('/file-transfer/download-file', downloadFile);
-  app.get('/file-transfer/download-all', downloadAllFiles);
-  
+  app.get("/file-transfer/download-file", downloadFile);
+  app.get("/file-transfer/download-all", downloadAllFiles);
+
   // Route pour valider un paiement de transfert de fichiers
-  app.get('/file-transfer/validate-payment', validatePayment);
+  app.get("/file-transfer/validate-payment", validatePayment);
 
   // Configuration améliorée pour servir les fichiers statiques avec les bons types MIME
-  app.use(express.static(path.resolve(__dirname, '../public'), {
-    setHeaders: (res, filePath) => {
-      // Définir les en-têtes appropriés selon le type de fichier
-      const ext = path.extname(filePath).toLowerCase();
-      
-      // Ajouter des en-têtes spécifiques pour les types de fichiers courants
-      if (ext === '.pdf') {
-        res.setHeader('Content-Type', 'application/pdf');
-      } else if (['.jpg', '.jpeg'].includes(ext)) {
-        res.setHeader('Content-Type', 'image/jpeg');
-      } else if (ext === '.png') {
-        res.setHeader('Content-Type', 'image/png');
-      } else if (ext === '.gif') {
-        res.setHeader('Content-Type', 'image/gif');
-      } else if (['.doc', '.docx'].includes(ext)) {
-        res.setHeader('Content-Type', 'application/msword');
-      } else if (['.xls', '.xlsx'].includes(ext)) {
-        res.setHeader('Content-Type', 'application/vnd.ms-excel');
-      } else if (ext === '.zip') {
-        res.setHeader('Content-Type', 'application/zip');
-      }
-      
-      // Ajouter des en-têtes pour permettre le téléchargement
-      res.setHeader('Content-Disposition', 'attachment');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-    }
-  }));
-  app.use(express.json({ limit: '100mb' }));
-  app.use(express.urlencoded({ limit: '100mb', extended: true }));
-  
+  app.use(
+    express.static(path.resolve(__dirname, "../public"), {
+      setHeaders: (res, filePath) => {
+        // Définir les en-têtes appropriés selon le type de fichier
+        const ext = path.extname(filePath).toLowerCase();
+
+        // Ajouter des en-têtes spécifiques pour les types de fichiers courants
+        if (ext === ".pdf") {
+          res.setHeader("Content-Type", "application/pdf");
+        } else if ([".jpg", ".jpeg"].includes(ext)) {
+          res.setHeader("Content-Type", "image/jpeg");
+        } else if (ext === ".png") {
+          res.setHeader("Content-Type", "image/png");
+        } else if (ext === ".gif") {
+          res.setHeader("Content-Type", "image/gif");
+        } else if ([".doc", ".docx"].includes(ext)) {
+          res.setHeader("Content-Type", "application/msword");
+        } else if ([".xls", ".xlsx"].includes(ext)) {
+          res.setHeader("Content-Type", "application/vnd.ms-excel");
+        } else if (ext === ".zip") {
+          res.setHeader("Content-Type", "application/zip");
+        }
+
+        // Ajouter des en-têtes pour permettre le téléchargement
+        res.setHeader("Content-Disposition", "attachment");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+      },
+    })
+  );
+  app.use(express.json({ limit: "100mb" }));
+  app.use(express.urlencoded({ limit: "100mb", extended: true }));
+
   // Middleware pour les uploads GraphQL
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 })); // 10GB max par fichier, 20 fichiers max
 
   // Route pour créer une session de portail client Stripe
-  app.post('/create-customer-portal-session', async (req, res) => {
+  app.post("/create-customer-portal-session", async (req, res) => {
     try {
       // Vérifier si l'utilisateur est authentifié
-      const token = req.headers.authorization || '';
+      const token = req.headers.authorization || "";
       const user = await authMiddleware(token);
-      
+
       if (!user) {
-        return res.status(401).json({ error: 'Non autorisé' });
+        return res.status(401).json({ error: "Non autorisé" });
       }
-      
+
       // Vérifier si l'utilisateur a un ID client Stripe
       if (!user.subscription?.stripeCustomerId) {
-        return res.status(400).json({ error: 'Aucun abonnement Stripe trouvé pour cet utilisateur' });
+        return res.status(400).json({
+          error: "Aucun abonnement Stripe trouvé pour cet utilisateur",
+        });
       }
-      
+
       // Créer une session de portail client
       const session = await stripe.billingPortal.sessions.create({
         customer: user.subscription.stripeCustomerId,
-        return_url: process.env.FRONTEND_URL || 'http://localhost:5173',
+        return_url: process.env.FRONTEND_URL || "http://localhost:5173",
       });
-      
+
       // Renvoyer l'URL de la session
       res.json({ url: session.url });
     } catch (error) {
-      console.error('Erreur lors de la création de la session de portail client:', error);
-      res.status(500).json({ error: 'Erreur lors de la création de la session de portail client' });
+      console.error(
+        "Erreur lors de la création de la session de portail client:",
+        error
+      );
+      res.status(500).json({
+        error: "Erreur lors de la création de la session de portail client",
+      });
     }
   });
 
   // Définir la constante BASE_URL pour l'API
-  const BASE_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`;
+  const BASE_URL =
+    process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`;
 
-  // Exporter BASE_URL pour une utilisation dans d'autres modules
-  module.exports.BASE_URL = BASE_URL;
+  // Définir BASE_URL pour une utilisation dans d'autres modules
+  // Note: En ES modules, les exports doivent être au niveau supérieur
+  // Cette valeur sera accessible via l'importation de ce fichier
 
   const server = new ApolloServer({
     typeDefs,
     resolvers,
     context: async ({ req }) => {
       // Ajoute le user au context si authentifié
-      const token = req.headers.authorization || '';
+      const token = req.headers.authorization || "";
       const user = await authMiddleware(token);
-      console.log('Contexte créé avec utilisateur:', user ? user.email : 'non authentifié');
+      console.log(
+        "Contexte créé avec utilisateur:",
+        user ? user.email : "non authentifié"
+      );
       return { user };
     },
     formatError: (error) => {
       console.error(error);
-      
+
       // Extraire les détails de l'erreur originale
       const originalError = error.originalError;
-      
+
       // Si c'est une erreur AppError, utiliser ses propriétés
-      if (originalError && originalError.name === 'AppError') {
+      if (originalError && originalError.name === "AppError") {
         return {
           message: originalError.message,
           code: originalError.code,
           details: originalError.details || null,
-          path: error.path
+          path: error.path,
         };
       }
-      
+
       // Pour les erreurs de validation GraphQL
-      if (error.extensions && error.extensions.code === 'BAD_USER_INPUT') {
+      if (error.extensions && error.extensions.code === "BAD_USER_INPUT") {
         return {
-          message: 'Données d\'entrée invalides',
-          code: 'VALIDATION_ERROR',
+          message: "Données d'entrée invalides",
+          code: "VALIDATION_ERROR",
           details: error.extensions.exception.validationErrors || null,
-          path: error.path
+          path: error.path,
         };
       }
-      
+
       // Pour les autres erreurs
       return {
         message: error.message,
-        code: error.extensions?.code || 'INTERNAL_ERROR',
-        path: error.path
+        code: error.extensions?.code || "INTERNAL_ERROR",
+        path: error.path,
       };
     },
     // Résoudre l'avertissement concernant les requêtes persistantes
-    cache: 'bounded',
+    cache: "bounded",
     persistedQueries: {
-      ttl: 900 // 15 minutes en secondes
-    }
+      ttl: 900, // 15 minutes en secondes
+    },
+  });
+  // Route spécifique pour gérer la redirection Google OAuth
+  app.get("/api/auth/google/callback", (req, res) => {
+    // Récupérer les paramètres de la requête
+    const { state, code } = req.query;
+
+    // Rediriger vers le endpoint Better Auth avec les mêmes paramètres
+    res.redirect(`/api/auth/callback/google?state=${state}&code=${code}`);
   });
 
+  // Configurer un middleware spécifique pour les routes Better Auth pour déboguer
+  app.use("/api/auth", (req, res, next) => {
+    console.log(`[Better Auth] ${req.method} ${req.url}`);
+    console.log("Headers:", req.headers);
+    if (req.body) console.log("Body:", JSON.stringify(req.body, null, 2));
+    next();
+  });
+
+  // Ensuite, démarrer Apollo Server et appliquer son middleware
   await server.start();
-  server.applyMiddleware({ app, cors: false }); // Désactiver le CORS intégré d'Apollo car nous utilisons notre propre middleware
+  server.applyMiddleware({
+    app,
+    cors: false, // Désactiver le CORS intégré d'Apollo car nous utilisons notre propre middleware
+    path: "/graphql", // Spécifier explicitement le chemin pour éviter les conflits avec Better Auth
+  });
 
   const PORT = process.env.PORT || 4000;
   app.listen(PORT, () => {
-    console.log(`🚀 Serveur démarré sur http://localhost:${PORT}${server.graphqlPath}`);
-    
+    console.log(
+      `🚀 Serveur démarré sur http://localhost:${PORT}${server.graphqlPath}`
+    );
+
     // Initialiser les jobs planifiés pour la suppression automatique des fichiers expirés
     setupScheduledJobs();
-    logger.info('Planificateur de tâches initialisé avec succès');
+    logger.info("Planificateur de tâches initialisé avec succès");
   });
 }
 

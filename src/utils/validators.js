@@ -289,7 +289,7 @@ const isFieldRequiredForCompanyStatus = (field, companyStatus) => {
   return REQUIRED_FIELDS_BY_COMPANY_STATUS[companyStatus].includes(field);
 };
 
-module.exports = {
+export {
   // Regex
   EMAIL_REGEX,
   PHONE_REGEX,

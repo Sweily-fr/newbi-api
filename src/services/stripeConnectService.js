@@ -1,6 +1,8 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const StripeConnectAccount = require('../models/StripeConnectAccount');
-const logger = require('../utils/logger');
+import Stripe from "stripe";
+import StripeConnectAccount from "../models/StripeConnectAccount.js";
+import logger from "../utils/logger.js";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 /**
  * Service pour gérer les interactions avec Stripe Connect
@@ -19,21 +21,21 @@ const stripeConnectService = {
         return {
           success: true,
           accountId: existingAccount.accountId,
-          message: 'Un compte Stripe Connect existe déjà pour cet utilisateur'
+          message: "Un compte Stripe Connect existe déjà pour cet utilisateur",
         };
       }
 
       // Créer un nouveau compte Stripe Connect Express
       const account = await stripe.accounts.create({
-        type: 'express',
+        type: "express",
         capabilities: {
           card_payments: { requested: true },
-          transfers: { requested: true }
+          transfers: { requested: true },
         },
-        business_type: 'individual',
+        business_type: "individual",
         metadata: {
-          userId: userId.toString() // Convertir l'ObjectId en string pour Stripe
-        }
+          userId: userId.toString(), // Convertir l'ObjectId en string pour Stripe
+        },
       });
 
       // Enregistrer le compte dans la base de données
@@ -42,7 +44,7 @@ const stripeConnectService = {
         accountId: account.id,
         isOnboarded: false,
         chargesEnabled: account.charges_enabled || false,
-        payoutsEnabled: account.payouts_enabled || false
+        payoutsEnabled: account.payouts_enabled || false,
       });
 
       await stripeConnectAccount.save();
@@ -50,13 +52,16 @@ const stripeConnectService = {
       return {
         success: true,
         accountId: account.id,
-        message: 'Compte Stripe Connect créé avec succès'
+        message: "Compte Stripe Connect créé avec succès",
       };
     } catch (error) {
-      logger.error('Erreur lors de la création du compte Stripe Connect:', error);
+      logger.error(
+        "Erreur lors de la création du compte Stripe Connect:",
+        error
+      );
       return {
         success: false,
-        message: `Erreur lors de la création du compte Stripe Connect: ${error.message}`
+        message: `Erreur lors de la création du compte Stripe Connect: ${error.message}`,
       };
     }
   },
@@ -74,7 +79,7 @@ const stripeConnectService = {
       if (!account) {
         return {
           success: false,
-          message: 'Compte Stripe Connect non trouvé'
+          message: "Compte Stripe Connect non trouvé",
         };
       }
 
@@ -83,19 +88,19 @@ const stripeConnectService = {
         account: accountId,
         refresh_url: returnUrl,
         return_url: returnUrl,
-        type: 'account_onboarding'
+        type: "account_onboarding",
       });
 
       return {
         success: true,
         url: accountLink.url,
-        message: 'Lien d\'onboarding généré avec succès'
+        message: "Lien d'onboarding généré avec succès",
       };
     } catch (error) {
-      logger.error('Erreur lors de la génération du lien d\'onboarding:', error);
+      logger.error("Erreur lors de la génération du lien d'onboarding:", error);
       return {
         success: false,
-        message: `Erreur lors de la génération du lien d'onboarding: ${error.message}`
+        message: `Erreur lors de la génération du lien d'onboarding: ${error.message}`,
       };
     }
   },
@@ -109,14 +114,14 @@ const stripeConnectService = {
     try {
       // Récupérer les informations du compte depuis Stripe
       const stripeAccount = await stripe.accounts.retrieve(accountId);
-      
+
       // Mettre à jour les informations dans notre base de données
       const account = await StripeConnectAccount.findOneAndUpdate(
         { accountId },
         {
           isOnboarded: stripeAccount.details_submitted || false,
           chargesEnabled: stripeAccount.charges_enabled || false,
-          payoutsEnabled: stripeAccount.payouts_enabled || false
+          payoutsEnabled: stripeAccount.payouts_enabled || false,
         },
         { new: true }
       );
@@ -124,7 +129,8 @@ const stripeConnectService = {
       if (!account) {
         return {
           success: false,
-          message: 'Compte Stripe Connect non trouvé dans notre base de données'
+          message:
+            "Compte Stripe Connect non trouvé dans notre base de données",
         };
       }
 
@@ -133,14 +139,17 @@ const stripeConnectService = {
         isOnboarded: account.isOnboarded,
         chargesEnabled: account.chargesEnabled,
         payoutsEnabled: account.payoutsEnabled,
-        accountStatus: stripeAccount.details_submitted ? 'complete' : 'pending',
-        message: 'Statut du compte récupéré avec succès'
+        accountStatus: stripeAccount.details_submitted ? "complete" : "pending",
+        message: "Statut du compte récupéré avec succès",
       };
     } catch (error) {
-      logger.error('Erreur lors de la vérification du statut du compte:', error);
+      logger.error(
+        "Erreur lors de la vérification du statut du compte:",
+        error
+      );
       return {
         success: false,
-        message: `Erreur lors de la vérification du statut du compte: ${error.message}`
+        message: `Erreur lors de la vérification du statut du compte: ${error.message}`,
       };
     }
   },
@@ -160,63 +169,67 @@ const stripeConnectService = {
       if (!account || !account.chargesEnabled) {
         return {
           success: false,
-          message: 'Le compte Stripe Connect n\'est pas configuré pour recevoir des paiements'
+          message:
+            "Le compte Stripe Connect n'est pas configuré pour recevoir des paiements",
         };
       }
 
       // Calculer la commission de la plateforme (10% par exemple)
       const amount = fileTransfer.paymentAmount * 100; // Convertir en centimes
-      const applicationFee = Math.round(amount * 0.10); // 10% de commission
+      const applicationFee = Math.round(amount * 0.1); // 10% de commission
 
       // Créer une session de paiement Stripe Checkout
       const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
+        payment_method_types: ["card"],
         line_items: [
           {
             price_data: {
               currency: fileTransfer.paymentCurrency.toLowerCase(),
               product_data: {
                 name: `Téléchargement de fichiers - ${fileTransfer.files.length} fichier(s)`,
-                description: `Accès aux fichiers partagés par ${fileTransfer.userId}`
+                description: `Accès aux fichiers partagés par ${fileTransfer.userId}`,
               },
-              unit_amount: amount
+              unit_amount: amount,
             },
-            quantity: 1
-          }
+            quantity: 1,
+          },
         ],
-        mode: 'payment',
+        mode: "payment",
         success_url: `${successUrl}`,
         cancel_url: `${cancelUrl}`,
         payment_intent_data: {
           application_fee_amount: applicationFee,
           transfer_data: {
-            destination: accountId
+            destination: accountId,
           },
           metadata: {
             fileTransferId: fileTransfer.id.toString(),
-            userId: fileTransfer.userId.toString()
-          }
+            userId: fileTransfer.userId.toString(),
+          },
         },
         metadata: {
           fileTransferId: fileTransfer.id.toString(),
-          userId: fileTransfer.userId.toString()
-        }
+          userId: fileTransfer.userId.toString(),
+        },
       });
 
       return {
         success: true,
         sessionId: session.id,
         sessionUrl: session.url,
-        message: 'Session de paiement créée avec succès'
+        message: "Session de paiement créée avec succès",
       };
     } catch (error) {
-      logger.error('Erreur lors de la création de la session de paiement:', error);
+      logger.error(
+        "Erreur lors de la création de la session de paiement:",
+        error
+      );
       return {
         success: false,
-        message: `Erreur lors de la création de la session de paiement: ${error.message}`
+        message: `Erreur lors de la création de la session de paiement: ${error.message}`,
       };
     }
-  }
+  },
 };
 
-module.exports = stripeConnectService;
+export default stripeConnectService;

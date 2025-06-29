@@ -106,7 +106,7 @@ const createDatabaseError = (message, details) => {
   );
 };
 
-module.exports = {
+export {
   ERROR_CODES,
   AppError,
   createNotFoundError,

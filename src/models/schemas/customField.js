@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-const { isValidCustomFieldValue } = require('../../utils/validators');
+import mongoose from 'mongoose';
+import { isValidCustomFieldValue } from '../../utils/validators.js';
 
 /**
  * Schéma pour les champs personnalisés
@@ -12,8 +12,9 @@ const customFieldSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: isValidCustomFieldValue,
-      message: 'Le nom du champ personnalisé contient des caractères non autorisés ou dépasse 500 caractères'
-    }
+      message:
+        "Le nom du champ personnalisé contient des caractères non autorisés ou dépasse 500 caractères",
+    },
   },
   value: {
     type: String,
@@ -21,9 +22,10 @@ const customFieldSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: isValidCustomFieldValue,
-      message: 'La valeur du champ personnalisé contient des caractères non autorisés ou dépasse 500 caractères'
-    }
-  }
+      message:
+        "La valeur du champ personnalisé contient des caractères non autorisés ou dépasse 500 caractères",
+    },
+  },
 });
 
-module.exports = customFieldSchema;
+export default customFieldSchema;

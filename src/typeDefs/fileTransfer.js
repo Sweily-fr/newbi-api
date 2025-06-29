@@ -1,6 +1,6 @@
-const { gql } = require('apollo-server-express');
+import { gql } from "apollo-server-express";
 
-module.exports = gql`
+export default gql`
   # Types pour le transfert de fichiers
   type File {
     id: ID
@@ -99,13 +99,19 @@ module.exports = gql`
   # Requêtes et mutations
   extend type Query {
     # Obtenir les transferts de fichiers de l'utilisateur connecté avec pagination
-    myFileTransfers(page: Int = 1, limit: Int = 10): FileTransferPaginatedResponse!
-    
+    myFileTransfers(
+      page: Int = 1
+      limit: Int = 10
+    ): FileTransferPaginatedResponse!
+
     # Obtenir les informations d'un transfert de fichiers par son ID
     fileTransferById(id: ID!): FileTransfer
-    
+
     # Obtenir les informations d'un transfert de fichiers par son lien de partage et sa clé d'accès
-    getFileTransferByLink(shareLink: String!, accessKey: String!): FileTransferAccessResponse
+    getFileTransferByLink(
+      shareLink: String!
+      accessKey: String!
+    ): FileTransferAccessResponse
   }
 
   # Input pour un fichier en base64
@@ -118,15 +124,24 @@ module.exports = gql`
 
   extend type Mutation {
     # Créer un nouveau transfert de fichiers
-    createFileTransfer(files: [Upload!]!, input: FileTransferInput): FileTransferCreationResponse
-    
+    createFileTransfer(
+      files: [Upload!]!
+      input: FileTransferInput
+    ): FileTransferCreationResponse
+
     # Créer un nouveau transfert de fichiers avec des fichiers en base64
-    createFileTransferBase64(files: [Base64FileInput!]!, input: FileTransferInput): FileTransferCreationResponse
-    
+    createFileTransferBase64(
+      files: [Base64FileInput!]!
+      input: FileTransferInput
+    ): FileTransferCreationResponse
+
     # Supprimer un transfert de fichiers
     deleteFileTransfer(id: ID!): Boolean
-    
+
     # Générer un lien de paiement pour un transfert de fichiers
-    generateFileTransferPaymentLink(shareLink: String!, accessKey: String!): FileTransferPaymentResponse
+    generateFileTransferPaymentLink(
+      shareLink: String!
+      accessKey: String!
+    ): FileTransferPaymentResponse
   }
 `;

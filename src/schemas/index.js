@@ -1,6 +1,11 @@
-const { loadFilesSync } = require('@graphql-tools/load-files');
-const { mergeTypeDefs } = require('@graphql-tools/merge');
-const path = require('path');
+import { loadFilesSync } from '@graphql-tools/load-files';
+import { mergeTypeDefs } from '@graphql-tools/merge';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Pour remplacer __dirname dans ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Charger d'abord le fichier de base
 const baseTypes = loadFilesSync(path.join(__dirname, './types/base.graphql'));
@@ -21,4 +26,4 @@ const typeDefsFiles = loadFilesSync(path.join(__dirname, '../typeDefs/*.js'));
 // Fusionner les schémas en s'assurant que les types de base sont traités en premier
 const typeDefs = mergeTypeDefs([...baseTypes, ...otherTypes, ...typeDefsFiles]);
 
-module.exports = typeDefs;
+export default typeDefs;

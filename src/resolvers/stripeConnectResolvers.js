@@ -1,7 +1,7 @@
-const stripeConnectService = require('../services/stripeConnectService');
-const StripeConnectAccount = require('../models/StripeConnectAccount');
-const FileTransfer = require('../models/FileTransfer');
-const logger = require('../utils/logger');
+import stripeConnectService from "../services/stripeConnectService.js";
+import StripeConnectAccount from "../models/StripeConnectAccount.js";
+import FileTransfer from "../models/FileTransfer.js";
+import logger from "../utils/logger.js";
 
 const stripeConnectResolvers = {
   Query: {
@@ -10,34 +10,46 @@ const stripeConnectResolvers = {
      */
     myStripeConnectAccount: async (_, args, { user }) => {
       if (!user) {
-        throw new Error('Vous devez être connecté pour accéder à cette ressource');
+        throw new Error(
+          "Vous devez être connecté pour accéder à cette ressource"
+        );
       }
 
       try {
         return await StripeConnectAccount.findOne({ userId: user._id });
       } catch (error) {
-        logger.error('Erreur lors de la récupération du compte Stripe Connect:', error);
-        throw new Error(`Erreur lors de la récupération du compte Stripe Connect: ${error.message}`);
+        logger.error(
+          "Erreur lors de la récupération du compte Stripe Connect:",
+          error
+        );
+        throw new Error(
+          `Erreur lors de la récupération du compte Stripe Connect: ${error.message}`
+        );
       }
-    }
+    },
   },
-  
+
   Mutation: {
     /**
      * Crée un compte Stripe Connect pour l'utilisateur connecté
      */
     createStripeConnectAccount: async (_, args, { user }) => {
       if (!user) {
-        throw new Error('Vous devez être connecté pour créer un compte Stripe Connect');
+        throw new Error(
+          "Vous devez être connecté pour créer un compte Stripe Connect"
+        );
       }
 
       try {
         return await stripeConnectService.createConnectAccount(user._id);
       } catch (error) {
-        logger.error('Erreur lors de la création du compte Stripe Connect:', error);
+        logger.error(
+          "Erreur lors de la création du compte Stripe Connect:",
+          error
+        );
         return {
           success: false,
-          message: `Erreur lors de la création du compte Stripe Connect: ${error.message}`
+          message: `Erreur lors de la création du compte Stripe Connect: ${error.message}`,
         };
       }
     },
@@ -45,27 +57,42 @@ const stripeConnectResolvers = {
     /**
      * Génère un lien d'onboarding pour un compte Stripe Connect
      */
-    generateStripeOnboardingLink: async (_, { accountId, returnUrl }, { user }) => {
+    generateStripeOnboardingLink: async (
+      _,
+      { accountId, returnUrl },
+      { user }
+    ) => {
       if (!user) {
-        throw new Error('Vous devez être connecté pour générer un lien d\'onboarding');
+        throw new Error(
+          "Vous devez être connecté pour générer un lien d'onboarding"
+        );
       }
 
       try {
         // Vérifier que le compte appartient bien à l'utilisateur connecté
-        const account = await StripeConnectAccount.findOne({ accountId, userId: user._id });
+        const account = await StripeConnectAccount.findOne({
+          accountId,
+          userId: user._id,
+        });
         if (!account) {
           return {
             success: false,
-            message: 'Compte Stripe Connect non trouvé ou non autorisé'
+            message: "Compte Stripe Connect non trouvé ou non autorisé",
           };
         }
 
-        return await stripeConnectService.generateOnboardingLink(accountId, returnUrl);
+        return await stripeConnectService.generateOnboardingLink(
+          accountId,
+          returnUrl
+        );
       } catch (error) {
-        logger.error('Erreur lors de la génération du lien d\'onboarding:', error);
+        logger.error(
+          "Erreur lors de la génération du lien d'onboarding:",
+          error
+        );
         return {
           success: false,
-          message: `Erreur lors de la génération du lien d'onboarding: ${error.message}`
+          message: `Erreur lors de la génération du lien d'onboarding: ${error.message}`,
         };
       }
     },
@@ -75,25 +102,33 @@ const stripeConnectResolvers = {
      */
     checkStripeConnectAccountStatus: async (_, { accountId }, { user }) => {
       if (!user) {
-        throw new Error('Vous devez être connecté pour vérifier le statut d\'un compte');
+        throw new Error(
+          "Vous devez être connecté pour vérifier le statut d'un compte"
+        );
       }
 
       try {
         // Vérifier que le compte appartient bien à l'utilisateur connecté
-        const account = await StripeConnectAccount.findOne({ accountId, userId: user._id });
+        const account = await StripeConnectAccount.findOne({
+          accountId,
+          userId: user._id,
+        });
         if (!account) {
           return {
             success: false,
-            message: 'Compte Stripe Connect non trouvé ou non autorisé'
+            message: "Compte Stripe Connect non trouvé ou non autorisé",
           };
         }
 
         return await stripeConnectService.checkAccountStatus(accountId);
       } catch (error) {
-        logger.error('Erreur lors de la vérification du statut du compte:', error);
+        logger.error(
+          "Erreur lors de la vérification du statut du compte:",
+          error
+        );
         return {
           success: false,
-          message: `Erreur lors de la vérification du statut du compte: ${error.message}`
+          message: `Erreur lors de la vérification du statut du compte: ${error.message}`,
         };
       }
     },
@@ -101,41 +136,50 @@ const stripeConnectResolvers = {
     /**
      * Crée une session de paiement pour un transfert de fichiers
      */
-    createPaymentSessionForFileTransfer: async (_, { transferId }, { origin }) => {
+    createPaymentSessionForFileTransfer: async (
+      _,
+      { transferId },
+      { origin }
+    ) => {
       try {
         // Récupérer le transfert de fichiers
         const fileTransfer = await FileTransfer.findById(transferId);
         if (!fileTransfer) {
           return {
             success: false,
-            message: 'Transfert de fichiers non trouvé'
+            message: "Transfert de fichiers non trouvé",
           };
         }
 
         // Vérifier que le paiement est requis et n'a pas déjà été effectué
-        console.log('Vérification du paiement:', {
+        console.log("Vérification du paiement:", {
           isPaymentRequired: fileTransfer.isPaymentRequired,
-          isPaid: fileTransfer.isPaid
+          isPaid: fileTransfer.isPaid,
         });
-        
+
         if (!fileTransfer.isPaymentRequired || fileTransfer.isPaid) {
           return {
             success: false,
-            message: 'Ce transfert ne nécessite pas de paiement ou a déjà été payé'
+            message:
+              "Ce transfert ne nécessite pas de paiement ou a déjà été payé",
           };
         }
 
         // Récupérer le compte Stripe Connect du propriétaire du transfert
-        const stripeConnectAccount = await StripeConnectAccount.findOne({ userId: fileTransfer.userId });
+        const stripeConnectAccount = await StripeConnectAccount.findOne({
+          userId: fileTransfer.userId,
+        });
         if (!stripeConnectAccount) {
           return {
             success: false,
-            message: 'Le propriétaire du transfert n\'a pas de compte Stripe Connect configuré'
+            message:
+              "Le propriétaire du transfert n'a pas de compte Stripe Connect configuré",
           };
         }
 
         // Construire les URLs de succès et d'annulation
-        const baseUrl = origin || process.env.FRONTEND_URL || 'http://localhost:3000';
+        const baseUrl =
+          origin || process.env.FRONTEND_URL || "http://localhost:3000";
         const successUrl = `${baseUrl}/file-transfer/download?link=${fileTransfer.shareLink}&key=${fileTransfer.accessKey}&payment_status=success`;
         const cancelUrl = `${baseUrl}/file-transfer/download?link=${fileTransfer.shareLink}&key=${fileTransfer.accessKey}&payment_status=canceled`;
 
@@ -156,14 +200,17 @@ const stripeConnectResolvers = {
 
         return result;
       } catch (error) {
-        logger.error('Erreur lors de la création de la session de paiement:', error);
+        logger.error(
+          "Erreur lors de la création de la session de paiement:",
+          error
+        );
         return {
           success: false,
-          message: `Erreur lors de la création de la session de paiement: ${error.message}`
+          message: `Erreur lors de la création de la session de paiement: ${error.message}`,
         };
       }
-    }
-  }
+    },
+  },
 };
 
-module.exports = stripeConnectResolvers;
+export default stripeConnectResolvers;

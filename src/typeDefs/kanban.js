@@ -1,4 +1,4 @@
-const { gql } = require('apollo-server-express');
+import { gql } from "apollo-server-express";
 
 const kanbanTypeDefs = gql`
   # Types pour les commentaires
@@ -141,7 +141,11 @@ const kanbanTypeDefs = gql`
     addKanbanColumn(boardId: ID!, input: ColumnInput!): KanbanBoard!
 
     # Mettre à jour une colonne
-    updateKanbanColumn(boardId: ID!, columnId: ID!, input: ColumnUpdateInput!): KanbanBoard!
+    updateKanbanColumn(
+      boardId: ID!
+      columnId: ID!
+      input: ColumnUpdateInput!
+    ): KanbanBoard!
 
     # Supprimer une colonne
     deleteKanbanColumn(boardId: ID!, columnId: ID!): KanbanBoard!
@@ -153,13 +157,23 @@ const kanbanTypeDefs = gql`
     addKanbanTask(boardId: ID!, columnId: ID!, input: TaskInput!): KanbanBoard!
 
     # Mettre à jour une tâche
-    updateKanbanTask(boardId: ID!, taskId: ID!, input: TaskUpdateInput!): KanbanBoard!
+    updateKanbanTask(
+      boardId: ID!
+      taskId: ID!
+      input: TaskUpdateInput!
+    ): KanbanBoard!
 
     # Supprimer une tâche
     deleteKanbanTask(boardId: ID!, taskId: ID!): KanbanBoard!
 
     # Déplacer une tâche entre colonnes
-    moveKanbanTask(boardId: ID!, taskId: ID!, sourceColumnId: ID!, targetColumnId: ID!, order: Int!): KanbanBoard!
+    moveKanbanTask(
+      boardId: ID!
+      taskId: ID!
+      sourceColumnId: ID!
+      targetColumnId: ID!
+      order: Int!
+    ): KanbanBoard!
 
     # Ajouter un commentaire à une tâche
     addKanbanTaskComment(boardId: ID!, taskId: ID!, input: CommentInput!): Task!
@@ -169,4 +183,4 @@ const kanbanTypeDefs = gql`
   }
 `;
 
-module.exports = kanbanTypeDefs;
+export default kanbanTypeDefs;

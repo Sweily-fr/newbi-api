@@ -1,21 +1,21 @@
-const { ApolloError, UserInputError } = require('apollo-server-express');
-const FileTransfer = require('../models/FileTransfer');
-const { isAuthenticated } = require('../middlewares/auth');
-const { 
+import { ApolloError, UserInputError } from 'apollo-server-express';
+import FileTransfer from '../models/FileTransfer.js';
+import { isAuthenticated } from '../middlewares/auth.js';
+import { 
   saveUploadedFile, 
   saveBase64File,
   generateShareLink, 
   generateAccessKey, 
   calculateExpiryDate,
   deleteFile
-} = require('../utils/fileTransferUtils');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { BASE_URL } = require('../utils/constants');
+} from '../utils/fileTransferUtils.js';
+import stripe from 'stripe';
+import { BASE_URL } from '../utils/constants.js';
 
 // Taille maximale autorisée (100 GB en octets)
 const MAX_FILE_SIZE = 100 * 1024 * 1024 * 1024;
 
-module.exports = {
+export default {
   Query: {
     // Obtenir les transferts de fichiers de l'utilisateur connecté avec pagination
     myFileTransfers: isAuthenticated(async (_, { page = 1, limit = 10 }, { user }) => {

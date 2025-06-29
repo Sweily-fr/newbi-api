@@ -14,8 +14,8 @@ const mockCompanies = [
       street: "123 Avenue de la République",
       city: "Paris",
       postalCode: "75011",
-      country: "France"
-    }
+      country: "France",
+    },
   },
   {
     name: "Acme Corporation",
@@ -26,8 +26,8 @@ const mockCompanies = [
       street: "45 Rue du Commerce",
       city: "Lyon",
       postalCode: "69002",
-      country: "France"
-    }
+      country: "France",
+    },
   },
   {
     name: "Tech Innovations",
@@ -38,8 +38,8 @@ const mockCompanies = [
       street: "8 Boulevard de l'Innovation",
       city: "Bordeaux",
       postalCode: "33000",
-      country: "France"
-    }
+      country: "France",
+    },
   },
   {
     name: "Boulangerie Martin",
@@ -50,8 +50,8 @@ const mockCompanies = [
       street: "12 Rue des Artisans",
       city: "Toulouse",
       postalCode: "31000",
-      country: "France"
-    }
+      country: "France",
+    },
   },
   {
     name: "Garage Dupont",
@@ -62,26 +62,22 @@ const mockCompanies = [
       street: "67 Avenue des Mécaniciens",
       city: "Marseille",
       postalCode: "13008",
-      country: "France"
-    }
-  }
+      country: "France",
+    },
+  },
 ];
 
 // Fonction pour rechercher une entreprise par SIRET
 const findCompanyBySiret = (siret) => {
-  return mockCompanies.find(company => company.siret === siret) || null;
+  return mockCompanies.find((company) => company.siret === siret) || null;
 };
 
 // Fonction pour rechercher des entreprises par nom (recherche insensible à la casse)
 const findCompaniesByName = (name) => {
   const lowerName = name.toLowerCase();
-  return mockCompanies.filter(company => 
+  return mockCompanies.filter((company) =>
     company.name.toLowerCase().includes(lowerName)
   );
 };
 
-module.exports = {
-  mockCompanies,
-  findCompanyBySiret,
-  findCompaniesByName
-};
+export { mockCompanies, findCompanyBySiret, findCompaniesByName };

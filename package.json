@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "API GraphQL pour la gestion de factures et devis",
   "main": "src/index.js",
+  "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
@@ -24,6 +25,7 @@
     "archiver": "^7.0.1",
     "axios": "^1.8.4",
     "bcryptjs": "^2.4.3",
+    "better-auth": "^1.2.10",
     "cors": "^2.8.5",
     "crypto-js": "^4.2.0",
     "dotenv": "^16.4.7",

@@ -1,20 +1,20 @@
-const { mergeResolvers } = require('@graphql-tools/merge');
-const userResolvers = require('./user');
-const invoiceResolvers = require('./invoice');
-const quoteResolvers = require('./quote');
+import { mergeResolvers } from "@graphql-tools/merge";
+import userResolvers from "./user.js";
+import invoiceResolvers from "./invoice.js";
+import quoteResolvers from "./quote.js";
 
-const clientResolvers = require('./client');
-const productResolvers = require('./product');
-const contactResolvers = require('./contact');
-const companySearchResolvers = require('./companySearch');
-const emailSignatureResolvers = require('./emailSignature');
-const integrationResolvers = require('./integration');
-const documentSettingsResolvers = require('./documentSettings');
-const expenseResolvers = require('./expense');
-const scalarResolvers = require('./scalars');
-const fileTransferResolvers = require('./fileTransfer');
-const kanbanResolvers = require('./kanban');
-const stripeConnectResolvers = require('./stripeConnectResolvers');
+import clientResolvers from "./client.js";
+import productResolvers from "./product.js";
+import contactResolvers from "./contact.js";
+import companySearchResolvers from "./companySearch.js";
+import emailSignatureResolvers from "./emailSignature.js";
+import integrationResolvers from "./integration.js";
+import documentSettingsResolvers from "./documentSettings.js";
+import expenseResolvers from "./expense.js";
+import scalarResolvers from "./scalars.js";
+import fileTransferResolvers from "./fileTransfer.js";
+import kanbanResolvers from "./kanban.js";
+import stripeConnectResolvers from "./stripeConnectResolvers.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -32,7 +32,7 @@ const resolvers = mergeResolvers([
   scalarResolvers,
   fileTransferResolvers,
   kanbanResolvers,
-  stripeConnectResolvers
+  stripeConnectResolvers,
 ]);
 
-module.exports = resolvers;
+export default resolvers;

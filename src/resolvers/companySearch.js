@@ -1,5 +1,8 @@
-const { isAuthenticated } = require('../middlewares/auth');
-const { searchCompanyBySiret, searchCompaniesByName } = require('../utils/companySearch');
+import { isAuthenticated } from "../middlewares/auth.js";
+import {
+  searchCompanyBySiret,
+  searchCompaniesByName,
+} from "../utils/companySearch.js";
 
 const companySearchResolvers = {
   Query: {
@@ -8,21 +11,25 @@ const companySearchResolvers = {
       try {
         return await searchCompanyBySiret(siret);
       } catch (error) {
-        console.error('Erreur lors de la recherche par SIRET:', error);
-        throw new Error('Impossible de rechercher l\'entreprise: ' + error.message);
+        console.error("Erreur lors de la recherche par SIRET:", error);
+        throw new Error(
+          "Impossible de rechercher l'entreprise: " + error.message
+        );
       }
     }),
-    
+
     // Recherche des entreprises françaises par nom
     searchCompaniesByName: isAuthenticated(async (_, { name }) => {
       try {
         return await searchCompaniesByName(name);
       } catch (error) {
-        console.error('Erreur lors de la recherche par nom:', error);
-        throw new Error('Impossible de rechercher les entreprises: ' + error.message);
+        console.error("Erreur lors de la recherche par nom:", error);
+        throw new Error(
+          "Impossible de rechercher les entreprises: " + error.message
+        );
       }
-    })
-  }
+    }),
+  },
 };
 
-module.exports = companySearchResolvers;
+export default companySearchResolvers;

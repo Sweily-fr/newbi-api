@@ -1,5 +1,5 @@
 # Importe les types communs
-# Note: GraphQL n'a pas de directive d'importation native, 
+# Note: GraphQL n'a pas de directive d'importation native,
 # mais la fusion des schémas gère cela pour nous
 
 type Subscription {
@@ -42,6 +42,11 @@ input UserProfileInput {
   profilePicture: String
 }
 
+input SignUpInput {
+  email: String!
+  password: String!
+}
+
 input LoginInput {
   email: String!
   password: String!
@@ -60,8 +65,10 @@ input UpdatePasswordInput {
 }
 
 type AuthPayload {
-  token: String!
-  user: User!
+  token: String
+  user: User
+  success: Boolean
+  message: String
 }
 
 type RegisterResponse {
@@ -94,8 +101,16 @@ extend type Query {
   me: User
 }
 
+type AuthResponse {
+  success: Boolean!
+  user: User
+  message: String
+}
+
 extend type Mutation {
   register(input: RegisterInput!): RegisterResponse!
+  signUp(input: SignUpInput!): AuthResponse!
+  signUpDirect(email: String!, password: String!): AuthPayload!
   login(input: LoginInput!): AuthPayload!
   requestPasswordReset(input: ResetPasswordInput!): Boolean!
   resetPassword(input: UpdatePasswordInput!): ResetPasswordResponse!
@@ -105,10 +120,16 @@ extend type Mutation {
   deleteCompanyLogo: User!
   uploadProfilePicture(base64Image: String!): User!
   deleteProfilePicture: User!
-  updatePassword(currentPassword: String!, newPassword: String!): ResetPasswordResponse!
+  updatePassword(
+    currentPassword: String!
+    newPassword: String!
+  ): ResetPasswordResponse!
   verifyEmail(token: String!): EmailVerificationResponse!
   resendVerificationEmail(email: String!): Boolean!
   disableAccount(password: String!): DisableAccountResponse!
-  reactivateAccount(email: String!, password: String!): ReactivateAccountResponse!
+  reactivateAccount(
+    email: String!
+    password: String!
+  ): ReactivateAccountResponse!
   setStripeCustomerId(stripeCustomerId: String!): User!
 }

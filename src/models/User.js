@@ -1,6 +1,6 @@
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const { 
+import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
+import { 
   EMAIL_REGEX, 
   SIRET_REGEX, 
   VAT_FR_REGEX, 
@@ -11,9 +11,9 @@ const {
   CAPITAL_SOCIAL_REGEX,
   RCS_REGEX,
   isFieldRequiredForCompanyStatus
-} = require('../utils/validators');
-const addressSchema = require('./schemas/address');
-const bankDetailsSchema = require('./schemas/bankDetails');
+} from '../utils/validators.js';
+import addressSchema from './schemas/address.js';
+import bankDetailsSchema from './schemas/bankDetails.js';
 
 /**
  * Schéma utilisateur principal
@@ -293,4 +293,5 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-module.exports = mongoose.model('User', userSchema);
+const User = mongoose.model('User', userSchema);
+export default User;

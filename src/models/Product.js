@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-const { NAME_REGEX } = require('../utils/validators');
+import mongoose from "mongoose";
+import { NAME_REGEX } from "../utils/validators.js";
 
 /**
  * Schéma principal du produit/service
@@ -66,4 +66,4 @@ productSchema.methods.toItem = function() {
 
 const Product = mongoose.model('Product', productSchema);
 
-module.exports = Product;
+export default Product;

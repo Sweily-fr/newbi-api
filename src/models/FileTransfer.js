@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 const Schema = mongoose.Schema;
 
 const fileSchema = new Schema({
@@ -142,4 +142,4 @@ FileTransferSchema.methods.markAsPaid = function(paymentId) {
 
 const FileTransfer = mongoose.model('FileTransfer', FileTransferSchema);
 
-module.exports = FileTransfer;
+export default FileTransfer;
