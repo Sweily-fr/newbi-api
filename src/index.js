@@ -56,7 +56,7 @@ async function startServer() {
 
   // Configuration CORS pour permettre l'accès aux ressources statiques
   const allowedOrigins = [
-    'http://localhost:5173',
+    'http://localhost:3000',
     'http://localhost:4000',
     'https://studio.apollographql.com',
     'https://www.newbi.fr',
