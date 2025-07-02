@@ -195,7 +195,7 @@ async function startServer() {
   // Route pour créer une session de portail client Stripe
   app.post('/create-customer-portal-session', async (req, res) => {
     try {
-      // Vérifier si l'utilisateur est authentifié via better-auth
+      // Vérifier si l'utilisateur est authentifié
       const user = await betterAuthMiddleware(req);
       
       if (!user) {
@@ -231,7 +231,7 @@ async function startServer() {
     typeDefs,
     resolvers,
     context: async ({ req }) => {
-      // Ajoute le user au context si authentifié via better-auth
+      // Ajoute le user au context si authentifié
       const user = await betterAuthMiddleware(req);
       console.log('Contexte créé avec utilisateur:', user ? user.email : 'non authentifié');
       return { user };
