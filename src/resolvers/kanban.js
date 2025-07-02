@@ -63,21 +63,21 @@ const resolvers = {
     
     deleteBoard: async (_, { id }, { user }) => {
       if (!user) throw new AuthenticationError('Not authenticated');
-      const session = await Board.startSession();
-      session.startTransaction();
       
       try {
-        await Column.deleteMany({ boardId: id, userId: user.id }).session(session);
-        await Task.deleteMany({ boardId: id, userId: user.id }).session(session);
-        const result = await Board.deleteOne({ _id: id, userId: user.id }).session(session);
+        // Supprimer les tâches associées au tableau
+        await Task.deleteMany({ boardId: id, userId: user.id });
         
-        await session.commitTransaction();
+        // Supprimer les colonnes associées au tableau
+        await Column.deleteMany({ boardId: id, userId: user.id });
+        
+        // Supprimer le tableau
+        const result = await Board.deleteOne({ _id: id, userId: user.id });
+        
         return result.deletedCount > 0;
       } catch (error) {
-        await session.abortTransaction();
-        throw error;
-      } finally {
-        session.endSession();
+        console.error('Error deleting board:', error);
+        throw new Error('Failed to delete board');
       }
     },
     
@@ -105,44 +105,37 @@ const resolvers = {
     
     deleteColumn: async (_, { id }, { user }) => {
       if (!user) throw new AuthenticationError('Not authenticated');
-      const session = await Column.startSession();
-      session.startTransaction();
       
       try {
-        await Task.deleteMany({ columnId: id, userId: user.id }).session(session);
-        const result = await Column.deleteOne({ _id: id, userId: user.id }).session(session);
+        // Supprimer les tâches associées à la colonne
+        await Task.deleteMany({ columnId: id, userId: user.id });
         
-        await session.commitTransaction();
+        // Supprimer la colonne
+        const result = await Column.deleteOne({ _id: id, userId: user.id });
+        
         return result.deletedCount > 0;
       } catch (error) {
-        await session.abortTransaction();
-        throw error;
-      } finally {
-        session.endSession();
+        console.error('Error deleting column:', error);
+        throw new Error('Failed to delete column');
       }
     },
     
     reorderColumns: async (_, { columns }, { user }) => {
       if (!user) throw new AuthenticationError('Not authenticated');
-      const session = await Column.startSession();
-      session.startTransaction();
       
       try {
         const updatePromises = columns.map((id, index) =>
           Column.updateOne(
             { _id: id, userId: user.id },
             { $set: { order: index, updatedAt: new Date() } }
-          ).session(session)
+          )
         );
         
         await Promise.all(updatePromises);
-        await session.commitTransaction();
         return true;
       } catch (error) {
-        await session.abortTransaction();
-        throw error;
-      } finally {
-        session.endSession();
+        console.error('Error reordering columns:', error);
+        throw new Error('Failed to reorder columns');
       }
     },
     
@@ -178,12 +171,9 @@ const resolvers = {
     moveTask: async (_, { id, columnId, position }, { user }) => {
       if (!user) throw new AuthenticationError('Not authenticated');
       
-      const session = await Task.startSession();
-      session.startTransaction();
-      
       try {
         // Get the task to move
-        const task = await Task.findOne({ _id: id, userId: user.id }).session(session);
+        const task = await Task.findOne({ _id: id, userId: user.id });
         if (!task) throw new Error('Task not found');
         
         // If the column is changing, update the column reference
@@ -194,7 +184,7 @@ const resolvers = {
         
         // Update the position of the moved task
         task.position = position;
-        await task.save({ session });
+        await task.save();
         
         // Get all tasks in the target column, sorted by position
         const tasks = await Task.find({
@@ -202,7 +192,7 @@ const resolvers = {
           columnId: columnId,
           _id: { $ne: task._id },
           userId: user.id
-        }).sort('position').session(session);
+        }).sort('position');
         
         // Update positions of other tasks in the column
         const updatePromises = [];
@@ -216,21 +206,18 @@ const resolvers = {
             Task.updateOne(
               { _id: tasks[i]._id },
               { $set: { position: currentPosition, updatedAt: new Date() } }
-            ).session(session)
+            )
           );
           
           currentPosition++;
         }
         
         await Promise.all(updatePromises);
-        await session.commitTransaction();
         
         return task;
       } catch (error) {
-        await session.abortTransaction();
-        throw error;
-      } finally {
-        session.endSession();
+        console.error('Error moving task:', error);
+        throw new Error('Failed to move task');
       }
     }
   },
