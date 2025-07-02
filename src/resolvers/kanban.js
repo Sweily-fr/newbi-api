@@ -43,11 +43,41 @@ const resolvers = {
     // Board mutations
     createBoard: async (_, { input }, { user }) => {
       if (!user) throw new AuthenticationError('Not authenticated');
+      
       const board = new Board({
         ...input,
         userId: user.id
       });
-      return await board.save();
+      
+      const savedBoard = await board.save();
+      
+      // Créer automatiquement les 4 colonnes par défaut
+      const defaultColumns = [
+        { title: 'À faire', color: '#ef4444', order: 0 },
+        { title: 'En cours', color: '#f59e0b', order: 1 },
+        { title: 'En attente', color: '#8b5cf6', order: 2 },
+        { title: 'Terminées', color: '#10b981', order: 3 }
+      ];
+      
+      try {
+        for (let i = 0; i < defaultColumns.length; i++) {
+          const columnData = defaultColumns[i];
+          
+          const column = new Column({
+            title: columnData.title,
+            color: columnData.color,
+            order: columnData.order,
+            boardId: savedBoard.id,
+            userId: user.id
+          });
+          
+          await column.save();
+        }
+      } catch (error) {
+        // Ne pas faire échouer la création du tableau si les colonnes échouent
+      }
+      
+      return savedBoard;
     },
     
     updateBoard: async (_, { input }, { user }) => {
@@ -84,10 +114,12 @@ const resolvers = {
     // Column mutations
     createColumn: async (_, { input }, { user }) => {
       if (!user) throw new AuthenticationError('Not authenticated');
+      
       const column = new Column({
         ...input,
         userId: user.id
       });
+      
       return await column.save();
     },
     
@@ -223,11 +255,13 @@ const resolvers = {
   },
   
   Board: {
-    columns: async (parent) => {
-      return await Column.find({ boardId: parent.id }).sort('order');
+    columns: async (board, _, { user }) => {
+      if (!user) throw new AuthenticationError('Not authenticated');
+      return await Column.find({ boardId: board.id, userId: user.id }).sort({ order: 1 });
     },
-    tasks: async (parent) => {
-      return await Task.find({ boardId: parent.id }).sort('position');
+    tasks: async (parent, _, { user }) => {
+      if (!user) return [];
+      return await Task.find({ boardId: parent.id, userId: user.id }).sort('position');
     }
   },
   
