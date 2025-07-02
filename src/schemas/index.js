@@ -12,7 +12,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, './types/objects.graphql'),
   path.join(__dirname, './types/inputs.graphql'),
   path.join(__dirname, './types/integration.graphql'),
-  path.join(__dirname, './*.graphql')
+  path.join(__dirname, './*.graphql'),
 ]);
 
 // Charger les définitions de types du dossier typeDefs
