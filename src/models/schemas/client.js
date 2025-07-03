@@ -49,9 +49,20 @@ const clientSchema = new mongoose.Schema({
   // Nom (obligatoire pour les entreprises, généré pour les particuliers)
   name: {
     type: String,
-    required: true,
     trim: true,
-    match: [NAME_REGEX, 'Le nom du client est invalide']
+    match: [NAME_REGEX, 'Le nom du client est invalide'],
+    // Validation conditionnelle: obligatoire pour les entreprises, généré pour les particuliers
+    validate: {
+      validator: function(v) {
+        // Pour les entreprises, le nom est obligatoire
+        if (this.type === CLIENT_TYPES.COMPANY) {
+          return v && v.trim().length > 0;
+        }
+        // Pour les particuliers, le nom peut être généré automatiquement
+        return true;
+      },
+      message: 'Le nom de l\'entreprise est requis'
+    }
   },
   email: {
     type: String,

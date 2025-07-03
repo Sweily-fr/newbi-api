@@ -292,6 +292,24 @@ const invoiceResolvers = {
         // Vérifier si le client a une adresse de livraison différente
         const clientData = input.client;
         
+        // Vérifier si un client avec cet email existe déjà dans les devis ou factures
+        const existingQuote = await Quote.findOne({
+          'client.email': clientData.email.toLowerCase(),
+          createdBy: user.id
+        });
+        
+        const existingInvoice = await Invoice.findOne({
+          'client.email': clientData.email.toLowerCase(),
+          createdBy: user.id
+        });
+        
+        if (existingQuote || existingInvoice) {
+          throw createValidationError(
+            `Un client avec l'adresse email "${clientData.email}" existe déjà. Veuillez sélectionner le client existant ou utiliser une adresse email différente.`,
+            { 'client.email': 'Cette adresse email est déjà utilisée par un autre client' }
+          );
+        }
+        
         // Si le client a une adresse de livraison différente, s'assurer qu'elle est bien fournie
         if (clientData.hasDifferentShippingAddress === true && !clientData.shippingAddress) {
           throw createValidationError(
