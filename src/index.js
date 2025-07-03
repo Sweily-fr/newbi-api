@@ -12,7 +12,7 @@ const { handleStripeWebhook: handleFileTransferStripeWebhook, downloadFile, down
 const { setupScheduledJobs } = require('./jobs/scheduler');
 const logger = require('./utils/logger');
 
-const { authMiddleware } = require('./middlewares/auth');
+const { betterAuthMiddleware } = require('./middlewares/better-auth');
 const typeDefs = require('./schemas');
 
 // Connexion à MongoDB
@@ -56,7 +56,7 @@ async function startServer() {
 
   // Configuration CORS pour permettre l'accès aux ressources statiques
   const allowedOrigins = [
-    'http://localhost:5173',
+    'http://localhost:3000',
     'http://localhost:4000',
     'https://studio.apollographql.com',
     'https://www.newbi.fr',
@@ -196,8 +196,7 @@ async function startServer() {
   app.post('/create-customer-portal-session', async (req, res) => {
     try {
       // Vérifier si l'utilisateur est authentifié
-      const token = req.headers.authorization || '';
-      const user = await authMiddleware(token);
+      const user = await betterAuthMiddleware(req);
       
       if (!user) {
         return res.status(401).json({ error: 'Non autorisé' });
@@ -233,8 +232,7 @@ async function startServer() {
     resolvers,
     context: async ({ req }) => {
       // Ajoute le user au context si authentifié
-      const token = req.headers.authorization || '';
-      const user = await authMiddleware(token);
+      const user = await betterAuthMiddleware(req);
       console.log('Contexte créé avec utilisateur:', user ? user.email : 'non authentifié');
       return { user };
     },

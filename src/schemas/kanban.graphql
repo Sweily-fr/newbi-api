@@ -1,0 +1,143 @@
+# schemas/kanban.graphql
+type Board {
+  id: ID!
+  title: String!
+  description: String
+  userId: ID!
+  columns: [Column!]!
+  tasks: [Task!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Column {
+  id: ID!
+  title: String!
+  color: String!
+  boardId: ID!
+  order: Int!
+  tasks: [Task!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Task {
+  id: ID!
+  title: String!
+  description: String
+  status: String!
+  priority: String
+  tags: [Tag!]
+  dueDate: DateTime
+  boardId: ID!
+  columnId: String!
+  position: Int
+  checklist: [ChecklistItem!]
+  userId: ID!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Tag {
+  name: String!
+  className: String!
+  bg: String!
+  text: String!
+  border: String!
+}
+
+type ChecklistItem {
+  id: ID!
+  text: String!
+  completed: Boolean!
+}
+
+input CreateBoardInput {
+  title: String!
+  description: String
+}
+
+input UpdateBoardInput {
+  id: ID!
+  title: String
+  description: String
+}
+
+input CreateColumnInput {
+  title: String!
+  color: String!
+  boardId: ID!
+  order: Int!
+}
+
+input UpdateColumnInput {
+  id: ID!
+  title: String
+  color: String
+  order: Int
+}
+
+input CreateTaskInput {
+  title: String!
+  description: String
+  status: String!
+  priority: String
+  tags: [TagInput!]
+  dueDate: DateTime
+  boardId: ID!
+  columnId: String!
+  position: Int
+  checklist: [ChecklistItemInput!]
+}
+
+input UpdateTaskInput {
+  id: ID!
+  title: String
+  description: String
+  status: String
+  priority: String
+  tags: [TagInput!]
+  dueDate: DateTime
+  columnId: String
+  position: Int
+  checklist: [ChecklistItemInput!]
+}
+
+input TagInput {
+  name: String!
+  className: String!
+  bg: String!
+  text: String!
+  border: String!
+}
+
+input ChecklistItemInput {
+  id: ID
+  text: String!
+  completed: Boolean
+}
+
+type Query {
+  boards: [Board!]!
+  board(id: ID!): Board
+  columns(boardId: ID!): [Column!]!
+  column(id: ID!): Column
+  tasks(boardId: ID!, columnId: ID): [Task!]!
+  task(id: ID!): Task
+}
+
+type Mutation {
+  createBoard(input: CreateBoardInput!): Board!
+  updateBoard(input: UpdateBoardInput!): Board!
+  deleteBoard(id: ID!): Boolean!
+  
+  createColumn(input: CreateColumnInput!): Column!
+  updateColumn(input: UpdateColumnInput!): Column!
+  deleteColumn(id: ID!): Boolean!
+  reorderColumns(columns: [ID!]!): Boolean!
+  
+  createTask(input: CreateTaskInput!): Task!
+  updateTask(input: UpdateTaskInput!): Task!
+  deleteTask(id: ID!): Boolean!
+  moveTask(id: ID!, columnId: String!, position: Int!): Task!
+}
