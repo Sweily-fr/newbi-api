@@ -23,7 +23,7 @@ const extractSessionToken = (cookieHeader) => {
 };
 
 /**
- * Valide une session better-auth directement
+ * Valide une session better-auth via l'API du frontend
  * @param {Object} headers - Headers de la requête
  * @returns {Object|null} - Données utilisateur ou null
  */
@@ -31,11 +31,6 @@ const validateSession = async (headers) => {
   if (!headers) return null;
   
   try {
-    // Importer l'instance better-auth depuis le frontend
-    // Pour l'instant, on va utiliser une approche simplifiée
-    // en vérifiant directement la présence du token de session
-    
-    // Extraire le cookie de session
     const cookieHeader = headers.cookie;
     if (!cookieHeader) {
       logger.debug('Aucun cookie trouvé');
@@ -49,18 +44,30 @@ const validateSession = async (headers) => {
       return null;
     }
     
-    // Pour l'instant, on va faire une validation basique
-    // En production, il faudrait valider le token avec better-auth
-    // Mais comme better-auth gère les sessions côté client/serveur,
-    // on peut faire confiance à la présence du token valide
+    // Valider la session via l'API better-auth du frontend
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const response = await fetch(`${frontendUrl}/api/auth/get-session`, {
+      method: 'GET',
+      headers: {
+        'Cookie': cookieHeader,
+        'Content-Type': 'application/json'
+      }
+    });
     
-    // Retourner un objet utilisateur basique pour permettre la récupération depuis la DB
-    // L'ID sera extrait du token ou récupéré autrement
-    return {
-      // Pour l'instant, on retourne null pour forcer la récupération depuis la DB
-      // basée sur le token de session
-      sessionToken: sessionToken
-    };
+    if (!response.ok) {
+      logger.debug(`Validation de session échouée: ${response.status}`);
+      return null;
+    }
+    
+    const sessionData = await response.json();
+    
+    if (!sessionData || !sessionData.user) {
+      logger.debug('Session invalide ou utilisateur non trouvé');
+      return null;
+    }
+    
+    logger.debug(`Session validée pour l'utilisateur: ${sessionData.user.email}`);
+    return sessionData.user;
     
   } catch (error) {
     logger.error('Erreur lors de la validation de session:', error.message);
@@ -75,26 +82,26 @@ const validateSession = async (headers) => {
 const betterAuthMiddleware = async (req) => {
   try {
     // Valider la session avec better-auth
-    const sessionData = await validateSession(req.headers);
+    const sessionUser = await validateSession(req.headers);
     
-    if (!sessionData || !sessionData.sessionToken) {
-      logger.debug('Session invalide ou token manquant');
+    if (!sessionUser) {
+      logger.debug('Session invalide ou utilisateur non authentifié');
       return null;
     }
     
-    // Pour l'instant, on va utiliser une approche temporaire
-    // En attendant d'implémenter la vraie validation better-auth
-    // On va chercher un utilisateur actif dans la base de données
-    
-    // Récupérer le premier utilisateur actif (temporaire pour les tests)
-    const user = await User.findOne({ isDisabled: { $ne: true } });
+    // Récupérer l'utilisateur complet depuis la base de données
+    // en utilisant l'email ou l'ID de la session validée
+    const user = await User.findOne({ 
+      email: sessionUser.email,
+      isDisabled: { $ne: true } 
+    });
     
     if (!user) {
-      logger.warn('Aucun utilisateur actif trouvé en base de données');
+      logger.warn(`Utilisateur ${sessionUser.email} non trouvé ou désactivé en base de données`);
       return null;
     }
     
-    logger.debug(`Authentification temporaire réussie pour: ${user.email}`);
+    logger.debug(`Authentification réussie pour: ${user.email}`);
     return user;
     
   } catch (error) {
