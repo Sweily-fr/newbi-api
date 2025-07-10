@@ -10,6 +10,7 @@ const clientSchema = require('./schemas/client');
 const itemSchema = require('./schemas/item');
 const companyInfoSchema = require('./schemas/companyInfo');
 const customFieldSchema = require('./schemas/customField');
+const bankDetailsSchema = require('./schemas/bankDetails');
 const { INVOICE_STATUS, PAYMENT_METHOD, DISCOUNT_TYPE } = require('./constants/enums');
 
 /**
@@ -191,6 +192,16 @@ const invoiceSchema = new mongoose.Schema({
     default: DISCOUNT_TYPE.FIXED
   },
   customFields: [customFieldSchema],
+  showBankDetails: {
+    type: Boolean,
+    default: false
+  },
+  bankDetails: {
+    type: bankDetailsSchema,
+    required: function() {
+      return this.showBankDetails;
+    }
+  },
   totalHT: {
     type: Number,
     min: 0,
