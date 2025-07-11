@@ -101,7 +101,41 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     }
   }
   
-  // Vérifier si le numéro existe déjà (pour gérer les numéros saisis manuellement)
+  // Pour les brouillons, vérifier et incrémenter automatiquement si le numéro existe déjà
+  if (options.isDraft) {
+    let numberExists = true;
+    let generatedNumber;
+    
+    while (numberExists) {
+      // Formater avec les zéros de tête
+      generatedNumber = `${String(newNumber).padStart(6, '0')}`;
+      
+      // Vérifier si ce numéro existe déjà (tous statuts confondus pour les brouillons)
+      const existingQuery = { 
+        prefix, 
+        number: generatedNumber,
+        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+      };
+      
+      // Ajouter le filtre par utilisateur si disponible
+      if (options.userId) {
+        existingQuery.createdBy = options.userId;
+      }
+      
+      const existingDoc = await model.findOne(existingQuery);
+      
+      if (!existingDoc) {
+        numberExists = false;
+      } else {
+        // Si le numéro existe déjà, incrémenter et réessayer
+        newNumber++;
+      }
+    }
+    
+    return generatedNumber;
+  }
+  
+  // Pour les documents non-brouillons, logique existante
   let numberExists = true;
   let generatedNumber;
   
@@ -113,7 +147,7 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     const existingQuery = { 
       prefix, 
       number: generatedNumber,
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] } // Filtrer par année courante
+      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
     
     // Ajouter le filtre par utilisateur si disponible

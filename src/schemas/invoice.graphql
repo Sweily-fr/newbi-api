@@ -89,7 +89,7 @@ extend type Query {
   invoice(id: ID!): Invoice!
   invoices(startDate: String, endDate: String, status: InvoiceStatus, search: String, page: Int, limit: Int): InvoicePagination!
   invoiceStats: InvoiceStats!
-  nextInvoiceNumber(prefix: String): String!
+  nextInvoiceNumber(prefix: String, isDraft: Boolean): String!
 }
 
 extend type Mutation {

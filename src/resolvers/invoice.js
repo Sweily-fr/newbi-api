@@ -144,11 +144,18 @@ const invoiceResolvers = {
       };
     }),
 
-    nextInvoiceNumber: isAuthenticated(async (_, { prefix }, { user }) => {
-      // Récupérer le préfixe personnalisé de l'utilisateur ou utiliser le format par défaut
-      const userObj = await mongoose.model('User').findById(user.id);
-      const customPrefix = prefix || userObj?.settings?.invoiceNumberPrefix;
-      return await generateInvoiceNumber(customPrefix, { userId: user.id });
+    nextInvoiceNumber: isAuthenticated(async (_, { prefix, isDraft }, { user }) => {
+      if (isDraft) {
+        // Pour les brouillons : retourner un numéro aléatoire temporaire
+        const timestamp = Date.now().toString().slice(-6);
+        const random = Math.floor(Math.random() * 1000);
+        return `DRAFT-${timestamp}-${random}`;
+      } else {
+        // Pour les factures finalisées : générer le prochain numéro séquentiel
+        const userObj = await mongoose.model('User').findById(user.id);
+        const customPrefix = prefix || userObj?.settings?.invoiceNumberPrefix;
+        return await generateInvoiceNumber(customPrefix, { userId: user.id, isPending: true });
+      }
     })
   },
 
@@ -169,61 +176,23 @@ const invoiceResolvers = {
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const prefix = input.prefix || `F-${year}${month}-`;
 
-      // Si le statut est PENDING, vérifier d'abord s'il existe des factures en DRAFT 
-      // qui pourraient entrer en conflit avec le numéro qui sera généré
-      const handleDraftConflicts = async (newNumber) => {
-        // Vérifier si une autre facture en brouillon existe avec ce numéro
-        const conflictingDraft = await Invoice.findOne({
-          prefix,
-          number: newNumber,
-          status: 'DRAFT',
-          createdBy: user.id
-        });
-        
-        if (conflictingDraft) {
-          // Au lieu de modifier le préfixe, générer un nouveau numéro pour la facture en conflit
-          // Trouver le dernier numéro de brouillon avec ce préfixe
-          const lastDraftNumber = await Invoice.findOne({
-            prefix,
-            status: 'DRAFT',
-            createdBy: user.id
-          }).sort({ number: -1 });
-          
-          // Générer un nouveau numéro pour le brouillon en conflit
-          let newDraftNumber;
-          if (lastDraftNumber) {
-            // Ajouter un suffixe -DRAFT au numéro existant
-            newDraftNumber = `${newNumber}-DRAFT`;
-          } else {
-            newDraftNumber = `DRAFT-${Math.floor(Math.random() * 10000)}`;
-          }
-          
-          // Vérifier que le nouveau numéro n'existe pas déjà
-          const existingWithNewNumber = await Invoice.findOne({
-            prefix,
-            number: newDraftNumber,
-            createdBy: user.id
-          });
-          
-          if (existingWithNewNumber) {
-            // Si le numéro existe déjà, ajouter un timestamp
-            newDraftNumber = `DRAFT-${Date.now().toString().slice(-6)}`;
-          }
-          
-          // Mettre à jour la facture en conflit
-          conflictingDraft.number = newDraftNumber;
-          await conflictingDraft.save();
-        }
-        
-        return newNumber;
+      // Fonction utilitaire pour générer un numéro aléatoire unique pour les brouillons
+      const generateDraftNumber = () => {
+        const timestamp = Date.now().toString().slice(-6);
+        const random = Math.floor(Math.random() * 1000);
+        return `DRAFT-${timestamp}-${random}`;
       };
       
-      // Vérifier si un numéro a été fourni ou si le statut n'est pas DRAFT
+      // Logique simplifiée de génération des numéros
       let number;
-      if (input.status !== 'DRAFT') {
-        // Si le statut n'est pas DRAFT, un numéro est requis
+      
+      if (input.status === 'DRAFT') {
+        // Pour les brouillons : toujours un numéro aléatoire temporaire
+        number = generateDraftNumber();
+      } else {
+        // Pour les factures finalisées (PENDING/COMPLETED) : numéro séquentiel
         if (input.number) {
-          // Vérifier si le numéro fourni existe déjà
+          // Vérifier si le numéro fourni existe déjà parmi les factures finalisées
           const existingInvoice = await Invoice.findOne({ 
             prefix, 
             number: input.number,
@@ -239,45 +208,9 @@ const invoiceResolvers = {
           }
           
           number = input.number;
-          
-          // Si le statut est PENDING, gérer les conflits avec les factures en DRAFT
-          if (input.status === 'PENDING') {
-            number = await handleDraftConflicts(number);
-          }
-        }
-      } else if (input.number) {
-        // Si c'est un brouillon mais qu'un numéro est fourni, le valider
-        const existingInvoice = await Invoice.findOne({ 
-          prefix, 
-          number: input.number,
-          createdBy: user.id,
-          _id: { $ne: input.id } // Exclure la facture en cours de modification
-        });
-        
-        if (existingInvoice) {
-          // Si le numéro existe déjà, générer un nouveau numéro
-          number = `DRAFT-${Date.now().toString().slice(-6)}`;
         } else {
-          // Sinon, utiliser le numéro fourni
-          number = input.number;
-        }
-      } else {
-        // Si aucun numéro n'est fourni et que c'est un brouillon, générer un numéro temporaire
-        const lastDraftInvoice = await Invoice.findOne({ 
-          status: 'DRAFT',
-          createdBy: user.id 
-        }).sort({ createdAt: -1 });
-        
-        if (lastDraftInvoice && lastDraftInvoice.number && lastDraftInvoice.number.startsWith('DRAFT-')) {
-          // Extraire le numéro du dernier brouillon
-          const lastDraftNumber = parseInt(lastDraftInvoice.number.replace('DRAFT-', ''), 10);
-          if (!isNaN(lastDraftNumber)) {
-            number = `DRAFT-${lastDraftNumber + 1}`;
-          } else {
-            number = `DRAFT-1`;
-          }
-        } else {
-          number = `DRAFT-1`;
+          // Générer le prochain numéro séquentiel
+          number = await generateInvoiceNumber(prefix, { userId: user.id, isPending: true });
         }
       }
 
@@ -444,14 +377,14 @@ const invoiceResolvers = {
         updatedInput = { ...updatedInput, ...totals };
       }
 
-      // Préparer les données à mettre à jour
-      const updateData = { ...invoiceData };
+      // Préparer les données à mettre à jour - SEULEMENT les champs modifiés
+      const updateData = {};
       
       // Mettre à jour les informations de l'entreprise si fournies
       if (updatedInput.companyInfo) {
         // Créer une copie des données de l'entreprise pour la mise à jour
         updateData.companyInfo = {
-          ...updateData.companyInfo,
+          ...invoiceData.companyInfo,
           ...updatedInput.companyInfo
         };
         
@@ -481,14 +414,14 @@ const invoiceResolvers = {
         }
         
         updateData.client = {
-          ...updateData.client,
+          ...invoiceData.client,
           ...updatedInput.client
         };
         
         // Mettre à jour l'adresse du client si fournie
         if (updatedInput.client.address) {
           updateData.client.address = {
-            ...(updateData.client.address || {}),
+            ...(invoiceData.client.address || {}),
             ...updatedInput.client.address
           };
         }
@@ -496,7 +429,7 @@ const invoiceResolvers = {
         // Mettre à jour l'adresse de livraison du client si fournie
         if (updatedInput.client.shippingAddress) {
           updateData.client.shippingAddress = {
-            ...(updateData.client.shippingAddress || {}),
+            ...(invoiceData.client.shippingAddress || {}),
             ...updatedInput.client.shippingAddress
           };
         }
@@ -506,15 +439,40 @@ const invoiceResolvers = {
       if (updatedInput.termsAndConditionsLink !== undefined) {
         if (updatedInput.termsAndConditionsLink === '') {
           // Si une chaîne vide est fournie, supprimer le lien
-          delete updateData.termsAndConditionsLink;
+          updateData.termsAndConditionsLink = null;
         } else {
           updateData.termsAndConditionsLink = updatedInput.termsAndConditionsLink;
         }
       }
       
+      // Gestion spéciale de la transition DRAFT vers PENDING/COMPLETED
+      if (invoiceData.status === 'DRAFT' && updatedInput.status && updatedInput.status !== 'DRAFT') {
+        // La facture passe de brouillon à finalisée : générer un nouveau numéro séquentiel
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const prefix = invoiceData.prefix || `F-${year}${month}-`;
+        
+        // Générer le prochain numéro séquentiel
+        updateData.number = await generateInvoiceNumber(prefix, { userId: user.id, isPending: true });
+        updateData.prefix = prefix;
+      }
+      
       // Fusionner toutes les autres mises à jour
       Object.keys(updatedInput).forEach(key => {
         if (key !== 'client' && key !== 'companyInfo' && key !== 'termsAndConditionsLink') {
+          // Éviter de mettre à jour le numéro s'il n'a pas changé pour éviter l'erreur de clé dupliquée
+          if (key === 'number' && updatedInput[key] === invoiceData.number) {
+            return; // Skip this field
+          }
+          // Ne pas écraser le numéro si on vient de le générer pour la transition DRAFT->PENDING
+          if (key === 'number' && invoiceData.status === 'DRAFT' && updatedInput.status && updatedInput.status !== 'DRAFT') {
+            return; // Skip this field car déjà géré ci-dessus
+          }
+          // Préserver le numéro existant pour les brouillons qui restent en DRAFT
+          if (key === 'number' && invoiceData.status === 'DRAFT' && (!updatedInput.status || updatedInput.status === 'DRAFT')) {
+            return; // Skip this field - garder le numéro existant pour les brouillons
+          }
           updateData[key] = updatedInput[key];
         }
       });
