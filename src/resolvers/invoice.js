@@ -2,6 +2,7 @@ const Invoice = require('../models/Invoice');
 const User = require('../models/User');
 const Quote = require('../models/Quote');
 const { isAuthenticated } = require('../middlewares/auth');
+const { requireCompanyInfo } = require('../middlewares/company-info-guard');
 const { generateInvoiceNumber } = require('../utils/documentNumbers');
 const mongoose = require('mongoose');
 const { 
@@ -160,7 +161,7 @@ const invoiceResolvers = {
   },
 
   Mutation: {
-    createInvoice: isAuthenticated(async (_, { input }, { user }) => {
+    createInvoice: requireCompanyInfo(isAuthenticated(async (_, { input }, { user }) => {
       // Récupérer les informations de l'entreprise de l'utilisateur
       const userWithCompany = await User.findById(user.id);
       if (!userWithCompany.company) {
@@ -327,9 +328,9 @@ const invoiceResolvers = {
         // Si c'est une autre erreur, la propager
         throw error;
       }
-    }),
+    })),
     
-    updateInvoice: isAuthenticated(async (_, { id, input }, { user }) => {
+    updateInvoice: requireCompanyInfo(isAuthenticated(async (_, { id, input }, { user }) => {
       // Rechercher la facture sans utiliser Mongoose pour éviter les validations automatiques
       const invoiceData = await Invoice.findOne({ 
         _id: id, 
@@ -543,7 +544,7 @@ const invoiceResolvers = {
           ERROR_CODES.VALIDATION_ERROR
         );
       }
-    }),
+    })),
 
     deleteInvoice: isAuthenticated(async (_, { id }, { user }) => {
       const invoice = await Invoice.findOne({ _id: id, createdBy: user.id });
