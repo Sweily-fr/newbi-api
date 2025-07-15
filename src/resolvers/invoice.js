@@ -557,6 +557,15 @@ const invoiceResolvers = {
         throw createResourceLockedError('Facture', `une facture ${invoice.status === 'COMPLETED' ? 'terminée' : 'annulée'} ne peut pas être supprimée`);
       }
       
+      // Si la facture est liée à un devis, retirer le lien du devis
+      if (invoice.sourceQuote) {
+        const Quote = require('../models/Quote');
+        await Quote.updateOne(
+          { _id: invoice.sourceQuote },
+          { $pull: { linkedInvoices: invoice._id } }
+        );
+      }
+      
       await Invoice.deleteOne({ _id: id, createdBy: user.id });
       return true;
     }),
@@ -709,6 +718,225 @@ const invoiceResolvers = {
       // Ici, vous pourriez implémenter la logique d'envoi d'email
       // Pour l'instant, nous simulons un succès
       // TODO: Implémenter l'envoi réel de la facture par email
+      
+      return true;
+    }),
+
+    createLinkedInvoice: isAuthenticated(async (_, { quoteId, amount, isDeposit }, { user }) => {
+      console.log('Création de facture liée - Paramètres reçus:', { quoteId, amount, isDeposit, userId: user.id });
+      
+      // Validation et conversion explicite du montant
+      const numericAmount = parseFloat(amount);
+      if (isNaN(numericAmount) || numericAmount <= 0) {
+        throw createValidationError(
+          'Montant invalide',
+          { amount: 'Le montant doit être un nombre positif' }
+        );
+      }
+      
+      console.log('Montant converti:', { original: amount, converted: numericAmount });
+      
+      // Vérifier que le devis existe et appartient à l'utilisateur
+      const quote = await Quote.findOne({ _id: quoteId, createdBy: user.id });
+      
+      if (!quote) {
+        throw createNotFoundError('Devis');
+      }
+
+      // Vérifier que le devis est accepté
+      if (quote.status !== 'COMPLETED') {
+        throw createValidationError(
+          'Seuls les devis acceptés peuvent être convertis en factures liées',
+          { status: 'Le devis doit être accepté pour créer une facture liée' }
+        );
+      }
+
+      // Vérifier le nombre de factures déjà liées (max 3)
+      const linkedInvoicesCount = quote.linkedInvoices ? quote.linkedInvoices.length : 0;
+      if (linkedInvoicesCount >= 3) {
+        throw createValidationError(
+          'Limite de factures liées atteinte',
+          { linkedInvoices: 'Un devis ne peut avoir plus de 3 factures liées' }
+        );
+      }
+
+      // Calculer le montant total déjà facturé et vérifier les acomptes
+      let totalInvoiced = 0;
+      let hasDeposit = false;
+      if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
+        const existingInvoices = await Invoice.find({
+          _id: { $in: quote.linkedInvoices },
+          createdBy: user.id
+        });
+        console.log('Factures existantes trouvées:', existingInvoices.map(inv => ({
+          id: inv._id,
+          number: inv.number,
+          finalTotalTTC: inv.finalTotalTTC,
+          isDeposit: inv.isDeposit
+        })));
+        totalInvoiced = existingInvoices.reduce((sum, inv) => sum + (inv.finalTotalTTC || 0), 0);
+        hasDeposit = existingInvoices.some(inv => inv.isDeposit === true);
+      }
+
+      // Vérifier qu'il n'y a qu'un seul acompte
+      if (isDeposit && hasDeposit) {
+        throw createValidationError(
+          'Acompte déjà existant',
+          { isDeposit: 'Un devis ne peut avoir qu\'un seul acompte' }
+        );
+      }
+
+      // Vérifier que le montant ne dépasse pas le total du devis
+      const remainingAmount = quote.finalTotalTTC - totalInvoiced;
+      
+      console.log('Validation du montant:', {
+        quoteFinalTotalTTC: quote.finalTotalTTC,
+        totalInvoiced,
+        remainingAmount,
+        requestedAmount: numericAmount,
+        isDeposit,
+        linkedInvoicesCount: quote.linkedInvoices ? quote.linkedInvoices.length : 0
+      });
+      
+      if (numericAmount > remainingAmount) {
+        console.error('Erreur de validation - Montant trop élevé:', {
+          amount: numericAmount,
+          remainingAmount,
+          difference: numericAmount - remainingAmount
+        });
+        throw createValidationError(
+          'Montant de facture invalide',
+          { amount: `Le montant ne peut pas dépasser le reste à facturer (${remainingAmount.toFixed(2)}€)` }
+        );
+      }
+
+      // Si c'est la dernière facture possible (3ème facture OU reste exactement ce montant),
+      // le montant doit être exactement égal au reste à facturer
+      const isLastPossibleInvoice = linkedInvoicesCount === 2 || remainingAmount === numericAmount;
+      if (linkedInvoicesCount === 2 && numericAmount !== remainingAmount) {
+        throw createValidationError(
+          'Montant de la dernière facture invalide',
+          { amount: `La dernière facture liée doit être exactement égale au reste à facturer (${remainingAmount.toFixed(2)}€)` }
+        );
+      }
+
+      // Générer le numéro de facture
+      const prefix = quote.prefix || 'F';
+      const number = await generateInvoiceNumber(prefix, {
+        isDraft: true,
+        userId: user.id
+      });
+
+      // Calculer le prix HT pour obtenir le montant TTC exact
+      // Si numericAmount = 120€ TTC avec 20% TVA, alors HT = 120 / 1.20 = 100€
+      const vatRate = 20;
+      const unitPriceHT = numericAmount / (1 + vatRate / 100);
+
+      // Créer la facture avec les données du devis
+      const invoice = new Invoice({
+        number,
+        prefix,
+        purchaseOrderNumber: `${quote.prefix}${quote.number}`, // Référence au devis
+        isDeposit,
+        status: 'DRAFT',
+        issueDate: new Date(),
+        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 jours par défaut
+        client: quote.client,
+        companyInfo: quote.companyInfo,
+        sourceQuote: quote._id,
+        
+        // Créer un article unique avec le montant spécifié
+        items: [{
+          description: isDeposit ? `Acompte sur devis ${quote.prefix}${quote.number}` : `Facture partielle sur devis ${quote.prefix}${quote.number}`,
+          quantity: 1,
+          unitPrice: unitPriceHT,
+          vatRate: vatRate,
+          unit: 'forfait',
+          discount: 0,
+          discountType: 'FIXED',
+          details: '',
+          vatExemptionText: ''
+        }],
+        
+        headerNotes: quote.headerNotes || '',
+        footerNotes: quote.footerNotes || '',
+        termsAndConditions: quote.termsAndConditions || '',
+        termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle || '',
+        termsAndConditionsLink: quote.termsAndConditionsLink || '',
+        
+        discount: 0,
+        discountType: 'FIXED',
+        customFields: quote.customFields || [],
+        createdBy: user.id
+      });
+
+      // Calculer les totaux
+      const totals = calculateInvoiceTotals(invoice.items, invoice.discount, invoice.discountType);
+      Object.assign(invoice, totals);
+      
+      // Vérifier que le montant TTC final correspond exactement au montant demandé
+      // (avec une tolérance de 0.01€ pour les erreurs d'arrondi)
+      if (Math.abs(invoice.finalTotalTTC - numericAmount) > 0.01) {
+        console.warn(`Différence de montant détectée: demandé=${numericAmount}, calculé=${invoice.finalTotalTTC}`);
+        // Forcer le montant exact si nécessaire
+        invoice.finalTotalTTC = numericAmount;
+      }
+
+      // Sauvegarder la facture
+      await invoice.save();
+
+      // Ajouter la facture aux factures liées du devis
+      if (!quote.linkedInvoices) {
+        quote.linkedInvoices = [];
+      }
+      quote.linkedInvoices.push(invoice._id);
+      await quote.save();
+
+      // Retourner la facture et le devis mis à jour
+      const populatedInvoice = await invoice.populate('createdBy');
+      const updatedQuote = await Quote.findById(quote._id).populate({
+        path: 'linkedInvoices',
+        select: 'id number status finalTotalTTC isDeposit'
+      });
+
+      return {
+        invoice: populatedInvoice,
+        quote: updatedQuote
+      };
+    }),
+
+    deleteLinkedInvoice: isAuthenticated(async (_, { id }, { user }) => {
+      const invoice = await Invoice.findOne({ _id: id, createdBy: user.id });
+      
+      if (!invoice) {
+        throw createNotFoundError('Facture liée');
+      }
+      
+      // Vérifier que c'est bien une facture liée à un devis
+      if (!invoice.sourceQuote) {
+        throw createValidationError(
+          'Facture non liée',
+          { invoice: 'Cette facture n\'est pas liée à un devis' }
+        );
+      }
+      
+      // Vérifier que la facture peut être supprimée
+      if (invoice.status === 'COMPLETED' || invoice.status === 'CANCELED') {
+        throw createResourceLockedError(
+          'Facture liée', 
+          `une facture ${invoice.status === 'COMPLETED' ? 'terminée' : 'annulée'} ne peut pas être supprimée`
+        );
+      }
+      
+      // Retirer la facture de la liste des factures liées du devis
+      const Quote = require('../models/Quote');
+      await Quote.updateOne(
+        { _id: invoice.sourceQuote },
+        { $pull: { linkedInvoices: invoice._id } }
+      );
+      
+      // Supprimer la facture
+      await Invoice.deleteOne({ _id: id, createdBy: user.id });
       
       return true;
     })

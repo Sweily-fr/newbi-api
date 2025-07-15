@@ -41,6 +41,11 @@ type InvoicePagination {
   hasNextPage: Boolean!
 }
 
+type LinkedInvoiceResult {
+  invoice: Invoice!
+  quote: Quote!
+}
+
 input CreateInvoiceInput {
   isDeposit: Boolean
   client: ClientInput!
@@ -99,4 +104,6 @@ extend type Mutation {
   sendInvoice(id: ID!, email: String!): Boolean!
   markInvoiceAsPaid(id: ID!, paymentDate: String!): Invoice!
   changeInvoiceStatus(id: ID!, status: InvoiceStatus!): Invoice!
+  createLinkedInvoice(quoteId: ID!, amount: Float!, isDeposit: Boolean!): LinkedInvoiceResult!
+  deleteLinkedInvoice(id: ID!): Boolean!
 }
