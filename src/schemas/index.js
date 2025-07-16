@@ -1,6 +1,11 @@
-const { loadFilesSync } = require('@graphql-tools/load-files');
-const { mergeTypeDefs } = require('@graphql-tools/merge');
-const path = require('path');
+import { loadFilesSync } from '@graphql-tools/load-files';
+import { mergeTypeDefs } from '@graphql-tools/merge';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Recréer __dirname pour ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Charger d'abord le fichier de base
 const baseTypes = loadFilesSync(path.join(__dirname, './types/base.graphql'));
@@ -12,13 +17,16 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, './types/objects.graphql'),
   path.join(__dirname, './types/inputs.graphql'),
   path.join(__dirname, './types/integration.graphql'),
+  path.join(__dirname, './types/fileTransfer.graphql'), // Chargement explicite du schéma fileTransfer
+  path.join(__dirname, './types/chunkUpload.graphql'),  // Chargement explicite du schéma chunkUpload
   path.join(__dirname, './*.graphql'),
 ]);
 
-// Charger les définitions de types du dossier typeDefs
-const typeDefsFiles = loadFilesSync(path.join(__dirname, '../typeDefs/*.js'));
+// NOTE: Les fichiers typeDefs/*.js ne sont plus chargés car ils ont été migrés vers des fichiers .graphql
+// et causent des conflits de types (notamment pour le type File avec size: Float vs Int)
+// const typeDefsFiles = loadFilesSync(path.join(__dirname, '../typeDefs/*.js'));
 
 // Fusionner les schémas en s'assurant que les types de base sont traités en premier
-const typeDefs = mergeTypeDefs([...baseTypes, ...otherTypes, ...typeDefsFiles]);
+const typeDefs = mergeTypeDefs([...baseTypes, ...otherTypes]);
 
-module.exports = typeDefs;
+export default typeDefs;

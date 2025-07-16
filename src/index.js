@@ -1,19 +1,25 @@
-require('dotenv').config();
-const express = require('express');
-const { ApolloServer } = require('apollo-server-express');
-const mongoose = require('mongoose');
-const path = require('path');
-const { graphqlUploadExpress } = require('graphql-upload');
-const fs = require('fs');
-const cors = require('cors');
-const stripe = require('./utils/stripe');
-const { handleStripeWebhook } = require('./controllers/webhookController');
-const { handleStripeWebhook: handleFileTransferStripeWebhook, downloadFile, downloadAllFiles, validatePayment } = require('./controllers/fileTransferController');
-const { setupScheduledJobs } = require('./jobs/scheduler');
-const logger = require('./utils/logger');
+import dotenv from 'dotenv';
+dotenv.config();
+import express from 'express';
+import { ApolloServer } from 'apollo-server-express';
+import mongoose from 'mongoose';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { graphqlUploadExpress } from 'graphql-upload';
 
-const { betterAuthMiddleware } = require('./middlewares/better-auth');
-const typeDefs = require('./schemas');
+// Recréer __dirname pour ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+import fs from 'fs';
+import cors from 'cors';
+import stripe from './utils/stripe.js';
+import { handleStripeWebhook } from './controllers/webhookController.js';
+import { handleStripeWebhook as handleFileTransferStripeWebhook, downloadFile, downloadAllFiles, validatePayment } from './controllers/fileTransferController.js';
+import { setupScheduledJobs } from './jobs/scheduler.js';
+import logger from './utils/logger.js';
+
+import { betterAuthMiddleware } from './middlewares/better-auth.js';
+import typeDefs from './schemas/index.js';
 
 // Connexion à MongoDB
 mongoose.connect(process.env.MONGODB_URI)
@@ -21,7 +27,7 @@ mongoose.connect(process.env.MONGODB_URI)
   .catch(err => logger.error('Erreur de connexion MongoDB:', err));
 
 // Chargement des resolvers
-const resolvers = require('./resolvers');
+import resolvers from './resolvers/index.js';
 
 // Assurer que le dossier d'upload existe
 const uploadLogoDir = path.resolve(__dirname, '../public/uploads/company-logos');
@@ -49,6 +55,13 @@ const uploadFileTransfersDir = path.resolve(__dirname, '../public/uploads/file-t
 if (!fs.existsSync(uploadFileTransfersDir)) {
   fs.mkdirSync(uploadFileTransfersDir, { recursive: true });
   logger.info(`Dossier d'upload pour les transferts de fichiers créé: ${uploadFileTransfersDir}`);
+}
+
+// Assurer que le dossier temporaire pour les chunks de fichiers existe
+const tempChunksDir = path.resolve(__dirname, '../public/uploads/temp-chunks');
+if (!fs.existsSync(tempChunksDir)) {
+  fs.mkdirSync(tempChunksDir, { recursive: true });
+  logger.info(`Dossier temporaire pour les chunks de fichiers créé: ${tempChunksDir}`);
 }
 
 async function startServer() {
@@ -223,9 +236,8 @@ async function startServer() {
 
   // Définir la constante BASE_URL pour l'API
   const BASE_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`;
-
-  // Exporter BASE_URL pour une utilisation dans d'autres modules
-  module.exports.BASE_URL = BASE_URL;
+  
+  // On n'exporte pas BASE_URL car nous sommes dans un module principal
 
   const server = new ApolloServer({
     typeDefs,

@@ -1,0 +1,30 @@
+# Types pour l'upload de fichiers en chunks
+
+# Type pour la réponse d'upload d'un chunk
+type ChunkUploadResponse {
+  chunkReceived: Boolean!
+  fileCompleted: Boolean!
+  fileId: String!
+  fileName: String
+  filePath: String
+  fileTransferId: String
+}
+
+# Étendre le type Mutation
+extend type Mutation {
+  # Uploader un chunk de fichier
+  uploadFileChunk(
+    chunk: Upload!
+    fileId: String!
+    chunkIndex: Int!
+    totalChunks: Int!
+    fileName: String!
+    fileSize: Int!
+  ): ChunkUploadResponse!
+  
+  # Créer un transfert de fichier à partir des IDs de fichiers déjà uploadés en chunks
+  createFileTransferWithIds(
+    fileIds: [String!]!
+    input: FileTransferInput
+  ): FileTransferResponse!
+}

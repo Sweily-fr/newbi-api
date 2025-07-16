@@ -2,9 +2,9 @@
 
 # Enum pour le statut du transfert de fichiers
 enum FileTransferStatus {
-  ACTIVE
-  EXPIRED
-  DELETED
+  active
+  expired
+  deleted
 }
 
 # Type pour représenter un fichier individuel dans un transfert
@@ -12,6 +12,7 @@ type File {
   id: ID!
   fileName: String!
   originalName: String!
+  displayName: String
   mimeType: String!
   size: Int!
   filePath: String!
@@ -21,22 +22,28 @@ type File {
 # Type principal pour le transfert de fichiers
 type FileTransfer {
   id: ID!
-  userId: ID!
-  files: [File!]!
-  totalSize: Int!
-  shareLink: String!
-  accessKey: String!
-  expiryDate: Date!
-  status: FileTransferStatus!
-  requiresPayment: Boolean!
+  userId: ID
+  files: [File]
+  totalSize: Float
+  shareLink: String
+  accessKey: String
+  expiryDate: Date
+  status: FileTransferStatus
+  isPaymentRequired: Boolean
   paymentAmount: Float
   paymentCurrency: String
-  isPaid: Boolean!
+  isPaid: Boolean
+  paymentId: String
+  paymentDate: Date
   paymentSessionId: String
   paymentSessionUrl: String
-  downloadCount: Int!
-  createdAt: Date!
-  updatedAt: Date!
+  downloadCount: Int
+  lastDownloadDate: Date
+  recipientEmail: String
+  notificationSent: Boolean
+  message: String
+  createdAt: Date
+  updatedAt: Date
   zipDownloadUrl: String
 }
 
@@ -73,9 +80,12 @@ type FileTransferAccessResponse {
 input FileTransferInput {
   expiryDays: Int
   isPaymentRequired: Boolean = false
+  requirePayment: Boolean = false # Alias pour isPaymentRequired pour compatibilité avec le frontend
   paymentAmount: Float = 0
   paymentCurrency: String = "EUR"
+  currency: String = "EUR" # Alias pour paymentCurrency pour compatibilité avec le frontend
   recipientEmail: String
+  message: String
 }
 
 # Étendre le type Query
@@ -90,11 +100,25 @@ extend type Query {
   getFileTransferByLink(shareLink: String!, accessKey: String!): FileTransferAccessResponse
 }
 
+# Input pour un fichier en base64
+input Base64FileInput {
+  name: String!
+  type: String!
+  size: Float!
+  base64: String!
+}
+
 # Étendre le type Mutation
 extend type Mutation {
   # Créer un nouveau transfert de fichiers
   createFileTransfer(
     files: [Upload!]!
+    input: FileTransferInput
+  ): FileTransferResponse!
+  
+  # Créer un nouveau transfert de fichiers avec des fichiers en base64
+  createFileTransferBase64(
+    files: [Base64FileInput!]!
     input: FileTransferInput
   ): FileTransferResponse!
   

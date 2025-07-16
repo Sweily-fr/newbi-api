@@ -8,3 +8,6 @@ scalar Upload
 
 # Type scalaire pour les dates et heures
 scalar DateTime
+
+# Type scalaire pour les dates (alias de DateTime pour compatibilité)
+scalar Date

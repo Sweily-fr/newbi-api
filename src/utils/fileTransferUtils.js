@@ -1,10 +1,10 @@
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const archiver = require('archiver');
-const { createWriteStream, mkdirSync, existsSync } = require('fs');
-const { promisify } = require('util');
-const { pipeline } = require('stream');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import archiver from 'archiver';
+import { createWriteStream, mkdirSync, existsSync } from 'fs';
+import { promisify } from 'util';
+import { pipeline } from 'stream';
 const pipelineAsync = promisify(pipeline);
 
 // Assurez-vous que le dossier existe
@@ -350,7 +350,26 @@ const createZipArchive = async (files, userId) => {
   return `/uploads/file-transfers/${userId.toString()}/archives/${archiveName}`;
 };
 
-module.exports = {
+/**
+ * Intégrer un fichier reconstruit à partir de chunks dans le système de transfert de fichiers
+ * @param {Object} fileInfo - Informations sur le fichier reconstruit
+ * @param {String} userId - ID de l'utilisateur
+ * @returns {Object} - Informations sur le fichier intégré
+ */
+const integrateReconstructedFile = (fileInfo, userId) => {
+  // Le fichier est déjà sauvegardé dans le bon dossier par reconstructFile
+  // On retourne simplement les informations du fichier pour l'intégrer dans le système
+  return {
+    originalName: fileInfo.originalName, // Contient maintenant le fileId pour la recherche
+    displayName: fileInfo.displayName || fileInfo.originalName, // Nom d'affichage du fichier
+    fileName: fileInfo.fileName,
+    filePath: fileInfo.filePath,
+    mimeType: fileInfo.mimeType,
+    size: fileInfo.size
+  };
+};
+
+export {
   ensureDirectoryExists,
   generateAccessKey,
   generateShareLink,
@@ -358,5 +377,6 @@ module.exports = {
   saveUploadedFile,
   saveBase64File,
   deleteFile,
-  createZipArchive
+  createZipArchive,
+  integrateReconstructedFile
 };

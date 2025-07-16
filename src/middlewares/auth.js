@@ -1,46 +1,49 @@
-const jwt = require('jsonwebtoken');
-const { AppError, ERROR_CODES } = require('../utils/errors');
-const User = require('../models/User');
+const jwt = require("jsonwebtoken");
+const { AppError, ERROR_CODES } = require("../utils/errors");
+const User = require("../models/User");
 
 const authMiddleware = async (token) => {
   // Vérifier si le token est présent
   if (!token) {
-    console.log('Aucun token fourni');
+    console.log("Aucun token fourni");
     return null;
   }
 
   try {
     // Enlever "Bearer " du token
-    const tokenContent = token.startsWith('Bearer ') ? token.slice(7) : token;
-    console.log('Token reçu:', token.substring(0, 20) + '...');
-    
+    const tokenContent = token.startsWith("Bearer ") ? token.slice(7) : token;
+    console.log("Token reçu:", token.substring(0, 20) + "...");
+
     // Vérifier et décoder le token
     const decoded = jwt.verify(tokenContent, process.env.JWT_SECRET);
-    console.log('Token décodé avec succès, userId:', decoded.id);
-    
+    console.log("Token décodé avec succès, userId:", decoded.id);
+
     // Vérifier si l'utilisateur existe et si son compte n'est pas désactivé
     const user = await User.findById(decoded.id);
     if (!user) {
-      console.log('Utilisateur non trouvé dans la base de données:', decoded.id);
+      console.log(
+        "Utilisateur non trouvé dans la base de données:",
+        decoded.id
+      );
       return null;
     }
-    
+
     // Si le compte est désactivé, refuser l'accès
     if (user.isDisabled) {
-      console.log('Compte utilisateur désactivé:', decoded.id);
+      console.log("Compte utilisateur désactivé:", decoded.id);
       return null;
     }
-    
-    console.log('Authentification réussie pour l\'utilisateur:', user.email);
+
+    console.log("Authentification réussie pour l'utilisateur:", user.email);
     return user;
   } catch (error) {
     // Différencier les types d'erreurs JWT
     if (error instanceof jwt.TokenExpiredError) {
-      console.log('Token expiré:', error.message);
+      console.log("Token expiré:", error.message);
     } else if (error instanceof jwt.JsonWebTokenError) {
-      console.log('Token invalide:', error.message);
+      console.log("Token invalide:", error.message);
     } else {
-      console.log('Erreur d\'authentification:', error.message);
+      console.log("Erreur d'authentification:", error.message);
     }
     return null;
   }
@@ -50,7 +53,7 @@ const isAuthenticated = (resolver) => {
   return (parent, args, context, info) => {
     if (!context.user) {
       throw new AppError(
-        'Vous devez être connecté pour effectuer cette action',
+        "Vous devez être connecté pour effectuer cette action",
         ERROR_CODES.UNAUTHENTICATED
       );
     }
@@ -60,5 +63,5 @@ const isAuthenticated = (resolver) => {
 
 module.exports = {
   authMiddleware,
-  isAuthenticated
+  isAuthenticated,
 };
