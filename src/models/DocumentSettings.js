@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-const { isValidFooterNotes } = require('../utils/validators');
+import mongoose from 'mongoose';
+import { isValidFooterNotes } from '../utils/validators.js';
 
 /**
  * Schéma pour les paramètres globaux des documents (factures et devis)
@@ -84,4 +84,4 @@ const documentSettingsSchema = new mongoose.Schema({
 // Index pour améliorer les performances des recherches
 documentSettingsSchema.index({ createdBy: 1, documentType: 1 }, { unique: true });
 
-module.exports = mongoose.model('DocumentSettings', documentSettingsSchema);
+export default mongoose.model('DocumentSettings', documentSettingsSchema);

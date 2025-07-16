@@ -1,6 +1,6 @@
-const jwt = require("jsonwebtoken");
-const { AppError, ERROR_CODES } = require("../utils/errors");
-const User = require("../models/User");
+import jwt from "jsonwebtoken";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
+import User from "../models/User.js";
 
 const authMiddleware = async (token) => {
   // Vérifier si le token est présent
@@ -61,7 +61,7 @@ const isAuthenticated = (resolver) => {
   };
 };
 
-module.exports = {
+export {
   authMiddleware,
-  isAuthenticated,
+  isAuthenticated
 };

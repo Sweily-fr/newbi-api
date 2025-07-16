@@ -1,12 +1,12 @@
-const mongoose = require('mongoose');
-const { 
+import mongoose from 'mongoose';
+import { 
   NAME_REGEX, 
   EMAIL_REGEX, 
   PHONE_REGEX, 
   PHONE_FR_REGEX, 
   URL_REGEX, 
   STREET_REGEX
-} = require('../utils/validators');
+} from '../utils/validators.js';
 
 /**
  * Schéma principal de la signature email
@@ -246,4 +246,4 @@ emailSignatureSchema.pre('save', async function(next) {
 
 const EmailSignature = mongoose.model('EmailSignature', emailSignatureSchema);
 
-module.exports = EmailSignature;
+export default EmailSignature;

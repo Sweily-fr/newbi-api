@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-const { IBAN_REGEX, BIC_REGEX } = require('../../utils/validators');
+import mongoose from 'mongoose';
+import { IBAN_REGEX, BIC_REGEX } from '../../utils/validators.js';
 
 /**
  * Schéma pour les coordonnées bancaires
@@ -51,4 +51,4 @@ const bankDetailsSchema = new mongoose.Schema({
   }
 });
 
-module.exports = bankDetailsSchema;
+export default bankDetailsSchema;

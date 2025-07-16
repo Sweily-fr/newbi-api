@@ -1,4 +1,4 @@
-const nodemailer = require('nodemailer');
+import nodemailer from "nodemailer";
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -13,10 +13,10 @@ const sendPasswordResetEmail = async (email, resetToken) => {
   const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
   const mailOptions = {
-    from: 'Newbi <contact@newbi.fr>',
+    from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: email,
-    subject: 'Réinitialisation de votre mot de passe - Newbi',
+    subject: "Réinitialisation de votre mot de passe - Newbi",
     html: `
       <!DOCTYPE html>
       <html>
@@ -156,7 +156,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
     await transporter.sendMail(mailOptions);
     return true;
   } catch (error) {
-    console.error('Error sending email:', error);
+    console.error("Error sending email:", error);
     return false;
   }
 };
@@ -165,10 +165,10 @@ const sendVerificationEmail = async (email, verificationToken) => {
   const verificationLink = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
 
   const mailOptions = {
-    from: 'Newbi <contact@newbi.fr>',
+    from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: email,
-    subject: 'Vérification de votre adresse email - Newbi',
+    subject: "Vérification de votre adresse email - Newbi",
     html: `
       <!DOCTYPE html>
       <html>
@@ -290,14 +290,14 @@ const sendVerificationEmail = async (email, verificationToken) => {
         </div>
       </body>
       </html>
-    `
+    `,
   };
 
   try {
     await transporter.sendMail(mailOptions);
     return true;
   } catch (error) {
-    console.error('Erreur lors de l\'envoi de l\'email de vérification:', error);
+    console.error("Erreur lors de l'envoi de l'email de vérification:", error);
     return false;
   }
 };
@@ -306,10 +306,10 @@ const sendPasswordResetConfirmationEmail = async (email) => {
   const loginLink = `${process.env.FRONTEND_URL}/auth`;
 
   const mailOptions = {
-    from: 'Newbi <contact@newbi.fr>',
+    from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: email,
-    subject: 'Confirmation de réinitialisation de mot de passe - Newbi',
+    subject: "Confirmation de réinitialisation de mot de passe - Newbi",
     html: `
       <!DOCTYPE html>
       <html>
@@ -430,19 +430,22 @@ const sendPasswordResetConfirmationEmail = async (email) => {
         </div>
       </body>
       </html>
-    `
+    `,
   };
 
   try {
     await transporter.sendMail(mailOptions);
     // Email de confirmation de réinitialisation de mot de passe envoyé à ${email}
   } catch (error) {
-    console.error('Erreur lors de l\'envoi de l\'email de confirmation de réinitialisation:', error);
+    console.error(
+      "Erreur lors de l'envoi de l'email de confirmation de réinitialisation:",
+      error
+    );
     throw error;
   }
 };
 
-module.exports = {
+export {
   sendPasswordResetEmail,
   sendVerificationEmail,
   sendPasswordResetConfirmationEmail

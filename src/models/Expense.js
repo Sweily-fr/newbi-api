@@ -1,8 +1,8 @@
-const mongoose = require('mongoose');
-const { 
+import mongoose from 'mongoose';
+import { 
   isPositiveAmount,
   URL_REGEX
-} = require('../utils/validators');
+} from '../utils/validators.js';
 
 // Schéma pour les fichiers (reçus, factures scannées, etc.)
 const fileSchema = new mongoose.Schema({
@@ -321,4 +321,5 @@ expenseSchema.statics.EXPENSE_CATEGORY = EXPENSE_CATEGORY;
 expenseSchema.statics.EXPENSE_STATUS = EXPENSE_STATUS;
 expenseSchema.statics.EXPENSE_PAYMENT_METHOD = EXPENSE_PAYMENT_METHOD;
 
-module.exports = mongoose.model('Expense', expenseSchema);
+const Expense = mongoose.model('Expense', expenseSchema);
+export default Expense;

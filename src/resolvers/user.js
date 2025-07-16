@@ -1,18 +1,18 @@
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const User = require('../models/User');
-const { isAuthenticated } = require('../middlewares/auth');
-const { sendPasswordResetEmail, sendVerificationEmail, sendPasswordResetConfirmationEmail } = require('../utils/mailer');
-const { saveBase64Image, deleteFile } = require('../utils/fileUpload');
-const path = require('path');
-const CryptoJS = require('crypto-js');
-const {
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import User from '../models/User.js';
+import { isAuthenticated } from '../middlewares/auth.js';
+import { sendPasswordResetEmail, sendVerificationEmail, sendPasswordResetConfirmationEmail } from '../utils/mailer.js';
+import { saveBase64Image, deleteFile } from '../utils/fileUpload.js';
+import path from 'path';
+import CryptoJS from 'crypto-js';
+import {
   AppError,
   ERROR_CODES,
   createNotFoundError,
   createAlreadyExistsError,
   createValidationError
-} = require('../utils/errors');
+} from '../utils/errors.js';
 
 const generateToken = (user, rememberMe = false) => {
   // Définir la durée d'expiration en fonction de l'option "Se souvenir de moi"
@@ -850,4 +850,4 @@ const userResolvers = {
   }
 };
 
-module.exports = userResolvers;
+export default userResolvers;

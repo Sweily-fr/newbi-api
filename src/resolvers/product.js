@@ -1,9 +1,9 @@
-const Product = require('../models/Product');
-const { isAuthenticated } = require('../middlewares/auth');
-const { 
+import Product from '../models/Product.js';
+import { isAuthenticated } from '../middlewares/auth.js';
+import { 
   createNotFoundError, 
   createAlreadyExistsError
-} = require('../utils/errors');
+} from '../utils/errors.js';
 
 const productResolvers = {
   Query: {
@@ -128,4 +128,4 @@ const productResolvers = {
   }
 };
 
-module.exports = productResolvers;
+export default productResolvers;

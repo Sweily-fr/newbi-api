@@ -1,17 +1,17 @@
-const Invoice = require('../models/Invoice');
-const User = require('../models/User');
-const Quote = require('../models/Quote');
-const { isAuthenticated } = require('../middlewares/auth');
-const { generateInvoiceNumber } = require('../utils/documentNumbers');
-const mongoose = require('mongoose');
-const { 
+import Invoice from '../models/Invoice.js';
+import User from '../models/User.js';
+import Quote from '../models/Quote.js';
+import { isAuthenticated } from '../middlewares/auth.js';
+import { generateInvoiceNumber } from '../utils/documentNumbers.js';
+import mongoose from 'mongoose';
+import { 
   createNotFoundError, 
   createResourceLockedError,
   createStatusTransitionError,
   createValidationError,
   AppError,
   ERROR_CODES
-} = require('../utils/errors');
+} from '../utils/errors.js';
 
 // Fonction utilitaire pour calculer les totaux avec remise
 const calculateInvoiceTotals = (items, discount = 0, discountType = 'FIXED') => {
@@ -714,4 +714,4 @@ const invoiceResolvers = {
   }
 };
 
-module.exports = invoiceResolvers;
+export default invoiceResolvers;

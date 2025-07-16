@@ -11,7 +11,8 @@ import {
 } from '../utils/fileTransferUtils.js';
 import Stripe from 'stripe';
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-import { BASE_URL } from '../utils/constants.js';
+import constants from '../utils/constants.js';
+const { BASE_URL } = constants;
 
 // Taille maximale autorisée (100 GB en octets)
 const MAX_FILE_SIZE = 100 * 1024 * 1024 * 1024;

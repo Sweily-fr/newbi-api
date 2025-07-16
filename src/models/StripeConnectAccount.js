@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const stripeConnectAccountSchema = new mongoose.Schema(
   {
@@ -34,4 +34,4 @@ stripeConnectAccountSchema.index({ userId: 1 }, { unique: true });
 
 const StripeConnectAccount = mongoose.model('StripeConnectAccount', stripeConnectAccountSchema);
 
-module.exports = StripeConnectAccount;
+export default StripeConnectAccount;

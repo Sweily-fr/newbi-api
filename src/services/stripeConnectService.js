@@ -1,6 +1,7 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const StripeConnectAccount = require('../models/StripeConnectAccount');
-const logger = require('../utils/logger');
+import Stripe from 'stripe';
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+import StripeConnectAccount from '../models/StripeConnectAccount.js';
+import logger from '../utils/logger.js';
 
 /**
  * Service pour gérer les interactions avec Stripe Connect
@@ -219,4 +220,4 @@ const stripeConnectService = {
   }
 };
 
-module.exports = stripeConnectService;
+export default stripeConnectService;

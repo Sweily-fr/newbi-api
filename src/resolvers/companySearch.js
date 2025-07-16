@@ -1,5 +1,5 @@
-const { isAuthenticated } = require('../middlewares/auth');
-const { searchCompanyBySiret, searchCompaniesByName } = require('../utils/companySearch');
+import { isAuthenticated } from '../middlewares/auth.js';
+import { searchCompanyBySiret, searchCompaniesByName } from '../utils/companySearch.js';
 
 const companySearchResolvers = {
   Query: {
@@ -25,4 +25,4 @@ const companySearchResolvers = {
   }
 };
 
-module.exports = companySearchResolvers;
+export default companySearchResolvers;

@@ -1,4 +1,4 @@
-const nodemailer = require('nodemailer');
+import nodemailer from 'nodemailer';
 
 // Création du transporteur pour l'envoi d'emails avec Mailtrap
 const transporter = nodemailer.createTransport({
@@ -215,4 +215,4 @@ const contactResolvers = {
   }
 };
 
-module.exports = contactResolvers;
+export default contactResolvers;

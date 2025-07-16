@@ -1,15 +1,15 @@
-const mongoose = require('mongoose');
-const { 
+import mongoose from 'mongoose';
+import { 
   isDateAfter, 
   URL_REGEX, 
   isPositiveAmount,
   isValidFooterNotes
-} = require('../utils/validators');
-const clientSchema = require('./schemas/client');
-const itemSchema = require('./schemas/item');
-const companyInfoSchema = require('./schemas/companyInfo');
-const customFieldSchema = require('./schemas/customField');
-const { QUOTE_STATUS, DISCOUNT_TYPE } = require('./constants/enums');
+} from '../utils/validators.js';
+import clientSchema from './schemas/client.js';
+import itemSchema from './schemas/item.js';
+import companyInfoSchema from './schemas/companyInfo.js';
+import customFieldSchema from './schemas/customField.js';
+import { QUOTE_STATUS, DISCOUNT_TYPE } from './constants/enums.js';
 
 /**
  * Schéma principal de devis
@@ -297,4 +297,4 @@ quoteSchema.statics.numberExistsForYear = async function(number, userId, year) {
   return count > 0;
 };
 
-module.exports = mongoose.model('Quote', quoteSchema);
+export default mongoose.model('Quote', quoteSchema);

@@ -1,5 +1,5 @@
 // models/kanban.js
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 // Schéma pour les items de la checklist
 const checklistItemSchema = new mongoose.Schema({
@@ -159,7 +159,7 @@ const Board = mongoose.model('Board', boardSchema);
 const Column = mongoose.model('Column', columnSchema);
 const Task = mongoose.model('Task', taskSchema);
 
-module.exports = {
+export {
   Board,
   Column,
   Task

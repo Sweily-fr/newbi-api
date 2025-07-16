@@ -1,6 +1,6 @@
-const mongoose = require('mongoose');
-const addressSchema = require('./schemas/address');
-const { EMAIL_REGEX, PHONE_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } = require('../utils/validators');
+import mongoose from 'mongoose';
+import addressSchema from './schemas/address.js';
+import { EMAIL_REGEX, PHONE_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } from '../utils/validators.js';
 
 /**
  * Schéma principal du client
@@ -87,4 +87,4 @@ clientSchema.index({ createdBy: 1 });
 clientSchema.index({ email: 1, createdBy: 1 }, { unique: true });
 clientSchema.index({ name: 'text' }, { weights: { name: 10 } });
 
-module.exports = mongoose.model('Client', clientSchema);
+export default mongoose.model('Client', clientSchema);

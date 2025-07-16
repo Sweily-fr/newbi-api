@@ -1,17 +1,17 @@
-const mongoose = require('mongoose');
-const { 
+import mongoose from 'mongoose';
+import { 
   isDateAfter, 
   URL_REGEX, 
   isPositiveAmount,
   isValidFooterNotes
-} = require('../utils/validators');
+} from '../utils/validators.js';
 
-const clientSchema = require('./schemas/client');
-const itemSchema = require('./schemas/item');
-const companyInfoSchema = require('./schemas/companyInfo');
-const customFieldSchema = require('./schemas/customField');
-const bankDetailsSchema = require('./schemas/bankDetails');
-const { INVOICE_STATUS, PAYMENT_METHOD, DISCOUNT_TYPE } = require('./constants/enums');
+import clientSchema from './schemas/client.js';
+import itemSchema from './schemas/item.js';
+import companyInfoSchema from './schemas/companyInfo.js';
+import customFieldSchema from './schemas/customField.js';
+import bankDetailsSchema from './schemas/bankDetails.js';
+import { INVOICE_STATUS, PAYMENT_METHOD, DISCOUNT_TYPE } from './constants/enums.js';
 
 /**
  * Schéma principal de facture
@@ -295,4 +295,4 @@ invoiceSchema.statics.numberExistsForYear = async function(number, userId, year)
   return count > 0;
 };
 
-module.exports = mongoose.model('Invoice', invoiceSchema);
+export default mongoose.model('Invoice', invoiceSchema);

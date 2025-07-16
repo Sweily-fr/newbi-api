@@ -1,18 +1,18 @@
-const EmailSignature = require('../models/EmailSignature');
-const { isAuthenticated } = require('../middlewares/auth');
-const { 
+import EmailSignature from '../models/EmailSignature.js';
+import { isAuthenticated } from '../middlewares/auth.js';
+import { 
   createNotFoundError, 
   createAlreadyExistsError,
   createValidationError
-} = require('../utils/errors');
-const { saveEmailSignaturePhoto, deleteFile } = require('../utils/fileUpload');
-const { 
+} from '../utils/errors.js';
+import { saveEmailSignaturePhoto, deleteFile } from '../utils/fileUpload.js';
+import { 
   NAME_REGEX, 
   EMAIL_REGEX, 
   PHONE_REGEX, 
   PHONE_FR_REGEX, 
   URL_REGEX 
-} = require('../utils/validators');
+} from '../utils/validators.js';
 
 const emailSignatureResolvers = {
   Query: {
@@ -351,4 +351,4 @@ const emailSignatureResolvers = {
   }
 };
 
-module.exports = emailSignatureResolvers;
+export default emailSignatureResolvers;

@@ -1,12 +1,12 @@
-const mongoose = require('mongoose');
-const { DISCOUNT_TYPE } = require('../constants/enums');
-const { 
+import mongoose from 'mongoose';
+import { DISCOUNT_TYPE } from '../constants/enums.js';
+import { 
   isValidItemDescription, 
   isValidUnit, 
   isPositiveAmount, 
   isPositiveNonZeroAmount, 
   isValidPercentage 
-} = require('../../utils/validators');
+} from '../../utils/validators.js';
 
 /**
  * Schéma pour les éléments de facture/devis
@@ -98,4 +98,4 @@ const itemSchema = new mongoose.Schema({
   }
 });
 
-module.exports = itemSchema;
+export default itemSchema;

@@ -1,6 +1,6 @@
-const mongoose = require('mongoose');
-const { EMAIL_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } = require('../../utils/validators');
-const addressSchema = require('./address');
+import mongoose from 'mongoose';
+import { EMAIL_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } from '../../utils/validators.js';
+import addressSchema from './address.js';
 
 /**
  * Types de client
@@ -123,4 +123,4 @@ const clientSchema = new mongoose.Schema({
   }
 });
 
-module.exports = clientSchema;
+export default clientSchema;

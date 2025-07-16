@@ -41,7 +41,7 @@ const PAYMENT_METHOD = {
   OTHER: 'OTHER'
 };
 
-module.exports = {
+export {
   INVOICE_STATUS,
   QUOTE_STATUS,
   DISCOUNT_TYPE,

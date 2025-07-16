@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-const { isValidCustomFieldValue } = require('../../utils/validators');
+import mongoose from 'mongoose';
+import { isValidCustomFieldValue } from '../../utils/validators.js';
 
 /**
  * Schéma pour les champs personnalisés
@@ -26,4 +26,4 @@ const customFieldSchema = new mongoose.Schema({
   }
 });
 
-module.exports = customFieldSchema;
+export default customFieldSchema;

@@ -1,8 +1,8 @@
-const User = require('../models/User');
-const Invoice = require('../models/Invoice');
-const FileTransfer = require('../models/FileTransfer');
-const { AppError } = require('../utils/errors');
-const stripe = require('../utils/stripe'); // Importer la configuration Stripe
+import User from '../models/User.js';
+import Invoice from '../models/Invoice.js';
+import FileTransfer from '../models/FileTransfer.js';
+import { AppError } from '../utils/errors.js';
+import stripe from '../utils/stripe.js'; // Importer la configuration Stripe
 
 /**
  * Gère les événements webhook de Stripe
@@ -385,6 +385,6 @@ async function handleCheckoutSessionCompleted(session) {
   }
 }
 
-module.exports = {
+export {
   handleStripeWebhook
 };

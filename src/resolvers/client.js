@@ -1,12 +1,12 @@
-const Client = require('../models/Client');
-const Invoice = require('../models/Invoice');
-const Quote = require('../models/Quote');
-const { isAuthenticated } = require('../middlewares/auth');
-const { 
+import Client from '../models/Client.js';
+import Invoice from '../models/Invoice.js';
+import Quote from '../models/Quote.js';
+import { isAuthenticated } from '../middlewares/auth.js';
+import { 
   createNotFoundError, 
   createAlreadyExistsError,
   createResourceInUseError
-} = require('../utils/errors');
+} from '../utils/errors.js';
 
 const clientResolvers = {
   Query: {
@@ -171,4 +171,4 @@ const clientResolvers = {
   }
 };
 
-module.exports = clientResolvers;
+export default clientResolvers;

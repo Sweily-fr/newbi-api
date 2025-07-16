@@ -1,6 +1,6 @@
 // resolvers/kanban.js
-const { Board, Column, Task } = require('../models/kanban');
-const { AuthenticationError } = require('apollo-server-express');
+import { Board, Column, Task } from '../models/kanban.js';
+import { AuthenticationError } from 'apollo-server-express';
 
 const resolvers = {
   Query: {
@@ -272,4 +272,4 @@ const resolvers = {
   }
 };
 
-module.exports = resolvers;
+export default resolvers;

@@ -1,6 +1,6 @@
-const { AppError, ERROR_CODES } = require('../utils/errors');
-const logger = require('../utils/logger');
-const User = require('../models/User');
+import { AppError, ERROR_CODES } from '../utils/errors.js';
+import logger from '../utils/logger.js';
+import User from '../models/User.js';
 
 /**
  * Extrait le token de session depuis les cookies
@@ -125,7 +125,7 @@ const isAuthenticated = (resolver) => {
   };
 };
 
-module.exports = {
+export {
   betterAuthMiddleware,
   isAuthenticated
 };

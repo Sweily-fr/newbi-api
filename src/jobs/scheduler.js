@@ -2,9 +2,9 @@
  * Planificateur de tâches pour les jobs récurrents
  */
 
-const cron = require('node-cron');
-const { cleanupExpiredFiles } = require('./cleanupExpiredFiles');
-const logger = require('../utils/logger');
+import cron from 'node-cron';
+import { cleanupExpiredFiles } from './cleanupExpiredFiles.js';
+import logger from '../utils/logger.js';
 
 /**
  * Configure et démarre tous les jobs planifiés
@@ -24,6 +24,6 @@ function setupScheduledJobs() {
   logger.info('Jobs planifiés configurés avec succès');
 }
 
-module.exports = {
+export {
   setupScheduledJobs
 };

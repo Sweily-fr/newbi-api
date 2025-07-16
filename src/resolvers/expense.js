@@ -1,10 +1,10 @@
-const Expense = require('../models/Expense');
-const { UserInputError, ForbiddenError, ApolloError } = require('apollo-server-express');
-const mongoose = require('mongoose');
-const fs = require('fs');
-const path = require('path');
-const { promisify } = require('util');
-const { processFileWithOCR } = require('../utils/ocrProcessor');
+import Expense from '../models/Expense.js';
+import { UserInputError, ForbiddenError, ApolloError } from 'apollo-server-express';
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
+import { promisify } from 'util';
+import { processFileWithOCR } from '../utils/ocrProcessor.js';
 
 const unlinkAsync = promisify(fs.unlink);
 const mkdirAsync = promisify(fs.mkdir);
@@ -64,7 +64,7 @@ const saveUploadedFile = async (file, userId) => {
   });
 };
 
-module.exports = {
+const expenseResolvers = {
   Query: {
     // Récupérer une dépense par son ID
     expense: async (_, { id }, { user }) => {
@@ -525,8 +525,10 @@ module.exports = {
       }
       
       // Si les loaders ne sont pas disponibles, utiliser une méthode alternative
-      const User = require('../models/User');
+      const User = (await import('../models/User.js')).default;
       return User.findById(expense.createdBy);
     }
   }
 };
+
+export default expenseResolvers;

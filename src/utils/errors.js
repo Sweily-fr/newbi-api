@@ -1,39 +1,39 @@
 // Codes d'erreur standardisés
 const ERROR_CODES = {
   // Erreurs d'authentification
-  UNAUTHENTICATED: 'UNAUTHENTICATED',
-  UNAUTHORIZED: 'UNAUTHORIZED',
-  EMAIL_NOT_VERIFIED: 'EMAIL_NOT_VERIFIED',
-  ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
-  
+  UNAUTHENTICATED: "UNAUTHENTICATED",
+  UNAUTHORIZED: "UNAUTHORIZED",
+  EMAIL_NOT_VERIFIED: "EMAIL_NOT_VERIFIED",
+  ACCOUNT_DISABLED: "ACCOUNT_DISABLED",
+
   // Erreurs de validation
-  VALIDATION_ERROR: 'VALIDATION_ERROR',
-  INVALID_INPUT: 'INVALID_INPUT',
-  
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  INVALID_INPUT: "INVALID_INPUT",
+
   // Erreurs de ressources
-  NOT_FOUND: 'NOT_FOUND',
-  ALREADY_EXISTS: 'ALREADY_EXISTS',
-  RESOURCE_LOCKED: 'RESOURCE_LOCKED',
-  
+  NOT_FOUND: "NOT_FOUND",
+  ALREADY_EXISTS: "ALREADY_EXISTS",
+  RESOURCE_LOCKED: "RESOURCE_LOCKED",
+
   // Erreurs métier spécifiques
-  INVALID_STATUS_TRANSITION: 'INVALID_STATUS_TRANSITION',
-  DOCUMENT_ALREADY_CONVERTED: 'DOCUMENT_ALREADY_CONVERTED',
-  COMPANY_INFO_REQUIRED: 'COMPANY_INFO_REQUIRED',
-  RESOURCE_IN_USE: 'RESOURCE_IN_USE',
-  
+  INVALID_STATUS_TRANSITION: "INVALID_STATUS_TRANSITION",
+  DOCUMENT_ALREADY_CONVERTED: "DOCUMENT_ALREADY_CONVERTED",
+  COMPANY_INFO_REQUIRED: "COMPANY_INFO_REQUIRED",
+  RESOURCE_IN_USE: "RESOURCE_IN_USE",
+
   // Erreurs système
-  INTERNAL_ERROR: 'INTERNAL_ERROR',
-  DATABASE_ERROR: 'DATABASE_ERROR'
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+  DATABASE_ERROR: "DATABASE_ERROR",
 };
 
 // Classe d'erreur personnalisée pour GraphQL
 class AppError extends Error {
   constructor(message, code, details = null) {
     super(message);
-    this.name = 'AppError';
+    this.name = "AppError";
     this.code = code;
     this.details = details;
-    
+
     // Capture de la stack trace
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, AppError);
@@ -43,16 +43,14 @@ class AppError extends Error {
 
 // Fonctions d'aide pour créer des erreurs spécifiques
 const createNotFoundError = (resource) => {
-  return new AppError(
-    `${resource} non trouvé`,
-    ERROR_CODES.NOT_FOUND,
-    { resource }
-  );
+  return new AppError(`${resource} non trouvé`, ERROR_CODES.NOT_FOUND, {
+    resource,
+  });
 };
 
 const createValidationError = (message, validationErrors) => {
   return new AppError(
-    message || 'Erreur de validation',
+    message || "Erreur de validation",
     ERROR_CODES.VALIDATION_ERROR,
     validationErrors
   );
@@ -92,7 +90,7 @@ const createResourceInUseError = (resource, usedIn) => {
 
 const createInternalServerError = (message, details) => {
   return new AppError(
-    message || 'Erreur interne',
+    message || "Erreur interne",
     ERROR_CODES.INTERNAL_ERROR,
     details
   );
@@ -100,13 +98,13 @@ const createInternalServerError = (message, details) => {
 
 const createDatabaseError = (message, details) => {
   return new AppError(
-    message || 'Erreur de base de données',
+    message || "Erreur de base de données",
     ERROR_CODES.DATABASE_ERROR,
     details
   );
 };
 
-module.exports = {
+export {
   ERROR_CODES,
   AppError,
   createNotFoundError,
@@ -116,5 +114,5 @@ module.exports = {
   createResourceLockedError,
   createResourceInUseError,
   createInternalServerError,
-  createDatabaseError
+  createDatabaseError,
 };

@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-const crypto = require('crypto');
+import mongoose from 'mongoose';
+import crypto from 'crypto';
 
 // Regex pour valider les clés API Stripe
 // Format: sk_test_, sk_live_, pk_test_ ou pk_live_ suivi de caractères alphanumériques et underscores
@@ -125,4 +125,5 @@ integrationSchema.statics.decryptApiKey = function(encryptedData, iv) {
   }
 };
 
-module.exports = mongoose.model('Integration', integrationSchema);
+const Integration = mongoose.model('Integration', integrationSchema);
+export default Integration;

@@ -1,8 +1,8 @@
-const Integration = require('../models/Integration');
-const { AuthenticationError, UserInputError } = require('apollo-server-express');
-const stripe = require('stripe');
+import Integration from '../models/Integration.js';
+import { AuthenticationError, UserInputError } from 'apollo-server-express';
+import stripe from 'stripe';
 
-module.exports = {
+export default {
   Query: {
     /**
      * Récupérer toutes les intégrations de l'utilisateur connecté

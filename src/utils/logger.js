@@ -3,9 +3,9 @@
  * Permet de gérer les logs de manière cohérente dans toute l'application
  */
 
-const winston = require("winston");
-const path = require("path");
-const fs = require("fs");
+import winston from "winston";
+import path from "path";
+import fs from "fs";
 
 // Créer le dossier de logs s'il n'existe pas
 const logDir = path.join(process.cwd(), "logs");
@@ -56,4 +56,4 @@ const logger = winston.createLogger({
   exitOnError: false,
 });
 
-module.exports = logger;
+export default logger;

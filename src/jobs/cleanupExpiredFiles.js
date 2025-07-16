@@ -5,9 +5,9 @@
  * 2. Supprimer les fichiers physiques associés aux transferts expirés depuis plus de 48h
  */
 
-const FileTransfer = require('../models/FileTransfer');
-const { deleteFile } = require('../utils/fileTransferUtils');
-const logger = require('../utils/logger');
+import FileTransfer from '../models/FileTransfer.js';
+import { deleteFile } from '../utils/fileTransferUtils.js';
+import logger from '../utils/logger.js';
 
 /**
  * Marque les transferts de fichiers expirés comme tels
@@ -98,7 +98,7 @@ async function cleanupExpiredFiles() {
   }
 }
 
-module.exports = {
+export {
   cleanupExpiredFiles,
   markExpiredTransfers,
   deleteExpiredFiles

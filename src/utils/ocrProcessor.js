@@ -1,28 +1,33 @@
 /**
  * Utilitaire de traitement OCR pour extraire les informations des factures et reçus
  */
-const { createWorker } = require('tesseract.js');
-const fs = require('fs');
+import { createWorker } from "tesseract.js";
+import fs from "fs";
 
 // Expressions régulières pour extraire les informations courantes des factures
 const REGEX = {
   // Numéro de TVA (formats européens courants)
-  VAT_NUMBER: /(?:TVA|VAT|Tax ID|N° TVA|VAT Number|VAT No)[^\w]?[:\s]*([A-Z]{2}[0-9A-Z]{2,12})/i,
-  
+  VAT_NUMBER:
+    /(?:TVA|VAT|Tax ID|N° TVA|VAT Number|VAT No)[^\w]?[:\s]*([A-Z]{2}[0-9A-Z]{2,12})/i,
+
   // Numéro de facture
-  INVOICE_NUMBER: /(?:Facture|Invoice|Bill|N°)[^\w]?[:\s]*([A-Z0-9]{1,4}[-\s]?[0-9]{1,10})/i,
-  
+  INVOICE_NUMBER:
+    /(?:Facture|Invoice|Bill|N°)[^\w]?[:\s]*([A-Z0-9]{1,4}[-\s]?[0-9]{1,10})/i,
+
   // Date de facture (formats courants)
-  INVOICE_DATE: /(?:Date|Date de facture|Invoice date|Date d'émission)[^\w]?[:\s]*(\d{1,2}[-./]\d{1,2}[-./]\d{2,4}|\d{4}[-./]\d{1,2}[-./]\d{1,2})/i,
-  
+  INVOICE_DATE:
+    /(?:Date|Date de facture|Invoice date|Date d'émission)[^\w]?[:\s]*(\d{1,2}[-./]\d{1,2}[-./]\d{2,4}|\d{4}[-./]\d{1,2}[-./]\d{1,2})/i,
+
   // Montant total
-  TOTAL_AMOUNT: /(?:Total|Montant total|Total amount|Total TTC|Total \(TTC\))[^\w]?[:\s]*([0-9\s]+[,.][0-9]{2})/i,
-  
+  TOTAL_AMOUNT:
+    /(?:Total|Montant total|Total amount|Total TTC|Total \(TTC\))[^\w]?[:\s]*([0-9\s]+[,.][0-9]{2})/i,
+
   // Montant TVA
-  VAT_AMOUNT: /(?:TVA|VAT|Tax|Taxe|Montant TVA|VAT amount)[^\w]?[:\s]*([0-9\s]+[,.][0-9]{2})/i,
-  
+  VAT_AMOUNT:
+    /(?:TVA|VAT|Tax|Taxe|Montant TVA|VAT amount)[^\w]?[:\s]*([0-9\s]+[,.][0-9]{2})/i,
+
   // Devise
-  CURRENCY: /(?:€|\$|£|EUR|USD|GBP|CAD|CHF)/i
+  CURRENCY: /(?:€|\$|£|EUR|USD|GBP|CAD|CHF)/i,
 };
 
 /**
@@ -31,9 +36,7 @@ const REGEX = {
  * @returns {string} - Texte nettoyé
  */
 const cleanText = (text) => {
-  return text
-    .replace(/\s+/g, ' ')
-    .trim();
+  return text.replace(/\s+/g, " ").trim();
 };
 
 /**
@@ -43,18 +46,16 @@ const cleanText = (text) => {
  */
 const extractAmount = (amountStr) => {
   if (!amountStr) return null;
-  
+
   // Nettoyer la chaîne
-  const cleaned = amountStr
-    .replace(/\s/g, '')
-    .replace(/,/g, '.');
-  
+  const cleaned = amountStr.replace(/\s/g, "").replace(/,/g, ".");
+
   // Extraire le nombre
   const match = cleaned.match(/([0-9]+\.?[0-9]*)/);
   if (match && match[1]) {
     return parseFloat(match[1]);
   }
-  
+
   return null;
 };
 
@@ -64,20 +65,20 @@ const extractAmount = (amountStr) => {
  * @returns {string} - Code de devise (EUR par défaut)
  */
 const extractCurrency = (text) => {
-  if (text.includes('€') || text.match(/\bEUR\b/i)) {
-    return 'EUR';
-  } else if (text.includes('$') || text.match(/\bUSD\b/i)) {
-    return 'USD';
-  } else if (text.includes('£') || text.match(/\bGBP\b/i)) {
-    return 'GBP';
+  if (text.includes("€") || text.match(/\bEUR\b/i)) {
+    return "EUR";
+  } else if (text.includes("$") || text.match(/\bUSD\b/i)) {
+    return "USD";
+  } else if (text.includes("£") || text.match(/\bGBP\b/i)) {
+    return "GBP";
   } else if (text.match(/\bCAD\b/i)) {
-    return 'CAD';
+    return "CAD";
   } else if (text.match(/\bCHF\b/i)) {
-    return 'CHF';
+    return "CHF";
   }
-  
+
   // Par défaut, on suppose que c'est en euros
-  return 'EUR';
+  return "EUR";
 };
 
 /**
@@ -88,20 +89,22 @@ const extractCurrency = (text) => {
 const extractVendorName = (text) => {
   // Cette fonction est simplifiée et pourrait être améliorée avec des algorithmes plus avancés
   // Généralement, le nom du fournisseur est souvent en haut de la facture
-  
+
   // Diviser le texte en lignes
-  const lines = text.split('\n');
-  
+  const lines = text.split("\n");
+
   // Prendre les premières lignes non vides qui ne contiennent pas de mots clés comme "facture"
   for (let i = 0; i < Math.min(5, lines.length); i++) {
     const line = lines[i].trim();
-    if (line && 
-        line.length > 3 && 
-        !line.match(/facture|invoice|reçu|receipt|ticket|bill/i)) {
+    if (
+      line &&
+      line.length > 3 &&
+      !line.match(/facture|invoice|reçu|receipt|ticket|bill/i)
+    ) {
       return line;
     }
   }
-  
+
   return null;
 };
 
@@ -112,25 +115,28 @@ const extractVendorName = (text) => {
  */
 const extractVendorAddress = (text) => {
   // Cette fonction est simplifiée et pourrait être améliorée
-  
+
   // Recherche des motifs d'adresse (code postal, ville)
   const addressRegex = /\b\d{5}\s+[A-Za-z\s-]+\b/;
   const match = text.match(addressRegex);
-  
+
   if (match) {
     // Trouver la ligne contenant l'adresse et les lignes précédentes
-    const lines = text.split('\n');
-    const addressLineIndex = lines.findIndex(line => line.includes(match[0]));
-    
+    const lines = text.split("\n");
+    const addressLineIndex = lines.findIndex((line) => line.includes(match[0]));
+
     if (addressLineIndex > 0) {
       // Prendre la ligne de l'adresse et jusqu'à 2 lignes précédentes
       const startIndex = Math.max(0, addressLineIndex - 2);
-      return lines.slice(startIndex, addressLineIndex + 1).join(', ').trim();
+      return lines
+        .slice(startIndex, addressLineIndex + 1)
+        .join(", ")
+        .trim();
     }
-    
+
     return match[0];
   }
-  
+
   return null;
 };
 
@@ -141,21 +147,23 @@ const extractVendorAddress = (text) => {
  */
 const normalizeDate = (dateStr) => {
   if (!dateStr) return null;
-  
+
   // Remplacer les séparateurs par des tirets
-  const normalized = dateStr.replace(/[./]/g, '-');
-  
+  const normalized = dateStr.replace(/[./]/g, "-");
+
   // Différents formats possibles
   const formats = [
     // JJ-MM-AAAA
     {
       regex: /^(\d{1,2})-(\d{1,2})-(\d{4})$/,
-      formatter: (d, m, y) => `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+      formatter: (d, m, y) =>
+        `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`,
     },
     // AAAA-MM-JJ
     {
       regex: /^(\d{4})-(\d{1,2})-(\d{1,2})$/,
-      formatter: (y, m, d) => `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+      formatter: (y, m, d) =>
+        `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`,
     },
     // JJ-MM-AA
     {
@@ -163,11 +171,11 @@ const normalizeDate = (dateStr) => {
       formatter: (d, m, y) => {
         // Déterminer le siècle (20 ou 21)
         const fullYear = parseInt(y) > 50 ? `19${y}` : `20${y}`;
-        return `${fullYear}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-      }
-    }
+        return `${fullYear}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+      },
+    },
   ];
-  
+
   // Tester chaque format
   for (const format of formats) {
     const match = normalized.match(format.regex);
@@ -184,7 +192,7 @@ const normalizeDate = (dateStr) => {
       }
     }
   }
-  
+
   return null;
 };
 
@@ -198,47 +206,63 @@ const processFileWithOCR = async (filePath) => {
   if (!fs.existsSync(filePath)) {
     throw new Error(`Le fichier ${filePath} n'existe pas`);
   }
-  
+
   try {
     // Créer un worker Tesseract
-    const worker = await createWorker('fra+eng');
-    
+    const worker = await createWorker("fra+eng");
+
     // Reconnaissance du texte
     const { data } = await worker.recognize(filePath);
-    
+
     // Terminer le worker
     await worker.terminate();
-    
+
     // Texte extrait
     const text = data.text;
-    
+
     // Extraire les informations avec les regex
     const vatNumberMatch = text.match(REGEX.VAT_NUMBER);
     const invoiceNumberMatch = text.match(REGEX.INVOICE_NUMBER);
     const invoiceDateMatch = text.match(REGEX.INVOICE_DATE);
     const totalAmountMatch = text.match(REGEX.TOTAL_AMOUNT);
     const vatAmountMatch = text.match(REGEX.VAT_AMOUNT);
-    
+
     // Extraire le nom du fournisseur et l'adresse
     const vendorName = extractVendorName(text);
     const vendorAddress = extractVendorAddress(text);
-    
+
     // Extraire la devise
     const currency = extractCurrency(text);
-    
+
     // Calculer un score de confiance simple
     let confidenceScore = 0;
     let extractedFields = 0;
-    
-    if (vendorName) { confidenceScore += data.confidence / 100; extractedFields++; }
-    if (vatNumberMatch) { confidenceScore += data.confidence / 100; extractedFields++; }
-    if (invoiceNumberMatch) { confidenceScore += data.confidence / 100; extractedFields++; }
-    if (invoiceDateMatch) { confidenceScore += data.confidence / 100; extractedFields++; }
-    if (totalAmountMatch) { confidenceScore += data.confidence / 100; extractedFields++; }
-    
+
+    if (vendorName) {
+      confidenceScore += data.confidence / 100;
+      extractedFields++;
+    }
+    if (vatNumberMatch) {
+      confidenceScore += data.confidence / 100;
+      extractedFields++;
+    }
+    if (invoiceNumberMatch) {
+      confidenceScore += data.confidence / 100;
+      extractedFields++;
+    }
+    if (invoiceDateMatch) {
+      confidenceScore += data.confidence / 100;
+      extractedFields++;
+    }
+    if (totalAmountMatch) {
+      confidenceScore += data.confidence / 100;
+      extractedFields++;
+    }
+
     // Normaliser le score de confiance
-    confidenceScore = extractedFields > 0 ? confidenceScore / extractedFields : 0;
-    
+    confidenceScore =
+      extractedFields > 0 ? confidenceScore / extractedFields : 0;
+
     // Retourner les données extraites
     return {
       vendorName: vendorName,
@@ -250,14 +274,12 @@ const processFileWithOCR = async (filePath) => {
       vatAmount: vatAmountMatch ? extractAmount(vatAmountMatch[1]) : null,
       currency: currency,
       confidenceScore: confidenceScore,
-      rawExtractedText: cleanText(text)
+      rawExtractedText: cleanText(text),
     };
   } catch (error) {
-    console.error('Erreur lors du traitement OCR:', error);
+    console.error("Erreur lors du traitement OCR:", error);
     throw new Error(`Erreur lors du traitement OCR: ${error.message}`);
   }
 };
 
-module.exports = {
-  processFileWithOCR
-};
+export { processFileWithOCR };

@@ -1,12 +1,13 @@
-const path = require('path');
-const fs = require('fs');
-const FileTransfer = require('../models/FileTransfer');
-const { createZipArchive } = require('../utils/fileTransferUtils');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+import path from 'path';
+import fs from 'fs';
+import FileTransfer from '../models/FileTransfer.js';
+import { createZipArchive } from '../utils/fileTransferUtils.js';
+import Stripe from 'stripe';
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const logger = console; // Utilisation de console comme logger de base
 
 // Webhook Stripe pour les paiements
-exports.handleStripeWebhook = async (req, res) => {
+const handleStripeWebhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
   
@@ -83,7 +84,7 @@ exports.handleStripeWebhook = async (req, res) => {
 };
 
 // Télécharger un fichier individuel
-exports.downloadFile = async (req, res) => {
+const downloadFile = async (req, res) => {
   try {
     // Utiliser req.query pour les paramètres de requête
     const { link: shareLink, key: accessKey, fileId } = req.query;
@@ -201,7 +202,7 @@ exports.downloadFile = async (req, res) => {
 };
 
 // Télécharger tous les fichiers en tant qu'archive ZIP
-exports.downloadAllFiles = async (req, res) => {
+const downloadAllFiles = async (req, res) => {
   try {
     const { link: shareLink, key: accessKey } = req.query;
     
@@ -356,7 +357,7 @@ exports.downloadAllFiles = async (req, res) => {
 };
 
 // Valider un paiement
-exports.validatePayment = async (req, res) => {
+const validatePayment = async (req, res) => {
   try {
     const { shareLink, accessKey, sessionId } = req.query;
     
@@ -394,4 +395,12 @@ exports.validatePayment = async (req, res) => {
     console.error('Erreur lors de la validation du paiement:', error);
     res.status(500).send('Une erreur est survenue lors de la validation du paiement');
   }
+};
+
+
+export {
+  handleStripeWebhook,
+  downloadFile,
+  downloadAllFiles,
+  validatePayment
 };

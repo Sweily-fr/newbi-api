@@ -1,7 +1,7 @@
-const stripeConnectService = require('../services/stripeConnectService');
-const StripeConnectAccount = require('../models/StripeConnectAccount');
-const FileTransfer = require('../models/FileTransfer');
-const logger = require('../utils/logger');
+import stripeConnectService from '../services/stripeConnectService.js';
+import StripeConnectAccount from '../models/StripeConnectAccount.js';
+import FileTransfer from '../models/FileTransfer.js';
+import logger from '../utils/logger.js';
 
 const stripeConnectResolvers = {
   Query: {
@@ -166,4 +166,4 @@ const stripeConnectResolvers = {
   }
 };
 
-module.exports = stripeConnectResolvers;
+export default stripeConnectResolvers;

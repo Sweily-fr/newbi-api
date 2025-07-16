@@ -1,7 +1,7 @@
-const mongoose = require('mongoose');
-const { EMAIL_REGEX, PHONE_FR_REGEX, SIRET_REGEX, VAT_FR_REGEX, URL_REGEX, NAME_REGEX, CAPITAL_SOCIAL_REGEX, RCS_REGEX } = require('../../utils/validators');
-const addressSchema = require('./address');
-const bankDetailsSchema = require('./bankDetails');
+import mongoose from 'mongoose';
+import { EMAIL_REGEX, PHONE_FR_REGEX, SIRET_REGEX, VAT_FR_REGEX, URL_REGEX, NAME_REGEX, CAPITAL_SOCIAL_REGEX, RCS_REGEX } from '../../utils/validators.js';
+import addressSchema from './address.js';
+import bankDetailsSchema from './bankDetails.js';
 
 /**
  * Schéma pour les informations de l'entreprise
@@ -121,4 +121,4 @@ const companyInfoSchema = new mongoose.Schema({
   }
 });
 
-module.exports = companyInfoSchema;
+export default companyInfoSchema;

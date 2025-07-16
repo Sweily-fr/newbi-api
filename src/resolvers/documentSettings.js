@@ -1,7 +1,7 @@
-const DocumentSettings = require('../models/DocumentSettings');
-const { AuthenticationError, UserInputError } = require('apollo-server-express');
+import DocumentSettings from '../models/DocumentSettings.js';
+import { AuthenticationError, UserInputError } from 'apollo-server-express';
 
-module.exports = {
+export default {
   Query: {
     // Récupérer les paramètres d'un type de document (facture ou devis)
     getDocumentSettings: async (_, { documentType }, { user }) => {
