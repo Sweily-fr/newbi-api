@@ -252,6 +252,10 @@ const invoiceSchema = new mongoose.Schema({
     trim: true,
     sparse: true,
     index: true
+  },
+  sourceQuote: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Quote'
   }
 }, {
   timestamps: true
