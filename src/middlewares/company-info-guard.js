@@ -1,5 +1,5 @@
-const { AppError, ERROR_CODES } = require('../utils/errors');
-const logger = require('../utils/logger');
+import { AppError, ERROR_CODES } from '../utils/errors.js';
+import logger from '../utils/logger.js';
 
 /**
  * Vérifie si les informations d'entreprise de l'utilisateur sont complètes
@@ -101,8 +101,4 @@ const validateCompanyInfo = (user) => {
   return true;
 };
 
-module.exports = {
-  requireCompanyInfo,
-  isCompanyInfoComplete,
-  validateCompanyInfo
-};
+export { requireCompanyInfo, isCompanyInfoComplete, validateCompanyInfo };

@@ -1,21 +1,11 @@
-<<<<<<< HEAD
 import Invoice from '../models/Invoice.js';
 import User from '../models/User.js';
 import Quote from '../models/Quote.js';
 import { isAuthenticated } from '../middlewares/auth.js';
+import { requireCompanyInfo } from '../middlewares/company-info-guard.js';
 import { generateInvoiceNumber } from '../utils/documentNumbers.js';
 import mongoose from 'mongoose';
 import { 
-=======
-const Invoice = require('../models/Invoice');
-const User = require('../models/User');
-const Quote = require('../models/Quote');
-const { isAuthenticated } = require('../middlewares/auth');
-const { requireCompanyInfo } = require('../middlewares/company-info-guard');
-const { generateInvoiceNumber } = require('../utils/documentNumbers');
-const mongoose = require('mongoose');
-const { 
->>>>>>> joaquim/devisTools/form
   createNotFoundError, 
   createResourceLockedError,
   createStatusTransitionError,
