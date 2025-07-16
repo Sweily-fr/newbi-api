@@ -558,15 +558,33 @@ const invoiceResolvers = {
       }
       
       // Si la facture est liée à un devis, retirer le lien du devis
-      if (invoice.sourceQuote) {
-        const Quote = require('../models/Quote');
+      const Quote = require('../models/Quote');
+      let sourceQuoteId = invoice.sourceQuote;
+      
+      // Si sourceQuote n'existe pas, chercher le devis qui contient cette facture
+      if (!sourceQuoteId) {
+        console.log(`Facture ${invoice.number} sans sourceQuote, recherche du devis lié...`);
+        const quote = await Quote.findOne({ linkedInvoices: invoice._id });
+        if (quote) {
+          console.log(`Devis trouvé: ${quote.number}`);
+          sourceQuoteId = quote._id;
+          // Mettre à jour la facture avec le sourceQuote manquant
+          invoice.sourceQuote = sourceQuoteId;
+          await invoice.save();
+        }
+      }
+      
+      // Supprimer le lien du devis si un devis source a été trouvé
+      if (sourceQuoteId) {
+        console.log(`Suppression du lien entre la facture ${invoice.number} et le devis`);
         await Quote.updateOne(
-          { _id: invoice.sourceQuote },
+          { _id: sourceQuoteId },
           { $pull: { linkedInvoices: invoice._id } }
         );
       }
       
       await Invoice.deleteOne({ _id: id, createdBy: user.id });
+      console.log(`Facture ${invoice.number} supprimée avec succès`);
       return true;
     }),
 
@@ -906,18 +924,60 @@ const invoiceResolvers = {
     }),
 
     deleteLinkedInvoice: isAuthenticated(async (_, { id }, { user }) => {
+      console.log('Tentative de suppression de facture liée:', { invoiceId: id, userId: user.id });
+      
       const invoice = await Invoice.findOne({ _id: id, createdBy: user.id });
       
       if (!invoice) {
+        console.log('Facture non trouvée:', { invoiceId: id, userId: user.id });
         throw createNotFoundError('Facture liée');
       }
       
+      console.log('Facture trouvée:', {
+        id: invoice._id,
+        number: invoice.number,
+        status: invoice.status,
+        sourceQuote: invoice.sourceQuote,
+        hasSourceQuote: !!invoice.sourceQuote
+      });
+      
       // Vérifier que c'est bien une facture liée à un devis
-      if (!invoice.sourceQuote) {
-        throw createValidationError(
-          'Facture non liée',
-          { invoice: 'Cette facture n\'est pas liée à un devis' }
-        );
+      let sourceQuoteId = invoice.sourceQuote;
+      
+      if (!sourceQuoteId) {
+        console.log('Facture sans sourceQuote, recherche dans les devis...');
+        
+        // Essayer de trouver le devis qui contient cette facture dans ses linkedInvoices
+        const Quote = require('../models/Quote');
+        const quoteWithInvoice = await Quote.findOne({
+          linkedInvoices: invoice._id,
+          createdBy: user.id
+        });
+        
+        if (quoteWithInvoice) {
+          console.log('Devis source trouvé via linkedInvoices:', {
+            quoteId: quoteWithInvoice._id,
+            quoteNumber: `${quoteWithInvoice.prefix}${quoteWithInvoice.number}`
+          });
+          sourceQuoteId = quoteWithInvoice._id;
+          
+          // Mettre à jour la facture avec le sourceQuote manquant
+          await Invoice.updateOne(
+            { _id: invoice._id },
+            { sourceQuote: sourceQuoteId }
+          );
+          console.log('sourceQuote mis à jour pour la facture');
+        } else {
+          console.log('Erreur: Facture sans sourceQuote et non trouvée dans les devis:', {
+            invoiceId: invoice._id,
+            number: invoice.number,
+            purchaseOrderNumber: invoice.purchaseOrderNumber
+          });
+          throw createValidationError(
+            'Facture non liée',
+            { invoice: 'Cette facture n\'est pas liée à un devis' }
+          );
+        }
       }
       
       // Vérifier que la facture peut être supprimée
@@ -931,12 +991,23 @@ const invoiceResolvers = {
       // Retirer la facture de la liste des factures liées du devis
       const Quote = require('../models/Quote');
       await Quote.updateOne(
-        { _id: invoice.sourceQuote },
+        { _id: sourceQuoteId },
         { $pull: { linkedInvoices: invoice._id } }
       );
       
+      console.log('Facture retirée de la liste des factures liées du devis:', {
+        quoteId: sourceQuoteId,
+        invoiceId: invoice._id
+      });
+      
       // Supprimer la facture
       await Invoice.deleteOne({ _id: id, createdBy: user.id });
+      
+      console.log('Facture liée supprimée avec succès:', {
+        invoiceId: id,
+        invoiceNumber: invoice.number,
+        quoteId: sourceQuoteId
+      });
       
       return true;
     })
