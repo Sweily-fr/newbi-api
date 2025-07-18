@@ -162,14 +162,18 @@ const invoiceResolvers = {
 
   Mutation: {
     createInvoice: requireCompanyInfo(isAuthenticated(async (_, { input }, { user }) => {
-      // Récupérer les informations de l'entreprise de l'utilisateur
+      // Récupérer les informations actuelles de l'entreprise de l'utilisateur
       const userWithCompany = await User.findById(user.id);
-      if (!userWithCompany.company) {
-        throw new AppError(
-          'Vous devez configurer les informations de votre entreprise avant de créer une facture',
-          ERROR_CODES.VALIDATION_ERROR
-        );
+      if (!userWithCompany || !userWithCompany.company) {
+        throw new Error('Informations d\'entreprise non configurées');
       }
+      
+      // Debug: Vérifier les données de l'entreprise récupérées
+      console.log('Données entreprise récupérées:', {
+        hasCompany: !!userWithCompany.company,
+        hasBankDetails: !!(userWithCompany.company && userWithCompany.company.bankDetails),
+        bankDetails: userWithCompany.company?.bankDetails
+      });
 
       // Utiliser le préfixe fourni ou générer un préfixe par défaut
       const now = new Date();
@@ -454,9 +458,52 @@ const invoiceResolvers = {
         const month = String(now.getMonth() + 1).padStart(2, '0');
         const prefix = invoiceData.prefix || `F-${year}${month}-`;
         
-        // Générer le prochain numéro séquentiel
-        updateData.number = await generateInvoiceNumber(prefix, { userId: user.id, isPending: true });
+        // Générer le prochain numéro séquentiel (remplace tout numéro DRAFT existant)
+        // Trouver le dernier numéro utilisé pour cet utilisateur
+        const lastInvoice = await Invoice.findOne({
+          createdBy: user.id,
+          status: { $in: ['PENDING', 'COMPLETED'] },
+          number: { $regex: /^\d{6}$/ }, // Seulement les numéros numériques
+          $expr: { $eq: [{ $year: '$issueDate' }, year] }
+        }).sort({ number: -1 });
+        
+        let nextNumber = 1;
+        if (lastInvoice && lastInvoice.number) {
+          nextNumber = parseInt(lastInvoice.number) + 1;
+        }
+        
+        // Vérifier que ce numéro n'existe pas déjà et l'incrémenter si nécessaire
+        let attempts = 0;
+        let newNumber;
+        let numberExists = true;
+        
+        while (numberExists && attempts < 50) {
+          attempts++;
+          newNumber = String(nextNumber).padStart(6, '0');
+          
+          // Vérifier si ce numéro existe déjà pour cet utilisateur
+          const existingInvoice = await Invoice.findOne({
+            number: newNumber,
+            createdBy: user.id,
+            _id: { $ne: invoiceData._id } // Exclure la facture actuelle
+          });
+          
+          if (!existingInvoice) {
+            numberExists = false;
+          } else {
+            console.log(`⚠️ Numéro ${newNumber} déjà utilisé, tentative ${attempts}/50`);
+            nextNumber++; // Incrémenter pour la prochaine tentative
+          }
+        }
+        
+        if (numberExists) {
+          throw new Error(`Impossible de générer un numéro unique après ${attempts} tentatives`);
+        }
+        
+        updateData.number = newNumber;
         updateData.prefix = prefix;
+        
+        console.log(`🔄 Transition DRAFT->PENDING: Ancien numéro "${invoiceData.number}" remplacé par "${updateData.number}"`);
       }
       
       // Fusionner toutes les autres mises à jour
@@ -466,9 +513,10 @@ const invoiceResolvers = {
           if (key === 'number' && updatedInput[key] === invoiceData.number) {
             return; // Skip this field
           }
-          // Ne pas écraser le numéro si on vient de le générer pour la transition DRAFT->PENDING
+          // Ne JAMAIS écraser le numéro si on vient de le générer pour la transition DRAFT->PENDING
           if (key === 'number' && invoiceData.status === 'DRAFT' && updatedInput.status && updatedInput.status !== 'DRAFT') {
-            return; // Skip this field car déjà géré ci-dessus
+            console.log(`⚠️  Ignoré le numéro "${updatedInput[key]}" du frontend car transition DRAFT->PENDING détectée`);
+            return; // Skip this field car déjà géré ci-dessus avec un numéro séquentiel
           }
           // Préserver le numéro existant pour les brouillons qui restent en DRAFT
           if (key === 'number' && invoiceData.status === 'DRAFT' && (!updatedInput.status || updatedInput.status === 'DRAFT')) {
@@ -558,7 +606,7 @@ const invoiceResolvers = {
       }
       
       // Si la facture est liée à un devis, retirer le lien du devis
-      const Quote = require('../models/Quote');
+
       let sourceQuoteId = invoice.sourceQuote;
       
       // Si sourceQuote n'existe pas, chercher le devis qui contient cette facture
@@ -627,66 +675,60 @@ const invoiceResolvers = {
 
       // Si la facture passe de DRAFT à PENDING, générer un nouveau numéro séquentiel
       if (invoice.status === 'DRAFT' && status === 'PENDING') {
-        // Conserver l'ancien préfixe ou utiliser le préfixe standard
+        console.log(`🔄 Transition DRAFT->PENDING: Ancien numéro "${invoice.number}"`);
+        
+        // Générer un nouveau numéro séquentiel avec retry logic
         const now = new Date();
         const year = now.getFullYear();
         const month = String(now.getMonth() + 1).padStart(2, '0');
-        const prefix = invoice.prefix || `F-${year}${month}-`;
+        const prefix = `F-${year}${month}-`;
         
-        // Toujours générer un nouveau numéro séquentiel par rapport aux factures PENDING/COMPLETED
-        // Nous passons quand même le numéro actuel comme manualNumber au cas où ce serait la première facture
-        const newNumber = await generateInvoiceNumber(prefix, {
-          manualNumber: invoice.number,
-          isPending: true,
-          userId: user.id
-        });
+        let newNumber;
+        let attempts = 0;
+        const maxAttempts = 10;
         
-        // Vérifier si une autre facture en brouillon existe avec ce numéro
-        const conflictingDraft = await Invoice.findOne({
-          _id: { $ne: invoice._id },
-          prefix,
-          number: newNumber,
-          status: 'DRAFT',
-          createdBy: user.id
-        });
-        
-        if (conflictingDraft) {
-          // Au lieu de modifier le préfixe, générer un nouveau numéro pour la facture en conflit
-          // Trouver le dernier numéro de brouillon avec ce préfixe
-          const lastDraftNumber = await Invoice.findOne({
-            prefix,
-            status: 'DRAFT',
-            createdBy: user.id
-          }).sort({ number: -1 });
+        while (attempts < maxAttempts) {
+          attempts++;
           
-          // Générer un nouveau numéro pour le brouillon en conflit
-          let newDraftNumber;
-          if (lastDraftNumber) {
-            // Ajouter un suffixe -DRAFT au numéro existant
-            newDraftNumber = `${newNumber}-DRAFT`;
-          } else {
-            newDraftNumber = `DRAFT-${Math.floor(Math.random() * 10000)}`;
-          }
-          
-          // Vérifier que le nouveau numéro n'existe pas déjà
-          const existingWithNewNumber = await Invoice.findOne({
-            prefix,
-            number: newDraftNumber,
-            createdBy: user.id
+          // Générer le numéro de base
+          const baseNumber = await generateInvoiceNumber(prefix, {
+            isPending: true,
+            userId: user.id
           });
           
-          if (existingWithNewNumber) {
-            // Si le numéro existe déjà, ajouter un timestamp
-            newDraftNumber = `DRAFT-${Date.now().toString().slice(-6)}`;
-          }
+          // Incrémenter le numéro si ce n'est pas la première tentative
+          const numberPart = parseInt(baseNumber, 10);
+          const incrementedNumber = String(numberPart + attempts - 1).padStart(6, '0');
           
-          // Mettre à jour la facture en conflit
-          conflictingDraft.number = newDraftNumber;
-          await conflictingDraft.save();
+          // Vérifier si ce numéro existe déjà
+          const existingInvoice = await Invoice.findOne({
+            $expr: {
+              $and: [
+                { $eq: ['$number', incrementedNumber] },
+                { $eq: ['$createdBy', user.id] },
+                { $eq: [{ $year: '$issueDate' }, year] }
+              ]
+            }
+          });
+          
+          if (!existingInvoice) {
+            newNumber = incrementedNumber;
+            console.log(`✅ Numéro unique trouvé: "${newNumber}" après ${attempts} tentative(s)`);
+            break;
+          } else {
+            console.log(`⚠️ Numéro ${incrementedNumber} déjà utilisé, tentative ${attempts}/${maxAttempts}`);
+          }
         }
         
-        // Mettre à jour le numéro de la facture actuelle
+        if (!newNumber) {
+          throw new Error('Impossible de générer un numéro unique après ' + maxAttempts + ' tentatives');
+        }
+        
+        // Mettre à jour le numéro et le préfixe de la facture
         invoice.number = newNumber;
+        invoice.prefix = prefix;
+        
+        console.log(`🔄 Transition DRAFT->PENDING: Ancien numéro "${invoice.number}" remplacé par "${newNumber}"`);
       }
 
       invoice.status = status;
@@ -760,6 +802,26 @@ const invoiceResolvers = {
       if (!quote) {
         throw createNotFoundError('Devis');
       }
+
+      // Récupérer les informations actuelles de l'entreprise
+      const userWithCompany = await User.findById(user.id);
+      if (!userWithCompany.company) {
+        throw new AppError(
+          'Vous devez configurer les informations de votre entreprise avant de créer une facture',
+          ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+      
+      // Debug: Vérifier les données de l'entreprise dans createLinkedInvoice
+      console.log('Données entreprise dans createLinkedInvoice:', {
+        hasCompany: !!userWithCompany.company,
+        companyName: userWithCompany.company?.name,
+        siret: userWithCompany.company?.siret,
+        vatNumber: userWithCompany.company?.vatNumber,
+        companyStatus: userWithCompany.company?.companyStatus,
+        hasBankDetails: !!(userWithCompany.company && userWithCompany.company.bankDetails),
+        bankDetails: userWithCompany.company?.bankDetails
+      });
 
       // Vérifier que le devis est accepté
       if (quote.status !== 'COMPLETED') {
@@ -860,7 +922,23 @@ const invoiceResolvers = {
         issueDate: new Date(),
         dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 jours par défaut
         client: quote.client,
-        companyInfo: quote.companyInfo,
+        // S'assurer que les champs SIRET et numéro de TVA sont correctement copiés depuis les informations de l'utilisateur
+        companyInfo: {
+          // Copier les propriétés de base de l'entreprise
+          name: userWithCompany.company.name || '',
+          email: userWithCompany.company.email || '',
+          phone: userWithCompany.company.phone || '',
+          website: userWithCompany.company.website || '',
+          address: userWithCompany.company.address || {},
+          // Copier les propriétés légales au premier niveau comme attendu par le schéma companyInfoSchema
+          siret: userWithCompany.company.siret || '',
+          vatNumber: userWithCompany.company.vatNumber || '',
+          companyStatus: userWithCompany.company.companyStatus || 'AUTRE',
+          // Autres propriétés si nécessaire
+          logo: userWithCompany.company.logo || '',
+          // Copier les coordonnées bancaires si elles existent
+          bankDetails: userWithCompany.company.bankDetails || {}
+        },
         sourceQuote: quote._id,
         
         // Créer un article unique avec le montant spécifié
@@ -899,6 +977,29 @@ const invoiceResolvers = {
         // Forcer le montant exact si nécessaire
         invoice.finalTotalTTC = numericAmount;
       }
+
+      // Debug: Vérifier les coordonnées bancaires avant nettoyage
+      console.log('Coordonnées bancaires avant nettoyage:', {
+        hasBankDetails: !!(invoice.companyInfo && invoice.companyInfo.bankDetails),
+        bankDetails: invoice.companyInfo?.bankDetails
+      });
+
+      // Nettoyer les coordonnées bancaires si elles sont invalides
+      if (invoice.companyInfo && invoice.companyInfo.bankDetails) {
+        const { iban, bic, bankName } = invoice.companyInfo.bankDetails;
+        console.log('Vérification des champs bancaires:', { iban: !!iban, bic: !!bic, bankName: !!bankName });
+        
+        // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
+        if (!iban || !bic || !bankName) {
+          console.log('Suppression des coordonnées bancaires invalides');
+          delete invoice.companyInfo.bankDetails;
+        }
+      }
+
+      console.log('Coordonnées bancaires après nettoyage:', {
+        hasBankDetails: !!(invoice.companyInfo && invoice.companyInfo.bankDetails),
+        bankDetails: invoice.companyInfo?.bankDetails
+      });
 
       // Sauvegarder la facture
       await invoice.save();
@@ -948,7 +1049,7 @@ const invoiceResolvers = {
         console.log('Facture sans sourceQuote, recherche dans les devis...');
         
         // Essayer de trouver le devis qui contient cette facture dans ses linkedInvoices
-        const Quote = require('../models/Quote');
+  
         const quoteWithInvoice = await Quote.findOne({
           linkedInvoices: invoice._id,
           createdBy: user.id
@@ -989,7 +1090,7 @@ const invoiceResolvers = {
       }
       
       // Retirer la facture de la liste des factures liées du devis
-      const Quote = require('../models/Quote');
+
       await Quote.updateOne(
         { _id: sourceQuoteId },
         { $pull: { linkedInvoices: invoice._id } }

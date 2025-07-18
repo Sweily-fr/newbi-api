@@ -533,7 +533,7 @@ const quoteResolvers = {
         const prefix = quote.prefix || `D-${year}${month}-`;
         
         // Générer un nouveau numéro séquentiel par rapport aux devis PENDING/COMPLETED/CANCELED
-        const { generateQuoteNumber } = require('../utils/documentNumbers');
+
         const newNumber = await generateQuoteNumber(prefix, {
           manualNumber: quote.number,
           isPending: true,
@@ -699,6 +699,15 @@ const quoteResolvers = {
       
       // Cette section a été déplacée plus haut
       
+      // Récupérer les informations actuelles de l'entreprise
+      const userWithCompany = await User.findById(user.id);
+      if (!userWithCompany.company) {
+        throw new AppError(
+          'Vous devez configurer les informations de votre entreprise avant de créer une facture',
+          ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+
       // Créer les factures selon la répartition
       const createdInvoices = [];
       let mainInvoice = null;
@@ -742,7 +751,23 @@ const quoteResolvers = {
           number,
           prefix,
           client: quote.client,
-          companyInfo: quote.companyInfo,
+          // S'assurer que les champs SIRET et numéro de TVA sont correctement copiés depuis les informations actuelles de l'utilisateur
+          companyInfo: {
+            // Copier les propriétés de base de l'entreprise
+            name: userWithCompany.company.name || '',
+            email: userWithCompany.company.email || '',
+            phone: userWithCompany.company.phone || '',
+            website: userWithCompany.company.website || '',
+            address: userWithCompany.company.address || {},
+            // Copier les propriétés légales au premier niveau comme attendu par le schéma companyInfoSchema
+            siret: userWithCompany.company.siret || '',
+            vatNumber: userWithCompany.company.vatNumber || '',
+            companyStatus: userWithCompany.company.companyStatus || 'AUTRE',
+            // Autres propriétés si nécessaire
+            logo: userWithCompany.company.logo || '',
+            // Copier les coordonnées bancaires si elles existent
+            bankDetails: userWithCompany.company.bankDetails || {}
+          },
           items: quote.items, // Note: les items ne sont pas répartis, ils sont tous inclus dans chaque facture
           status: 'DRAFT', // Toujours créer en brouillon pour permettre les modifications
           issueDate: new Date(),
@@ -771,6 +796,16 @@ const quoteResolvers = {
               ? `Facture partielle ${i+1}/${invoiceCount} (${invoiceDistribution[i]}% du montant total)` 
               : ''
         });
+        
+        // Nettoyer les coordonnées bancaires si elles sont invalides
+        if (invoice.companyInfo && invoice.companyInfo.bankDetails) {
+          const { iban, bic, bankName } = invoice.companyInfo.bankDetails;
+          
+          // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
+          if (!iban || !bic || !bankName) {
+            delete invoice.companyInfo.bankDetails;
+          }
+        }
         
         await invoice.save();
         createdInvoices.push(invoice);

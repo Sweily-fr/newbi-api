@@ -29,6 +29,7 @@ type Invoice {
   finalTotalTTC: Float!
   customFields: [CustomField!]
   discountAmount: Float
+  showBankDetails: Boolean
   createdBy: User!
   stripeInvoiceId: String
   createdAt: String!
@@ -66,6 +67,8 @@ input CreateInvoiceInput {
   number: String
   prefix: String
   purchaseOrderNumber: String
+  showBankDetails: Boolean
+  bankDetails: BankDetailsInput
 }
 
 input UpdateInvoiceInput {
@@ -88,6 +91,8 @@ input UpdateInvoiceInput {
   number: String
   prefix: String
   purchaseOrderNumber: String
+  showBankDetails: Boolean
+  bankDetails: BankDetailsInput
 }
 
 extend type Query {
