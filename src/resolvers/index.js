@@ -16,6 +16,7 @@ import fileTransferResolvers from './fileTransfer.js';
 import stripeConnectResolvers from './stripeConnectResolvers.js';
 import kanbanResolvers from './kanban.js';
 import chunkUploadResolvers from './chunkUpload.js';
+import imageUploadResolvers from './imageUpload.js';
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -34,7 +35,8 @@ const resolvers = mergeResolvers([
   fileTransferResolvers,
   stripeConnectResolvers,
   kanbanResolvers,
-  chunkUploadResolvers
+  chunkUploadResolvers,
+  imageUploadResolvers
 ]);
 
 export default resolvers;
