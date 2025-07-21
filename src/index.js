@@ -115,7 +115,7 @@ async function startServer() {
       },
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "Accept", "Range"],
+      allowedHeaders: ["Content-Type", "Authorization", "Accept", "Range", "apollo-require-preflight"],
       exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
     })
   );
@@ -126,7 +126,7 @@ async function startServer() {
     res.header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
     res.header(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, Range"
+      "Content-Type, Authorization, Range, apollo-require-preflight"
     );
     res.header(
       "Access-Control-Expose-Headers",
@@ -201,7 +201,7 @@ async function startServer() {
     res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.header(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, Range"
+      "Content-Type, Authorization, Range, apollo-require-preflight"
     );
     res.header(
       "Access-Control-Expose-Headers",

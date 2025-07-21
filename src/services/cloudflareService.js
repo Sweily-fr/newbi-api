@@ -9,17 +9,17 @@ import path from 'path';
 
 class CloudflareService {
   constructor() {
-    // Configuration Cloudflare R2 (compatible S3)
+    // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
       region: 'auto',
-      endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      endpoint: process.env.AWS_S3_API_URL,
       credentials: {
-        accessKeyId: process.env.CLOUDFLARE_R2_ACCESS_KEY_ID,
-        secretAccessKey: process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY,
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
       },
     });
     
-    this.bucketName = process.env.CLOUDFLARE_R2_BUCKET_NAME || 'newbi-signatures';
+    this.bucketName = process.env.AWS_S3_BUCKET_NAME || 'newbi-signatures';
     this.publicUrl = process.env.CLOUDFLARE_R2_PUBLIC_URL; // URL publique de votre domaine custom
   }
 
@@ -57,14 +57,12 @@ class CloudflareService {
 
       await this.client.send(command);
 
-      // Construire l'URL publique
-      const publicUrl = this.publicUrl 
-        ? `${this.publicUrl}/${key}`
-        : `https://${this.bucketName}.${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/${key}`;
+      // Générer une URL signée temporaire (24h) pour l'accès aux images
+      const signedUrl = await this.getSignedUrl(key, 86400); // 24 heures
 
       return {
         key,
-        url: publicUrl,
+        url: signedUrl,
         contentType,
       };
     } catch (error) {
@@ -74,16 +72,15 @@ class CloudflareService {
   }
 
   /**
-   * Récupère l'URL publique d'une image
+   * Récupère l'URL signée d'une image
    * @param {string} key - Clé de l'image dans R2
-   * @returns {string}
+   * @param {number} expiresIn - Durée de validité en secondes (défaut: 24h)
+   * @returns {Promise<string>}
    */
-  getImageUrl(key) {
+  async getImageUrl(key, expiresIn = 86400) {
     if (!key) return null;
     
-    return this.publicUrl 
-      ? `${this.publicUrl}/${key}`
-      : `https://${this.bucketName}.${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/${key}`;
+    return await this.getSignedUrl(key, expiresIn);
   }
 
   /**

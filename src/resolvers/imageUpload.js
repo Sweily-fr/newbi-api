@@ -2,12 +2,12 @@
  * Resolvers GraphQL pour l'upload d'images vers Cloudflare
  */
 
-import { GraphQLUpload } from 'graphql-upload-minimal';
+import { GraphQLUpload } from 'graphql-upload';
 import { isAuthenticated } from '../middlewares/auth.js';
 import cloudflareService from '../services/cloudflareService.js';
 import { 
   createValidationError,
-  createInternalError 
+  createInternalServerError 
 } from '../utils/errors.js';
 
 const imageUploadResolvers = {
@@ -103,7 +103,7 @@ const imageUploadResolvers = {
           throw error;
         }
         
-        throw createInternalError('Erreur lors de l\'upload de l\'image');
+        throw createInternalServerError('Erreur lors de l\'upload de l\'image');
       }
     }),
 
@@ -130,7 +130,7 @@ const imageUploadResolvers = {
 
       } catch (error) {
         console.error('Erreur suppression image signature:', error);
-        throw createInternalError('Erreur lors de la suppression de l\'image');
+        throw createInternalServerError('Erreur lors de la suppression de l\'image');
       }
     }),
 
@@ -159,7 +159,7 @@ const imageUploadResolvers = {
 
       } catch (error) {
         console.error('Erreur génération URL signée:', error);
-        throw createInternalError('Erreur lors de la génération de l\'URL signée');
+        throw createInternalServerError('Erreur lors de la récupération de l\'URL de l\'image');
       }
     }),
   },
