@@ -2,11 +2,11 @@
   "name": "graphql-api",
   "version": "1.0.0",
   "description": "API GraphQL pour la gestion de factures et devis",
-  "main": "src/index.js",
+  "main": "src/server.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
     "test": "jest",
     "lint": "eslint src/**/*.js"
   },

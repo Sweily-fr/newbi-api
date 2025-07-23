@@ -4,7 +4,7 @@
 
 import { GraphQLUpload } from 'graphql-upload';
 import { isAuthenticated } from '../middlewares/auth.js';
-import cloudflareService from '../services/cloudflareService.js';
+import * as cloudflareService from '../services/cloudflareService.js';
 import { 
   createValidationError,
   createInternalServerError 
@@ -28,7 +28,7 @@ const imageUploadResolvers = {
           throw createValidationError('Accès non autorisé à cette image');
         }
 
-        const url = cloudflareService.getImageUrl(key);
+        const url = await cloudflareService.getFileUrl(key);
         
         return {
           key,
@@ -55,14 +55,16 @@ const imageUploadResolvers = {
           throw createValidationError('Type d\'image invalide. Utilisez "profile" ou "company"');
         }
 
-        // Validation du nom de fichier
-        if (!cloudflareService.isValidImageFile(filename)) {
-          throw createValidationError('Format d\'image non supporté. Utilisez JPG, PNG, GIF ou WebP');
-        }
-
         // Validation du MIME type
         if (!mimetype.startsWith('image/')) {
           throw createValidationError('Le fichier doit être une image');
+        }
+
+        // Validation du format de fichier
+        const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+        const fileExtension = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+        if (!allowedExtensions.includes(fileExtension)) {
+          throw createValidationError('Format d\'image non supporté. Utilisez JPG, PNG, GIF ou WebP');
         }
 
         // Lire le fichier en buffer
@@ -75,15 +77,22 @@ const imageUploadResolvers = {
         
         const fileBuffer = Buffer.concat(chunks);
 
-        // Validation de la taille
-        if (!cloudflareService.isValidFileSize(fileBuffer)) {
+        // Validation de la taille (max 5MB)
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        if (fileBuffer.length > maxSize) {
           throw createValidationError('L\'image est trop volumineuse (max 5MB)');
         }
 
+        // Créer l'objet file pour le service Cloudflare
+        const fileObject = {
+          buffer: fileBuffer,
+          originalname: filename,
+          mimetype: mimetype
+        };
+
         // Upload vers Cloudflare
-        const result = await cloudflareService.uploadImage(
-          fileBuffer,
-          filename,
+        const result = await cloudflareService.uploadFile(
+          fileObject,
           user.id,
           imageType
         );
@@ -92,14 +101,13 @@ const imageUploadResolvers = {
           success: true,
           key: result.key,
           url: result.url,
-          contentType: result.contentType,
           message: 'Image uploadée avec succès',
         };
 
       } catch (error) {
         console.error('Erreur upload image signature:', error);
         
-        if (error.message.includes('Validation')) {
+        if (error.message.includes('Validation') || error.message.includes('invalide') || error.message.includes('volumineuse')) {
           throw error;
         }
         
@@ -121,7 +129,7 @@ const imageUploadResolvers = {
           throw createValidationError('Accès non autorisé à cette image');
         }
 
-        const success = await cloudflareService.deleteImage(key);
+        const success = await cloudflareService.deleteFile(key);
 
         return {
           success,
@@ -148,7 +156,7 @@ const imageUploadResolvers = {
           throw createValidationError('Accès non autorisé à cette image');
         }
 
-        const signedUrl = await cloudflareService.getSignedUrl(key, expiresIn);
+        const signedUrl = await cloudflareService.getFileUrl(key);
 
         return {
           success: true,
