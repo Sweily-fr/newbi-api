@@ -4,11 +4,24 @@
 
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import crypto from 'crypto';
 import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import dotenv from 'dotenv';
+import crypto from 'crypto';
+
+// Charger les variables d'environnement
+dotenv.config();
 
 class CloudflareService {
   constructor() {
+    // Debug: Vérifier les variables d'environnement
+    console.log('🔧 Configuration Cloudflare R2:');
+    console.log('  AWS_S3_BUCKET_NAME:', process.env.AWS_S3_BUCKET_NAME);
+    console.log('  AWS_S3_API_URL:', process.env.AWS_S3_API_URL);
+    console.log('  AWS_ACCESS_KEY_ID:', process.env.AWS_ACCESS_KEY_ID ? '✅ Définie' : '❌ Manquante');
+    console.log('  AWS_SECRET_ACCESS_KEY:', process.env.AWS_SECRET_ACCESS_KEY ? '✅ Définie' : '❌ Manquante');
+    console.log('  AWS_R2_PUBLIC_URL:', process.env.AWS_R2_PUBLIC_URL);
+    
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
       region: 'auto',
@@ -19,8 +32,13 @@ class CloudflareService {
       },
     });
     
-    this.bucketName = process.env.AWS_S3_BUCKET_NAME || 'newbi-signatures';
-    this.publicUrl = process.env.CLOUDFLARE_R2_PUBLIC_URL; // URL publique de votre domaine custom
+    this.bucketName = process.env.AWS_S3_BUCKET_NAME;
+    this.publicUrl = process.env.AWS_R2_PUBLIC_URL || process.env.CLOUDFLARE_R2_PUBLIC_URL; // URL publique de votre domaine custom
+    
+    if (!this.bucketName) {
+      console.error('❌ ERREUR: AWS_S3_BUCKET_NAME n\'est pas définie!');
+      throw new Error('Configuration manquante: AWS_S3_BUCKET_NAME');
+    }
   }
 
   /**
@@ -57,12 +75,37 @@ class CloudflareService {
 
       await this.client.send(command);
 
-      // Générer une URL signée temporaire (24h) pour l'accès aux images
-      const signedUrl = await this.getSignedUrl(key, 86400); // 24 heures
+      // Générer l'URL appropriée selon la configuration
+      let imageUrl;
+      
+      // Utilisation directe des URLs publiques Cloudflare R2
+      if (process.env.AWS_R2_PUBLIC_URL && process.env.AWS_R2_PUBLIC_URL !== 'your_r2_public_url') {
+        imageUrl = `${process.env.AWS_R2_PUBLIC_URL}/${key}`;
+        console.log('🌐 URL publique Cloudflare R2 générée:', imageUrl);
+      } else {
+        // Fallback sur le proxy backend si pas d'URL publique configurée
+        console.log('🔗 Pas d\'URL publique configurée, utilisation du proxy pour:', key);
+        
+        const keyParts = key.split('/');
+        if (keyParts.length >= 3 && keyParts[0] === 'signatures') {
+          const userId = keyParts[1];
+          const imageType = keyParts[2];
+          const filename = keyParts.slice(3).join('/');
+          
+          const baseUrl = process.env.BACKEND_URL || 'http://localhost:4000';
+          imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
+          
+          console.log('✅ URL proxy générée:', imageUrl);
+        } else {
+          // Dernier fallback sur URL signée
+          console.log('⚠️ Structure de clé inattendue, fallback sur URL signée');
+          imageUrl = await this.getSignedUrl(key, 86400);
+        }
+      }
 
       return {
         key,
-        url: signedUrl,
+        url: imageUrl,
         contentType,
       };
     } catch (error) {
@@ -72,15 +115,21 @@ class CloudflareService {
   }
 
   /**
-   * Récupère l'URL signée d'une image
+   * Récupère l'URL d'une image (publique ou signée selon la configuration)
    * @param {string} key - Clé de l'image dans R2
-   * @param {number} expiresIn - Durée de validité en secondes (défaut: 24h)
+   * @param {number} expiresIn - Durée de validité en secondes pour URL signée (défaut: 24h)
    * @returns {Promise<string>}
    */
   async getImageUrl(key, expiresIn = 86400) {
     if (!key) return null;
     
-    return await this.getSignedUrl(key, expiresIn);
+    if (process.env.AWS_R2_PUBLIC_URL && process.env.AWS_R2_PUBLIC_URL !== 'your_r2_public_url') {
+      // Si URL publique configurée, utiliser l'URL publique directe
+      return `${process.env.AWS_R2_PUBLIC_URL}/${key}`;
+    } else {
+      // Sinon, générer une URL signée temporaire
+      return await this.getSignedUrl(key, expiresIn);
+    }
   }
 
   /**
@@ -91,12 +140,22 @@ class CloudflareService {
    */
   async getSignedUrl(key, expiresIn = 3600) {
     try {
+      console.log('🔗 Génération URL signée pour:', key);
+      
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
         Key: key,
       });
 
-      return await getSignedUrl(this.client, command, { expiresIn });
+      const signedUrl = await getSignedUrl(this.client, command, { 
+        expiresIn,
+        // Ajouter des paramètres spécifiques à Cloudflare R2
+        signableHeaders: new Set(['host']),
+        unhoistableHeaders: new Set(['x-amz-content-sha256'])
+      });
+      
+      console.log('✅ URL signée générée:', signedUrl.substring(0, 100) + '...');
+      return signedUrl;
     } catch (error) {
       console.error('Erreur génération URL signée:', error);
       throw new Error(`Échec de la génération d'URL signée: ${error.message}`);
