@@ -1,0 +1,22 @@
+"""
+Types GraphQL pour l'upload de documents vers Cloudflare
+"""
+
+type DocumentUploadResult {
+  success: Boolean!
+  key: String
+  url: String
+  contentType: String
+  fileName: String
+  fileSize: Int
+  message: String
+}
+
+extend type Mutation {
+  """
+  Upload un document vers Cloudflare R2
+  """
+  uploadDocument(
+    file: Upload!
+  ): DocumentUploadResult!
+}

@@ -46,6 +46,12 @@ input CustomFieldInput {
   value: String!
 }
 
+input AppearanceInput {
+  textColor: String
+  headerTextColor: String
+  headerBgColor: String
+}
+
 input CompanyInput {
   name: String
   email: String

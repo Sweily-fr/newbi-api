@@ -103,6 +103,14 @@ const userSchema = new mongoose.Schema({
     profilePicture: {
       type: String,
       trim: true
+    },
+    profilePictureUrl: {
+      type: String,
+      trim: true
+    },
+    profilePictureKey: {
+      type: String,
+      trim: true
     }
   },
   company: {

@@ -256,6 +256,23 @@ const invoiceSchema = new mongoose.Schema({
   sourceQuote: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Quote'
+  },
+  appearance: {
+    textColor: {
+      type: String,
+      default: '#000000',
+      trim: true
+    },
+    headerTextColor: {
+      type: String,
+      default: '#000000',
+      trim: true
+    },
+    headerBgColor: {
+      type: String,
+      default: '#f8f9fa',
+      trim: true
+    }
   }
 }, {
   timestamps: true

@@ -42,6 +42,23 @@ class CloudflareService {
   }
 
   /**
+   * Nettoie un nom de fichier pour les headers HTTP
+   * @param {string} fileName - Nom original du fichier
+   * @returns {string} - Nom de fichier nettoyé
+   */
+  sanitizeFileName(fileName) {
+    if (!fileName) return 'unknown';
+    
+    // Remplacer les caractères problématiques par des underscores
+    // et garder seulement les caractères alphanumériques, points, tirets et underscores
+    return fileName
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .replace(/_+/g, '_') // Remplacer les underscores multiples par un seul
+      .replace(/^_|_$/g, '') // Supprimer les underscores en début/fin
+      .substring(0, 100); // Limiter la longueur
+  }
+
+  /**
    * Upload une image vers Cloudflare R2
    * @param {Buffer} fileBuffer - Buffer de l'image
    * @param {string} fileName - Nom original du fichier
@@ -59,6 +76,11 @@ class CloudflareService {
       // Déterminer le content-type
       const contentType = this.getContentType(fileExtension);
 
+      // Nettoyer le nom de fichier pour les headers HTTP
+      const sanitizedFileName = this.sanitizeFileName(fileName);
+      console.log('📝 Nom de fichier original:', fileName);
+      console.log('🧹 Nom de fichier nettoyé:', sanitizedFileName);
+
       // Commande d'upload
       const command = new PutObjectCommand({
         Bucket: this.bucketName,
@@ -68,7 +90,7 @@ class CloudflareService {
         Metadata: {
           userId: userId,
           imageType: imageType,
-          originalName: fileName,
+          originalName: sanitizedFileName, // Utiliser le nom nettoyé
           uploadedAt: new Date().toISOString(),
         },
       });
@@ -195,6 +217,10 @@ class CloudflareService {
       '.gif': 'image/gif',
       '.webp': 'image/webp',
       '.svg': 'image/svg+xml',
+      '.pdf': 'application/pdf', // Support des PDF
+      '.tiff': 'image/tiff',
+      '.tif': 'image/tiff',
+      '.bmp': 'image/bmp',
     };
 
     return mimeTypes[extension] || 'application/octet-stream';
