@@ -67,6 +67,18 @@ const imageUploadTypeDefs = gql`
       key: String!
       expiresIn: Int = 3600
     ): SignedUrlResult!
+
+    """
+    Upload une image de profil utilisateur vers Cloudflare R2
+    """
+    uploadUserProfileImage(
+      file: Upload!
+    ): ImageUploadResult!
+
+    """
+    Supprime l'image de profil utilisateur de Cloudflare R2
+    """
+    deleteUserProfileImage: ImageDeleteResult!
   }
 `;
 

@@ -1,0 +1,53 @@
+"""
+Types GraphQL pour l'OCR avec Mistral
+"""
+
+type OcrResult {
+  success: Boolean!
+  extractedText: String
+  financialAnalysis: String
+  data: String
+  metadata: OcrMetadata
+  message: String
+}
+
+type OcrMetadata {
+  fileName: String
+  mimeType: String
+  fileSize: Int
+  processedAt: String
+  documentUrl: String
+  cloudflareKey: String
+  documentId: String
+}
+
+input OcrOptions {
+  model: String
+  pages: [Int!]
+  includeImageBase64: Boolean
+  imageLimit: Int
+  imageMinSize: Int
+  bboxAnnotationFormat: String
+  documentAnnotationFormat: String
+}
+
+extend type Mutation {
+  """
+  Effectue l'OCR sur un document avec l'API Mistral
+  """
+  processDocumentOcr(
+    file: Upload!
+    options: OcrOptions
+  ): OcrResult!
+
+  """
+  Effectue l'OCR sur un document déjà uploadé sur Cloudflare
+  """
+  processDocumentOcrFromUrl(
+    cloudflareUrl: String!
+    fileName: String!
+    mimeType: String!
+    fileSize: Int
+    options: OcrOptions
+  ): OcrResult!
+}

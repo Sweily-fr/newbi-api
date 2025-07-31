@@ -178,8 +178,15 @@ input UpdateExpenseInput {
 
 # Input pour le téléchargement de fichiers
 input FileUploadInput {
-  file: Upload!
+  file: Upload
   processOCR: Boolean = true
+  # Pour les fichiers déjà uploadés sur Cloudflare
+  cloudflareUrl: String
+  fileName: String
+  mimeType: String
+  fileSize: Int
+  ocrData: JSON
+  ocrDocumentId: String
 }
 
 # Input pour la mise à jour des métadonnées OCR
@@ -200,52 +207,52 @@ input OCRMetadataInput {
 extend type Query {
   # Récupérer une dépense par son ID
   expense(id: ID!): Expense!
-  
+
   # Récupérer une liste paginée de dépenses avec filtres
   expenses(
-    startDate: String, 
-    endDate: String, 
-    category: ExpenseCategory, 
-    status: ExpenseStatus, 
-    search: String, 
-    tags: [String!],
-    page: Int, 
+    startDate: String
+    endDate: String
+    category: ExpenseCategory
+    status: ExpenseStatus
+    search: String
+    tags: [String!]
+    page: Int
     limit: Int
   ): ExpensePagination!
-  
+
   # Récupérer les statistiques des dépenses
-  expenseStats(
-    startDate: String, 
-    endDate: String
-  ): ExpenseStats!
+  expenseStats(startDate: String, endDate: String): ExpenseStats!
 }
 
 # Mutations pour les dépenses
 extend type Mutation {
   # Créer une nouvelle dépense
   createExpense(input: CreateExpenseInput!): Expense!
-  
+
   # Mettre à jour une dépense existante
   updateExpense(id: ID!, input: UpdateExpenseInput!): Expense!
-  
+
   # Supprimer une dépense
   deleteExpense(id: ID!): Boolean!
-  
+
   # Changer le statut d'une dépense
   changeExpenseStatus(id: ID!, status: ExpenseStatus!): Expense!
-  
+
   # Ajouter un fichier à une dépense
   addExpenseFile(expenseId: ID!, input: FileUploadInput!): Expense!
-  
+
   # Supprimer un fichier d'une dépense
   removeExpenseFile(expenseId: ID!, fileId: ID!): Expense!
-  
+
   # Mettre à jour les métadonnées OCR d'une dépense
-  updateExpenseOCRMetadata(expenseId: ID!, metadata: OCRMetadataInput!): Expense!
-  
+  updateExpenseOCRMetadata(
+    expenseId: ID!
+    metadata: OCRMetadataInput!
+  ): Expense!
+
   # Déclencher manuellement l'analyse OCR d'un fichier
   processExpenseFileOCR(expenseId: ID!, fileId: ID!): Expense!
-  
+
   # Appliquer les données OCR aux champs de la dépense
   applyOCRDataToExpense(expenseId: ID!): Expense!
 }

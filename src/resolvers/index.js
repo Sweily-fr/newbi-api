@@ -17,6 +17,8 @@ import stripeConnectResolvers from './stripeConnectResolvers.js';
 import kanbanResolvers from './kanban.js';
 import chunkUploadResolvers from './chunkUpload.js';
 import imageUploadResolvers from './imageUpload.js';
+import documentUploadResolvers from './documentUpload.js';
+import ocrResolvers from './ocr.js';
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -36,7 +38,9 @@ const resolvers = mergeResolvers([
   stripeConnectResolvers,
   kanbanResolvers,
   chunkUploadResolvers,
-  imageUploadResolvers
+  imageUploadResolvers,
+  documentUploadResolvers,
+  ocrResolvers
 ]);
 
 export default resolvers;

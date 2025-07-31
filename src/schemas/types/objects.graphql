@@ -46,6 +46,12 @@ type CustomField {
   value: String!
 }
 
+type Appearance {
+  textColor: String
+  headerTextColor: String
+  headerBgColor: String
+}
+
 type Company {
   name: String
   email: String
