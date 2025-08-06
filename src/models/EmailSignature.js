@@ -1,203 +1,81 @@
 import mongoose from 'mongoose';
-import { 
-  NAME_REGEX, 
-  EMAIL_REGEX, 
-  PHONE_REGEX, 
-  PHONE_FR_REGEX, 
-  URL_REGEX, 
-  STREET_REGEX
-} from '../utils/validators.js';
 
 /**
- * Schéma principal de la signature email
+ * Schéma principal de la signature email - Version 2025
+ * Compatible avec la nouvelle interface de configuration
  */
 const emailSignatureSchema = new mongoose.Schema({
-  name: {
+  // Informations de base
+  signatureName: {
     type: String,
     required: true,
     trim: true,
-    match: [NAME_REGEX, 'Veuillez fournir un nom valide']
-  },
-  fullName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  jobTitle: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  email: {
-    type: String,
-    required: true,
-    trim: true,
-    match: [EMAIL_REGEX, 'Veuillez fournir une adresse email valide']
-  },
-  phone: {
-    type: String,
-    trim: true,
-    match: [PHONE_REGEX, 'Veuillez fournir un numéro de téléphone valide (format international)']
-  },
-  mobilePhone: {
-    type: String,
-    trim: true,
-    match: [PHONE_FR_REGEX, 'Veuillez fournir un numéro de mobile valide (format français)']
-  },
-  website: {
-    type: String,
-    trim: true,
-    match: [URL_REGEX, 'Veuillez fournir une URL valide']
-  },
-  address: {
-    type: String,
-    trim: true,
-    match: [STREET_REGEX, 'Veuillez fournir une adresse valide']
-  },
-  companyName: {
-    type: String,
-    trim: true
-    // Suppression de la validation restrictive pour permettre des noms d'entreprise comme "Sweily45"
-    // match: [NAME_REGEX, 'Veuillez fournir un nom d\'entreprise valide']
-  },
-  socialLinks: {
-    linkedin: { 
-      type: String, 
-      trim: true,
-      match: [URL_REGEX, 'Veuillez fournir une URL LinkedIn valide']
-    },
-    twitter: { 
-      type: String, 
-      trim: true,
-      match: [URL_REGEX, 'Veuillez fournir une URL Twitter valide']
-    },
-    facebook: { 
-      type: String, 
-      trim: true,
-      match: [URL_REGEX, 'Veuillez fournir une URL Facebook valide']
-    },
-    instagram: { 
-      type: String, 
-      trim: true,
-      match: [URL_REGEX, 'Veuillez fournir une URL Instagram valide']
-    }
-  },
-  template: {
-    type: String,
-    enum: ['simple', 'professional', 'modern', 'creative'],
-    default: 'simple'
-  },
-  primaryColor: {
-    type: String,
-    default: '#5b50ff',
-    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
-  },
-  secondaryColor: {
-    type: String,
-    default: '#f5f5f5',
-    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
-  },
-  logoUrl: {
-    type: String,
-    trim: true
-  },
-  showLogo: {
-    type: Boolean,
-    default: true
-  },
-  profilePhotoUrl: {
-    type: String,
-    trim: true
-  },
-  profilePhotoSize: {
-    type: Number,
-    default: 80, // Taille par défaut en pixels
-    min: [40, 'La taille minimale est de 40px'],
-    max: [120, 'La taille maximale est de 120px']
-  },
-  socialLinksDisplayMode: {
-    type: String,
-    enum: ['icons', 'text'],
-    default: 'text'
-  },
-  socialLinksIconStyle: {
-    type: String,
-    enum: ['plain', 'rounded', 'circle'],
-    default: 'plain'
-  },
-  socialLinksIconBgColor: {
-    type: String,
-    default: '#5b50ff',
-    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
-  },
-  socialLinksIconColor: {
-    type: String,
-    default: '#FFFFFF',
-    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
-  },
-  socialLinksPosition: {
-    type: String,
-    enum: ['bottom', 'right'],
-    default: 'bottom'
-  },
-  layout: {
-    type: String,
-    enum: ['horizontal', 'vertical'],
-    default: 'vertical'
-  },
-  horizontalSpacing: {
-    type: Number,
-    default: 20,
-    min: [0, 'L\'espacement horizontal ne peut pas être négatif'],
-    max: [60, 'L\'espacement horizontal maximum est de 60px']
-  },
-  verticalSpacing: {
-    type: Number,
-    default: 10,
-    min: [0, 'L\'espacement vertical ne peut pas être négatif'],
-    max: [40, 'L\'espacement vertical maximum est de 40px']
-  },
-  verticalAlignment: {
-    type: String,
-    enum: ['left', 'center', 'right'],
-    default: 'left'
-  },
-  imagesLayout: {
-    type: String,
-    enum: ['horizontal', 'vertical'],
-    default: 'vertical'
-  },
-  fontFamily: {
-    type: String,
-    default: 'Arial, sans-serif'
-  },
-  fontSize: {
-    type: Number,
-    default: 14,
-    min: [8, 'La taille de police minimale est de 8px'],
-    max: [24, 'La taille de police maximale est de 24px']
-  },
-  textStyle: {
-    type: String,
-    enum: ['normal', 'overline', 'underline', 'strikethrough'],
-    default: 'normal'
+    default: 'Ma signature professionnelle'
   },
   isDefault: {
     type: Boolean,
     default: false
   },
-  socialLinksIconSize: {
-    type: Number,
-    default: 24,
-    min: [16, 'La taille d\'icône minimale est de 16px'],
-    max: [48, 'La taille d\'icône maximale est de 48px']
+  
+  // Informations personnelles
+  firstName: {
+    type: String,
+    required: false,
+    trim: true,
+    maxlength: [50, 'Le prénom ne peut pas dépasser 50 caractères']
   },
+  lastName: {
+    type: String,
+    required: false,
+    trim: true,
+    maxlength: [50, 'Le nom ne peut pas dépasser 50 caractères']
+  },
+  position: {
+    type: String,
+    required: false,
+    trim: true,
+    maxlength: [100, 'Le poste ne peut pas dépasser 100 caractères']
+  },
+  
+  // Informations de contact
+  email: {
+    type: String,
+    required: false,
+    trim: true,
+    lowercase: true,
+    match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Format d\'email invalide']
+  },
+  phone: {
+    type: String,
+    trim: true
+  },
+  mobile: {
+    type: String,
+    trim: true
+  },
+  website: {
+    type: String,
+    trim: true
+  },
+  address: {
+    type: String,
+    trim: true
+  },
+  companyName: {
+    type: String,
+    trim: true
+  },
+  
   // Options d'affichage des icônes
-  showEmailIcon: {
+  showPhoneIcon: {
     type: Boolean,
     default: true
   },
-  showPhoneIcon: {
+  showMobileIcon: {
+    type: Boolean,
+    default: true
+  },
+  showEmailIcon: {
     type: Boolean,
     default: true
   },
@@ -209,12 +87,248 @@ const emailSignatureSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  iconTextSpacing: {
+  
+  // Couleurs des différents éléments
+  primaryColor: {
+    type: String,
+    default: '#2563eb',
+    match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Veuillez fournir une couleur hexadécimale valide']
+  },
+  colors: {
+    name: {
+      type: String,
+      default: '#2563eb',
+      match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Couleur nom invalide']
+    },
+    position: {
+      type: String,
+      default: '#666666',
+      match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Couleur poste invalide']
+    },
+    company: {
+      type: String,
+      default: '#2563eb',
+      match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Couleur entreprise invalide']
+    },
+    contact: {
+      type: String,
+      default: '#666666',
+      match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Couleur contact invalide']
+    },
+    separatorVertical: {
+      type: String,
+      default: '#e0e0e0',
+      match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Couleur séparateur vertical invalide']
+    },
+    separatorHorizontal: {
+      type: String,
+      default: '#e0e0e0',
+      match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, 'Couleur séparateur horizontal invalide']
+    }
+  },
+  
+  // Espacement entre prénom et nom (en pixels)
+  nameSpacing: {
     type: Number,
-    default: 5,
-    min: [0, 'L\'espacement minimum est de 0px'],
+    default: 4,
+    min: [0, 'L\'espacement ne peut pas être négatif'],
     max: [20, 'L\'espacement maximum est de 20px']
   },
+  
+  // Alignement du nom et prénom (left, center, right)
+  nameAlignment: {
+    type: String,
+    enum: ['left', 'center', 'right'],
+    default: 'left'
+  },
+  
+  // Layout de la signature (vertical ou horizontal)
+  layout: {
+    type: String,
+    enum: ['horizontal', 'vertical'],
+    default: 'horizontal'
+  },
+  
+  // Largeurs des colonnes (en pourcentage)
+  columnWidths: {
+    photo: {
+      type: Number,
+      default: 25,
+      min: [10, 'Largeur minimale de 10%'],
+      max: [90, 'Largeur maximale de 90%']
+    },
+    content: {
+      type: Number,
+      default: 75,
+      min: [10, 'Largeur minimale de 10%'],
+      max: [90, 'Largeur maximale de 90%']
+    }
+  },
+  
+  // Images Cloudflare
+  photo: {
+    type: String,
+    trim: true
+  },
+  photoKey: {
+    type: String,
+    trim: true
+  },
+  logo: {
+    type: String,
+    trim: true
+  },
+  logoKey: {
+    type: String,
+    trim: true
+  },
+  
+  // Taille de l'image de profil (en pixels)
+  imageSize: {
+    type: Number,
+    default: 80,
+    min: [40, 'Taille minimale de 40px'],
+    max: [200, 'Taille maximale de 200px']
+  },
+  
+  // Forme de l'image de profil (round ou square)
+  imageShape: {
+    type: String,
+    enum: ['round', 'square'],
+    default: 'round'
+  },
+  
+  // Épaisseur des séparateurs (en pixels)
+  separatorVerticalWidth: {
+    type: Number,
+    default: 1,
+    min: [0, 'Épaisseur minimale de 0px'],
+    max: [10, 'Épaisseur maximale de 10px']
+  },
+  separatorHorizontalWidth: {
+    type: Number,
+    default: 1,
+    min: [0, 'Épaisseur minimale de 0px'],
+    max: [10, 'Épaisseur maximale de 10px']
+  },
+  
+  // Taille du logo entreprise (en pixels)
+  logoSize: {
+    type: Number,
+    default: 60,
+    min: [20, 'Taille minimale de 20px'],
+    max: [150, 'Taille maximale de 150px']
+  },
+  
+  // Espacements entre les éléments (en pixels)
+  spacings: {
+    global: {
+      type: Number,
+      default: 8,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    photoBottom: {
+      type: Number,
+      default: 12,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    logoBottom: {
+      type: Number,
+      default: 12,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    nameBottom: {
+      type: Number,
+      default: 8,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    positionBottom: {
+      type: Number,
+      default: 8,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    companyBottom: {
+      type: Number,
+      default: 12,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    contactBottom: {
+      type: Number,
+      default: 6,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    phoneToMobile: {
+      type: Number,
+      default: 4,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    mobileToEmail: {
+      type: Number,
+      default: 4,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    emailToWebsite: {
+      type: Number,
+      default: 4,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    websiteToAddress: {
+      type: Number,
+      default: 4,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    separatorTop: {
+      type: Number,
+      default: 12,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    },
+    separatorBottom: {
+      type: Number,
+      default: 12,
+      min: [0, 'Espacement minimum de 0px'],
+      max: [50, 'Espacement maximum de 50px']
+    }
+  },
+  
+  // Typographie générale
+  fontFamily: {
+    type: String,
+    default: 'Arial, sans-serif'
+  },
+  fontSize: {
+    name: {
+      type: Number,
+      default: 16,
+      min: [8, 'Taille minimale de 8px'],
+      max: [32, 'Taille maximale de 32px']
+    },
+    position: {
+      type: Number,
+      default: 14,
+      min: [8, 'Taille minimale de 8px'],
+      max: [32, 'Taille maximale de 32px']
+    },
+    contact: {
+      type: Number,
+      default: 12,
+      min: [8, 'Taille minimale de 8px'],
+      max: [32, 'Taille maximale de 32px']
+    }
+  },
+  
+  // Utilisateur propriétaire
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -226,7 +340,7 @@ const emailSignatureSchema = new mongoose.Schema({
 
 // Index pour améliorer les performances des recherches
 emailSignatureSchema.index({ createdBy: 1 });
-emailSignatureSchema.index({ name: 'text' });
+emailSignatureSchema.index({ signatureName: 'text' });
 
 // S'assurer qu'il n'y a qu'une seule signature par défaut par utilisateur
 emailSignatureSchema.pre('save', async function(next) {
