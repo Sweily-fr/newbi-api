@@ -11,20 +11,8 @@ const emailSignatureResolvers = {
   Query: {
     // Récupérer toutes les signatures de l'utilisateur connecté
     getMyEmailSignatures: isAuthenticated(async (_, __, { user }) => {
-      console.log('🔍 [SERVER] Récupération des signatures pour utilisateur:', user.email);
-      const signatures = await EmailSignature.find({ createdBy: user.id })
+      return EmailSignature.find({ createdBy: user.id })
         .sort({ updatedAt: -1 }); // Tri par date de mise à jour (plus récent en premier)
-      console.log('📊 [SERVER] Signatures trouvées:', signatures.length);
-      console.log('📋 [SERVER] Détails des signatures:', signatures.map(s => ({
-        id: s._id,
-        signatureName: s.signatureName,
-        firstName: s.firstName,
-        lastName: s.lastName,
-        email: s.email,
-        isDefault: s.isDefault,
-        createdAt: s.createdAt
-      })));
-      return signatures;
     }),
 
     // Récupérer une signature spécifique
@@ -47,12 +35,8 @@ const emailSignatureResolvers = {
   Mutation: {
     // Créer une nouvelle signature
     createEmailSignature: isAuthenticated(async (_, { input }, { user }) => {
-      console.log('🚀 [SERVER] Début création signature pour utilisateur:', user.email);
-      console.log('📝 [SERVER] Données reçues:', JSON.stringify(input, null, 2));
-      
       // Validation basique - seul le nom de signature est requis
       if (!input.signatureName || input.signatureName.trim() === '') {
-        console.log('❌ [SERVER] Erreur: nom de signature manquant');
         throw createValidationError('Le nom de la signature est requis');
       }
       
@@ -132,45 +116,96 @@ const emailSignatureResolvers = {
 
     // Supprimer une signature
     deleteEmailSignature: isAuthenticated(async (_, { id }, { user }) => {
-      const signature = await EmailSignature.findOne({ _id: id, createdBy: user.id });
+      console.log(`🔍 [BACKEND] Début suppression signature ID: ${id} pour utilisateur: ${user.id}`);
       
-      if (!signature) {
-        throw createNotFoundError('Signature email');
-      }
-      
-      // Si la signature supprimée était la signature par défaut et qu'il y a d'autres signatures,
-      // définir la signature la plus récente comme nouvelle signature par défaut
-      if (signature.isDefault) {
-        const otherSignature = await EmailSignature.findOne({ 
-          createdBy: user.id,
-          _id: { $ne: id }
-        }).sort({ updatedAt: -1 });
+      try {
+        // 1. Vérifier que la signature existe et appartient à l'utilisateur
+        console.log(`🔍 [BACKEND] Recherche de la signature à supprimer...`);
+        const signature = await EmailSignature.findOne({ _id: id, createdBy: user.id });
         
-        if (otherSignature) {
-          otherSignature.isDefault = true;
-          await otherSignature.save();
+        if (!signature) {
+          console.error(`❌ [BACKEND] Signature non trouvée ou non autorisée`);
+          throw createNotFoundError('Signature email');
         }
-      }
-      
-      // Supprimer les fichiers associés (photo et logo) si ils existent
-      if (signature.photo) {
-        try {
-          deleteFile(signature.photo);
-        } catch (error) {
-          console.error('Erreur lors de la suppression de la photo de profil:', error);
+        
+        console.log(`✅ [BACKEND] Signature trouvée: ${signature.signatureName}`);
+
+        // 2. Gestion de la signature par défaut
+        if (signature.isDefault) {
+          console.log(`ℹ️ [BACKEND] La signature est définie comme par défaut, recherche d'une autre signature...`);
+          const otherSignature = await EmailSignature.findOne({ 
+            createdBy: user.id,
+            _id: { $ne: id }
+          }).sort({ updatedAt: -1 });
+
+          if (otherSignature) {
+            console.log(`🔄 [BACKEND] Définition de la signature ${otherSignature._id} comme nouvelle signature par défaut`);
+            otherSignature.isDefault = true;
+            await otherSignature.save();
+          } else {
+            console.log(`ℹ️ [BACKEND] Aucune autre signature trouvée pour définir comme par défaut`);
+          }
         }
-      }
-      
-      if (signature.logo) {
-        try {
-          deleteFile(signature.logo);
-        } catch (error) {
-          console.error('Erreur lors de la suppression du logo:', error);
+
+        // 3. Préparer la suppression des fichiers associés
+        console.log(`🔍 [BACKEND] Préparation de la suppression des fichiers associés...`);
+        const filesToDelete = [];
+        if (signature.photo) {
+          console.log(`📷 [BACKEND] Fichier photo à supprimer: ${signature.photo}`);
+          filesToDelete.push(signature.photo);
         }
+        
+        if (signature.logo) {
+          console.log(`🏢 [BACKEND] Fichier logo à supprimer: ${signature.logo}`);
+          filesToDelete.push(signature.logo);
+        }
+
+        // 4. Suppression des fichiers de manière séquentielle avec gestion d'erreur
+        if (filesToDelete.length > 0) {
+          console.log(`🔄 [BACKEND] Tentative de suppression de ${filesToDelete.length} fichier(s)...`);
+          
+          // Supprimer les fichiers un par un de manière séquentielle
+          for (const filePath of filesToDelete) {
+            try {
+              console.log(`🗑️ [BACKEND] Suppression du fichier: ${filePath}`);
+              await deleteFile(filePath);
+              console.log(`✅ [BACKEND] Fichier supprimé avec succès: ${filePath}`);
+            } catch (error) {
+              console.error(`⚠️ [BACKEND] Échec de la suppression du fichier ${filePath}:`, error.message);
+              // On continue même si la suppression d'un fichier échoue
+            }
+          }
+        } else {
+          console.log(`ℹ️ [BACKEND] Aucun fichier à supprimer`);
+        }
+
+        // 5. Suppression de la signature en base de données
+        console.log(`🗑️ [BACKEND] Suppression de l'entrée en base de données...`);
+        const deleteResult = await EmailSignature.deleteOne({ _id: id, createdBy: user.id });
+        
+        console.log(`🔍 [BACKEND] Résultat suppression DB:`, JSON.stringify(deleteResult, null, 2));
+        
+        if (deleteResult.deletedCount !== 1) {
+          console.error(`❌ [BACKEND] Aucun document supprimé, deletedCount: ${deleteResult.deletedCount}`);
+          throw new Error('Aucune signature trouvée à supprimer');
+        }
+        
+        console.log(`✅ [BACKEND] Signature supprimée avec succès`);
+        return true;
+      } catch (error) {
+        console.error(`❌ [BACKEND] Erreur lors de la suppression:`, error);
+        
+        // Si l'erreur est déjà une erreur métier, on la renvoie telle quelle
+        if (error.extensions && error.extensions.code) {
+          console.error(`❌ [BACKEND] Erreur métier:`, error.message);
+          throw error;
+        }
+        
+        // Sinon, on crée une erreur générique
+        const errorMessage = error.message || 'Une erreur est survenue lors de la suppression de la signature';
+        console.error(`❌ [BACKEND] Erreur technique: ${errorMessage}`);
+        throw new Error(errorMessage);
       }
-      
-      await EmailSignature.deleteOne({ _id: id, createdBy: user.id });
-      return true;
     }),
 
     // Définir une signature comme par défaut
