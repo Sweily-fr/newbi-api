@@ -269,6 +269,15 @@ const userSchema = new mongoose.Schema({
     address: addressSchema,
     bankDetails: bankDetailsSchema
   },
+  // Champs pour l'intégration Bridge API
+  bridgeUserId: {
+    type: String,
+    sparse: true, // Index sparse pour éviter les conflits avec les valeurs null
+    index: true
+  },
+  bridgeCreatedAt: {
+    type: Date
+  },
   resetPasswordToken: String,
   resetPasswordExpires: Date
 }, {

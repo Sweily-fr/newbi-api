@@ -1,0 +1,87 @@
+"""
+Types et mutations pour l'intégration Bridge API
+"""
+
+type BridgeUserResponse {
+  success: Boolean!
+  bridgeUserId: String
+  message: String
+}
+
+type BridgeDisconnectResponse {
+  success: Boolean!
+  message: String
+}
+
+type BridgeBank {
+  name: String!
+  logo: String
+}
+
+type BridgeAccount {
+  id: String!
+  name: String!
+  balance: Float!
+  currency: String!
+  type: String!
+  status: String!
+  iban: String
+  bank: BridgeBank!
+  lastRefreshedAt: String
+  createdAt: String
+}
+
+type BridgeAccountsResponse {
+  success: Boolean!
+  accounts: [BridgeAccount!]!
+  message: String
+}
+
+type BridgeConnectSessionResponse {
+  success: Boolean!
+  redirectUrl: String
+  sessionId: String
+  message: String
+}
+
+input BridgeConnectSessionInput {
+  redirectUrl: String
+  webhookUrl: String
+  context: String
+  capabilities: [String!]
+  types_de_comptes: [String!]
+}
+
+extend type Query {
+  """
+  Récupère l'ID utilisateur Bridge existant
+  """
+  getBridgeUserId: BridgeUserResponse!
+  
+  """
+  Récupère les comptes bancaires de l'utilisateur
+  """
+  getBridgeAccounts: BridgeAccountsResponse!
+}
+
+extend type Mutation {
+  """
+  Crée ou récupère un utilisateur Bridge
+  """
+  createBridgeUser: BridgeUserResponse!
+  
+  """
+  Supprime la connexion Bridge d'un utilisateur
+  """
+  disconnectBridge: BridgeDisconnectResponse!
+  
+  """
+  Crée une session de connexion Bridge et retourne l'URL de redirection
+  """
+  createBridgeConnectSession(input: BridgeConnectSessionInput!): BridgeConnectSessionResponse!
+  
+  """
+  Force la synchronisation des comptes bancaires depuis Bridge API
+  """
+  syncBridgeAccounts: BridgeAccountsResponse!
+}

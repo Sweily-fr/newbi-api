@@ -71,7 +71,15 @@ const documentSettingsSchema = new mongoose.Schema({
     }
   },
   
-  // Utilisateur propriétaire des paramètres
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
+  
+  // Utilisateur propriétaire des paramètres (pour audit trail)
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -82,6 +90,9 @@ const documentSettingsSchema = new mongoose.Schema({
 });
 
 // Index pour améliorer les performances des recherches
-documentSettingsSchema.index({ createdBy: 1, documentType: 1 }, { unique: true });
+// Index composé workspace + documentType (unique par workspace)
+documentSettingsSchema.index({ workspaceId: 1, documentType: 1 }, { unique: true });
+// Index legacy pour la migration
+documentSettingsSchema.index({ createdBy: 1, documentType: 1 });
 
 export default mongoose.model('DocumentSettings', documentSettingsSchema);

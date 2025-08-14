@@ -335,20 +335,67 @@ const expenseResolvers = {
       const expense = await checkExpenseAccess(id, user.id);
 
       // Supprimer les fichiers associés
-      for (const file of expense.files) {
-        try {
-          await unlinkAsync(file.path);
-        } catch (error) {
-          console.error(
-            `Erreur lors de la suppression du fichier ${file.path}:`,
-            error
-          );
+      if (expense.files && expense.files.length > 0) {
+        for (const file of expense.files) {
+          try {
+            await unlinkAsync(file.path);
+          } catch (error) {
+            console.warn(
+              `Impossible de supprimer le fichier ${file.path}:`,
+              error
+            );
+          }
         }
       }
 
-      // Use deleteOne instead of the deprecated remove() method
-      await Expense.deleteOne({ _id: expense._id });
-      return true;
+      await Expense.findByIdAndDelete(id);
+      return { success: true, message: "Dépense supprimée avec succès" };
+    },
+
+    // Supprimer plusieurs dépenses
+    deleteMultipleExpenses: async (_, { ids }, { user }) => {
+      if (!user) throw new ForbiddenError("Vous devez être connecté");
+
+      if (!ids || ids.length === 0) {
+        throw new UserInputError("Aucun ID de dépense fourni");
+      }
+
+      const deletedCount = { success: 0, failed: 0 };
+      const errors = [];
+
+      for (const id of ids) {
+        try {
+          const expense = await checkExpenseAccess(id, user.id);
+
+          // Supprimer les fichiers associés
+          if (expense.files && expense.files.length > 0) {
+            for (const file of expense.files) {
+              try {
+                await unlinkAsync(file.path);
+              } catch (error) {
+                console.warn(
+                  `Impossible de supprimer le fichier ${file.path}:`,
+                  error
+                );
+              }
+            }
+          }
+
+          await Expense.findByIdAndDelete(id);
+          deletedCount.success++;
+        } catch (error) {
+          deletedCount.failed++;
+          errors.push({ id, error: error.message });
+        }
+      }
+
+      return {
+        success: deletedCount.failed === 0,
+        deletedCount: deletedCount.success,
+        failedCount: deletedCount.failed,
+        message: `${deletedCount.success} dépense(s) supprimée(s) avec succès${deletedCount.failed > 0 ? `, ${deletedCount.failed} échec(s)` : ''}`,
+        errors
+      };
     },
 
     // Changer le statut d'une dépense

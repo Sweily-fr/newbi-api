@@ -215,6 +215,13 @@ const emailSignatureSchema = new mongoose.Schema({
     min: [0, 'L\'espacement minimum est de 0px'],
     max: [20, 'L\'espacement maximum est de 20px']
   },
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -225,8 +232,11 @@ const emailSignatureSchema = new mongoose.Schema({
 });
 
 // Index pour améliorer les performances des recherches
+// Index composés workspace + autres champs
+emailSignatureSchema.index({ workspaceId: 1, name: 'text' });
+emailSignatureSchema.index({ workspaceId: 1, createdBy: 1 });
+// Index legacy pour la migration
 emailSignatureSchema.index({ createdBy: 1 });
-emailSignatureSchema.index({ name: 'text' });
 
 // S'assurer qu'il n'y a qu'une seule signature par défaut par utilisateur
 emailSignatureSchema.pre('save', async function(next) {

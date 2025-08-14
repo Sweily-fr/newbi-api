@@ -130,6 +130,26 @@ type StatusStat {
   count: Int!
 }
 
+# Type pour le résultat de suppression simple
+type DeleteExpenseResult {
+  success: Boolean!
+  message: String!
+}
+
+# Type pour le résultat de suppression multiple
+type DeleteMultipleExpensesResult {
+  success: Boolean!
+  deletedCount: Int!
+  failedCount: Int!
+  message: String!
+  errors: [DeleteError!]!
+}
+
+type DeleteError {
+  id: ID!
+  error: String!
+}
+
 # Input pour la création d'une dépense
 input CreateExpenseInput {
   title: String!
@@ -233,7 +253,10 @@ extend type Mutation {
   updateExpense(id: ID!, input: UpdateExpenseInput!): Expense!
 
   # Supprimer une dépense
-  deleteExpense(id: ID!): Boolean!
+  deleteExpense(id: ID!): DeleteExpenseResult!
+
+  # Supprimer plusieurs dépenses
+  deleteMultipleExpenses(ids: [ID!]!): DeleteMultipleExpensesResult!
 
   # Changer le statut d'une dépense
   changeExpenseStatus(id: ID!, status: ExpenseStatus!): Expense!

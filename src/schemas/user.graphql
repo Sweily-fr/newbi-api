@@ -1,5 +1,5 @@
 # Importe les types communs
-# Note: GraphQL n'a pas de directive d'importation native, 
+# Note: GraphQL n'a pas de directive d'importation native,
 # mais la fusion des schémas gère cela pour nous
 
 type Subscription {
@@ -101,14 +101,21 @@ extend type Mutation {
   resetPassword(input: UpdatePasswordInput!): ResetPasswordResponse!
   updateProfile(input: UserProfileInput!): User!
   updateCompany(input: CompanyInput!): User!
+  updateCompanyLogo(logoUrl: String): User!
   uploadCompanyLogo(base64Image: String!): User!
   deleteCompanyLogo: User!
   uploadProfilePicture(base64Image: String!): User!
   deleteProfilePicture: User!
-  updatePassword(currentPassword: String!, newPassword: String!): ResetPasswordResponse!
+  updatePassword(
+    currentPassword: String!
+    newPassword: String!
+  ): ResetPasswordResponse!
   verifyEmail(token: String!): EmailVerificationResponse!
   resendVerificationEmail(email: String!): Boolean!
   disableAccount(password: String!): DisableAccountResponse!
-  reactivateAccount(email: String!, password: String!): ReactivateAccountResponse!
+  reactivateAccount(
+    email: String!
+    password: String!
+  ): ReactivateAccountResponse!
   setStripeCustomerId(stripeCustomerId: String!): User!
 }

@@ -1,0 +1,96 @@
+type Event {
+  id: ID!
+  title: String!
+  description: String
+  start: DateTime!
+  end: DateTime!
+  allDay: Boolean!
+  color: EventColor!
+  location: String
+  type: EventType!
+  invoiceId: ID
+  invoice: Invoice
+  userId: ID!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum EventColor {
+  sky
+  amber
+  orange
+  emerald
+  violet
+  rose
+  blue
+  green
+  red
+  purple
+  pink
+  yellow
+}
+
+enum EventType {
+  MANUAL
+  INVOICE_DUE
+  MEETING
+  DEADLINE
+  REMINDER
+}
+
+input CreateEventInput {
+  title: String!
+  description: String
+  start: DateTime!
+  end: DateTime!
+  allDay: Boolean = false
+  color: EventColor = sky
+  location: String
+  type: EventType = MANUAL
+}
+
+input UpdateEventInput {
+  id: ID!
+  title: String
+  description: String
+  start: DateTime
+  end: DateTime
+  allDay: Boolean
+  color: EventColor
+  location: String
+  type: EventType
+}
+
+type EventsResponse {
+  success: Boolean!
+  message: String
+  events: [Event!]
+  totalCount: Int
+}
+
+type EventResponse {
+  success: Boolean!
+  message: String
+  event: Event
+}
+
+extend type Query {
+  getEvents(
+    startDate: DateTime
+    endDate: DateTime
+    type: EventType
+    limit: Int = 100
+    offset: Int = 0
+  ): EventsResponse!
+  
+  getEvent(id: ID!): EventResponse!
+}
+
+extend type Mutation {
+  createEvent(input: CreateEventInput!): EventResponse!
+  updateEvent(input: UpdateEventInput!): EventResponse!
+  deleteEvent(id: ID!): EventResponse!
+  
+  # Synchroniser les événements avec les factures
+  syncInvoiceEvents: EventsResponse!
+}

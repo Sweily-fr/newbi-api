@@ -1,22 +1,26 @@
-import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
-import User from '../models/User.js';
-import { isAuthenticated } from '../middlewares/auth.js';
-import { sendPasswordResetEmail, sendVerificationEmail, sendPasswordResetConfirmationEmail } from '../utils/mailer.js';
-import { saveBase64Image, deleteFile } from '../utils/fileUpload.js';
-import path from 'path';
-import CryptoJS from 'crypto-js';
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
+import User from "../models/User.js";
+import { isAuthenticated } from "../middlewares/auth.js";
+import {
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+  sendPasswordResetConfirmationEmail,
+} from "../utils/mailer.js";
+import { saveBase64Image, deleteFile } from "../utils/fileUpload.js";
+import path from "path";
+import CryptoJS from "crypto-js";
 import {
   AppError,
   ERROR_CODES,
   createNotFoundError,
   createAlreadyExistsError,
-  createValidationError
-} from '../utils/errors.js';
+  createValidationError,
+} from "../utils/errors.js";
 
 const generateToken = (user, rememberMe = false) => {
   // Définir la durée d'expiration en fonction de l'option "Se souvenir de moi"
-  const expiresIn = rememberMe ? '30d' : '24h'; // 30 jours si "Se souvenir de moi" est activé, sinon 24 heures
+  const expiresIn = rememberMe ? "30d" : "24h"; // 30 jours si "Se souvenir de moi" est activé, sinon 24 heures
 
   return jwt.sign(
     { id: user.id, email: user.email, isEmailVerified: user.isEmailVerified },
@@ -27,7 +31,7 @@ const generateToken = (user, rememberMe = false) => {
 
 // Fonction pour générer un token de vérification d'email
 const generateVerificationToken = () => {
-  return crypto.randomBytes(32).toString('hex');
+  return crypto.randomBytes(32).toString("hex");
 };
 
 const userResolvers = {
@@ -40,22 +44,25 @@ const userResolvers = {
   Mutation: {
     register: async (_, { input }) => {
       try {
-        const existingUser = await User.findOne({ email: input.email.toLowerCase() });
+        const existingUser = await User.findOne({
+          email: input.email.toLowerCase(),
+        });
         if (existingUser) {
-          throw createAlreadyExistsError('utilisateur', 'email', input.email);
+          throw createAlreadyExistsError("utilisateur", "email", input.email);
         }
 
         // Déchiffrer le mot de passe si nécessaire
         let password = input.password;
         if (input.passwordEncrypted) {
           try {
-            const parts = password.split(':');
+            const parts = password.split(":");
             if (parts.length !== 2) {
-              throw new Error('Format de mot de passe chiffré invalide');
+              throw new Error("Format de mot de passe chiffré invalide");
             }
 
             // SHA256 sur la clé, comme côté front !
-            const keyRaw = process.env.PASSWORD_ENCRYPTION_KEY || 'newbi-public-key';
+            const keyRaw =
+              process.env.PASSWORD_ENCRYPTION_KEY || "newbi-public-key";
             const key = CryptoJS.SHA256(keyRaw);
 
             const iv = CryptoJS.enc.Base64.parse(parts[0]);
@@ -65,22 +72,25 @@ const userResolvers = {
               ciphertext: cipherText,
             });
 
-            const decrypted = CryptoJS.AES.decrypt(
-              cipherParams,
-              key,
-              { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
-            );
+            const decrypted = CryptoJS.AES.decrypt(cipherParams, key, {
+              iv,
+              mode: CryptoJS.mode.CBC,
+              padding: CryptoJS.pad.Pkcs7,
+            });
 
             const clearPassword = decrypted.toString(CryptoJS.enc.Utf8);
 
             if (!clearPassword) {
-              throw new Error('Échec du déchiffrement du mot de passe');
+              throw new Error("Échec du déchiffrement du mot de passe");
             }
             password = clearPassword;
           } catch (error) {
-            console.error('Erreur lors du déchiffrement du mot de passe:', error);
+            console.error(
+              "Erreur lors du déchiffrement du mot de passe:",
+              error
+            );
             throw new AppError(
-              'Erreur lors du traitement de votre demande. Veuillez réessayer.',
+              "Erreur lors du traitement de votre demande. Veuillez réessayer.",
               ERROR_CODES.INTERNAL_ERROR
             );
           }
@@ -88,7 +98,9 @@ const userResolvers = {
 
         // Générer un token de vérification d'email
         const emailVerificationToken = generateVerificationToken();
-        const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 heures
+        const emailVerificationExpires = new Date(
+          Date.now() + 24 * 60 * 60 * 1000
+        ); // 24 heures
 
         // Créer un nouvel utilisateur avec les données fournies
         const user = new User({
@@ -96,7 +108,7 @@ const userResolvers = {
           password, // Utiliser le mot de passe déchiffré
           email: input.email.toLowerCase(),
           emailVerificationToken,
-          emailVerificationExpires
+          emailVerificationExpires,
         });
 
         await user.save();
@@ -107,14 +119,15 @@ const userResolvers = {
         // Ne pas générer de token, l'utilisateur doit d'abord vérifier son email
         return {
           user,
-          message: "Inscription réussie ! Veuillez vérifier votre boîte mail pour confirmer votre adresse email avant de vous connecter."
+          message:
+            "Inscription réussie ! Veuillez vérifier votre boîte mail pour confirmer votre adresse email avant de vous connecter.",
         };
       } catch (error) {
-        console.error('Erreur lors de l\'inscription:', error);
-        if (error.name === 'AppError') throw error;
+        console.error("Erreur lors de l'inscription:", error);
+        if (error.name === "AppError") throw error;
 
         throw new AppError(
-          'Une erreur est survenue lors de l\'inscription.',
+          "Une erreur est survenue lors de l'inscription.",
           ERROR_CODES.INTERNAL_ERROR,
           error.message
         );
@@ -126,7 +139,7 @@ const userResolvers = {
         const user = await User.findOne({ email: input.email.toLowerCase() });
         if (!user) {
           throw new AppError(
-            'L\'email n\'existe pas',
+            "L'email n'existe pas",
             ERROR_CODES.UNAUTHENTICATED
           );
         }
@@ -137,13 +150,14 @@ const userResolvers = {
           try {
             // Déchiffrer avec AES-CBC
             // Format attendu: "iv_base64:encrypted_base64"
-            const parts = password.split(':');
+            const parts = password.split(":");
             if (parts.length !== 2) {
-              throw new Error('Format de mot de passe chiffré invalide');
+              throw new Error("Format de mot de passe chiffré invalide");
             }
 
             // SHA256 sur la clé, comme côté front !
-            const keyRaw = process.env.PASSWORD_ENCRYPTION_KEY || 'newbi-public-key';
+            const keyRaw =
+              process.env.PASSWORD_ENCRYPTION_KEY || "newbi-public-key";
             const key = CryptoJS.SHA256(keyRaw);
 
             const iv = CryptoJS.enc.Base64.parse(parts[0]);
@@ -153,22 +167,25 @@ const userResolvers = {
               ciphertext: cipherText,
             });
 
-            const decrypted = CryptoJS.AES.decrypt(
-              cipherParams,
-              key,
-              { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
-            );
+            const decrypted = CryptoJS.AES.decrypt(cipherParams, key, {
+              iv,
+              mode: CryptoJS.mode.CBC,
+              padding: CryptoJS.pad.Pkcs7,
+            });
 
             const clearPassword = decrypted.toString(CryptoJS.enc.Utf8);
 
             if (!clearPassword) {
-              throw new Error('Échec du déchiffrement du mot de passe');
+              throw new Error("Échec du déchiffrement du mot de passe");
             }
             password = clearPassword;
           } catch (error) {
-            console.error('Erreur lors du déchiffrement du mot de passe:', error);
+            console.error(
+              "Erreur lors du déchiffrement du mot de passe:",
+              error
+            );
             throw new AppError(
-              'Erreur lors du traitement de votre demande. Veuillez réessayer.',
+              "Erreur lors du traitement de votre demande. Veuillez réessayer.",
               ERROR_CODES.INTERNAL_ERROR
             );
           }
@@ -177,7 +194,7 @@ const userResolvers = {
         const validPassword = await user.comparePassword(password);
         if (!validPassword) {
           throw new AppError(
-            'Le mot de passe ne correspond pas',
+            "Le mot de passe ne correspond pas",
             ERROR_CODES.UNAUTHENTICATED
           );
         }
@@ -185,7 +202,7 @@ const userResolvers = {
         // Vérifier si le compte est désactivé
         if (user.isDisabled) {
           throw new AppError(
-            'Ce compte a été désactivé. Utilisez la mutation reactivateAccount pour le réactiver.',
+            "Ce compte a été désactivé. Utilisez la mutation reactivateAccount pour le réactiver.",
             ERROR_CODES.ACCOUNT_DISABLED
           );
         }
@@ -193,7 +210,7 @@ const userResolvers = {
         // Vérifier si l'email est vérifié
         if (!user.isEmailVerified) {
           throw new AppError(
-            'Veuillez vérifier votre adresse email avant de vous connecter. Consultez votre boîte de réception.',
+            "Veuillez vérifier votre adresse email avant de vous connecter. Consultez votre boîte de réception.",
             ERROR_CODES.EMAIL_NOT_VERIFIED
           );
         }
@@ -204,11 +221,11 @@ const userResolvers = {
 
         return { token, user };
       } catch (error) {
-        if (error.name === 'AppError') throw error;
+        if (error.name === "AppError") throw error;
 
-        console.error('Erreur lors de la connexion:', error);
+        console.error("Erreur lors de la connexion:", error);
         throw new AppError(
-          'Une erreur est survenue lors de la connexion.',
+          "Une erreur est survenue lors de la connexion.",
           ERROR_CODES.INTERNAL_ERROR,
           error.message
         );
@@ -223,8 +240,11 @@ const userResolvers = {
         }
 
         // Générer un token aléatoire pour la réinitialisation
-        const resetToken = crypto.randomBytes(32).toString('hex');
-        const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+        const resetToken = crypto.randomBytes(32).toString("hex");
+        const hashedToken = crypto
+          .createHash("sha256")
+          .update(resetToken)
+          .digest("hex");
 
         user.resetPasswordToken = hashedToken;
         user.resetPasswordExpires = Date.now() + 3600000; // 1 heure
@@ -235,25 +255,31 @@ const userResolvers = {
 
         return true;
       } catch (error) {
-        console.error('Error in requestPasswordReset:', error);
+        console.error("Error in requestPasswordReset:", error);
         return true; // Toujours retourner true pour des raisons de sécurité
       }
     },
 
-    resetPassword: async (_, { input: { token, newPassword, passwordEncrypted } }) => {
+    resetPassword: async (
+      _,
+      { input: { token, newPassword, passwordEncrypted } }
+    ) => {
       try {
         // Hash le token reçu pour le comparer avec celui stocké dans la base
-        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+        const hashedToken = crypto
+          .createHash("sha256")
+          .update(token)
+          .digest("hex");
 
         // Vérifier si le token existe et n'est pas expiré
         const user = await User.findOne({
           resetPasswordToken: hashedToken,
-          resetPasswordExpires: { $gt: Date.now() }
+          resetPasswordExpires: { $gt: Date.now() },
         });
 
         if (!user) {
           throw new AppError(
-            'Le lien de réinitialisation est invalide ou a expiré.',
+            "Le lien de réinitialisation est invalide ou a expiré.",
             ERROR_CODES.INVALID_TOKEN
           );
         }
@@ -262,13 +288,14 @@ const userResolvers = {
         let password = newPassword;
         if (passwordEncrypted) {
           try {
-            const parts = password.split(':');
+            const parts = password.split(":");
             if (parts.length !== 2) {
-              throw new Error('Format de mot de passe chiffré invalide');
+              throw new Error("Format de mot de passe chiffré invalide");
             }
 
             // SHA256 sur la clé, comme côté front !
-            const keyRaw = process.env.PASSWORD_ENCRYPTION_KEY || 'newbi-public-key';
+            const keyRaw =
+              process.env.PASSWORD_ENCRYPTION_KEY || "newbi-public-key";
             const key = CryptoJS.SHA256(keyRaw);
 
             const iv = CryptoJS.enc.Base64.parse(parts[0]);
@@ -278,22 +305,25 @@ const userResolvers = {
               ciphertext: cipherText,
             });
 
-            const decrypted = CryptoJS.AES.decrypt(
-              cipherParams,
-              key,
-              { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
-            );
+            const decrypted = CryptoJS.AES.decrypt(cipherParams, key, {
+              iv,
+              mode: CryptoJS.mode.CBC,
+              padding: CryptoJS.pad.Pkcs7,
+            });
 
             const clearPassword = decrypted.toString(CryptoJS.enc.Utf8);
 
             if (!clearPassword) {
-              throw new Error('Échec du déchiffrement du mot de passe');
+              throw new Error("Échec du déchiffrement du mot de passe");
             }
             password = clearPassword;
           } catch (error) {
-            console.error('Erreur lors du déchiffrement du mot de passe:', error);
+            console.error(
+              "Erreur lors du déchiffrement du mot de passe:",
+              error
+            );
             throw new AppError(
-              'Erreur lors du traitement de votre demande. Veuillez réessayer.',
+              "Erreur lors du traitement de votre demande. Veuillez réessayer.",
               ERROR_CODES.INTERNAL_ERROR
             );
           }
@@ -309,19 +339,24 @@ const userResolvers = {
         try {
           await sendPasswordResetConfirmationEmail(user.email);
         } catch (emailError) {
-          console.error('Erreur lors de l\'envoi de l\'email de confirmation:', emailError);
+          console.error(
+            "Erreur lors de l'envoi de l'email de confirmation:",
+            emailError
+          );
           // Continuer même si l'envoi de l'email échoue
         }
 
         return {
           success: true,
-          message: "Votre mot de passe a été réinitialisé avec succès. Vous pouvez maintenant vous connecter avec votre nouveau mot de passe."
+          message:
+            "Votre mot de passe a été réinitialisé avec succès. Vous pouvez maintenant vous connecter avec votre nouveau mot de passe.",
         };
       } catch (error) {
-        console.error('Error in resetPassword:', error);
+        console.error("Error in resetPassword:", error);
         return {
           success: false,
-          message: "Une erreur est survenue lors de la réinitialisation du mot de passe."
+          message:
+            "Une erreur est survenue lors de la réinitialisation du mot de passe.",
         };
       }
     },
@@ -332,51 +367,63 @@ const userResolvers = {
         const userDoc = await User.findById(user.id);
 
         if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
+          throw createNotFoundError("Utilisateur");
         }
 
         // Gérer l'upload de la photo de profil si présente dans l'input
         if (input.profilePicture !== undefined) {
           // Si la photo de profil est une chaîne vide, cela signifie que l'utilisateur veut la supprimer
-          if (input.profilePicture === '') {
+          if (input.profilePicture === "") {
             // Si une photo de profil existe déjà, la supprimer
             if (userDoc.profile && userDoc.profile.profilePicture) {
               try {
                 const oldPicturePath = userDoc.profile.profilePicture;
                 await deleteFile(oldPicturePath);
-                console.log('Photo de profil supprimée:', oldPicturePath);
+                console.log("Photo de profil supprimée:", oldPicturePath);
               } catch (err) {
-                console.error('Erreur lors de la suppression de l\'ancienne photo de profil:', err);
+                console.error(
+                  "Erreur lors de la suppression de l'ancienne photo de profil:",
+                  err
+                );
                 // Continuer même si la suppression échoue
               }
             }
 
             // Mettre à jour le champ profilePicture à une chaîne vide
-            input.profilePicture = '';
+            input.profilePicture = "";
           }
           // Si la photo de profil est une chaîne base64, cela signifie que l'utilisateur veut la mettre à jour
-          else if (input.profilePicture.startsWith('data:image')) {
+          else if (input.profilePicture.startsWith("data:image")) {
             // Si une photo de profil existe déjà, la supprimer
             if (userDoc.profile && userDoc.profile.profilePicture) {
               try {
                 const oldPicturePath = userDoc.profile.profilePicture;
                 await deleteFile(oldPicturePath);
-                console.log('Ancienne photo de profil supprimée:', oldPicturePath);
+                console.log(
+                  "Ancienne photo de profil supprimée:",
+                  oldPicturePath
+                );
               } catch (err) {
-                console.error('Erreur lors de la suppression de l\'ancienne photo de profil:', err);
+                console.error(
+                  "Erreur lors de la suppression de l'ancienne photo de profil:",
+                  err
+                );
                 // Continuer même si la suppression échoue
               }
             }
 
             // Sauvegarder la nouvelle image
-            const picturePath = await saveBase64Image(input.profilePicture, 'profile-pictures');
-            console.log('Nouvelle photo de profil sauvegardée:', picturePath);
+            const picturePath = await saveBase64Image(
+              input.profilePicture,
+              "profile-pictures"
+            );
+            console.log("Nouvelle photo de profil sauvegardée:", picturePath);
 
             // Mettre à jour le champ profilePicture avec le chemin de la nouvelle image
             input.profilePicture = picturePath;
           }
           // Si la photo de profil n'est ni une chaîne vide ni une chaîne base64, la supprimer de l'input
-          else if (!input.profilePicture.startsWith('/uploads/')) {
+          else if (!input.profilePicture.startsWith("/uploads/")) {
             delete input.profilePicture;
           }
         }
@@ -384,7 +431,7 @@ const userResolvers = {
         // Mettre à jour les champs du profil
         userDoc.profile = {
           ...userDoc.profile.toObject(),
-          ...input
+          ...input,
         };
 
         // Sauvegarder avec validation
@@ -392,15 +439,15 @@ const userResolvers = {
 
         return userDoc;
       } catch (error) {
-        if (error.name === 'ValidationError') {
+        if (error.name === "ValidationError") {
           throw createValidationError(error);
         }
 
-        if (error.name === 'AppError') throw error;
+        if (error.name === "AppError") throw error;
 
-        console.error('Erreur lors de la mise à jour du profil:', error);
+        console.error("Erreur lors de la mise à jour du profil:", error);
         throw new AppError(
-          'Une erreur est survenue lors de la mise à jour du profil.',
+          "Une erreur est survenue lors de la mise à jour du profil.",
           ERROR_CODES.INTERNAL_ERROR
         );
       }
@@ -412,58 +459,85 @@ const userResolvers = {
         const userDoc = await User.findById(user.id);
 
         if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
+          throw createNotFoundError("Utilisateur");
         }
 
         // Mettre à jour les champs de l'entreprise
         userDoc.company = {
           ...userDoc.company.toObject(),
-          ...input
+          ...input,
         };
 
         // S'assurer que transactionCategory est correctement défini
-        console.log('Input complet:', JSON.stringify(input));
-        console.log('Transaction Category reçue:', input.transactionCategory);
+        console.log("Input complet:", JSON.stringify(input));
+        console.log("Transaction Category reçue:", input.transactionCategory);
 
         // Traiter explicitement le champ transactionCategory
         // Si la valeur est définie (même vide), l'utiliser
-        if (Object.prototype.hasOwnProperty.call(input, 'transactionCategory')) {
-          userDoc.company.transactionCategory = input.transactionCategory || null;
-          console.log('Transaction Category après traitement:', userDoc.company.transactionCategory);
+        if (
+          Object.prototype.hasOwnProperty.call(input, "transactionCategory")
+        ) {
+          userDoc.company.transactionCategory =
+            input.transactionCategory || null;
+          console.log(
+            "Transaction Category après traitement:",
+            userDoc.company.transactionCategory
+          );
         }
 
         // Traiter explicitement le champ vatPaymentCondition
-        if (Object.prototype.hasOwnProperty.call(input, 'vatPaymentCondition')) {
+        if (
+          Object.prototype.hasOwnProperty.call(input, "vatPaymentCondition")
+        ) {
           // Si la valeur est vide ou null, utiliser 'NONE' comme valeur par défaut
           // Sinon, utiliser la valeur fournie si elle est valide
-          const validValues = ['ENCAISSEMENTS', 'DEBITS', 'EXONERATION', 'NONE'];
-          const value = input.vatPaymentCondition || 'NONE';
+          const validValues = [
+            "ENCAISSEMENTS",
+            "DEBITS",
+            "EXONERATION",
+            "NONE",
+          ];
+          const value = input.vatPaymentCondition || "NONE";
 
           // Vérifier si la valeur est valide
-          userDoc.company.vatPaymentCondition = validValues.includes(value) ? value : 'NONE';
-          console.log('VAT Payment Condition après traitement:', userDoc.company.vatPaymentCondition);
-        } else if (userDoc.company && userDoc.company.vatPaymentCondition === '') {
+          userDoc.company.vatPaymentCondition = validValues.includes(value)
+            ? value
+            : "NONE";
+          console.log(
+            "VAT Payment Condition après traitement:",
+            userDoc.company.vatPaymentCondition
+          );
+        } else if (
+          userDoc.company &&
+          userDoc.company.vatPaymentCondition === ""
+        ) {
           // Si la valeur est une chaîne vide, la remplacer par 'NONE'
-          userDoc.company.vatPaymentCondition = 'NONE';
+          userDoc.company.vatPaymentCondition = "NONE";
         }
         // Ne pas définir de valeur par défaut si le champ n'existe pas du tout
 
         // Traiter explicitement le champ companyStatus
-        if (Object.prototype.hasOwnProperty.call(input, 'companyStatus')) {
-          userDoc.company.companyStatus = input.companyStatus || 'AUTRE';
-          console.log('Company Status après traitement:', userDoc.company.companyStatus);
+        if (Object.prototype.hasOwnProperty.call(input, "companyStatus")) {
+          userDoc.company.companyStatus = input.companyStatus || "AUTRE";
+          console.log(
+            "Company Status après traitement:",
+            userDoc.company.companyStatus
+          );
         }
 
         // Traiter explicitement le champ capitalSocial
-        if (Object.prototype.hasOwnProperty.call(input, 'capitalSocial')) {
+        if (Object.prototype.hasOwnProperty.call(input, "capitalSocial")) {
           userDoc.company.capitalSocial = input.capitalSocial || null;
-          console.log('Capital Social après traitement:', userDoc.company.capitalSocial);
+          console.log(
+            "Capital Social après traitement:",
+            userDoc.company.capitalSocial
+          );
         }
 
         // Traiter explicitement le champ rcs
-        if (Object.prototype.hasOwnProperty.call(input, 'rcs')) {
+        if (Object.prototype.hasOwnProperty.call(input, "rcs")) {
           userDoc.company.rcs = input.rcs || null;
-          console.log('RCS après traitement:', userDoc.company.rcs);
+          console.log("RCS après traitement:", userDoc.company.rcs);
         }
 
         // Sauvegarder avec validation
@@ -471,15 +545,18 @@ const userResolvers = {
 
         return userDoc;
       } catch (error) {
-        if (error.name === 'ValidationError') {
+        if (error.name === "ValidationError") {
           throw createValidationError(error);
         }
 
-        if (error.name === 'AppError') throw error;
+        if (error.name === "AppError") throw error;
 
-        console.error('Erreur lors de la mise à jour des informations de l\'entreprise:', error);
+        console.error(
+          "Erreur lors de la mise à jour des informations de l'entreprise:",
+          error
+        );
         throw new AppError(
-          'Une erreur est survenue lors de la mise à jour des informations de l\'entreprise.',
+          "Une erreur est survenue lors de la mise à jour des informations de l'entreprise.",
           ERROR_CODES.INTERNAL_ERROR
         );
       }
@@ -490,7 +567,7 @@ const userResolvers = {
         // Vérifier si l'utilisateur existe
         const userDoc = await User.findById(user.id);
         if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
+          throw createNotFoundError("Utilisateur");
         }
 
         // Nous ne supprimons plus l'ancien logo pour préserver les références dans les factures et devis existants
@@ -506,101 +583,124 @@ const userResolvers = {
 
         // Sauvegarder la nouvelle image
         const logoPath = await saveBase64Image(base64Image);
-        console.log('Logo path reçu de saveBase64Image:', logoPath);
+        console.log("Logo path reçu de saveBase64Image:", logoPath);
 
         // Mettre à jour l'utilisateur
         userDoc.company = userDoc.company || {};
         userDoc.company.logo = logoPath;
-        console.log('Logo path sauvegardé dans userDoc:', userDoc.company.logo);
+        console.log("Logo path sauvegardé dans userDoc:", userDoc.company.logo);
 
         await userDoc.save();
-        console.log('Utilisateur sauvegardé avec logo:', userDoc.company.logo);
+        console.log("Utilisateur sauvegardé avec logo:", userDoc.company.logo);
 
         return userDoc;
       } catch (error) {
-        console.error('Erreur lors de l\'upload du logo:', error);
+        console.error("Erreur lors de l'upload du logo:", error);
         throw new AppError(
-          'Une erreur est survenue lors de l\'upload du logo.',
+          "Une erreur est survenue lors de l'upload du logo.",
           ERROR_CODES.INTERNAL_ERROR
         );
       }
     }),
 
-    uploadProfilePicture: isAuthenticated(async (_, { base64Image }, { user }) => {
-      try {
-        // Vérifier si l'utilisateur existe
-        const userDoc = await User.findById(user.id);
-        if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
-        }
-
-        // Si une photo de profil existe déjà, la supprimer
-        if (userDoc.profile && userDoc.profile.profilePicture) {
-          try {
-            const oldPicturePath = userDoc.profile.profilePicture;
-            await deleteFile(oldPicturePath);
-          } catch (err) {
-            console.error('Erreur lors de la suppression de l\'ancienne photo de profil:', err);
-            // Continuer même si la suppression échoue
+    uploadProfilePicture: isAuthenticated(
+      async (_, { base64Image }, { user }) => {
+        try {
+          // Vérifier si l'utilisateur existe
+          const userDoc = await User.findById(user.id);
+          if (!userDoc) {
+            throw createNotFoundError("Utilisateur");
           }
+
+          // Si une photo de profil existe déjà, la supprimer
+          if (userDoc.profile && userDoc.profile.profilePicture) {
+            try {
+              const oldPicturePath = userDoc.profile.profilePicture;
+              await deleteFile(oldPicturePath);
+            } catch (err) {
+              console.error(
+                "Erreur lors de la suppression de l'ancienne photo de profil:",
+                err
+              );
+              // Continuer même si la suppression échoue
+            }
+          }
+
+          // Sauvegarder la nouvelle image dans le dossier profile-pictures
+          const picturePath = await saveBase64Image(
+            base64Image,
+            "profile-pictures"
+          );
+          console.log("Photo path reçu de saveBase64Image:", picturePath);
+
+          // Mettre à jour l'utilisateur
+          userDoc.profile = userDoc.profile || {};
+          userDoc.profile.profilePicture = picturePath;
+          console.log(
+            "Photo path sauvegardé dans userDoc:",
+            userDoc.profile.profilePicture
+          );
+
+          await userDoc.save();
+          console.log(
+            "Utilisateur sauvegardé avec photo de profil:",
+            userDoc.profile.profilePicture
+          );
+
+          return userDoc;
+        } catch (error) {
+          console.error(
+            "Erreur lors de l'upload de la photo de profil:",
+            error
+          );
+          throw new AppError(
+            "Une erreur est survenue lors de l'upload de la photo de profil.",
+            ERROR_CODES.INTERNAL_ERROR
+          );
         }
-
-        // Sauvegarder la nouvelle image dans le dossier profile-pictures
-        const picturePath = await saveBase64Image(base64Image, 'profile-pictures');
-        console.log('Photo path reçu de saveBase64Image:', picturePath);
-
-        // Mettre à jour l'utilisateur
-        userDoc.profile = userDoc.profile || {};
-        userDoc.profile.profilePicture = picturePath;
-        console.log('Photo path sauvegardé dans userDoc:', userDoc.profile.profilePicture);
-
-        await userDoc.save();
-        console.log('Utilisateur sauvegardé avec photo de profil:', userDoc.profile.profilePicture);
-
-        return userDoc;
-      } catch (error) {
-        console.error('Erreur lors de l\'upload de la photo de profil:', error);
-        throw new AppError(
-          'Une erreur est survenue lors de l\'upload de la photo de profil.',
-          ERROR_CODES.INTERNAL_ERROR
-        );
       }
-    }),
+    ),
 
     deleteCompanyLogo: isAuthenticated(async (_, __, { user }) => {
       try {
         // Vérifier si l'utilisateur existe
         const userDoc = await User.findById(user.id);
         if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
+          throw createNotFoundError("Utilisateur");
         }
 
         // Si un logo existe, le supprimer
         if (userDoc.company && userDoc.company.logo) {
           try {
             const logoPath = userDoc.company.logo;
-            console.log('Tentative de suppression du logo:', logoPath);
+            console.log("Tentative de suppression du logo:", logoPath);
             const deleted = await deleteFile(logoPath);
-            console.log('Résultat de la suppression:', deleted ? 'Succès' : 'Échec');
+            console.log(
+              "Résultat de la suppression:",
+              deleted ? "Succès" : "Échec"
+            );
           } catch (err) {
-            console.error('Erreur lors de la suppression du logo:', err);
+            console.error("Erreur lors de la suppression du logo:", err);
             // Continuer même si la suppression échoue
           }
         } else {
-          console.log('Aucun logo à supprimer pour l\'utilisateur:', user.id);
+          console.log("Aucun logo à supprimer pour l'utilisateur:", user.id);
         }
 
         // Mettre à jour l'utilisateur
         userDoc.company = userDoc.company || {};
-        userDoc.company.logo = '';
+        userDoc.company.logo = "";
         await userDoc.save();
-        console.log('Logo supprimé de la base de données pour l\'utilisateur:', user.id);
+        console.log(
+          "Logo supprimé de la base de données pour l'utilisateur:",
+          user.id
+        );
 
         return userDoc;
       } catch (error) {
-        console.error('Erreur lors de la suppression du logo:', error);
+        console.error("Erreur lors de la suppression du logo:", error);
         throw new AppError(
-          'Une erreur est survenue lors de la suppression du logo.',
+          "Une erreur est survenue lors de la suppression du logo.",
           ERROR_CODES.INTERNAL_ERROR
         );
       }
@@ -611,35 +711,53 @@ const userResolvers = {
         // Vérifier si l'utilisateur existe
         const userDoc = await User.findById(user.id);
         if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
+          throw createNotFoundError("Utilisateur");
         }
 
         // Si une photo de profil existe, la supprimer
         if (userDoc.profile && userDoc.profile.profilePicture) {
           try {
             const picturePath = userDoc.profile.profilePicture;
-            console.log('Tentative de suppression de la photo de profil:', picturePath);
+            console.log(
+              "Tentative de suppression de la photo de profil:",
+              picturePath
+            );
             const deleted = await deleteFile(picturePath);
-            console.log('Résultat de la suppression:', deleted ? 'Succès' : 'Échec');
+            console.log(
+              "Résultat de la suppression:",
+              deleted ? "Succès" : "Échec"
+            );
           } catch (err) {
-            console.error('Erreur lors de la suppression de la photo de profil:', err);
+            console.error(
+              "Erreur lors de la suppression de la photo de profil:",
+              err
+            );
             // Continuer même si la suppression échoue
           }
         } else {
-          console.log('Aucune photo de profil à supprimer pour l\'utilisateur:', user.id);
+          console.log(
+            "Aucune photo de profil à supprimer pour l'utilisateur:",
+            user.id
+          );
         }
 
         // Mettre à jour l'utilisateur
         userDoc.profile = userDoc.profile || {};
-        userDoc.profile.profilePicture = '';
+        userDoc.profile.profilePicture = "";
         await userDoc.save();
-        console.log('Photo de profil supprimée de la base de données pour l\'utilisateur:', user.id);
+        console.log(
+          "Photo de profil supprimée de la base de données pour l'utilisateur:",
+          user.id
+        );
 
         return userDoc;
       } catch (error) {
-        console.error('Erreur lors de la suppression de la photo de profil:', error);
+        console.error(
+          "Erreur lors de la suppression de la photo de profil:",
+          error
+        );
         throw new AppError(
-          'Une erreur est survenue lors de la suppression de la photo de profil.',
+          "Une erreur est survenue lors de la suppression de la photo de profil.",
           ERROR_CODES.INTERNAL_ERROR
         );
       }
@@ -649,12 +767,12 @@ const userResolvers = {
       // Rechercher l'utilisateur avec ce token de vérification
       const user = await User.findOne({
         emailVerificationToken: token,
-        emailVerificationExpires: { $gt: Date.now() }
+        emailVerificationExpires: { $gt: Date.now() },
       });
 
       if (!user) {
         throw new AppError(
-          'Le lien de vérification est invalide ou a expiré',
+          "Le lien de vérification est invalide ou a expiré",
           ERROR_CODES.INVALID_TOKEN
         );
       }
@@ -667,7 +785,8 @@ const userResolvers = {
 
       return {
         success: true,
-        message: 'Votre adresse email a été vérifiée avec succès. Vous pouvez maintenant vous connecter.'
+        message:
+          "Votre adresse email a été vérifiée avec succès. Vous pouvez maintenant vous connecter.",
       };
     },
 
@@ -687,7 +806,9 @@ const userResolvers = {
 
       // Générer un nouveau token
       const emailVerificationToken = generateVerificationToken();
-      const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 heures
+      const emailVerificationExpires = new Date(
+        Date.now() + 24 * 60 * 60 * 1000
+      ); // 24 heures
 
       // Mettre à jour l'utilisateur avec le nouveau token
       user.emailVerificationToken = emailVerificationToken;
@@ -700,56 +821,61 @@ const userResolvers = {
       return true;
     },
 
-    updatePassword: isAuthenticated(async (_, { currentPassword, newPassword }, { user }) => {
-      try {
-        const userDoc = await User.findById(user.id);
+    updatePassword: isAuthenticated(
+      async (_, { currentPassword, newPassword }, { user }) => {
+        try {
+          const userDoc = await User.findById(user.id);
 
-        if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
-        }
+          if (!userDoc) {
+            throw createNotFoundError("Utilisateur");
+          }
 
-        const validPassword = await userDoc.comparePassword(currentPassword);
-        if (!validPassword) {
+          const validPassword = await userDoc.comparePassword(currentPassword);
+          if (!validPassword) {
+            throw new AppError(
+              "Le mot de passe actuel est incorrect",
+              ERROR_CODES.INVALID_INPUT,
+              { field: "currentPassword" }
+            );
+          }
+
+          userDoc.password = newPassword;
+          await userDoc.save();
+
+          return {
+            success: true,
+            message: "Mot de passe mis à jour avec succès",
+          };
+        } catch (error) {
+          if (error.name === "AppError") throw error;
+
+          console.error(
+            "Erreur lors de la mise à jour du mot de passe:",
+            error
+          );
           throw new AppError(
-            'Le mot de passe actuel est incorrect',
-            ERROR_CODES.INVALID_INPUT,
-            { field: 'currentPassword' }
+            "Une erreur est survenue lors de la mise à jour du mot de passe.",
+            ERROR_CODES.INTERNAL_ERROR
           );
         }
-
-        userDoc.password = newPassword;
-        await userDoc.save();
-
-        return {
-          success: true,
-          message: 'Mot de passe mis à jour avec succès'
-        };
-      } catch (error) {
-        if (error.name === 'AppError') throw error;
-
-        console.error('Erreur lors de la mise à jour du mot de passe:', error);
-        throw new AppError(
-          'Une erreur est survenue lors de la mise à jour du mot de passe.',
-          ERROR_CODES.INTERNAL_ERROR
-        );
       }
-    }),
+    ),
 
     disableAccount: isAuthenticated(async (_, { password }, { user }) => {
       try {
         const userDoc = await User.findById(user.id);
 
         if (!userDoc) {
-          throw createNotFoundError('Utilisateur');
+          throw createNotFoundError("Utilisateur");
         }
 
         // Vérifier le mot de passe pour confirmer l'action
         const validPassword = await userDoc.comparePassword(password);
         if (!validPassword) {
           throw new AppError(
-            'Le mot de passe est incorrect',
+            "Le mot de passe est incorrect",
             ERROR_CODES.INVALID_INPUT,
-            { field: 'password' }
+            { field: "password" }
           );
         }
 
@@ -759,14 +885,14 @@ const userResolvers = {
 
         return {
           success: true,
-          message: 'Votre compte a été désactivé avec succès'
+          message: "Votre compte a été désactivé avec succès",
         };
       } catch (error) {
-        if (error.name === 'AppError') throw error;
+        if (error.name === "AppError") throw error;
 
-        console.error('Erreur lors de la désactivation du compte:', error);
+        console.error("Erreur lors de la désactivation du compte:", error);
         throw new AppError(
-          'Une erreur est survenue lors de la désactivation de votre compte.',
+          "Une erreur est survenue lors de la désactivation de votre compte.",
           ERROR_CODES.INTERNAL_ERROR
         );
       }
@@ -777,15 +903,15 @@ const userResolvers = {
         const user = await User.findOne({ email: email.toLowerCase() });
 
         if (!user) {
-          throw createNotFoundError('Utilisateur');
+          throw createNotFoundError("Utilisateur");
         }
 
         // Vérifier si le compte est bien désactivé
         if (!user.isDisabled) {
           return {
             success: false,
-            message: 'Ce compte est déjà actif',
-            user: null
+            message: "Ce compte est déjà actif",
+            user: null,
           };
         }
 
@@ -793,9 +919,9 @@ const userResolvers = {
         const validPassword = await user.comparePassword(password);
         if (!validPassword) {
           throw new AppError(
-            'Le mot de passe est incorrect',
+            "Le mot de passe est incorrect",
             ERROR_CODES.INVALID_INPUT,
-            { field: 'password' }
+            { field: "password" }
           );
         }
 
@@ -805,49 +931,88 @@ const userResolvers = {
 
         return {
           success: true,
-          message: 'Votre compte a été réactivé avec succès',
-          user: user
+          message: "Votre compte a été réactivé avec succès",
+          user: user,
         };
       } catch (error) {
-        if (error.name === 'AppError') throw error;
+        if (error.name === "AppError") throw error;
 
-        console.error('Erreur lors de la réactivation du compte:', error);
+        console.error("Erreur lors de la réactivation du compte:", error);
         throw new AppError(
-          'Une erreur est survenue lors de la réactivation de votre compte.',
+          "Une erreur est survenue lors de la réactivation de votre compte.",
           ERROR_CODES.INTERNAL_ERROR
         );
       }
     },
 
     // Nouvelle mutation pour associer un ID client Stripe à un utilisateur
-    setStripeCustomerId: isAuthenticated(async (_, { stripeCustomerId }, { user }) => {
+    setStripeCustomerId: isAuthenticated(
+      async (_, { stripeCustomerId }, { user }) => {
+        try {
+          // Vérifier si l'utilisateur existe
+          const userDoc = await User.findById(user.id);
+          if (!userDoc) {
+            throw createNotFoundError("Utilisateur non trouvé");
+          }
+
+          // Mettre à jour le Stripe Customer ID
+          userDoc.subscription = userDoc.subscription || {};
+          userDoc.subscription.stripeCustomerId = stripeCustomerId;
+
+          // Sauvegarder les modifications
+          await userDoc.save();
+
+          console.log(
+            `Stripe Customer ID associé à l'utilisateur ${userDoc.email}: ${stripeCustomerId}`
+          );
+
+          return userDoc;
+        } catch (error) {
+          console.error(
+            "Erreur lors de l'association du Stripe Customer ID:",
+            error
+          );
+          throw new AppError(
+            "Erreur lors de l'association du Stripe Customer ID",
+            ERROR_CODES.INTERNAL_ERROR,
+            error.message
+          );
+        }
+      }
+    ),
+
+    /**
+     * Met à jour uniquement le logo de l'entreprise
+     */
+    updateCompanyLogo: isAuthenticated(async (_, { logoUrl }, { user }) => {
       try {
-        // Vérifier si l'utilisateur existe
-        const userDoc = await User.findById(user.id);
-        if (!userDoc) {
-          throw createNotFoundError('Utilisateur non trouvé');
+        // Mise à jour directe sans validation complète
+        const updatedUser = await User.findByIdAndUpdate(
+          user.id,
+          { 'company.logo': logoUrl },
+          { new: true, runValidators: false } // Pas de validation pour éviter les erreurs
+        );
+
+        if (!updatedUser) {
+          throw createNotFoundError('Utilisateur');
         }
 
-        // Mettre à jour le Stripe Customer ID
-        userDoc.subscription = userDoc.subscription || {};
-        userDoc.subscription.stripeCustomerId = stripeCustomerId;
+        console.log('✅ Logo mis à jour en BDD:', {
+          userId: user.id,
+          logoUrl: logoUrl,
+          companyLogo: updatedUser.company?.logo
+        });
 
-        // Sauvegarder les modifications
-        await userDoc.save();
-
-        console.log(`Stripe Customer ID associé à l'utilisateur ${userDoc.email}: ${stripeCustomerId}`);
-
-        return userDoc;
+        return updatedUser;
       } catch (error) {
-        console.error('Erreur lors de l\'association du Stripe Customer ID:', error);
+        console.error('Erreur mise à jour logo:', error);
         throw new AppError(
-          'Erreur lors de l\'association du Stripe Customer ID',
-          ERROR_CODES.INTERNAL_ERROR,
-          error.message
+          'Erreur lors de la mise à jour du logo',
+          ERROR_CODES.INTERNAL_ERROR
         );
       }
-    })
-  }
+    }),
+  },
 };
 
 export default userResolvers;

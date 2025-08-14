@@ -299,6 +299,14 @@ const expenseSchema = new mongoose.Schema({
       message: 'Un tag ne doit pas dépasser 30 caractères'
     }
   }],
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
+  // Utilisateur qui a créé la dépense (pour audit trail)
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -309,11 +317,13 @@ const expenseSchema = new mongoose.Schema({
 });
 
 // Index pour améliorer les performances des recherches
+// Index composés workspace + autres champs pour les requêtes fréquentes
+expenseSchema.index({ workspaceId: 1, date: -1 });
+expenseSchema.index({ workspaceId: 1, category: 1 });
+expenseSchema.index({ workspaceId: 1, status: 1 });
+expenseSchema.index({ workspaceId: 1, 'vendor': 'text' });
+// Index legacy pour la migration
 expenseSchema.index({ createdBy: 1 });
-expenseSchema.index({ date: -1 });
-expenseSchema.index({ category: 1 });
-expenseSchema.index({ status: 1 });
-expenseSchema.index({ 'vendor': 'text' });
 expenseSchema.index({ 'tags': 1 });
 
 // Exporter les constantes pour les utiliser dans d'autres fichiers

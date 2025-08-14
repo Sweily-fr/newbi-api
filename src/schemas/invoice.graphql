@@ -99,19 +99,19 @@ input UpdateInvoiceInput {
 }
 
 extend type Query {
-  invoice(id: ID!): Invoice!
-  invoices(startDate: String, endDate: String, status: InvoiceStatus, search: String, page: Int, limit: Int): InvoicePagination!
-  invoiceStats: InvoiceStats!
-  nextInvoiceNumber(prefix: String, isDraft: Boolean): String!
+  invoice(id: ID!, workspaceId: ID!): Invoice!
+  invoices(workspaceId: ID!, startDate: String, endDate: String, status: InvoiceStatus, search: String, page: Int, limit: Int): InvoicePagination!
+  invoiceStats(workspaceId: ID!): InvoiceStats!
+  nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
 }
 
 extend type Mutation {
-  createInvoice(input: CreateInvoiceInput!): Invoice!
-  updateInvoice(id: ID!, input: UpdateInvoiceInput!): Invoice!
-  deleteInvoice(id: ID!): Boolean!
-  sendInvoice(id: ID!, email: String!): Boolean!
-  markInvoiceAsPaid(id: ID!, paymentDate: String!): Invoice!
-  changeInvoiceStatus(id: ID!, status: InvoiceStatus!): Invoice!
-  createLinkedInvoice(quoteId: ID!, amount: Float!, isDeposit: Boolean!): LinkedInvoiceResult!
-  deleteLinkedInvoice(id: ID!): Boolean!
+  createInvoice(workspaceId: ID!, input: CreateInvoiceInput!): Invoice!
+  updateInvoice(id: ID!, workspaceId: ID!, input: UpdateInvoiceInput!): Invoice!
+  deleteInvoice(id: ID!, workspaceId: ID!): Boolean!
+  sendInvoice(id: ID!, workspaceId: ID!, email: String!): Boolean!
+  markInvoiceAsPaid(id: ID!, workspaceId: ID!, paymentDate: String!): Invoice!
+  changeInvoiceStatus(id: ID!, workspaceId: ID!, status: InvoiceStatus!): Invoice!
+  createLinkedInvoice(quoteId: ID!, workspaceId: ID!, amount: Float!, isDeposit: Boolean!): LinkedInvoiceResult!
+  deleteLinkedInvoice(id: ID!, workspaceId: ID!): Boolean!
 }

@@ -12,6 +12,11 @@ type DocumentUploadResult {
   message: String
 }
 
+type DocumentDeleteResult {
+  success: Boolean!
+  message: String
+}
+
 extend type Mutation {
   """
   Upload un document vers Cloudflare R2
@@ -19,4 +24,11 @@ extend type Mutation {
   uploadDocument(
     file: Upload!
   ): DocumentUploadResult!
+  
+  """
+  Supprime un document de Cloudflare R2
+  """
+  deleteDocument(
+    key: String!
+  ): DocumentDeleteResult!
 }

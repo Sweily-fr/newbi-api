@@ -192,6 +192,13 @@ const quoteSchema = new mongoose.Schema({
       message: 'Le montant de la remise doit être un nombre positif'
     }
   },
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -210,13 +217,15 @@ const quoteSchema = new mongoose.Schema({
 });
 
 // Index pour améliorer les performances des recherches
+// Index composés workspace + autres champs
+quoteSchema.index({ workspaceId: 1, 'client.name': 1 });
+quoteSchema.index({ workspaceId: 1, status: 1 });
+quoteSchema.index({ workspaceId: 1, issueDate: -1 });
+// Index unique pour garantir l'unicité des numéros de devis par workspace
+quoteSchema.index({ workspaceId: 1, number: 1 }, { unique: true });
+// Index legacy pour la migration
 quoteSchema.index({ createdBy: 1 });
-quoteSchema.index({ 'client.name': 1 });
-quoteSchema.index({ status: 1 });
-quoteSchema.index({ issueDate: -1 });
-
-// Index unique pour garantir l'unicité des numéros de devis par utilisateur
-quoteSchema.index({ number: 1, createdBy: 1 }, { unique: true });
+quoteSchema.index({ number: 1, createdBy: 1 });
 
 /**
  * Calcul automatique des totaux avant sauvegarde

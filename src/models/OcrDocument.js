@@ -5,7 +5,15 @@
 import mongoose from 'mongoose';
 
 const ocrDocumentSchema = new mongoose.Schema({
-  // Référence utilisateur
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
+
+  // Référence utilisateur (pour audit trail)
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -172,9 +180,12 @@ const ocrDocumentSchema = new mongoose.Schema({
 });
 
 // Index pour les requêtes fréquentes
+// Index composés workspace + autres champs
+ocrDocumentSchema.index({ workspaceId: 1, createdAt: -1 });
+ocrDocumentSchema.index({ workspaceId: 1, documentType: 1 });
+ocrDocumentSchema.index({ workspaceId: 1, 'usage.usedForExpense': 1 });
+// Index legacy pour la migration
 ocrDocumentSchema.index({ userId: 1, createdAt: -1 });
-ocrDocumentSchema.index({ userId: 1, documentType: 1 });
-ocrDocumentSchema.index({ userId: 1, 'usage.usedForExpense': 1 });
 
 // Méthodes d'instance
 ocrDocumentSchema.methods.markAsUsedForExpense = function(expenseId) {

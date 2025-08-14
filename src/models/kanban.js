@@ -27,6 +27,13 @@ const boardSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
   userId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
@@ -59,6 +66,13 @@ const columnSchema = new mongoose.Schema({
     type: Number, 
     required: [true, 'L\'ordre est requis'],
     min: 0
+  },
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
   },
   userId: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -110,6 +124,13 @@ const taskSchema = new mongoose.Schema({
     min: 0
   },
   checklist: [checklistItemSchema],
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
   userId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
@@ -122,6 +143,11 @@ const taskSchema = new mongoose.Schema({
 });
 
 // Index pour améliorer les performances des requêtes fréquentes
+// Index composés workspace + autres champs
+boardSchema.index({ workspaceId: 1, createdAt: -1 });
+columnSchema.index({ workspaceId: 1, boardId: 1, order: 1 });
+taskSchema.index({ workspaceId: 1, boardId: 1, columnId: 1, position: 1 });
+// Index legacy pour la migration
 boardSchema.index({ userId: 1, createdAt: -1 });
 columnSchema.index({ boardId: 1, order: 1 });
 taskSchema.index({ boardId: 1, columnId: 1, position: 1 });
