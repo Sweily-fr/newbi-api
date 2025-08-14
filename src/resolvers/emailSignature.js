@@ -5,336 +5,210 @@ import {
   createAlreadyExistsError,
   createValidationError
 } from '../utils/errors.js';
-import { saveEmailSignaturePhoto, deleteFile } from '../utils/fileUpload.js';
-import { 
-  NAME_REGEX, 
-  EMAIL_REGEX, 
-  PHONE_REGEX, 
-  PHONE_FR_REGEX, 
-  URL_REGEX 
-} from '../utils/validators.js';
+import { deleteFile } from '../utils/fileUpload.js';
 
 const emailSignatureResolvers = {
   Query: {
-    emailSignature: isAuthenticated(async (_, { id }, { user }) => {
+    // Récupérer toutes les signatures de l'utilisateur connecté
+    getMyEmailSignatures: isAuthenticated(async (_, __, { user }) => {
+      return EmailSignature.find({ createdBy: user.id })
+        .sort({ updatedAt: -1 }); // Tri par date de mise à jour (plus récent en premier)
+    }),
+
+    // Récupérer une signature spécifique
+    getEmailSignature: isAuthenticated(async (_, { id }, { user }) => {
       const signature = await EmailSignature.findOne({ _id: id, createdBy: user.id });
       if (!signature) throw createNotFoundError('Signature email');
       return signature;
     }),
 
-    emailSignatures: isAuthenticated(async (_, { search, page = 1, limit = 20 }, { user }) => {
-      const query = { createdBy: user.id };
-      
-      if (search && search.trim() !== '') {
-        // Créer une requête OR pour rechercher dans plusieurs champs
-        const searchRegex = new RegExp(search, 'i'); // 'i' pour insensible à la casse
-        
-        query.$or = [
-          { name: searchRegex },         // Recherche par nom
-          { fullName: searchRegex },     // Recherche par nom complet
-          { jobTitle: searchRegex },     // Recherche par titre de poste
-          { email: searchRegex }         // Recherche par email
-        ];
-      }
-      
-      const skip = (page - 1) * limit;
-      
-      // Définir les options de tri
-      let sortOptions = { updatedAt: -1 }; // Tri par défaut par date de mise à jour (plus récent en premier)
-      
-      const [signatures, totalCount] = await Promise.all([
-        EmailSignature.find(query)
-          .sort(sortOptions)
-          .skip(skip)
-          .limit(limit),
-        EmailSignature.countDocuments(query)
-      ]);
-      
-      return {
-        signatures,
-        totalCount,
-        hasNextPage: skip + signatures.length < totalCount
-      };
-    }),
-
-    defaultEmailSignature: isAuthenticated(async (_, __, { user }) => {
+    // Récupérer la signature par défaut de l'utilisateur
+    getDefaultEmailSignature: isAuthenticated(async (_, __, { user }) => {
       const signature = await EmailSignature.findOne({ 
         createdBy: user.id,
         isDefault: true
       });
-      
       return signature; // Peut être null si aucune signature par défaut n'existe
     })
   },
 
   Mutation: {
+    // Créer une nouvelle signature
     createEmailSignature: isAuthenticated(async (_, { input }, { user }) => {
-      // Validation explicite des champs sensibles
-      const validationErrors = {};
-      
-      if (input.name && !NAME_REGEX.test(input.name)) {
-        validationErrors.name = 'Le nom contient des caractères non autorisés';
-      }
-      
-      if (input.fullName && !NAME_REGEX.test(input.fullName)) {
-        validationErrors.fullName = 'Le nom complet contient des caractères non autorisés';
-      }
-      
-      if (input.jobTitle && !NAME_REGEX.test(input.jobTitle)) {
-        validationErrors.jobTitle = 'Le titre du poste contient des caractères non autorisés';
-      }
-      
-      if (input.email && !EMAIL_REGEX.test(input.email)) {
-        validationErrors.email = 'Format d\'email invalide';
-      }
-      
-      if (input.phone && input.phone.trim() !== '' && !PHONE_FR_REGEX.test(input.phone)) {
-        validationErrors.phone = 'Format de numéro de téléphone invalide';
-      }
-      
-      if (input.mobilePhone && input.mobilePhone.trim() !== '' && !PHONE_FR_REGEX.test(input.mobilePhone)) {
-        validationErrors.mobilePhone = 'Format de numéro de mobile invalide';
-      }
-      
-      if (input.website && input.website.trim() !== '' && !URL_REGEX.test(input.website)) {
-        validationErrors.website = 'Format d\'URL invalide';
-      }
-      
-      // Vérifier les liens sociaux si présents
-      if (input.socialLinks) {
-        if (input.socialLinks.linkedin && !URL_REGEX.test(input.socialLinks.linkedin)) {
-          validationErrors['socialLinks.linkedin'] = 'Format d\'URL LinkedIn invalide';
-        }
-        
-        if (input.socialLinks.twitter && !URL_REGEX.test(input.socialLinks.twitter)) {
-          validationErrors['socialLinks.twitter'] = 'Format d\'URL Twitter invalide';
-        }
-        
-        if (input.socialLinks.facebook && !URL_REGEX.test(input.socialLinks.facebook)) {
-          validationErrors['socialLinks.facebook'] = 'Format d\'URL Facebook invalide';
-        }
-        
-        if (input.socialLinks.instagram && !URL_REGEX.test(input.socialLinks.instagram)) {
-          validationErrors['socialLinks.instagram'] = 'Format d\'URL Instagram invalide';
-        }
-      }
-      
-      // Si des erreurs de validation sont détectées, lancer une exception
-      if (Object.keys(validationErrors).length > 0) {
-        throw createValidationError('Certains champs contiennent des erreurs de validation', validationErrors);
+      // Validation basique - seul le nom de signature est requis
+      if (!input.signatureName || input.signatureName.trim() === '') {
+        throw createValidationError('Le nom de la signature est requis');
       }
       
       // Vérifier si une signature avec ce nom existe déjà pour cet utilisateur
       const existingSignature = await EmailSignature.findOne({ 
-        name: input.name,
+        signatureName: input.signatureName,
         createdBy: user.id 
       });
       
       if (existingSignature) {
-        throw createAlreadyExistsError('signature email', 'nom', input.name);
+        throw createAlreadyExistsError('signature email', 'nom', input.signatureName);
       }
       
       // Si c'est la première signature de l'utilisateur, la définir comme signature par défaut
       const signatureCount = await EmailSignature.countDocuments({ createdBy: user.id });
-      const isDefault = input.isDefault !== undefined ? input.isDefault : (signatureCount === 0);
+      const isFirstSignature = signatureCount === 0;
       
-      // Traiter l'upload de la photo de profil si présente
-      let profilePhotoUrl = input.profilePhotoUrl;
-      if (input.profilePhotoBase64) {
-        try {
-          profilePhotoUrl = saveEmailSignaturePhoto(input.profilePhotoBase64);
-        } catch (error) {
-          console.error('Erreur lors de l\'upload de la photo de profil:', error);
-          // Continuer sans la photo de profil en cas d'erreur
-        }
-      }
-      
-      // Log des données reçues pour débogage
-      console.log('Données reçues pour création de signature email:', {
-        companyName: input.companyName,
-        website: input.website,
-        address: input.address
-      });
-      
-      // S'assurer que companyName est correctement défini
+      // Préparer les données de la signature avec les valeurs par défaut
       const signatureData = {
         ...input,
-        profilePhotoUrl,
-        isDefault,
         createdBy: user.id,
-        // Forcer l'utilisation du companyName fourni par le client
-        companyName: input.companyName || ''
+        isDefault: input.isDefault !== undefined ? input.isDefault : isFirstSignature
       };
       
       const signature = new EmailSignature(signatureData);
-      
       await signature.save();
       return signature;
     }),
 
-    updateEmailSignature: isAuthenticated(async (_, { id, input }, { user }) => {
-      const signature = await EmailSignature.findOne({ _id: id, createdBy: user.id });
+    // Mettre à jour une signature existante
+    updateEmailSignature: isAuthenticated(async (_, { input }, { user }) => {
+      const signature = await EmailSignature.findOne({ _id: input.id, createdBy: user.id });
       
       if (!signature) {
         throw createNotFoundError('Signature email');
       }
       
-      // Validation explicite des champs sensibles
-      const validationErrors = {};
-      
-      if (input.name && !NAME_REGEX.test(input.name)) {
-        validationErrors.name = 'Le nom contient des caractères non autorisés';
+      // Validation basique - seul le nom de signature est requis
+      if (!input.signatureName || input.signatureName.trim() === '') {
+        throw createValidationError('Le nom de la signature est requis');
       }
       
-      if (input.fullName && !NAME_REGEX.test(input.fullName)) {
-        validationErrors.fullName = 'Le nom complet contient des caractères non autorisés';
-      }
-      
-      if (input.jobTitle && !NAME_REGEX.test(input.jobTitle)) {
-        validationErrors.jobTitle = 'Le titre du poste contient des caractères non autorisés';
-      }
-      
-      if (input.email && !EMAIL_REGEX.test(input.email)) {
-        validationErrors.email = 'Format d\'email invalide';
-      }
-      
-      if (input.phone && input.phone.trim() !== '' && !PHONE_FR_REGEX.test(input.phone)) {
-        validationErrors.phone = 'Format de numéro de téléphone invalide';
-      }
-      
-      if (input.mobilePhone && input.mobilePhone.trim() !== '' && !PHONE_FR_REGEX.test(input.mobilePhone)) {
-        validationErrors.mobilePhone = 'Format de numéro de mobile invalide';
-      }
-      
-      if (input.website && input.website.trim() !== '' && !URL_REGEX.test(input.website)) {
-        validationErrors.website = 'Format d\'URL invalide';
-      }
-      
-      // Vérifier les liens sociaux si présents
-      if (input.socialLinks) {
-        if (input.socialLinks.linkedin && !URL_REGEX.test(input.socialLinks.linkedin)) {
-          validationErrors['socialLinks.linkedin'] = 'Format d\'URL LinkedIn invalide';
-        }
-        
-        if (input.socialLinks.twitter && !URL_REGEX.test(input.socialLinks.twitter)) {
-          validationErrors['socialLinks.twitter'] = 'Format d\'URL Twitter invalide';
-        }
-        
-        if (input.socialLinks.facebook && !URL_REGEX.test(input.socialLinks.facebook)) {
-          validationErrors['socialLinks.facebook'] = 'Format d\'URL Facebook invalide';
-        }
-        
-        if (input.socialLinks.instagram && !URL_REGEX.test(input.socialLinks.instagram)) {
-          validationErrors['socialLinks.instagram'] = 'Format d\'URL Instagram invalide';
-        }
-      }
-      
-      // Si des erreurs de validation sont détectées, lancer une exception
-      if (Object.keys(validationErrors).length > 0) {
-        throw createValidationError('Certains champs contiennent des erreurs de validation', validationErrors);
-      }
-      
-      // Si le nom est modifié, vérifier qu'il n'existe pas déjà
-      if (input.name && input.name !== signature.name) {
+      // Si le nom de la signature est modifié, vérifier qu'il n'existe pas déjà
+      if (input.signatureName && input.signatureName !== signature.signatureName) {
         const existingSignature = await EmailSignature.findOne({ 
-          name: input.name,
+          signatureName: input.signatureName,
           createdBy: user.id,
-          _id: { $ne: id }
+          _id: { $ne: input.id }
         });
         
         if (existingSignature) {
-          throw createAlreadyExistsError('signature email', 'nom', input.name);
+          throw createAlreadyExistsError('signature email', 'nom', input.signatureName);
         }
       }
       
-      // Traiter l'upload de la photo de profil si présente
-      if (input.profilePhotoBase64) {
-        try {
-          // Supprimer l'ancienne photo si elle existe
-          if (signature.profilePhotoUrl) {
-            deleteFile(signature.profilePhotoUrl);
-          }
-          // Sauvegarder la nouvelle photo
-          input.profilePhotoUrl = saveEmailSignaturePhoto(input.profilePhotoBase64);
-        } catch (error) {
-          console.error('Erreur lors de l\'upload de la photo de profil:', error);
-          // Continuer sans la photo de profil en cas d'erreur
-        }
-      } else if (input.profilePhotoToDelete && signature.profilePhotoUrl) {
-        // Supprimer la photo si demandé
-        try {
-          deleteFile(signature.profilePhotoUrl);
-          input.profilePhotoUrl = null;
-        } catch (error) {
-          console.error('Erreur lors de la suppression de la photo de profil:', error);
-        }
-      }
-      
-      // Log des données reçues pour débogage
-      console.log('Données reçues pour mise à jour de signature email:', {
-        id,
-        companyName: input.companyName,
-        website: input.website,
-        address: input.address
-      });
-      
-      // Mettre à jour la signature
+      // Mettre à jour la signature avec les nouvelles données
       Object.keys(input).forEach(key => {
-        if (key === 'socialLinks' && input[key]) {
-          // Traitement spécial pour les liens sociaux (objet imbriqué)
-          Object.keys(input[key]).forEach(socialKey => {
-            signature.socialLinks[socialKey] = input[key][socialKey];
-          });
-        } else if (key !== 'profilePhotoBase64' && key !== 'profilePhotoToDelete') {
-          // Ne pas copier ces propriétés dans le modèle
-          signature[key] = input[key];
+        if (key !== 'id' && input[key] !== undefined) {
+          // Traitement spécial pour les objets imbriqués
+          if (key === 'colors' && input[key]) {
+            signature.colors = { ...signature.colors, ...input[key] };
+          } else if (key === 'columnWidths' && input[key]) {
+            signature.columnWidths = { ...signature.columnWidths, ...input[key] };
+          } else if (key === 'spacings' && input[key]) {
+            signature.spacings = { ...signature.spacings, ...input[key] };
+          } else if (key === 'fontSize' && input[key]) {
+            signature.fontSize = { ...signature.fontSize, ...input[key] };
+          } else {
+            signature[key] = input[key];
+          }
         }
       });
-      
-      // S'assurer explicitement que companyName est correctement défini
-      if (input.companyName !== undefined) {
-        signature.companyName = input.companyName;
-      }
       
       await signature.save();
       return signature;
     }),
 
+    // Supprimer une signature
     deleteEmailSignature: isAuthenticated(async (_, { id }, { user }) => {
-      const signature = await EmailSignature.findOne({ _id: id, createdBy: user.id });
+      console.log(`🔍 [BACKEND] Début suppression signature ID: ${id} pour utilisateur: ${user.id}`);
       
-      if (!signature) {
-        throw createNotFoundError('Signature email');
-      }
-      
-      // Si la signature supprimée était la signature par défaut et qu'il y a d'autres signatures,
-      // définir la signature la plus récente comme nouvelle signature par défaut
-      if (signature.isDefault) {
-        const otherSignature = await EmailSignature.findOne({ 
-          createdBy: user.id,
-          _id: { $ne: id }
-        }).sort({ updatedAt: -1 });
+      try {
+        // 1. Vérifier que la signature existe et appartient à l'utilisateur
+        console.log(`🔍 [BACKEND] Recherche de la signature à supprimer...`);
+        const signature = await EmailSignature.findOne({ _id: id, createdBy: user.id });
         
-        if (otherSignature) {
-          otherSignature.isDefault = true;
-          await otherSignature.save();
+        if (!signature) {
+          console.error(`❌ [BACKEND] Signature non trouvée ou non autorisée`);
+          throw createNotFoundError('Signature email');
         }
-      }
-      
-      // Supprimer la photo de profil si elle existe
-      if (signature.profilePhotoUrl) {
-        try {
-          deleteFile(signature.profilePhotoUrl);
-        } catch (error) {
-          console.error('Erreur lors de la suppression de la photo de profil:', error);
-          // Continuer même en cas d'erreur
+        
+        console.log(`✅ [BACKEND] Signature trouvée: ${signature.signatureName}`);
+
+        // 2. Gestion de la signature par défaut
+        if (signature.isDefault) {
+          console.log(`ℹ️ [BACKEND] La signature est définie comme par défaut, recherche d'une autre signature...`);
+          const otherSignature = await EmailSignature.findOne({ 
+            createdBy: user.id,
+            _id: { $ne: id }
+          }).sort({ updatedAt: -1 });
+
+          if (otherSignature) {
+            console.log(`🔄 [BACKEND] Définition de la signature ${otherSignature._id} comme nouvelle signature par défaut`);
+            otherSignature.isDefault = true;
+            await otherSignature.save();
+          } else {
+            console.log(`ℹ️ [BACKEND] Aucune autre signature trouvée pour définir comme par défaut`);
+          }
         }
+
+        // 3. Préparer la suppression des fichiers associés
+        console.log(`🔍 [BACKEND] Préparation de la suppression des fichiers associés...`);
+        const filesToDelete = [];
+        if (signature.photo) {
+          console.log(`📷 [BACKEND] Fichier photo à supprimer: ${signature.photo}`);
+          filesToDelete.push(signature.photo);
+        }
+        
+        if (signature.logo) {
+          console.log(`🏢 [BACKEND] Fichier logo à supprimer: ${signature.logo}`);
+          filesToDelete.push(signature.logo);
+        }
+
+        // 4. Suppression des fichiers de manière séquentielle avec gestion d'erreur
+        if (filesToDelete.length > 0) {
+          console.log(`🔄 [BACKEND] Tentative de suppression de ${filesToDelete.length} fichier(s)...`);
+          
+          // Supprimer les fichiers un par un de manière séquentielle
+          for (const filePath of filesToDelete) {
+            try {
+              console.log(`🗑️ [BACKEND] Suppression du fichier: ${filePath}`);
+              await deleteFile(filePath);
+              console.log(`✅ [BACKEND] Fichier supprimé avec succès: ${filePath}`);
+            } catch (error) {
+              console.error(`⚠️ [BACKEND] Échec de la suppression du fichier ${filePath}:`, error.message);
+              // On continue même si la suppression d'un fichier échoue
+            }
+          }
+        } else {
+          console.log(`ℹ️ [BACKEND] Aucun fichier à supprimer`);
+        }
+
+        // 5. Suppression de la signature en base de données
+        console.log(`🗑️ [BACKEND] Suppression de l'entrée en base de données...`);
+        const deleteResult = await EmailSignature.deleteOne({ _id: id, createdBy: user.id });
+        
+        console.log(`🔍 [BACKEND] Résultat suppression DB:`, JSON.stringify(deleteResult, null, 2));
+        
+        if (deleteResult.deletedCount !== 1) {
+          console.error(`❌ [BACKEND] Aucun document supprimé, deletedCount: ${deleteResult.deletedCount}`);
+          throw new Error('Aucune signature trouvée à supprimer');
+        }
+        
+        console.log(`✅ [BACKEND] Signature supprimée avec succès`);
+        return true;
+      } catch (error) {
+        console.error(`❌ [BACKEND] Erreur lors de la suppression:`, error);
+        
+        // Si l'erreur est déjà une erreur métier, on la renvoie telle quelle
+        if (error.extensions && error.extensions.code) {
+          console.error(`❌ [BACKEND] Erreur métier:`, error.message);
+          throw error;
+        }
+        
+        // Sinon, on crée une erreur générique
+        const errorMessage = error.message || 'Une erreur est survenue lors de la suppression de la signature';
+        console.error(`❌ [BACKEND] Erreur technique: ${errorMessage}`);
+        throw new Error(errorMessage);
       }
-      
-      await EmailSignature.deleteOne({ _id: id, createdBy: user.id });
-      return true;
     }),
 
+    // Définir une signature comme par défaut
     setDefaultEmailSignature: isAuthenticated(async (_, { id }, { user }) => {
       const signature = await EmailSignature.findOne({ _id: id, createdBy: user.id });
       
