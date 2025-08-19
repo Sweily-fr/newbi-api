@@ -150,6 +150,7 @@ transactionSchema.virtual("formattedDate").get(function () {
 // Méthode statique pour synchroniser les transactions Bridge
 transactionSchema.statics.syncBridgeTransactions = async function (
   userId,
+  workspaceId,
   bridgeTransactions
 ) {
   const results = {
@@ -200,6 +201,7 @@ transactionSchema.statics.syncBridgeTransactions = async function (
         bridgeAccountId: bridgeTransaction.account_id,
         bridgeUserId: bridgeTransaction.user_id || userId,
         userId: userId,
+        workspaceId: workspaceId,
         amount: Math.abs(bridgeTransaction.amount),
         currency: bridgeTransaction.currency_code || "EUR",
         description:

@@ -8,9 +8,61 @@ import Transaction from "../models/Transaction.js";
 import BridgeAccount from "../models/BridgeAccount.js";
 import { isAuthenticated } from "../middlewares/auth.js";
 import {
+  isWorkspaceMember,
+  requireWorkspacePermission,
+} from "../middlewares/workspace.js";
+import {
   createValidationError,
   createInternalServerError,
+  AppError,
+  ERROR_CODES,
 } from "../utils/errors.js";
+
+/**
+ * Middleware pour vérifier l'appartenance au workspace et enrichir le contexte
+ * @param {Function} resolver - Resolver GraphQL à wrapper
+ * @param {string} requiredPermission - Permission requise ("read", "write", "delete", "manageMembers")
+ * @returns {Function} - Resolver wrappé avec vérification workspace
+ */
+const withWorkspace = (resolver, requiredPermission = "read") => {
+  return async (parent, args, context, info) => {
+    try {
+      // Extraire workspaceId des arguments ou du contexte
+      const workspaceId = args.workspaceId || context.workspaceId;
+
+      if (!workspaceId) {
+        throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
+      }
+
+      // Vérifier l'appartenance au workspace
+      const workspaceContext = await isWorkspaceMember(
+        context.req,
+        workspaceId,
+        context.user
+      );
+
+      // Vérifier les permissions spécifiques
+      if (requiredPermission !== "read") {
+        requireWorkspacePermission(requiredPermission)(workspaceContext);
+      }
+
+      // Enrichir le contexte avec les informations workspace
+      const enrichedContext = {
+        ...context,
+        ...workspaceContext,
+      };
+
+      // Exécuter le resolver avec le contexte enrichi
+      return await resolver(parent, args, enrichedContext, info);
+    } catch (error) {
+      console.error(
+        `Erreur dans withWorkspace pour ${resolver.name}:`,
+        error.message
+      );
+      throw error;
+    }
+  };
+};
 
 /**
  * Récupère un token d'authentification Bridge
@@ -77,15 +129,16 @@ const bridgeResolvers = {
     /**
      * Récupère les transactions récentes de l'utilisateur
      */
-    getRecentTransactions: isAuthenticated(
-      async (_, { limit = 1000 }, { user }) => {
+    getRecentTransactions: withWorkspace(
+      async (_, { limit = 1000 }, context) => {
+        const { workspaceId, user } = context;
         try {
           console.log(
-            `📊 Récupération des ${limit} dernières transactions pour:`,
-            user.id
+            `📊 Récupération des ${limit} dernières transactions pour workspace:`,
+            workspaceId
           );
 
-          const transactions = await Transaction.find({ userId: user.id })
+          const transactions = await Transaction.find({ workspaceId })
             .sort({ date: -1 })
             .limit(limit)
             .lean();
@@ -154,11 +207,12 @@ const bridgeResolvers = {
     /**
      * Récupère les statistiques des transactions
      */
-    getTransactionStats: isAuthenticated(async (_, __, { user }) => {
+    getTransactionStats: withWorkspace(async (_, __, context) => {
+      const { workspaceId, user } = context;
       try {
         console.log(
-          "📈 Calcul des statistiques de transactions pour:",
-          user.id
+          "📈 Calcul des statistiques de transactions pour workspace:",
+          workspaceId
         );
 
         const now = new Date();
@@ -166,7 +220,7 @@ const bridgeResolvers = {
 
         // Transactions du mois en cours
         const monthlyTransactions = await Transaction.find({
-          userId: user.id,
+          workspaceId,
           date: { $gte: startOfMonth },
         });
 
@@ -701,10 +755,13 @@ const bridgeResolvers = {
     /**
      * Synchronise les transactions Bridge avec la base de données locale
      */
-    syncBridgeTransactions: isAuthenticated(async (_, __, { user }) => {
+    syncBridgeTransactions: withWorkspace(async (_, __, context) => {
+      const { workspaceId, user } = context;
       try {
         console.log(
-          "🔄 Synchronisation des transactions Bridge pour:",
+          "🔄 Synchronisation des transactions Bridge pour workspace:",
+          workspaceId,
+          "par utilisateur:",
           user.id
         );
 
@@ -784,6 +841,7 @@ const bridgeResolvers = {
         const bridgeTransactions = transactionsResponse.data.resources || [];
         const syncResults = await Transaction.syncBridgeTransactions(
           user.id,
+          workspaceId,
           bridgeTransactions
         );
 

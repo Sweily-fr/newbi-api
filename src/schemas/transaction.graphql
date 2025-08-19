@@ -80,11 +80,11 @@ type CategoryBreakdown {
 
 # Extensions des types existants
 extend type Query {
-  # Récupère les transactions récentes de l'utilisateur
-  getRecentTransactions(limit: Int): TransactionResponse!
+  # Récupère les transactions récentes du workspace
+  getRecentTransactions(workspaceId: ID!, limit: Int): TransactionResponse!
   
-  # Récupère les statistiques des transactions
-  getTransactionStats: TransactionStatsResponse!
+  # Récupère les statistiques des transactions du workspace
+  getTransactionStats(workspaceId: ID!): TransactionStatsResponse!
 }
 
 extend type Mutation {

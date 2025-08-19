@@ -9,17 +9,71 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { processFileWithOCR } from "../utils/ocrProcessor.js";
+import { isAuthenticated } from "../middlewares/auth.js";
+import {
+  isWorkspaceMember,
+  requireWorkspacePermission,
+} from "../middlewares/workspace.js";
+import {
+  createNotFoundError,
+  createResourceLockedError,
+  createValidationError,
+  AppError,
+  ERROR_CODES,
+} from "../utils/errors.js";
 
 const unlinkAsync = promisify(fs.unlink);
 const mkdirAsync = promisify(fs.mkdir);
 
+/**
+ * Wrapper pour les resolvers workspace
+ * Remplace isAuthenticated par la vérification workspace
+ */
+const withWorkspace = (resolver, requiredPermission = "read") => {
+  return async (parent, args, context, info) => {
+    try {
+      // Extraire workspaceId des arguments ou du contexte
+      const workspaceId = args.workspaceId || context.workspaceId;
+
+      if (!workspaceId) {
+        throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
+      }
+
+      // Vérifier l'appartenance au workspace
+      const workspaceContext = await isWorkspaceMember(
+        context.req,
+        workspaceId,
+        context.user
+      );
+
+      // Vérifier les permissions spécifiques
+      if (requiredPermission !== "read") {
+        requireWorkspacePermission(requiredPermission)(workspaceContext);
+      }
+
+      // Enrichir le contexte avec les informations workspace
+      const enrichedContext = {
+        ...context,
+        ...workspaceContext,
+      };
+
+      // Exécuter le resolver avec le contexte enrichi
+      return await resolver(parent, args, enrichedContext, info);
+    } catch (error) {
+      console.error(
+        `Erreur dans withWorkspace pour ${resolver.name}:`,
+        error.message
+      );
+      throw error;
+    }
+  };
+};
+
 // Fonction utilitaire pour vérifier si l'utilisateur est autorisé à accéder à une dépense
-const checkExpenseAccess = async (expenseId, userId) => {
-  const expense = await Expense.findOne({ _id: expenseId, createdBy: userId });
+const checkExpenseAccess = async (expenseId, workspaceId) => {
+  const expense = await Expense.findOne({ _id: expenseId, workspaceId });
   if (!expense) {
-    throw new ForbiddenError(
-      "Vous n'êtes pas autorisé à accéder à cette dépense"
-    );
+    throw createNotFoundError("Dépense");
   }
   return expense;
 };
@@ -81,16 +135,15 @@ const saveUploadedFile = async (file, userId) => {
 const expenseResolvers = {
   Query: {
     // Récupérer une dépense par son ID
-    expense: async (_, { id }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
-
-      return await checkExpenseAccess(id, user.id);
-    },
+    expense: withWorkspace(async (_, { id, workspaceId }, context) => {
+      return await checkExpenseAccess(id, workspaceId);
+    }),
 
     // Récupérer une liste paginée de dépenses avec filtres
-    expenses: async (
+    expenses: withWorkspace(async (
       _,
       {
+        workspaceId,
         startDate,
         endDate,
         category,
@@ -100,11 +153,9 @@ const expenseResolvers = {
         page = 1,
         limit = 10,
       },
-      { user }
+      context
     ) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
-
-      const query = { createdBy: user.id };
+      const query = { workspaceId };
 
       // Appliquer les filtres de date
       if (startDate || endDate) {
@@ -148,17 +199,15 @@ const expenseResolvers = {
         totalCount,
         hasNextPage: page * limit < totalCount,
       };
-    },
+    }),
 
     // Récupérer les statistiques des dépenses
-    expenseStats: async (_, { startDate, endDate }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
-
+    expenseStats: withWorkspace(async (_, { workspaceId, startDate, endDate }, context) => {
       const dateQuery = {};
       if (startDate) dateQuery.$gte = new Date(startDate);
       if (endDate) dateQuery.$lte = new Date(endDate);
 
-      const match = { createdBy: new mongoose.Types.ObjectId(user.id) };
+      const match = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
       if (startDate || endDate) match.date = dateQuery;
 
       // Aggrégation pour obtenir les statistiques
@@ -259,16 +308,17 @@ const expenseResolvers = {
           count: stat.count,
         })),
       };
-    },
+    }),
   },
 
   Mutation: {
     // Créer une nouvelle dépense
-    createExpense: async (_, { input }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    createExpense: withWorkspace(async (_, { input }, context) => {
+      const { workspaceId, user } = context;
 
       const expenseData = {
         ...input,
+        workspaceId,
         createdBy: user.id,
       };
 
@@ -289,13 +339,13 @@ const expenseResolvers = {
         }
         throw error;
       }
-    },
+    }),
 
     // Mettre à jour une dépense existante
-    updateExpense: async (_, { id, input }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    updateExpense: withWorkspace(async (_, { id, input }, context) => {
+      const { workspaceId } = context;
 
-      await checkExpenseAccess(id, user.id);
+      await checkExpenseAccess(id, workspaceId);
 
       // Log pour déboguer
       console.log("updateExpense - input reçu:", JSON.stringify(input));
@@ -326,13 +376,13 @@ const expenseResolvers = {
         }
         throw error;
       }
-    },
+    }),
 
     // Supprimer une dépense
-    deleteExpense: async (_, { id }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    deleteExpense: withWorkspace(async (_, { id }, context) => {
+      const { workspaceId } = context;
 
-      const expense = await checkExpenseAccess(id, user.id);
+      const expense = await checkExpenseAccess(id, workspaceId);
 
       // Supprimer les fichiers associés
       if (expense.files && expense.files.length > 0) {
@@ -350,11 +400,11 @@ const expenseResolvers = {
 
       await Expense.findByIdAndDelete(id);
       return { success: true, message: "Dépense supprimée avec succès" };
-    },
+    }),
 
     // Supprimer plusieurs dépenses
-    deleteMultipleExpenses: async (_, { ids }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    deleteMultipleExpenses: withWorkspace(async (_, { ids }, context) => {
+      const { workspaceId } = context;
 
       if (!ids || ids.length === 0) {
         throw new UserInputError("Aucun ID de dépense fourni");
@@ -396,13 +446,13 @@ const expenseResolvers = {
         message: `${deletedCount.success} dépense(s) supprimée(s) avec succès${deletedCount.failed > 0 ? `, ${deletedCount.failed} échec(s)` : ''}`,
         errors
       };
-    },
+    }),
 
     // Changer le statut d'une dépense
-    changeExpenseStatus: async (_, { id, status }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    changeExpenseStatus: withWorkspace(async (_, { id, status }, context) => {
+      const { workspaceId } = context;
 
-      const expense = await checkExpenseAccess(id, user.id);
+      const expense = await checkExpenseAccess(id, workspaceId);
 
       expense.status = status;
       if (status === "PAID" && !expense.paymentDate) {
@@ -411,13 +461,13 @@ const expenseResolvers = {
 
       await expense.save();
       return expense;
-    },
+    }),
 
     // Ajouter un fichier à une dépense
-    addExpenseFile: async (_, { expenseId, input }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    addExpenseFile: withWorkspace(async (_, { expenseId, input }, context) => {
+      const { workspaceId } = context;
 
-      const expense = await checkExpenseAccess(expenseId, user.id);
+      const expense = await checkExpenseAccess(expenseId, workspaceId);
 
       try {
         let fileData;
@@ -515,13 +565,13 @@ const expenseResolvers = {
           { error }
         );
       }
-    },
+    }),
 
     // Supprimer un fichier d'une dépense
-    removeExpenseFile: async (_, { expenseId, fileId }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    removeExpenseFile: withWorkspace(async (_, { expenseId, fileId }, context) => {
+      const { workspaceId } = context;
 
-      const expense = await checkExpenseAccess(expenseId, user.id);
+      const expense = await checkExpenseAccess(expenseId, workspaceId);
 
       // Trouver le fichier à supprimer
       const fileIndex = expense.files.findIndex(
@@ -549,13 +599,13 @@ const expenseResolvers = {
       await expense.save();
 
       return expense;
-    },
+    }),
 
     // Mettre à jour les métadonnées OCR d'une dépense
-    updateExpenseOCRMetadata: async (_, { expenseId, metadata }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    updateExpenseOCRMetadata: withWorkspace(async (_, { expenseId, metadata }, context) => {
+      const { workspaceId } = context;
 
-      const expense = await checkExpenseAccess(expenseId, user.id);
+      const expense = await checkExpenseAccess(expenseId, workspaceId);
 
       // Mettre à jour les métadonnées OCR
       expense.ocrMetadata = {
@@ -568,13 +618,13 @@ const expenseResolvers = {
 
       await expense.save();
       return expense;
-    },
+    }),
 
     // Déclencher manuellement l'analyse OCR d'un fichier
-    processExpenseFileOCR: async (_, { expenseId, fileId }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    processExpenseFileOCR: withWorkspace(async (_, { expenseId, fileId }, context) => {
+      const { workspaceId } = context;
 
-      const expense = await checkExpenseAccess(expenseId, user.id);
+      const expense = await checkExpenseAccess(expenseId, workspaceId);
 
       // Trouver le fichier à traiter
       const fileIndex = expense.files.findIndex(
@@ -620,13 +670,13 @@ const expenseResolvers = {
           { error }
         );
       }
-    },
+    }),
 
     // Appliquer les données OCR aux champs de la dépense
-    applyOCRDataToExpense: async (_, { expenseId }, { user }) => {
-      if (!user) throw new ForbiddenError("Vous devez être connecté");
+    applyOCRDataToExpense: withWorkspace(async (_, { expenseId }, context) => {
+      const { workspaceId } = context;
 
-      const expense = await checkExpenseAccess(expenseId, user.id);
+      const expense = await checkExpenseAccess(expenseId, workspaceId);
 
       // Vérifier si des métadonnées OCR sont disponibles
       if (
@@ -675,7 +725,7 @@ const expenseResolvers = {
 
       await expense.save();
       return expense;
-    },
+    }),
   },
 
   // Résolveurs de type
