@@ -21,7 +21,10 @@ class CloudflareService {
   constructor() {
     // Debug: Vérifier les variables d'environnement
     console.log("🔧 Configuration Cloudflare R2:");
-    console.log("  AWS_S3_BUCKET_NAME:", process.env.AWS_S3_BUCKET_NAME);
+    console.log("  IMAGE_BUCKET_NAME:", process.env.IMAGE_BUCKET_NAME);
+    console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
+    console.log("  LOGO_BUCKET_NAME:", process.env.LOGO_BUCKET_NAME);
+    console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
     console.log("  AWS_S3_API_URL:", process.env.AWS_S3_API_URL);
     console.log(
       "  AWS_ACCESS_KEY_ID:",
@@ -31,7 +34,6 @@ class CloudflareService {
       "  AWS_SECRET_ACCESS_KEY:",
       process.env.AWS_SECRET_ACCESS_KEY ? "✅ Définie" : "❌ Manquante"
     );
-    console.log("  AWS_R2_PUBLIC_URL:", process.env.AWS_R2_PUBLIC_URL);
 
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
@@ -43,13 +45,12 @@ class CloudflareService {
       },
     });
 
-    this.bucketName = process.env.AWS_S3_BUCKET_NAME;
-    this.publicUrl =
-      process.env.AWS_R2_PUBLIC_URL || process.env.CLOUDFLARE_R2_PUBLIC_URL; // URL publique de votre domaine custom
+    this.bucketName = process.env.IMAGE_BUCKET_NAME;
+    this.publicUrl = process.env.IMAGE_PUBLIC_URL; // URL publique de votre domaine custom
 
     if (!this.bucketName) {
-      console.error("❌ ERREUR: AWS_S3_BUCKET_NAME n'est pas définie!");
-      throw new Error("Configuration manquante: AWS_S3_BUCKET_NAME");
+      console.error("❌ ERREUR: IMAGE_BUCKET_NAME n'est pas définie!");
+      throw new Error("Configuration manquante: IMAGE_BUCKET_NAME");
     }
   }
 
@@ -113,12 +114,9 @@ class CloudflareService {
       let imageUrl;
 
       // Utilisation directe des URLs publiques Cloudflare R2
-      if (
-        process.env.AWS_R2_PUBLIC_URL &&
-        process.env.AWS_R2_PUBLIC_URL !== "your_r2_public_url"
-      ) {
-        imageUrl = `${process.env.AWS_R2_PUBLIC_URL}/${key}`;
-        console.log("🌐 URL publique Cloudflare R2 générée:", imageUrl);
+      if (this.publicUrl && this.publicUrl !== "https://your_image_bucket_public_url") {
+        imageUrl = `${this.publicUrl}/${key}`;
+        console.log("🌐 URL publique IMAGE_BUCKET générée:", imageUrl);
       } else {
         // Fallback sur le proxy backend si pas d'URL publique configurée
         console.log(
@@ -153,6 +151,79 @@ class CloudflareService {
     } catch (error) {
       console.error("Erreur upload Cloudflare:", error);
       throw new Error(`Échec de l'upload vers Cloudflare: ${error.message}`);
+    }
+  }
+
+  /**
+   * Upload un logo social vers le bucket logo-rs
+   * @param {Buffer} fileBuffer - Buffer de l'image
+   * @param {string} fileName - Nom original du fichier
+   * @param {string} logoType - Type de logo ('facebook', 'linkedin', etc.)
+   * @param {string} color - Couleur du logo
+   * @returns {Promise<{key: string, url: string}>}
+   */
+  async uploadSocialLogo(fileBuffer, fileName, logoType, color) {
+    try {
+      // Configuration spécifique pour le bucket logo-rs
+      const logoBucketName = process.env.LOGO_BUCKET_NAME || 'logo-rs';
+      const logoPublicUrl = process.env.LOGO_PUBLIC_URL;
+      
+      // Créer un client S3 spécifique pour les logos (même config mais différent bucket)
+      const logoClient = new S3Client({
+        region: "auto",
+        endpoint: process.env.AWS_S3_API_URL,
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        },
+      });
+      
+      // Générer une clé unique pour le logo social
+      const fileExtension = path.extname(fileName).toLowerCase();
+      const timestamp = Date.now();
+      const colorHash = color.replace('#', '');
+      const key = `social-logos/${logoType}/${colorHash}/${timestamp}${fileExtension}`;
+
+      // Déterminer le content-type
+      const contentType = this.getContentType(fileExtension);
+
+      console.log(`🎨 Upload logo ${logoType} couleur ${color} vers bucket ${logoBucketName}`);
+
+      // Commande d'upload vers le bucket logo-rs
+      const command = new PutObjectCommand({
+        Bucket: logoBucketName,
+        Key: key,
+        Body: fileBuffer,
+        ContentType: contentType,
+        CacheControl: 'public, max-age=31536000', // Cache 1 an
+        Metadata: {
+          logoType: logoType,
+          color: color,
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      await logoClient.send(command);
+
+      // Générer l'URL publique
+      let imageUrl;
+      if (logoPublicUrl) {
+        imageUrl = `${logoPublicUrl}/${key}`;
+        console.log("🌐 URL publique logo-rs générée:", imageUrl);
+      } else {
+        // Fallback sur URL signée si pas d'URL publique
+        imageUrl = await this.getSignedUrl(key, 86400);
+        console.log("🔗 URL signée générée pour logo:", imageUrl);
+      }
+
+      return {
+        key,
+        url: imageUrl,
+        contentType,
+      };
+    } catch (error) {
+      console.error("Erreur upload logo social:", error);
+      throw new Error(`Échec de l'upload du logo social: ${error.message}`);
     }
   }
 

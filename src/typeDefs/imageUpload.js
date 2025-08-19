@@ -79,6 +79,15 @@ const imageUploadTypeDefs = gql`
     Supprime l'image de profil utilisateur de Cloudflare R2
     """
     deleteUserProfileImage: ImageDeleteResult!
+
+    """
+    Upload un logo social vers le bucket logo-rs
+    """
+    uploadSocialLogo(
+      file: Upload!
+      logoType: String!
+      color: String!
+    ): ImageUploadResult!
   }
 `;
 

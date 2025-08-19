@@ -295,6 +295,83 @@ const imageUploadResolvers = {
         );
       }
     }),
+
+    /**
+     * Upload un logo social vers le bucket logo-rs
+     */
+    uploadSocialLogo: async (_, { file, logoType, color }) => {
+      try {
+        const { createReadStream, filename, mimetype } = await file;
+
+        // Validation du type de logo
+        const validLogoTypes = ['facebook', 'linkedin', 'twitter', 'instagram'];
+        if (!validLogoTypes.includes(logoType)) {
+          throw createValidationError(
+            'Type de logo invalide. Utilisez facebook, linkedin, twitter ou instagram'
+          );
+        }
+
+        // Validation de la couleur (format hex)
+        if (!color || !/^#[0-9A-F]{6}$/i.test(color)) {
+          throw createValidationError(
+            'Couleur invalide. Utilisez un format hexadécimal (#RRGGBB)'
+          );
+        }
+
+        // Validation du nom de fichier
+        if (!cloudflareService.isValidImageFile(filename)) {
+          throw createValidationError(
+            "Format d'image non supporté. Utilisez JPG, PNG, GIF ou WebP"
+          );
+        }
+
+        // Validation du MIME type
+        if (!mimetype.startsWith("image/")) {
+          throw createValidationError("Le fichier doit être une image");
+        }
+
+        // Lire le fichier en buffer
+        const stream = createReadStream();
+        const chunks = [];
+
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+
+        const fileBuffer = Buffer.concat(chunks);
+
+        // Validation de la taille
+        if (!cloudflareService.isValidFileSize(fileBuffer)) {
+          throw createValidationError(
+            "L'image est trop volumineuse (max 5MB)"
+          );
+        }
+
+        // Upload vers le bucket logo-rs
+        const result = await cloudflareService.uploadSocialLogo(
+          fileBuffer,
+          filename,
+          logoType,
+          color
+        );
+
+        return {
+          success: true,
+          key: result.key,
+          url: result.url,
+          contentType: result.contentType,
+          message: "Logo social uploadé avec succès",
+        };
+      } catch (error) {
+        console.error("Erreur upload logo social:", error);
+
+        if (error.message.includes("Validation")) {
+          throw error;
+        }
+
+        throw createInternalServerError("Erreur lors de l'upload du logo social");
+      }
+    },
   },
 };
 
