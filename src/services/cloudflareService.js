@@ -21,7 +21,8 @@ class CloudflareService {
   constructor() {
     // Debug: Vérifier les variables d'environnement
     console.log("🔧 Configuration Cloudflare R2:");
-    console.log("  AWS_S3_BUCKET_NAME:", process.env.AWS_S3_BUCKET_NAME);
+    console.log("  IMAGE_BUCKET_NAME:", process.env.IMAGE_BUCKET_NAME);
+    console.log("  LOGO_BUCKET_NAME:", process.env.LOGO_BUCKET_NAME);
     console.log("  AWS_S3_API_URL:", process.env.AWS_S3_API_URL);
     console.log(
       "  AWS_ACCESS_KEY_ID:",
@@ -31,7 +32,8 @@ class CloudflareService {
       "  AWS_SECRET_ACCESS_KEY:",
       process.env.AWS_SECRET_ACCESS_KEY ? "✅ Définie" : "❌ Manquante"
     );
-    console.log("  AWS_R2_PUBLIC_URL:", process.env.AWS_R2_PUBLIC_URL);
+    console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
+    console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
 
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
@@ -43,13 +45,25 @@ class CloudflareService {
       },
     });
 
-    this.bucketName = process.env.AWS_S3_BUCKET_NAME;
-    this.publicUrl =
-      process.env.AWS_R2_PUBLIC_URL || process.env.CLOUDFLARE_R2_PUBLIC_URL; // URL publique de votre domaine custom
+    // Configuration des buckets séparés
+    this.imageBucketName = process.env.IMAGE_BUCKET_NAME;
+    this.logoBucketName = process.env.LOGO_BUCKET_NAME;
+    this.imagePublicUrl = process.env.IMAGE_PUBLIC_URL;
+    this.logoPublicUrl = process.env.LOGO_PUBLIC_URL;
 
-    if (!this.bucketName) {
-      console.error("❌ ERREUR: AWS_S3_BUCKET_NAME n'est pas définie!");
-      throw new Error("Configuration manquante: AWS_S3_BUCKET_NAME");
+    // Client séparé pour le bucket des logos
+    this.logoClient = new S3Client({
+      region: "auto",
+      endpoint: process.env.AWS_S3_API_URL,
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    });
+
+    if (!this.imageBucketName || !this.logoBucketName) {
+      console.error("❌ ERREUR: IMAGE_BUCKET_NAME ou LOGO_BUCKET_NAME manquant!");
+      throw new Error("Configuration manquante: IMAGE_BUCKET_NAME et LOGO_BUCKET_NAME requis");
     }
   }
 
@@ -95,7 +109,7 @@ class CloudflareService {
 
       // Commande d'upload
       const command = new PutObjectCommand({
-        Bucket: this.bucketName,
+        Bucket: this.imageBucketName,
         Key: key,
         Body: fileBuffer,
         ContentType: contentType,
@@ -114,10 +128,10 @@ class CloudflareService {
 
       // Utilisation directe des URLs publiques Cloudflare R2
       if (
-        process.env.AWS_R2_PUBLIC_URL &&
-        process.env.AWS_R2_PUBLIC_URL !== "your_r2_public_url"
+        this.imagePublicUrl &&
+        this.imagePublicUrl !== "https://your_image_bucket_public_url"
       ) {
-        imageUrl = `${process.env.AWS_R2_PUBLIC_URL}/${key}`;
+        imageUrl = `${this.imagePublicUrl}/${key}`;
         console.log("🌐 URL publique Cloudflare R2 générée:", imageUrl);
       } else {
         // Fallback sur le proxy backend si pas d'URL publique configurée
@@ -188,7 +202,7 @@ class CloudflareService {
       console.log("🔗 Génération URL signée pour:", key);
 
       const command = new GetObjectCommand({
-        Bucket: this.bucketName,
+        Bucket: this.imageBucketName,
         Key: key,
       });
 
@@ -218,7 +232,7 @@ class CloudflareService {
   async deleteImage(key) {
     try {
       const command = new DeleteObjectCommand({
-        Bucket: this.bucketName,
+        Bucket: this.imageBucketName,
         Key: key,
       });
 
