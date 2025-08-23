@@ -1,23 +1,26 @@
 import Client from '../models/Client.js';
 import Invoice from '../models/Invoice.js';
 import Quote from '../models/Quote.js';
-import { isAuthenticated } from '../middlewares/auth.js';
+import { isAuthenticated, withWorkspace } from '../middlewares/better-auth.js';
 import { 
   createNotFoundError, 
   createAlreadyExistsError,
   createResourceInUseError
 } from '../utils/errors.js';
+import mongoose from 'mongoose';
 
 const clientResolvers = {
   Query: {
-    client: isAuthenticated(async (_, { id }, { user }) => {
-      const client = await Client.findOne({ _id: id, createdBy: user.id });
+    client: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const client = await Client.findOne({ _id: id, workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId) });
       if (!client) throw createNotFoundError('Client');
       return client;
     }),
 
-    clients: isAuthenticated(async (_, { page = 1, limit = 10, search }, { user }) => {
-      const query = { createdBy: user.id };
+    clients: withWorkspace(async (_, { page = 1, limit = 10, search, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const query = { workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId) };
       
       if (search) {
         query.$or = [
@@ -60,11 +63,12 @@ const clientResolvers = {
   },
 
   Mutation: {
-    createClient: isAuthenticated(async (_, { input }, { user }) => {
-      // Vérifier si un client avec cet email existe déjà
+    createClient: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      
       const existingClient = await Client.findOne({ 
         email: input.email.toLowerCase(),
-        createdBy: user.id 
+        workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId)
       });
       
       if (existingClient) {
@@ -87,25 +91,27 @@ const clientResolvers = {
       const client = new Client({
         ...input,
         email: input.email.toLowerCase(),
-        createdBy: user.id
+        createdBy: user.id,
+        workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId)
       });
       
       await client.save();
       return client;
     }),
 
-    updateClient: isAuthenticated(async (_, { id, input }, { user }) => {
-      const client = await Client.findOne({ _id: id, createdBy: user.id });
+    updateClient: withWorkspace(async (_, { id, input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const client = await Client.findOne({ _id: id, workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId) });
       
       if (!client) {
         throw createNotFoundError('Client');
       }
       
-      // Si l'email est modifié, vérifier qu'il n'existe pas déjà
+      // Si l'email est modifié, vérifier qu'il n'existe pas déjà dans ce workspace
       if (input.email && input.email !== client.email) {
         const existingClient = await Client.findOne({ 
           email: input.email.toLowerCase(),
-          createdBy: user.id,
+          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
           _id: { $ne: id }
         });
         
@@ -138,8 +144,9 @@ const clientResolvers = {
       return client;
     }),
 
-    deleteClient: isAuthenticated(async (_, { id }, { user }) => {
-      const client = await Client.findOne({ _id: id, createdBy: user.id });
+    deleteClient: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const client = await Client.findOne({ _id: id, workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId) });
       
       if (!client) {
         throw createNotFoundError('Client');
@@ -148,7 +155,7 @@ const clientResolvers = {
       // Vérifier si le client est utilisé dans des factures
       const invoiceCount = await Invoice.countDocuments({ 
         'client.id': id, // Utiliser l'ID du client plutôt que l'email
-        createdBy: user.id
+        workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId)
       });
       
       if (invoiceCount > 0) {
@@ -158,14 +165,14 @@ const clientResolvers = {
       // Vérifier si le client est utilisé dans des devis
       const quoteCount = await Quote.countDocuments({ 
         'client.id': id, // Utiliser l'ID du client plutôt que l'email
-        createdBy: user.id
+        workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId)
       });
       
       if (quoteCount > 0) {
         throw createResourceInUseError('client', 'devis');
       }
       
-      await Client.deleteOne({ _id: id, createdBy: user.id });
+      await Client.deleteOne({ _id: id, workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId) });
       return true;
     })
   }

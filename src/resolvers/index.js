@@ -19,8 +19,8 @@ import chunkUploadResolvers from './chunkUpload.js';
 import imageUploadResolvers from './imageUpload.js';
 import documentUploadResolvers from './documentUpload.js';
 import ocrResolvers from './ocr.js';
-import bridgeResolvers from './bridge.js';
 import eventResolvers from './event.js';
+import bankingResolvers from './banking.js';
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -43,8 +43,8 @@ const resolvers = mergeResolvers([
   imageUploadResolvers,
   documentUploadResolvers,
   ocrResolvers,
-  bridgeResolvers,
-  eventResolvers
+  eventResolvers,
+  bankingResolvers
 ]);
 
 export default resolvers;

@@ -81,16 +81,17 @@ extend type Query {
     type: EventType
     limit: Int = 100
     offset: Int = 0
+    workspaceId: ID
   ): EventsResponse!
   
-  getEvent(id: ID!): EventResponse!
+  getEvent(id: ID!, workspaceId: ID): EventResponse!
 }
 
 extend type Mutation {
-  createEvent(input: CreateEventInput!): EventResponse!
-  updateEvent(input: UpdateEventInput!): EventResponse!
-  deleteEvent(id: ID!): EventResponse!
+  createEvent(input: CreateEventInput!, workspaceId: ID): EventResponse!
+  updateEvent(input: UpdateEventInput!, workspaceId: ID): EventResponse!
+  deleteEvent(id: ID!, workspaceId: ID): EventResponse!
   
   # Synchroniser les événements avec les factures
-  syncInvoiceEvents: EventsResponse!
+  syncInvoiceEvents(workspaceId: ID): EventsResponse!
 }

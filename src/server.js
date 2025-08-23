@@ -21,7 +21,11 @@ import logger from "./utils/logger.js";
 import { betterAuthMiddleware } from "./middlewares/better-auth.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
-import webhookRoutes from "./routes/webhook.js";
+import webhookRoutes from './routes/webhook.js';
+import bankingRoutes from './routes/banking.js';
+import bankingConnectRoutes from './routes/banking-connect.js';
+import bankingSyncRoutes from './routes/banking-sync.js';
+import { initializeBankingSystem } from "./services/banking/index.js";
 
 // Configuration des chemins
 const __filename = fileURLToPath(import.meta.url);
@@ -101,6 +105,7 @@ async function startServer() {
         "Accept",
         "Range",
         "apollo-require-preflight",
+        "x-workspace-id",
       ],
       exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
     })
@@ -108,6 +113,11 @@ async function startServer() {
 
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
+  
+  // Routes banking
+  app.use("/banking", bankingRoutes);
+  app.use("/banking-connect", bankingConnectRoutes);
+  app.use("/banking-sync", bankingSyncRoutes);
 
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
@@ -132,6 +142,13 @@ async function startServer() {
 
   await server.start();
   server.applyMiddleware({ app, cors: false });
+
+  // Initialiser le système banking
+  try {
+    await initializeBankingSystem();
+  } catch (error) {
+    logger.warn('⚠️ Système banking non disponible:', error.message);
+  }
 
   // Démarrer le serveur
   const PORT = process.env.PORT || 4000;

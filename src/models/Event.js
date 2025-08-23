@@ -139,12 +139,12 @@ eventSchema.statics.createInvoiceDueEvent = async function(invoice, userId, work
   }
 };
 
-eventSchema.statics.updateInvoiceEvent = async function(invoice, userId) {
+eventSchema.statics.updateInvoiceEvent = async function(invoice, userId, workspaceId) {
   try {
     const event = await this.findOne({ 
       invoiceId: invoice._id,
       type: 'INVOICE_DUE',
-      userId: userId
+      workspaceId: workspaceId || invoice.workspaceId
     });
     
     if (event) {

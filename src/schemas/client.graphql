@@ -4,10 +4,10 @@
 
 extend type Query {
   # Get a single client by ID
-  client(id: ID!): Client!
+  client(workspaceId: String, id: ID!): Client!
   
   # Get all clients for the current user's company with pagination
-  clients(page: Int, limit: Int, search: String): ClientsResult!
+  clients(workspaceId: String, page: Int, limit: Int, search: String): ClientsResult!
 }
 
 # Type pour les résultats paginés des clients
@@ -20,11 +20,11 @@ type ClientsResult {
 
 extend type Mutation {
   # Create a new client
-  createClient(input: ClientInput!): Client!
+  createClient(workspaceId: String, input: ClientInput!): Client!
   
   # Update an existing client
-  updateClient(id: ID!, input: ClientInput!): Client!
+  updateClient(workspaceId: String, id: ID!, input: ClientInput!): Client!
   
   # Delete a client
-  deleteClient(id: ID!): Boolean!
+  deleteClient(workspaceId: String, id: ID!): Boolean!
 }

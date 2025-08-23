@@ -1,0 +1,302 @@
+# Types pour le système banking
+
+type Transaction {
+  id: ID!
+  externalId: String!
+  provider: BankingProvider!
+  type: TransactionType!
+  status: TransactionStatus!
+  amount: Float!
+  currency: String!
+  description: String!
+  fromAccount: String
+  toAccount: String
+  workspaceId: String!
+  userId: ID!
+  processedAt: DateTime
+  failureReason: String
+  fees: TransactionFees
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type TransactionFees {
+  amount: Float!
+  currency: String!
+  provider: String
+}
+
+type AccountBanking {
+  id: ID!
+  externalId: String!
+  provider: BankingProvider!
+  type: AccountType!
+  status: AccountStatus!
+  balance: AccountBalance!
+  accountNumber: String
+  routingNumber: String
+  iban: String
+  bic: String
+  bankName: String!
+  accountHolder: AccountHolder!
+  workspaceId: String!
+  userId: ID!
+  lastSyncAt: DateTime!
+  notifications: AccountNotifications
+  limits: AccountLimits
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type AccountBalance {
+  available: Float!
+  current: Float!
+  currency: String!
+}
+
+type AccountHolder {
+  name: String!
+  email: String!
+}
+
+type AccountNotifications {
+  lowBalance: LowBalanceNotification
+  transactions: TransactionNotification
+}
+
+type LowBalanceNotification {
+  enabled: Boolean!
+  threshold: Float!
+}
+
+type TransactionNotification {
+  enabled: Boolean!
+}
+
+type AccountLimits {
+  daily: Float
+  monthly: Float
+  perTransaction: Float
+}
+
+type ApiMetric {
+  id: ID!
+  provider: BankingProvider!
+  endpoint: String!
+  method: String!
+  requestCount: Int!
+  successCount: Int!
+  errorCount: Int!
+  responseTime: ResponseTimeMetrics!
+  cost: CostMetrics!
+  date: DateTime!
+  workspaceId: String!
+  errors: [ApiError!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type ResponseTimeMetrics {
+  total: Float!
+  average: Float!
+  min: Float
+  max: Float
+}
+
+type CostMetrics {
+  total: Float!
+  perRequest: Float!
+  currency: String!
+}
+
+type ApiError {
+  code: String!
+  message: String!
+  count: Int!
+  lastOccurrence: DateTime!
+}
+
+type PaymentResult {
+  transaction: Transaction!
+  success: Boolean!
+  message: String
+}
+
+type RefundResult {
+  transaction: Transaction!
+  success: Boolean!
+  message: String
+}
+
+type ProviderStats {
+  provider: BankingProvider!
+  totalRequests: Int!
+  totalCost: Float!
+  avgResponseTime: Float!
+  successRate: Float!
+}
+
+type CostComparison {
+  provider: BankingProvider!
+  totalCost: Float!
+  totalRequests: Int!
+  avgCostPerRequest: Float!
+}
+
+# Enums
+
+enum BankingProvider {
+  BRIDGE
+  STRIPE
+  PAYPAL
+  MOCK
+}
+
+enum TransactionType {
+  PAYMENT
+  REFUND
+  TRANSFER
+  WITHDRAWAL
+  DEPOSIT
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  CREDIT
+  BUSINESS
+  INVESTMENT
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+# Inputs
+
+input ProcessPaymentInput {
+  amount: Float!
+  currency: String!
+  description: String!
+  fromAccount: String!
+  toAccount: String!
+  beneficiaryName: String
+  metadata: JSON
+  idempotencyKey: String
+}
+
+input ProcessRefundInput {
+  transactionId: ID!
+  amount: Float
+  reason: String
+  metadata: JSON
+}
+
+input CreateAccountInput {
+  type: AccountType!
+  holderName: String!
+  holderEmail: String!
+  metadata: JSON
+}
+
+input UpdateAccountInput {
+  notifications: AccountNotificationsInput
+  limits: AccountLimitsInput
+}
+
+input AccountNotificationsInput {
+  lowBalance: LowBalanceNotificationInput
+  transactions: TransactionNotificationInput
+}
+
+input LowBalanceNotificationInput {
+  enabled: Boolean!
+  threshold: Float!
+}
+
+input TransactionNotificationInput {
+  enabled: Boolean!
+}
+
+input AccountLimitsInput {
+  daily: Float
+  monthly: Float
+  perTransaction: Float
+}
+
+input TransactionFiltersInput {
+  type: TransactionType
+  status: TransactionStatus
+  minAmount: Float
+  maxAmount: Float
+  startDate: DateTime
+  endDate: DateTime
+  accountId: String
+  sync: Boolean
+}
+
+input MetricsFiltersInput {
+  provider: BankingProvider
+  startDate: DateTime!
+  endDate: DateTime!
+}
+
+# Queries
+
+extend type Query {
+  # Transactions
+  transactions(filters: TransactionFiltersInput, limit: Int, offset: Int): [Transaction!]!
+  transaction(id: ID!): Transaction
+  transactionByExternalId(provider: BankingProvider!, externalId: String!): Transaction
+  
+  # Comptes
+  bankingAccounts: [AccountBanking!]!
+  bankingAccount(id: ID!): AccountBanking
+  accountBalance(accountId: String!): AccountBalance!
+  
+  # Métriques
+  apiMetrics(filters: MetricsFiltersInput!): [ApiMetric!]!
+  providerStats(provider: BankingProvider!, startDate: DateTime!, endDate: DateTime!): ProviderStats
+  costComparison(startDate: DateTime!, endDate: DateTime!): [CostComparison!]!
+  
+  # Historique
+  transactionHistory(accountId: String!, filters: TransactionFiltersInput): [Transaction!]!
+}
+
+# Mutations
+
+extend type Mutation {
+  # Paiements
+  processPayment(input: ProcessPaymentInput!): PaymentResult!
+  processRefund(input: ProcessRefundInput!): RefundResult!
+  
+  # Gestion des comptes
+  createBankingAccount(input: CreateAccountInput!): AccountBanking!
+  updateBankingAccount(id: ID!, input: UpdateAccountInput!): AccountBanking!
+  deleteBankingAccount(id: ID!): Boolean!
+  syncAccountBalance(accountId: String!): AccountBalance!
+  
+  # Administration
+  switchBankingProvider(provider: BankingProvider!): Boolean!
+  syncTransactionHistory(accountId: String!): [Transaction!]!
+}
+
+# Subscriptions
+
+extend type Subscription {
+  transactionUpdated(workspaceId: String!): Transaction!
+  accountBalanceUpdated(accountId: String!): AccountBalance!
+  apiMetricsUpdated(workspaceId: String!): ApiMetric!
+}

@@ -1,52 +1,54 @@
 // resolvers/kanban.js
 import { Board, Column, Task } from '../models/kanban.js';
 import { AuthenticationError } from 'apollo-server-express';
+import { withWorkspace } from '../middlewares/better-auth.js';
 
 const resolvers = {
   Query: {
-    boards: async (_, __, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
-      return await Board.find({ userId: user.id }).sort({ createdAt: -1 });
-    },
+    boards: withWorkspace(async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      return await Board.find({ workspaceId: finalWorkspaceId }).sort({ createdAt: -1 });
+    }),
     
-    board: async (_, { id }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
-      const board = await Board.findOne({ _id: id, userId: user.id });
+    board: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const board = await Board.findOne({ _id: id, workspaceId: finalWorkspaceId });
       if (!board) throw new Error('Board not found');
       return board;
-    },
+    }),
     
-    columns: async (_, { boardId }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
-      return await Column.find({ boardId, userId: user.id }).sort('order');
-    },
+    columns: withWorkspace(async (_, { boardId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      return await Column.find({ boardId, workspaceId: finalWorkspaceId }).sort('order');
+    }),
     
-    column: async (_, { id }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
-      return await Column.findOne({ _id: id, userId: user.id });
-    },
+    column: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      return await Column.findOne({ _id: id, workspaceId: finalWorkspaceId });
+    }),
     
-    tasks: async (_, { boardId, columnId }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
-      const query = { boardId, userId: user.id };
+    tasks: withWorkspace(async (_, { boardId, columnId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const query = { boardId, workspaceId: finalWorkspaceId };
       if (columnId) query.columnId = columnId;
       return await Task.find(query).sort('position');
-    },
+    }),
     
-    task: async (_, { id }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
-      return await Task.findOne({ _id: id, userId: user.id });
-    }
+    task: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      return await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
+    })
   },
   
   Mutation: {
     // Board mutations
-    createBoard: async (_, { input }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    createBoard: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       const board = new Board({
         ...input,
-        userId: user.id
+        userId: user.id,
+        workspaceId: finalWorkspaceId
       });
       
       const savedBoard = await board.save();
@@ -68,7 +70,8 @@ const resolvers = {
             color: columnData.color,
             order: columnData.order,
             boardId: savedBoard.id,
-            userId: user.id
+            userId: user.id,
+            workspaceId: finalWorkspaceId
           });
           
           await column.save();
@@ -78,87 +81,88 @@ const resolvers = {
       }
       
       return savedBoard;
-    },
+    }),
     
-    updateBoard: async (_, { input }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    updateBoard: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const board = await Board.findOneAndUpdate(
-        { _id: input.id, userId: user.id },
+        { _id: input.id, workspaceId: finalWorkspaceId },
         { ...input, updatedAt: new Date() },
         { new: true }
       );
       if (!board) throw new Error('Board not found');
       return board;
-    },
+    }),
     
-    deleteBoard: async (_, { id }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    deleteBoard: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
         // Supprimer les tâches associées au tableau
-        await Task.deleteMany({ boardId: id, userId: user.id });
+        await Task.deleteMany({ boardId: id, workspaceId: finalWorkspaceId });
         
         // Supprimer les colonnes associées au tableau
-        await Column.deleteMany({ boardId: id, userId: user.id });
+        await Column.deleteMany({ boardId: id, workspaceId: finalWorkspaceId });
         
         // Supprimer le tableau
-        const result = await Board.deleteOne({ _id: id, userId: user.id });
+        const result = await Board.deleteOne({ _id: id, workspaceId: finalWorkspaceId });
         
         return result.deletedCount > 0;
       } catch (error) {
         console.error('Error deleting board:', error);
         throw new Error('Failed to delete board');
       }
-    },
+    }),
     
     // Column mutations
-    createColumn: async (_, { input }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    createColumn: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       const column = new Column({
         ...input,
-        userId: user.id
+        userId: user.id,
+        workspaceId: finalWorkspaceId
       });
       
       return await column.save();
-    },
+    }),
     
-    updateColumn: async (_, { input }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    updateColumn: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const { id, ...updates } = input;
       const column = await Column.findOneAndUpdate(
-        { _id: id, userId: user.id },
+        { _id: id, workspaceId: finalWorkspaceId },
         { ...updates, updatedAt: new Date() },
         { new: true }
       );
       if (!column) throw new Error('Column not found');
       return column;
-    },
+    }),
     
-    deleteColumn: async (_, { id }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    deleteColumn: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
         // Supprimer les tâches associées à la colonne
-        await Task.deleteMany({ columnId: id, userId: user.id });
+        await Task.deleteMany({ columnId: id, workspaceId: finalWorkspaceId });
         
         // Supprimer la colonne
-        const result = await Column.deleteOne({ _id: id, userId: user.id });
+        const result = await Column.deleteOne({ _id: id, workspaceId: finalWorkspaceId });
         
         return result.deletedCount > 0;
       } catch (error) {
         console.error('Error deleting column:', error);
         throw new Error('Failed to delete column');
       }
-    },
+    }),
     
-    reorderColumns: async (_, { columns }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    reorderColumns: withWorkspace(async (_, { columns, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
         const updatePromises = columns.map((id, index) =>
           Column.updateOne(
-            { _id: id, userId: user.id },
+            { _id: id, workspaceId: finalWorkspaceId },
             { $set: { order: index, updatedAt: new Date() } }
           )
         );
@@ -169,43 +173,44 @@ const resolvers = {
         console.error('Error reordering columns:', error);
         throw new Error('Failed to reorder columns');
       }
-    },
+    }),
     
     // Task mutations
-    createTask: async (_, { input }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    createTask: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const task = new Task({
         ...input,
         userId: user.id,
+        workspaceId: finalWorkspaceId,
         position: input.position || 0
       });
       return await task.save();
-    },
+    }),
     
-    updateTask: async (_, { input }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    updateTask: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const { id, ...updates } = input;
       const task = await Task.findOneAndUpdate(
-        { _id: id, userId: user.id },
+        { _id: id, workspaceId: finalWorkspaceId },
         { ...updates, updatedAt: new Date() },
         { new: true }
       );
       if (!task) throw new Error('Task not found');
       return task;
-    },
+    }),
     
-    deleteTask: async (_, { id }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
-      const result = await Task.deleteOne({ _id: id, userId: user.id });
+    deleteTask: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const result = await Task.deleteOne({ _id: id, workspaceId: finalWorkspaceId });
       return result.deletedCount > 0;
-    },
+    }),
     
-    moveTask: async (_, { id, columnId, position }, { user }) => {
-      if (!user) throw new AuthenticationError('Not authenticated');
+    moveTask: withWorkspace(async (_, { id, columnId, position, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
         // Get the task to move
-        const task = await Task.findOne({ _id: id, userId: user.id });
+        const task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
         if (!task) throw new Error('Task not found');
         
         // If the column is changing, update the column reference
@@ -223,7 +228,7 @@ const resolvers = {
           boardId: task.boardId,
           columnId: columnId,
           _id: { $ne: task._id },
-          userId: user.id
+          workspaceId: finalWorkspaceId
         }).sort('position');
         
         // Update positions of other tasks in the column
@@ -251,17 +256,17 @@ const resolvers = {
         console.error('Error moving task:', error);
         throw new Error('Failed to move task');
       }
-    }
+    })
   },
   
   Board: {
     columns: async (board, _, { user }) => {
       if (!user) throw new AuthenticationError('Not authenticated');
-      return await Column.find({ boardId: board.id, userId: user.id }).sort({ order: 1 });
+      return await Column.find({ boardId: board.id, workspaceId: board.workspaceId }).sort({ order: 1 });
     },
     tasks: async (parent, _, { user }) => {
       if (!user) return [];
-      return await Task.find({ boardId: parent.id, userId: user.id }).sort('position');
+      return await Task.find({ boardId: parent.id, workspaceId: parent.workspaceId }).sort('position');
     }
   },
   

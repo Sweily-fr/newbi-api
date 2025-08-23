@@ -77,6 +77,10 @@ const clientSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true
   }
 }, {
   timestamps: true
@@ -84,7 +88,8 @@ const clientSchema = new mongoose.Schema({
 
 // Index pour améliorer les performances des recherches
 clientSchema.index({ createdBy: 1 });
-clientSchema.index({ email: 1, createdBy: 1 }, { unique: true });
+clientSchema.index({ workspaceId: 1 });
+clientSchema.index({ email: 1, workspaceId: 1 }, { unique: true });
 clientSchema.index({ name: 'text' }, { weights: { name: 10 } });
 
 export default mongoose.model('Client', clientSchema);

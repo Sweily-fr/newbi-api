@@ -1,5 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
+import { bankingService } from '../services/banking/index.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -32,7 +34,7 @@ const verifyBridgeSignature = (payload, signature, secret) => {
 };
 
 // Endpoint webhook Bridge
-router.post('/bridge', rawBodyParser, (req, res) => {
+router.post('/bridge', rawBodyParser, async (req, res) => {
   try {
     console.log('🔔 Webhook Bridge reçu !');
     console.log('Headers:', req.headers);
@@ -97,18 +99,19 @@ router.post('/bridge', rawBodyParser, (req, res) => {
         break;
       case 'account.connected':
         console.log('✅ Compte connecté avec succès');
+        await handleAccountConnected(payload);
         break;
       case 'account.disconnected':
         console.log('❌ Compte déconnecté');
         break;
       case 'item.refreshed':
-        console.log('🔄 Données du compte mises à jour');
-        break;
+      case 'item.account.updated':
+      case 'item.account.created':
+      case 'account.connected':
       case 'transaction.created':
-        console.log('💰 Nouvelle transaction détectée');
-        break;
       case 'transaction.updated':
         console.log('📝 Transaction mise à jour');
+        await handleTransactionEvent(payload);
         break;
       default:
         console.log(`❓ Type d'événement non géré: ${payload.type}`);
@@ -140,5 +143,113 @@ router.get('/bridge/test', (req, res) => {
     hasSecret: !!process.env.BRIDGE_WEBHOOK_SECRET
   });
 });
+
+// Fonctions de gestion des événements webhook
+async function handleAccountConnected(payload) {
+  try {
+    const userUuid = payload.content?.user_uuid;
+    if (!userUuid) return;
+    
+    console.log('🔄 Déclenchement synchronisation suite à connexion compte');
+    await triggerSyncForUser(userUuid);
+  } catch (error) {
+    console.error('❌ Erreur handleAccountConnected:', error.message);
+  }
+}
+
+async function handleItemRefreshed(payload) {
+  try {
+    const userUuid = payload.content?.user_uuid;
+    if (!userUuid) return;
+    
+    console.log('🔄 Déclenchement synchronisation suite à refresh item');
+    await triggerSyncForUser(userUuid);
+  } catch (error) {
+    console.error('❌ Erreur handleItemRefreshed:', error.message);
+  }
+}
+
+async function handleAccountUpdated(payload) {
+  try {
+    const userUuid = payload.content?.user_uuid;
+    const accountId = payload.content?.account_id;
+    const nbNewTransactions = payload.content?.nb_new_transactions || 0;
+    const nbUpdatedTransactions = payload.content?.nb_updated_transactions || 0;
+    
+    if (!userUuid) return;
+    
+    console.log(`🔄 Compte ${accountId} mis à jour: ${nbNewTransactions} nouvelles transactions, ${nbUpdatedTransactions} mises à jour`);
+    await triggerSyncForUser(userUuid, accountId);
+  } catch (error) {
+    console.error('❌ Erreur handleAccountUpdated:', error.message);
+  }
+}
+
+async function handleTransactionEvent(payload) {
+  try {
+    const userUuid = payload.content?.user_uuid;
+    const accountId = payload.content?.account_id;
+    
+    if (!userUuid) return;
+    
+    console.log('🔄 Déclenchement synchronisation suite à événement transaction');
+    await triggerSyncForUser(userUuid, accountId);
+  } catch (error) {
+    console.error('❌ Erreur handleTransactionEvent:', error.message);
+  }
+}
+
+async function triggerSyncForUser(userUuid, specificAccountId = null) {
+  try {
+    // Initialiser le service banking
+    await bankingService.initialize('bridge');
+    const provider = bankingService.currentProvider;
+    
+    // Trouver le workspace correspondant au user_uuid Bridge
+    const workspaceId = await findWorkspaceByBridgeUuid(userUuid);
+    if (!workspaceId) {
+      console.error('❌ Workspace non trouvé pour user_uuid:', userUuid);
+      return;
+    }
+    
+    // Utiliser un userId fictif pour la synchronisation (sera amélioré)
+    const userId = 'webhook-sync';
+    
+    if (specificAccountId) {
+      // Synchroniser un compte spécifique
+      console.log(`🔄 Synchronisation compte ${specificAccountId} pour workspace ${workspaceId}`);
+      await provider.getTransactions(specificAccountId, userId, workspaceId, { limit: 100 });
+    } else {
+      // Synchronisation complète
+      console.log(`🔄 Synchronisation complète pour workspace ${workspaceId}`);
+      const result = await provider.syncAllTransactions(userId, workspaceId, { limit: 100 });
+      console.log(`✅ Synchronisation webhook terminée: ${result.accounts} comptes, ${result.transactions} transactions`);
+    }
+  } catch (error) {
+    console.error('❌ Erreur synchronisation webhook:', error.message);
+  }
+}
+
+async function findWorkspaceByBridgeUuid(userUuid) {
+  try {
+    // Initialiser le service banking pour récupérer l'utilisateur
+    await bankingService.initialize('bridge');
+    const provider = bankingService.currentProvider;
+    
+    // Récupérer l'utilisateur Bridge par UUID pour obtenir son external_user_id
+    const bridgeUser = await provider.getBridgeUserByUuid(userUuid);
+    
+    if (bridgeUser && bridgeUser.external_user_id) {
+      console.log(`✅ Workspace trouvé: ${bridgeUser.external_user_id} pour user_uuid: ${userUuid}`);
+      return bridgeUser.external_user_id;
+    } else {
+      console.error('❌ external_user_id non trouvé pour user_uuid:', userUuid);
+      return null;
+    }
+  } catch (error) {
+    console.error('❌ Erreur recherche workspace:', error.message);
+    return null;
+  }
+}
 
 export default router;

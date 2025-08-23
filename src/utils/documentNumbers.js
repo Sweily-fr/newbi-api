@@ -12,18 +12,18 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
 
   // Si c'est pour une facture en statut PENDING et qu'un numéro manuel est fourni
   if (options.manualNumber && options.isPending) {
-    // Vérifier s'il existe déjà des factures en statut PENDING ou COMPLETED pour cet utilisateur
+    // Vérifier s'il existe déjà des factures en statut PENDING ou COMPLETED pour ce workspace ou utilisateur
     const existingPendingOrCompleted = await model.findOne({
       status: { $in: ["PENDING", "COMPLETED"] },
-      createdBy: options.userId, // Filtrer par utilisateur
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : { createdBy: options.userId }), // Filtrer par workspace ou utilisateur
     });
 
     // Si aucune facture n'existe encore en PENDING ou COMPLETED pour cet utilisateur, on peut utiliser le numéro manuel
     if (!existingPendingOrCompleted) {
-      // Vérifier si le numéro manuel est déjà utilisé par cet utilisateur dans l'année courante
+      // Vérifier si le numéro manuel est déjà utilisé par ce workspace ou utilisateur dans l'année courante
       const existingWithManualNumber = await model.findOne({
         number: options.manualNumber,
-        createdBy: options.userId, // Filtrer par utilisateur
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : { createdBy: options.userId }), // Filtrer par workspace ou utilisateur
         $expr: { $eq: [{ $year: "$issueDate" }, currentYear] }, // Filtrer par année courante
       });
 
@@ -47,8 +47,10 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     query.prefix = { $regex: "^D-" };
   }
 
-  // Ajouter le filtre par utilisateur si disponible
-  if (options.userId) {
+  // Ajouter le filtre par workspace si disponible, sinon par utilisateur
+  if (options.workspaceId) {
+    query.workspaceId = options.workspaceId;
+  } else if (options.userId) {
     query.createdBy = options.userId;
   }
 
@@ -117,8 +119,10 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
         $expr: { $eq: [{ $year: "$issueDate" }, currentYear] },
       };
 
-      // Ajouter le filtre par utilisateur si disponible
-      if (options.userId) {
+      // Ajouter le filtre par workspace si disponible, sinon par utilisateur
+      if (options.workspaceId) {
+        existingQuery.workspaceId = options.workspaceId;
+      } else if (options.userId) {
         existingQuery.createdBy = options.userId;
       }
 
@@ -150,8 +154,10 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
       $expr: { $eq: [{ $year: "$issueDate" }, currentYear] },
     };
 
-    // Ajouter le filtre par utilisateur si disponible
-    if (options.userId) {
+    // Ajouter le filtre par workspace si disponible, sinon par utilisateur
+    if (options.workspaceId) {
+      existingQuery.workspaceId = options.workspaceId;
+    } else if (options.userId) {
       existingQuery.createdBy = options.userId;
     }
 

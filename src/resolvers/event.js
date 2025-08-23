@@ -1,21 +1,22 @@
 import Event from '../models/Event.js';
 import Invoice from '../models/Invoice.js';
-import { isAuthenticated } from '../middlewares/auth.js';
+import { isAuthenticated, withWorkspace } from '../middlewares/better-auth.js';
 
 const eventResolvers = {
   Event: {
     // Mapper le champ invoiceId populé vers invoice pour la compatibilité GraphQL
     invoice: (parent) => parent.invoiceId,
+    // Convertir l'ObjectId en string pour GraphQL
+    invoiceId: (parent) => parent.invoiceId ? parent.invoiceId._id?.toString() || parent.invoiceId.toString() : null,
   },
   
   Query: {
-    getEvents: async (_, { startDate, endDate, type, limit = 100, offset = 0 }, context) => {
+    getEvents: withWorkspace(async (_, { startDate, endDate, type, limit = 100, offset = 0, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
-        await isAuthenticated(context);
-        const userId = context.user.id;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         // Construire le filtre
-        const filter = { userId };
+        const filter = { workspaceId: finalWorkspaceId };
         
         if (type) {
           filter.type = type;
@@ -55,14 +56,13 @@ const eventResolvers = {
           message: error.message || 'Erreur lors de la récupération des événements'
         };
       }
-    },
+    }),
 
-    getEvent: async (_, { id }, context) => {
+    getEvent: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
-        await isAuthenticated(context);
-        const userId = context.user.id;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const event = await Event.findOne({ _id: id, userId })
+        const event = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId })
           .populate('invoiceId');
 
         if (!event) {
@@ -86,18 +86,18 @@ const eventResolvers = {
           message: error.message || 'Erreur lors de la récupération de l\'événement'
         };
       }
-    }
+    })
   },
 
   Mutation: {
-    createEvent: async (_, { input }, context) => {
+    createEvent: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
-        await isAuthenticated(context);
-        const userId = context.user.id;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         const event = new Event({
           ...input,
-          userId
+          userId: user.id,
+          workspaceId: finalWorkspaceId
         });
 
         await event.save();
@@ -115,17 +115,16 @@ const eventResolvers = {
           message: error.message || 'Erreur lors de la création de l\'événement'
         };
       }
-    },
+    }),
 
-    updateEvent: async (_, { input }, context) => {
+    updateEvent: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
-        await isAuthenticated(context);
-        const userId = context.user.id;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         const { id, ...updateData } = input;
 
         const event = await Event.findOneAndUpdate(
-          { _id: id, userId },
+          { _id: id, workspaceId: finalWorkspaceId },
           updateData,
           { new: true, runValidators: true }
         ).populate('invoiceId');
@@ -151,14 +150,13 @@ const eventResolvers = {
           message: error.message || 'Erreur lors de la mise à jour de l\'événement'
         };
       }
-    },
+    }),
 
-    deleteEvent: async (_, { id }, context) => {
+    deleteEvent: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
-        await isAuthenticated(context);
-        const userId = context.user.id;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const event = await Event.findOneAndDelete({ _id: id, userId });
+        const event = await Event.findOneAndDelete({ _id: id, workspaceId: finalWorkspaceId });
 
         if (!event) {
           return {
@@ -181,22 +179,21 @@ const eventResolvers = {
           message: error.message || 'Erreur lors de la suppression de l\'événement'
         };
       }
-    },
+    }),
 
-    syncInvoiceEvents: async (_, __, context) => {
+    syncInvoiceEvents: withWorkspace(async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
-        await isAuthenticated(context);
-        const userId = context.user.id;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        // Récupérer toutes les factures de l'utilisateur
-        const invoices = await Invoice.find({ userId });
+        // Récupérer toutes les factures du workspace
+        const invoices = await Invoice.find({ workspaceId: finalWorkspaceId });
 
         const events = [];
         
         for (const invoice of invoices) {
           if (invoice.dueDate) {
             try {
-              const event = await Event.createInvoiceDueEvent(invoice, userId);
+              const event = await Event.createInvoiceDueEvent(invoice, user.id, finalWorkspaceId);
               events.push(event);
             } catch (error) {
               console.error(`Erreur lors de la création de l'événement pour la facture ${invoice._id}:`, error);
@@ -219,14 +216,9 @@ const eventResolvers = {
           message: error.message || 'Erreur lors de la synchronisation des événements'
         };
       }
-    }
+    })
   },
 
-  Event: {
-    id: (event) => event._id.toString(),
-    userId: (event) => event.userId.toString(),
-    invoiceId: (event) => event.invoiceId ? event.invoiceId.toString() : null,
-  }
 };
 
 export default eventResolvers;

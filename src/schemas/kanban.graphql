@@ -118,26 +118,26 @@ input ChecklistItemInput {
 }
 
 type Query {
-  boards: [Board!]!
-  board(id: ID!): Board
-  columns(boardId: ID!): [Column!]!
-  column(id: ID!): Column
-  tasks(boardId: ID!, columnId: ID): [Task!]!
-  task(id: ID!): Task
+  boards(workspaceId: ID): [Board!]!
+  board(id: ID!, workspaceId: ID): Board
+  columns(boardId: ID!, workspaceId: ID): [Column!]!
+  column(id: ID!, workspaceId: ID): Column
+  tasks(boardId: ID!, columnId: ID, workspaceId: ID): [Task!]!
+  task(id: ID!, workspaceId: ID): Task
 }
 
 type Mutation {
-  createBoard(input: CreateBoardInput!): Board!
-  updateBoard(input: UpdateBoardInput!): Board!
-  deleteBoard(id: ID!): Boolean!
+  createBoard(input: CreateBoardInput!, workspaceId: ID): Board!
+  updateBoard(input: UpdateBoardInput!, workspaceId: ID): Board!
+  deleteBoard(id: ID!, workspaceId: ID): Boolean!
   
-  createColumn(input: CreateColumnInput!): Column!
-  updateColumn(input: UpdateColumnInput!): Column!
-  deleteColumn(id: ID!): Boolean!
-  reorderColumns(columns: [ID!]!): Boolean!
+  createColumn(input: CreateColumnInput!, workspaceId: ID): Column!
+  updateColumn(input: UpdateColumnInput!, workspaceId: ID): Column!
+  deleteColumn(id: ID!, workspaceId: ID): Boolean!
+  reorderColumns(columns: [ID!]!, workspaceId: ID): Boolean!
   
-  createTask(input: CreateTaskInput!): Task!
-  updateTask(input: UpdateTaskInput!): Task!
-  deleteTask(id: ID!): Boolean!
-  moveTask(id: ID!, columnId: String!, position: Int!): Task!
+  createTask(input: CreateTaskInput!, workspaceId: ID): Task!
+  updateTask(input: UpdateTaskInput!, workspaceId: ID): Task!
+  deleteTask(id: ID!, workspaceId: ID): Boolean!
+  moveTask(id: ID!, columnId: String!, position: Int!, workspaceId: ID): Task!
 }
