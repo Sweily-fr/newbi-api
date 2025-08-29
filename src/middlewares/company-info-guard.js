@@ -1,27 +1,28 @@
-import { AppError, ERROR_CODES } from '../utils/errors.js';
-import logger from '../utils/logger.js';
+import { AppError, ERROR_CODES } from "../utils/errors.js";
+import logger from "../utils/logger.js";
+import mongoose from "mongoose";
 
 /**
- * Vérifie si les informations d'entreprise de l'utilisateur sont complètes
- * @param {Object} company - Objet company de l'utilisateur
+ * Vérifie si les informations d'entreprise de l'organisation sont complètes
+ * @param {Object} organization - Objet organization (Better Auth)
  * @returns {boolean} - true si les informations sont complètes
  */
-const isCompanyInfoComplete = (company) => {
-  if (!company) {
+const isCompanyInfoComplete = (organization) => {
+  if (!organization) {
     return false;
   }
 
-  // Vérifier les champs obligatoires
+  // Vérifier les champs obligatoires de l'organisation
   const requiredFields = [
-    company.name,
-    company.email,
-    company.address?.street,
-    company.address?.city,
-    company.address?.postalCode,
-    company.address?.country
+    organization.companyName,
+    organization.companyEmail,
+    organization.addressStreet,
+    organization.addressCity,
+    organization.addressZipCode,
+    organization.addressCountry
   ];
 
-  return requiredFields.every(field => field && field.trim().length > 0);
+  return requiredFields.every(field => field && field.toString().trim().length > 0);
 };
 
 /**
@@ -30,7 +31,7 @@ const isCompanyInfoComplete = (company) => {
  */
 const requireCompanyInfo = (resolver) => {
   return async (parent, args, context, info) => {
-    const { user } = context;
+    const { user, workspaceId } = context;
 
     // Vérifier que l'utilisateur est authentifié
     if (!user) {
@@ -42,12 +43,53 @@ const requireCompanyInfo = (resolver) => {
       );
     }
 
+    // Récupérer le workspaceId depuis les arguments ou le contexte
+    const finalWorkspaceId = args.workspaceId || workspaceId;
+    if (!finalWorkspaceId) {
+      throw new AppError(
+        'workspaceId requis',
+        ERROR_CODES.BAD_REQUEST,
+        400
+      );
+    }
+
+    // Récupérer les informations de l'organisation depuis la collection Better Auth
+    let organization;
+    try {
+      const db = mongoose.connection.db;
+      const organizationCollection = db.collection('organization');
+      organization = await organizationCollection.findOne({ _id: new mongoose.Types.ObjectId(finalWorkspaceId) });
+    } catch (error) {
+      logger.error('Erreur lors de la récupération de l\'organisation:', error);
+      throw new AppError(
+        'Erreur lors de la récupération des informations d\'entreprise',
+        ERROR_CODES.INTERNAL_ERROR,
+        500
+      );
+    }
+
+    if (!organization) {
+      logger.warn(`Organisation non trouvée pour workspaceId: ${finalWorkspaceId}`);
+      throw new AppError(
+        'Organisation non trouvée',
+        ERROR_CODES.NOT_FOUND,
+        404
+      );
+    }
+
     // Vérifier les informations d'entreprise
-    if (!isCompanyInfoComplete(user.company)) {
-      logger.warn(`Utilisateur ${user.id} - Informations d'entreprise incomplètes`, {
+    if (!isCompanyInfoComplete(organization)) {
+      logger.warn(`WorkspaceId ${finalWorkspaceId} - Informations d'entreprise incomplètes`, {
+        workspaceId: finalWorkspaceId,
         userId: user.id,
-        email: user.email,
-        company: user.company
+        organization: {
+          companyName: organization.companyName,
+          companyEmail: organization.companyEmail,
+          addressStreet: organization.addressStreet,
+          addressCity: organization.addressCity,
+          addressZipCode: organization.addressZipCode,
+          addressCountry: organization.addressCountry
+        }
       });
 
       throw new AppError(
@@ -55,18 +97,18 @@ const requireCompanyInfo = (resolver) => {
         ERROR_CODES.COMPANY_INFO_INCOMPLETE,
         403,
         {
-          requiredFields: [
+          missingFields: [
             'Nom de l\'entreprise',
             'Email de contact',
             'Adresse complète (rue, ville, code postal, pays)'
           ],
           currentCompany: {
-            hasName: !!user.company?.name,
-            hasEmail: !!user.company?.email,
-            hasAddress: !!(user.company?.address?.street && 
-                          user.company?.address?.city && 
-                          user.company?.address?.postalCode && 
-                          user.company?.address?.country)
+            hasName: !!organization.companyName,
+            hasEmail: !!organization.companyEmail,
+            hasAddress: !!(organization.addressStreet && 
+                          organization.addressCity && 
+                          organization.addressZipCode && 
+                          organization.addressCountry)
           }
         }
       );
@@ -81,16 +123,38 @@ const requireCompanyInfo = (resolver) => {
  * Fonction utilitaire pour vérifier les informations d'entreprise
  * Peut être utilisée dans d'autres parties de l'application
  */
-const validateCompanyInfo = (user) => {
-  if (!user) {
+const validateCompanyInfo = async (workspaceId) => {
+  if (!workspaceId) {
     throw new AppError(
-      'Utilisateur non authentifié',
-      ERROR_CODES.UNAUTHORIZED,
-      401
+      'workspaceId requis',
+      ERROR_CODES.BAD_REQUEST,
+      400
     );
   }
 
-  if (!isCompanyInfoComplete(user.company)) {
+  // Récupérer les informations de l'organisation
+  let organization;
+  try {
+    const db = mongoose.connection.db;
+    const organizationCollection = db.collection('organization');
+    organization = await organizationCollection.findOne({ _id: new mongoose.Types.ObjectId(workspaceId) });
+  } catch (error) {
+    throw new AppError(
+      'Erreur lors de la récupération des informations d\'entreprise',
+      ERROR_CODES.INTERNAL_ERROR,
+      500
+    );
+  }
+
+  if (!organization) {
+    throw new AppError(
+      'Organisation non trouvée',
+      ERROR_CODES.NOT_FOUND,
+      404
+    );
+  }
+
+  if (!isCompanyInfoComplete(organization)) {
     throw new AppError(
       'Informations d\'entreprise incomplètes',
       ERROR_CODES.COMPANY_INFO_INCOMPLETE,

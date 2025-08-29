@@ -75,21 +75,29 @@ const clientResolvers = {
         throw createAlreadyExistsError('client', 'email', input.email);
       }
       
-      // Validation spécifique selon le type de client
+      // Validation et traitement spécifique selon le type de client
+      let clientData = { ...input };
+      
       if (input.type === 'COMPANY') {
         // Pour une entreprise, le SIRET est recommandé
         if (!input.siret && !input.vatNumber) {
           console.warn('Création d\'un client entreprise sans SIRET ni numéro de TVA');
         }
       } else if (input.type === 'INDIVIDUAL') {
-        // Pour un particulier, firstName et lastName sont recommandés
-        if (!input.firstName && !input.lastName) {
-          console.warn('Création d\'un client particulier sans prénom ni nom de famille');
+        // Pour un particulier, générer le nom complet à partir de firstName et lastName
+        if (input.firstName && input.lastName) {
+          clientData.name = `${input.firstName} ${input.lastName}`;
+        } else if (input.firstName) {
+          clientData.name = input.firstName;
+        } else if (input.lastName) {
+          clientData.name = input.lastName;
+        } else if (!input.name) {
+          console.warn('Création d\'un client particulier sans prénom, nom de famille, ni nom complet');
         }
       }
       
       const client = new Client({
-        ...input,
+        ...clientData,
         email: input.email.toLowerCase(),
         createdBy: user.id,
         workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId)
@@ -120,24 +128,33 @@ const clientResolvers = {
         }
       }
       
-      // Validation spécifique selon le type de client
+      // Validation et traitement spécifique selon le type de client
+      let updateData = { ...input };
+      
       if (input.type === 'COMPANY') {
         // Pour une entreprise, le SIRET est recommandé
         if (!input.siret && !input.vatNumber && !client.siret && !client.vatNumber) {
           console.warn('Mise à jour d\'un client entreprise sans SIRET ni numéro de TVA');
         }
       } else if (input.type === 'INDIVIDUAL') {
-        // Pour un particulier, firstName et lastName sont recommandés
-        const firstName = input.firstName || client.firstName;
-        const lastName = input.lastName || client.lastName;
-        if (!firstName && !lastName) {
-          console.warn('Mise à jour d\'un client particulier sans prénom ni nom de famille');
+        // Pour un particulier, générer le nom complet à partir de firstName et lastName
+        const firstName = input.firstName !== undefined ? input.firstName : client.firstName;
+        const lastName = input.lastName !== undefined ? input.lastName : client.lastName;
+        
+        if (firstName && lastName) {
+          updateData.name = `${firstName} ${lastName}`;
+        } else if (firstName) {
+          updateData.name = firstName;
+        } else if (lastName) {
+          updateData.name = lastName;
+        } else if (!input.name && !client.name) {
+          console.warn('Mise à jour d\'un client particulier sans prénom, nom de famille, ni nom complet');
         }
       }
       
       // Mettre à jour le client
-      Object.keys(input).forEach(key => {
-        client[key] = key === 'email' ? input[key].toLowerCase() : input[key];
+      Object.keys(updateData).forEach(key => {
+        client[key] = key === 'email' ? updateData[key].toLowerCase() : updateData[key];
       });
       
       await client.save();

@@ -33,7 +33,7 @@ const withWorkspace = (resolver, requiredPermission = "read") => {
       // Pour l'instant, on assume que l'utilisateur est propriétaire/admin du workspace
       // car Better Auth gère l'authentification et l'accès aux workspaces
       // TODO: Récupérer le vrai rôle depuis Better Auth ou la base de données
-      
+
       // Créer l'objet workspace avec les permissions basées sur le rôle
       // Par défaut, on donne les permissions d'admin/owner pour éviter les erreurs
       const workspace = {
@@ -43,15 +43,15 @@ const withWorkspace = (resolver, requiredPermission = "read") => {
           canRead: true,
           canWrite: true,
           canDelete: true,
-          canAdmin: true
-        }
+          canAdmin: true,
+        },
       };
 
       // Enrichir le contexte avec le workspaceId et les informations du workspace
       const enrichedContext = {
         ...context,
         workspaceId,
-        workspace
+        workspace,
       };
 
       return await resolver(parent, args, enrichedContext, info);

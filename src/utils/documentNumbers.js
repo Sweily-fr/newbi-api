@@ -72,6 +72,20 @@ const generateSequentialNumber = async (prefix, model, options = {}) => {
     .sort({ number: -1 });
 
   if (!lastDoc) {
+    // Vérifier s'il existe des documents avec n'importe quel statut pour éviter les doublons
+    const anyDoc = await model
+      .findOne({
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : { createdBy: options.userId }),
+        $expr: { $eq: [{ $year: "$issueDate" }, currentYear] }
+      }, { number: 1 })
+      .sort({ number: -1 });
+    
+    if (anyDoc) {
+      const lastNumber = parseInt(anyDoc.number);
+      const newNumber = lastNumber + 1;
+      return String(newNumber).padStart(6, "0");
+    }
+    
     return options.manualNumber || "000001";
   }
 
