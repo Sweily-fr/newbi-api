@@ -23,7 +23,15 @@ class CloudflareService {
     console.log("🔧 Configuration Cloudflare R2:");
     console.log("  IMAGE_BUCKET_NAME:", process.env.IMAGE_BUCKET_NAME);
     console.log("  LOGO_BUCKET_NAME:", process.env.LOGO_BUCKET_NAME);
+    console.log(
+      "  AWS_S3_BUCKET_NAME_IMG_COMPANY:",
+      process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY
+    );
     console.log("  AWS_S3_API_URL:", process.env.AWS_S3_API_URL);
+    console.log(
+      "  AWS_S3_API_URL_IMG_COMPANY:",
+      process.env.AWS_S3_API_URL_IMG_COMPANY
+    );
     console.log(
       "  AWS_ACCESS_KEY_ID:",
       process.env.AWS_ACCESS_KEY_ID ? "✅ Définie" : "❌ Manquante"
@@ -34,6 +42,7 @@ class CloudflareService {
     );
     console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
     console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
+    console.log("  COMPANY_PUBLIC_URL:", process.env.COMPANY_IMAGES_PUBLIC_URL);
 
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
@@ -48,8 +57,10 @@ class CloudflareService {
     // Configuration des buckets séparés
     this.imageBucketName = process.env.IMAGE_BUCKET_NAME;
     this.logoBucketName = process.env.LOGO_BUCKET_NAME;
+    this.companyBucketName = process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY;
     this.imagePublicUrl = process.env.IMAGE_PUBLIC_URL;
     this.logoPublicUrl = process.env.LOGO_PUBLIC_URL;
+    this.companyPublicUrl = process.env.COMPANY_IMAGES_PUBLIC_URL;
 
     // Client séparé pour le bucket des logos
     this.logoClient = new S3Client({
@@ -61,9 +72,30 @@ class CloudflareService {
       },
     });
 
+    // Client spécifique pour les images d'entreprise
+    this.companyClient = new S3Client({
+      region: "auto",
+      endpoint: process.env.AWS_S3_API_URL_IMG_COMPANY,
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    });
+
     if (!this.imageBucketName || !this.logoBucketName) {
-      console.error("❌ ERREUR: IMAGE_BUCKET_NAME ou LOGO_BUCKET_NAME manquant!");
-      throw new Error("Configuration manquante: IMAGE_BUCKET_NAME et LOGO_BUCKET_NAME requis");
+      console.error(
+        "❌ ERREUR: IMAGE_BUCKET_NAME ou LOGO_BUCKET_NAME manquant!"
+      );
+      throw new Error(
+        "Configuration manquante: IMAGE_BUCKET_NAME et LOGO_BUCKET_NAME requis"
+      );
+    }
+
+    if (!this.companyBucketName) {
+      console.error("❌ ERREUR: AWS_S3_BUCKET_NAME_IMG_COMPANY manquant!");
+      throw new Error(
+        "Configuration manquante: AWS_S3_BUCKET_NAME_IMG_COMPANY requis"
+      );
     }
   }
 
@@ -89,15 +121,39 @@ class CloudflareService {
    * @param {Buffer} fileBuffer - Buffer de l'image
    * @param {string} fileName - Nom original du fichier
    * @param {string} userId - ID de l'utilisateur
-   * @param {string} imageType - Type d'image ('profile' ou 'company')
+   * @param {string} imageType - Type d'image ('profile', 'company', ou 'imgCompany')
+   * @param {string} organizationId - ID de l'organisation (optionnel)
    * @returns {Promise<{key: string, url: string}>}
    */
-  async uploadImage(fileBuffer, fileName, userId, imageType = "profile") {
+  async uploadImage(
+    fileBuffer,
+    fileName,
+    userId,
+    imageType = "profile",
+    organizationId = null
+  ) {
     try {
-      // Générer une clé unique pour l'image
+      // Générer une clé pour l'image
       const fileExtension = path.extname(fileName).toLowerCase();
-      const uniqueId = crypto.randomUUID();
-      const key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
+      let key, bucketName, client;
+
+      // Déterminer le bucket et la clé selon le type d'image
+      if (imageType === "imgCompany" || imageType === "company") {
+        // Pour les images d'entreprise : userId/logo.extension (clé fixe pour écraser)
+        key = `${userId}/logo${fileExtension}`;
+        bucketName = this.companyBucketName;
+        client = this.companyClient;
+        console.log("📁 Upload vers bucket entreprise:", bucketName);
+        console.log("🏢 Utilisateur ID:", userId);
+        console.log("🔄 Écrasement du logo existant avec la clé:", key);
+      } else {
+        // Pour les autres images : signatures/userId/imageType/uniqueId.extension (UUID pour éviter les conflits)
+        const uniqueId = crypto.randomUUID();
+        key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
+        bucketName = this.imageBucketName;
+        client = this.client;
+        console.log("📁 Upload vers bucket signatures:", bucketName);
+      }
 
       // Déterminer le content-type
       const contentType = this.getContentType(fileExtension);
@@ -109,53 +165,75 @@ class CloudflareService {
 
       // Commande d'upload
       const command = new PutObjectCommand({
-        Bucket: this.imageBucketName,
+        Bucket: bucketName,
         Key: key,
         Body: fileBuffer,
         ContentType: contentType,
         Metadata: {
           userId: userId,
           imageType: imageType,
-          originalName: sanitizedFileName, // Utiliser le nom nettoyé
+          organizationId: organizationId || "",
+          originalName: sanitizedFileName,
           uploadedAt: new Date().toISOString(),
         },
       });
 
-      await this.client.send(command);
+      await client.send(command);
 
       // Générer l'URL appropriée selon la configuration
       let imageUrl;
 
-      // Utilisation directe des URLs publiques Cloudflare R2
-      if (
-        this.imagePublicUrl &&
-        this.imagePublicUrl !== "https://your_image_bucket_public_url"
-      ) {
-        imageUrl = `${this.imagePublicUrl}/${key}`;
-        console.log("🌐 URL publique Cloudflare R2 générée:", imageUrl);
-      } else {
-        // Fallback sur le proxy backend si pas d'URL publique configurée
-        console.log(
-          "🔗 Pas d'URL publique configurée, utilisation du proxy pour:",
-          key
-        );
-
-        const keyParts = key.split("/");
-        if (keyParts.length >= 3 && keyParts[0] === "signatures") {
-          const userId = keyParts[1];
-          const imageType = keyParts[2];
-          const filename = keyParts.slice(3).join("/");
-
-          const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
-          imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
-
-          console.log("✅ URL proxy générée:", imageUrl);
-        } else {
-          // Dernier fallback sur URL signée
+      if (imageType === "imgCompany" || imageType === "company") {
+        // Pour les images d'entreprise, utiliser l'URL publique configurée
+        if (
+          this.companyPublicUrl &&
+          this.companyPublicUrl !== "https://your_company_bucket_public_url"
+        ) {
+          imageUrl = `${this.companyPublicUrl}/${key}`;
           console.log(
-            "⚠️ Structure de clé inattendue, fallback sur URL signée"
+            "🌐 URL publique Cloudflare entreprise générée:",
+            imageUrl
           );
-          imageUrl = await this.getSignedUrl(key, 86400);
+        } else {
+          // Fallback sur URL hardcodée si pas configurée
+          imageUrl = `https://pub-157ce0fed50fe542bc92a07317a09205.r2.dev/${key}`;
+          console.log(
+            "🌐 URL publique Cloudflare entreprise (fallback):",
+            imageUrl
+          );
+        }
+      } else {
+        // Utilisation directe des URLs publiques Cloudflare R2 pour les autres images
+        if (
+          this.imagePublicUrl &&
+          this.imagePublicUrl !== "https://your_image_bucket_public_url"
+        ) {
+          imageUrl = `${this.imagePublicUrl}/${key}`;
+          console.log("🌐 URL publique Cloudflare R2 générée:", imageUrl);
+        } else {
+          // Fallback sur le proxy backend si pas d'URL publique configurée
+          console.log(
+            "🔗 Pas d'URL publique configurée, utilisation du proxy pour:",
+            key
+          );
+
+          const keyParts = key.split("/");
+          if (keyParts.length >= 3 && keyParts[0] === "signatures") {
+            const userId = keyParts[1];
+            const imageType = keyParts[2];
+            const filename = keyParts.slice(3).join("/");
+
+            const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
+            imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
+
+            console.log("✅ URL proxy générée:", imageUrl);
+          } else {
+            // Dernier fallback sur URL signée
+            console.log(
+              "⚠️ Structure de clé inattendue, fallback sur URL signée"
+            );
+            imageUrl = await this.getSignedUrl(key, 86400, client, bucketName);
+          }
         }
       }
 
@@ -195,18 +273,23 @@ class CloudflareService {
    * Génère une URL signée temporaire pour l'accès privé
    * @param {string} key - Clé de l'image
    * @param {number} expiresIn - Durée de validité en secondes (défaut: 1h)
+   * @param {S3Client} client - Client S3 à utiliser (optionnel)
+   * @param {string} bucketName - Nom du bucket (optionnel)
    * @returns {Promise<string>}
    */
-  async getSignedUrl(key, expiresIn = 3600) {
+  async getSignedUrl(key, expiresIn = 3600, client = null, bucketName = null) {
     try {
       console.log("🔗 Génération URL signée pour:", key);
 
+      const s3Client = client || this.client;
+      const bucket = bucketName || this.imageBucketName;
+
       const command = new GetObjectCommand({
-        Bucket: this.imageBucketName,
+        Bucket: bucket,
         Key: key,
       });
 
-      const signedUrl = await getSignedUrl(this.client, command, {
+      const signedUrl = await getSignedUrl(s3Client, command, {
         expiresIn,
         // Ajouter des paramètres spécifiques à Cloudflare R2
         signableHeaders: new Set(["host"]),

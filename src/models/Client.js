@@ -1,6 +1,16 @@
 import mongoose from 'mongoose';
 import addressSchema from './schemas/address.js';
-import { EMAIL_REGEX, PHONE_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } from '../utils/validators.js';
+import { 
+  EMAIL_REGEX, 
+  PHONE_REGEX, 
+  SIRET_REGEX, 
+  VAT_EU_REGEX, 
+  NAME_REGEX,
+  isValidEmail,
+  isValidName,
+  isValidSIRET,
+  isValidVATNumberEU
+} from '../utils/validators.js';
 
 /**
  * Schéma principal du client
@@ -8,21 +18,44 @@ import { EMAIL_REGEX, PHONE_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } from 
 const clientSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true,
+    required: [true, 'Le nom est requis'],
     trim: true,
-    match: [NAME_REGEX, 'Veuillez fournir un nom valide']
+    validate: {
+      validator: function(v) {
+        if (this.type === 'COMPANY') {
+          return v && v.length >= 2 && v.length <= 100 && /^[a-zA-ZÀ-ÿ0-9\s&'"\-.,()]{2,100}$/.test(v);
+        } else {
+          return v && v.length >= 2 && v.length <= 50 && /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v);
+        }
+      },
+      message: function(props) {
+        if (this.type === 'COMPANY') {
+          return 'Le nom de l\'entreprise doit contenir entre 2 et 100 caractères';
+        } else {
+          return 'Le nom doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)';
+        }
+      }
+    }
   },
   email: {
     type: String,
-    required: true,
+    required: [true, 'L\'email est requis'],
     trim: true,
     lowercase: true,
-    match: [EMAIL_REGEX, 'Veuillez fournir une adresse email valide']
+    validate: {
+      validator: isValidEmail,
+      message: 'Veuillez fournir une adresse email valide'
+    }
   },
   phone: {
     type: String,
     trim: true,
-    match: [PHONE_REGEX, 'Veuillez fournir un numéro de téléphone valide']
+    validate: {
+      validator: function(v) {
+        return !v || PHONE_REGEX.test(v);
+      },
+      message: 'Veuillez fournir un numéro de téléphone valide'
+    }
   },
   address: {
     type: addressSchema,
@@ -56,22 +89,49 @@ const clientSchema = new mongoose.Schema({
   siret: {
     type: String,
     trim: true,
-    match: [SIRET_REGEX, 'Veuillez fournir un numéro SIRET valide (14 chiffres)']
+    validate: {
+      validator: function(v) {
+        return !v || isValidSIRET(v);
+      },
+      message: 'Le SIRET doit contenir exactement 14 chiffres'
+    }
   },
   vatNumber: {
     type: String,
     trim: true,
-    match: [VAT_FR_REGEX, 'Veuillez fournir un numéro de TVA valide (format FR)']
+    validate: {
+      validator: function(v) {
+        return !v || isValidVATNumberEU(v);
+      },
+      message: 'Format de TVA invalide (ex: FR12345678901)'
+    }
   },
-  // Pour les particuliers, on peut ajouter des champs spécifiques ici si nécessaire
-  // Par exemple: firstName, lastName, etc.
+  // Pour les particuliers et entreprises (contact)
   firstName: {
     type: String,
-    trim: true
+    trim: true,
+    validate: {
+      validator: function(v) {
+        return !v || (v.length >= 2 && v.length <= 50 && /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v));
+      },
+      message: function(props) {
+        if (this.type === 'INDIVIDUAL') {
+          return 'Le prénom doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)';
+        } else {
+          return 'Le nom du contact doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)';
+        }
+      }
+    }
   },
   lastName: {
     type: String,
-    trim: true
+    trim: true,
+    validate: {
+      validator: function(v) {
+        return !v || (v.length >= 2 && v.length <= 50 && /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v));
+      },
+      message: 'Le nom de famille doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)'
+    }
   },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,

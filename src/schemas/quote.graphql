@@ -78,14 +78,14 @@ input UpdateQuoteInput {
 }
 
 extend type Query {
-  quote(id: ID!): Quote!
-  quotes(startDate: String, endDate: String, status: QuoteStatus, search: String, page: Int, limit: Int): QuotePagination!
-  quoteStats: QuoteStats!
-  nextQuoteNumber(prefix: String): String!
+  quote(workspaceId: ID!, id: ID!): Quote!
+  quotes(workspaceId: ID!, startDate: String, endDate: String, status: QuoteStatus, search: String, page: Int, limit: Int): QuotePagination!
+  quoteStats(workspaceId: ID!): QuoteStats!
+  nextQuoteNumber(workspaceId: ID!, prefix: String): String!
 }
 
 extend type Mutation {
-  createQuote(input: CreateQuoteInput!): Quote!
+  createQuote(workspaceId: ID!, input: CreateQuoteInput!): Quote!
   updateQuote(id: ID!, input: UpdateQuoteInput!): Quote!
   deleteQuote(id: ID!): Boolean!
   convertQuoteToInvoice(id: ID!, distribution: [Float], isDeposit: Boolean, skipValidation: Boolean): Invoice!

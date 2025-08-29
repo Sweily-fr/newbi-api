@@ -1,30 +1,30 @@
-import { loadFilesSync } from '@graphql-tools/load-files';
-import { mergeTypeDefs } from '@graphql-tools/merge';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { loadFilesSync } from "@graphql-tools/load-files";
+import { mergeTypeDefs } from "@graphql-tools/merge";
+import path from "path";
+import { fileURLToPath } from "url";
 
 // Recréer __dirname pour ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Charger d'abord le fichier de base
-const baseTypes = loadFilesSync(path.join(__dirname, './types/base.graphql'));
+const baseTypes = loadFilesSync(path.join(__dirname, "./types/base.graphql"));
 
 // Charger ensuite les autres fichiers de schéma
 const otherTypes = loadFilesSync([
-  path.join(__dirname, './types/scalars.graphql'),
-  path.join(__dirname, './types/enums.graphql'),
-  path.join(__dirname, './types/objects.graphql'),
-  path.join(__dirname, './types/inputs.graphql'),
-  path.join(__dirname, './types/integration.graphql'),
-  path.join(__dirname, './types/fileTransfer.graphql'), // Chargement explicite du schéma fileTransfer
-  path.join(__dirname, './types/chunkUpload.graphql'),  // Chargement explicite du schéma chunkUpload
-  path.join(__dirname, './types/imageUpload.graphql'),   // Chargement explicite du schéma imageUpload
-  path.join(__dirname, './types/documentUpload.graphql'), // Chargement explicite du schéma documentUpload
-  path.join(__dirname, './types/ocr.graphql'),           // Chargement explicite du schéma OCR
-  path.join(__dirname, './types/event.graphql'),         // Chargement explicite du schéma Event
-  path.join(__dirname, './types/banking.graphql'),       // Chargement explicite du schéma Banking
-  path.join(__dirname, './*.graphql'),
+  path.join(__dirname, "./types/scalars.graphql"),
+  path.join(__dirname, "./types/enums.graphql"),
+  path.join(__dirname, "./types/objects.graphql"),
+  path.join(__dirname, "./types/inputs.graphql"),
+  path.join(__dirname, "./types/integration.graphql"),
+  path.join(__dirname, "./types/fileTransfer.graphql"), // Chargement explicite du schéma fileTransfer
+  path.join(__dirname, "./types/chunkUpload.graphql"), // Chargement explicite du schéma chunkUpload
+  path.join(__dirname, "./types/imageUpload.graphql"), // Chargement explicite du schéma imageUpload
+  path.join(__dirname, "./types/documentUpload.graphql"), // Chargement explicite du schéma documentUpload
+  path.join(__dirname, "./types/ocr.graphql"), // Chargement explicite du schéma OCR
+  path.join(__dirname, "./types/event.graphql"), // Chargement explicite du schéma Event
+  path.join(__dirname, "./types/banking.graphql"), // Chargement explicite du schéma Banking
+  path.join(__dirname, "./*.graphql"),
 ]);
 
 // NOTE: Les fichiers typeDefs/*.js ne sont plus chargés car ils ont été migrés vers des fichiers .graphql

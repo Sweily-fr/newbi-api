@@ -94,6 +94,25 @@ const documentUploadResolvers = {
           );
         }
 
+        // Récupérer l'ID de l'organisation de l'utilisateur
+        let organizationId = null;
+
+        if (folderType === "imgCompany") {
+          // Essayer différentes propriétés pour l'organizationId
+          organizationId =
+            user.organizationId ||
+            user.organization?.id ||
+            user.organization ||
+            user.currentOrganizationId;
+
+          if (!organizationId) {
+            // Utiliser l'userId comme fallback pour les images d'entreprise
+            organizationId = user.id;
+          }
+
+          console.log("🏢 Organisation ID utilisé:", organizationId);
+        }
+
         // Upload vers Cloudflare R2
         console.log("☁️ Upload vers Cloudflare R2...");
         console.log("📁 Type de dossier:", folderType);
@@ -101,7 +120,8 @@ const documentUploadResolvers = {
           fileBuffer,
           filename,
           user.id,
-          folderType
+          folderType,
+          organizationId
         );
 
         console.log("✅ Document uploadé avec succès:", uploadResult.url);
@@ -137,17 +157,17 @@ const documentUploadResolvers = {
       try {
         // Supprimer de Cloudflare R2
         await cloudflareService.deleteImage(key);
-        
+
         return {
           success: true,
-          message: 'Document supprimé avec succès'
+          message: "Document supprimé avec succès",
         };
       } catch (error) {
-        console.error('❌ Erreur suppression document:', error);
-        
+        console.error("❌ Erreur suppression document:", error);
+
         return {
           success: false,
-          message: error.message || 'Erreur lors de la suppression du document'
+          message: error.message || "Erreur lors de la suppression du document",
         };
       }
     }),

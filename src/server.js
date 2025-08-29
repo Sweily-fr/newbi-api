@@ -21,10 +21,10 @@ import logger from "./utils/logger.js";
 import { betterAuthMiddleware } from "./middlewares/better-auth.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
-import webhookRoutes from './routes/webhook.js';
-import bankingRoutes from './routes/banking.js';
-import bankingConnectRoutes from './routes/banking-connect.js';
-import bankingSyncRoutes from './routes/banking-sync.js';
+import webhookRoutes from "./routes/webhook.js";
+import bankingRoutes from "./routes/banking.js";
+import bankingConnectRoutes from "./routes/banking-connect.js";
+import bankingSyncRoutes from "./routes/banking-sync.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 
 // Configuration des chemins
@@ -113,7 +113,7 @@ async function startServer() {
 
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
-  
+
   // Routes banking
   app.use("/banking", bankingRoutes);
   app.use("/banking-connect", bankingConnectRoutes);
@@ -147,7 +147,7 @@ async function startServer() {
   try {
     await initializeBankingSystem();
   } catch (error) {
-    logger.warn('⚠️ Système banking non disponible:', error.message);
+    logger.warn("⚠️ Système banking non disponible:", error.message);
   }
 
   // Démarrer le serveur

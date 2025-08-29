@@ -85,16 +85,19 @@ const quoteResolvers = {
     }
   },
   Query: {
-    quote: isAuthenticated(async (_, { id }, { user }) => {
-      const quote = await Quote.findOne({ _id: id, createdBy: user.id })
+    quote: isAuthenticated(async (_, { workspaceId, id }, { user }) => {
+      console.log('🔍 [QUOTE RESOLVER] Récupération devis:', { workspaceId, id, userId: user.id });
+      const quote = await Quote.findOne({ _id: id, workspaceId })
         .populate('createdBy')
         .populate('convertedToInvoice');
+      console.log('📄 [QUOTE RESOLVER] Devis trouvé:', quote ? { id: quote.id, createdBy: quote.createdBy?.id } : 'Aucun');
       if (!quote) throw createNotFoundError('Devis');
       return quote;
     }),
 
-    quotes: isAuthenticated(async (_, { startDate, endDate, status, search, page = 1, limit = 10 }, { user }) => {
-      const query = { createdBy: user.id };
+    quotes: isAuthenticated(async (_, { workspaceId, startDate, endDate, status, search, page = 1, limit = 10 }, { user }) => {
+      console.log('🔍 [QUOTES RESOLVER] Récupération liste devis:', { workspaceId, userId: user.id, filters: { startDate, endDate, status, search, page, limit } });
+      const query = { workspaceId };
 
       if (startDate || endDate) {
         query.createdAt = {};
@@ -115,6 +118,7 @@ const quoteResolvers = {
 
       const skip = (page - 1) * limit;
       const totalCount = await Quote.countDocuments(query);
+      console.log('📊 [QUOTES RESOLVER] Nombre total de devis trouvés:', totalCount);
       
       const quotes = await Quote.find(query)
         .populate('createdBy')
@@ -122,6 +126,8 @@ const quoteResolvers = {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
+      
+      console.log('📋 [QUOTES RESOLVER] Devis récupérés:', quotes.map(q => ({ id: q.id, number: q.number, createdBy: q.createdBy?.id })));
 
       return {
         quotes,
@@ -130,9 +136,10 @@ const quoteResolvers = {
       };
     }),
 
-    quoteStats: isAuthenticated(async (_, __, { user }) => {
+    quoteStats: isAuthenticated(async (_, { workspaceId }, { user }) => {
+      console.log('📈 [QUOTE STATS RESOLVER] Récupération statistiques:', { workspaceId, userId: user.id });
       const [stats] = await Quote.aggregate([
-        { $match: { createdBy: new mongoose.Types.ObjectId(user.id) } },
+        { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
         {
           $group: {
             _id: null,
@@ -204,16 +211,16 @@ const quoteResolvers = {
       return defaultStats;
     }),
 
-    nextQuoteNumber: isAuthenticated(async (_, { prefix }, { user }) => {
+    nextQuoteNumber: isAuthenticated(async (_, { workspaceId, prefix }, { user }) => {
       // Récupérer le préfixe personnalisé de l'utilisateur ou utiliser le format par défaut
       const userObj = await mongoose.model('User').findById(user.id);
       const customPrefix = prefix || userObj?.settings?.quoteNumberPrefix;
-      return await generateQuoteNumber(customPrefix, { userId: user.id });
+      return await generateQuoteNumber(customPrefix, { userId: user.id, workspaceId });
     })
   },
 
   Mutation: {
-    createQuote: isAuthenticated(async (_, { input }, { user }) => {
+    createQuote: isAuthenticated(async (_, { workspaceId, input }, { user }) => {
       // Utiliser le préfixe fourni ou 'D' par défaut
       const prefix = input.prefix || 'D';
       
@@ -224,6 +231,7 @@ const quoteResolvers = {
         const pendingQuotes = await Quote.find({
           prefix,
           status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
+          workspaceId,
           createdBy: user.id,
           // Ne considérer que les numéros sans suffixe
           number: { $regex: /^\d+$/ }
@@ -253,6 +261,7 @@ const quoteResolvers = {
           prefix,
           number: newNumber,
           status: 'DRAFT',
+          workspaceId,
           createdBy: user.id
         });
         
@@ -287,6 +296,7 @@ const quoteResolvers = {
         // Vérifier si le numéro fourni existe déjà
         const existingQuote = await Quote.findOne({ 
           number: input.number,
+          workspaceId,
           createdBy: user.id 
         });
         if (existingQuote) {
@@ -303,6 +313,7 @@ const quoteResolvers = {
               prefix,
               number,
               status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
+              workspaceId,
               createdBy: user.id
             });
             
@@ -314,6 +325,7 @@ const quoteResolvers = {
               const lastQuote = await Quote.findOne({
                 prefix,
                 status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
+                workspaceId,
                 createdBy: user.id,
                 number: { $regex: /^\d+$/ }
               }, { number: 1 }).sort({ number: -1 }).limit(1).lean();
@@ -372,11 +384,13 @@ const quoteResolvers = {
         // Vérifier si un client avec cet email existe déjà dans les devis ou factures
         const existingQuote = await Quote.findOne({
           'client.email': clientData.email.toLowerCase(),
+          workspaceId,
           createdBy: user.id
         });
         
         const existingInvoice = await Invoice.findOne({
           'client.email': clientData.email.toLowerCase(),
+          workspaceId,
           createdBy: user.id
         });
         
@@ -411,6 +425,7 @@ const quoteResolvers = {
         ...input,
         number, // S'assurer que le numéro est défini
         prefix,
+        workspaceId, // Ajouter le workspaceId
         companyInfo: input.companyInfo || userWithCompany.company,
         createdBy: user.id,
         ...totals // Ajouter tous les totaux calculés
