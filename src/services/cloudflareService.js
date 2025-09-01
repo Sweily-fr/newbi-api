@@ -27,6 +27,10 @@ class CloudflareService {
       "  AWS_S3_BUCKET_NAME_IMG_COMPANY:",
       process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY
     );
+    console.log(
+      "  AWS_S3_BUCKET_NAME_IMG:",
+      process.env.AWS_S3_BUCKET_NAME_IMG
+    );
     console.log("  AWS_S3_API_URL:", process.env.AWS_S3_API_URL);
     console.log(
       "  AWS_S3_API_URL_IMG_COMPANY:",
@@ -43,6 +47,7 @@ class CloudflareService {
     console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
     console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
     console.log("  COMPANY_PUBLIC_URL:", process.env.COMPANY_IMAGES_PUBLIC_URL);
+    console.log("  AWS_R2_PUBLIC_URL_IMG:", process.env.AWS_R2_PUBLIC_URL_IMG);
 
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
@@ -58,9 +63,11 @@ class CloudflareService {
     this.imageBucketName = process.env.IMAGE_BUCKET_NAME;
     this.logoBucketName = process.env.LOGO_BUCKET_NAME;
     this.companyBucketName = process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY;
+    this.userProfileBucketName = process.env.AWS_S3_BUCKET_NAME_IMG;
     this.imagePublicUrl = process.env.IMAGE_PUBLIC_URL;
     this.logoPublicUrl = process.env.LOGO_PUBLIC_URL;
     this.companyPublicUrl = process.env.COMPANY_IMAGES_PUBLIC_URL;
+    this.userProfilePublicUrl = process.env.AWS_R2_PUBLIC_URL_IMG;
 
     // Client séparé pour le bucket des logos
     this.logoClient = new S3Client({
@@ -146,6 +153,17 @@ class CloudflareService {
         console.log("📁 Upload vers bucket entreprise:", bucketName);
         console.log("🏢 Utilisateur ID:", userId);
         console.log("🔄 Écrasement du logo existant avec la clé:", key);
+      } else if (imageType === "profile") {
+        // Pour les images de profil utilisateur : user/userId/profile.extension (clé fixe pour écraser)
+        key = `user/${userId}/profile${fileExtension}`;
+        bucketName = this.userProfileBucketName;
+        client = this.client;
+        console.log("📁 Upload vers bucket profils utilisateur:", bucketName);
+        console.log("👤 Utilisateur ID:", userId);
+        console.log(
+          "🔄 Écrasement de l'image de profil existante avec la clé:",
+          key
+        );
       } else {
         // Pour les autres images : signatures/userId/imageType/uniqueId.extension (UUID pour éviter les conflits)
         const uniqueId = crypto.randomUUID();
@@ -199,6 +217,25 @@ class CloudflareService {
           imageUrl = `https://pub-157ce0fed50fe542bc92a07317a09205.r2.dev/${key}`;
           console.log(
             "🌐 URL publique Cloudflare entreprise (fallback):",
+            imageUrl
+          );
+        }
+      } else if (imageType === "profile") {
+        // Pour les images de profil utilisateur, utiliser l'URL publique dédiée
+        if (
+          this.userProfilePublicUrl &&
+          this.userProfilePublicUrl !== "https://your_user_bucket_public_url"
+        ) {
+          imageUrl = `${this.userProfilePublicUrl}/${key}`;
+          console.log(
+            "🌐 URL publique Cloudflare profil utilisateur générée:",
+            imageUrl
+          );
+        } else {
+          // Fallback sur URL hardcodée si pas configurée
+          imageUrl = `https://pub-afeb8647684e476ca05894fe1df797fb.r2.dev/${key}`;
+          console.log(
+            "🌐 URL publique Cloudflare profil utilisateur (fallback):",
             imageUrl
           );
         }

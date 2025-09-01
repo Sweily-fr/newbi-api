@@ -1,7 +1,9 @@
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import mongoose from "mongoose";
 import User from "../models/User.js";
 import { isAuthenticated } from "../middlewares/auth.js";
+import { withWorkspace } from "../middlewares/better-auth.js";
 import {
   sendPasswordResetEmail,
   sendVerificationEmail,
@@ -984,25 +986,32 @@ const userResolvers = {
     /**
      * Met à jour uniquement le logo de l'entreprise
      */
-    updateCompanyLogo: isAuthenticated(async (_, { logoUrl }, { user }) => {
+    updateCompanyLogo: withWorkspace(async (_, { logoUrl }, { user, workspaceId }) => {
       try {
-        // Mise à jour directe sans validation complète
-        const updatedUser = await User.findByIdAndUpdate(
-          user.id,
-          { 'company.logo': logoUrl },
-          { new: true, runValidators: false } // Pas de validation pour éviter les erreurs
+        // Mise à jour directe dans la collection organization
+        const db = mongoose.connection.db;
+        const organizationCollection = db.collection('organization');
+        
+        const result = await organizationCollection.findOneAndUpdate(
+          { _id: new mongoose.Types.ObjectId(workspaceId) },
+          { $set: { logo: logoUrl } },
+          { returnDocument: 'after' }
         );
 
-        if (!updatedUser) {
-          throw createNotFoundError('Utilisateur');
+        if (!result) {
+          throw new AppError(
+            'Organisation non trouvée',
+            ERROR_CODES.NOT_FOUND
+          );
         }
 
-        console.log('✅ Logo mis à jour en BDD:', {
-          userId: user.id,
-          logoUrl: logoUrl,
-          companyLogo: updatedUser.company?.logo
+        console.log('✅ Logo mis à jour dans organization:', {
+          workspaceId: workspaceId,
+          logoUrl: logoUrl
         });
 
+        // Retourner l'utilisateur avec les informations mises à jour
+        const updatedUser = await User.findById(user.id);
         return updatedUser;
       } catch (error) {
         console.error('Erreur mise à jour logo:', error);

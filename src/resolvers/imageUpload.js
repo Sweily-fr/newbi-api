@@ -233,8 +233,9 @@ const imageUploadResolvers = {
           "profile"
         );
 
-        // Mettre à jour l'utilisateur avec la nouvelle URL et clé
+        // Mettre à jour l'utilisateur avec la nouvelle URL dans le champ avatar
         await User.findByIdAndUpdate(user.id, {
+          avatar: result.url,
           profilePictureUrl: result.url,
           profilePictureKey: result.key,
         });
@@ -264,20 +265,50 @@ const imageUploadResolvers = {
      */
     deleteUserProfileImage: isAuthenticated(async (_, __, { user }) => {
       try {
-        if (!user.profilePictureKey) {
+        console.log("🚀 Début suppression image profil pour user ID:", user.id);
+
+        // Récupérer l'utilisateur complet depuis la base de données
+        const userDoc = await User.findById(user.id);
+        if (!userDoc) {
+          console.log("❌ Utilisateur non trouvé dans la DB");
+          throw createValidationError("Utilisateur non trouvé");
+        }
+
+        console.log("✅ Utilisateur trouvé dans la DB");
+
+        // Vérifier toutes les sources possibles d'URL d'image de profil
+        console.log("🔍 Debug userDoc.avatar:", userDoc);
+        console.log(
+          "🔍 Debug userDoc.profilePictureUrl:",
+          userDoc.profilePictureUrl
+        );
+
+        const imageUrl = userDoc.avatar || userDoc.profilePictureUrl;
+
+        if (!imageUrl) {
+          console.log("❌ Aucune image de profil trouvée");
           throw createValidationError("Aucune image de profil à supprimer");
         }
 
-        const success = await cloudflareService.deleteImage(
-          user.profilePictureKey
-        );
+        // Extraire la clé depuis l'URL
+        // URL format: https://pub-afeb8647684e476ca05894fe1df797fb.r2.dev/user/68b4a618b1c6f619a457314c/profile.jpg
+        const urlParts = imageUrl.split("/");
+        const key = urlParts.slice(-3).join("/"); // user/userId/profile.jpg
+
+        console.log("🔑 URL trouvée:", imageUrl);
+        console.log("🔑 Clé extraite:", key);
+
+        const success = await cloudflareService.deleteImage(key);
 
         if (success) {
-          // Mettre à jour l'utilisateur pour supprimer les références à l'image
+          // Mettre à jour l'utilisateur pour supprimer le champ avatar
           await User.findByIdAndUpdate(user.id, {
             $unset: {
+              avatar: 1,
               profilePictureUrl: 1,
               profilePictureKey: 1,
+              "profile.profilePictureUrl": 1,
+              "profile.profilePictureKey": 1,
             },
           });
         }

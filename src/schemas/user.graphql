@@ -101,7 +101,7 @@ extend type Mutation {
   resetPassword(input: UpdatePasswordInput!): ResetPasswordResponse!
   updateProfile(input: UserProfileInput!): User!
   updateCompany(input: CompanyInput!): User!
-  updateCompanyLogo(logoUrl: String): User!
+  updateCompanyLogo(logoUrl: String, workspaceId: ID!): User!
   uploadCompanyLogo(base64Image: String!): User!
   deleteCompanyLogo: User!
   uploadProfilePicture(base64Image: String!): User!
