@@ -22,8 +22,9 @@ class CloudflareService {
     // Debug: Vérifier les variables d'environnement
     console.log("🔧 Configuration Cloudflare R2:");
     console.log("  IMAGE_BUCKET_NAME:", process.env.IMAGE_BUCKET_NAME);
-<<<<<<< HEAD
+    console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
     console.log("  LOGO_BUCKET_NAME:", process.env.LOGO_BUCKET_NAME);
+    console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
     console.log(
       "  AWS_S3_BUCKET_NAME_IMG_COMPANY:",
       process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY
@@ -32,11 +33,6 @@ class CloudflareService {
       "  AWS_S3_BUCKET_NAME_IMG:",
       process.env.AWS_S3_BUCKET_NAME_IMG
     );
-=======
-    console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
-    console.log("  LOGO_BUCKET_NAME:", process.env.LOGO_BUCKET_NAME);
-    console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
->>>>>>> Dylan/SignatureMailv2
     console.log("  AWS_S3_API_URL:", process.env.AWS_S3_API_URL);
     console.log(
       "  AWS_S3_API_URL_IMG_COMPANY:",
@@ -50,13 +46,8 @@ class CloudflareService {
       "  AWS_SECRET_ACCESS_KEY:",
       process.env.AWS_SECRET_ACCESS_KEY ? "✅ Définie" : "❌ Manquante"
     );
-<<<<<<< HEAD
-    console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
-    console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
     console.log("  COMPANY_PUBLIC_URL:", process.env.COMPANY_IMAGES_PUBLIC_URL);
     console.log("  AWS_R2_PUBLIC_URL_IMG:", process.env.AWS_R2_PUBLIC_URL_IMG);
-=======
->>>>>>> Dylan/SignatureMailv2
 
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
@@ -68,7 +59,6 @@ class CloudflareService {
       },
     });
 
-<<<<<<< HEAD
     // Configuration des buckets séparés
     this.imageBucketName = process.env.IMAGE_BUCKET_NAME;
     this.logoBucketName = process.env.LOGO_BUCKET_NAME;
@@ -92,7 +82,7 @@ class CloudflareService {
     // Client spécifique pour les images d'entreprise
     this.companyClient = new S3Client({
       region: "auto",
-      endpoint: process.env.AWS_S3_API_URL_IMG_COMPANY,
+      endpoint: process.env.AWS_S3_API_URL_IMG_COMPANY || process.env.AWS_S3_API_URL,
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
@@ -113,14 +103,6 @@ class CloudflareService {
       throw new Error(
         "Configuration manquante: AWS_S3_BUCKET_NAME_IMG_COMPANY requis"
       );
-=======
-    this.bucketName = process.env.IMAGE_BUCKET_NAME;
-    this.publicUrl = process.env.IMAGE_PUBLIC_URL; // URL publique de votre domaine custom
-
-    if (!this.bucketName) {
-      console.error("❌ ERREUR: IMAGE_BUCKET_NAME n'est pas définie!");
-      throw new Error("Configuration manquante: IMAGE_BUCKET_NAME");
->>>>>>> Dylan/SignatureMailv2
     }
   }
 
@@ -219,7 +201,6 @@ class CloudflareService {
       // Générer l'URL appropriée selon la configuration
       let imageUrl;
 
-<<<<<<< HEAD
       if (imageType === "imgCompany" || imageType === "company") {
         // Pour les images d'entreprise, utiliser l'URL publique configurée
         if (
@@ -227,31 +208,6 @@ class CloudflareService {
           this.companyPublicUrl !== "https://your_company_bucket_public_url"
         ) {
           imageUrl = `${this.companyPublicUrl}/${key}`;
-=======
-      // Utilisation directe des URLs publiques Cloudflare R2
-      if (this.publicUrl && this.publicUrl !== "https://your_image_bucket_public_url") {
-        imageUrl = `${this.publicUrl}/${key}`;
-        console.log("🌐 URL publique IMAGE_BUCKET générée:", imageUrl);
-      } else {
-        // Fallback sur le proxy backend si pas d'URL publique configurée
-        console.log(
-          "🔗 Pas d'URL publique configurée, utilisation du proxy pour:",
-          key
-        );
-
-        const keyParts = key.split("/");
-        if (keyParts.length >= 3 && keyParts[0] === "signatures") {
-          const userId = keyParts[1];
-          const imageType = keyParts[2];
-          const filename = keyParts.slice(3).join("/");
-
-          const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
-          imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
-
-          console.log("✅ URL proxy générée:", imageUrl);
-        } else {
-          // Dernier fallback sur URL signée
->>>>>>> Dylan/SignatureMailv2
           console.log(
             "🌐 URL publique Cloudflare entreprise générée:",
             imageUrl
@@ -340,19 +296,9 @@ class CloudflareService {
   async uploadSocialLogo(fileBuffer, fileName, logoType, color) {
     try {
       // Configuration spécifique pour le bucket logo-rs
-      const logoBucketName = process.env.LOGO_BUCKET_NAME || 'logo-rs';
-      const logoPublicUrl = process.env.LOGO_PUBLIC_URL;
-      
-      // Créer un client S3 spécifique pour les logos (même config mais différent bucket)
-      const logoClient = new S3Client({
-        region: "auto",
-        endpoint: process.env.AWS_S3_API_URL,
-        credentials: {
-          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        },
-      });
-      
+      const logoBucketName = this.logoBucketName || 'logo-rs';
+      const logoPublicUrl = this.logoPublicUrl;
+
       // Générer une clé unique pour le logo social
       const fileExtension = path.extname(fileName).toLowerCase();
       const timestamp = Date.now();
@@ -378,16 +324,16 @@ class CloudflareService {
         },
       });
 
-      await logoClient.send(command);
+      await this.logoClient.send(command);
 
       // Générer l'URL publique
       let imageUrl;
-      if (logoPublicUrl) {
+      if (logoPublicUrl && logoPublicUrl !== "https://your_logo_bucket_public_url") {
         imageUrl = `${logoPublicUrl}/${key}`;
         console.log("🌐 URL publique logo-rs générée:", imageUrl);
       } else {
         // Fallback sur URL signée si pas d'URL publique
-        imageUrl = await this.getSignedUrl(key, 86400);
+        imageUrl = await this.getSignedUrl(key, 86400, this.logoClient, logoBucketName);
         console.log("🔗 URL signée générée pour logo:", imageUrl);
       }
 
@@ -411,15 +357,35 @@ class CloudflareService {
   async getImageUrl(key, expiresIn = 86400) {
     if (!key) return null;
 
-    if (
-      process.env.AWS_R2_PUBLIC_URL &&
-      process.env.AWS_R2_PUBLIC_URL !== "your_r2_public_url"
-    ) {
-      // Si URL publique configurée, utiliser l'URL publique directe
-      return `${process.env.AWS_R2_PUBLIC_URL}/${key}`;
+    // Déterminer le bon bucket et l'URL publique selon la clé
+    if (key.includes('social-logos/')) {
+      // Pour les logos sociaux
+      if (this.logoPublicUrl && this.logoPublicUrl !== "https://your_logo_bucket_public_url") {
+        return `${this.logoPublicUrl}/${key}`;
+      } else {
+        return await this.getSignedUrl(key, expiresIn, this.logoClient, this.logoBucketName);
+      }
+    } else if (key.includes('/logo.') || (key.split('/').length === 2 && key.includes('logo'))) {
+      // Pour les images d'entreprise
+      if (this.companyPublicUrl && this.companyPublicUrl !== "https://your_company_bucket_public_url") {
+        return `${this.companyPublicUrl}/${key}`;
+      } else {
+        return await this.getSignedUrl(key, expiresIn, this.companyClient, this.companyBucketName);
+      }
+    } else if (key.startsWith('user/')) {
+      // Pour les profils utilisateur
+      if (this.userProfilePublicUrl && this.userProfilePublicUrl !== "https://your_user_bucket_public_url") {
+        return `${this.userProfilePublicUrl}/${key}`;
+      } else {
+        return await this.getSignedUrl(key, expiresIn, this.client, this.userProfileBucketName);
+      }
     } else {
-      // Sinon, générer une URL signée temporaire
-      return await this.getSignedUrl(key, expiresIn);
+      // Pour les autres images (signatures)
+      if (this.imagePublicUrl && this.imagePublicUrl !== "https://your_image_bucket_public_url") {
+        return `${this.imagePublicUrl}/${key}`;
+      } else {
+        return await this.getSignedUrl(key, expiresIn, this.client, this.imageBucketName);
+      }
     }
   }
 
@@ -464,16 +430,33 @@ class CloudflareService {
   /**
    * Supprime une image de Cloudflare R2
    * @param {string} key - Clé de l'image à supprimer
+   * @param {string} imageType - Type d'image pour déterminer le bon bucket
    * @returns {Promise<boolean>}
    */
-  async deleteImage(key) {
+  async deleteImage(key, imageType = null) {
     try {
+      let client = this.client;
+      let bucketName = this.imageBucketName;
+
+      // Déterminer le bon client et bucket selon le type ou la clé
+      if (imageType === "company" || imageType === "imgCompany" || key.includes('/logo.')) {
+        client = this.companyClient;
+        bucketName = this.companyBucketName;
+      } else if (imageType === "profile" || key.startsWith('user/')) {
+        client = this.client;
+        bucketName = this.userProfileBucketName;
+      } else if (key.includes('social-logos/')) {
+        client = this.logoClient;
+        bucketName = this.logoBucketName;
+      }
+
       const command = new DeleteObjectCommand({
-        Bucket: this.imageBucketName,
+        Bucket: bucketName,
         Key: key,
       });
 
-      await this.client.send(command);
+      await client.send(command);
+      console.log("🗑️ Image supprimée:", key, "du bucket:", bucketName);
       return true;
     } catch (error) {
       console.error("Erreur suppression Cloudflare:", error);
