@@ -253,13 +253,20 @@ const invoiceResolvers = {
 
     nextInvoiceNumber: withWorkspace(
       async (_, { workspaceId, prefix, isDraft }, context) => {
-        const { user } = context;
+        const { user } = context || {};
+        if (!user) {
+          throw new Error('User not found in context');
+        }
 
         if (isDraft) {
-          // Pour les brouillons : retourner un numéro aléatoire temporaire
-          const timestamp = Date.now().toString().slice(-6);
-          const random = Math.floor(Math.random() * 1000);
-          return `DRAFT-${timestamp}-${random}`;
+          // Pour les brouillons : utiliser la même logique que pour les devis
+          const userObj = await mongoose.model("User").findById(user._id);
+          const customPrefix = prefix || userObj?.settings?.invoiceNumberPrefix;
+          return await generateInvoiceNumber(customPrefix, {
+            workspaceId: workspaceId,
+            isDraft: true,
+            userId: user._id
+          });
         } else {
           // Pour les factures finalisées : générer le prochain numéro séquentiel par workspace
           const userObj = await mongoose.model("User").findById(user._id);
@@ -307,19 +314,19 @@ const invoiceResolvers = {
         const month = String(now.getMonth() + 1).padStart(2, "0");
         const prefix = input.prefix || `F-${year}${month}-`;
 
-        // Fonction utilitaire pour générer un numéro aléatoire unique pour les brouillons
-        const generateDraftNumber = () => {
-          const timestamp = Date.now().toString().slice(-6);
-          const random = Math.floor(Math.random() * 1000);
-          return `DRAFT-${timestamp}-${random}`;
-        };
-
-        // Logique simplifiée de génération des numéros
+        // Logique de génération des numéros
         let number;
 
-        if (input.status === "DRAFT") {
-          // Pour les brouillons : toujours un numéro aléatoire temporaire
-          number = generateDraftNumber();
+        if (input.status === 'DRAFT') {
+          // Pour les brouillons : utiliser generateInvoiceNumber avec isDraft: true
+          const currentUser = await mongoose.model('User').findById(context.user._id);
+          const customPrefix = input.prefix || currentUser?.settings?.invoiceNumberPrefix;
+          number = await generateInvoiceNumber(customPrefix, {
+            workspaceId,
+            isDraft: true,
+            userId: context.user._id,
+            manualNumber: input.number // Passer le numéro manuel s'il est fourni
+          });
         } else {
           // Pour les factures finalisées (PENDING/COMPLETED) : numéro séquentiel
           if (input.number) {
@@ -656,57 +663,22 @@ const invoiceResolvers = {
           const month = String(now.getMonth() + 1).padStart(2, "0");
           const prefix = invoiceData.prefix || `F-${year}${month}-`;
 
-          // Générer le prochain numéro séquentiel (remplace tout numéro DRAFT existant)
-          // Trouver le dernier numéro utilisé pour ce workspace
-          const lastInvoice = await Invoice.findOne({
+          // Utiliser generateInvoiceNumber pour générer le prochain numéro séquentiel
+          // Cela garantit que le numéro est unique et suit la séquence correcte
+          const newNumber = await generateInvoiceNumber(prefix, {
             workspaceId: workspaceId,
-            status: { $in: ["PENDING", "COMPLETED"] },
-            number: { $regex: /^\d{6}$/ }, // Seulement les numéros numériques
-            $expr: { $eq: [{ $year: "$issueDate" }, year] },
-          }).sort({ number: -1 });
+            userId: context.user._id,
+            isPending: true,
+            year: year
+          });
 
-          let nextNumber = 1;
-          if (lastInvoice && lastInvoice.number) {
-            nextNumber = parseInt(lastInvoice.number) + 1;
-          }
-
-          // Vérifier que ce numéro n'existe pas déjà et l'incrémenter si nécessaire
-          let attempts = 0;
-          let newNumber;
-          let numberExists = true;
-
-          while (numberExists && attempts < 50) {
-            attempts++;
-            newNumber = String(nextNumber).padStart(6, "0");
-
-            // Vérifier si ce numéro existe déjà pour ce workspace
-            const existingInvoice = await Invoice.findOne({
-              number: newNumber,
-              workspaceId: workspaceId,
-              _id: { $ne: invoiceData._id }, // Exclure la facture actuelle
-            });
-
-            if (!existingInvoice) {
-              numberExists = false;
-            } else {
-              console.log(
-                `⚠️ Numéro ${newNumber} déjà utilisé, tentative ${attempts}/50`
-              );
-              nextNumber++; // Incrémenter pour la prochaine tentative
-            }
-          }
-
-          if (numberExists) {
-            throw new Error(
-              `Impossible de générer un numéro unique après ${attempts} tentatives`
-            );
-          }
-
+          // Mettre à jour le numéro et le préfixe
           updateData.number = newNumber;
           updateData.prefix = prefix;
 
           console.log(
-            `🔄 Transition DRAFT->PENDING: Ancien numéro "${invoiceData.number}" remplacé par "${newNumber}"`
+            `🔄 Transition DRAFT->${updatedInput.status}: ` +
+            `Nouveau numéro séquentiel généré: "${newNumber}"`
           );
         }
 
