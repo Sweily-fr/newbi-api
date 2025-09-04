@@ -165,4 +165,43 @@ const validateCompanyInfo = async (workspaceId) => {
   return true;
 };
 
-export { requireCompanyInfo, isCompanyInfoComplete, validateCompanyInfo };
+/**
+ * Fonction utilitaire pour récupérer les informations d'organisation
+ * @param {string} workspaceId - ID de l'organisation
+ * @returns {Object} - Objet organization
+ */
+const getOrganizationInfo = async (workspaceId) => {
+  if (!workspaceId) {
+    throw new AppError(
+      'workspaceId requis',
+      ERROR_CODES.BAD_REQUEST,
+      400
+    );
+  }
+
+  let organization;
+  try {
+    const db = mongoose.connection.db;
+    const organizationCollection = db.collection('organization');
+    organization = await organizationCollection.findOne({ _id: new mongoose.Types.ObjectId(workspaceId) });
+  } catch (error) {
+    logger.error('Erreur lors de la récupération de l\'organisation:', error);
+    throw new AppError(
+      'Erreur lors de la récupération des informations d\'entreprise',
+      ERROR_CODES.INTERNAL_ERROR,
+      500
+    );
+  }
+
+  if (!organization) {
+    throw new AppError(
+      'Organisation non trouvée',
+      ERROR_CODES.NOT_FOUND,
+      404
+    );
+  }
+
+  return organization;
+};
+
+export { requireCompanyInfo, isCompanyInfoComplete, validateCompanyInfo, getOrganizationInfo };
