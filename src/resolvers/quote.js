@@ -225,32 +225,38 @@ const quoteResolvers = {
       const prefix = input.prefix || 'D';
       
       // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
-      // À partir du dernier numéro le plus grand, sans combler les trous
+      // Vérifie tous les numéros existants et trouve le premier trou disponible
       const forceSequentialNumber = async () => {
         // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
-        const pendingQuotes = await Quote.find({
+        const officialQuotes = await Quote.find({
           prefix,
           status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
           workspaceId,
           createdBy: user.id,
           // Ne considérer que les numéros sans suffixe
           number: { $regex: /^\d+$/ }
-        }, { number: 1 }).sort({ number: -1 }).limit(1).lean(); // Tri décroissant et limite à 1 pour obtenir le plus grand
+        }, { number: 1 }).sort({ number: 1 }).lean(); // Tri croissant
         
-        let nextNumber;
-        
-        if (pendingQuotes.length === 0) {
-          // Si aucun devis officiel n'existe, commencer à 1
-          nextNumber = '000001';
-        } else {
-          // Récupérer le dernier numéro (le plus grand)
-          const lastNumber = parseInt(pendingQuotes[0].number);
-          
-          // Incrémenter de 1 et formater
-          nextNumber = String(lastNumber + 1).padStart(6, '0');
+        // Si aucun devis officiel n'existe, commencer à 1
+        if (officialQuotes.length === 0) {
+          return '000001';
         }
         
-        return nextNumber;
+        // Convertir les numéros en entiers
+        const numbers = officialQuotes.map(q => parseInt(q.number, 10));
+        
+        // Trouver le premier numéro manquant dans la séquence
+        let nextNumber = 1;
+        for (const num of numbers) {
+          if (num > nextNumber) {
+            // Un trou a été trouvé, utiliser ce numéro
+            break;
+          }
+          nextNumber = num + 1;
+        }
+        
+        // Formater avec des zéros à gauche (6 chiffres)
+        return String(nextNumber).padStart(6, '0');
       };
       
       // Si le statut est PENDING, vérifier d'abord s'il existe des devis en DRAFT 
@@ -290,75 +296,62 @@ const quoteResolvers = {
         return newNumber;
       };
       
-      // Vérifier si un numéro a été fourni
+      // Vérifier si c'est le premier devis de l'utilisateur
+      const firstQuote = await Quote.findOne({
+        createdBy: user.id,
+        status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
+      });
+      
       let number;
-      if (input.number) {
-        // Vérifier si le numéro fourni existe déjà
+      
+      // Logique de génération du numéro
+      if (input.number && firstQuote === null) {
+        // C'est le premier devis, on peut accepter le numéro fourni
+        // Vérifier que le numéro est valide
+        if (!/^\d{1,6}$/.test(input.number)) {
+          throw new AppError(
+            'Le numéro de devis doit contenir entre 1 et 6 chiffres',
+            ERROR_CODES.VALIDATION_ERROR
+          );
+        }
+        
+        // Vérifier que le numéro n'existe pas déjà
         const existingQuote = await Quote.findOne({ 
           number: input.number,
           workspaceId,
           createdBy: user.id 
         });
+        
         if (existingQuote) {
-          // Si le numéro existe déjà, générer un nouveau numéro
-          number = await generateQuoteNumber(prefix, { userId: user.id });
+          throw new AppError(
+            'Ce numéro de devis est déjà utilisé',
+            ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER
+          );
+        }
+        
+        number = input.number;
+      } else if (input.number) {
+        // Ce n'est pas le premier devis, on ignore le numéro fourni et on en génère un nouveau
+        console.log('Numéro fourni ignoré car ce n\'est pas le premier devis. Génération d\'un numéro séquentiel.');
+        
+        if (input.status === 'PENDING') {
+          number = await forceSequentialNumber();
         } else {
-          // Sinon, utiliser le numéro fourni
-          number = input.number;
-          
-          // Si le statut est PENDING, vérifier que le numéro est valide et forcer un numéro séquentiel si nécessaire
-          if (input.status === 'PENDING') {
-            // Vérifier si le numéro fourni est valide pour un devis PENDING
-            const existingPendingOrCompleted = await Quote.findOne({
-              prefix,
-              number,
-              status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-              workspaceId,
-              createdBy: user.id
-            });
-            
-            if (existingPendingOrCompleted) {
-              // Si le numéro existe déjà pour un devis à encaisser, forcer un numéro séquentiel
-              number = await forceSequentialNumber();
-            } else {
-              // Vérifier si le numéro fourni est supérieur au dernier numéro le plus grand + 1
-              const lastQuote = await Quote.findOne({
-                prefix,
-                status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-                workspaceId,
-                createdBy: user.id,
-                number: { $regex: /^\d+$/ }
-              }, { number: 1 }).sort({ number: -1 }).limit(1).lean();
-              
-              // Si des devis existent, vérifier que le numéro fourni est valide
-              if (lastQuote) {
-                const lastNumber = parseInt(lastQuote.number);
-                const providedNumber = parseInt(number);
-                
-                // Si le numéro fourni n'est pas le suivant après le dernier
-                if (providedNumber !== lastNumber + 1) {
-                  // Forcer un numéro séquentiel à partir du dernier
-                  number = await forceSequentialNumber();
-                }
-              }
-            }
-            
-            // Gérer les conflits avec les devis en DRAFT
-            number = await handleDraftConflicts(number);
-          }
+          number = await generateQuoteNumber(prefix, { userId: user.id });
         }
       } else {
-        // Générer un nouveau numéro
-        // Si le statut est PENDING, forcer un numéro strictement séquentiel
+        // Aucun numéro fourni, on en génère un nouveau
         if (input.status === 'PENDING') {
-          // Forcer un numéro séquentiel sans écarts
+          // Pour les devis PENDING, on force un numéro séquentiel
           number = await forceSequentialNumber();
-          // Gérer les conflits avec les devis en DRAFT
-          number = await handleDraftConflicts(number);
         } else {
+          // Pour les brouillons, on génère un numéro standard
           number = await generateQuoteNumber(prefix, { userId: user.id });
         }
       }
+      
+      // Gérer les conflits avec les devis en DRAFT
+      number = await handleDraftConflicts(number);
       
       const userWithCompany = await User.findById(user.id).select('company');
       if (!userWithCompany?.company) {
