@@ -269,164 +269,6 @@ const quoteResolvers = {
   },
 
   Mutation: {
-<<<<<<< HEAD
-    createQuote: isAuthenticated(
-      async (_, { workspaceId, input }, { user }) => {
-        // Utiliser le préfixe fourni ou 'D' par défaut
-        const prefix = input.prefix || "D";
-
-        // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
-        // À partir du dernier numéro le plus grand, sans combler les trous
-        const forceSequentialNumber = async () => {
-          // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
-          const pendingQuotes = await Quote.find(
-            {
-              prefix,
-              status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-              workspaceId,
-              createdBy: user.id,
-              // Ne considérer que les numéros sans suffixe
-              number: { $regex: /^\d+$/ },
-            },
-            { number: 1 }
-          )
-            .sort({ number: -1 })
-            .limit(1)
-            .lean(); // Tri décroissant et limite à 1 pour obtenir le plus grand
-
-          let nextNumber;
-
-          if (pendingQuotes.length === 0) {
-            // Si aucun devis officiel n'existe, commencer à 1
-            nextNumber = "000001";
-          } else {
-            // Récupérer le dernier numéro (le plus grand)
-            const lastNumber = parseInt(pendingQuotes[0].number);
-
-            // Incrémenter de 1 et formater
-            nextNumber = String(lastNumber + 1).padStart(6, "0");
-          }
-
-          return nextNumber;
-        };
-
-        // Si le statut est PENDING, vérifier d'abord s'il existe des devis en DRAFT
-        // qui pourraient entrer en conflit avec le numéro qui sera généré
-        const handleDraftConflicts = async (newNumber) => {
-          // Vérifier s'il existe un devis en DRAFT avec le même numéro
-          const conflictingDrafts = await Quote.find({
-            prefix,
-            number: newNumber,
-            status: "DRAFT",
-            workspaceId,
-            createdBy: user.id,
-          });
-
-          // S'il y a des devis en conflit, mettre à jour leur numéro
-          for (const draft of conflictingDrafts) {
-            // Ajouter le suffixe -DRAFT au numéro existant
-            const newDraftNumber = `${newNumber}-DRAFT`;
-
-            // Vérifier que le nouveau numéro n'existe pas déjà
-            const existingWithNewNumber = await Quote.findOne({
-              prefix,
-              number: newDraftNumber,
-              createdBy: user.id,
-            });
-
-            // Si le numéro existe déjà, générer un numéro unique avec timestamp
-            const finalDraftNumber = existingWithNewNumber
-              ? `DRAFT-${Date.now().toString().slice(-6)}`
-              : newDraftNumber;
-
-            // Mettre à jour le devis en brouillon avec le nouveau numéro
-            await Quote.findByIdAndUpdate(draft._id, {
-              number: finalDraftNumber,
-            });
-            console.log(
-              `Devis en brouillon mis à jour avec le numéro ${finalDraftNumber}`
-            );
-          }
-
-          return newNumber;
-        };
-
-        // Vérifier si un numéro a été fourni
-        let number;
-        if (input.number) {
-          // Vérifier si le numéro fourni existe déjà
-          const existingQuote = await Quote.findOne({
-            number: input.number,
-            workspaceId,
-            createdBy: user.id,
-          });
-          if (existingQuote) {
-            // Si le numéro existe déjà, générer un nouveau numéro
-            number = await generateQuoteNumber(prefix, { userId: user.id });
-          } else {
-            // Sinon, utiliser le numéro fourni
-            number = input.number;
-
-            // Si le statut est PENDING, vérifier que le numéro est valide et forcer un numéro séquentiel si nécessaire
-            if (input.status === "PENDING") {
-              // Vérifier si le numéro fourni est valide pour un devis PENDING
-              const existingPendingOrCompleted = await Quote.findOne({
-                prefix,
-                number,
-                status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-                workspaceId,
-                createdBy: user.id,
-              });
-
-              if (existingPendingOrCompleted) {
-                // Si le numéro existe déjà pour un devis à encaisser, forcer un numéro séquentiel
-                number = await forceSequentialNumber();
-              } else {
-                // Vérifier si le numéro fourni est supérieur au dernier numéro le plus grand + 1
-                const lastQuote = await Quote.findOne(
-                  {
-                    prefix,
-                    status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-                    workspaceId,
-                    createdBy: user.id,
-                    number: { $regex: /^\d+$/ },
-                  },
-                  { number: 1 }
-                )
-                  .sort({ number: -1 })
-                  .limit(1)
-                  .lean();
-
-                // Si des devis existent, vérifier que le numéro fourni est valide
-                if (lastQuote) {
-                  const lastNumber = parseInt(lastQuote.number);
-                  const providedNumber = parseInt(number);
-
-                  // Si le numéro fourni n'est pas le suivant après le dernier
-                  if (providedNumber !== lastNumber + 1) {
-                    // Forcer un numéro séquentiel à partir du dernier
-                    number = await forceSequentialNumber();
-                  }
-                }
-              }
-
-              // Gérer les conflits avec les devis en DRAFT
-              number = await handleDraftConflicts(number);
-            }
-          }
-        } else {
-          // Générer un nouveau numéro
-          // Si le statut est PENDING, forcer un numéro strictement séquentiel
-          if (input.status === "PENDING") {
-            // Forcer un numéro séquentiel sans écarts
-            number = await forceSequentialNumber();
-            // Gérer les conflits avec les devis en DRAFT
-            number = await handleDraftConflicts(number);
-          } else {
-            number = await generateQuoteNumber(prefix, { userId: user.id });
-          }
-        }
-=======
     createQuote: isAuthenticated(async (_, { workspaceId, input }, { user }) => {
       // Utiliser le préfixe fourni ou 'D' par défaut
       const prefix = input.prefix || 'D';
@@ -480,20 +322,9 @@ const quoteResolvers = {
         
         // S'il y a des devis en conflit, mettre à jour leur numéro
         for (const draft of conflictingDrafts) {
-          // Ajouter le suffixe -DRAFT au numéro existant
-          const newDraftNumber = `${newNumber}-DRAFT`;
-          
-          // Vérifier que le nouveau numéro n'existe pas déjà
-          const existingWithNewNumber = await Quote.findOne({
-            prefix,
-            number: newDraftNumber,
-            createdBy: user.id
-          });
-          
-          // Si le numéro existe déjà, générer un numéro unique avec timestamp
-          const finalDraftNumber = existingWithNewNumber 
-            ? `DRAFT-${Date.now().toString().slice(-6)}` 
-            : newDraftNumber;
+          // Utiliser le format DRAFT-ID avec timestamp
+          const timestamp = Date.now() + Math.floor(Math.random() * 1000);
+          const finalDraftNumber = `DRAFT-${newNumber}-${timestamp}`;
           
           // Mettre à jour le devis en brouillon avec le nouveau numéro
           await Quote.findByIdAndUpdate(draft._id, { number: finalDraftNumber });
@@ -567,15 +398,6 @@ const quoteResolvers = {
           ERROR_CODES.COMPANY_INFO_REQUIRED
         );
       }
->>>>>>> joaquim/devis/maintenance2
-
-        const userWithCompany = await User.findById(user.id).select("company");
-        if (!userWithCompany?.company) {
-          throw new AppError(
-            "Les informations de votre entreprise doivent être configurées avant de créer un devis",
-            ERROR_CODES.COMPANY_INFO_REQUIRED
-          );
-        }
 
         // Calculer les totaux avec la remise
         const totals = calculateQuoteTotals(
@@ -784,60 +606,114 @@ const quoteResolvers = {
         const month = String(now.getMonth() + 1).padStart(2, "0");
         const prefix = quote.prefix || `D-${year}${month}-`;
 
-        // Générer un nouveau numéro séquentiel par rapport aux devis PENDING/COMPLETED/CANCELED
+        // Sauvegarder le numéro original avant modification
+        const originalDraftNumber = quote.number;
 
-        const newNumber = await generateQuoteNumber(prefix, {
-          manualNumber: quote.number,
-          isPending: true,
-          userId: user.id,
-        });
-
-        // Vérifier si un autre devis en brouillon existe avec ce numéro
-        const conflictingDraft = await Quote.findOne({
-          _id: { $ne: quote._id },
-          prefix,
-          number: newNumber,
-          status: "DRAFT",
-          createdBy: user.id,
-        });
-
-        if (conflictingDraft) {
-          // Générer un nouveau numéro pour le devis en conflit
-          // Trouver le dernier numéro de brouillon avec ce préfixe
-          const lastDraftNumber = await Quote.findOne({
-            prefix,
-            status: "DRAFT",
-            createdBy: user.id,
-          }).sort({ number: -1 });
-
-          // Générer un nouveau numéro pour le brouillon en conflit
-          let newDraftNumber;
-          if (lastDraftNumber) {
-            // Ajouter un suffixe -DRAFT au numéro existant
-            newDraftNumber = `${newNumber}-DRAFT`;
+        // ÉTAPE 1 du swap: Si c'est un devis avec suffixe -DRAFT, faire le swap complet
+        let finalNumber = originalDraftNumber;
+        
+        console.log(`🔄 [SWAP] Début du processus pour devis ${quote._id} avec numéro: ${originalDraftNumber}`);
+        
+        if (originalDraftNumber.endsWith('-DRAFT')) {
+          const baseNumber = originalDraftNumber.replace('-DRAFT', '');
+          console.log(`🔍 [SWAP] Recherche d'un conflit avec le numéro de base: ${baseNumber}`);
+          
+          // Vérifier s'il existe un devis avec le numéro de base
+          const searchQuery = {
+            number: baseNumber,
+            workspaceId: quote.workspaceId,
+            _id: { $ne: quote._id }
+          };
+          console.log(`🔍 [SWAP] Requête de recherche:`, JSON.stringify(searchQuery, null, 2));
+          
+          const existingQuote = await Quote.findOne(searchQuery);
+          console.log(`🔍 [SWAP] Résultat de la recherche:`, existingQuote ? `Trouvé: ${existingQuote._id} (${existingQuote.number}, ${existingQuote.status})` : 'Aucun devis trouvé');
+          
+          if (existingQuote) {
+            // Vérifier le statut du devis existant
+            if (existingQuote.status === 'DRAFT') {
+              console.log(`⚠️ [SWAP] Conflit avec brouillon ${existingQuote._id} - Swap autorisé`);
+              
+              // ÉTAPE 1: 000892 -> TEMP-000892
+              const tempNumber1 = `TEMP-${baseNumber}`;
+              console.log(`🔄 [SWAP] ÉTAPE 1: ${existingQuote.number} -> ${tempNumber1}`);
+              await Quote.findByIdAndUpdate(existingQuote._id, {
+                number: tempNumber1
+              });
+              console.log(`✅ [SWAP] ÉTAPE 1 terminée`);
+              
+              // ÉTAPE 2: Le devis actuel prend le numéro de base
+              finalNumber = baseNumber;
+              console.log(`🔄 [SWAP] ÉTAPE 2: ${originalDraftNumber} -> ${finalNumber}`);
+              
+              // ÉTAPE 3: TEMP-000892 -> 000892-DRAFT (fait après la sauvegarde)
+              // On sauvegarde l'ID pour l'étape 3
+              quote._swapQuoteId = existingQuote._id;
+              quote._originalDraftNumber = originalDraftNumber;
+            } else {
+              console.log(`🚫 [SWAP] Conflit avec devis finalisé ${existingQuote._id} (${existingQuote.status}) - Génération numéro séquentiel`);
+              
+              // Générer le prochain numéro séquentiel
+              finalNumber = await generateQuoteNumber(prefix, {
+                workspaceId: quote.workspaceId,
+                userId: user.id,
+                year,
+                currentQuoteId: quote._id
+              });
+              console.log(`🔢 [SWAP] Nouveau numéro séquentiel généré: ${finalNumber}`);
+            }
           } else {
-            newDraftNumber = `DRAFT-${Math.floor(Math.random() * 10000)}`;
+            console.log(`✅ [SWAP] Pas de conflit, simple suppression du suffixe -DRAFT`);
+            // Pas de conflit, juste enlever le suffixe -DRAFT
+            finalNumber = baseNumber;
           }
-
-          // Vérifier que le nouveau numéro n'existe pas déjà
-          const existingWithNewNumber = await Quote.findOne({
-            prefix,
-            number: newDraftNumber,
-            createdBy: user.id,
+        } else {
+          console.log(`🔄 [SWAP] Génération d'un nouveau numéro séquentiel pour: ${originalDraftNumber}`);
+          // Générer un nouveau numéro séquentiel normal
+          finalNumber = await generateQuoteNumber(prefix, {
+            isValidatingDraft: true,
+            currentDraftNumber: originalDraftNumber,
+            workspaceId: quote.workspaceId,
+            userId: user.id,
+            year,
+            currentQuoteId: quote._id
           });
+        }
+        
+        console.log(`🎯 [SWAP] Numéro final calculé: ${finalNumber}`);
 
-          if (existingWithNewNumber) {
-            // Si le numéro existe déjà, ajouter un timestamp
-            newDraftNumber = `DRAFT-${Date.now().toString().slice(-6)}`;
-          }
+        // Utiliser une stratégie de numéro temporaire pour éviter les erreurs de clé dupliquée
+        const tempNumber = `TEMP-${Date.now()}`;
+        console.log(`🔄 [SWAP] Attribution numéro temporaire: ${tempNumber}`);
+        quote.number = tempNumber;
+        await quote.save();
+        console.log(`✅ [SWAP] Sauvegarde temporaire réussie`);
 
-          // Mettre à jour le devis en conflit
-          conflictingDraft.number = newDraftNumber;
-          await conflictingDraft.save();
+        // Mettre à jour le numéro et le préfixe du devis
+        console.log(`🔄 [SWAP] Attribution numéro final: ${finalNumber}`);
+        quote.number = finalNumber;
+        quote.prefix = prefix;
+        
+        try {
+          await quote.save();
+          console.log(`✅ [SWAP] Sauvegarde finale réussie avec numéro: ${finalNumber}`);
+        } catch (error) {
+          console.error(`❌ [SWAP] ERREUR lors de la sauvegarde finale:`, error.message);
+          throw error;
         }
 
-        // Mettre à jour le numéro du devis actuel
-        quote.number = newNumber;
+        // ÉTAPE 3 du swap: Finaliser le changement TEMP-000892 -> 000892-DRAFT
+        if (quote._swapQuoteId && quote._originalDraftNumber) {
+          console.log(`🔄 [SWAP] ÉTAPE 3: ${quote._swapQuoteId} -> ${quote._originalDraftNumber}`);
+          await Quote.findByIdAndUpdate(quote._swapQuoteId, {
+            number: quote._originalDraftNumber // 000892-DRAFT
+          });
+          console.log(`✅ [SWAP] ÉTAPE 3 terminée`);
+          
+          // Nettoyer les propriétés temporaires
+          delete quote._swapQuoteId;
+          delete quote._originalDraftNumber;
+        }
       }
 
       quote.status = status;

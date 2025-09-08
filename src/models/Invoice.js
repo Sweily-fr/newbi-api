@@ -49,10 +49,10 @@ const invoiceSchema = new mongoose.Schema(
       validate: {
         validator: function (value) {
           if (!value && this.status === "DRAFT") return true; // Valide si pas de numéro pour un brouillon
-          return /^[A-Za-z0-9-]{1,20}$/.test(value);
+          return /^[A-Za-z0-9-]{1,50}$/.test(value);
         },
         message:
-          "Le numéro de facture doit contenir uniquement des lettres, chiffres ou tirets (max 20 caractères)",
+          "Le numéro de facture doit contenir uniquement des lettres, chiffres ou tirets (max 50 caractères)",
       },
     },
     issueDate: {

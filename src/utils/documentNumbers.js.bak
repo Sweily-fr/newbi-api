@@ -333,16 +333,11 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       const existingDraft = await Invoice.findOne(draftQuery);
       
       if (existingDraft) {
-        // LOGIQUE CORRIGÉE : Seul l'ancien brouillon devient DRAFT-ID
-        
-        // Renommer l'ancien brouillon avec un suffixe unique
-        const timestamp = Date.now();
+        // Renommer l'ancien brouillon avec le préfixe DRAFT-
         await Invoice.findByIdAndUpdate(existingDraft._id, {
-          number: `DRAFT-${options.manualNumber}-${timestamp}`
+          number: `DRAFT-${options.manualNumber}`
         });
-        
-        // Le nouveau brouillon garde le numéro original
-        return options.manualNumber;
+        // Brouillon existant renommé avec préfixe DRAFT-
       }
       
       return options.manualNumber;
@@ -424,17 +419,42 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       const existingDraft = await Quote.findOne(draftQuery);
       
       if (existingDraft) {
-        // NOUVELLE LOGIQUE : TOUS les doublons deviennent DRAFT-ID
+        // Cas spécial : si on veut créer un numéro avec suffixe -DRAFT
+        // et qu'il existe déjà un brouillon avec le numéro de base
+        if (options.manualNumber.endsWith('-DRAFT')) {
+          const baseNumber = options.manualNumber.replace('-DRAFT', '');
+          
+          // Vérifier s'il existe un brouillon avec le numéro de base
+          const baseNumberQuery = {
+            number: baseNumber,
+            status: 'DRAFT',
+            $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+          };
+          
+          if (options.workspaceId) {
+            baseNumberQuery.workspaceId = options.workspaceId;
+          } else if (options.userId) {
+            baseNumberQuery.createdBy = options.userId;
+          }
+          
+          const baseNumberDraft = await Quote.findOne(baseNumberQuery);
+          
+          if (baseNumberDraft) {
+            // Renommer le brouillon avec le numéro de base en ajoutant -DRAFT
+            await Quote.findByIdAndUpdate(baseNumberDraft._id, {
+              number: `${baseNumber}-DRAFT`
+            });
+            
+            // Le nouveau devis prend le numéro de base
+            return baseNumber;
+          }
+        }
         
-        // Renommer l'ancien brouillon avec un suffixe unique
-        const timestamp1 = Date.now();
+        // Logique normale : renommer l'ancien brouillon avec un suffixe unique
+        const timestamp = Date.now();
         await Quote.findByIdAndUpdate(existingDraft._id, {
-          number: `DRAFT-${options.manualNumber}-${timestamp1}`
+          number: `DRAFT-${options.manualNumber}-${timestamp}`
         });
-        
-        // Le nouveau devis reçoit AUSSI le format DRAFT-ID avec un timestamp différent
-        const timestamp2 = Date.now() + Math.floor(Math.random() * 1000);
-        return `DRAFT-${options.manualNumber}-${timestamp2}`;
       }
       
       return options.manualNumber;
@@ -549,16 +569,11 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
   let isTempNumber = false;
   
   if (draftNumber.startsWith('DRAFT-')) {
-    // Gérer les formats DRAFT-000052-123456 (avec timestamp) et DRAFT-000052
-    const draftPart = draftNumber.replace('DRAFT-', '');
-    
-    // Si le format contient un timestamp (DRAFT-000052-123456), extraire le numéro de base
-    if (draftPart.includes('-') && /^\d{6}-\d+$/.test(draftPart)) {
-      targetNumber = draftPart.split('-')[0]; // Extraire 000052 de 000052-123456
-    } else {
-      targetNumber = draftPart; // Format simple DRAFT-000052
-    }
-    
+    targetNumber = draftNumber.replace('DRAFT-', '');
+    isDraftPrefixed = true;
+  } else if (draftNumber.endsWith('-DRAFT')) {
+    // Gérer les numéros avec suffixe -DRAFT (ex: 000453-DRAFT)
+    targetNumber = draftNumber.replace('-DRAFT', '');
     isDraftPrefixed = true;
   } else if (draftNumber.startsWith('TEMP-')) {
     isTempNumber = true;
@@ -567,6 +582,10 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
       targetNumber = options.originalDraftNumber;
       if (targetNumber.startsWith('DRAFT-')) {
         targetNumber = targetNumber.replace('DRAFT-', '');
+        isDraftPrefixed = true;
+      } else if (targetNumber.endsWith('-DRAFT')) {
+        // Gérer les numéros avec suffixe -DRAFT (ex: 000453-DRAFT)
+        targetNumber = targetNumber.replace('-DRAFT', '');
         isDraftPrefixed = true;
       }
     }
@@ -617,17 +636,35 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
     });
   }
   
-  // Si c'est un brouillon avec préfixe DRAFT-, il doit obtenir le prochain numéro séquentiel
+  // Si c'est un brouillon avec préfixe DRAFT-, extraire le numéro cible
   if (isDraftPrefixed) {
-    // Pour les brouillons DRAFT-ID, générer le prochain numéro séquentiel
-    const nextSequentialNumber = await generateQuoteSequentialNumber(prefix, {
-      ...options,
-      year: currentYear
-    });
+    // Vérifier s'il existe un devis finalisé avec ce numéro
+    const finalizedQuery = {
+      number: targetNumber,
+      status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
+      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+    };
     
-    // Vérifier s'il existe un brouillon avec ce numéro séquentiel
+    if (options.workspaceId) {
+      finalizedQuery.workspaceId = options.workspaceId;
+    } else if (options.userId) {
+      finalizedQuery.createdBy = options.userId;
+    }
+    
+    const existingFinalized = await Quote.findOne(finalizedQuery);
+    
+    if (existingFinalized) {
+      // LOGIQUE DE SWAP: Transformer le devis finalisé en DRAFT avant d'assigner le numéro
+      const uniqueSuffix = Date.now().toString().slice(-6);
+      await Quote.findByIdAndUpdate(existingFinalized._id, {
+        number: `DRAFT-${targetNumber}-${uniqueSuffix}`,
+        status: 'DRAFT'
+      });
+    }
+    
+    // Vérifier s'il y a des conflits avec des brouillons existants
     const conflictQuery = {
-      number: nextSequentialNumber,
+      number: { $lte: targetNumber },
       status: 'DRAFT',
       $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
@@ -638,21 +675,23 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
       conflictQuery.createdBy = options.userId;
     }
     
+    // Exclure le devis actuel pour éviter l'auto-conflit
     if (options.currentQuoteId) {
       conflictQuery._id = { $ne: options.currentQuoteId };
     }
     
-    const conflictingDraft = await Quote.findOne(conflictQuery);
+    const conflictingDrafts = await Quote.find(conflictQuery);
     
-    if (conflictingDraft) {
-      // Transformer le brouillon en conflit en DRAFT-ID
+    // Renommer tous les brouillons en conflit avec des suffixes uniques
+    for (const draft of conflictingDrafts) {
       const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-      await Quote.findByIdAndUpdate(conflictingDraft._id, {
-        number: `DRAFT-${conflictingDraft.number}-${timestamp}`
+      await Quote.findByIdAndUpdate(draft._id, {
+        number: `DRAFT-${draft.number}-${timestamp}`
       });
+      // Brouillon de devis en conflit renommé avec suffixe unique
     }
     
-    return nextSequentialNumber;
+    return targetNumber;
   }
   
   // Pour les brouillons normaux, vérifier d'abord s'il existe un devis finalisé avec ce numéro
@@ -678,62 +717,8 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
       status: 'DRAFT'
     });
     
-    // Vérifier s'il y a des brouillons avec le même numéro exact
-    const duplicateDraftQuery = {
-      number: draftNumber,
-      status: 'DRAFT',
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
-    };
-    
-    if (options.workspaceId) {
-      duplicateDraftQuery.workspaceId = options.workspaceId;
-    } else if (options.userId) {
-      duplicateDraftQuery.createdBy = options.userId;
-    }
-    
-    if (options.currentQuoteId) {
-      duplicateDraftQuery._id = { $ne: options.currentQuoteId };
-    }
-    
-    const duplicateDrafts = await Quote.find(duplicateDraftQuery);
-    
-    // Renommer SEULEMENT les brouillons avec le même numéro exact
-    for (const draft of duplicateDrafts) {
-      const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-      await Quote.findByIdAndUpdate(draft._id, {
-        number: `DRAFT-${draft.number}-${timestamp}`
-      });
-    }
-    
     // Maintenant on peut utiliser le numéro libéré
     return draftNumber;
-  }
-  
-  // Vérifier s'il y a des brouillons avec le même numéro exact (sans devis finalisé)
-  const duplicateDraftQuery = {
-    number: draftNumber,
-    status: 'DRAFT',
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
-  };
-  
-  if (options.workspaceId) {
-    duplicateDraftQuery.workspaceId = options.workspaceId;
-  } else if (options.userId) {
-    duplicateDraftQuery.createdBy = options.userId;
-  }
-  
-  if (options.currentQuoteId) {
-    duplicateDraftQuery._id = { $ne: options.currentQuoteId };
-  }
-  
-  const duplicateDrafts = await Quote.find(duplicateDraftQuery);
-  
-  // Renommer SEULEMENT les brouillons avec le même numéro exact
-  for (const draft of duplicateDrafts) {
-    const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-    await Quote.findByIdAndUpdate(draft._id, {
-      number: `DRAFT-${draft.number}-${timestamp}`
-    });
   }
   
   // Sinon, passer le numéro actuel comme manualNumber
