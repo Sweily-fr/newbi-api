@@ -314,6 +314,31 @@ const invoiceResolvers = {
         const month = String(now.getMonth() + 1).padStart(2, "0");
         const prefix = input.prefix || `F-${year}${month}-`;
 
+        // Fonction pour gérer les conflits de brouillons
+        const handleDraftConflicts = async (newNumber) => {
+          // Vérifier s'il existe une facture en DRAFT avec le même numéro
+          const conflictingDrafts = await Invoice.find({
+            prefix,
+            number: newNumber,
+            status: 'DRAFT',
+            workspaceId,
+            createdBy: context.user._id
+          });
+          
+          // S'il y a des factures en conflit, mettre à jour leur numéro
+          for (const draft of conflictingDrafts) {
+            // Utiliser le format DRAFT-ID avec timestamp
+            const timestamp = Date.now() + Math.floor(Math.random() * 1000);
+            const finalDraftNumber = `DRAFT-${newNumber}-${timestamp}`;
+            
+            // Mettre à jour la facture en brouillon avec le nouveau numéro
+            await Invoice.findByIdAndUpdate(draft._id, { number: finalDraftNumber });
+            console.log(`Facture en brouillon mise à jour avec le numéro ${finalDraftNumber}`);
+          }
+          
+          return newNumber;
+        };
+
         // Logique de génération des numéros
         let number;
 
@@ -330,6 +355,9 @@ const invoiceResolvers = {
         } else {
           // Pour les factures finalisées (PENDING/COMPLETED) : numéro séquentiel
           if (input.number) {
+            // Gérer les conflits avec les brouillons avant d'assigner le numéro
+            await handleDraftConflicts(input.number);
+            
             // Vérifier si le numéro fourni existe déjà parmi les factures finalisées
             const existingInvoice = await Invoice.findOne({
               prefix,
@@ -347,11 +375,16 @@ const invoiceResolvers = {
 
             number = input.number;
           } else {
-            // Générer le prochain numéro séquentiel
-            number = await generateInvoiceNumber(prefix, {
+            // Générer le prochain numéro séquentiel (strict, sans écart)
+            const sequentialNumber = await generateInvoiceNumber(prefix, {
               workspaceId: workspaceId,
-              isPending: true,
+              // Plus de numéro manuel pour les factures non-brouillons - numérotation strictement séquentielle
             });
+            
+            // Gérer les conflits avec les brouillons
+            await handleDraftConflicts(sequentialNumber);
+            
+            number = sequentialNumber;
           }
         }
 
@@ -971,69 +1004,40 @@ const invoiceResolvers = {
             `🔄 Transition DRAFT->PENDING: Ancien numéro "${invoice.number}"`
           );
 
-          // Générer un nouveau numéro séquentiel avec retry logic
+          // Sauvegarder le numéro original du brouillon
+          const originalDraftNumber = invoice.number;
+
+          // D'abord changer temporairement le numéro pour éviter les conflits
+          const tempNumber = `TEMP-${Date.now()}`;
+          invoice.number = tempNumber;
+          await invoice.save();
+
+          // Utiliser la logique de validation de brouillon
           const now = new Date();
           const year = now.getFullYear();
           const month = String(now.getMonth() + 1).padStart(2, "0");
           const prefix = `F-${year}${month}-`;
 
-          let newNumber;
-          let attempts = 0;
-          const maxAttempts = 10;
+          // Utiliser la fonction handleDraftValidation pour respecter la séquence
+          const newNumber = await generateInvoiceNumber(prefix, {
+            isValidatingDraft: true,
+            currentDraftNumber: invoice.number,
+            originalDraftNumber: originalDraftNumber, // Passer le numéro original
+            workspaceId: workspaceId,
+            year: year,
+            currentInvoiceId: invoice._id // Passer l'ID de la facture actuelle
+          });
 
-          while (attempts < maxAttempts) {
-            attempts++;
-
-            // Générer le numéro de base
-            const baseNumber = await generateInvoiceNumber(prefix, {
-              isPending: true,
-              workspaceId: workspaceId,
-            });
-
-            // Incrémenter le numéro si ce n'est pas la première tentative
-            const numberPart = parseInt(baseNumber, 10);
-            const incrementedNumber = String(
-              numberPart + attempts - 1
-            ).padStart(6, "0");
-
-            // Vérifier si ce numéro existe déjà
-            const existingInvoice = await Invoice.findOne({
-              $expr: {
-                $and: [
-                  { $eq: ["$number", incrementedNumber] },
-                  { $eq: ["$workspaceId", workspaceId] },
-                  { $eq: [{ $year: "$issueDate" }, year] },
-                ],
-              },
-            });
-
-            if (!existingInvoice) {
-              newNumber = incrementedNumber;
-              console.log(
-                `✅ Numéro unique trouvé: "${newNumber}" après ${attempts} tentative(s)`
-              );
-              break;
-            } else {
-              console.log(
-                `⚠️ Numéro ${incrementedNumber} déjà utilisé, tentative ${attempts}/${maxAttempts}`
-              );
-            }
-          }
-
-          if (!newNumber) {
-            throw new Error(
-              "Impossible de générer un numéro unique après " +
-                maxAttempts +
-                " tentatives"
-            );
-          }
+          console.log(
+            `✅ Numéro généré pour la transition: "${newNumber}"`
+          );
 
           // Mettre à jour le numéro et le préfixe de la facture
           invoice.number = newNumber;
           invoice.prefix = prefix;
 
           console.log(
-            `🔄 Transition DRAFT->PENDING: Ancien numéro "${invoice.number}" remplacé par "${newNumber}"`
+            `🔄 Transition DRAFT->PENDING: Numéro temporaire remplacé par "${newNumber}"`
           );
         }
 
