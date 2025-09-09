@@ -294,25 +294,18 @@ const quoteResolvers = {
           number: { $regex: /^\d+$/ }
         }, { number: 1 }).sort({ number: 1 }).lean(); // Tri croissant
         
-        // Debug: Log des résultats trouvés
-        console.log('📋 [DEBUG] forceSequentialNumber - Devis trouvés:', officialQuotes);
-        
         // Si aucun devis officiel n'existe, commencer à 1
         if (officialQuotes.length === 0) {
-          console.log('⚠️ [DEBUG] Aucun devis officiel trouvé, retour à 000001');
           return '000001';
         }
         
         // Convertir les numéros en entiers et trier
         const numbers = officialQuotes.map(q => parseInt(q.number, 10)).sort((a, b) => a - b);
         
-        console.log('🔢 [DEBUG] Numéros existants triés:', numbers);
         
         // Prendre le plus grand numéro et ajouter 1
         const maxNumber = Math.max(...numbers);
         const nextNumber = maxNumber + 1;
-        
-        console.log('➡️ [DEBUG] Prochain numéro calculé:', nextNumber);
         
         // Formater avec des zéros à gauche (6 chiffres)
         return String(nextNumber).padStart(6, '0');
