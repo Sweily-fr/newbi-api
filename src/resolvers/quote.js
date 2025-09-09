@@ -276,6 +276,14 @@ const quoteResolvers = {
       // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
       // Vérifie tous les numéros existants et trouve le premier trou disponible
       const forceSequentialNumber = async () => {
+        // Debug: Log des paramètres de recherche
+        console.log('🔍 [DEBUG] forceSequentialNumber - Paramètres de recherche:', {
+          prefix,
+          workspaceId,
+          userId: user.id,
+          status: ['PENDING', 'COMPLETED', 'CANCELED']
+        });
+        
         // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
         const officialQuotes = await Quote.find({
           prefix,
@@ -286,23 +294,25 @@ const quoteResolvers = {
           number: { $regex: /^\d+$/ }
         }, { number: 1 }).sort({ number: 1 }).lean(); // Tri croissant
         
+        // Debug: Log des résultats trouvés
+        console.log('📋 [DEBUG] forceSequentialNumber - Devis trouvés:', officialQuotes);
+        
         // Si aucun devis officiel n'existe, commencer à 1
         if (officialQuotes.length === 0) {
+          console.log('⚠️ [DEBUG] Aucun devis officiel trouvé, retour à 000001');
           return '000001';
         }
         
-        // Convertir les numéros en entiers
-        const numbers = officialQuotes.map(q => parseInt(q.number, 10));
+        // Convertir les numéros en entiers et trier
+        const numbers = officialQuotes.map(q => parseInt(q.number, 10)).sort((a, b) => a - b);
         
-        // Trouver le premier numéro manquant dans la séquence
-        let nextNumber = 1;
-        for (const num of numbers) {
-          if (num > nextNumber) {
-            // Un trou a été trouvé, utiliser ce numéro
-            break;
-          }
-          nextNumber = num + 1;
-        }
+        console.log('🔢 [DEBUG] Numéros existants triés:', numbers);
+        
+        // Prendre le plus grand numéro et ajouter 1
+        const maxNumber = Math.max(...numbers);
+        const nextNumber = maxNumber + 1;
+        
+        console.log('➡️ [DEBUG] Prochain numéro calculé:', nextNumber);
         
         // Formater avec des zéros à gauche (6 chiffres)
         return String(nextNumber).padStart(6, '0');
@@ -874,6 +884,36 @@ const quoteResolvers = {
           );
         }
 
+        // Vérifier les informations légales requises selon le statut juridique
+        const legalForm = organization.legalForm || "AUTRE";
+        const requiredForVATStatuses = ['SARL', 'SAS', 'EURL', 'SASU', 'SA', 'SNC', 'SCOP'];
+        
+        if (requiredForVATStatuses.includes(legalForm)) {
+          if (!organization.vatNumber || organization.vatNumber.trim() === "") {
+            throw new AppError(
+              `Le numéro de TVA est obligatoire pour le statut juridique "${legalForm}". Veuillez compléter les informations légales de votre entreprise dans les paramètres de l'organisation.`,
+              ERROR_CODES.VALIDATION_ERROR,
+              {
+                field: "vatNumber",
+                legalForm: legalForm,
+                requiredFields: ["vatNumber"]
+              }
+            );
+          }
+          
+          if (!organization.siret || organization.siret.trim() === "") {
+            throw new AppError(
+              `Le numéro SIRET est obligatoire pour le statut juridique "${legalForm}". Veuillez compléter les informations légales de votre entreprise dans les paramètres de l'organisation.`,
+              ERROR_CODES.VALIDATION_ERROR,
+              {
+                field: "siret",
+                legalForm: legalForm,
+                requiredFields: ["siret"]
+              }
+            );
+          }
+        }
+
         // Créer les factures selon la répartition
         const createdInvoices = [];
         let mainInvoice = null;
@@ -904,7 +944,12 @@ const quoteResolvers = {
         for (let i = 0; i < invoiceCount; i++) {
           // Générer un nouveau numéro de facture avec ce préfixe au moment de la création
           // Cela garantit que le numéro est séquentiel par rapport aux autres factures déjà créées
-          const number = await generateInvoiceNumber(prefix);
+          // Utiliser la logique DRAFT-ID pour gérer les conflits avec les brouillons existants
+          const number = await generateInvoiceNumber(prefix, {
+            isDraft: true, // Les factures créées depuis un devis sont toujours des brouillons
+            workspaceId: quote.workspaceId,
+            userId: user.id
+          });
 
           // Calculer les montants en fonction du pourcentage
           const percentage = invoiceDistribution[i] / 100;
@@ -926,31 +971,45 @@ const quoteResolvers = {
             number,
             prefix,
             client: quote.client,
-            // S'assurer que les champs SIRET et numéro de TVA sont correctement copiés depuis les informations de l'organisation
+            // Copier les informations d'entreprise du devis en priorité, avec fallback sur l'organisation
             companyInfo: {
-              // Copier les propriétés de base de l'entreprise depuis l'organisation
-              name: organization.companyName || "",
-              email: organization.companyEmail || "",
-              phone: organization.companyPhone || "",
-              website: organization.website || "",
+              // Priorité aux informations du devis, fallback sur l'organisation
+              name: quote.companyInfo?.name || organization.companyName || "",
+              email: quote.companyInfo?.email || organization.companyEmail || "",
+              phone: quote.companyInfo?.phone || organization.companyPhone || "",
+              website: quote.companyInfo?.website || organization.website || "",
               address: {
-                street: organization.addressStreet || "",
-                city: organization.addressCity || "",
-                zipCode: organization.addressZipCode || "",
-                country: organization.addressCountry || "France"
+                street: quote.companyInfo?.address?.street || organization.addressStreet || "",
+                city: quote.companyInfo?.address?.city || organization.addressCity || "",
+                postalCode: quote.companyInfo?.address?.postalCode || organization.addressZipCode || "",
+                country: quote.companyInfo?.address?.country || organization.addressCountry || "France"
               },
-              // Copier les propriétés légales au premier niveau comme attendu par le schéma companyInfoSchema
-              siret: organization.siret || "",
-              vatNumber: organization.vatNumber || "",
-              companyStatus: organization.legalForm || "AUTRE",
-              // Autres propriétés si nécessaire
-              logo: organization.logo || "",
-              // Copier les coordonnées bancaires si elles existent
-              bankDetails: (organization.bankIban && organization.bankBic && organization.bankName) ? {
-                iban: organization.bankIban,
-                bic: organization.bankBic,
-                bankName: organization.bankName
-              } : {},
+              // Copier les propriétés légales (priorité au devis, fallback sur l'organisation)
+              siret: quote.companyInfo?.siret || organization.siret || "",
+              vatNumber: quote.companyInfo?.vatNumber || organization.vatNumber || "",
+              companyStatus: quote.companyInfo?.companyStatus || organization.legalForm || "AUTRE",
+              // Autres propriétés
+              logo: quote.companyInfo?.logo || organization.logo || "",
+              // Copier les coordonnées bancaires du devis en priorité, sinon de l'organisation
+              // Ne pas inclure bankDetails si les informations sont incomplètes
+              ...(quote.companyInfo?.bankDetails?.iban && quote.companyInfo?.bankDetails?.bic && quote.companyInfo?.bankDetails?.bankName ? {
+                bankDetails: {
+                  iban: quote.companyInfo.bankDetails.iban,
+                  bic: quote.companyInfo.bankDetails.bic,
+                  bankName: quote.companyInfo.bankDetails.bankName
+                }
+              } : (organization.bankIban && organization.bankBic && organization.bankName) ? {
+                bankDetails: {
+                  iban: organization.bankIban,
+                  bic: organization.bankBic,
+                  bankName: organization.bankName
+                }
+              } : {}),
+              // Copier les autres champs du devis s'ils existent
+              transactionCategory: quote.companyInfo?.transactionCategory,
+              vatPaymentCondition: quote.companyInfo?.vatPaymentCondition,
+              capitalSocial: quote.companyInfo?.capitalSocial,
+              rcs: quote.companyInfo?.rcs,
             },
             items: quote.items, // Note: les items ne sont pas répartis, ils sont tous inclus dans chaque facture
             status: "DRAFT", // Toujours créer en brouillon pour permettre les modifications
