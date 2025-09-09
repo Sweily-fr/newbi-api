@@ -1303,19 +1303,37 @@ const invoiceResolvers = {
           // S'assurer que les champs SIRET et numéro de TVA sont correctement copiés depuis les informations de l'utilisateur
           companyInfo: {
             // Copier les propriétés de base de l'entreprise
-            name: userWithCompany.company.name || "",
-            email: userWithCompany.company.email || "",
-            phone: userWithCompany.company.phone || "",
-            website: userWithCompany.company.website || "",
-            address: userWithCompany.company.address || {},
+            name: userWithCompany.company.name || 'Entreprise',
+            email: userWithCompany.company.email || '',
+            phone: userWithCompany.company.phone || '',
+            website: userWithCompany.company.website || '',
+            // S'assurer que l'adresse est correctement définie avec les champs requis
+            address: {
+              street: userWithCompany.company.address?.street || '',
+              city: userWithCompany.company.address?.city || '',
+              postalCode: userWithCompany.company.address?.postalCode || '',
+              country: userWithCompany.company.address?.country || 'France'
+            },
             // Copier les propriétés légales au premier niveau comme attendu par le schéma companyInfoSchema
-            siret: userWithCompany.company.siret || "",
-            vatNumber: userWithCompany.company.vatNumber || "",
-            companyStatus: userWithCompany.company.companyStatus || "AUTRE",
+            siret: userWithCompany.company.siret || '',
+            vatNumber: userWithCompany.company.vatNumber || '',
+            companyStatus: userWithCompany.company.companyStatus || 'AUTRE',
+            transactionCategory: userWithCompany.company.transactionCategory || 'SERVICES',
+            vatPaymentCondition: userWithCompany.company.vatPaymentCondition || 'NONE',
+            capitalSocial: userWithCompany.company.capitalSocial || '',
+            rcs: userWithCompany.company.rcs || '',
             // Autres propriétés si nécessaire
-            logo: userWithCompany.company.logo || "",
-            // Copier les coordonnées bancaires si elles existent
-            bankDetails: userWithCompany.company.bankDetails || {},
+            logo: userWithCompany.company.logo || '',
+            // Copier les coordonnées bancaires seulement si elles sont complètes
+            ...(userWithCompany.company.bankDetails?.iban && 
+                userWithCompany.company.bankDetails?.bic && 
+                userWithCompany.company.bankDetails?.bankName ? {
+              bankDetails: {
+                iban: userWithCompany.company.bankDetails.iban,
+                bic: userWithCompany.company.bankDetails.bic,
+                bankName: userWithCompany.company.bankDetails.bankName
+              }
+            } : {})
           },
           sourceQuote: quote._id,
 
