@@ -424,17 +424,16 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       const existingDraft = await Quote.findOne(draftQuery);
       
       if (existingDraft) {
-        // NOUVELLE LOGIQUE : TOUS les doublons deviennent DRAFT-ID
+        // LOGIQUE CORRIGÉE : Seul l'ancien brouillon devient DRAFT-ID
         
         // Renommer l'ancien brouillon avec un suffixe unique
-        const timestamp1 = Date.now();
+        const timestamp = Date.now();
         await Quote.findByIdAndUpdate(existingDraft._id, {
-          number: `DRAFT-${options.manualNumber}-${timestamp1}`
+          number: `DRAFT-${options.manualNumber}-${timestamp}`
         });
         
-        // Le nouveau devis reçoit AUSSI le format DRAFT-ID avec un timestamp différent
-        const timestamp2 = Date.now() + Math.floor(Math.random() * 1000);
-        return `DRAFT-${options.manualNumber}-${timestamp2}`;
+        // Le nouveau brouillon garde le numéro original
+        return options.manualNumber;
       }
       
       return options.manualNumber;
