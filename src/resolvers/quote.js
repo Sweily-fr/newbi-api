@@ -397,7 +397,11 @@ const quoteResolvers = {
           number = await forceSequentialNumber();
         } else {
           // Pour les brouillons, on génère un numéro standard
-          number = await generateQuoteNumber(prefix, { userId: user.id });
+          number = await generateQuoteNumber(prefix, { 
+            isDraft: true,
+            workspaceId,
+            userId: user.id 
+          });
         }
       }
       
