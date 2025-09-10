@@ -135,10 +135,26 @@ export default {
         // Vérifier si le transfert est accessible
         const isAccessible = fileTransfer.isAccessible();
         
-        // Préparer les informations du transfert
+        // Préparer les informations du transfert avec URLs de téléchargement
+        const filesWithDownloadUrls = fileTransfer.files.map(file => ({
+          ...file.toObject(),
+          id: file._id.toString(), // Assurer que l'ID est présent
+          downloadUrl: file.storageType === 'r2' ? file.filePath : file.filePath
+        }));
+
+        console.log('📁 Fichiers préparés pour la réponse:', {
+          totalFiles: filesWithDownloadUrls.length,
+          files: filesWithDownloadUrls.map(f => ({
+            id: f.id,
+            originalName: f.originalName,
+            downloadUrl: f.downloadUrl,
+            storageType: f.storageType
+          }))
+        });
+
         const fileTransferInfo = {
           id: fileTransfer.id,
-          files: fileTransfer.files,
+          files: filesWithDownloadUrls,
           totalSize: fileTransfer.totalSize,
           expiryDate: fileTransfer.expiryDate,
           paymentInfo,

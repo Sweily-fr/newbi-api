@@ -19,6 +19,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./types/integration.graphql"),
   path.join(__dirname, "./types/fileTransfer.graphql"), // Chargement explicite du schéma fileTransfer
   path.join(__dirname, "./types/chunkUpload.graphql"), // Chargement explicite du schéma chunkUpload
+  path.join(__dirname, "./types/chunkUploadR2.graphql"), // Chargement explicite du schéma chunkUpload R2
   path.join(__dirname, "./types/imageUpload.graphql"), // Chargement explicite du schéma imageUpload
   path.join(__dirname, "./types/documentUpload.graphql"), // Chargement explicite du schéma documentUpload
   path.join(__dirname, "./types/ocr.graphql"), // Chargement explicite du schéma OCR

@@ -445,8 +445,189 @@ const sendPasswordResetConfirmationEmail = async (email) => {
   }
 };
 
+const sendFileTransferEmail = async (recipientEmail, transferData) => {
+  const { shareLink, accessKey, senderName, message, files, expiryDate } = transferData;
+  const transferUrl = `${process.env.FRONTEND_URL}/transfer/${shareLink}?accessKey=${accessKey}`;
+  
+  const filesList = files.map(file => 
+    `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+      <strong>${file.originalName}</strong> 
+      <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
+    </li>`
+  ).join('');
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: recipientEmail,
+    subject: `${senderName || 'Quelqu\'un'} vous a envoyé des fichiers via Newbi`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Transfert de fichiers - Newbi</title>
+        <style>
+          body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f0eeff;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+          }
+          .header {
+            text-align: center;
+            padding: 20px 0;
+            border-bottom: 1px solid #e5e7eb;
+          }
+          .content {
+            padding: 30px 20px;
+          }
+          h1 {
+            color: #1f2937;
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 20px;
+          }
+          p {
+            margin-bottom: 16px;
+            color: #4b5563;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #5b50ff;
+            color: white;
+            font-weight: 600;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            margin: 20px 0;
+            text-align: center;
+          }
+          .btn:hover {
+            background-color: #4a41e0;
+          }
+          .files-list {
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 20px 0;
+          }
+          .files-list ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+          }
+          .message-box {
+            background-color: #e6e1ff;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+            font-style: italic;
+          }
+          .expiry {
+            display: inline-block;
+            background-color: #fee2e2;
+            color: #b91c1c;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 14px;
+            margin: 20px 0;
+          }
+          .footer {
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+            font-size: 14px;
+            border-top: 1px solid #e5e7eb;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 200px; height: auto;">
+          </div>
+          
+          <div class="content">
+            <h1>📁 Vous avez reçu des fichiers</h1>
+            <p>Bonjour,</p>
+            <p><strong>${senderName || 'Quelqu\'un'}</strong> vous a envoyé ${files.length} fichier(s) via Newbi.</p>
+            
+            ${message ? `
+              <div class="message-box">
+                <strong>Message :</strong><br>
+                ${message}
+              </div>
+            ` : ''}
+            
+            <div class="files-list">
+              <h3 style="margin-top: 0; color: #374151;">Fichiers inclus :</h3>
+              <ul>${filesList}</ul>
+            </div>
+            
+            <div style="text-align: center;">
+              <a href="${transferUrl}" class="btn">Télécharger les fichiers</a>
+            </div>
+            
+            <div class="expiry">
+              <strong>⏰ Attention :</strong> Ce transfert expire le ${new Date(expiryDate).toLocaleDateString('fr-FR', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })}.
+            </div>
+            
+            <p>Si le bouton ne fonctionne pas, vous pouvez copier et coller le lien suivant dans votre navigateur :</p>
+            <p style="word-break: break-all; color: #6b7280; font-size: 14px;">${transferUrl}</p>
+            
+            <p><strong>Sécurisé et confidentiel :</strong> Vos fichiers sont stockés de manière sécurisée et seront automatiquement supprimés après expiration.</p>
+          </div>
+          
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
+            <p>Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("Erreur lors de l'envoi de l'email de transfert:", error);
+    return false;
+  }
+};
+
+// Fonction utilitaire pour formater la taille des fichiers
+const formatFileSize = (bytes) => {
+  if (!bytes) return "0 Bytes";
+  const k = 1024;
+  const sizes = ["Bytes", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+};
+
 export {
   sendPasswordResetEmail,
   sendVerificationEmail,
-  sendPasswordResetConfirmationEmail
+  sendPasswordResetConfirmationEmail,
+  sendFileTransferEmail
 };

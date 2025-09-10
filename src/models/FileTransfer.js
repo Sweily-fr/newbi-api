@@ -7,6 +7,9 @@ const fileSchema = new Schema({
     required: true,
     trim: true,
   },
+  displayName: {
+    type: String,
+  },
   fileName: {
     type: String,
     required: true,
@@ -17,6 +20,9 @@ const fileSchema = new Schema({
     required: true,
     trim: true,
   },
+  r2Key: {
+    type: String,
+  },
   mimeType: {
     type: String,
     required: true,
@@ -26,7 +32,15 @@ const fileSchema = new Schema({
     type: Number,
     required: true,
   },
-  uploadDate: {
+  storageType: {
+    type: String,
+    enum: ['local', 'r2'],
+    default: 'local'
+  },
+  fileId: {
+    type: String
+  },
+  uploadedAt: {
     type: Date,
     default: Date.now,
   },
@@ -152,6 +166,7 @@ FileTransferSchema.methods.generateShareCredentials = function () {
 
   this.shareLink = `share-${timestamp}-${randomString}`;
   this.accessKey = `key-${timestamp}-${Math.random().toString(36).substring(2, 15)}`;
+  this.downloadLink = `dl-${this._id}-${timestamp}-${Math.random().toString(36).substring(2, 15)}`;
 
   // Définir la date d'expiration (par défaut 7 jours)
   if (!this.expiryDate) {

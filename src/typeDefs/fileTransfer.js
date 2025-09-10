@@ -10,6 +10,9 @@ module.exports = gql`
     mimeType: String
     size: Float
     uploadDate: DateTime
+    r2Key: String
+    storageType: String
+    fileId: String
   }
 
   type FileTransfer {

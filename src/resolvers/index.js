@@ -16,6 +16,7 @@ import fileTransferResolvers from "./fileTransfer.js";
 import stripeConnectResolvers from "./stripeConnectResolvers.js";
 import kanbanResolvers from "./kanban.js";
 import chunkUploadResolvers from "./chunkUpload.js";
+import chunkUploadR2Resolvers from "./chunkUploadR2.js";
 import imageUploadResolvers from "./imageUpload.js";
 import documentUploadResolvers from "./documentUpload.js";
 import ocrResolvers from "./ocr.js";
@@ -40,6 +41,7 @@ const resolvers = mergeResolvers([
   stripeConnectResolvers,
   kanbanResolvers,
   chunkUploadResolvers,
+  chunkUploadR2Resolvers,
   imageUploadResolvers,
   documentUploadResolvers,
   ocrResolvers,

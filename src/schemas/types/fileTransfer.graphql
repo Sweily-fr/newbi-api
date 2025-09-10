@@ -17,6 +17,9 @@ type File {
   size: Int!
   filePath: String!
   downloadUrl: String
+  r2Key: String
+  storageType: String
+  fileId: String
 }
 
 # Type principal pour le transfert de fichiers
