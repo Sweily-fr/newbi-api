@@ -249,6 +249,26 @@ export default {
           message 
         });
         
+        // Vérification de doublons plus stricte avec un hash unique
+        const transferHash = `${user.id}-${totalSize}-${filesInfo.map(f => f.originalName).join('-')}-${recipientEmail || 'no-email'}`;
+        const recentTransfer = await FileTransfer.findOne({
+          userId: user.id,
+          totalSize,
+          status: 'active',
+          createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) }, // Réduit à 2 minutes
+          'files.0.originalName': filesInfo[0]?.originalName,
+          recipientEmail: recipientEmail
+        });
+
+        if (recentTransfer) {
+          console.log('Transfert en doublon détecté, retour du transfert existant:', recentTransfer.id);
+          return {
+            fileTransfer: recentTransfer,
+            shareLink: recentTransfer.shareLink,
+            accessKey: recentTransfer.accessKey
+          };
+        }
+
         // Créer un nouveau transfert de fichier
         const fileTransfer = new FileTransfer({
           userId: user.id,

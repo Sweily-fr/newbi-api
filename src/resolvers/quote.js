@@ -356,21 +356,31 @@ const quoteResolvers = {
           );
         }
         
-        // Vérifier que le numéro n'existe pas déjà
-        const existingQuote = await Quote.findOne({ 
-          number: input.number,
-          workspaceId,
-          createdBy: user.id 
-        });
-        
-        if (existingQuote) {
-          throw new AppError(
-            'Ce numéro de devis est déjà utilisé',
-            ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER
-          );
+        // Pour les brouillons, utiliser generateQuoteNumber pour gérer les conflits
+        if (input.status === 'DRAFT') {
+          number = await generateQuoteNumber(prefix, {
+            isDraft: true,
+            manualNumber: input.number,
+            workspaceId,
+            userId: user.id
+          });
+        } else {
+          // Pour les devis non-brouillons, vérifier l'unicité
+          const existingQuote = await Quote.findOne({ 
+            number: input.number,
+            workspaceId,
+            createdBy: user.id 
+          });
+          
+          if (existingQuote) {
+            throw new AppError(
+              'Ce numéro de devis est déjà utilisé',
+              ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER
+            );
+          }
+          
+          number = input.number;
         }
-        
-        number = input.number;
       } else if (input.number) {
         // Ce n'est pas le premier devis, on ignore le numéro fourni et on en génère un nouveau
         console.log('Numéro fourni ignoré car ce n\'est pas le premier devis. Génération d\'un numéro séquentiel.');
@@ -387,7 +397,11 @@ const quoteResolvers = {
           number = await forceSequentialNumber();
         } else {
           // Pour les brouillons, on génère un numéro standard
-          number = await generateQuoteNumber(prefix, { userId: user.id });
+          number = await generateQuoteNumber(prefix, { 
+            isDraft: true,
+            workspaceId,
+            userId: user.id 
+          });
         }
       }
       
