@@ -353,7 +353,7 @@ const quoteResolvers = {
           );
         }
         
-        // Vérifier que le numéro n'existe pas déjà
+        // Vérifier si le numéro existe déjà et gérer les conflits avec les brouillons
         const existingQuote = await Quote.findOne({ 
           number: input.number,
           workspaceId,
@@ -361,10 +361,20 @@ const quoteResolvers = {
         });
         
         if (existingQuote) {
-          throw new AppError(
-            'Ce numéro de devis est déjà utilisé',
-            ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER
-          );
+          // Si c'est un brouillon existant, le renommer automatiquement
+          if (existingQuote.status === 'DRAFT') {
+            const timestamp = Date.now();
+            await Quote.findByIdAndUpdate(existingQuote._id, {
+              number: `DRAFT-${input.number}-${timestamp}`
+            });
+            console.log(`Brouillon existant renommé: ${input.number} -> DRAFT-${input.number}-${timestamp}`);
+          } else {
+            // Si c'est un devis finalisé, lever une erreur
+            throw new AppError(
+              'Ce numéro de devis est déjà utilisé',
+              ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER
+            );
+          }
         }
         
         number = input.number;
