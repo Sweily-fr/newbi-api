@@ -267,23 +267,80 @@ const expenseResolvers = {
     createExpense: async (_, { input }, { user }) => {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
 
+      console.log('createExpense resolver - input reçu:', JSON.stringify(input));
+      console.log('createExpense resolver - user:', { id: user.id, workspaceId: user.workspaceId });
+
       const expenseData = {
         ...input,
         createdBy: user.id,
+        workspaceId: user.workspaceId || user.id, // Utiliser workspaceId de l'utilisateur ou son ID comme fallback
       };
 
-      // Convertir les dates
-      if (input.date) expenseData.date = new Date(input.date);
-      if (input.paymentDate)
-        expenseData.paymentDate = new Date(input.paymentDate);
+      // Convertir les dates avec gestion du format français
+      if (input.date) {
+        console.log('Traitement de la date:', input.date, 'Type:', typeof input.date);
+        
+        // Vérifier si c'est déjà au format ISO (YYYY-MM-DD)
+        if (/^\d{4}-\d{2}-\d{2}$/.test(input.date)) {
+          const dateObj = new Date(input.date + 'T12:00:00.000Z'); // Utiliser midi UTC pour éviter les problèmes de timezone
+          console.log('Date créée:', dateObj, 'Valid:', !isNaN(dateObj.getTime()));
+          expenseData.date = dateObj;
+        } else {
+          // Essayer de parser d'autres formats
+          const parsedDate = new Date(input.date);
+          console.log('Date parsée:', parsedDate, 'Valid:', !isNaN(parsedDate.getTime()));
+          if (isNaN(parsedDate.getTime())) {
+            throw new UserInputError(`Format de date invalide: ${input.date}. Utilisez le format YYYY-MM-DD`);
+          }
+          expenseData.date = parsedDate;
+        }
+      }
+      
+      // Gérer paymentDate seulement si elle est fournie et valide
+      if (input.paymentDate && input.paymentDate.trim() !== '') {
+        console.log('Traitement de paymentDate:', input.paymentDate, 'Type:', typeof input.paymentDate);
+        
+        if (/^\d{4}-\d{2}-\d{2}$/.test(input.paymentDate)) {
+          const paymentDateObj = new Date(input.paymentDate + 'T12:00:00.000Z');
+          console.log('PaymentDate créée:', paymentDateObj, 'Valid:', !isNaN(paymentDateObj.getTime()));
+          expenseData.paymentDate = paymentDateObj;
+        } else {
+          const parsedPaymentDate = new Date(input.paymentDate);
+          console.log('PaymentDate parsée:', parsedPaymentDate, 'Valid:', !isNaN(parsedPaymentDate.getTime()));
+          if (isNaN(parsedPaymentDate.getTime())) {
+            throw new UserInputError(`Format de date de paiement invalide: ${input.paymentDate}. Utilisez le format YYYY-MM-DD`);
+          }
+          expenseData.paymentDate = parsedPaymentDate;
+        }
+      } else {
+        // Ne pas inclure paymentDate si elle est vide ou non fournie
+        delete expenseData.paymentDate;
+      }
+
+      console.log('createExpense resolver - expenseData final:', JSON.stringify(expenseData));
 
       try {
         const expense = new Expense(expenseData);
         await expense.save();
+        console.log('createExpense resolver - dépense créée avec succès:', expense.id);
         return expense;
       } catch (error) {
+        console.error('createExpense resolver - erreur complète:', error);
+        console.error('createExpense resolver - nom erreur:', error.name);
+        console.error('createExpense resolver - message erreur:', error.message);
+        
         if (error.name === "ValidationError") {
-          throw new UserInputError("Données de dépense invalides", {
+          console.error('createExpense resolver - erreurs de validation détaillées:');
+          Object.keys(error.errors).forEach(field => {
+            console.error(`  - ${field}: ${error.errors[field].message}`);
+          });
+          
+          // Créer un message d'erreur plus détaillé
+          const errorMessages = Object.keys(error.errors).map(field => 
+            `${field}: ${error.errors[field].message}`
+          ).join(', ');
+          
+          throw new UserInputError(`Erreurs de validation: ${errorMessages}`, {
             errors: error.errors,
           });
         }
