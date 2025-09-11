@@ -207,6 +207,7 @@ const stripeConnectService = {
           },
         },
         metadata: {
+          transferId: fileTransfer.id.toString(),
           fileTransferId: fileTransfer.id.toString(),
           userId: fileTransfer.userId.toString(),
         },

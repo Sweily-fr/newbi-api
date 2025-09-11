@@ -211,9 +211,10 @@ export default {
         
         // Définir les options du transfert de fichier
         const expiryDays = input?.expiryDays || 7;
-        const isPaymentRequired = input?.isPaymentRequired || input?.requirePayment || false;
         const paymentAmount = input?.paymentAmount || 0;
         const paymentCurrency = input?.paymentCurrency || input?.currency || 'EUR';
+        // isPaymentRequired doit être true si paymentAmount > 0 OU si explicitement défini à true
+        const isPaymentRequired = (paymentAmount > 0) || input?.isPaymentRequired || input?.requirePayment || false;
         const recipientEmail = input?.recipientEmail || null;
         const message = input?.message || null;
         

@@ -22,6 +22,9 @@ import { betterAuthMiddleware } from "./middlewares/better-auth.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
 import webhookRoutes from "./routes/webhook.js";
+import stripeWebhookRoutes from "./routes/stripeWebhook.js";
+import fileTransferAuthRoutes from "./routes/fileTransferAuth.js";
+import fileDownloadRoutes from "./routes/fileDownload.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
@@ -113,15 +116,23 @@ async function startServer() {
 
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
+  app.use("/webhook/stripe", stripeWebhookRoutes);
+
+  // Middleware pour les uploads
+  app.use(express.json({ limit: "100mb" }));
+  app.use(express.urlencoded({ limit: "100mb", extended: true }));
+
+  // Routes file transfer auth
+  app.use("/api/transfers", fileTransferAuthRoutes);
+  
+  // Routes file download proxy
+  app.use("/api/files", fileDownloadRoutes);
 
   // Routes banking
   app.use("/banking", bankingRoutes);
   app.use("/banking-connect", bankingConnectRoutes);
   app.use("/banking-sync", bankingSyncRoutes);
 
-  // Middleware pour les uploads
-  app.use(express.json({ limit: "100mb" }));
-  app.use(express.urlencoded({ limit: "100mb", extended: true }));
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 
   // Autres routes API

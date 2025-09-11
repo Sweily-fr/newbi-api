@@ -34,11 +34,11 @@ const fileSchema = new Schema({
   },
   storageType: {
     type: String,
-    enum: ['local', 'r2'],
-    default: 'local'
+    enum: ["local", "r2"],
+    default: "local",
   },
   fileId: {
-    type: String
+    type: String,
   },
   uploadedAt: {
     type: Date,
@@ -67,7 +67,9 @@ const FileTransferSchema = new Schema(
       type: String,
       unique: true,
       default: function () {
-        return `dl-${this.shareLink}-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+        return `dl-${this.shareLink}-${Date.now()}-${Math.random()
+          .toString(36)
+          .substring(2, 15)}`;
       },
     },
     accessKey: {
@@ -136,11 +138,9 @@ FileTransferSchema.methods.isExpired = function () {
   return this.expiryDate < new Date() || this.status === "expired";
 };
 
-// Méthode pour vérifier si le transfert est accessible
+// Méthode pour vérifier si le transfert est accessible (sans vérifier isPaid global)
 FileTransferSchema.methods.isAccessible = function () {
-  if (this.isPaymentRequired && !this.isPaid) {
-    return false;
-  }
+  // Ne plus utiliser isPaid global - l'accès doit être vérifié via AccessGrant
   return !this.isExpired() && this.status === "active";
 };
 
@@ -165,8 +165,12 @@ FileTransferSchema.methods.generateShareCredentials = function () {
   const randomString = Math.random().toString(36).substring(2, 15);
 
   this.shareLink = `share-${timestamp}-${randomString}`;
-  this.accessKey = `key-${timestamp}-${Math.random().toString(36).substring(2, 15)}`;
-  this.downloadLink = `dl-${this._id}-${timestamp}-${Math.random().toString(36).substring(2, 15)}`;
+  this.accessKey = `key-${timestamp}-${Math.random()
+    .toString(36)
+    .substring(2, 15)}`;
+  this.downloadLink = `dl-${this._id}-${timestamp}-${Math.random()
+    .toString(36)
+    .substring(2, 15)}`;
 
   // Définir la date d'expiration (par défaut 7 jours)
   if (!this.expiryDate) {
