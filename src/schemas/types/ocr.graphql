@@ -48,6 +48,7 @@ extend type Mutation {
     fileName: String!
     mimeType: String!
     fileSize: Int
+    workspaceId: String!
     options: OcrOptions
   ): OcrResult!
 }

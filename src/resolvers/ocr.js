@@ -176,7 +176,7 @@ const ocrResolvers = {
     /**
      * Effectue l'OCR sur un document déjà uploadé sur Cloudflare
      */
-    processDocumentOcrFromUrl: isAuthenticated(async (_, { cloudflareUrl, fileName, mimeType, fileSize, options = {} }, { user }) => {
+    processDocumentOcrFromUrl: isAuthenticated(async (_, { cloudflareUrl, fileName, mimeType, fileSize, workspaceId, options = {} }, { user }) => {
       try {
         // Vérifier si le service Mistral est configuré
         if (!mistralOcrService.isConfigured()) {
@@ -255,6 +255,7 @@ const ocrResolvers = {
         
         const ocrDocument = new OcrDocument({
           userId: user.id,
+          workspaceId: workspaceId,
           originalFileName: fileName,
           mimeType: mimeType,
           fileSize: fileSize || 0, // Utiliser la taille fournie ou 0 par défaut
