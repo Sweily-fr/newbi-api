@@ -7,7 +7,7 @@ type CreditNote {
   originalInvoice: Invoice!
   originalInvoiceNumber: String!
   creditType: CreditType!
-  reason: String!
+  reason: String
   client: Client!
   companyInfo: Company!
   items: [Item!]!
@@ -52,7 +52,7 @@ type CreditNoteStats {
 input CreateCreditNoteInput {
   originalInvoiceId: ID!
   creditType: CreditType!
-  reason: String!
+  reason: String
   client: ClientInput!
   companyInfo: CompanyInput
   items: [ItemInput!]!
@@ -76,6 +76,7 @@ input CreateCreditNoteInput {
 }
 
 input UpdateCreditNoteInput {
+  originalInvoiceId: ID
   creditType: CreditType
   reason: String
   client: ClientInput
