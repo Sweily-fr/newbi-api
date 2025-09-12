@@ -26,6 +26,8 @@ type Quote {
   finalTotalHT: Float!
   finalTotalTTC: Float!
   discountAmount: Float
+  showBankDetails: Boolean
+  appearance: Appearance
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -56,6 +58,8 @@ input CreateQuoteInput {
   discount: Float
   discountType: DiscountType
   customFields: [CustomFieldInput!]
+  showBankDetails: Boolean
+  appearance: AppearanceInput
 }
 
 input UpdateQuoteInput {
@@ -75,6 +79,8 @@ input UpdateQuoteInput {
   discount: Float
   discountType: DiscountType
   customFields: [CustomFieldInput!]
+  showBankDetails: Boolean
+  appearance: AppearanceInput
 }
 
 extend type Query {
