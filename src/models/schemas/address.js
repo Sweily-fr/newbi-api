@@ -1,17 +1,20 @@
 import mongoose from 'mongoose';
-import { 
-  POSTAL_CODE_FR_REGEX, 
-  STREET_REGEX, 
-  CITY_REGEX, 
-  COUNTRY_REGEX,
-  isValidCity,
-  isValidCountry
-} from '../../utils/validators.js';
+import { STREET_REGEX } from '../../utils/validators.js';
 
 /**
  * Schéma d'adresse réutilisable
  */
 const addressSchema = new mongoose.Schema({
+  fullName: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(v) {
+        return !v || (v.length >= 2 && v.length <= 100 && /^[a-zA-ZÀ-ÿ\s'-]{2,100}$/.test(v));
+      },
+      message: 'Le nom complet doit contenir entre 2 et 100 caractères (lettres, espaces, apostrophes et tirets uniquement)'
+    }
+  },
   street: {
     type: String,
     trim: true,

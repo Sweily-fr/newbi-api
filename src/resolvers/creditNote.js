@@ -271,6 +271,18 @@ const creditNoteResolvers = {
             status: 'CREATED',
             originalInvoice: originalInvoice._id,
             originalInvoiceNumber: originalInvoice.number,
+            client: {
+              ...input.client,
+              shippingAddress: input.client.hasDifferentShippingAddress 
+                ? {
+                  fullName: input.client.shippingAddress?.fullName || '',
+                  street: input.client.shippingAddress?.street || '',
+                  city: input.client.shippingAddress?.city || '',
+                  postalCode: input.client.shippingAddress?.postalCode || '',
+                  country: input.client.shippingAddress?.country || ''
+                }
+                : undefined
+            },
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             createdBy: new mongoose.Types.ObjectId(context.user.id),
             ...totals,

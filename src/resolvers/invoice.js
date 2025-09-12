@@ -441,6 +441,18 @@ const invoiceResolvers = {
             number,
             prefix,
             companyInfo: input.companyInfo || userWithCompany.company,
+            client: {
+              ...input.client,
+              shippingAddress: input.client.hasDifferentShippingAddress 
+                ? {
+                  fullName: input.client.shippingAddress?.fullName || '',
+                  street: input.client.shippingAddress?.street || '',
+                  city: input.client.shippingAddress?.city || '',
+                  postalCode: input.client.shippingAddress?.postalCode || '',
+                  country: input.client.shippingAddress?.country || ''
+                }
+                : undefined
+            },
             workspaceId: workspaceId, // ✅ Ajout automatique du workspaceId
             createdBy: user._id, // ✅ Conservé pour audit trail
             ...totals, // Ajouter tous les totaux calculés

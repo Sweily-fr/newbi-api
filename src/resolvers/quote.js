@@ -486,6 +486,23 @@ const quoteResolvers = {
           prefix,
           workspaceId, // Ajouter le workspaceId
           companyInfo: input.companyInfo || userWithCompany.company,
+          client: {
+            ...input.client,
+            shippingAddress: input.client.hasDifferentShippingAddress 
+              ? {
+                fullName: input.client.shippingAddress?.fullName || '',
+                street: input.client.shippingAddress?.street || '',
+                city: input.client.shippingAddress?.city || '',
+                postalCode: input.client.shippingAddress?.postalCode || '',
+                country: input.client.shippingAddress?.country || ''
+              }
+              : undefined
+          },
+          appearance: input.appearance || {
+            textColor: '#000000',
+            headerTextColor: '#ffffff', 
+            headerBgColor: '#1d1d1b'
+          },
           createdBy: user.id,
           ...totals, // Ajouter tous les totaux calculés
         });

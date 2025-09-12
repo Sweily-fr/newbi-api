@@ -211,7 +211,24 @@ const quoteSchema = new mongoose.Schema({
   linkedInvoices: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Invoice'
-  }]
+  }],
+  appearance: {
+    textColor: {
+      type: String,
+      default: '#000000',
+      trim: true,
+    },
+    headerTextColor: {
+      type: String,
+      default: '#ffffff',
+      trim: true,
+    },
+    headerBgColor: {
+      type: String,
+      default: '#1d1d1b',
+      trim: true,
+    },
+  }
 }, {
   timestamps: true
 });
