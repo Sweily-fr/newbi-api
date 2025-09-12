@@ -225,19 +225,44 @@ const creditNoteResolvers = {
             );
           }
 
+          // Calculer les totaux du nouvel avoir
+          const totals = calculateCreditNoteTotals(
+            input.items,
+            input.discount,
+            input.discountType
+          );
+
+          // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture
+          const existingCreditNotes = await CreditNote.find({
+            originalInvoice: originalInvoice._id,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          });
+
+          // Calculer la somme des avoirs existants (valeurs absolues car les avoirs sont négatifs)
+          const existingCreditNotesTotal = existingCreditNotes.reduce((sum, creditNote) => {
+            return sum + Math.abs(creditNote.finalTotalTTC || 0);
+          }, 0);
+
+          // Montant du nouvel avoir (valeur absolue)
+          const newCreditNoteAmount = Math.abs(totals.finalTotalTTC);
+
+          // Montant total de la facture originale
+          const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
+
+          // Vérifier que la somme totale ne dépasse pas le montant de la facture
+          if (existingCreditNotesTotal + newCreditNoteAmount > invoiceTotalAmount) {
+            const remainingAmount = invoiceTotalAmount - existingCreditNotesTotal;
+            throw createValidationError(
+              `Le montant de cet avoir (${newCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`
+            );
+          }
+
           // Générer le numéro d'avoir
           const number = await generateCreditNoteNumber(input.prefix, {
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             isDraft: false,
             manualNumber: input.number,
           });
-
-          // Calculer les totaux
-          const totals = calculateCreditNoteTotals(
-            input.items,
-            input.discount,
-            input.discountType
-          );
 
           // Créer l'avoir
           const creditNote = new CreditNote({
@@ -296,6 +321,38 @@ const creditNoteResolvers = {
               input.discount || creditNote.discount,
               input.discountType || creditNote.discountType
             );
+
+            // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture lors de la modification
+            const originalInvoice = await Invoice.findById(creditNote.originalInvoice);
+            if (!originalInvoice) {
+              throw createNotFoundError('Facture originale non trouvée');
+            }
+
+            // Récupérer tous les autres avoirs pour cette facture (excluant celui en cours de modification)
+            const otherCreditNotes = await CreditNote.find({
+              originalInvoice: creditNote.originalInvoice,
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              _id: { $ne: id }, // Exclure l'avoir en cours de modification
+            });
+
+            // Calculer la somme des autres avoirs existants
+            const otherCreditNotesTotal = otherCreditNotes.reduce((sum, cn) => {
+              return sum + Math.abs(cn.finalTotalTTC || 0);
+            }, 0);
+
+            // Montant du nouvel avoir modifié
+            const updatedCreditNoteAmount = Math.abs(totals.finalTotalTTC);
+
+            // Montant total de la facture originale
+            const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
+
+            // Vérifier que la somme totale ne dépasse pas le montant de la facture
+            if (otherCreditNotesTotal + updatedCreditNoteAmount > invoiceTotalAmount) {
+              const remainingAmount = invoiceTotalAmount - otherCreditNotesTotal;
+              throw createValidationError(
+                `Le montant de cet avoir modifié (${updatedCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`
+              );
+            }
           }
 
           // Mettre à jour l'avoir
