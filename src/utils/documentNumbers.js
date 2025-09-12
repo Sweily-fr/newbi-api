@@ -1,5 +1,6 @@
 import Quote from '../models/Quote.js';
 import Invoice from '../models/Invoice.js';
+import CreditNote from '../models/CreditNote.js';
 
 /**
  * Génère un numéro séquentiel pour les factures selon les règles métier spécifiques
@@ -744,8 +745,299 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
   });
 };
 
+/**
+ * Génère un numéro séquentiel pour les avoirs selon les règles métier
+ * Les avoirs suivent une numérotation séquentielle similaire aux factures
+ */
+const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
+  const currentYear = options.year || new Date().getFullYear();
+  
+  // Construire la requête de base pour les avoirs non-brouillons
+  const baseQuery = {
+    status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
+    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+  };
+  
+  // Ajouter le filtre par workspace ou utilisateur
+  if (options.workspaceId) {
+    baseQuery.workspaceId = options.workspaceId;
+  } else if (options.userId) {
+    baseQuery.createdBy = options.userId;
+  }
+  
+  // Numérotation séquentielle sans écart
+  const existingCreditNotes = await CreditNote.find(baseQuery).lean();
+  
+  if (existingCreditNotes.length === 0) {
+    // Aucun avoir officiel n'existe, on peut utiliser un numéro manuel si fourni
+    if (options.manualNumber) {
+      const num = parseInt(options.manualNumber, 10);
+      return String(num).padStart(6, '0');
+    }
+    return '000001';
+  }
+  
+  // Extraire tous les numéros numériques et les trier
+  const numericNumbers = existingCreditNotes
+    .map(creditNote => {
+      if (/^\d+$/.test(creditNote.number)) {
+        return parseInt(creditNote.number, 10);
+      }
+      return null;
+    })
+    .filter(num => num !== null)
+    .sort((a, b) => a - b);
+  
+  if (numericNumbers.length === 0) {
+    return '000001';
+  }
+  
+  // Numérotation strictement séquentielle
+  const maxNumber = Math.max(...numericNumbers);
+  const nextNumber = maxNumber + 1;
+  
+  return String(nextNumber).padStart(6, '0');
+};
+
+/**
+ * Gère la logique de validation des brouillons d'avoir
+ */
+const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}) => {
+  const currentYear = options.year || new Date().getFullYear();
+  
+  // Extraire le numéro numérique si c'est un brouillon avec préfixe DRAFT- ou TEMP-
+  let targetNumber = draftNumber;
+  let isDraftPrefixed = false;
+  let isTempNumber = false;
+  
+  if (draftNumber.startsWith('DRAFT-')) {
+    targetNumber = draftNumber.replace('DRAFT-', '');
+    isDraftPrefixed = true;
+  } else if (draftNumber.startsWith('TEMP-')) {
+    isTempNumber = true;
+  }
+  
+  // Vérifier s'il existe déjà des avoirs non-brouillons
+  const existingNonDraftsQuery = {
+    status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
+    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+  };
+  
+  if (options.workspaceId) {
+    existingNonDraftsQuery.workspaceId = options.workspaceId;
+  } else if (options.userId) {
+    existingNonDraftsQuery.createdBy = options.userId;
+  }
+  
+  const existingNonDrafts = await CreditNote.find(existingNonDraftsQuery).lean();
+  
+  // Si aucun avoir non-brouillon n'existe
+  if (existingNonDrafts.length === 0) {
+    if (isTempNumber) {
+      if (options.originalDraftNumber && /^\d+$/.test(options.originalDraftNumber)) {
+        // Vérifier s'il y a des conflits avec d'autres brouillons
+        const conflictingDraftQuery = {
+          status: 'DRAFT',
+          number: options.originalDraftNumber,
+          $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+        };
+        
+        if (options.workspaceId) {
+          conflictingDraftQuery.workspaceId = options.workspaceId;
+        } else if (options.userId) {
+          conflictingDraftQuery.createdBy = options.userId;
+        }
+        
+        if (options.currentCreditNoteId) {
+          conflictingDraftQuery._id = { $ne: options.currentCreditNoteId };
+        }
+        
+        const conflictingDraft = await CreditNote.findOne(conflictingDraftQuery);
+        
+        if (conflictingDraft) {
+          const uniqueSuffix = Date.now().toString().slice(-6);
+          await CreditNote.findByIdAndUpdate(conflictingDraft._id, {
+            number: `DRAFT-${options.originalDraftNumber}-${uniqueSuffix}`
+          });
+        }
+        
+        return options.originalDraftNumber;
+      }
+      return '000001';
+    }
+    
+    if (isDraftPrefixed) {
+      const conflictingDraftQuery = {
+        status: 'DRAFT',
+        number: targetNumber,
+        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+      };
+      
+      if (options.workspaceId) {
+        conflictingDraftQuery.workspaceId = options.workspaceId;
+      } else if (options.userId) {
+        conflictingDraftQuery.createdBy = options.userId;
+      }
+      
+      if (options.currentCreditNoteId) {
+        conflictingDraftQuery._id = { $ne: options.currentCreditNoteId };
+      }
+      
+      const conflictingDraft = await CreditNote.findOne(conflictingDraftQuery);
+      
+      if (conflictingDraft) {
+        const uniqueSuffix = Date.now().toString().slice(-6);
+        await CreditNote.findByIdAndUpdate(conflictingDraft._id, {
+          number: `DRAFT-${targetNumber}-${uniqueSuffix}`
+        });
+      }
+    }
+    
+    return targetNumber;
+  }
+  
+  // Si des avoirs non-brouillons existent, calculer le prochain numéro séquentiel
+  const numericNumbers = existingNonDrafts
+    .map(creditNote => {
+      if (/^\d+$/.test(creditNote.number)) {
+        return parseInt(creditNote.number, 10);
+      }
+      return null;
+    })
+    .filter(num => num !== null)
+    .sort((a, b) => a - b);
+  
+  if (numericNumbers.length === 0) {
+    return '000001';
+  }
+  
+  const maxNumber = Math.max(...numericNumbers);
+  const nextSequentialNumber = maxNumber + 1;
+  
+  // Renommer tous les brouillons avec des numéros qui pourraient entrer en conflit
+  const conflictingDraftsQuery = {
+    status: 'DRAFT',
+    number: { $lte: String(nextSequentialNumber).padStart(6, '0'), $regex: /^\d+$/ },
+    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+  };
+  
+  if (options.workspaceId) {
+    conflictingDraftsQuery.workspaceId = options.workspaceId;
+  } else if (options.userId) {
+    conflictingDraftsQuery.createdBy = options.userId;
+  }
+  
+  if (options.currentCreditNoteId) {
+    conflictingDraftsQuery._id = { $ne: options.currentCreditNoteId };
+  }
+  
+  const conflictingDrafts = await CreditNote.find(conflictingDraftsQuery).lean();
+  
+  for (const draft of conflictingDrafts) {
+    const uniqueSuffix = Date.now().toString().slice(-6);
+    await CreditNote.findByIdAndUpdate(draft._id, {
+      number: `DRAFT-${draft.number}-${uniqueSuffix}`
+    });
+  }
+  
+  return String(nextSequentialNumber).padStart(6, '0');
+};
+
+/**
+ * Génère un numéro d'avoir
+ */
+const generateCreditNoteNumber = async (customPrefix, options = {}) => {
+  const currentYear = options.year || new Date().getFullYear();
+  
+  // Générer le préfixe si non fourni
+  let prefix;
+  if (customPrefix) {
+    prefix = customPrefix;
+  } else {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    prefix = `AV-${year}${month}-`;
+  }
+  
+  // Gestion des brouillons
+  if (options.isDraft) {
+    if (options.manualNumber) {
+      // Vérifier si le numéro manuel est déjà utilisé par un avoir non-brouillon
+      const nonDraftQuery = {
+        number: options.manualNumber,
+        status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
+        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+      };
+      
+      if (options.workspaceId) {
+        nonDraftQuery.workspaceId = options.workspaceId;
+      } else if (options.userId) {
+        nonDraftQuery.createdBy = options.userId;
+      }
+      
+      const existingNonDraft = await CreditNote.findOne(nonDraftQuery);
+      
+      if (existingNonDraft) {
+        return `DRAFT-${options.manualNumber}`;
+      }
+      
+      // Vérifier si le numéro est déjà utilisé par un autre brouillon
+      const draftQuery = {
+        number: options.manualNumber,
+        status: 'DRAFT',
+        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+      };
+      
+      if (options.workspaceId) {
+        draftQuery.workspaceId = options.workspaceId;
+      } else if (options.userId) {
+        draftQuery.createdBy = options.userId;
+      }
+      
+      const existingDraft = await CreditNote.findOne(draftQuery);
+      
+      if (existingDraft) {
+        // Seul l'ancien brouillon devient DRAFT-ID
+        const timestamp = Date.now();
+        await CreditNote.findByIdAndUpdate(existingDraft._id, {
+          number: `DRAFT-${options.manualNumber}-${timestamp}`
+        });
+        
+        // Le nouveau brouillon garde le numéro original
+        return options.manualNumber;
+      }
+      
+      return options.manualNumber;
+    }
+    
+    // Brouillon sans numéro manuel
+    return `DRAFT-${Date.now().toString(36).toUpperCase()}`;
+  }
+  
+  // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
+  if (options.isValidatingDraft && options.currentDraftNumber) {
+    return await handleCreditNoteDraftValidation(options.currentDraftNumber, prefix, {
+      ...options,
+      year: currentYear
+    });
+  }
+  
+  // Si un numéro manuel est fourni pour un avoir non-brouillon
+  if (options.manualNumber) {
+    return options.manualNumber;
+  }
+  
+  // Génération normale pour les avoirs non-brouillons
+  return await generateCreditNoteSequentialNumber(prefix, {
+    ...options,
+    year: currentYear
+  });
+};
+
 export {
   generateInvoiceNumber,
   generateQuoteNumber,
+  generateCreditNoteNumber,
   validateInvoiceNumberSequence,
 };

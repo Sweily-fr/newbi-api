@@ -65,3 +65,22 @@ enum CompanyStatus {
   AUTO_ENTREPRENEUR
   AUTRE
 }
+
+enum CreditType {
+  CORRECTION
+  COMMERCIAL_GESTURE
+  REFUND
+  STOCK_SHORTAGE
+}
+
+enum CreditNoteStatus {
+  CREATED
+}
+
+enum RefundMethod {
+  NEXT_INVOICE
+  BANK_TRANSFER
+  CHECK
+  VOUCHER
+  CASH
+}

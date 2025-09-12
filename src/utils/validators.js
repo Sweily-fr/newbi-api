@@ -186,6 +186,16 @@ const isPositiveNonZeroAmount = (amount) => {
   return typeof amount === "number" && amount > 0;
 };
 
+// Validation des montants pour avoirs (peut être négatif)
+const isValidCreditAmount = (amount) => {
+  return typeof amount === "number" && !isNaN(amount);
+};
+
+// Validation des montants pour avoirs (peut être négatif, non-nul)
+const isValidCreditNonZeroAmount = (amount) => {
+  return typeof amount === "number" && !isNaN(amount) && amount !== 0;
+};
+
 // Validation des dates (date passée)
 const isPastDate = (date) => {
   return new Date(date) < new Date();
@@ -339,6 +349,8 @@ export {
   isStrongPassword,
   isPositiveAmount,
   isPositiveNonZeroAmount,
+  isValidCreditAmount,
+  isValidCreditNonZeroAmount,
   isPastDate,
   isFutureDate,
   isDateAfter,

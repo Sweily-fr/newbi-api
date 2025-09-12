@@ -42,7 +42,7 @@ const eventSchema = new mongoose.Schema({
   // Type d'événement
   type: {
     type: String,
-    enum: ['MANUAL', 'INVOICE_DUE', 'MEETING', 'DEADLINE', 'REMINDER'],
+    enum: ['MANUAL', 'INVOICE_DUE', 'MEETING', 'DEADLINE', 'REMINDER', 'CREDIT_NOTE_CREATED'],
     default: 'MANUAL'
   },
   

@@ -1,0 +1,117 @@
+# Schéma GraphQL pour les avoirs (credit notes)
+
+type CreditNote {
+  id: ID!
+  number: String!
+  prefix: String
+  originalInvoice: Invoice!
+  originalInvoiceNumber: String!
+  creditType: CreditType!
+  reason: String
+  client: Client!
+  companyInfo: Company!
+  items: [Item!]!
+  status: CreditNoteStatus!
+  issueDate: String!
+  executionDate: String
+  refundMethod: RefundMethod!
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  totalHT: Float!
+  totalTTC: Float!
+  totalVAT: Float!
+  finalTotalHT: Float!
+  finalTotalTTC: Float!
+  customFields: [CustomField!]
+  showBankDetails: Boolean
+  bankDetails: BankDetails
+  appearance: Appearance
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type CreditNotePagination {
+  creditNotes: [CreditNote!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+}
+
+# Statistiques pour les avoirs
+type CreditNoteStats {
+  totalCount: Int!
+  createdCount: Int!
+  totalAmount: Float!
+}
+
+input CreateCreditNoteInput {
+  originalInvoiceId: ID!
+  creditType: CreditType!
+  reason: String
+  client: ClientInput!
+  companyInfo: CompanyInput
+  items: [ItemInput!]!
+  status: CreditNoteStatus = CREATED
+  issueDate: String!
+  executionDate: String
+  refundMethod: RefundMethod = NEXT_INVOICE
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  customFields: [CustomFieldInput!]
+  number: String
+  prefix: String
+  showBankDetails: Boolean
+  bankDetails: BankDetailsInput
+  appearance: AppearanceInput
+}
+
+input UpdateCreditNoteInput {
+  originalInvoiceId: ID
+  creditType: CreditType
+  reason: String
+  client: ClientInput
+  companyInfo: CompanyInput
+  items: [ItemInput!]
+  status: CreditNoteStatus
+  issueDate: String
+  executionDate: String
+  refundMethod: RefundMethod
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  discount: Float
+  discountType: DiscountType
+  customFields: [CustomFieldInput!]
+  number: String
+  prefix: String
+  showBankDetails: Boolean
+  bankDetails: BankDetailsInput
+  appearance: AppearanceInput
+}
+
+extend type Query {
+  creditNote(id: ID!, workspaceId: ID!): CreditNote!
+  creditNotes(workspaceId: ID!, startDate: String, endDate: String, status: CreditNoteStatus, search: String, page: Int, limit: Int): CreditNotePagination!
+  creditNotesByInvoice(invoiceId: ID!, workspaceId: ID!): [CreditNote!]!
+  creditNoteStats(workspaceId: ID!): CreditNoteStats!
+  nextCreditNoteNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
+}
+
+extend type Mutation {
+  createCreditNote(workspaceId: ID!, input: CreateCreditNoteInput!): CreditNote!
+  updateCreditNote(id: ID!, workspaceId: ID!, input: UpdateCreditNoteInput!): CreditNote!
+  deleteCreditNote(id: ID!, workspaceId: ID!): Boolean!
+  changeCreditNoteStatus(id: ID!, workspaceId: ID!, status: CreditNoteStatus!): CreditNote!
+}

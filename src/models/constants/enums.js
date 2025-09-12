@@ -20,6 +20,13 @@ const QUOTE_STATUS = {
   CANCELED: 'CANCELED'
 };
 
+/**
+ * Statuts possibles pour un avoir (credit note)
+ */
+const CREDIT_NOTE_STATUS = {
+  CREATED: 'CREATED'
+};
+
 
 
 /**
@@ -44,6 +51,7 @@ const PAYMENT_METHOD = {
 export {
   INVOICE_STATUS,
   QUOTE_STATUS,
+  CREDIT_NOTE_STATUS,
   DISCOUNT_TYPE,
   PAYMENT_METHOD
 };
