@@ -28,6 +28,7 @@ type Quote {
   discountAmount: Float
   showBankDetails: Boolean
   appearance: Appearance
+  shipping: Shipping
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -60,6 +61,7 @@ input CreateQuoteInput {
   customFields: [CustomFieldInput!]
   showBankDetails: Boolean
   appearance: AppearanceInput
+  shipping: ShippingInput
 }
 
 input UpdateQuoteInput {
@@ -81,6 +83,7 @@ input UpdateQuoteInput {
   customFields: [CustomFieldInput!]
   showBankDetails: Boolean
   appearance: AppearanceInput
+  shipping: ShippingInput
 }
 
 extend type Query {

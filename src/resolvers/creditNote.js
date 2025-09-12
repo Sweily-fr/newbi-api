@@ -273,16 +273,24 @@ const creditNoteResolvers = {
             originalInvoiceNumber: originalInvoice.number,
             client: {
               ...input.client,
-              shippingAddress: input.client.hasDifferentShippingAddress 
-                ? {
-                  fullName: input.client.shippingAddress?.fullName || '',
-                  street: input.client.shippingAddress?.street || '',
-                  city: input.client.shippingAddress?.city || '',
-                  postalCode: input.client.shippingAddress?.postalCode || '',
-                  country: input.client.shippingAddress?.country || ''
-                }
-                : undefined
+              // Pour les avoirs, ne pas copier l'adresse de livraison du client
+              // car on utilise celle de la facture originale dans le champ shipping
+              hasDifferentShippingAddress: false,
+              shippingAddress: undefined
             },
+            // Copier les informations de livraison depuis la facture originale
+            shipping: originalInvoice.shipping ? {
+              billShipping: originalInvoice.shipping.billShipping,
+              shippingAddress: originalInvoice.shipping.shippingAddress ? {
+                fullName: originalInvoice.shipping.shippingAddress.fullName,
+                street: originalInvoice.shipping.shippingAddress.street,
+                city: originalInvoice.shipping.shippingAddress.city,
+                postalCode: originalInvoice.shipping.shippingAddress.postalCode,
+                country: originalInvoice.shipping.shippingAddress.country
+              } : undefined,
+              shippingAmountHT: originalInvoice.shipping.shippingAmountHT,
+              shippingVatRate: originalInvoice.shipping.shippingVatRate
+            } : undefined,
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             createdBy: new mongoose.Types.ObjectId(context.user.id),
             ...totals,

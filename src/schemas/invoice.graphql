@@ -31,6 +31,7 @@ type Invoice {
   discountAmount: Float
   showBankDetails: Boolean
   appearance: Appearance
+  shipping: Shipping
   createdBy: User!
   stripeInvoiceId: String
   createdAt: String!
@@ -71,6 +72,7 @@ input CreateInvoiceInput {
   showBankDetails: Boolean
   bankDetails: BankDetailsInput
   appearance: AppearanceInput
+  shipping: ShippingInput
 }
 
 input UpdateInvoiceInput {
@@ -96,6 +98,7 @@ input UpdateInvoiceInput {
   showBankDetails: Boolean
   bankDetails: BankDetailsInput
   appearance: AppearanceInput
+  shipping: ShippingInput
 }
 
 extend type Query {

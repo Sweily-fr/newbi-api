@@ -73,3 +73,17 @@ input ItemInput {
   discountType: DiscountType
   details: String
 }
+
+type Shipping {
+  billShipping: Boolean!
+  shippingAddress: Address
+  shippingAmountHT: Float!
+  shippingVatRate: Float!
+}
+
+input ShippingInput {
+  billShipping: Boolean!
+  shippingAddress: AddressInput
+  shippingAmountHT: Float!
+  shippingVatRate: Float!
+}

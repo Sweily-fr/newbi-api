@@ -65,15 +65,19 @@ const withWorkspace = (resolver, requiredPermission = "read") => {
   });
 };
 
-// Fonction utilitaire pour calculer les totaux avec remise
-const calculateInvoiceTotals = (
-  items,
-  discount = 0,
-  discountType = "FIXED"
-) => {
+/**
+ * Calcule les totaux d'une facture
+ * @param {Array} items - Articles de la facture
+ * @param {Number} discount - Remise globale
+ * @param {String} discountType - Type de remise (FIXED ou PERCENTAGE)
+ * @param {Object} shipping - Informations de livraison
+ * @returns {Object} - Totaux calculés
+ */
+const calculateInvoiceTotals = (items, discount = 0, discountType = "FIXED", shipping = null) => {
   let totalHT = 0;
   let totalVAT = 0;
 
+  // Calculer les totaux des articles
   items.forEach((item) => {
     let itemHT = item.quantity * item.unitPrice;
 
@@ -91,8 +95,18 @@ const calculateInvoiceTotals = (
     totalVAT += itemVAT;
   });
 
+  // Ajouter les frais de livraison si facturés
+  if (shipping && shipping.billShipping) {
+    const shippingHT = shipping.shippingAmountHT || 0;
+    const shippingVAT = shippingHT * (shipping.shippingVatRate / 100);
+    
+    totalHT += shippingHT;
+    totalVAT += shippingVAT;
+  }
+
   const totalTTC = totalHT + totalVAT;
 
+  // Calculer la remise globale
   let discountAmount = 0;
   if (discount) {
     if (discountType === "PERCENTAGE") {
@@ -388,11 +402,12 @@ const invoiceResolvers = {
           }
         }
 
-        // Calculer les totaux avec la remise
+        // Calculer les totaux avec la remise et la livraison
         const totals = calculateInvoiceTotals(
           input.items,
           input.discount,
-          input.discountType
+          input.discountType,
+          input.shipping
         );
 
         try {
@@ -618,7 +633,8 @@ const invoiceResolvers = {
           const totals = calculateInvoiceTotals(
             updatedInput.items,
             updatedInput.discount || invoiceData.discount,
-            updatedInput.discountType || invoiceData.discountType
+            updatedInput.discountType || invoiceData.discountType,
+            updatedInput.shipping || invoiceData.shipping
           );
           updatedInput = { ...updatedInput, ...totals };
         }
@@ -1383,7 +1399,8 @@ const invoiceResolvers = {
         const totals = calculateInvoiceTotals(
           invoice.items,
           invoice.discount,
-          invoice.discountType
+          invoice.discountType,
+          invoice.shipping
         );
         Object.assign(invoice, totals);
 

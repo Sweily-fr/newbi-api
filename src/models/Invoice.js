@@ -1,21 +1,22 @@
-import mongoose from "mongoose";
+import mongoose from 'mongoose';
 import {
   isDateAfter,
   URL_REGEX,
   isPositiveAmount,
   isValidFooterNotes,
-} from "../utils/validators.js";
+} from '../utils/validators.js';
 
-import clientSchema from "./schemas/client.js";
-import itemSchema from "./schemas/item.js";
-import companyInfoSchema from "./schemas/companyInfo.js";
-import customFieldSchema from "./schemas/customField.js";
-import bankDetailsSchema from "./schemas/bankDetails.js";
+import clientSchema from './schemas/client.js';
+import itemSchema from './schemas/item.js';
+import companyInfoSchema from './schemas/companyInfo.js';
+import customFieldSchema from './schemas/customField.js';
+import bankDetailsSchema from './schemas/bankDetails.js';
+import shippingSchema from './schemas/shipping.js';
 import {
   INVOICE_STATUS,
   PAYMENT_METHOD,
   DISCOUNT_TYPE,
-} from "./constants/enums.js";
+} from './constants/enums.js';
 
 /**
  * Schéma principal de facture
@@ -293,6 +294,15 @@ const invoiceSchema = new mongoose.Schema(
         default: "#1d1d1b",
         trim: true,
       },
+    },
+    // Informations de livraison
+    shipping: {
+      type: shippingSchema,
+      default: () => ({
+        billShipping: false,
+        shippingAmountHT: 0,
+        shippingVatRate: 20
+      })
     },
   },
   {

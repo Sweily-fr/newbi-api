@@ -30,6 +30,7 @@ type CreditNote {
   customFields: [CustomField!]
   showBankDetails: Boolean
   bankDetails: BankDetails
+  shipping: Shipping
   appearance: Appearance
   createdBy: User!
   createdAt: String!
@@ -72,6 +73,7 @@ input CreateCreditNoteInput {
   prefix: String
   showBankDetails: Boolean
   bankDetails: BankDetailsInput
+  shipping: ShippingInput
   appearance: AppearanceInput
 }
 
@@ -98,6 +100,7 @@ input UpdateCreditNoteInput {
   prefix: String
   showBankDetails: Boolean
   bankDetails: BankDetailsInput
+  shipping: ShippingInput
   appearance: AppearanceInput
 }
 

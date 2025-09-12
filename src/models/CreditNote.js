@@ -10,6 +10,7 @@ import creditNoteItemSchema from './schemas/creditNoteItem.js';
 import companyInfoSchema from './schemas/companyInfo.js';
 import customFieldSchema from './schemas/customField.js';
 import bankDetailsSchema from './schemas/bankDetails.js';
+import shippingSchema from './schemas/shipping.js';
 import {
   CREDIT_NOTE_STATUS,
   DISCOUNT_TYPE,
@@ -264,6 +265,11 @@ const creditNoteSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+    // Informations de livraison (copiées depuis la facture originale)
+    shipping: {
+      type: shippingSchema,
+      required: false,
     },
     appearance: {
       textColor: {

@@ -9,6 +9,7 @@ import clientSchema from './schemas/client.js';
 import itemSchema from './schemas/item.js';
 import companyInfoSchema from './schemas/companyInfo.js';
 import customFieldSchema from './schemas/customField.js';
+import shippingSchema from './schemas/shipping.js';
 import { QUOTE_STATUS, DISCOUNT_TYPE } from './constants/enums.js';
 
 /**
@@ -228,6 +229,15 @@ const quoteSchema = new mongoose.Schema({
       default: '#1d1d1b',
       trim: true,
     },
+  },
+  // Informations de livraison
+  shipping: {
+    type: shippingSchema,
+    default: () => ({
+      billShipping: false,
+      shippingAmountHT: 0,
+      shippingVatRate: 20
+    })
   }
 }, {
   timestamps: true

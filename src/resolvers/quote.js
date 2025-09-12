@@ -17,8 +17,8 @@ import {
 } from "../utils/errors.js";
 import { getOrganizationInfo } from "../middlewares/company-info-guard.js";
 
-// Fonction utilitaire pour calculer les totaux avec remise
-const calculateQuoteTotals = (items, discount = 0, discountType = "FIXED") => {
+// Fonction utilitaire pour calculer les totaux avec remise et livraison
+const calculateQuoteTotals = (items, discount = 0, discountType = "FIXED", shipping = null) => {
   let totalHT = 0;
   let totalVAT = 0;
 
@@ -38,6 +38,15 @@ const calculateQuoteTotals = (items, discount = 0, discountType = "FIXED") => {
     totalHT += itemHT;
     totalVAT += itemVAT;
   });
+
+  // Ajouter les frais de livraison si facturés
+  if (shipping && shipping.billShipping) {
+    const shippingHT = shipping.shippingAmountHT || 0;
+    const shippingVAT = shippingHT * (shipping.shippingVatRate / 100);
+    
+    totalHT += shippingHT;
+    totalVAT += shippingVAT;
+  }
 
   const totalTTC = totalHT + totalVAT;
 
@@ -416,11 +425,12 @@ const quoteResolvers = {
         );
       }
 
-        // Calculer les totaux avec la remise
+        // Calculer les totaux avec la remise et la livraison
         const totals = calculateQuoteTotals(
           input.items,
           input.discount,
-          input.discountType
+          input.discountType,
+          input.shipping
         );
 
         // Vérifier si le client a une adresse de livraison différente
@@ -554,7 +564,8 @@ const quoteResolvers = {
         const totals = calculateQuoteTotals(
           input.items,
           input.discount !== undefined ? input.discount : quote.discount,
-          input.discountType || quote.discountType
+          input.discountType || quote.discountType,
+          input.shipping !== undefined ? input.shipping : quote.shipping
         );
         input = { ...input, ...totals };
       }
