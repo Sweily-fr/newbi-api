@@ -381,7 +381,6 @@ const userResolvers = {
               try {
                 const oldPicturePath = userDoc.profile.profilePicture;
                 await deleteFile(oldPicturePath);
-                console.log("Photo de profil supprimée:", oldPicturePath);
               } catch (err) {
                 console.error(
                   "Erreur lors de la suppression de l'ancienne photo de profil:",
@@ -401,10 +400,6 @@ const userResolvers = {
               try {
                 const oldPicturePath = userDoc.profile.profilePicture;
                 await deleteFile(oldPicturePath);
-                console.log(
-                  "Ancienne photo de profil supprimée:",
-                  oldPicturePath
-                );
               } catch (err) {
                 console.error(
                   "Erreur lors de la suppression de l'ancienne photo de profil:",
@@ -419,7 +414,6 @@ const userResolvers = {
               input.profilePicture,
               "profile-pictures"
             );
-            console.log("Nouvelle photo de profil sauvegardée:", picturePath);
 
             // Mettre à jour le champ profilePicture avec le chemin de la nouvelle image
             input.profilePicture = picturePath;
@@ -471,8 +465,6 @@ const userResolvers = {
         };
 
         // S'assurer que transactionCategory est correctement défini
-        console.log("Input complet:", JSON.stringify(input));
-        console.log("Transaction Category reçue:", input.transactionCategory);
 
         // Traiter explicitement le champ transactionCategory
         // Si la valeur est définie (même vide), l'utiliser
@@ -481,10 +473,6 @@ const userResolvers = {
         ) {
           userDoc.company.transactionCategory =
             input.transactionCategory || null;
-          console.log(
-            "Transaction Category après traitement:",
-            userDoc.company.transactionCategory
-          );
         }
 
         // Traiter explicitement le champ vatPaymentCondition
@@ -505,10 +493,6 @@ const userResolvers = {
           userDoc.company.vatPaymentCondition = validValues.includes(value)
             ? value
             : "NONE";
-          console.log(
-            "VAT Payment Condition après traitement:",
-            userDoc.company.vatPaymentCondition
-          );
         } else if (
           userDoc.company &&
           userDoc.company.vatPaymentCondition === ""
@@ -521,25 +505,16 @@ const userResolvers = {
         // Traiter explicitement le champ companyStatus
         if (Object.prototype.hasOwnProperty.call(input, "companyStatus")) {
           userDoc.company.companyStatus = input.companyStatus || "AUTRE";
-          console.log(
-            "Company Status après traitement:",
-            userDoc.company.companyStatus
-          );
         }
 
         // Traiter explicitement le champ capitalSocial
         if (Object.prototype.hasOwnProperty.call(input, "capitalSocial")) {
           userDoc.company.capitalSocial = input.capitalSocial || null;
-          console.log(
-            "Capital Social après traitement:",
-            userDoc.company.capitalSocial
-          );
         }
 
         // Traiter explicitement le champ rcs
         if (Object.prototype.hasOwnProperty.call(input, "rcs")) {
           userDoc.company.rcs = input.rcs || null;
-          console.log("RCS après traitement:", userDoc.company.rcs);
         }
 
         // Sauvegarder avec validation
@@ -585,15 +560,12 @@ const userResolvers = {
 
         // Sauvegarder la nouvelle image
         const logoPath = await saveBase64Image(base64Image);
-        console.log("Logo path reçu de saveBase64Image:", logoPath);
 
         // Mettre à jour l'utilisateur
         userDoc.company = userDoc.company || {};
         userDoc.company.logo = logoPath;
-        console.log("Logo path sauvegardé dans userDoc:", userDoc.company.logo);
 
         await userDoc.save();
-        console.log("Utilisateur sauvegardé avec logo:", userDoc.company.logo);
 
         return userDoc;
       } catch (error) {
@@ -633,21 +605,12 @@ const userResolvers = {
             base64Image,
             "profile-pictures"
           );
-          console.log("Photo path reçu de saveBase64Image:", picturePath);
 
           // Mettre à jour l'utilisateur
           userDoc.profile = userDoc.profile || {};
           userDoc.profile.profilePicture = picturePath;
-          console.log(
-            "Photo path sauvegardé dans userDoc:",
-            userDoc.profile.profilePicture
-          );
 
           await userDoc.save();
-          console.log(
-            "Utilisateur sauvegardé avec photo de profil:",
-            userDoc.profile.profilePicture
-          );
 
           return userDoc;
         } catch (error) {
@@ -675,12 +638,7 @@ const userResolvers = {
         if (userDoc.company && userDoc.company.logo) {
           try {
             const logoPath = userDoc.company.logo;
-            console.log("Tentative de suppression du logo:", logoPath);
             const deleted = await deleteFile(logoPath);
-            console.log(
-              "Résultat de la suppression:",
-              deleted ? "Succès" : "Échec"
-            );
           } catch (err) {
             console.error("Erreur lors de la suppression du logo:", err);
             // Continuer même si la suppression échoue
@@ -693,10 +651,6 @@ const userResolvers = {
         userDoc.company = userDoc.company || {};
         userDoc.company.logo = "";
         await userDoc.save();
-        console.log(
-          "Logo supprimé de la base de données pour l'utilisateur:",
-          user.id
-        );
 
         return userDoc;
       } catch (error) {
@@ -720,15 +674,7 @@ const userResolvers = {
         if (userDoc.profile && userDoc.profile.profilePicture) {
           try {
             const picturePath = userDoc.profile.profilePicture;
-            console.log(
-              "Tentative de suppression de la photo de profil:",
-              picturePath
-            );
             const deleted = await deleteFile(picturePath);
-            console.log(
-              "Résultat de la suppression:",
-              deleted ? "Succès" : "Échec"
-            );
           } catch (err) {
             console.error(
               "Erreur lors de la suppression de la photo de profil:",
@@ -747,10 +693,6 @@ const userResolvers = {
         userDoc.profile = userDoc.profile || {};
         userDoc.profile.profilePicture = "";
         await userDoc.save();
-        console.log(
-          "Photo de profil supprimée de la base de données pour l'utilisateur:",
-          user.id
-        );
 
         return userDoc;
       } catch (error) {
@@ -964,10 +906,6 @@ const userResolvers = {
           // Sauvegarder les modifications
           await userDoc.save();
 
-          console.log(
-            `Stripe Customer ID associé à l'utilisateur ${userDoc.email}: ${stripeCustomerId}`
-          );
-
           return userDoc;
         } catch (error) {
           console.error(
@@ -986,41 +924,39 @@ const userResolvers = {
     /**
      * Met à jour uniquement le logo de l'entreprise
      */
-    updateCompanyLogo: withWorkspace(async (_, { logoUrl }, { user, workspaceId }) => {
-      try {
-        // Mise à jour directe dans la collection organization
-        const db = mongoose.connection.db;
-        const organizationCollection = db.collection('organization');
-        
-        const result = await organizationCollection.findOneAndUpdate(
-          { _id: new mongoose.Types.ObjectId(workspaceId) },
-          { $set: { logo: logoUrl } },
-          { returnDocument: 'after' }
-        );
+    updateCompanyLogo: withWorkspace(
+      async (_, { logoUrl }, { user, workspaceId }) => {
+        try {
+          // Mise à jour directe dans la collection organization
+          const db = mongoose.connection.db;
+          const organizationCollection = db.collection("organization");
 
-        if (!result) {
+          const result = await organizationCollection.findOneAndUpdate(
+            { _id: new mongoose.Types.ObjectId(workspaceId) },
+            { $set: { logo: logoUrl } },
+            { returnDocument: "after" }
+          );
+
+          if (!result) {
+            throw new AppError(
+              "Organisation non trouvée",
+              ERROR_CODES.NOT_FOUND
+            );
+          }
+
+
+          // Retourner l'utilisateur avec les informations mises à jour
+          const updatedUser = await User.findById(user.id);
+          return updatedUser;
+        } catch (error) {
+          console.error("Erreur mise à jour logo:", error);
           throw new AppError(
-            'Organisation non trouvée',
-            ERROR_CODES.NOT_FOUND
+            "Erreur lors de la mise à jour du logo",
+            ERROR_CODES.INTERNAL_ERROR
           );
         }
-
-        console.log('✅ Logo mis à jour dans organization:', {
-          workspaceId: workspaceId,
-          logoUrl: logoUrl
-        });
-
-        // Retourner l'utilisateur avec les informations mises à jour
-        const updatedUser = await User.findById(user.id);
-        return updatedUser;
-      } catch (error) {
-        console.error('Erreur mise à jour logo:', error);
-        throw new AppError(
-          'Erreur lors de la mise à jour du logo',
-          ERROR_CODES.INTERNAL_ERROR
-        );
       }
-    }),
+    ),
   },
 };
 

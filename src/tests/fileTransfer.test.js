@@ -130,11 +130,6 @@ async function runTests() {
 
     // Utiliser des commentaires au lieu de console.log pour éviter les erreurs de lint
     // Transferts de fichiers de l'utilisateur
-    console.log(
-      fileTransfersData
-        ? "Transferts récupérés avec succès"
-        : "Aucun transfert trouvé"
-    );
   } catch (error) {
     // Erreur lors de la récupération des transferts de fichiers
     console.error("Erreur API:", error.message);
@@ -149,11 +144,6 @@ async function runTests() {
         query: FILE_TRANSFER_BY_ID,
         variables: { id: existingTransfer._id.toString() },
       });
-
-      // Transfert de fichiers par ID
-      console.log(
-        fileTransferData ? "Transfert par ID récupéré" : "Transfert non trouvé"
-      );
     } catch (error) {
       // Erreur lors de la récupération du transfert de fichiers par ID
       console.error("Erreur API:", error.message);
@@ -168,13 +158,6 @@ async function runTests() {
           accessKey: existingTransfer.accessKey,
         },
       });
-
-      // Transfert de fichiers par lien et clé
-      console.log(
-        fileTransferByLinkData
-          ? "Transfert par lien récupéré"
-          : "Transfert non trouvé"
-      );
     } catch (error) {
       // Erreur lors de la récupération du transfert de fichiers par lien
       console.error("Erreur API:", error.message);
@@ -187,11 +170,6 @@ async function runTests() {
           mutation: GENERATE_PAYMENT_LINK,
           variables: { id: existingTransfer._id.toString() },
         });
-
-        // Lien de paiement généré
-        console.log(
-          paymentLinkData ? "Lien de paiement généré" : "Échec génération lien"
-        );
       } catch (error) {
         // Erreur lors de la génération du lien de paiement
         console.error("Erreur API:", error.message);

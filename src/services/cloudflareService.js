@@ -19,22 +19,6 @@ dotenv.config();
 
 class CloudflareService {
   constructor() {
-    // Debug: Vérifier les variables d'environnement
-    console.log("🔧 Configuration Cloudflare R2:");
-    console.log("  IMAGE_BUCKET_NAME:", process.env.IMAGE_BUCKET_NAME);
-    console.log("  IMAGE_PUBLIC_URL:", process.env.IMAGE_PUBLIC_URL);
-    console.log("  LOGO_BUCKET_NAME:", process.env.LOGO_BUCKET_NAME);
-    console.log("  LOGO_PUBLIC_URL:", process.env.LOGO_PUBLIC_URL);
-    console.log("  AWS_S3_API_URL:", process.env.AWS_S3_API_URL);
-    console.log(
-      "  AWS_ACCESS_KEY_ID:",
-      process.env.AWS_ACCESS_KEY_ID ? "✅ Définie" : "❌ Manquante"
-    );
-    console.log(
-      "  AWS_SECRET_ACCESS_KEY:",
-      process.env.AWS_SECRET_ACCESS_KEY ? "✅ Définie" : "❌ Manquante"
-    );
-
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
       region: "auto",
@@ -91,8 +75,6 @@ class CloudflareService {
 
       // Nettoyer le nom de fichier pour les headers HTTP
       const sanitizedFileName = this.sanitizeFileName(fileName);
-      console.log("📝 Nom de fichier original:", fileName);
-      console.log("🧹 Nom de fichier nettoyé:", sanitizedFileName);
 
       // Commande d'upload
       const command = new PutObjectCommand({
@@ -114,15 +96,13 @@ class CloudflareService {
       let imageUrl;
 
       // Utilisation directe des URLs publiques Cloudflare R2
-      if (this.publicUrl && this.publicUrl !== "https://your_image_bucket_public_url") {
+      if (
+        this.publicUrl &&
+        this.publicUrl !== "https://your_image_bucket_public_url"
+      ) {
         imageUrl = `${this.publicUrl}/${key}`;
-        console.log("🌐 URL publique IMAGE_BUCKET générée:", imageUrl);
       } else {
         // Fallback sur le proxy backend si pas d'URL publique configurée
-        console.log(
-          "🔗 Pas d'URL publique configurée, utilisation du proxy pour:",
-          key
-        );
 
         const keyParts = key.split("/");
         if (keyParts.length >= 3 && keyParts[0] === "signatures") {
@@ -132,13 +112,8 @@ class CloudflareService {
 
           const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
           imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
-
-          console.log("✅ URL proxy générée:", imageUrl);
         } else {
           // Dernier fallback sur URL signée
-          console.log(
-            "⚠️ Structure de clé inattendue, fallback sur URL signée"
-          );
           imageUrl = await this.getSignedUrl(key, 86400);
         }
       }
@@ -165,9 +140,9 @@ class CloudflareService {
   async uploadSocialLogo(fileBuffer, fileName, logoType, color) {
     try {
       // Configuration spécifique pour le bucket logo-rs
-      const logoBucketName = process.env.LOGO_BUCKET_NAME || 'logo-rs';
+      const logoBucketName = process.env.LOGO_BUCKET_NAME || "logo-rs";
       const logoPublicUrl = process.env.LOGO_PUBLIC_URL;
-      
+
       // Créer un client S3 spécifique pour les logos (même config mais différent bucket)
       const logoClient = new S3Client({
         region: "auto",
@@ -177,17 +152,15 @@ class CloudflareService {
           secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
         },
       });
-      
+
       // Générer une clé unique pour le logo social
       const fileExtension = path.extname(fileName).toLowerCase();
       const timestamp = Date.now();
-      const colorHash = color.replace('#', '');
+      const colorHash = color.replace("#", "");
       const key = `social-logos/${logoType}/${colorHash}/${timestamp}${fileExtension}`;
 
       // Déterminer le content-type
       const contentType = this.getContentType(fileExtension);
-
-      console.log(`🎨 Upload logo ${logoType} couleur ${color} vers bucket ${logoBucketName}`);
 
       // Commande d'upload vers le bucket logo-rs
       const command = new PutObjectCommand({
@@ -195,7 +168,7 @@ class CloudflareService {
         Key: key,
         Body: fileBuffer,
         ContentType: contentType,
-        CacheControl: 'public, max-age=31536000', // Cache 1 an
+        CacheControl: "public, max-age=31536000", // Cache 1 an
         Metadata: {
           logoType: logoType,
           color: color,
@@ -209,11 +182,9 @@ class CloudflareService {
       let imageUrl;
       if (logoPublicUrl) {
         imageUrl = `${logoPublicUrl}/${key}`;
-        console.log("🌐 URL publique logo-rs générée:", imageUrl);
       } else {
         // Fallback sur URL signée si pas d'URL publique
         imageUrl = await this.getSignedUrl(key, 86400);
-        console.log("🔗 URL signée générée pour logo:", imageUrl);
       }
 
       return {
@@ -256,8 +227,6 @@ class CloudflareService {
    */
   async getSignedUrl(key, expiresIn = 3600) {
     try {
-      console.log("🔗 Génération URL signée pour:", key);
-
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
         Key: key,
@@ -270,10 +239,6 @@ class CloudflareService {
         unhoistableHeaders: new Set(["x-amz-content-sha256"]),
       });
 
-      console.log(
-        "✅ URL signée générée:",
-        signedUrl.substring(0, 100) + "..."
-      );
       return signedUrl;
     } catch (error) {
       console.error("Erreur génération URL signée:", error);

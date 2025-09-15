@@ -57,12 +57,8 @@ class MistralOcrService {
         throw new Error("URL de document invalide");
       }
 
-      // Debug: Afficher les options reçues
-      console.log("🔍 Options OCR reçues:", JSON.stringify(options, null, 2));
-
       // Forcer l'utilisation du modèle OCR correct (ignorer le modèle passé en option)
       const modelToUse = "mistral-ocr-latest"; // Toujours utiliser le modèle OCR
-      console.log("🤖 Modèle utilisé pour l'OCR:", modelToUse);
 
       // Configuration de base pour l'API Mistral
       const requestBody = {
@@ -99,8 +95,6 @@ class MistralOcrService {
           options.documentAnnotationFormat;
       }
 
-      console.log("🔍 Envoi de la requête OCR à Mistral...");
-
       // Appel à l'API Mistral
       const response = await fetch(this.endpoint, {
         method: "POST",
@@ -121,19 +115,11 @@ class MistralOcrService {
 
       const result = await response.json();
 
-      console.log("✅ OCR Mistral terminé avec succès");
-
       // Extraire le texte brut
       const extractedText = this.extractTextFromResult(result);
-      
+
       // Parser le markdown pour obtenir des données structurées
       const structuredData = this.parseMarkdownToStructuredData(extractedText);
-      
-      console.log('📊 Données structurées extraites:', {
-        title: structuredData.title,
-        sectionsCount: structuredData.sections.length,
-        tablesCount: structuredData.tables.length
-      });
 
       return {
         success: true,
@@ -145,9 +131,9 @@ class MistralOcrService {
           mimeType,
           documentUrl,
           processedAt: new Date().toISOString(),
-          model: result.model || 'mistral-ocr-latest',
+          model: result.model || "mistral-ocr-latest",
           pagesProcessed: result.usage_info?.pages_processed || 0,
-          docSizeBytes: result.usage_info?.doc_size_bytes || 0
+          docSizeBytes: result.usage_info?.doc_size_bytes || 0,
         },
       };
     } catch (error) {
@@ -163,8 +149,6 @@ class MistralOcrService {
    */
   extractTextFromResult(result) {
     try {
-      console.log('🔍 Structure du résultat Mistral:', JSON.stringify(result, null, 2));
-      
       // Structure moderne de Mistral OCR: pages avec markdown
       if (result.pages && Array.isArray(result.pages)) {
         const extractedText = result.pages
@@ -179,35 +163,36 @@ class MistralOcrService {
             }
             // Fallback sur blocks
             if (page.blocks && Array.isArray(page.blocks)) {
-              return page.blocks.map((block) => block.text || '').join(' ');
+              return page.blocks.map((block) => block.text || "").join(" ");
             }
-            return '';
+            return "";
           })
-          .filter(text => text.trim()) // Supprimer les pages vides
-          .join('\n\n');
-          
+          .filter((text) => text.trim()) // Supprimer les pages vides
+          .join("\n\n");
+
         if (extractedText.trim()) {
-          console.log('✅ Texte extrait depuis pages.markdown');
           return extractedText;
         }
       }
 
       // Structure legacy: text direct
       if (result.text) {
-        console.log('✅ Texte extrait depuis result.text');
         return result.text;
       }
 
       // Structure legacy: content array
       if (result.content && Array.isArray(result.content)) {
-        const extractedText = result.content.map((item) => item.text || "").join("\n");
+        const extractedText = result.content
+          .map((item) => item.text || "")
+          .join("\n");
         if (extractedText.trim()) {
-          console.log('✅ Texte extrait depuis result.content');
           return extractedText;
         }
       }
 
-      console.warn('⚠️ Aucun texte trouvé dans la structure, utilisation du fallback JSON');
+      console.warn(
+        "⚠️ Aucun texte trouvé dans la structure, utilisation du fallback JSON"
+      );
       return JSON.stringify(result, null, 2);
     } catch (error) {
       console.error("❌ Erreur lors de l'extraction du texte:", error);
@@ -227,10 +212,10 @@ class MistralOcrService {
         title: null,
         sections: [],
         tables: [],
-        metadata: {}
+        metadata: {},
       };
 
-      const lines = markdown.split('\n');
+      const lines = markdown.split("\n");
       let currentSection = null;
       let inTable = false;
       let tableHeaders = [];
@@ -238,50 +223,56 @@ class MistralOcrService {
 
       for (const line of lines) {
         const trimmed = line.trim();
-        
+
         // Titre principal (# FACTURE)
-        if (trimmed.startsWith('# ') && !data.title) {
+        if (trimmed.startsWith("# ") && !data.title) {
           data.title = trimmed.substring(2).trim();
         }
-        
+
         // Sections (## Section)
-        else if (trimmed.startsWith('## ')) {
+        else if (trimmed.startsWith("## ")) {
           if (currentSection) {
             data.sections.push(currentSection);
           }
           currentSection = {
             title: trimmed.substring(3).trim(),
-            content: []
+            content: [],
           };
           inTable = false;
         }
-        
+
         // Détection de tableau
-        else if (trimmed.includes('|') && trimmed.split('|').length > 2) {
+        else if (trimmed.includes("|") && trimmed.split("|").length > 2) {
           if (!inTable) {
             // Première ligne du tableau (headers)
-            tableHeaders = trimmed.split('|').map(h => h.trim()).filter(h => h);
+            tableHeaders = trimmed
+              .split("|")
+              .map((h) => h.trim())
+              .filter((h) => h);
             inTable = true;
             tableRows = [];
-          } else if (!trimmed.includes('---')) {
+          } else if (!trimmed.includes("---")) {
             // Ligne de données (ignorer la ligne de séparation ---)
-            const row = trimmed.split('|').map(cell => cell.trim()).filter(cell => cell);
+            const row = trimmed
+              .split("|")
+              .map((cell) => cell.trim())
+              .filter((cell) => cell);
             if (row.length > 0) {
               tableRows.push(row);
             }
           }
         }
-        
+
         // Fin de tableau ou contenu normal
         else {
           if (inTable && tableHeaders.length > 0 && tableRows.length > 0) {
             data.tables.push({
               headers: tableHeaders,
-              rows: tableRows
+              rows: tableRows,
             });
             inTable = false;
           }
-          
+
           if (currentSection && trimmed) {
             currentSection.content.push(trimmed);
           }
@@ -292,25 +283,25 @@ class MistralOcrService {
       if (currentSection) {
         data.sections.push(currentSection);
       }
-      
+
       // Ajouter le dernier tableau
       if (inTable && tableHeaders.length > 0 && tableRows.length > 0) {
         data.tables.push({
           headers: tableHeaders,
-          rows: tableRows
+          rows: tableRows,
         });
       }
 
       return data;
     } catch (error) {
-      console.error('❌ Erreur lors du parsing du markdown:', error);
+      console.error("❌ Erreur lors du parsing du markdown:", error);
       return {
         rawText: markdown,
         title: null,
         sections: [],
         tables: [],
         metadata: {},
-        error: error.message
+        error: error.message,
       };
     }
   }

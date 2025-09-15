@@ -265,28 +265,15 @@ const imageUploadResolvers = {
      */
     deleteUserProfileImage: isAuthenticated(async (_, __, { user }) => {
       try {
-        console.log("🚀 Début suppression image profil pour user ID:", user.id);
-
         // Récupérer l'utilisateur complet depuis la base de données
         const userDoc = await User.findById(user.id);
         if (!userDoc) {
-          console.log("❌ Utilisateur non trouvé dans la DB");
           throw createValidationError("Utilisateur non trouvé");
         }
-
-        console.log("✅ Utilisateur trouvé dans la DB");
-
-        // Vérifier toutes les sources possibles d'URL d'image de profil
-        console.log("🔍 Debug userDoc.avatar:", userDoc);
-        console.log(
-          "🔍 Debug userDoc.profilePictureUrl:",
-          userDoc.profilePictureUrl
-        );
 
         const imageUrl = userDoc.avatar || userDoc.profilePictureUrl;
 
         if (!imageUrl) {
-          console.log("❌ Aucune image de profil trouvée");
           throw createValidationError("Aucune image de profil à supprimer");
         }
 
@@ -294,9 +281,6 @@ const imageUploadResolvers = {
         // URL format: https://pub-afeb8647684e476ca05894fe1df797fb.r2.dev/user/68b4a618b1c6f619a457314c/profile.jpg
         const urlParts = imageUrl.split("/");
         const key = urlParts.slice(-3).join("/"); // user/userId/profile.jpg
-
-        console.log("🔑 URL trouvée:", imageUrl);
-        console.log("🔑 Clé extraite:", key);
 
         const success = await cloudflareService.deleteImage(key);
 
@@ -320,7 +304,6 @@ const imageUploadResolvers = {
             : "Erreur lors de la suppression",
         };
       } catch (error) {
-        console.error("Erreur suppression image profil utilisateur:", error);
         throw createInternalServerError(
           "Erreur lors de la suppression de l'image de profil"
         );
@@ -335,17 +318,17 @@ const imageUploadResolvers = {
         const { createReadStream, filename, mimetype } = await file;
 
         // Validation du type de logo
-        const validLogoTypes = ['facebook', 'linkedin', 'twitter', 'instagram'];
+        const validLogoTypes = ["facebook", "linkedin", "twitter", "instagram"];
         if (!validLogoTypes.includes(logoType)) {
           throw createValidationError(
-            'Type de logo invalide. Utilisez facebook, linkedin, twitter ou instagram'
+            "Type de logo invalide. Utilisez facebook, linkedin, twitter ou instagram"
           );
         }
 
         // Validation de la couleur (format hex)
         if (!color || !/^#[0-9A-F]{6}$/i.test(color)) {
           throw createValidationError(
-            'Couleur invalide. Utilisez un format hexadécimal (#RRGGBB)'
+            "Couleur invalide. Utilisez un format hexadécimal (#RRGGBB)"
           );
         }
 
@@ -373,9 +356,7 @@ const imageUploadResolvers = {
 
         // Validation de la taille
         if (!cloudflareService.isValidFileSize(fileBuffer)) {
-          throw createValidationError(
-            "L'image est trop volumineuse (max 5MB)"
-          );
+          throw createValidationError("L'image est trop volumineuse (max 5MB)");
         }
 
         // Upload vers le bucket logo-rs
@@ -394,13 +375,13 @@ const imageUploadResolvers = {
           message: "Logo social uploadé avec succès",
         };
       } catch (error) {
-        console.error("Erreur upload logo social:", error);
-
         if (error.message.includes("Validation")) {
           throw error;
         }
 
-        throw createInternalServerError("Erreur lors de l'upload du logo social");
+        throw createInternalServerError(
+          "Erreur lors de l'upload du logo social"
+        );
       }
     },
   },

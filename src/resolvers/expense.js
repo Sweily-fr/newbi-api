@@ -267,9 +267,6 @@ const expenseResolvers = {
     createExpense: async (_, { input }, { user }) => {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
 
-      console.log('createExpense resolver - input reçu:', JSON.stringify(input));
-      console.log('createExpense resolver - user:', { id: user.id, workspaceId: user.workspaceId });
-
       const expenseData = {
         ...input,
         createdBy: user.id,
@@ -278,37 +275,34 @@ const expenseResolvers = {
 
       // Convertir les dates avec gestion du format français
       if (input.date) {
-        console.log('Traitement de la date:', input.date, 'Type:', typeof input.date);
-        
         // Vérifier si c'est déjà au format ISO (YYYY-MM-DD)
         if (/^\d{4}-\d{2}-\d{2}$/.test(input.date)) {
-          const dateObj = new Date(input.date + 'T12:00:00.000Z'); // Utiliser midi UTC pour éviter les problèmes de timezone
-          console.log('Date créée:', dateObj, 'Valid:', !isNaN(dateObj.getTime()));
+          const dateObj = new Date(input.date + "T12:00:00.000Z"); // Utiliser midi UTC pour éviter les problèmes de timezone
           expenseData.date = dateObj;
         } else {
           // Essayer de parser d'autres formats
           const parsedDate = new Date(input.date);
-          console.log('Date parsée:', parsedDate, 'Valid:', !isNaN(parsedDate.getTime()));
           if (isNaN(parsedDate.getTime())) {
-            throw new UserInputError(`Format de date invalide: ${input.date}. Utilisez le format YYYY-MM-DD`);
+            throw new UserInputError(
+              `Format de date invalide: ${input.date}. Utilisez le format YYYY-MM-DD`
+            );
           }
           expenseData.date = parsedDate;
         }
       }
-      
+
       // Gérer paymentDate seulement si elle est fournie et valide
-      if (input.paymentDate && input.paymentDate.trim() !== '') {
-        console.log('Traitement de paymentDate:', input.paymentDate, 'Type:', typeof input.paymentDate);
-        
+      if (input.paymentDate && input.paymentDate.trim() !== "") {
         if (/^\d{4}-\d{2}-\d{2}$/.test(input.paymentDate)) {
-          const paymentDateObj = new Date(input.paymentDate + 'T12:00:00.000Z');
-          console.log('PaymentDate créée:', paymentDateObj, 'Valid:', !isNaN(paymentDateObj.getTime()));
+          const paymentDateObj = new Date(input.paymentDate + "T12:00:00.000Z");
+
           expenseData.paymentDate = paymentDateObj;
         } else {
           const parsedPaymentDate = new Date(input.paymentDate);
-          console.log('PaymentDate parsée:', parsedPaymentDate, 'Valid:', !isNaN(parsedPaymentDate.getTime()));
           if (isNaN(parsedPaymentDate.getTime())) {
-            throw new UserInputError(`Format de date de paiement invalide: ${input.paymentDate}. Utilisez le format YYYY-MM-DD`);
+            throw new UserInputError(
+              `Format de date de paiement invalide: ${input.paymentDate}. Utilisez le format YYYY-MM-DD`
+            );
           }
           expenseData.paymentDate = parsedPaymentDate;
         }
@@ -317,29 +311,26 @@ const expenseResolvers = {
         delete expenseData.paymentDate;
       }
 
-      console.log('createExpense resolver - expenseData final:', JSON.stringify(expenseData));
-
       try {
         const expense = new Expense(expenseData);
         await expense.save();
-        console.log('createExpense resolver - dépense créée avec succès:', expense.id);
         return expense;
       } catch (error) {
-        console.error('createExpense resolver - erreur complète:', error);
-        console.error('createExpense resolver - nom erreur:', error.name);
-        console.error('createExpense resolver - message erreur:', error.message);
-        
+        console.error(
+          "createExpense resolver - message erreur:",
+          error.message
+        );
+
         if (error.name === "ValidationError") {
-          console.error('createExpense resolver - erreurs de validation détaillées:');
-          Object.keys(error.errors).forEach(field => {
-            console.error(`  - ${field}: ${error.errors[field].message}`);
-          });
-          
+          // Object.keys(error.errors).forEach((field) => {
+          //   console.error(`  - ${field}: ${error.errors[field].message}`);
+          // });
+
           // Créer un message d'erreur plus détaillé
-          const errorMessages = Object.keys(error.errors).map(field => 
-            `${field}: ${error.errors[field].message}`
-          ).join(', ');
-          
+          const errorMessages = Object.keys(error.errors)
+            .map((field) => `${field}: ${error.errors[field].message}`)
+            .join(", ");
+
           throw new UserInputError(`Erreurs de validation: ${errorMessages}`, {
             errors: error.errors,
           });
@@ -353,11 +344,6 @@ const expenseResolvers = {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
 
       await checkExpenseAccess(id, user.id);
-
-      // Log pour déboguer
-      console.log("updateExpense - input reçu:", JSON.stringify(input));
-      console.log("updateExpense - champs disponibles:", Object.keys(input));
-
       // Convertir les dates
       if (input.date) input.date = new Date(input.date);
       if (input.paymentDate) input.paymentDate = new Date(input.paymentDate);
@@ -450,8 +436,10 @@ const expenseResolvers = {
         success: deletedCount.failed === 0,
         deletedCount: deletedCount.success,
         failedCount: deletedCount.failed,
-        message: `${deletedCount.success} dépense(s) supprimée(s) avec succès${deletedCount.failed > 0 ? `, ${deletedCount.failed} échec(s)` : ''}`,
-        errors
+        message: `${deletedCount.success} dépense(s) supprimée(s) avec succès${
+          deletedCount.failed > 0 ? `, ${deletedCount.failed} échec(s)` : ""
+        }`,
+        errors,
       };
     },
 
@@ -478,36 +466,32 @@ const expenseResolvers = {
 
       try {
         let fileData;
-        
+
         // Cas 1: Fichier déjà uploadé sur Cloudflare
         if (input.cloudflareUrl) {
           fileData = {
             id: new mongoose.Types.ObjectId(),
-            filename: input.fileName || 'document.pdf',
-            originalFilename: input.fileName || 'document.pdf',
-            mimetype: input.mimeType || 'application/pdf',
+            filename: input.fileName || "document.pdf",
+            originalFilename: input.fileName || "document.pdf",
+            mimetype: input.mimeType || "application/pdf",
             path: input.cloudflareUrl, // Utiliser l'URL Cloudflare comme path
             url: input.cloudflareUrl,
             size: input.fileSize || 0,
             ocrProcessed: !!input.ocrData,
             ocrData: input.ocrData ? JSON.parse(input.ocrData) : null,
             createdAt: new Date(),
-            updatedAt: new Date()
+            updatedAt: new Date(),
           };
-          
-          console.log('✅ Fichier Cloudflare ajouté:', {
-            url: input.cloudflareUrl,
-            fileName: input.fileName,
-            hasOcrData: !!input.ocrData
-          });
-        } 
+        }
         // Cas 2: Fichier à uploader normalement
         else if (input.file) {
           fileData = await saveUploadedFile(input.file, user.id);
-        } 
+        }
         // Cas 3: Aucun fichier fourni
         else {
-          throw new UserInputError("Vous devez fournir soit un fichier à uploader, soit une URL Cloudflare");
+          throw new UserInputError(
+            "Vous devez fournir soit un fichier à uploader, soit une URL Cloudflare"
+          );
         }
 
         // Traiter le fichier avec OCR si demandé ET si ce n'est pas déjà fait
@@ -542,21 +526,27 @@ const expenseResolvers = {
             // Ne pas bloquer l'ajout du fichier en cas d'erreur OCR
           }
         }
-        
+
         // Si nous avons des données OCR déjà traitées (cas Cloudflare), les utiliser
-        if (fileData.ocrData && (!expense.ocrMetadata || Object.keys(expense.ocrMetadata).length === 0)) {
+        if (
+          fileData.ocrData &&
+          (!expense.ocrMetadata ||
+            Object.keys(expense.ocrMetadata).length === 0)
+        ) {
           const ocrData = fileData.ocrData;
           expense.ocrMetadata = {
-            vendorName: ocrData.vendorName || '',
-            vendorAddress: ocrData.vendorAddress || '',
-            vendorVatNumber: ocrData.vendorVatNumber || '',
-            invoiceNumber: ocrData.invoiceNumber || '',
-            invoiceDate: ocrData.invoiceDate ? new Date(ocrData.invoiceDate) : null,
+            vendorName: ocrData.vendorName || "",
+            vendorAddress: ocrData.vendorAddress || "",
+            vendorVatNumber: ocrData.vendorVatNumber || "",
+            invoiceNumber: ocrData.invoiceNumber || "",
+            invoiceDate: ocrData.invoiceDate
+              ? new Date(ocrData.invoiceDate)
+              : null,
             totalAmount: ocrData.totalAmount || 0,
             vatAmount: ocrData.vatAmount || 0,
-            currency: ocrData.currency || 'EUR',
+            currency: ocrData.currency || "EUR",
             confidenceScore: ocrData.confidenceScore || 0,
-            rawExtractedText: ocrData.rawExtractedText || '',
+            rawExtractedText: ocrData.rawExtractedText || "",
           };
         }
 

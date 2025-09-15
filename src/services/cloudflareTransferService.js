@@ -22,20 +22,6 @@ dotenv.config();
 
 class CloudflareTransferService {
   constructor() {
-    // Debug: Vérifier les variables d'environnement
-    console.log("🔧 Configuration Cloudflare R2 pour les transferts:");
-    console.log("  TRANSFER_BUCKET_NAME:", process.env.TRANSFER_BUCKET_NAME || "app-transfers-prod");
-    console.log("  TRANSFER_PUBLIC_URL:", process.env.TRANSFER_PUBLIC_URL);
-    console.log("  AWS_S3_API_URL:", process.env.AWS_S3_API_URL);
-    console.log(
-      "  AWS_ACCESS_KEY_ID:",
-      process.env.AWS_ACCESS_KEY_ID ? "✅ Définie" : "❌ Manquante"
-    );
-    console.log(
-      "  AWS_SECRET_ACCESS_KEY:",
-      process.env.AWS_SECRET_ACCESS_KEY ? "✅ Définie" : "❌ Manquante"
-    );
-
     // Configuration Cloudflare R2 (compatible S3)
     this.client = new S3Client({
       region: "auto",
@@ -65,12 +51,12 @@ class CloudflareTransferService {
   generateR2Path(transferId, fileId, originalName) {
     const now = new Date();
     const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+
     // Nettoyer le nom original pour éviter les problèmes de chemin
     const sanitizedName = this.sanitizeFileName(originalName);
-    
+
     return `prod/${year}/${month}/${day}/t_${transferId}/f_${fileId}_${sanitizedName}`;
   }
 
@@ -106,11 +92,8 @@ class CloudflareTransferService {
       const key = this.generateR2Path(transferId, fileId, originalName);
 
       // Déterminer le content-type
-      const contentType = mimeType || this.getContentType(path.extname(originalName));
-
-      console.log(`📤 Upload fichier vers R2: ${key}`);
-      console.log(`📊 Taille: ${fileBuffer.length} octets`);
-      console.log(`📋 Type: ${contentType}`);
+      const contentType =
+        mimeType || this.getContentType(path.extname(originalName));
 
       // Commande d'upload
       const command = new PutObjectCommand({
@@ -130,13 +113,14 @@ class CloudflareTransferService {
 
       // Générer l'URL d'accès
       let fileUrl;
-      if (this.publicUrl && this.publicUrl !== "https://your_transfer_bucket_public_url") {
+      if (
+        this.publicUrl &&
+        this.publicUrl !== "https://your_transfer_bucket_public_url"
+      ) {
         fileUrl = `${this.publicUrl}/${key}`;
-        console.log("🌐 URL publique générée:", fileUrl);
       } else {
         // Utiliser une URL signée temporaire
         fileUrl = await this.getSignedUrl(key, 86400); // 24h
-        console.log("🔗 URL signée générée");
       }
 
       return {
@@ -165,12 +149,10 @@ class CloudflareTransferService {
       // Générer le chemin pour le chunk temporaire
       const now = new Date();
       const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      
-      const key = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${chunkIndex}`;
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
 
-      console.log(`📤 Upload chunk ${chunkIndex} vers R2: ${key}`);
+      const key = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${chunkIndex}`;
 
       // Commande d'upload
       const command = new PutObjectCommand({
@@ -195,7 +177,9 @@ class CloudflareTransferService {
       };
     } catch (error) {
       console.error(`Erreur upload chunk ${chunkIndex}:`, error);
-      throw new Error(`Échec de l'upload du chunk ${chunkIndex}: ${error.message}`);
+      throw new Error(
+        `Échec de l'upload du chunk ${chunkIndex}: ${error.message}`
+      );
     }
   }
 
@@ -208,22 +192,26 @@ class CloudflareTransferService {
    * @param {string} mimeType - Type MIME du fichier
    * @returns {Promise<{key: string, url: string, size: number}>}
    */
-  async reconstructFileFromChunks(transferId, fileId, originalName, totalChunks, mimeType) {
+  async reconstructFileFromChunks(
+    transferId,
+    fileId,
+    originalName,
+    totalChunks,
+    mimeType
+  ) {
     try {
-      console.log(`🔧 Reconstruction du fichier ${fileId} à partir de ${totalChunks} chunks`);
-
       // Récupérer tous les chunks
       const chunks = [];
       let totalSize = 0;
 
       const now = new Date();
       const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
 
       for (let i = 0; i < totalChunks; i++) {
         const chunkKey = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${i}`;
-        
+
         try {
           const getCommand = new GetObjectCommand({
             Bucket: this.bucketName,
@@ -231,12 +219,12 @@ class CloudflareTransferService {
           });
 
           const response = await this.client.send(getCommand);
-          const chunkBuffer = Buffer.from(await response.Body.transformToByteArray());
-          
+          const chunkBuffer = Buffer.from(
+            await response.Body.transformToByteArray()
+          );
+
           chunks.push(chunkBuffer);
           totalSize += chunkBuffer.length;
-          
-          console.log(`✅ Chunk ${i} récupéré: ${chunkBuffer.length} octets`);
         } catch (error) {
           console.error(`❌ Erreur récupération chunk ${i}:`, error);
           throw new Error(`Chunk ${i} manquant ou inaccessible`);
@@ -245,10 +233,15 @@ class CloudflareTransferService {
 
       // Concaténer tous les chunks
       const completeFileBuffer = Buffer.concat(chunks);
-      console.log(`🔗 Fichier reconstruit: ${completeFileBuffer.length} octets`);
 
       // Upload du fichier complet
-      const result = await this.uploadFile(completeFileBuffer, transferId, fileId, originalName, mimeType);
+      const result = await this.uploadFile(
+        completeFileBuffer,
+        transferId,
+        fileId,
+        originalName,
+        mimeType
+      );
 
       // Nettoyer les chunks temporaires
       await this.cleanupChunks(transferId, fileId, totalChunks);
@@ -256,7 +249,9 @@ class CloudflareTransferService {
       return result;
     } catch (error) {
       console.error("Erreur reconstruction fichier:", error);
-      throw new Error(`Échec de la reconstruction du fichier: ${error.message}`);
+      throw new Error(
+        `Échec de la reconstruction du fichier: ${error.message}`
+      );
     }
   }
 
@@ -271,12 +266,12 @@ class CloudflareTransferService {
     try {
       const now = new Date();
       const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
 
       for (let i = 0; i < totalChunks; i++) {
         const chunkKey = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${i}`;
-        
+
         try {
           const deleteCommand = new DeleteObjectCommand({
             Bucket: this.bucketName,
@@ -284,7 +279,6 @@ class CloudflareTransferService {
           });
 
           await this.client.send(deleteCommand);
-          console.log(`🗑️ Chunk ${i} supprimé`);
         } catch (error) {
           console.warn(`⚠️ Erreur suppression chunk ${i}:`, error.message);
         }
@@ -303,7 +297,10 @@ class CloudflareTransferService {
   async getFileUrl(key, expiresIn = 86400) {
     if (!key) return null;
 
-    if (this.publicUrl && this.publicUrl !== "https://your_transfer_bucket_public_url") {
+    if (
+      this.publicUrl &&
+      this.publicUrl !== "https://your_transfer_bucket_public_url"
+    ) {
       // Si URL publique configurée, utiliser l'URL publique directe
       return `${this.publicUrl}/${key}`;
     } else {
@@ -320,8 +317,6 @@ class CloudflareTransferService {
    */
   async getSignedUrl(key, expiresIn = 3600) {
     try {
-      console.log("🔗 Génération URL signée pour:", key);
-
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
         Key: key,
@@ -333,7 +328,6 @@ class CloudflareTransferService {
         unhoistableHeaders: new Set(["x-amz-content-sha256"]),
       });
 
-      console.log("✅ URL signée générée:", signedUrl.substring(0, 100) + "...");
       return signedUrl;
     } catch (error) {
       console.error("Erreur génération URL signée:", error);
@@ -354,7 +348,6 @@ class CloudflareTransferService {
       });
 
       await this.client.send(command);
-      console.log(`🗑️ Fichier supprimé: ${key}`);
       return true;
     } catch (error) {
       console.error("Erreur suppression Cloudflare R2:", error);
@@ -377,7 +370,7 @@ class CloudflareTransferService {
       await this.client.send(command);
       return true;
     } catch (error) {
-      if (error.name === 'NotFound') {
+      if (error.name === "NotFound") {
         return false;
       }
       throw error;
@@ -399,11 +392,14 @@ class CloudflareTransferService {
       ".svg": "image/svg+xml",
       ".pdf": "application/pdf",
       ".doc": "application/msword",
-      ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".docx":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       ".xls": "application/vnd.ms-excel",
-      ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ".xlsx":
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       ".ppt": "application/vnd.ms-powerpoint",
-      ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      ".pptx":
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       ".txt": "text/plain",
       ".csv": "text/csv",
       ".zip": "application/zip",
@@ -435,7 +431,7 @@ class CloudflareTransferService {
    */
   isValidFileSize(fileData) {
     const maxSize = 10 * 1024 * 1024 * 1024; // 10GB
-    const size = typeof fileData === 'number' ? fileData : fileData.length;
+    const size = typeof fileData === "number" ? fileData : fileData.length;
     return size <= maxSize;
   }
 }

@@ -124,13 +124,6 @@ export default {
           };
         }
 
-        console.log("Débogage FileTransfer:", {
-          id: fileTransfer.id,
-          isPaymentRequired: fileTransfer.isPaymentRequired,
-          paymentAmount: fileTransfer.paymentAmount,
-          isPaid: fileTransfer.isPaid,
-        });
-
         // Préparer les informations de paiement
         const paymentInfo = {
           isPaymentRequired: fileTransfer.isPaymentRequired,
@@ -151,16 +144,6 @@ export default {
           downloadUrl:
             file.storageType === "r2" ? file.filePath : file.filePath,
         }));
-
-        console.log("📁 Fichiers préparés pour la réponse:", {
-          totalFiles: filesWithDownloadUrls.length,
-          files: filesWithDownloadUrls.map((f) => ({
-            id: f.id,
-            originalName: f.originalName,
-            downloadUrl: f.downloadUrl,
-            storageType: f.storageType,
-          })),
-        });
 
         const fileTransferInfo = {
           id: fileTransfer.id,

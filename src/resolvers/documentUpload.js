@@ -15,8 +15,6 @@ const documentUploadResolvers = {
      */
     uploadDocument: async (_, { file }, { user }) => {
       try {
-        console.log("📤 Début upload document vers Cloudflare...");
-
         // Vérifier l'authentification
         if (!user) {
           throw new Error("Utilisateur non authentifié");
@@ -24,12 +22,6 @@ const documentUploadResolvers = {
 
         // Récupérer les informations du fichier
         const { createReadStream, filename, mimetype, encoding } = await file;
-
-        console.log("📄 Informations fichier:", {
-          filename,
-          mimetype,
-          encoding,
-        });
 
         // Lire le fichier en buffer
         const stream = createReadStream();
@@ -41,8 +33,6 @@ const documentUploadResolvers = {
 
         const fileBuffer = Buffer.concat(chunks);
         const fileSize = fileBuffer.length;
-
-        console.log("📊 Taille fichier:", fileSize, "bytes");
 
         // Valider la taille du fichier (10MB max)
         const maxSize = 10 * 1024 * 1024; // 10MB
@@ -89,9 +79,6 @@ const documentUploadResolvers = {
 
         if (isImage && isCompanyLogo) {
           folderType = "imgCompany";
-          console.log(
-            "🏢 Logo d'entreprise détecté, utilisation du dossier imgCompany"
-          );
         }
 
         // Récupérer l'ID de l'organisation de l'utilisateur
@@ -109,13 +96,9 @@ const documentUploadResolvers = {
             // Utiliser l'userId comme fallback pour les images d'entreprise
             organizationId = user.id;
           }
-
-          console.log("🏢 Organisation ID utilisé:", organizationId);
         }
 
         // Upload vers Cloudflare R2
-        console.log("☁️ Upload vers Cloudflare R2...");
-        console.log("📁 Type de dossier:", folderType);
         const uploadResult = await cloudflareService.uploadImage(
           fileBuffer,
           filename,
@@ -123,8 +106,6 @@ const documentUploadResolvers = {
           folderType,
           organizationId
         );
-
-        console.log("✅ Document uploadé avec succès:", uploadResult.url);
 
         return {
           success: true,

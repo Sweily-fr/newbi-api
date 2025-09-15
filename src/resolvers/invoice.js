@@ -73,7 +73,12 @@ const withWorkspace = (resolver, requiredPermission = "read") => {
  * @param {Object} shipping - Informations de livraison
  * @returns {Object} - Totaux calculés
  */
-const calculateInvoiceTotals = (items, discount = 0, discountType = "FIXED", shipping = null) => {
+const calculateInvoiceTotals = (
+  items,
+  discount = 0,
+  discountType = "FIXED",
+  shipping = null
+) => {
   let totalHT = 0;
   let totalVAT = 0;
 
@@ -99,7 +104,7 @@ const calculateInvoiceTotals = (items, discount = 0, discountType = "FIXED", shi
   if (shipping && shipping.billShipping) {
     const shippingHT = shipping.shippingAmountHT || 0;
     const shippingVAT = shippingHT * (shipping.shippingVatRate / 100);
-    
+
     totalHT += shippingHT;
     totalVAT += shippingVAT;
   }
@@ -269,7 +274,7 @@ const invoiceResolvers = {
       async (_, { workspaceId, prefix, isDraft }, context) => {
         const { user } = context || {};
         if (!user) {
-          throw new Error('User not found in context');
+          throw new Error("User not found in context");
         }
 
         if (isDraft) {
@@ -279,7 +284,7 @@ const invoiceResolvers = {
           return await generateInvoiceNumber(customPrefix, {
             workspaceId: workspaceId,
             isDraft: true,
-            userId: user._id
+            userId: user._id,
           });
         } else {
           // Pour les factures finalisées : générer le prochain numéro séquentiel par workspace
@@ -313,15 +318,6 @@ const invoiceResolvers = {
           throw new Error("Informations d'entreprise non configurées");
         }
 
-        // Debug: Vérifier les données de l'entreprise récupérées
-        console.log("Données entreprise récupérées:", {
-          hasCompany: !!userWithCompany.company,
-          hasBankDetails: !!(
-            userWithCompany.company && userWithCompany.company.bankDetails
-          ),
-          bankDetails: userWithCompany.company?.bankDetails,
-        });
-
         // Utiliser le préfixe fourni ou générer un préfixe par défaut
         const now = new Date();
         const year = now.getFullYear();
@@ -334,44 +330,48 @@ const invoiceResolvers = {
           const conflictingDrafts = await Invoice.find({
             prefix,
             number: newNumber,
-            status: 'DRAFT',
+            status: "DRAFT",
             workspaceId,
-            createdBy: context.user._id
+            createdBy: context.user._id,
           });
-          
+
           // S'il y a des factures en conflit, mettre à jour leur numéro
           for (const draft of conflictingDrafts) {
             // Utiliser le format DRAFT-ID avec timestamp
             const timestamp = Date.now() + Math.floor(Math.random() * 1000);
             const finalDraftNumber = `DRAFT-${newNumber}-${timestamp}`;
-            
+
             // Mettre à jour la facture en brouillon avec le nouveau numéro
-            await Invoice.findByIdAndUpdate(draft._id, { number: finalDraftNumber });
-            console.log(`Facture en brouillon mise à jour avec le numéro ${finalDraftNumber}`);
+            await Invoice.findByIdAndUpdate(draft._id, {
+              number: finalDraftNumber,
+            });
           }
-          
+
           return newNumber;
         };
 
         // Logique de génération des numéros
         let number;
 
-        if (input.status === 'DRAFT') {
+        if (input.status === "DRAFT") {
           // Pour les brouillons : utiliser generateInvoiceNumber avec isDraft: true
-          const currentUser = await mongoose.model('User').findById(context.user._id);
-          const customPrefix = input.prefix || currentUser?.settings?.invoiceNumberPrefix;
+          const currentUser = await mongoose
+            .model("User")
+            .findById(context.user._id);
+          const customPrefix =
+            input.prefix || currentUser?.settings?.invoiceNumberPrefix;
           number = await generateInvoiceNumber(customPrefix, {
             workspaceId,
             isDraft: true,
             userId: context.user._id,
-            manualNumber: input.number // Passer le numéro manuel s'il est fourni
+            manualNumber: input.number, // Passer le numéro manuel s'il est fourni
           });
         } else {
           // Pour les factures finalisées (PENDING/COMPLETED) : numéro séquentiel
           if (input.number) {
             // Gérer les conflits avec les brouillons avant d'assigner le numéro
             await handleDraftConflicts(input.number);
-            
+
             // Vérifier si le numéro fourni existe déjà parmi les factures finalisées
             const existingInvoice = await Invoice.findOne({
               prefix,
@@ -394,10 +394,10 @@ const invoiceResolvers = {
               workspaceId: workspaceId,
               // Plus de numéro manuel pour les factures non-brouillons - numérotation strictement séquentielle
             });
-            
+
             // Gérer les conflits avec les brouillons
             await handleDraftConflicts(sequentialNumber);
-            
+
             number = sequentialNumber;
           }
         }
@@ -458,15 +458,15 @@ const invoiceResolvers = {
             companyInfo: input.companyInfo || userWithCompany.company,
             client: {
               ...input.client,
-              shippingAddress: input.client.hasDifferentShippingAddress 
+              shippingAddress: input.client.hasDifferentShippingAddress
                 ? {
-                  fullName: input.client.shippingAddress?.fullName || '',
-                  street: input.client.shippingAddress?.street || '',
-                  city: input.client.shippingAddress?.city || '',
-                  postalCode: input.client.shippingAddress?.postalCode || '',
-                  country: input.client.shippingAddress?.country || ''
-                }
-                : undefined
+                    fullName: input.client.shippingAddress?.fullName || "",
+                    street: input.client.shippingAddress?.street || "",
+                    city: input.client.shippingAddress?.city || "",
+                    postalCode: input.client.shippingAddress?.postalCode || "",
+                    country: input.client.shippingAddress?.country || "",
+                  }
+                : undefined,
             },
             workspaceId: workspaceId, // ✅ Ajout automatique du workspaceId
             createdBy: user._id, // ✅ Conservé pour audit trail
@@ -479,11 +479,6 @@ const invoiceResolvers = {
           if (invoice.dueDate) {
             try {
               await Event.createInvoiceDueEvent(invoice, user._id, workspaceId);
-              console.log("Événement de calendrier créé pour la facture:", {
-                invoiceId: invoice._id,
-                invoiceNumber: `${invoice.prefix}${invoice.number}`,
-                dueDate: invoice.dueDate,
-              });
             } catch (eventError) {
               console.error(
                 "Erreur lors de la création de l'événement de calendrier:",
@@ -730,17 +725,12 @@ const invoiceResolvers = {
             workspaceId: workspaceId,
             userId: context.user._id,
             isPending: true,
-            year: year
+            year: year,
           });
 
           // Mettre à jour le numéro et le préfixe
           updateData.number = newNumber;
           updateData.prefix = prefix;
-
-          console.log(
-            `🔄 Transition DRAFT->${updatedInput.status}: ` +
-            `Nouveau numéro séquentiel généré: "${newNumber}"`
-          );
         }
 
         // Fusionner toutes les autres mises à jour
@@ -761,9 +751,6 @@ const invoiceResolvers = {
               updatedInput.status &&
               updatedInput.status !== "DRAFT"
             ) {
-              console.log(
-                `⚠️  Ignoré le numéro "${updatedInput[key]}" du frontend car transition DRAFT->PENDING détectée`
-              );
               return; // Skip this field car déjà géré ci-dessus avec un numéro séquentiel
             }
             // Préserver le numéro existant pour les brouillons qui restent en DRAFT
@@ -832,14 +819,6 @@ const invoiceResolvers = {
           if (updatedInvoice.dueDate) {
             try {
               await Event.updateInvoiceEvent(updatedInvoice, user.id);
-              console.log(
-                "Événement de calendrier mis à jour pour la facture:",
-                {
-                  invoiceId: updatedInvoice._id,
-                  invoiceNumber: `${updatedInvoice.prefix}${updatedInvoice.number}`,
-                  dueDate: updatedInvoice.dueDate,
-                }
-              );
             } catch (eventError) {
               console.error(
                 "Erreur lors de la mise à jour de l'événement de calendrier:",
@@ -910,12 +889,8 @@ const invoiceResolvers = {
 
       // Si sourceQuote n'existe pas, chercher le devis qui contient cette facture
       if (!sourceQuoteId) {
-        console.log(
-          `Facture ${invoice.number} sans sourceQuote, recherche du devis lié...`
-        );
         const quote = await Quote.findOne({ linkedInvoices: invoice._id });
         if (quote) {
-          console.log(`Devis trouvé: ${quote.number}`);
           sourceQuoteId = quote._id;
           // Mettre à jour la facture avec le sourceQuote manquant
           invoice.sourceQuote = sourceQuoteId;
@@ -925,9 +900,6 @@ const invoiceResolvers = {
 
       // Supprimer le lien du devis si un devis source a été trouvé
       if (sourceQuoteId) {
-        console.log(
-          `Suppression du lien entre la facture ${invoice.number} et le devis`
-        );
         await Quote.updateOne(
           { _id: sourceQuoteId },
           { $pull: { linkedInvoices: invoice._id } }
@@ -937,10 +909,6 @@ const invoiceResolvers = {
       // Supprimer l'événement de calendrier associé à la facture
       try {
         await Event.deleteInvoiceEvent(invoice._id, user.id);
-        console.log("Événement de calendrier supprimé pour la facture:", {
-          invoiceId: invoice._id,
-          invoiceNumber: `${invoice.prefix}${invoice.number}`,
-        });
       } catch (eventError) {
         console.error(
           "Erreur lors de la suppression de l'événement de calendrier:",
@@ -957,7 +925,6 @@ const invoiceResolvers = {
         workspaceId: workspaceId,
       });
 
-      console.log(`Facture ${invoice.number} supprimée avec succès`);
       return { success: true, message: "Facture supprimée avec succès" };
     }),
 
@@ -1028,10 +995,6 @@ const invoiceResolvers = {
 
         // Si la facture passe de DRAFT à PENDING, générer un nouveau numéro séquentiel
         if (invoice.status === "DRAFT" && status === "PENDING") {
-          console.log(
-            `🔄 Transition DRAFT->PENDING: Ancien numéro "${invoice.number}"`
-          );
-
           // Sauvegarder le numéro original du brouillon
           const originalDraftNumber = invoice.number;
 
@@ -1053,20 +1016,12 @@ const invoiceResolvers = {
             originalDraftNumber: originalDraftNumber, // Passer le numéro original
             workspaceId: workspaceId,
             year: year,
-            currentInvoiceId: invoice._id // Passer l'ID de la facture actuelle
+            currentInvoiceId: invoice._id, // Passer l'ID de la facture actuelle
           });
-
-          console.log(
-            `✅ Numéro généré pour la transition: "${newNumber}"`
-          );
 
           // Mettre à jour le numéro et le préfixe de la facture
           invoice.number = newNumber;
           invoice.prefix = prefix;
-
-          console.log(
-            `🔄 Transition DRAFT->PENDING: Numéro temporaire remplacé par "${newNumber}"`
-          );
         }
 
         invoice.status = status;
@@ -1166,13 +1121,6 @@ const invoiceResolvers = {
         { quoteId, amount, isDeposit, workspaceId },
         { user, workspace }
       ) => {
-        console.log("Création de facture liée - Paramètres reçus:", {
-          quoteId,
-          amount,
-          isDeposit,
-          userId: user.id,
-        });
-
         // Validation et conversion explicite du montant
         const numericAmount = parseFloat(amount);
         if (isNaN(numericAmount) || numericAmount <= 0) {
@@ -1180,11 +1128,6 @@ const invoiceResolvers = {
             amount: "Le montant doit être un nombre positif",
           });
         }
-
-        console.log("Montant converti:", {
-          original: amount,
-          converted: numericAmount,
-        });
 
         // Vérifier que le devis existe et appartient au workspace
         const quote = await Quote.findOne({ _id: quoteId, workspaceId });
@@ -1201,19 +1144,6 @@ const invoiceResolvers = {
             ERROR_CODES.VALIDATION_ERROR
           );
         }
-
-        // Debug: Vérifier les données de l'entreprise dans createLinkedInvoice
-        console.log("Données entreprise dans createLinkedInvoice:", {
-          hasCompany: !!userWithCompany.company,
-          companyName: userWithCompany.company?.name,
-          siret: userWithCompany.company?.siret,
-          vatNumber: userWithCompany.company?.vatNumber,
-          companyStatus: userWithCompany.company?.companyStatus,
-          hasBankDetails: !!(
-            userWithCompany.company && userWithCompany.company.bankDetails
-          ),
-          bankDetails: userWithCompany.company?.bankDetails,
-        });
 
         // Vérifier que le devis est accepté
         if (quote.status !== "COMPLETED") {
@@ -1241,15 +1171,6 @@ const invoiceResolvers = {
             _id: { $in: quote.linkedInvoices },
             workspaceId: workspaceId,
           });
-          console.log(
-            "Factures existantes trouvées:",
-            existingInvoices.map((inv) => ({
-              id: inv._id,
-              number: inv.number,
-              finalTotalTTC: inv.finalTotalTTC,
-              isDeposit: inv.isDeposit,
-            }))
-          );
           totalInvoiced = existingInvoices.reduce(
             (sum, inv) => sum + (inv.finalTotalTTC || 0),
             0
@@ -1266,17 +1187,6 @@ const invoiceResolvers = {
 
         // Vérifier que le montant ne dépasse pas le total du devis
         const remainingAmount = quote.finalTotalTTC - totalInvoiced;
-
-        console.log("Validation du montant:", {
-          quoteFinalTotalTTC: quote.finalTotalTTC,
-          totalInvoiced,
-          remainingAmount,
-          requestedAmount: numericAmount,
-          isDeposit,
-          linkedInvoicesCount: quote.linkedInvoices
-            ? quote.linkedInvoices.length
-            : 0,
-        });
 
         if (numericAmount > remainingAmount) {
           console.error("Erreur de validation - Montant trop élevé:", {
@@ -1331,37 +1241,41 @@ const invoiceResolvers = {
           // S'assurer que les champs SIRET et numéro de TVA sont correctement copiés depuis les informations de l'utilisateur
           companyInfo: {
             // Copier les propriétés de base de l'entreprise
-            name: userWithCompany.company.name || 'Entreprise',
-            email: userWithCompany.company.email || '',
-            phone: userWithCompany.company.phone || '',
-            website: userWithCompany.company.website || '',
+            name: userWithCompany.company.name || "Entreprise",
+            email: userWithCompany.company.email || "",
+            phone: userWithCompany.company.phone || "",
+            website: userWithCompany.company.website || "",
             // S'assurer que l'adresse est correctement définie avec les champs requis
             address: {
-              street: userWithCompany.company.address?.street || '',
-              city: userWithCompany.company.address?.city || '',
-              postalCode: userWithCompany.company.address?.postalCode || '',
-              country: userWithCompany.company.address?.country || 'France'
+              street: userWithCompany.company.address?.street || "",
+              city: userWithCompany.company.address?.city || "",
+              postalCode: userWithCompany.company.address?.postalCode || "",
+              country: userWithCompany.company.address?.country || "France",
             },
             // Copier les propriétés légales au premier niveau comme attendu par le schéma companyInfoSchema
-            siret: userWithCompany.company.siret || '',
-            vatNumber: userWithCompany.company.vatNumber || '',
-            companyStatus: userWithCompany.company.companyStatus || 'AUTRE',
-            transactionCategory: userWithCompany.company.transactionCategory || 'SERVICES',
-            vatPaymentCondition: userWithCompany.company.vatPaymentCondition || 'NONE',
-            capitalSocial: userWithCompany.company.capitalSocial || '',
-            rcs: userWithCompany.company.rcs || '',
+            siret: userWithCompany.company.siret || "",
+            vatNumber: userWithCompany.company.vatNumber || "",
+            companyStatus: userWithCompany.company.companyStatus || "AUTRE",
+            transactionCategory:
+              userWithCompany.company.transactionCategory || "SERVICES",
+            vatPaymentCondition:
+              userWithCompany.company.vatPaymentCondition || "NONE",
+            capitalSocial: userWithCompany.company.capitalSocial || "",
+            rcs: userWithCompany.company.rcs || "",
             // Autres propriétés si nécessaire
-            logo: userWithCompany.company.logo || '',
+            logo: userWithCompany.company.logo || "",
             // Copier les coordonnées bancaires seulement si elles sont complètes
-            ...(userWithCompany.company.bankDetails?.iban && 
-                userWithCompany.company.bankDetails?.bic && 
-                userWithCompany.company.bankDetails?.bankName ? {
-              bankDetails: {
-                iban: userWithCompany.company.bankDetails.iban,
-                bic: userWithCompany.company.bankDetails.bic,
-                bankName: userWithCompany.company.bankDetails.bankName
-              }
-            } : {})
+            ...(userWithCompany.company.bankDetails?.iban &&
+            userWithCompany.company.bankDetails?.bic &&
+            userWithCompany.company.bankDetails?.bankName
+              ? {
+                  bankDetails: {
+                    iban: userWithCompany.company.bankDetails.iban,
+                    bic: userWithCompany.company.bankDetails.bic,
+                    bankName: userWithCompany.company.bankDetails.bankName,
+                  },
+                }
+              : {}),
           },
           sourceQuote: quote._id,
 
@@ -1413,37 +1327,15 @@ const invoiceResolvers = {
           // Forcer le montant exact si nécessaire
           invoice.finalTotalTTC = numericAmount;
         }
-
-        // Debug: Vérifier les coordonnées bancaires avant nettoyage
-        console.log("Coordonnées bancaires avant nettoyage:", {
-          hasBankDetails: !!(
-            invoice.companyInfo && invoice.companyInfo.bankDetails
-          ),
-          bankDetails: invoice.companyInfo?.bankDetails,
-        });
-
         // Nettoyer les coordonnées bancaires si elles sont invalides
         if (invoice.companyInfo && invoice.companyInfo.bankDetails) {
           const { iban, bic, bankName } = invoice.companyInfo.bankDetails;
-          console.log("Vérification des champs bancaires:", {
-            iban: !!iban,
-            bic: !!bic,
-            bankName: !!bankName,
-          });
 
           // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
           if (!iban || !bic || !bankName) {
-            console.log("Suppression des coordonnées bancaires invalides");
             delete invoice.companyInfo.bankDetails;
           }
         }
-
-        console.log("Coordonnées bancaires après nettoyage:", {
-          hasBankDetails: !!(
-            invoice.companyInfo && invoice.companyInfo.bankDetails
-          ),
-          bankDetails: invoice.companyInfo?.bankDetails,
-        });
 
         // Sauvegarder la facture
         await invoice.save();
@@ -1471,35 +1363,16 @@ const invoiceResolvers = {
 
     deleteLinkedInvoice: withWorkspace(
       async (_, { id, workspaceId }, { user }) => {
-        console.log("Tentative de suppression de facture liée:", {
-          invoiceId: id,
-          userId: user.id,
-        });
-
         const invoice = await Invoice.findOne({ _id: id, workspaceId });
 
         if (!invoice) {
-          console.log("Facture non trouvée:", {
-            invoiceId: id,
-            userId: user.id,
-          });
           throw createNotFoundError("Facture liée");
         }
-
-        console.log("Facture trouvée:", {
-          id: invoice._id,
-          number: invoice.number,
-          status: invoice.status,
-          sourceQuote: invoice.sourceQuote,
-          hasSourceQuote: !!invoice.sourceQuote,
-        });
 
         // Vérifier que c'est bien une facture liée à un devis
         let sourceQuoteId = invoice.sourceQuote;
 
         if (!sourceQuoteId) {
-          console.log("Facture sans sourceQuote, recherche dans les devis...");
-
           // Essayer de trouver le devis qui contient cette facture dans ses linkedInvoices
 
           const quoteWithInvoice = await Quote.findOne({
@@ -1508,10 +1381,6 @@ const invoiceResolvers = {
           });
 
           if (quoteWithInvoice) {
-            console.log("Devis source trouvé via linkedInvoices:", {
-              quoteId: quoteWithInvoice._id,
-              quoteNumber: `${quoteWithInvoice.prefix}${quoteWithInvoice.number}`,
-            });
             sourceQuoteId = quoteWithInvoice._id;
 
             // Mettre à jour la facture avec le sourceQuote manquant
@@ -1519,16 +1388,7 @@ const invoiceResolvers = {
               { _id: invoice._id },
               { sourceQuote: sourceQuoteId }
             );
-            console.log("sourceQuote mis à jour pour la facture");
           } else {
-            console.log(
-              "Erreur: Facture sans sourceQuote et non trouvée dans les devis:",
-              {
-                invoiceId: invoice._id,
-                number: invoice.number,
-                purchaseOrderNumber: invoice.purchaseOrderNumber,
-              }
-            );
             throw createValidationError("Facture non liée", {
               invoice: "Cette facture n'est pas liée à un devis",
             });
@@ -1552,22 +1412,8 @@ const invoiceResolvers = {
           { $pull: { linkedInvoices: invoice._id } }
         );
 
-        console.log(
-          "Facture retirée de la liste des factures liées du devis:",
-          {
-            quoteId: sourceQuoteId,
-            invoiceId: invoice._id,
-          }
-        );
-
         // Supprimer la facture
         await Invoice.deleteOne({ _id: id, workspaceId });
-
-        console.log("Facture liée supprimée avec succès:", {
-          invoiceId: id,
-          invoiceNumber: invoice.number,
-          quoteId: sourceQuoteId,
-        });
 
         return true;
       }

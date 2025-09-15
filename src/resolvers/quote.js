@@ -18,7 +18,12 @@ import {
 import { getOrganizationInfo } from "../middlewares/company-info-guard.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
-const calculateQuoteTotals = (items, discount = 0, discountType = "FIXED", shipping = null) => {
+const calculateQuoteTotals = (
+  items,
+  discount = 0,
+  discountType = "FIXED",
+  shipping = null
+) => {
   let totalHT = 0;
   let totalVAT = 0;
 
@@ -43,7 +48,7 @@ const calculateQuoteTotals = (items, discount = 0, discountType = "FIXED", shipp
   if (shipping && shipping.billShipping) {
     const shippingHT = shipping.shippingAmountHT || 0;
     const shippingVAT = shippingHT * (shipping.shippingVatRate / 100);
-    
+
     totalHT += shippingHT;
     totalVAT += shippingVAT;
   }
@@ -99,18 +104,10 @@ const quoteResolvers = {
   },
   Query: {
     quote: isAuthenticated(async (_, { workspaceId, id }, { user }) => {
-      console.log("🔍 [QUOTE RESOLVER] Récupération devis:", {
-        workspaceId,
-        id,
-        userId: user.id,
-      });
       const quote = await Quote.findOne({ _id: id, workspaceId })
         .populate("createdBy")
         .populate("convertedToInvoice");
-      console.log(
-        "📄 [QUOTE RESOLVER] Devis trouvé:",
-        quote ? { id: quote.id, createdBy: quote.createdBy?.id } : "Aucun"
-      );
+
       if (!quote) throw createNotFoundError("Devis");
       return quote;
     }),
@@ -129,11 +126,6 @@ const quoteResolvers = {
         },
         { user }
       ) => {
-        console.log("🔍 [QUOTES RESOLVER] Récupération liste devis:", {
-          workspaceId,
-          userId: user.id,
-          filters: { startDate, endDate, status, search, page, limit },
-        });
         const query = { workspaceId };
 
         if (startDate || endDate) {
@@ -155,10 +147,6 @@ const quoteResolvers = {
 
         const skip = (page - 1) * limit;
         const totalCount = await Quote.countDocuments(query);
-        console.log(
-          "📊 [QUOTES RESOLVER] Nombre total de devis trouvés:",
-          totalCount
-        );
 
         const quotes = await Quote.find(query)
           .populate("createdBy")
@@ -185,10 +173,6 @@ const quoteResolvers = {
     ),
 
     quoteStats: isAuthenticated(async (_, { workspaceId }, { user }) => {
-      console.log("📈 [QUOTE STATS RESOLVER] Récupération statistiques:", {
-        workspaceId,
-        userId: user.id,
-      });
       const [stats] = await Quote.aggregate([
         { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
         {
@@ -235,8 +219,6 @@ const quoteResolvers = {
         },
       ]);
 
-      console.log("Stats from MongoDB:", stats);
-
       // Créer un objet avec des valeurs par défaut
       const defaultStats = {
         totalCount: 0,
@@ -256,11 +238,9 @@ const quoteResolvers = {
             stats[key] = 0;
           }
         });
-        console.log("Processed stats:", stats);
         return stats;
       }
 
-      console.log("Using default stats");
       return defaultStats;
     }),
 
@@ -278,152 +258,153 @@ const quoteResolvers = {
   },
 
   Mutation: {
-    createQuote: isAuthenticated(async (_, { workspaceId, input }, { user }) => {
-      // Utiliser le préfixe fourni ou 'D' par défaut
-      const prefix = input.prefix || 'D';
-      
-      // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
-      // Vérifie tous les numéros existants et trouve le premier trou disponible
-      const forceSequentialNumber = async () => {
-        // Debug: Log des paramètres de recherche
-        console.log('🔍 [DEBUG] forceSequentialNumber - Paramètres de recherche:', {
-          prefix,
-          workspaceId,
-          userId: user.id,
-          status: ['PENDING', 'COMPLETED', 'CANCELED']
-        });
-        
-        // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
-        const officialQuotes = await Quote.find({
-          prefix,
-          status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-          workspaceId,
+    createQuote: isAuthenticated(
+      async (_, { workspaceId, input }, { user }) => {
+        // Utiliser le préfixe fourni ou 'D' par défaut
+        const prefix = input.prefix || "D";
+
+        // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
+        // Vérifie tous les numéros existants et trouve le premier trou disponible
+        const forceSequentialNumber = async () => {
+          // Debug: Log des paramètres de recherche
+
+          // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
+          const officialQuotes = await Quote.find(
+            {
+              prefix,
+              status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+              workspaceId,
+              createdBy: user.id,
+              // Ne considérer que les numéros sans suffixe
+              number: { $regex: /^\d+$/ },
+            },
+            { number: 1 }
+          )
+            .sort({ number: 1 })
+            .lean(); // Tri croissant
+
+          // Si aucun devis officiel n'existe, commencer à 1
+          if (officialQuotes.length === 0) {
+            return "000001";
+          }
+
+          // Convertir les numéros en entiers et trier
+          const numbers = officialQuotes
+            .map((q) => parseInt(q.number, 10))
+            .sort((a, b) => a - b);
+
+          // Prendre le plus grand numéro et ajouter 1
+          const maxNumber = Math.max(...numbers);
+          const nextNumber = maxNumber + 1;
+
+          // Formater avec des zéros à gauche (6 chiffres)
+          return String(nextNumber).padStart(6, "0");
+        };
+
+        // Si le statut est PENDING, vérifier d'abord s'il existe des devis en DRAFT
+        // qui pourraient entrer en conflit avec le numéro qui sera généré
+        const handleDraftConflicts = async (newNumber) => {
+          // Vérifier s'il existe un devis en DRAFT avec le même numéro
+          const conflictingDrafts = await Quote.find({
+            prefix,
+            number: newNumber,
+            status: "DRAFT",
+            workspaceId,
+            createdBy: user.id,
+          });
+
+          // S'il y a des devis en conflit, mettre à jour leur numéro
+          for (const draft of conflictingDrafts) {
+            // Utiliser le format DRAFT-ID avec timestamp
+            const timestamp = Date.now() + Math.floor(Math.random() * 1000);
+            const finalDraftNumber = `DRAFT-${newNumber}-${timestamp}`;
+
+            // Mettre à jour le devis en brouillon avec le nouveau numéro
+            await Quote.findByIdAndUpdate(draft._id, {
+              number: finalDraftNumber,
+            });
+          }
+
+          return newNumber;
+        };
+
+        // Vérifier si c'est le premier devis de l'utilisateur
+        const firstQuote = await Quote.findOne({
           createdBy: user.id,
-          // Ne considérer que les numéros sans suffixe
-          number: { $regex: /^\d+$/ }
-        }, { number: 1 }).sort({ number: 1 }).lean(); // Tri croissant
-        
-        // Si aucun devis officiel n'existe, commencer à 1
-        if (officialQuotes.length === 0) {
-          return '000001';
-        }
-        
-        // Convertir les numéros en entiers et trier
-        const numbers = officialQuotes.map(q => parseInt(q.number, 10)).sort((a, b) => a - b);
-        
-        
-        // Prendre le plus grand numéro et ajouter 1
-        const maxNumber = Math.max(...numbers);
-        const nextNumber = maxNumber + 1;
-        
-        // Formater avec des zéros à gauche (6 chiffres)
-        return String(nextNumber).padStart(6, '0');
-      };
-      
-      // Si le statut est PENDING, vérifier d'abord s'il existe des devis en DRAFT 
-      // qui pourraient entrer en conflit avec le numéro qui sera généré
-      const handleDraftConflicts = async (newNumber) => {
-        // Vérifier s'il existe un devis en DRAFT avec le même numéro
-        const conflictingDrafts = await Quote.find({
-          prefix,
-          number: newNumber,
-          status: 'DRAFT',
-          workspaceId,
-          createdBy: user.id
+          status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
         });
-        
-        // S'il y a des devis en conflit, mettre à jour leur numéro
-        for (const draft of conflictingDrafts) {
-          // Utiliser le format DRAFT-ID avec timestamp
-          const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-          const finalDraftNumber = `DRAFT-${newNumber}-${timestamp}`;
-          
-          // Mettre à jour le devis en brouillon avec le nouveau numéro
-          await Quote.findByIdAndUpdate(draft._id, { number: finalDraftNumber });
-          console.log(`Devis en brouillon mis à jour avec le numéro ${finalDraftNumber}`);
-        }
-        
-        return newNumber;
-      };
-      
-      // Vérifier si c'est le premier devis de l'utilisateur
-      const firstQuote = await Quote.findOne({
-        createdBy: user.id,
-        status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
-      });
-      
-      let number;
-      
-      // Logique de génération du numéro
-      if (input.number && firstQuote === null) {
-        // C'est le premier devis, on peut accepter le numéro fourni
-        // Vérifier que le numéro est valide
-        if (!/^\d{1,6}$/.test(input.number)) {
-          throw new AppError(
-            'Le numéro de devis doit contenir entre 1 et 6 chiffres',
-            ERROR_CODES.VALIDATION_ERROR
-          );
-        }
-        
-        // Pour les brouillons, utiliser generateQuoteNumber pour gérer les conflits
-        if (input.status === 'DRAFT') {
-          number = await generateQuoteNumber(prefix, {
-            isDraft: true,
-            manualNumber: input.number,
-            workspaceId,
-            userId: user.id
-          });
-        } else {
-          // Pour les devis non-brouillons, vérifier l'unicité
-          const existingQuote = await Quote.findOne({ 
-            number: input.number,
-            workspaceId,
-            createdBy: user.id 
-          });
-          
-          if (existingQuote) {
+
+        let number;
+
+        // Logique de génération du numéro
+        if (input.number && firstQuote === null) {
+          // C'est le premier devis, on peut accepter le numéro fourni
+          // Vérifier que le numéro est valide
+          if (!/^\d{1,6}$/.test(input.number)) {
             throw new AppError(
-              'Ce numéro de devis est déjà utilisé',
-              ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER
+              "Le numéro de devis doit contenir entre 1 et 6 chiffres",
+              ERROR_CODES.VALIDATION_ERROR
             );
           }
-          
-          number = input.number;
-        }
-      } else if (input.number) {
-        // Ce n'est pas le premier devis, on ignore le numéro fourni et on en génère un nouveau
-        console.log('Numéro fourni ignoré car ce n\'est pas le premier devis. Génération d\'un numéro séquentiel.');
-        
-        if (input.status === 'PENDING') {
-          number = await forceSequentialNumber();
+
+          // Pour les brouillons, utiliser generateQuoteNumber pour gérer les conflits
+          if (input.status === "DRAFT") {
+            number = await generateQuoteNumber(prefix, {
+              isDraft: true,
+              manualNumber: input.number,
+              workspaceId,
+              userId: user.id,
+            });
+          } else {
+            // Pour les devis non-brouillons, vérifier l'unicité
+            const existingQuote = await Quote.findOne({
+              number: input.number,
+              workspaceId,
+              createdBy: user.id,
+            });
+
+            if (existingQuote) {
+              throw new AppError(
+                "Ce numéro de devis est déjà utilisé",
+                ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER
+              );
+            }
+
+            number = input.number;
+          }
+        } else if (input.number) {
+          // Ce n'est pas le premier devis, on ignore le numéro fourni et on en génère un nouveau
+
+          if (input.status === "PENDING") {
+            number = await forceSequentialNumber();
+          } else {
+            number = await generateQuoteNumber(prefix, { userId: user.id });
+          }
         } else {
-          number = await generateQuoteNumber(prefix, { userId: user.id });
+          // Aucun numéro fourni, on en génère un nouveau
+          if (input.status === "PENDING") {
+            // Pour les devis PENDING, on force un numéro séquentiel
+            number = await forceSequentialNumber();
+          } else {
+            // Pour les brouillons, on génère un numéro standard
+            number = await generateQuoteNumber(prefix, {
+              isDraft: true,
+              workspaceId,
+              userId: user.id,
+            });
+          }
         }
-      } else {
-        // Aucun numéro fourni, on en génère un nouveau
-        if (input.status === 'PENDING') {
-          // Pour les devis PENDING, on force un numéro séquentiel
-          number = await forceSequentialNumber();
-        } else {
-          // Pour les brouillons, on génère un numéro standard
-          number = await generateQuoteNumber(prefix, { 
-            isDraft: true,
-            workspaceId,
-            userId: user.id 
-          });
+
+        // Gérer les conflits avec les devis en DRAFT
+        number = await handleDraftConflicts(number);
+
+        const userWithCompany = await User.findById(user.id).select("company");
+        if (!userWithCompany?.company) {
+          throw new AppError(
+            "Les informations de votre entreprise doivent être configurées avant de créer un devis",
+            ERROR_CODES.COMPANY_INFO_REQUIRED
+          );
         }
-      }
-      
-      // Gérer les conflits avec les devis en DRAFT
-      number = await handleDraftConflicts(number);
-      
-      const userWithCompany = await User.findById(user.id).select('company');
-      if (!userWithCompany?.company) {
-        throw new AppError(
-          'Les informations de votre entreprise doivent être configurées avant de créer un devis',
-          ERROR_CODES.COMPANY_INFO_REQUIRED
-        );
-      }
 
         // Calculer les totaux avec la remise et la livraison
         const totals = calculateQuoteTotals(
@@ -498,20 +479,20 @@ const quoteResolvers = {
           companyInfo: input.companyInfo || userWithCompany.company,
           client: {
             ...input.client,
-            shippingAddress: input.client.hasDifferentShippingAddress 
+            shippingAddress: input.client.hasDifferentShippingAddress
               ? {
-                fullName: input.client.shippingAddress?.fullName || '',
-                street: input.client.shippingAddress?.street || '',
-                city: input.client.shippingAddress?.city || '',
-                postalCode: input.client.shippingAddress?.postalCode || '',
-                country: input.client.shippingAddress?.country || ''
-              }
-              : undefined
+                  fullName: input.client.shippingAddress?.fullName || "",
+                  street: input.client.shippingAddress?.street || "",
+                  city: input.client.shippingAddress?.city || "",
+                  postalCode: input.client.shippingAddress?.postalCode || "",
+                  country: input.client.shippingAddress?.country || "",
+                }
+              : undefined,
           },
           appearance: input.appearance || {
-            textColor: '#000000',
-            headerTextColor: '#ffffff', 
-            headerBgColor: '#1d1d1b'
+            textColor: "#000000",
+            headerTextColor: "#ffffff",
+            headerBgColor: "#1d1d1b",
           },
           createdBy: user.id,
           ...totals, // Ajouter tous les totaux calculés
@@ -656,64 +637,49 @@ const quoteResolvers = {
 
         // ÉTAPE 1 du swap: Si c'est un devis avec suffixe -DRAFT, faire le swap complet
         let finalNumber = originalDraftNumber;
-        
-        console.log(`🔄 [SWAP] Début du processus pour devis ${quote._id} avec numéro: ${originalDraftNumber}`);
-        
-        if (originalDraftNumber.endsWith('-DRAFT')) {
-          const baseNumber = originalDraftNumber.replace('-DRAFT', '');
-          console.log(`🔍 [SWAP] Recherche d'un conflit avec le numéro de base: ${baseNumber}`);
-          
+
+        if (originalDraftNumber.endsWith("-DRAFT")) {
+          const baseNumber = originalDraftNumber.replace("-DRAFT", "");
+
           // Vérifier s'il existe un devis avec le numéro de base
           const searchQuery = {
             number: baseNumber,
             workspaceId: quote.workspaceId,
-            _id: { $ne: quote._id }
+            _id: { $ne: quote._id },
           };
-          console.log(`🔍 [SWAP] Requête de recherche:`, JSON.stringify(searchQuery, null, 2));
-          
+
           const existingQuote = await Quote.findOne(searchQuery);
-          console.log(`🔍 [SWAP] Résultat de la recherche:`, existingQuote ? `Trouvé: ${existingQuote._id} (${existingQuote.number}, ${existingQuote.status})` : 'Aucun devis trouvé');
-          
+
           if (existingQuote) {
             // Vérifier le statut du devis existant
-            if (existingQuote.status === 'DRAFT') {
-              console.log(`⚠️ [SWAP] Conflit avec brouillon ${existingQuote._id} - Swap autorisé`);
-              
+            if (existingQuote.status === "DRAFT") {
               // ÉTAPE 1: 000892 -> TEMP-000892
               const tempNumber1 = `TEMP-${baseNumber}`;
-              console.log(`🔄 [SWAP] ÉTAPE 1: ${existingQuote.number} -> ${tempNumber1}`);
               await Quote.findByIdAndUpdate(existingQuote._id, {
-                number: tempNumber1
+                number: tempNumber1,
               });
-              console.log(`✅ [SWAP] ÉTAPE 1 terminée`);
-              
+
               // ÉTAPE 2: Le devis actuel prend le numéro de base
               finalNumber = baseNumber;
-              console.log(`🔄 [SWAP] ÉTAPE 2: ${originalDraftNumber} -> ${finalNumber}`);
-              
+
               // ÉTAPE 3: TEMP-000892 -> 000892-DRAFT (fait après la sauvegarde)
               // On sauvegarde l'ID pour l'étape 3
               quote._swapQuoteId = existingQuote._id;
               quote._originalDraftNumber = originalDraftNumber;
             } else {
-              console.log(`🚫 [SWAP] Conflit avec devis finalisé ${existingQuote._id} (${existingQuote.status}) - Génération numéro séquentiel`);
-              
               // Générer le prochain numéro séquentiel
               finalNumber = await generateQuoteNumber(prefix, {
                 workspaceId: quote.workspaceId,
                 userId: user.id,
                 year,
-                currentQuoteId: quote._id
+                currentQuoteId: quote._id,
               });
-              console.log(`🔢 [SWAP] Nouveau numéro séquentiel généré: ${finalNumber}`);
             }
           } else {
-            console.log(`✅ [SWAP] Pas de conflit, simple suppression du suffixe -DRAFT`);
             // Pas de conflit, juste enlever le suffixe -DRAFT
             finalNumber = baseNumber;
           }
         } else {
-          console.log(`🔄 [SWAP] Génération d'un nouveau numéro séquentiel pour: ${originalDraftNumber}`);
           // Générer un nouveau numéro séquentiel normal
           finalNumber = await generateQuoteNumber(prefix, {
             isValidatingDraft: true,
@@ -721,40 +687,30 @@ const quoteResolvers = {
             workspaceId: quote.workspaceId,
             userId: user.id,
             year,
-            currentQuoteId: quote._id
+            currentQuoteId: quote._id,
           });
         }
-        
-        console.log(`🎯 [SWAP] Numéro final calculé: ${finalNumber}`);
-
         // Utiliser une stratégie de numéro temporaire pour éviter les erreurs de clé dupliquée
         const tempNumber = `TEMP-${Date.now()}`;
-        console.log(`🔄 [SWAP] Attribution numéro temporaire: ${tempNumber}`);
         quote.number = tempNumber;
         await quote.save();
-        console.log(`✅ [SWAP] Sauvegarde temporaire réussie`);
 
         // Mettre à jour le numéro et le préfixe du devis
-        console.log(`🔄 [SWAP] Attribution numéro final: ${finalNumber}`);
         quote.number = finalNumber;
         quote.prefix = prefix;
-        
+
         try {
           await quote.save();
-          console.log(`✅ [SWAP] Sauvegarde finale réussie avec numéro: ${finalNumber}`);
         } catch (error) {
-          console.error(`❌ [SWAP] ERREUR lors de la sauvegarde finale:`, error.message);
           throw error;
         }
 
         // ÉTAPE 3 du swap: Finaliser le changement TEMP-000892 -> 000892-DRAFT
         if (quote._swapQuoteId && quote._originalDraftNumber) {
-          console.log(`🔄 [SWAP] ÉTAPE 3: ${quote._swapQuoteId} -> ${quote._originalDraftNumber}`);
           await Quote.findByIdAndUpdate(quote._swapQuoteId, {
-            number: quote._originalDraftNumber // 000892-DRAFT
+            number: quote._originalDraftNumber, // 000892-DRAFT
           });
-          console.log(`✅ [SWAP] ÉTAPE 3 terminée`);
-          
+
           // Nettoyer les propriétés temporaires
           delete quote._swapQuoteId;
           delete quote._originalDraftNumber;
@@ -912,7 +868,10 @@ const quoteResolvers = {
         const organization = await getOrganizationInfo(quote.workspaceId);
 
         // Vérifier que le nom de l'entreprise est défini
-        if (!organization.companyName || organization.companyName.trim() === "") {
+        if (
+          !organization.companyName ||
+          organization.companyName.trim() === ""
+        ) {
           throw new AppError(
             "Le nom de votre entreprise doit être défini dans les paramètres de l'organisation avant de créer une facture",
             ERROR_CODES.VALIDATION_ERROR
@@ -921,8 +880,16 @@ const quoteResolvers = {
 
         // Vérifier les informations légales requises selon le statut juridique
         const legalForm = organization.legalForm || "AUTRE";
-        const requiredForVATStatuses = ['SARL', 'SAS', 'EURL', 'SASU', 'SA', 'SNC', 'SCOP'];
-        
+        const requiredForVATStatuses = [
+          "SARL",
+          "SAS",
+          "EURL",
+          "SASU",
+          "SA",
+          "SNC",
+          "SCOP",
+        ];
+
         if (requiredForVATStatuses.includes(legalForm)) {
           if (!organization.vatNumber || organization.vatNumber.trim() === "") {
             throw new AppError(
@@ -931,11 +898,11 @@ const quoteResolvers = {
               {
                 field: "vatNumber",
                 legalForm: legalForm,
-                requiredFields: ["vatNumber"]
+                requiredFields: ["vatNumber"],
               }
             );
           }
-          
+
           if (!organization.siret || organization.siret.trim() === "") {
             throw new AppError(
               `Le numéro SIRET est obligatoire pour le statut juridique "${legalForm}". Veuillez compléter les informations légales de votre entreprise dans les paramètres de l'organisation.`,
@@ -943,7 +910,7 @@ const quoteResolvers = {
               {
                 field: "siret",
                 legalForm: legalForm,
-                requiredFields: ["siret"]
+                requiredFields: ["siret"],
               }
             );
           }
@@ -983,7 +950,7 @@ const quoteResolvers = {
           const number = await generateInvoiceNumber(prefix, {
             isDraft: true, // Les factures créées depuis un devis sont toujours des brouillons
             workspaceId: quote.workspaceId,
-            userId: user.id
+            userId: user.id,
           });
 
           // Calculer les montants en fonction du pourcentage
@@ -1010,36 +977,62 @@ const quoteResolvers = {
             companyInfo: {
               // Priorité aux informations du devis, fallback sur l'organisation
               name: quote.companyInfo?.name || organization.companyName || "",
-              email: quote.companyInfo?.email || organization.companyEmail || "",
-              phone: quote.companyInfo?.phone || organization.companyPhone || "",
+              email:
+                quote.companyInfo?.email || organization.companyEmail || "",
+              phone:
+                quote.companyInfo?.phone || organization.companyPhone || "",
               website: quote.companyInfo?.website || organization.website || "",
               address: {
-                street: quote.companyInfo?.address?.street || organization.addressStreet || "",
-                city: quote.companyInfo?.address?.city || organization.addressCity || "",
-                postalCode: quote.companyInfo?.address?.postalCode || organization.addressZipCode || "",
-                country: quote.companyInfo?.address?.country || organization.addressCountry || "France"
+                street:
+                  quote.companyInfo?.address?.street ||
+                  organization.addressStreet ||
+                  "",
+                city:
+                  quote.companyInfo?.address?.city ||
+                  organization.addressCity ||
+                  "",
+                postalCode:
+                  quote.companyInfo?.address?.postalCode ||
+                  organization.addressZipCode ||
+                  "",
+                country:
+                  quote.companyInfo?.address?.country ||
+                  organization.addressCountry ||
+                  "France",
               },
               // Copier les propriétés légales (priorité au devis, fallback sur l'organisation)
               siret: quote.companyInfo?.siret || organization.siret || "",
-              vatNumber: quote.companyInfo?.vatNumber || organization.vatNumber || "",
-              companyStatus: quote.companyInfo?.companyStatus || organization.legalForm || "AUTRE",
+              vatNumber:
+                quote.companyInfo?.vatNumber || organization.vatNumber || "",
+              companyStatus:
+                quote.companyInfo?.companyStatus ||
+                organization.legalForm ||
+                "AUTRE",
               // Autres propriétés
               logo: quote.companyInfo?.logo || organization.logo || "",
               // Copier les coordonnées bancaires du devis en priorité, sinon de l'organisation
               // Ne pas inclure bankDetails si les informations sont incomplètes
-              ...(quote.companyInfo?.bankDetails?.iban && quote.companyInfo?.bankDetails?.bic && quote.companyInfo?.bankDetails?.bankName ? {
-                bankDetails: {
-                  iban: quote.companyInfo.bankDetails.iban,
-                  bic: quote.companyInfo.bankDetails.bic,
-                  bankName: quote.companyInfo.bankDetails.bankName
-                }
-              } : (organization.bankIban && organization.bankBic && organization.bankName) ? {
-                bankDetails: {
-                  iban: organization.bankIban,
-                  bic: organization.bankBic,
-                  bankName: organization.bankName
-                }
-              } : {}),
+              ...(quote.companyInfo?.bankDetails?.iban &&
+              quote.companyInfo?.bankDetails?.bic &&
+              quote.companyInfo?.bankDetails?.bankName
+                ? {
+                    bankDetails: {
+                      iban: quote.companyInfo.bankDetails.iban,
+                      bic: quote.companyInfo.bankDetails.bic,
+                      bankName: quote.companyInfo.bankDetails.bankName,
+                    },
+                  }
+                : organization.bankIban &&
+                  organization.bankBic &&
+                  organization.bankName
+                ? {
+                    bankDetails: {
+                      iban: organization.bankIban,
+                      bic: organization.bankBic,
+                      bankName: organization.bankName,
+                    },
+                  }
+                : {}),
               // Copier les autres champs du devis s'ils existent
               transactionCategory: quote.companyInfo?.transactionCategory,
               vatPaymentCondition: quote.companyInfo?.vatPaymentCondition,

@@ -151,12 +151,6 @@ const stripeConnectResolvers = {
           };
         }
 
-        // Vérifier que le paiement est requis et n'a pas déjà été effectué
-        console.log("Vérification du paiement:", {
-          isPaymentRequired: fileTransfer.isPaymentRequired,
-          isPaid: fileTransfer.isPaid,
-        });
-
         if (!fileTransfer.isPaymentRequired || fileTransfer.isPaid) {
           return {
             success: false,
