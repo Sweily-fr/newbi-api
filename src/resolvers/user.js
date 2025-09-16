@@ -1010,9 +1010,11 @@ const userResolvers = {
           logoUrl: logoUrl
         });
 
-        // Retourner l'utilisateur avec les informations mises à jour
-        const updatedUser = await User.findById(user.id);
-        return updatedUser;
+        // Retourner un objet de succès
+        return {
+          success: true,
+          message: 'Logo mis à jour avec succès'
+        };
       } catch (error) {
         console.error('Erreur mise à jour logo:', error);
         throw new AppError(
