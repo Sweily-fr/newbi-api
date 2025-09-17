@@ -2,7 +2,7 @@ import CreditNote from '../models/CreditNote.js';
 import Invoice from '../models/Invoice.js';
 import User from '../models/User.js';
 import Event from '../models/Event.js';
-import { isAuthenticated } from '../middlewares/better-auth.js';
+import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
 import { requireCompanyInfo } from '../middlewares/company-info-guard.js';
 import { generateCreditNoteNumber } from '../utils/documentNumbers.js';
 import mongoose from 'mongoose';

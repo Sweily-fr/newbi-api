@@ -1,7 +1,7 @@
 import Client from '../models/Client.js';
 import Invoice from '../models/Invoice.js';
 import Quote from '../models/Quote.js';
-import { isAuthenticated, withWorkspace } from '../middlewares/better-auth.js';
+import { isAuthenticated, withWorkspace } from '../middlewares/better-auth-jwt.js';
 import { 
   createNotFoundError, 
   createAlreadyExistsError,

@@ -22,8 +22,6 @@ const extractSessionToken = (cookieHeader) => {
   return null;
 };
 
-
-
 /**
  * Valide une session better-auth via l'API du frontend
  * @param {Object} headers - Headers de la requête
@@ -145,19 +143,17 @@ const withWorkspace = (resolver) => {
     }
 
     // Extraire le workspaceId depuis les headers ou les arguments
-    let workspaceId = args.workspaceId || context.req?.headers['x-workspace-id'];
-    
+    let workspaceId =
+      args.workspaceId || context.req?.headers["x-workspace-id"];
+
     if (!workspaceId) {
-      throw new AppError(
-        "WorkspaceId requis",
-        ERROR_CODES.VALIDATION_ERROR
-      );
+      throw new AppError("WorkspaceId requis", ERROR_CODES.VALIDATION_ERROR);
     }
 
     // Ajouter le workspaceId au contexte
     const enhancedContext = {
       ...context,
-      workspaceId
+      workspaceId,
     };
 
     return resolver(parent, args, enhancedContext, info);
