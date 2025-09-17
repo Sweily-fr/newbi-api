@@ -1,7 +1,7 @@
 // resolvers/kanban.js
 import { Board, Column, Task } from '../models/kanban.js';
 import { AuthenticationError } from 'apollo-server-express';
-import { withWorkspace } from '../middlewares/better-auth.js';
+import { withWorkspace } from '../middlewares/better-auth-jwt.js';
 
 const resolvers = {
   Query: {

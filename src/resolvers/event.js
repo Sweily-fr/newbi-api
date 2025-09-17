@@ -1,6 +1,6 @@
 import Event from '../models/Event.js';
 import Invoice from '../models/Invoice.js';
-import { isAuthenticated, withWorkspace } from '../middlewares/better-auth.js';
+import { isAuthenticated, withWorkspace } from '../middlewares/better-auth-jwt.js';
 
 const eventResolvers = {
   Event: {
