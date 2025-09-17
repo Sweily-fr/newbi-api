@@ -4,6 +4,7 @@
 
 import cron from 'node-cron';
 import { cleanupExpiredFiles } from './cleanupExpiredFiles.js';
+import { processScheduledReferrals } from './processScheduledReferrals.js';
 import logger from '../utils/logger.js';
 
 /**
@@ -18,6 +19,16 @@ function setupScheduledJobs() {
       await cleanupExpiredFiles();
     } catch (error) {
       logger.error('Erreur lors de l\'exécution du job de nettoyage:', error);
+    }
+  });
+
+  // Job de traitement des paiements de parrainage programmés - s'exécute toutes les heures
+  cron.schedule('0 * * * *', async () => {
+    try {
+      logger.info('Exécution du job de traitement des paiements de parrainage programmés');
+      await processScheduledReferrals();
+    } catch (error) {
+      logger.error('Erreur lors de l\'exécution du job de parrainage:', error);
     }
   });
   

@@ -22,6 +22,7 @@ import documentUploadResolvers from "./documentUpload.js";
 import ocrResolvers from "./ocr.js";
 import eventResolvers from "./event.js";
 import bankingResolvers from "./banking.js";
+import referralResolvers from "./referral.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -48,6 +49,7 @@ const resolvers = mergeResolvers([
   ocrResolvers,
   eventResolvers,
   bankingResolvers,
+  referralResolvers,
 ]);
 
 export default resolvers;

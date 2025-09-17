@@ -1,7 +1,11 @@
-import Stripe from "stripe";
+import dotenv from 'dotenv';
+dotenv.config();
+
+import Stripe from 'stripe';
+import logger from '../utils/logger.js';
+import StripeConnectAccount from '../models/StripeConnectAccount.js';
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-import StripeConnectAccount from "../models/StripeConnectAccount.js";
-import logger from "../utils/logger.js";
 
 /**
  * Service pour gérer les interactions avec Stripe Connect
@@ -230,6 +234,84 @@ const stripeConnectService = {
       };
     }
   },
+
+  /**
+   * Effectue un virement depuis le solde Stripe de Newbi vers un compte Stripe Connect
+   * @param {string} accountId - ID du compte Stripe Connect destinataire
+   * @param {number} amount - Montant en centimes
+   * @param {string} currency - Devise (ex: 'eur')
+   * @param {Object} metadata - Métadonnées du transfert
+   * @returns {Promise<Object>} - Résultat du transfert
+   */
+  async transferToStripeConnect(accountId, amount, currency = 'eur', metadata = {}) {
+    try {
+      // Vérifier si le compte existe et peut recevoir des paiements
+      const account = await StripeConnectAccount.findOne({ accountId });
+      if (!account || !account.payoutsEnabled) {
+        return {
+          success: false,
+          error: "Le compte Stripe Connect n'est pas configuré pour recevoir des virements"
+        };
+      }
+
+      // Effectuer le virement depuis le solde Stripe de Newbi vers le compte Connect
+      // Utiliser un transfer avec source_transaction pour débiter le compte principal
+      const transfer = await stripe.transfers.create({
+        amount: amount,
+        currency: currency,
+        destination: accountId,
+        description: metadata.description || 'Paiement de parrainage Newbi',
+        metadata: {
+          ...metadata,
+          source: 'newbi_referral_payout',
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      logger.info('✅ Virement de parrainage effectué depuis le solde Newbi', {
+        transferId: transfer.id,
+        accountId,
+        amount: amount / 100, // Afficher en euros
+        currency,
+        description: transfer.description
+      });
+
+      return {
+        success: true,
+        transferId: transfer.id,
+        amount: transfer.amount,
+        currency: transfer.currency,
+        destination: transfer.destination,
+        description: transfer.description
+      };
+
+    } catch (error) {
+      logger.error('❌ Erreur lors du virement de parrainage depuis Newbi:', error);
+      
+      // Messages d'erreur plus spécifiques
+      let errorMessage = error.message;
+      if (error.code === 'insufficient_funds') {
+        errorMessage = 'Solde insuffisant sur le compte Stripe de Newbi pour effectuer le virement';
+      } else if (error.code === 'account_invalid') {
+        errorMessage = 'Compte Stripe Connect destinataire invalide ou non configuré';
+      }
+      
+      return {
+        success: false,
+        error: errorMessage,
+        stripeError: error.code
+      };
+    }
+  }
 };
 
 export default stripeConnectService;
+
+// Export des fonctions individuelles pour faciliter l'import
+export const {
+  createConnectAccount,
+  generateOnboardingLink,
+  checkAccountStatus,
+  createPaymentSession,
+  transferToStripeConnect
+} = stripeConnectService;

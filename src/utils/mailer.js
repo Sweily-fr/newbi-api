@@ -2,11 +2,15 @@ import nodemailer from "nodemailer";
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
+  port: parseInt(process.env.SMTP_PORT),
+  secure: false, // true for 465, false for other ports
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  tls: {
+    rejectUnauthorized: false
+  }
 });
 
 const sendPasswordResetEmail = async (email, resetToken) => {
@@ -625,9 +629,230 @@ const formatFileSize = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 };
 
+const sendReferralThankYouEmail = async (referrer, referredUser, payoutAmount) => {
+  const dashboardLink = `${process.env.FRONTEND_URL}/dashboard`;
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: referrer.email,
+    subject: "🎉 Félicitations ! Votre parrainage vous a rapporté 50€ - Newbi",
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Parrainage réussi - Newbi</title>
+        <style>
+          body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f0eeff;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+          }
+          .header {
+            text-align: center;
+            padding: 20px 0;
+            border-bottom: 1px solid #e5e7eb;
+          }
+          .content {
+            padding: 30px 20px;
+          }
+          h1 {
+            color: #1f2937;
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            text-align: center;
+          }
+          p {
+            margin-bottom: 16px;
+            color: #4b5563;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #5b50ff;
+            color: white;
+            font-weight: 600;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            margin: 20px 0;
+            text-align: center;
+          }
+          .btn:hover {
+            background-color: #4a41e0;
+          }
+          .celebration-box {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            margin: 25px 0;
+          }
+          .celebration-box h2 {
+            margin: 0 0 10px 0;
+            font-size: 24px;
+            font-weight: 800;
+          }
+          .celebration-box .amount {
+            font-size: 36px;
+            font-weight: 900;
+            margin: 10px 0;
+          }
+          .referral-info {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+          }
+          .referral-info h3 {
+            margin-top: 0;
+            color: #374151;
+            font-size: 18px;
+          }
+          .referral-stats {
+            display: flex;
+            justify-content: space-between;
+            background-color: #e6e1ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+          }
+          .stat-item {
+            text-align: center;
+            flex: 1;
+          }
+          .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #5b50ff;
+          }
+          .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .footer {
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+            font-size: 14px;
+            border-top: 1px solid #e5e7eb;
+          }
+          .emoji {
+            font-size: 24px;
+            margin: 0 5px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 200px; height: auto;">
+          </div>
+          
+          <div class="content">
+            <h1>🎉 Parrainage réussi !</h1>
+            
+            <div class="celebration-box">
+              <h2>Félicitations ${referrer.firstName || referrer.email} !</h2>
+              <div class="amount">+${payoutAmount}€</div>
+              <p style="margin: 0; font-size: 16px; opacity: 0.9;">
+                viennent d'être versés sur votre compte Stripe Connect
+              </p>
+            </div>
+            
+            <p>Excellente nouvelle ! Votre filleul <strong>${referredUser.email}</strong> vient de souscrire à un abonnement annuel Newbi.</p>
+            
+            <div class="referral-info">
+              <h3>📊 Détails du parrainage</h3>
+              <p><strong>Filleul :</strong> ${referredUser.email}</p>
+              <p><strong>Date de souscription :</strong> ${new Date().toLocaleDateString('fr-FR', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })}</p>
+              <p><strong>Récompense :</strong> ${payoutAmount}€</p>
+              <p><strong>Statut :</strong> <span style="color: #f59e0b; font-weight: 600;">⏳ Programmé</span></p>
+            </div>
+            
+            <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 15px; margin: 20px 0;">
+              <h4 style="margin-top: 0; color: #92400e; font-size: 16px;">⏰ Délai de paiement</h4>
+              <p style="margin-bottom: 0; color: #92400e;">
+                Pour des raisons de sécurité financière, votre récompense de <strong>${payoutAmount}€</strong> sera versée sur votre compte Stripe Connect dans <strong>7 jours</strong>, soit le <strong>${new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' })}</strong>.
+              </p>
+            </div>
+            
+            <p>🚀 <strong>Continuez à parrainer !</strong> Chaque nouveau filleul qui souscrit à un abonnement annuel vous rapporte ${payoutAmount}€. Il n'y a pas de limite au nombre de parrainages que vous pouvez effectuer.</p>
+            
+            <div style="text-align: center;">
+              <a href="${dashboardLink}" class="btn">Voir mon tableau de bord</a>
+            </div>
+            
+            <div class="referral-stats">
+              <div class="stat-item">
+                <div class="stat-value">⏰</div>
+                <div class="stat-label">Paiement dans 7 jours</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">♾️</div>
+                <div class="stat-label">Parrainages illimités</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">🎯</div>
+                <div class="stat-label">50€ par filleul</div>
+              </div>
+            </div>
+            
+            <p style="font-size: 14px; color: #6b7280; text-align: center;">
+              <strong>Comment ça marche ?</strong><br>
+              Partagez votre lien de parrainage → Votre filleul s'inscrit → Il souscrit à un abonnement annuel → Vous recevez 50€ !
+            </p>
+            
+            <p>Merci de faire confiance à Newbi et de nous aider à grandir ! <span class="emoji">🙏</span></p>
+          </div>
+          
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
+            <p>Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
+            <p>Questions ? Contactez-nous à <a href="mailto:support@newbi.fr">support@newbi.fr</a></p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("Erreur lors de l'envoi de l'email de remerciement parrainage:", error);
+    return false;
+  }
+};
+
 export {
   sendPasswordResetEmail,
   sendVerificationEmail,
   sendPasswordResetConfirmationEmail,
-  sendFileTransferEmail
+  sendFileTransferEmail,
+  sendReferralThankYouEmail
 };

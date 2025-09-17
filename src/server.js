@@ -88,6 +88,7 @@ async function startServer() {
     "https://www.newbi.fr",
     "https://newbi.fr",
     "https://api.newbi.fr",
+    "https://newbi-v2.vercel.app",
     process.env.FRONTEND_URL,
   ].filter(Boolean);
 

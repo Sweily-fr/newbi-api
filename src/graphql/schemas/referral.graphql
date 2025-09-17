@@ -1,0 +1,27 @@
+type ReferralResponse {
+  success: Boolean!
+  message: String!
+  referralCode: String
+}
+
+type ReferralPaymentResponse {
+  success: Boolean!
+  message: String!
+  transferId: String
+}
+
+type ReferralStats {
+  totalReferrals: Int!
+  activeReferrals: Int!
+  totalEarnings: Float!
+  referralCode: String
+}
+
+extend type Mutation {
+  generateReferralCode: ReferralResponse!
+  processReferralPayment(referralId: ID!, amount: Float!): ReferralPaymentResponse!
+}
+
+extend type Query {
+  getReferralStats: ReferralStats!
+}

@@ -1,0 +1,39 @@
+type ReferralResponse {
+  success: Boolean!
+  message: String!
+  referralCode: String
+  referralLink: String
+}
+
+type ReferralPaymentResponse {
+  success: Boolean!
+  message: String!
+  transferId: String
+}
+
+type ReferralStats {
+  totalReferrals: Int!
+  activeReferrals: Int!
+  totalEarnings: Float!
+  pendingEarnings: Float!
+  referralCode: String
+}
+
+type StripeConnectStatusResponse {
+  success: Boolean!
+  message: String!
+  isConnected: Boolean!
+  canReceivePayments: Boolean!
+  onboardingUrl: String
+}
+
+extend type Mutation {
+  generateReferralCode: ReferralResponse!
+  generateReferralLink: ReferralResponse!
+  processReferralPayment(referralId: ID!, amount: Float!): ReferralPaymentResponse!
+  checkStripeConnectForReferral: StripeConnectStatusResponse!
+}
+
+extend type Query {
+  getReferralStats: ReferralStats!
+}
