@@ -15,7 +15,7 @@ const __dirname = path.dirname(__filename);
 
 // Configuration du client Apollo
 const httpLink = createUploadLink({
-  uri: process.env.API_URL || 'http://localhost:4000/graphql',
+  uri: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/graphql',
   fetch,
   headers: {
     // Ajouter ici les en-têtes d'authentification si nécessaire
