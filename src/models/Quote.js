@@ -303,31 +303,53 @@ quoteSchema.pre('save', function(next) {
   next();
 });
 
-// Création d'un index composé pour garantir l'unicité des numéros de devis par année
-// Cela permet de réutiliser les numéros d'une année à l'autre
+// Ajout d'un champ virtuel pour l'année d'émission
+quoteSchema.virtual('issueYear').get(function() {
+  return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+});
+
+// Middleware pre-save pour définir l'année d'émission
+quoteSchema.pre('save', function(next) {
+  if (this.issueDate) {
+    this.issueYear = this.issueDate.getFullYear();
+  } else {
+    this.issueYear = new Date().getFullYear();
+  }
+  next();
+});
+
+// Ajout du champ issueYear au schéma pour l'index
+quoteSchema.add({
+  issueYear: {
+    type: Number,
+    default: function() {
+      return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+    },
+    index: true
+  }
+});
+
+// Création d'un index composé pour garantir l'unicité des numéros de devis par année et organisation
+// Cela permet de réutiliser les numéros d'une année à l'autre et d'avoir les mêmes numéros dans différentes organisations
 quoteSchema.index(
-  { 
+  {
     number: 1,
-    createdBy: 1,
-    // Utilisation de l'opérateur $year pour extraire l'année de la date d'émission
-    // Cela permet d'avoir un numéro unique par année pour chaque utilisateur
+    workspaceId: 1,
+    issueYear: 1
   },
   { 
     unique: true,
     partialFilterExpression: { number: { $exists: true } }, // Ignorer les documents sans numéro
-    name: 'number_createdBy_year_unique' 
+    name: 'number_workspaceId_year_unique' 
   }
 );
 
-// Ajout d'une méthode statique pour vérifier si un numéro existe déjà pour une année donnée
-quoteSchema.statics.numberExistsForYear = async function(number, userId, year) {
-  const startDate = new Date(year, 0, 1); // 1er janvier de l'année
-  const endDate = new Date(year, 11, 31, 23, 59, 59); // 31 décembre de l'année
-  
+// Ajout d'une méthode statique pour vérifier si un numéro existe déjà pour une année donnée dans une organisation
+quoteSchema.statics.numberExistsForYear = async function(number, workspaceId, year) {
   const count = await this.countDocuments({
     number,
-    createdBy: userId,
-    issueDate: { $gte: startDate, $lte: endDate }
+    workspaceId,
+    issueYear: year
   });
   
   return count > 0;

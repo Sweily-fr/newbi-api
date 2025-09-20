@@ -302,32 +302,56 @@ creditNoteSchema.index({ workspaceId: 1, originalInvoice: 1 });
 creditNoteSchema.index({ createdBy: 1 });
 creditNoteSchema.index({ issueDate: -1 });
 
-// Index composé pour garantir l'unicité des numéros d'avoir par année
+// Ajout d'un champ virtuel pour l'année d'émission
+creditNoteSchema.virtual('issueYear').get(function() {
+  return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+});
+
+// Middleware pre-save pour définir l'année d'émission
+creditNoteSchema.pre('save', function(next) {
+  if (this.issueDate) {
+    this.issueYear = this.issueDate.getFullYear();
+  } else {
+    this.issueYear = new Date().getFullYear();
+  }
+  next();
+});
+
+// Ajout du champ issueYear au schéma pour l'index
+creditNoteSchema.add({
+  issueYear: {
+    type: Number,
+    default: function() {
+      return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+    },
+    index: true
+  }
+});
+
+// Index composé pour garantir l'unicité des numéros d'avoir par année et organisation
 creditNoteSchema.index(
   {
     number: 1,
-    createdBy: 1,
+    workspaceId: 1,
+    issueYear: 1
   },
   {
     unique: true,
     partialFilterExpression: { number: { $exists: true } },
-    name: "creditnote_number_createdBy_year_unique",
+    name: "creditnote_number_workspaceId_year_unique",
   }
 );
 
-// Méthode statique pour vérifier si un numéro existe déjà pour une année donnée
+// Méthode statique pour vérifier si un numéro existe déjà pour une année donnée dans une organisation
 creditNoteSchema.statics.numberExistsForYear = async function (
   number,
-  userId,
+  workspaceId,
   year
 ) {
-  const startDate = new Date(year, 0, 1);
-  const endDate = new Date(year, 11, 31, 23, 59, 59);
-
   const count = await this.countDocuments({
     number,
-    createdBy: userId,
-    issueDate: { $gte: startDate, $lte: endDate },
+    workspaceId,
+    issueYear: year,
   });
 
   return count > 0;
