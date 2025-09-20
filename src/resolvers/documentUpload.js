@@ -13,8 +13,10 @@ const documentUploadResolvers = {
     /**
      * Upload un document vers Cloudflare R2
      */
-    uploadDocument: async (_, { file }, { user }) => {
+    uploadDocument: async (_, { file, folderType }, { user }) => {
       try {
+        console.log('🚀 DocumentUpload - Début upload avec folderType:', folderType);
+        
         // Vérifier l'authentification
         if (!user) {
           throw new Error("Utilisateur non authentifié");
@@ -60,31 +62,34 @@ const documentUploadResolvers = {
           );
         }
 
-        // Déterminer le type de dossier selon le nom du fichier
-        let folderType = "documents"; // Type par défaut
+        // Déterminer le type de dossier
+        let finalFolderType = folderType || "documents"; // Utiliser le paramètre fourni ou "documents" par défaut
 
-        // Détecter les logos d'entreprise par le nom du fichier
-        const isCompanyLogo =
-          filename.toLowerCase().includes("logo") ||
-          filename.toLowerCase().includes("company") ||
-          filename.toLowerCase().includes("entreprise");
+        // Si aucun folderType n'est fourni, utiliser la logique de détection automatique
+        if (!folderType) {
+          // Détecter les logos d'entreprise par le nom du fichier
+          const isCompanyLogo =
+            filename.toLowerCase().includes("logo") ||
+            filename.toLowerCase().includes("company") ||
+            filename.toLowerCase().includes("entreprise");
 
-        // Si c'est une image ET que le nom contient des mots-clés de logo
-        const isImage = [
-          "image/jpeg",
-          "image/jpg",
-          "image/png",
-          "image/webp",
-        ].includes(mimetype);
+          // Si c'est une image ET que le nom contient des mots-clés de logo
+          const isImage = [
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp",
+          ].includes(mimetype);
 
-        if (isImage && isCompanyLogo) {
-          folderType = "imgCompany";
+          if (isImage && isCompanyLogo) {
+            finalFolderType = "imgCompany";
+          }
         }
 
         // Récupérer l'ID de l'organisation de l'utilisateur
         let organizationId = null;
 
-        if (folderType === "imgCompany") {
+        if (finalFolderType === "imgCompany") {
           // Essayer différentes propriétés pour l'organizationId
           organizationId =
             user.organizationId ||
@@ -99,11 +104,12 @@ const documentUploadResolvers = {
         }
 
         // Upload vers Cloudflare R2
+        console.log('📤 DocumentUpload - Appel cloudflareService avec finalFolderType:', finalFolderType);
         const uploadResult = await cloudflareService.uploadImage(
           fileBuffer,
           filename,
           user.id,
-          folderType,
+          finalFolderType,
           organizationId
         );
 

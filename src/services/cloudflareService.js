@@ -31,6 +31,10 @@ class CloudflareService {
 
     this.bucketName = process.env.IMAGE_BUCKET_NAME;
     this.publicUrl = process.env.IMAGE_PUBLIC_URL; // URL publique de votre domaine custom
+    
+    // Configuration spécifique pour l'OCR
+    this.ocrBucketName = process.env.IMAGE_OCR_BUCKET_NAME;
+    this.ocrPublicUrl = process.env.IMAGE_OCR_PUBLIC_URL;
 
     if (!this.bucketName) {
       console.error("❌ ERREUR: IMAGE_BUCKET_NAME n'est pas définie!");
@@ -63,12 +67,52 @@ class CloudflareService {
    * @param {string} imageType - Type d'image ('profile' ou 'company')
    * @returns {Promise<{key: string, url: string}>}
    */
-  async uploadImage(fileBuffer, fileName, userId, imageType = "profile") {
+  async uploadImage(fileBuffer, fileName, userId, imageType = "profile", organizationId = null) {
     try {
       // Générer une clé unique pour l'image
       const fileExtension = path.extname(fileName).toLowerCase();
       const uniqueId = crypto.randomUUID();
-      const key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
+      
+      // Déterminer le chemin selon le type de fichier
+      console.log('🔍 CloudflareService - imageType reçu:', imageType);
+      let key;
+      switch (imageType) {
+        case 'ocr': {
+          // Pour les reçus OCR, fichier directement dans le compartiment OCR
+          key = `${uniqueId}${fileExtension}`;
+          break;
+        }
+        case 'imgCompany': {
+          // Pour les logos d'entreprise
+          const orgId = organizationId || userId;
+          key = `signatures/${orgId}/company/${uniqueId}${fileExtension}`;
+          break;
+        }
+        case 'documents': {
+          // Pour les documents généraux
+          key = `documents/${userId}/${uniqueId}${fileExtension}`;
+          break;
+        }
+        default: {
+          // Pour les profils et autres (comportement par défaut)
+          key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
+          break;
+        }
+      }
+
+      console.log('📁 CloudflareService - Clé générée:', key);
+
+      // Déterminer le bucket et l'URL publique selon le type
+      let targetBucket, targetPublicUrl;
+      if (imageType === 'ocr') {
+        targetBucket = this.ocrBucketName || this.bucketName;
+        targetPublicUrl = this.ocrPublicUrl || this.publicUrl;
+        console.log('🪣 CloudflareService - Utilisation bucket OCR:', targetBucket);
+      } else {
+        targetBucket = this.bucketName;
+        targetPublicUrl = this.publicUrl;
+        console.log('🪣 CloudflareService - Utilisation bucket standard:', targetBucket);
+      }
 
       // Déterminer le content-type
       const contentType = this.getContentType(fileExtension);
@@ -78,7 +122,7 @@ class CloudflareService {
 
       // Commande d'upload
       const command = new PutObjectCommand({
-        Bucket: this.bucketName,
+        Bucket: targetBucket,
         Key: key,
         Body: fileBuffer,
         ContentType: contentType,
@@ -97,10 +141,13 @@ class CloudflareService {
 
       // Utilisation directe des URLs publiques Cloudflare R2
       if (
-        this.publicUrl &&
-        this.publicUrl !== "https://your_image_bucket_public_url"
+        targetPublicUrl &&
+        targetPublicUrl !== "https://your_image_bucket_public_url"
       ) {
-        imageUrl = `${this.publicUrl}/${key}`;
+        // Éviter les doubles barres obliques
+        const cleanUrl = targetPublicUrl.endsWith('/') ? targetPublicUrl.slice(0, -1) : targetPublicUrl;
+        imageUrl = `${cleanUrl}/${key}`;
+        console.log('🌐 CloudflareService - URL générée:', imageUrl);
       } else {
         // Fallback sur le proxy backend si pas d'URL publique configurée
 

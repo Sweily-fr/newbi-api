@@ -1,5 +1,5 @@
 """
-Types GraphQL pour l'upload de documents vers Cloudflare
+Types GraphQL pour l'upload de documents vers Cloudflare R2
 """
 
 type DocumentUploadResult {
@@ -23,6 +23,7 @@ extend type Mutation {
   """
   uploadDocument(
     file: Upload!
+    folderType: String
   ): DocumentUploadResult!
   
   """
