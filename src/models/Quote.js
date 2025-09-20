@@ -248,11 +248,8 @@ const quoteSchema = new mongoose.Schema({
 quoteSchema.index({ workspaceId: 1, 'client.name': 1 });
 quoteSchema.index({ workspaceId: 1, status: 1 });
 quoteSchema.index({ workspaceId: 1, issueDate: -1 });
-// Index unique pour garantir l'unicité des numéros de devis par workspace
-quoteSchema.index({ workspaceId: 1, number: 1 }, { unique: true });
-// Index legacy pour la migration
+// Index legacy pour la migration et audit trail
 quoteSchema.index({ createdBy: 1 });
-quoteSchema.index({ number: 1, createdBy: 1 });
 
 /**
  * Calcul automatique des totaux avant sauvegarde

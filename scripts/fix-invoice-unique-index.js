@@ -45,9 +45,21 @@ async function fixDocumentUniqueIndexes() {
     
     // Collections à traiter
     const collections = [
-      { name: 'invoices', oldIndex: 'number_createdBy_year_unique', newIndex: 'number_workspaceId_year_unique' },
-      { name: 'creditnotes', oldIndex: 'creditnote_number_createdBy_year_unique', newIndex: 'creditnote_number_workspaceId_year_unique' },
-      { name: 'quotes', oldIndex: 'number_createdBy_year_unique', newIndex: 'number_workspaceId_year_unique' }
+      { 
+        name: 'invoices', 
+        oldIndexes: ['number_createdBy_year_unique'], 
+        newIndex: 'number_workspaceId_year_unique' 
+      },
+      { 
+        name: 'creditnotes', 
+        oldIndexes: ['creditnote_number_createdBy_year_unique'], 
+        newIndex: 'creditnote_number_workspaceId_year_unique' 
+      },
+      { 
+        name: 'quotes', 
+        oldIndexes: ['number_createdBy_year_unique', 'number_1_createdBy_1'], 
+        newIndex: 'number_workspaceId_year_unique' 
+      }
     ];
 
     for (const collectionInfo of collections) {
@@ -65,23 +77,25 @@ async function fixDocumentUniqueIndexes() {
       const indexes = await collection.indexes();
       console.log('Index existants:', indexes.map(idx => ({ name: idx.name, key: idx.key })));
 
-      // Vérifier si l'ancien index existe
-      const oldIndexExists = indexes.some(idx => idx.name === collectionInfo.oldIndex);
-      
-      if (oldIndexExists) {
-        console.log(`\n🗑️  Suppression de l'ancien index ${collectionInfo.oldIndex}...`);
-        try {
-          await collection.dropIndex(collectionInfo.oldIndex);
-          console.log('✅ Ancien index supprimé avec succès');
-        } catch (error) {
-          if (error.code === 27) {
-            console.log('⚠️  L\'index n\'existe pas (déjà supprimé)');
-          } else {
-            throw error;
+      // Supprimer tous les anciens index
+      for (const oldIndexName of collectionInfo.oldIndexes) {
+        const oldIndexExists = indexes.some(idx => idx.name === oldIndexName);
+        
+        if (oldIndexExists) {
+          console.log(`\n🗑️  Suppression de l'ancien index ${oldIndexName}...`);
+          try {
+            await collection.dropIndex(oldIndexName);
+            console.log('✅ Ancien index supprimé avec succès');
+          } catch (error) {
+            if (error.code === 27) {
+              console.log('⚠️  L\'index n\'existe pas (déjà supprimé)');
+            } else {
+              throw error;
+            }
           }
+        } else {
+          console.log(`ℹ️  L'ancien index ${oldIndexName} n'existe pas`);
         }
-      } else {
-        console.log('ℹ️  L\'ancien index n\'existe pas');
       }
 
       // Ajouter le champ issueYear aux documents existants qui n'en ont pas
@@ -101,6 +115,34 @@ async function fixDocumentUniqueIndexes() {
         ]
       );
       console.log(`✅ ${result.modifiedCount} documents mis à jour avec issueYear`);
+
+      // Vérifier et nettoyer les documents avec workspaceId null
+      console.log(`\n🧹 Vérification des documents avec workspaceId null...`);
+      const nullWorkspaceCount = await collection.countDocuments({ workspaceId: null });
+      
+      if (nullWorkspaceCount > 0) {
+        console.log(`⚠️  Trouvé ${nullWorkspaceCount} documents avec workspaceId null`);
+        
+        // Lister quelques exemples pour diagnostic
+        const examples = await collection.find({ workspaceId: null }).limit(5).toArray();
+        console.log('Exemples de documents problématiques:');
+        examples.forEach((doc, index) => {
+          console.log(`  ${index + 1}. ID: ${doc._id}, number: ${doc.number}, createdBy: ${doc.createdBy}`);
+        });
+        
+        console.log('❌ Impossible de créer l\'index unique avec des workspaceId null');
+        console.log('💡 Solutions possibles:');
+        console.log('   1. Supprimer ces documents orphelins');
+        console.log('   2. Leur assigner un workspaceId valide');
+        console.log('   3. Les exclure de l\'index unique');
+        
+        // Proposer de supprimer les documents orphelins
+        console.log('\n🗑️  Suppression des documents orphelins avec workspaceId null...');
+        const deleteResult = await collection.deleteMany({ workspaceId: null });
+        console.log(`✅ ${deleteResult.deletedCount} documents orphelins supprimés`);
+      } else {
+        console.log('✅ Aucun document avec workspaceId null trouvé');
+      }
 
       // Créer le nouvel index
       console.log(`\n🔧 Création du nouvel index ${collectionInfo.newIndex}...`);
