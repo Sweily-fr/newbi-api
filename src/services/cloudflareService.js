@@ -78,8 +78,12 @@ class CloudflareService {
       let key;
       switch (imageType) {
         case 'ocr': {
-          // Pour les reçus OCR, fichier directement dans le compartiment OCR
-          key = `${uniqueId}${fileExtension}`;
+          // Pour les reçus OCR, organiser par organisation (ID organisation uniquement)
+          if (!organizationId) {
+            throw new Error('Organization ID requis pour les uploads OCR');
+          }
+          console.log('🏢 CloudflareService - Organization ID pour OCR:', organizationId);
+          key = `${organizationId}/${uniqueId}${fileExtension}`;
           break;
         }
         case 'imgCompany': {

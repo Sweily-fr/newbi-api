@@ -89,7 +89,7 @@ const documentUploadResolvers = {
         // Récupérer l'ID de l'organisation de l'utilisateur
         let organizationId = null;
 
-        if (finalFolderType === "imgCompany") {
+        if (finalFolderType === "imgCompany" || finalFolderType === "ocr") {
           // Essayer différentes propriétés pour l'organizationId
           organizationId =
             user.organizationId ||
@@ -97,10 +97,39 @@ const documentUploadResolvers = {
             user.organization ||
             user.currentOrganizationId;
 
+          // Si pas trouvé, chercher dans la collection member
           if (!organizationId) {
-            // Utiliser l'userId comme fallback pour les images d'entreprise
+            try {
+              const mongoose = await import('mongoose');
+              const ObjectId = mongoose.default.Types.ObjectId;
+              
+              // Convertir l'userId en ObjectId si nécessaire
+              const userObjectId = typeof user.id === 'string' ? new ObjectId(user.id) : user.id;
+              
+              const memberRecord = await mongoose.default.connection.db
+                .collection('member')
+                .findOne({ userId: userObjectId });
+              
+              if (memberRecord && memberRecord.organizationId) {
+                organizationId = memberRecord.organizationId.toString();
+                console.log('🔍 DocumentUpload - Organization trouvée via collection member:', organizationId);
+              } else {
+                console.log('🔍 DocumentUpload - Aucun member trouvé pour userId:', user.id);
+              }
+            } catch (memberError) {
+              console.error('❌ Erreur recherche member:', memberError);
+            }
+          }
+
+          if (!organizationId) {
+            if (finalFolderType === "ocr") {
+              throw new Error("Organization ID requis pour les uploads OCR. L'utilisateur doit être associé à une organisation.");
+            }
+            // Utiliser l'userId comme fallback uniquement pour les images d'entreprise
             organizationId = user.id;
           }
+          
+          console.log('🏢 DocumentUpload - Organization ID récupéré:', organizationId, 'pour type:', finalFolderType);
         }
 
         // Upload vers Cloudflare R2
