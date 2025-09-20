@@ -2,8 +2,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import User from "../models/User.js";
-import { isAuthenticated } from "../middlewares/auth.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import { isAuthenticated, withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   sendPasswordResetEmail,
   sendVerificationEmail,

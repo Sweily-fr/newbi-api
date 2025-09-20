@@ -1,5 +1,5 @@
 import EmailSignature from "../models/EmailSignature.js";
-import { isAuthenticated } from "../middlewares/auth.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   createNotFoundError,
   createAlreadyExistsError,

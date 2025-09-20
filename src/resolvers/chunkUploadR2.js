@@ -1,5 +1,5 @@
 import { ApolloError, UserInputError } from "apollo-server-express";
-import { isAuthenticated } from "../middlewares/auth.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   saveChunkToR2,
   areAllChunksReceivedOnR2,

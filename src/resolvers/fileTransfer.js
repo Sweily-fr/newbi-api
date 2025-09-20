@@ -1,6 +1,6 @@
 import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
-import { isAuthenticated } from "../middlewares/auth.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   saveUploadedFile,
   saveBase64File,

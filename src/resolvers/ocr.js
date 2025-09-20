@@ -3,7 +3,7 @@
  */
 
 import { GraphQLUpload } from "graphql-upload";
-import { isAuthenticated } from "../middlewares/auth.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import mistralOcrService from "../services/mistralOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import financialAnalysisService from "../services/financialAnalysisService.js";

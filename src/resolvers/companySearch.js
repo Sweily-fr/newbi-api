@@ -1,4 +1,4 @@
-import { isAuthenticated } from '../middlewares/auth.js';
+import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
 import { searchCompanyBySiret, searchCompaniesByName } from '../utils/companySearch.js';
 
 const companySearchResolvers = {
