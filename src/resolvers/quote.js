@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
-import { isAuthenticated } from "../middlewares/auth.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   generateQuoteNumber,
   generateInvoiceNumber,

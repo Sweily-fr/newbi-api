@@ -17,20 +17,21 @@ const betterAuthJWTMiddleware = async (req) => {
     }
 
     // Récupérer l'IP client pour les protections de sécurité
-    const clientIP = req.ip || 
-                    req.connection.remoteAddress || 
-                    req.socket.remoteAddress ||
-                    (req.connection.socket ? req.connection.socket.remoteAddress : null) ||
-                    req.headers['x-forwarded-for']?.split(',')[0] ||
-                    req.headers['x-real-ip'] ||
-                    'unknown';
+    const clientIP =
+      req.ip ||
+      req.connection.remoteAddress ||
+      req.socket.remoteAddress ||
+      (req.connection.socket ? req.connection.socket.remoteAddress : null) ||
+      req.headers["x-forwarded-for"]?.split(",")[0] ||
+      req.headers["x-real-ip"] ||
+      "unknown";
 
     // Validation JWKS complète avec vérification cryptographique
     let decoded;
     try {
       const jwksValidator = await getJWKSValidator();
       decoded = await jwksValidator.validateJWT(token, clientIP);
-      
+
       if (!decoded) {
         return null;
       }
@@ -38,7 +39,7 @@ const betterAuthJWTMiddleware = async (req) => {
       logger.warn("JWT invalide ou malformé:", jwtError.message);
       return null;
     }
-    
+
     if (!decoded || !decoded.sub) {
       return null;
     }
@@ -56,7 +57,6 @@ const betterAuthJWTMiddleware = async (req) => {
     }
 
     return user;
-
   } catch (error) {
     logger.error("Erreur validation JWT:", error.message);
     return null;
@@ -69,12 +69,12 @@ const betterAuthJWTMiddleware = async (req) => {
 const extractJWTToken = (headers) => {
   // Priorité 1: Header Authorization Bearer
   const authHeader = headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith("Bearer ")) {
     return authHeader.slice(7);
   }
 
   // Priorité 2: Header personnalisé
-  return headers['x-jwt-token'];
+  return headers["x-jwt-token"];
 };
 
 /**
@@ -83,11 +83,11 @@ const extractJWTToken = (headers) => {
 const validateJWT = async (req, res, next) => {
   try {
     const user = await betterAuthJWTMiddleware(req);
-    
+
     if (!user) {
-      return res.status(401).json({ 
-        error: 'Token invalide', 
-        message: 'Vous devez être connecté pour effectuer cette action' 
+      return res.status(401).json({
+        error: "Token invalide",
+        message: "Vous devez être connecté pour effectuer cette action",
       });
     }
 
@@ -95,9 +95,9 @@ const validateJWT = async (req, res, next) => {
     next();
   } catch (error) {
     logger.error("Erreur validation JWT middleware:", error.message);
-    return res.status(500).json({ 
-      error: 'Erreur serveur', 
-      message: 'Erreur lors de la validation du token' 
+    return res.status(500).json({
+      error: "Erreur serveur",
+      message: "Erreur lors de la validation du token",
     });
   }
 };
@@ -129,7 +129,8 @@ const withWorkspace = (resolver) => {
       );
     }
 
-    let workspaceId = args.workspaceId || context.req?.headers["x-workspace-id"];
+    let workspaceId =
+      args.workspaceId || context.req?.headers["x-workspace-id"];
 
     // Si aucun workspaceId n'est fourni, utiliser l'ID utilisateur comme workspace
     if (!workspaceId) {
@@ -145,9 +146,4 @@ const withWorkspace = (resolver) => {
   };
 };
 
-export { 
-  betterAuthJWTMiddleware,
-  validateJWT,
-  isAuthenticated,
-  withWorkspace
-};
+export { betterAuthJWTMiddleware, validateJWT, isAuthenticated, withWorkspace };

@@ -3,7 +3,7 @@
  */
 
 import { GraphQLUpload } from "graphql-upload";
-import { isAuthenticated } from "../middlewares/auth.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import cloudflareService from "../services/cloudflareService.js";
 import User from "../models/User.js";
 import {
