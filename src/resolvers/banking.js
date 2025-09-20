@@ -1,5 +1,5 @@
 import { bankingService } from '../services/banking/BankingService.js';
-import { withWorkspace } from '../middlewares/better-auth-jwt.js';
+import { withWorkspace } from '../middlewares/better-auth-bearer.js';
 import Transaction from '../models/Transaction.js';
 import AccountBanking from '../models/AccountBanking.js';
 import ApiMetric from '../models/ApiMetric.js';

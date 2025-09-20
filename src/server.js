@@ -18,7 +18,7 @@ import {
 } from "./controllers/fileTransferController.js";
 import { setupScheduledJobs } from "./jobs/scheduler.js";
 import logger from "./utils/logger.js";
-import { betterAuthJWTMiddleware, validateJWT } from "./middlewares/better-auth-jwt.js";
+import { betterAuthBearerMiddleware } from "./middlewares/better-auth-bearer.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
 import webhookRoutes from "./routes/webhook.js";
@@ -128,10 +128,10 @@ async function startServer() {
   // Routes file download proxy
   app.use("/api/files", fileDownloadRoutes);
 
-  // Routes banking (avec authentification JWT)
-  app.use("/banking", validateJWT, bankingRoutes);
-  app.use("/banking-connect", validateJWT, bankingConnectRoutes);
-  app.use("/banking-sync", validateJWT, bankingSyncRoutes);
+  // Routes banking (avec authentification Bearer)
+  app.use("/banking", bankingRoutes);
+  app.use("/banking-connect", bankingConnectRoutes);
+  app.use("/banking-sync", bankingSyncRoutes);
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 
@@ -144,7 +144,7 @@ async function startServer() {
     resolvers,
     context: async ({ req }) => ({
       req,
-      user: await betterAuthJWTMiddleware(req),
+      user: await betterAuthBearerMiddleware(req),
     }),
     formatError: formatError,
     cache: "bounded",

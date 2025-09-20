@@ -173,6 +173,7 @@ const validateJWT = async (req, res, next) => {
     };
 
     const token = authHeader.slice(7);
+    console.log(' [JWT Middleware] Token extrait:', token.substring(0, 50) + '...');
     console.log('🔍 [JWT Middleware] Token extrait:', token.substring(0, 50) + '...');
     
     const decodedHeader = jwt.decode(token, { complete: true });
