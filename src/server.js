@@ -143,33 +143,10 @@ async function startServer() {
   const server = new ApolloServer({
     typeDefs,
     resolvers,
-    context: async ({ req }) => {
-      console.log(" [GraphQL] === CRÉATION CONTEXTE ===");
-      console.log(" [GraphQL] URL:", req.url);
-      console.log(" [GraphQL] Method:", req.method);
-      
-      const user = await betterAuthJWTMiddleware(req);
-      
-      console.log(" [GraphQL] Résultat betterAuthJWTMiddleware:", {
-        user: user ? {
-          id: user._id,
-          email: user.email
-        } : null
-      });
-      
-      const context = {
-        req,
-        user: user,
-      };
-      
-      console.log(" [GraphQL] Contexte final:", {
-        hasReq: !!context.req,
-        hasUser: !!context.user,
-        userId: context.user?._id
-      });
-      
-      return context;
-    },
+    context: async ({ req }) => ({
+      req,
+      user: await betterAuthJWTMiddleware(req),
+    }),
     formatError: formatError,
     cache: "bounded",
     persistedQueries: { ttl: 900 },
@@ -182,14 +159,14 @@ async function startServer() {
   try {
     await initializeBankingSystem();
   } catch (error) {
-    logger.warn(" Système banking non disponible:", error.message);
+    logger.warn("⚠️ Système banking non disponible:", error.message);
   }
 
   // Démarrer le serveur
   const PORT = process.env.PORT || 4000;
   app.listen(PORT, () => {
     logger.info(
-      ` Serveur démarré sur http://localhost:${PORT}${server.graphqlPath}`
+      `🚀 Serveur démarré sur http://localhost:${PORT}${server.graphqlPath}`
     );
     setupScheduledJobs();
   });
