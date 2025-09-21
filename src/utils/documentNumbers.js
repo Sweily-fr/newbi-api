@@ -9,8 +9,7 @@ import CreditNote from '../models/CreditNote.js';
  * 1. Si aucune facture n'existe encore, on peut choisir le numéro de facture que l'on veut
  * 2. Les numéros de facture sont calculés à partir du dernier numéro de facture créée (Sans prendre en compte les brouillons)
  * 3. Les factures créées doivent être séquentielles sans écart de chiffres (Status: PENDING, COMPLETED, CANCELED)
- * 4. Quand on crée une facture en brouillon 000012 et une facture en brouillon 000013, si on valide la création de la facture 000013 avant la 000012, 
- *    alors le numéro de facture de la 000012 doit changer en "DRAFT-" tandis que la facture numéro 000013 doit changer en 000012 pour la création
+ * 4. TOUS les brouillons utilisent le format DRAFT-ID, même s'ils sont les derniers créés
  * 5. Quand le préfixe arrive à l'année suivante, les numéros de facture doivent repasser à 0
  */
 const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
@@ -334,19 +333,15 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       const existingDraft = await Invoice.findOne(draftQuery);
       
       if (existingDraft) {
-        // LOGIQUE CORRIGÉE : Seul l'ancien brouillon devient DRAFT-ID
-        
         // Renommer l'ancien brouillon avec un suffixe unique
         const timestamp = Date.now();
         await Invoice.findByIdAndUpdate(existingDraft._id, {
           number: `DRAFT-${options.manualNumber}-${timestamp}`
         });
-        
-        // Le nouveau brouillon garde le numéro original
-        return options.manualNumber;
       }
       
-      return options.manualNumber;
+      // TOUS les brouillons utilisent le format DRAFT-ID
+      return `DRAFT-${options.manualNumber}`;
     }
     
     // Brouillon sans numéro manuel
@@ -425,19 +420,15 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       const existingDraft = await Quote.findOne(draftQuery);
       
       if (existingDraft) {
-        // LOGIQUE CORRIGÉE : Seul l'ancien brouillon devient DRAFT-ID
-        
         // Renommer l'ancien brouillon avec un suffixe unique
         const timestamp = Date.now();
         await Quote.findByIdAndUpdate(existingDraft._id, {
           number: `DRAFT-${options.manualNumber}-${timestamp}`
         });
-        
-        // Le nouveau brouillon garde le numéro original
-        return options.manualNumber;
       }
       
-      return options.manualNumber;
+      // TOUS les brouillons utilisent le format DRAFT-ID
+      return `DRAFT-${options.manualNumber}`;
     }
     
     // Brouillon sans numéro manuel
