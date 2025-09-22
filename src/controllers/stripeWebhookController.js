@@ -5,6 +5,7 @@ import User from '../models/User.js';
 import ReferralEvent from '../models/ReferralEvent.js';
 import logger from '../utils/logger.js';
 import { processReferralPayout, scheduleReferralPayout } from '../services/referralService.js';
+import { sendFileTransferPaymentNotification } from '../utils/mailer.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -114,6 +115,44 @@ async function handleCheckoutSessionCompleted(session) {
       amount: accessGrant.paidAmount,
       currency: accessGrant.currency
     });
+
+    // Envoyer une notification par email à l'expéditeur du fichier
+    try {
+      // Récupérer l'utilisateur expéditeur
+      const sender = await User.findById(fileTransfer.userId);
+      if (sender && sender.email) {
+        const paymentData = {
+          buyerEmail: accessGrant.buyerEmail,
+          paidAmount: accessGrant.paidAmount,
+          currency: accessGrant.currency,
+          files: fileTransfer.files,
+          transferId: fileTransfer._id,
+          paymentDate: new Date()
+        };
+
+        const emailSent = await sendFileTransferPaymentNotification(sender.email, paymentData);
+        
+        if (emailSent) {
+          logger.info('✅ Email de notification envoyé à l\'expéditeur', {
+            senderEmail: sender.email,
+            transferId: transferId
+          });
+        } else {
+          logger.warn('⚠️ Échec envoi email de notification à l\'expéditeur', {
+            senderEmail: sender.email,
+            transferId: transferId
+          });
+        }
+      } else {
+        logger.warn('⚠️ Expéditeur non trouvé ou email manquant', {
+          userId: fileTransfer.userId,
+          transferId: transferId
+        });
+      }
+    } catch (emailError) {
+      logger.error('❌ Erreur lors de l\'envoi de l\'email de notification:', emailError);
+      // Ne pas faire échouer le webhook pour une erreur d'email
+    }
 
   } catch (error) {
     logger.error('❌ Erreur handleCheckoutSessionCompleted:', error);
