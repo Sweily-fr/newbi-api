@@ -18,7 +18,10 @@ import {
 } from "./controllers/fileTransferController.js";
 import { setupScheduledJobs } from "./jobs/scheduler.js";
 import logger from "./utils/logger.js";
-import { betterAuthJWTMiddleware, validateJWT } from "./middlewares/better-auth-jwt.js";
+import {
+  betterAuthJWTMiddleware,
+  validateJWT,
+} from "./middlewares/better-auth-jwt.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
 import webhookRoutes from "./routes/webhook.js";
@@ -125,7 +128,7 @@ async function startServer() {
 
   // Routes file transfer auth
   app.use("/api/transfers", fileTransferAuthRoutes);
-  
+
   // Routes file download proxy
   app.use("/api/files", fileDownloadRoutes);
 
