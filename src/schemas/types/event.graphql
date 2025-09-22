@@ -36,6 +36,7 @@ enum EventType {
   MEETING
   DEADLINE
   REMINDER
+  CREDIT_NOTE_CREATED
 }
 
 input CreateEventInput {
