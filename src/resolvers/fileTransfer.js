@@ -14,8 +14,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 import constants from "../utils/constants.js";
 const { BASE_URL } = constants;
 
-// Taille maximale autorisée (100 GB en octets)
-const MAX_FILE_SIZE = 100 * 1024 * 1024 * 1024;
+// Taille maximale autorisée (5 GB en octets)
+const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024;
 
 export default {
   Query: {
@@ -207,8 +207,8 @@ export default {
           const shareLink = generateShareLink();
           const accessKey = generateAccessKey();
 
-          // Calculer la date d'expiration (48 heures)
-          const expiryDate = calculateExpiryDate();
+          // Calculer la date d'expiration (48 heures par défaut)
+          const expiryDate = calculateExpiryDate(2);
 
           // Sauvegarder les fichiers
           const uploadedFiles = [];

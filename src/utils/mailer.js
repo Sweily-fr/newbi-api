@@ -849,10 +849,202 @@ const sendReferralThankYouEmail = async (referrer, referredUser, payoutAmount) =
   }
 };
 
+const sendFileTransferPaymentNotification = async (senderEmail, paymentData) => {
+  const { 
+    buyerEmail, 
+    paidAmount, 
+    currency, 
+    files, 
+    transferId,
+    paymentDate = new Date()
+  } = paymentData;
+  
+  const filesList = files.map(file => 
+    `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+      <strong>${file.originalName || file.displayName}</strong> 
+      <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
+    </li>`
+  ).join('');
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: senderEmail,
+    subject: `💰 Paiement reçu - ${paidAmount}${currency.toUpperCase()}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Paiement reçu - Newbi</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            background-color: #f8f9fa;
+          }
+          .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          }
+          .header {
+            text-align: center;
+            padding: 30px 20px;
+            border-bottom: 1px solid #e5e7eb;
+          }
+          .logo {
+            width: 120px;
+            height: auto;
+          }
+          .content {
+            padding: 30px 20px;
+            text-align: center;
+          }
+          .amount {
+            font-size: 32px;
+            font-weight: 800;
+            color: #10b981;
+            margin: 20px 0;
+          }
+          .message {
+            font-size: 18px;
+            color: #4b5563;
+            margin-bottom: 30px;
+          }
+          .details {
+            background-color: #f8fafc;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+          }
+          .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e5e7eb;
+          }
+          .detail-row:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+          }
+          .detail-label {
+            color: #6b7280;
+            font-size: 14px;
+          }
+          .detail-value {
+            font-weight: 600;
+            color: #1f2937;
+            font-size: 14px;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #1f2937;
+            color: white;
+            font-weight: 600;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            margin: 20px 0;
+          }
+          .footer {
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+            font-size: 12px;
+            background-color: #f8f9fa;
+          }
+          
+          /* Mobile responsive */
+          @media (max-width: 600px) {
+            body {
+              padding: 10px;
+            }
+            .container {
+              margin: 0;
+            }
+            .content {
+              padding: 20px 15px;
+            }
+            .amount {
+              font-size: 28px;
+            }
+            .message {
+              font-size: 16px;
+            }
+            .details {
+              padding: 15px;
+            }
+            .detail-row {
+              flex-direction: column;
+              gap: 5px;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <img src="${process.env.AWS_S3_API_URL || 'https://via.placeholder.com/120x40/000000/FFFFFF?text=NEWBI'}/logobewbi/Logo_Texte_Black.png" alt="Newbi" class="logo">
+          </div>
+          
+          <div class="content">
+            <div class="amount">+${paidAmount} ${currency.toUpperCase()}</div>
+            
+            <p class="message">Votre transfert de fichiers a été payé !</p>
+            
+            <div class="details">
+              <div class="detail-row">
+                <span class="detail-label">Client</span>
+                <span class="detail-value">${buyerEmail}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Date</span>
+                <span class="detail-value">${paymentDate.toLocaleDateString('fr-FR')}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Fichiers</span>
+                <span class="detail-value">${files.length} fichier${files.length > 1 ? 's' : ''}</span>
+              </div>
+            </div>
+            
+            <a href="${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers" class="btn">Voir mes transferts</a>
+          </div>
+          
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
+            <p>Questions ? <a href="mailto:contact@newbi.fr" style="color: #5b50ff;">contact@newbi.fr</a></p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("Erreur lors de l'envoi de l'email de notification de paiement:", error);
+    return false;
+  }
+};
+
 export {
   sendPasswordResetEmail,
   sendVerificationEmail,
   sendPasswordResetConfirmationEmail,
   sendFileTransferEmail,
-  sendReferralThankYouEmail
+  sendReferralThankYouEmail,
+  sendFileTransferPaymentNotification
 };
