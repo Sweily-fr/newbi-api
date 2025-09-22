@@ -35,6 +35,18 @@ class CloudflareService {
     // Configuration spécifique pour l'OCR
     this.ocrBucketName = process.env.IMAGE_OCR_BUCKET_NAME;
     this.ocrPublicUrl = process.env.IMAGE_OCR_PUBLIC_URL;
+    
+    // Configuration spécifique pour les images d'entreprise
+    this.companyBucketName = process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY;
+    this.companyPublicUrl = process.env.COMPANY_IMAGES_PUBLIC_URL;
+    
+    // Configuration spécifique pour les images de profil
+    this.profileBucketName = process.env.AWS_S3_BUCKET_NAME_IMG;
+    this.profilePublicUrl = process.env.USER_IMAGES_PUBLIC_URL;
+    
+    console.log('🔧 CloudflareService - Variables profil:');
+    console.log('   AWS_S3_BUCKET_NAME_IMG:', process.env.AWS_S3_BUCKET_NAME_IMG);
+    console.log('   USER_IMAGES_PUBLIC_URL:', process.env.USER_IMAGES_PUBLIC_URL);
 
     if (!this.bucketName) {
       console.error("❌ ERREUR: IMAGE_BUCKET_NAME n'est pas définie!");
@@ -112,6 +124,15 @@ class CloudflareService {
         targetBucket = this.ocrBucketName || this.bucketName;
         targetPublicUrl = this.ocrPublicUrl || this.publicUrl;
         console.log('🪣 CloudflareService - Utilisation bucket OCR:', targetBucket);
+      } else if (imageType === 'imgCompany') {
+        targetBucket = this.companyBucketName || this.bucketName;
+        targetPublicUrl = this.companyPublicUrl || this.publicUrl;
+        console.log('🪣 CloudflareService - Utilisation bucket entreprise:', targetBucket);
+      } else if (imageType === 'profile') {
+        targetBucket = this.profileBucketName || this.bucketName;
+        targetPublicUrl = this.profilePublicUrl || this.publicUrl;
+        console.log('🪣 CloudflareService - Utilisation bucket profil:', targetBucket);
+        console.log('🌐 CloudflareService - URL publique profil:', targetPublicUrl);
       } else {
         targetBucket = this.bucketName;
         targetPublicUrl = this.publicUrl;

@@ -48,10 +48,12 @@ type EmailSignature {
   
   # Espacements
   spacings: SignatureSpacings!
+  detailedSpacing: Boolean!
   
   # Typographie
   fontFamily: String!
   fontSize: FontSizes!
+  typography: DetailedTypography!
   
   # Métadonnées
   createdBy: User!
@@ -87,12 +89,35 @@ type SignatureSpacings {
   websiteToAddress: Int!
   separatorTop: Int!
   separatorBottom: Int!
+  logoToSocial: Int!
+  verticalSeparatorLeft: Int!
+  verticalSeparatorRight: Int!
 }
 
 type FontSizes {
   name: Int!
   position: Int!
   contact: Int!
+}
+
+type TypographyField {
+  fontFamily: String!
+  fontSize: Int!
+  color: String!
+  fontWeight: String!
+  fontStyle: String
+  textDecoration: String
+}
+
+type DetailedTypography {
+  fullName: TypographyField!
+  position: TypographyField!
+  company: TypographyField!
+  email: TypographyField!
+  phone: TypographyField!
+  mobile: TypographyField!
+  website: TypographyField!
+  address: TypographyField!
 }
 
 input EmailSignatureInput {
@@ -145,10 +170,12 @@ input EmailSignatureInput {
   
   # Espacements
   spacings: SignatureSpacingsInput
+  detailedSpacing: Boolean
   
   # Typographie
   fontFamily: String
   fontSize: FontSizesInput
+  typography: DetailedTypographyInput
 }
 
 input SignatureColorsInput {
@@ -179,12 +206,35 @@ input SignatureSpacingsInput {
   websiteToAddress: Int
   separatorTop: Int
   separatorBottom: Int
+  logoToSocial: Int
+  verticalSeparatorLeft: Int
+  verticalSeparatorRight: Int
 }
 
 input FontSizesInput {
   name: Int
   position: Int
   contact: Int
+}
+
+input TypographyFieldInput {
+  fontFamily: String
+  fontSize: Int
+  color: String
+  fontWeight: String
+  fontStyle: String
+  textDecoration: String
+}
+
+input DetailedTypographyInput {
+  fullName: TypographyFieldInput
+  position: TypographyFieldInput
+  company: TypographyFieldInput
+  email: TypographyFieldInput
+  phone: TypographyFieldInput
+  mobile: TypographyFieldInput
+  website: TypographyFieldInput
+  address: TypographyFieldInput
 }
 
 input UpdateEmailSignatureInput {
@@ -238,10 +288,12 @@ input UpdateEmailSignatureInput {
   
   # Espacements
   spacings: SignatureSpacingsInput
+  detailedSpacing: Boolean
   
   # Typographie
   fontFamily: String
   fontSize: FontSizesInput
+  typography: DetailedTypographyInput
 }
 
 extend type Query {
@@ -264,6 +316,9 @@ extend type Mutation {
   
   # Supprimer une signature
   deleteEmailSignature(id: ID!): Boolean!
+  
+  # Supprimer plusieurs signatures
+  deleteMultipleEmailSignatures(ids: [ID!]!): Int!
   
   # Définir une signature comme par défaut
   setDefaultEmailSignature(id: ID!): EmailSignature!
