@@ -227,64 +227,75 @@ const emailSignatureResolvers = {
     }),
 
     // Supprimer plusieurs signatures
-    deleteMultipleEmailSignatures: isAuthenticated(async (_, { ids }, { user }) => {
-      try {
-        console.log(`🗑️ [BACKEND] Suppression multiple de ${ids.length} signatures pour l'utilisateur ${user.id}`);
-        
-        // 1. Vérifier que toutes les signatures existent et appartiennent à l'utilisateur
-        const signatures = await EmailSignature.find({
-          _id: { $in: ids },
-          createdBy: user.id,
-        });
+    deleteMultipleEmailSignatures: isAuthenticated(
+      async (_, { ids }, { user }) => {
+        try {
+          console.log(
+            `🗑️ [BACKEND] Suppression multiple de ${ids.length} signatures pour l'utilisateur ${user.id}`
+          );
 
-        if (signatures.length !== ids.length) {
-          throw createNotFoundError("Une ou plusieurs signatures");
-        }
+          // 1. Vérifier que toutes les signatures existent et appartiennent à l'utilisateur
+          const signatures = await EmailSignature.find({
+            _id: { $in: ids },
+            createdBy: user.id,
+          });
 
-        // 2. Collecter tous les fichiers à supprimer
-        const filesToDelete = [];
-        signatures.forEach(signature => {
-          if (signature.photo) {
-            filesToDelete.push(signature.photo);
+          if (signatures.length !== ids.length) {
+            throw createNotFoundError("Une ou plusieurs signatures");
           }
-          if (signature.logo) {
-            filesToDelete.push(signature.logo);
-          }
-        });
 
-        // 3. Supprimer les fichiers
-        if (filesToDelete.length > 0) {
-          for (const filePath of filesToDelete) {
-            try {
-              await deleteFile(filePath);
-            } catch (error) {
-              console.error(
-                `⚠️ [BACKEND] Échec de la suppression du fichier ${filePath}:`,
-                error.message
-              );
+          // 2. Collecter tous les fichiers à supprimer
+          const filesToDelete = [];
+          signatures.forEach((signature) => {
+            if (signature.photo) {
+              filesToDelete.push(signature.photo);
+            }
+            if (signature.logo) {
+              filesToDelete.push(signature.logo);
+            }
+          });
+
+          // 3. Supprimer les fichiers
+          if (filesToDelete.length > 0) {
+            for (const filePath of filesToDelete) {
+              try {
+                await deleteFile(filePath);
+              } catch (error) {
+                console.error(
+                  `⚠️ [BACKEND] Échec de la suppression du fichier ${filePath}:`,
+                  error.message
+                );
+              }
             }
           }
-        }
 
-        // 4. Supprimer les signatures de la base de données
-        const deleteResult = await EmailSignature.deleteMany({
-          _id: { $in: ids },
-          createdBy: user.id,
-        });
+          // 4. Supprimer les signatures de la base de données
+          const deleteResult = await EmailSignature.deleteMany({
+            _id: { $in: ids },
+            createdBy: user.id,
+          });
 
-        console.log(`✅ [BACKEND] ${deleteResult.deletedCount} signatures supprimées`);
-        return deleteResult.deletedCount;
-      } catch (error) {
-        console.error(`❌ [BACKEND] Erreur lors de la suppression multiple:`, error);
-        
-        if (error.extensions && error.extensions.code) {
-          throw error;
+          console.log(
+            `✅ [BACKEND] ${deleteResult.deletedCount} signatures supprimées`
+          );
+          return deleteResult.deletedCount;
+        } catch (error) {
+          console.error(
+            `❌ [BACKEND] Erreur lors de la suppression multiple:`,
+            error
+          );
+
+          if (error.extensions && error.extensions.code) {
+            throw error;
+          }
+
+          const errorMessage =
+            error.message ||
+            "Une erreur est survenue lors de la suppression des signatures";
+          throw new Error(errorMessage);
         }
-        
-        const errorMessage = error.message || "Une erreur est survenue lors de la suppression des signatures";
-        throw new Error(errorMessage);
       }
-    }),
+    ),
 
     // Définir une signature comme par défaut
     setDefaultEmailSignature: isAuthenticated(async (_, { id }, { user }) => {
