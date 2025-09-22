@@ -241,6 +241,12 @@ const emailSignatureSchema = new mongoose.Schema(
       max: [150, "Taille maximale de 150px"],
     },
 
+    // Mode espacement détaillé
+    detailedSpacing: {
+      type: Boolean,
+      default: false,
+    },
+
     // Espacements entre les éléments (en pixels)
     spacings: {
       global: {
@@ -321,6 +327,25 @@ const emailSignatureSchema = new mongoose.Schema(
         min: [0, "Espacement minimum de 0px"],
         max: [50, "Espacement maximum de 50px"],
       },
+      // Espacements spécifiques aux orientations
+      logoToSocial: {
+        type: Number,
+        default: 12,
+        min: [0, "Espacement minimum de 0px"],
+        max: [50, "Espacement maximum de 50px"],
+      },
+      verticalSeparatorLeft: {
+        type: Number,
+        default: 22,
+        min: [0, "Espacement minimum de 0px"],
+        max: [50, "Espacement maximum de 50px"],
+      },
+      verticalSeparatorRight: {
+        type: Number,
+        default: 22,
+        min: [0, "Espacement minimum de 0px"],
+        max: [50, "Espacement maximum de 50px"],
+      },
     },
 
     // Typographie générale
@@ -346,6 +371,206 @@ const emailSignatureSchema = new mongoose.Schema(
         default: 12,
         min: [8, "Taille minimale de 8px"],
         max: [32, "Taille maximale de 32px"],
+      },
+    },
+
+    // Typographie détaillée pour chaque champ
+    typography: {
+      fullName: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 16,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#171717",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
+        },
+      },
+      position: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 14,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#666666",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
+        },
+      },
+      company: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 14,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#171717",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
+      },
+      email: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 12,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#666666",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
+      },
+      phone: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 12,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#666666",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
+      },
+      mobile: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 12,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#666666",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
+      },
+      website: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 12,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#666666",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
+      },
+      address: {
+        fontFamily: {
+          type: String,
+          default: "Arial, sans-serif",
+        },
+        fontSize: {
+          type: Number,
+          default: 12,
+          min: [8, "Taille minimale de 8px"],
+          max: [32, "Taille maximale de 32px"],
+        },
+        color: {
+          type: String,
+          default: "#666666",
+          match: [/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/, "Couleur invalide"],
+        },
+        fontWeight: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "bold", "lighter", "bolder"],
+        },
       },
     },
 
