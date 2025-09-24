@@ -12,7 +12,13 @@ class TrialService {
    */
   static async checkAndUpdateTrialStatus(userId) {
     try {
-      const user = await User.findById(userId);
+      let user = await User.findById(userId);
+      
+      // Si pas trouvé par ID, essayer par email (fallback)
+      if (!user && typeof userId === 'string' && userId.includes('@')) {
+        user = await User.findOne({ email: userId });
+      }
+      
       if (!user) {
         throw new Error('Utilisateur non trouvé');
       }

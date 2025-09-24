@@ -11,6 +11,7 @@ const trialResolvers = {
     getTrialStatus: isAuthenticated(async (parent, args, context) => {
       try {
         const trialStatus = await TrialService.checkAndUpdateTrialStatus(context.user.id);
+        
         return {
           success: true,
           data: trialStatus,
