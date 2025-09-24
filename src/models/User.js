@@ -66,6 +66,23 @@ const userSchema = new mongoose.Schema(
         type: String,
         sparse: true,
       },
+      // Nouveaux champs pour la période d'essai de 14 jours
+      trialStartDate: {
+        type: Date,
+        default: null,
+      },
+      trialEndDate: {
+        type: Date,
+        default: null,
+      },
+      isTrialActive: {
+        type: Boolean,
+        default: false,
+      },
+      hasUsedTrial: {
+        type: Boolean,
+        default: false,
+      },
     },
     emailVerificationExpires: Date,
     profile: {
@@ -366,12 +383,107 @@ userSchema.pre("save", async function (next) {
 });
 
 /**
+ * Middleware pour démarrer automatiquement la période d'essai lors de la création d'un utilisateur
+ */
+userSchema.pre("save", async function (next) {
+  // Démarrer la période d'essai seulement lors de la création d'un nouvel utilisateur
+  if (this.isNew && !this.subscription.hasUsedTrial) {
+    try {
+      const now = new Date();
+      const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 14 jours
+
+      this.subscription.trialStartDate = now;
+      this.subscription.trialEndDate = trialEnd;
+      this.subscription.isTrialActive = true;
+      this.subscription.hasUsedTrial = true;
+      this.subscription.licence = true; // Accès complet pendant l'essai
+    } catch (error) {
+      return next(error);
+    }
+  }
+  next();
+});
+
+/**
  * Méthode pour comparer les mots de passe
  * @param {string} candidatePassword - Mot de passe à vérifier
  * @returns {Promise<boolean>} - Résultat de la comparaison
  */
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
+};
+
+/**
+ * Méthode pour démarrer la période d'essai de 14 jours
+ * @returns {Promise<void>}
+ */
+userSchema.methods.startTrial = async function () {
+  if (this.subscription.hasUsedTrial) {
+    throw new Error("L'utilisateur a déjà utilisé sa période d'essai");
+  }
+
+  const now = new Date();
+  const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 14 jours
+
+  this.subscription.trialStartDate = now;
+  this.subscription.trialEndDate = trialEnd;
+  this.subscription.isTrialActive = true;
+  this.subscription.hasUsedTrial = true;
+  this.subscription.licence = true; // Accès complet pendant l'essai
+
+  await this.save();
+};
+
+/**
+ * Méthode pour vérifier si la période d'essai est encore valide
+ * @returns {boolean}
+ */
+userSchema.methods.isTrialValid = function () {
+  if (!this.subscription.isTrialActive || !this.subscription.trialEndDate) {
+    return false;
+  }
+
+  const now = new Date();
+  return now < this.subscription.trialEndDate;
+};
+
+/**
+ * Méthode pour terminer la période d'essai
+ * @returns {Promise<void>}
+ */
+userSchema.methods.endTrial = async function () {
+  this.subscription.isTrialActive = false;
+  this.subscription.licence = false; // Retirer l'accès après l'essai
+  await this.save();
+};
+
+/**
+ * Méthode pour obtenir les jours restants de la période d'essai
+ * @returns {number} - Nombre de jours restants (0 si expiré)
+ */
+userSchema.methods.getTrialDaysRemaining = function () {
+  if (!this.subscription.isTrialActive || !this.subscription.trialEndDate) {
+    return 0;
+  }
+
+  const now = new Date();
+  const diffTime = this.subscription.trialEndDate - now;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  return Math.max(0, diffDays);
+};
+
+/**
+ * Méthode pour vérifier si l'utilisateur a accès aux fonctionnalités premium
+ * @returns {boolean}
+ */
+userSchema.methods.hasPremiumAccess = function () {
+  // Accès si abonnement payant actif OU période d'essai valide
+  const hasLicence = Boolean(this.subscription?.licence);
+  const hasStripeSubscription = Boolean(this.subscription?.stripeCustomerId);
+  const hasValidTrial = this.isTrialValid();
+  
+  return hasLicence && (hasValidTrial || hasStripeSubscription);
 };
 
 export default mongoose.model("User", userSchema, "user");
