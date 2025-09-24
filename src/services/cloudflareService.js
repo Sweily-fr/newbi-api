@@ -41,12 +41,12 @@ class CloudflareService {
     this.companyPublicUrl = process.env.COMPANY_IMAGES_PUBLIC_URL;
     
     // Configuration spécifique pour les images de profil
-    this.profileBucketName = process.env.AWS_S3_BUCKET_NAME_IMG;
-    this.profilePublicUrl = process.env.USER_IMAGES_PUBLIC_URL;
+    this.profileBucketName = process.env.AWS_S3_BUCKET_NAME_IMG_PROFILE;
+    this.profilePublicUrl = process.env.AWS_S3_API_URL_PROFILE;
     
     console.log('🔧 CloudflareService - Variables profil:');
-    console.log('   AWS_S3_BUCKET_NAME_IMG:', process.env.AWS_S3_BUCKET_NAME_IMG);
-    console.log('   USER_IMAGES_PUBLIC_URL:', process.env.USER_IMAGES_PUBLIC_URL);
+    console.log('   AWS_S3_BUCKET_NAME_IMG_PROFILE:', process.env.AWS_S3_BUCKET_NAME_IMG_PROFILE);
+    console.log('   AWS_S3_API_URL_PROFILE:', process.env.AWS_S3_API_URL_PROFILE);
 
     if (!this.bucketName) {
       console.error("❌ ERREUR: IMAGE_BUCKET_NAME n'est pas définie!");
@@ -109,8 +109,13 @@ class CloudflareService {
           key = `documents/${userId}/${uniqueId}${fileExtension}`;
           break;
         }
+        case 'profile': {
+          // Pour les images de profil - sans préfixe signatures/
+          key = `${userId}/image/${uniqueId}${fileExtension}`;
+          break;
+        }
         default: {
-          // Pour les profils et autres (comportement par défaut)
+          // Pour les signatures et autres (comportement par défaut)
           key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
           break;
         }

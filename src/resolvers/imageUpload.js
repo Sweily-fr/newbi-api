@@ -278,9 +278,9 @@ const imageUploadResolvers = {
         }
 
         // Extraire la clé depuis l'URL
-        // URL format: https://pub-afeb8647684e476ca05894fe1df797fb.r2.dev/user/68b4a618b1c6f619a457314c/profile.jpg
+        // URL format: https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev/68cad81bb22506f4c701424d/image/034e23b0-7d87-4a8a-8e4f-dfdf87204131.webp
         const urlParts = imageUrl.split("/");
-        const key = urlParts.slice(-3).join("/"); // user/userId/profile.jpg
+        const key = urlParts.slice(-3).join("/"); // userId/image/uniqueId.extension
 
         const success = await cloudflareService.deleteImage(key);
 
