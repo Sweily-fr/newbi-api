@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-09-24T15:22:10.369Z",
+  "summary": {
+    "totalUsersWithTrial": 0,
+    "totalOrganizationsWithTrial": 0,
+    "validMigrations": 0,
+    "inconsistentData": 0,
+    "missingOrganizations": 0
+  },
+  "validationResults": [],
+  "usersWithTrial": [],
+  "organizationsWithTrial": []
+}

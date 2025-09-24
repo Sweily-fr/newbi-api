@@ -53,6 +53,20 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
     emailVerificationToken: String,
+    subscription: {
+      licence: {
+        type: Boolean,
+        default: true,
+      },
+      trial: {
+        type: Boolean,
+        default: false,
+      },
+      stripeCustomerId: {
+        type: String,
+        sparse: true,
+      },
+    },
     emailVerificationExpires: Date,
     profile: {
       firstName: {

@@ -1,6 +1,5 @@
-import TrialService from '../services/trialService.js';
+import OrganizationTrialService from '../services/organizationTrialService.js';
 import { isAuthenticated } from '../middlewares/better-auth.js';
-import User from '../models/User.js';
 import logger from '../utils/logger.js';
 
 const trialResolvers = {
@@ -10,7 +9,8 @@ const trialResolvers = {
      */
     getTrialStatus: isAuthenticated(async (parent, args, context) => {
       try {
-        const trialStatus = await TrialService.checkAndUpdateTrialStatus(context.user.id);
+        // Utiliser le nouveau service basé sur l'organisation
+        const trialStatus = await OrganizationTrialService.checkAndUpdateTrialStatus(context.user.id);
         
         return {
           success: true,
@@ -36,7 +36,8 @@ const trialResolvers = {
           throw new Error('Accès non autorisé');
         }
 
-        const stats = await TrialService.getTrialStats();
+        // Utiliser le nouveau service basé sur l'organisation
+        const stats = await OrganizationTrialService.getTrialStats();
         return {
           success: true,
           data: stats,
@@ -58,17 +59,8 @@ const trialResolvers = {
      */
     startTrial: isAuthenticated(async (parent, args, context) => {
       try {
-        const user = await User.findById(context.user.id);
-        if (!user) {
-          throw new Error('Utilisateur non trouvé');
-        }
-
-        if (user.subscription.hasUsedTrial) {
-          throw new Error('Vous avez déjà utilisé votre période d\'essai gratuite');
-        }
-
-        await user.startTrial();
-        const trialStatus = await TrialService.checkAndUpdateTrialStatus(context.user.id);
+        // Utiliser le nouveau service basé sur l'organisation
+        const trialStatus = await OrganizationTrialService.startTrial(context.user.id);
 
         logger.info(`Période d'essai démarrée pour l'utilisateur ${context.user.id}`);
 
