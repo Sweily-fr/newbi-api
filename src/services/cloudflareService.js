@@ -101,7 +101,7 @@ class CloudflareService {
         case 'imgCompany': {
           // Pour les logos d'entreprise
           const orgId = organizationId || userId;
-          key = `signatures/${orgId}/company/${uniqueId}${fileExtension}`;
+          key = `${orgId}/company/${uniqueId}${fileExtension}`;
           break;
         }
         case 'documents': {
