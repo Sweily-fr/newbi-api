@@ -42,11 +42,12 @@ class CloudflareService {
     
     // Configuration spécifique pour les images de profil
     this.profileBucketName = process.env.AWS_S3_BUCKET_NAME_IMG_PROFILE;
-    this.profilePublicUrl = process.env.AWS_S3_API_URL_PROFILE;
+    this.profilePublicUrl = process.env.AWS_S3_API_URL_PROFILE || "https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev";
     
     console.log('🔧 CloudflareService - Variables profil:');
     console.log('   AWS_S3_BUCKET_NAME_IMG_PROFILE:', process.env.AWS_S3_BUCKET_NAME_IMG_PROFILE);
     console.log('   AWS_S3_API_URL_PROFILE:', process.env.AWS_S3_API_URL_PROFILE);
+    console.log('   this.profilePublicUrl après init:', this.profilePublicUrl);
 
     if (!this.bucketName) {
       console.error("❌ ERREUR: IMAGE_BUCKET_NAME n'est pas définie!");
@@ -135,7 +136,7 @@ class CloudflareService {
         console.log('🪣 CloudflareService - Utilisation bucket entreprise:', targetBucket);
       } else if (imageType === 'profile') {
         targetBucket = this.profileBucketName || this.bucketName;
-        targetPublicUrl = this.profilePublicUrl || this.publicUrl;
+        targetPublicUrl = this.profilePublicUrl || "https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev";
         console.log('🪣 CloudflareService - Utilisation bucket profil:', targetBucket);
         console.log('🌐 CloudflareService - URL publique profil:', targetPublicUrl);
       } else {
@@ -190,8 +191,9 @@ class CloudflareService {
           const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
           imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
         } else {
-          // Dernier fallback sur URL signée
-          imageUrl = await this.getSignedUrl(key, 86400);
+          // Dernier fallback sur URL signée avec le bon bucket
+          console.log('🔐 CloudflareService - Fallback URL signée, bucket:', targetBucket);
+          imageUrl = await this.getSignedUrlForBucket(key, targetBucket, 86400);
         }
       }
 
@@ -284,15 +286,60 @@ class CloudflareService {
   async getImageUrl(key, expiresIn = 86400) {
     if (!key) return null;
 
+    console.log('🔍 CloudflareService - getImageUrl appelée avec key:', key);
+
+    // Déterminer l'URL publique appropriée selon le type d'image
+    let targetPublicUrl = process.env.AWS_R2_PUBLIC_URL;
+
+    // Analyser la clé pour déterminer le type d'image
+    const keyParts = key.split("/");
+    
+    if (keyParts.length >= 2 && keyParts[1] === "image") {
+      // Format: userId/image/filename -> Image de profil
+      targetPublicUrl = process.env.AWS_S3_API_URL_PROFILE;
+      console.log('👤 CloudflareService - Image de profil détectée');
+      console.log('🌐 CloudflareService - URL publique profil:', targetPublicUrl);
+      console.log('🔍 CloudflareService - Variable env AWS_S3_API_URL_PROFILE:', process.env.AWS_S3_API_URL_PROFILE);
+    } else if (keyParts.length >= 2 && keyParts[1] === "company") {
+      // Format: userId/company/filename -> Image d'entreprise
+      targetPublicUrl = process.env.COMPANY_IMAGES_PUBLIC_URL;
+      console.log('🏢 CloudflareService - Image d\'entreprise détectée');
+    } else if (keyParts.length >= 1 && !key.includes("signatures")) {
+      // Format: orgId/filename -> Image OCR
+      targetPublicUrl = process.env.IMAGE_OCR_PUBLIC_URL;
+      console.log('📄 CloudflareService - Image OCR détectée');
+    } else if (key.includes("signatures")) {
+      // Format signatures/userId/type/filename -> Image signature
+      targetPublicUrl = process.env.IMAGE_PUBLIC_URL;
+      console.log('✍️ CloudflareService - Image signature détectée');
+    }
+
     if (
-      process.env.AWS_R2_PUBLIC_URL &&
-      process.env.AWS_R2_PUBLIC_URL !== "your_r2_public_url"
+      targetPublicUrl &&
+      targetPublicUrl !== "your_r2_public_url" &&
+      targetPublicUrl !== undefined
     ) {
       // Si URL publique configurée, utiliser l'URL publique directe
-      return `${process.env.AWS_R2_PUBLIC_URL}/${key}`;
+      const finalUrl = `${targetPublicUrl}/${key}`;
+      console.log('🌐 CloudflareService - URL finale générée:', finalUrl);
+      return finalUrl;
     } else {
-      // Sinon, générer une URL signée temporaire
-      return await this.getSignedUrl(key, expiresIn);
+      // Sinon, générer une URL signée temporaire avec le bon bucket
+      console.log('🔐 CloudflareService - Fallback sur URL signée');
+      console.log('🔍 CloudflareService - targetPublicUrl était:', targetPublicUrl);
+      
+      // Déterminer le bon bucket pour l'URL signée
+      let targetBucket = this.bucketName;
+      if (keyParts.length >= 2 && keyParts[1] === "image") {
+        targetBucket = this.profileBucketName || this.bucketName;
+      } else if (keyParts.length >= 2 && keyParts[1] === "company") {
+        targetBucket = this.companyBucketName || this.bucketName;
+      } else if (keyParts.length >= 1 && !key.includes("signatures")) {
+        targetBucket = this.ocrBucketName || this.bucketName;
+      }
+      
+      console.log('🪣 CloudflareService - Bucket pour URL signée:', targetBucket);
+      return await this.getSignedUrlForBucket(key, targetBucket, expiresIn);
     }
   }
 
@@ -303,9 +350,22 @@ class CloudflareService {
    * @returns {Promise<string>}
    */
   async getSignedUrl(key, expiresIn = 3600) {
+    return await this.getSignedUrlForBucket(key, this.bucketName, expiresIn);
+  }
+
+  /**
+   * Génère une URL signée temporaire pour un bucket spécifique
+   * @param {string} key - Clé de l'image
+   * @param {string} bucketName - Nom du bucket à utiliser
+   * @param {number} expiresIn - Durée de validité en secondes (défaut: 1h)
+   * @returns {Promise<string>}
+   */
+  async getSignedUrlForBucket(key, bucketName, expiresIn = 3600) {
     try {
+      console.log(`🔐 CloudflareService - Génération URL signée pour bucket: ${bucketName}, key: ${key}`);
+      
       const command = new GetObjectCommand({
-        Bucket: this.bucketName,
+        Bucket: bucketName,
         Key: key,
       });
 
@@ -316,6 +376,7 @@ class CloudflareService {
         unhoistableHeaders: new Set(["x-amz-content-sha256"]),
       });
 
+      console.log(`🌐 CloudflareService - URL signée générée: ${signedUrl.substring(0, 100)}...`);
       return signedUrl;
     } catch (error) {
       console.error("Erreur génération URL signée:", error);
