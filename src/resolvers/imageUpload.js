@@ -25,7 +25,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!key.includes(`signatures/${user.id}/`)) {
+        if (!key.includes(`${user.id}/`)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -45,17 +45,22 @@ const imageUploadResolvers = {
 
   Mutation: {
     /**
-     * Upload une image de signature vers Cloudflare
+     * Upload une image de signature vers Cloudflare (nouvelle structure)
      */
     uploadSignatureImage: isAuthenticated(
-      async (_, { file, imageType = "profile" }, { user }) => {
+      async (_, { file, imageType = "imgProfil", signatureId }, { user }) => {
         try {
           const { createReadStream, filename, mimetype } = await file;
 
-          // Validation du type d'image
-          if (!["profile", "company"].includes(imageType)) {
+          // Validation du signatureId
+          if (!signatureId) {
+            throw createValidationError("signatureId est requis pour l'upload d'images de signature");
+          }
+
+          // Validation du type d'image (nouvelle structure)
+          if (!["imgProfil", "logoReseau"].includes(imageType)) {
             throw createValidationError(
-              'Type d\'image invalide. Utilisez "profile" ou "company"'
+              'Type d\'image invalide. Utilisez "imgProfil" ou "logoReseau"'
             );
           }
 
@@ -88,11 +93,14 @@ const imageUploadResolvers = {
             );
           }
 
-          // Upload vers Cloudflare
-          const result = await cloudflareService.uploadImage(
+          console.log(`🔄 Upload ${imageType} pour signature ${signatureId} par utilisateur ${user.id}`);
+
+          // Upload vers Cloudflare avec la nouvelle méthode
+          const result = await cloudflareService.uploadSignatureImage(
             fileBuffer,
             filename,
             user.id,
+            signatureId,
             imageType
           );
 
@@ -106,7 +114,7 @@ const imageUploadResolvers = {
         } catch (error) {
           console.error("Erreur upload image signature:", error);
 
-          if (error.message.includes("Validation")) {
+          if (error.message.includes("Validation") || error.message.includes("requis")) {
             throw error;
           }
 
@@ -125,7 +133,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!key.includes(`signatures/${user.id}/`)) {
+        if (!key.includes(`${user.id}/`)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -156,7 +164,7 @@ const imageUploadResolvers = {
           }
 
           // Vérifier que l'image appartient à l'utilisateur (sécurité)
-          if (!key.includes(`signatures/${user.id}/`)) {
+          if (!key.includes(`${user.id}/`)) {
             throw createValidationError("Accès non autorisé à cette image");
           }
 
