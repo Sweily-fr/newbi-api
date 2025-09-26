@@ -146,10 +146,14 @@ async function startServer() {
   const server = new ApolloServer({
     typeDefs,
     resolvers,
-    context: async ({ req }) => ({
-      req,
-      user: await betterAuthJWTMiddleware(req),
-    }),
+    context: async ({ req }) => {
+      const user = await betterAuthJWTMiddleware(req);
+      logger.debug(`GraphQL Context - User: ${user ? user._id : 'null'}`);
+      return {
+        req,
+        user,
+      };
+    },
     formatError: formatError,
     cache: "bounded",
     persistedQueries: { ttl: 900 },

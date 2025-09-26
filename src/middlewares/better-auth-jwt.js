@@ -13,8 +13,11 @@ const betterAuthJWTMiddleware = async (req) => {
     // Récupérer le token JWT depuis les headers
     const token = extractJWTToken(req.headers);
     if (!token) {
+      logger.debug("Aucun token JWT trouvé dans les headers");
       return null;
     }
+
+    logger.debug(`Token JWT extrait: ${token.substring(0, 20)}...`);
 
     // Récupérer l'IP client pour les protections de sécurité
     const clientIP =
@@ -29,12 +32,15 @@ const betterAuthJWTMiddleware = async (req) => {
     // Validation JWKS complète avec vérification cryptographique
     let decoded;
     try {
+      logger.debug(`Validation JWT pour IP: ${clientIP}`);
       const jwksValidator = await getJWKSValidator();
       decoded = await jwksValidator.validateJWT(token, clientIP);
 
       if (!decoded) {
+        logger.warn("JWT validation failed - decoded is null");
         return null;
       }
+      logger.debug(`JWT validé avec succès pour utilisateur: ${decoded.sub}`);
     } catch (jwtError) {
       logger.warn("JWT invalide ou malformé:", jwtError.message);
       return null;
