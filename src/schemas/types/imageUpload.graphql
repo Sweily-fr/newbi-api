@@ -34,6 +34,8 @@ type SignedUrlResult {
 enum ImageType {
   PROFILE
   COMPANY
+  IMG_PROFIL
+  LOGO_RESEAU
 }
 
 extend type Query {
@@ -45,11 +47,12 @@ extend type Query {
 
 extend type Mutation {
   """
-  Upload une image de signature vers Cloudflare R2
+  Upload une image de signature vers Cloudflare R2 (nouvelle structure)
   """
   uploadSignatureImage(
     file: Upload!
-    imageType: String = "profile"
+    imageType: String = "imgProfil"
+    signatureId: String!
   ): ImageUploadResult!
 
   """

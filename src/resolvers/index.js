@@ -51,7 +51,11 @@ const resolvers = mergeResolvers([
   eventResolvers,
   bankingResolvers,
   referralResolvers,
+<<<<<<< HEAD
   trialResolvers,
+=======
+  // socialIconResolvers, // Désactivé - remplacé par le nouveau système API REST
+>>>>>>> Dylan/SignatureMailv7
 ]);
 
 export default resolvers;

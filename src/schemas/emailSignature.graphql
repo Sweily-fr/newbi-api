@@ -16,6 +16,11 @@ type EmailSignature {
   address: String
   companyName: String
   
+  # Réseaux sociaux
+  socialNetworks: SocialNetworks
+  socialColors: SocialColors
+  customSocialIcons: CustomSocialIcons
+  
   # Options d'affichage des icônes
   showPhoneIcon: Boolean!
   showMobileIcon: Boolean!
@@ -31,6 +36,7 @@ type EmailSignature {
   nameSpacing: Int!
   nameAlignment: String!
   layout: String!
+  orientation: String
   columnWidths: ColumnWidths!
   
   # Images
@@ -70,6 +76,27 @@ type SignatureColors {
   separatorHorizontal: String!
 }
 
+type SocialNetworks {
+  facebook: String
+  instagram: String
+  linkedin: String
+  x: String
+}
+
+type SocialColors {
+  facebook: String
+  instagram: String
+  linkedin: String
+  x: String
+}
+
+type CustomSocialIcons {
+  facebook: String
+  instagram: String
+  linkedin: String
+  x: String
+}
+
 type ColumnWidths {
   photo: Int!
   content: Int!
@@ -105,8 +132,8 @@ type TypographyField {
   fontSize: Int!
   color: String!
   fontWeight: String!
-  fontStyle: String
-  textDecoration: String
+  fontStyle: String!
+  textDecoration: String!
 }
 
 type DetailedTypography {
@@ -138,6 +165,11 @@ input EmailSignatureInput {
   address: String
   companyName: String
   
+  # Réseaux sociaux
+  socialNetworks: SocialNetworksInput
+  socialColors: SocialColorsInput
+  customSocialIcons: CustomSocialIconsInput
+  
   # Options d'affichage des icônes
   showPhoneIcon: Boolean
   showMobileIcon: Boolean
@@ -153,6 +185,7 @@ input EmailSignatureInput {
   nameSpacing: Int
   nameAlignment: String
   layout: String
+  orientation: String
   columnWidths: ColumnWidthsInput
   
   # Images
@@ -185,6 +218,27 @@ input SignatureColorsInput {
   contact: String
   separatorVertical: String
   separatorHorizontal: String
+}
+
+input SocialNetworksInput {
+  facebook: String
+  instagram: String
+  linkedin: String
+  x: String
+}
+
+input SocialColorsInput {
+  facebook: String
+  instagram: String
+  linkedin: String
+  x: String
+}
+
+input CustomSocialIconsInput {
+  facebook: String
+  instagram: String
+  linkedin: String
+  x: String
 }
 
 input ColumnWidthsInput {
@@ -256,6 +310,11 @@ input UpdateEmailSignatureInput {
   address: String
   companyName: String
   
+  # Réseaux sociaux
+  socialNetworks: SocialNetworksInput
+  socialColors: SocialColorsInput
+  customSocialIcons: CustomSocialIconsInput
+  
   # Options d'affichage des icônes
   showPhoneIcon: Boolean
   showMobileIcon: Boolean
@@ -271,6 +330,7 @@ input UpdateEmailSignatureInput {
   nameSpacing: Int
   nameAlignment: String
   layout: String
+  orientation: String
   columnWidths: ColumnWidthsInput
   
   # Images
@@ -294,6 +354,13 @@ input UpdateEmailSignatureInput {
   fontFamily: String
   fontSize: FontSizesInput
   typography: DetailedTypographyInput
+}
+
+# Type de retour pour le nettoyage des fichiers temporaires
+type CleanupResult {
+  success: Boolean!
+  deletedCount: Int!
+  message: String!
 }
 
 extend type Query {
@@ -322,4 +389,7 @@ extend type Mutation {
   
   # Définir une signature comme par défaut
   setDefaultEmailSignature(id: ID!): EmailSignature!
+  
+  # Nettoyer les fichiers temporaires sur Cloudflare
+  cleanupTemporaryFiles(userId: String!, newSignatureId: String): CleanupResult!
 }

@@ -19,6 +19,11 @@ const emailSignatureTypeDefs = gql`
     address: String
     companyName: String
     
+    # Réseaux sociaux
+    socialNetworks: SocialNetworks
+    socialColors: SocialColors
+    customSocialIcons: CustomSocialIcons
+    
     # Options d'affichage des icônes
     showPhoneIcon: Boolean!
     showMobileIcon: Boolean!
@@ -34,6 +39,7 @@ const emailSignatureTypeDefs = gql`
     nameSpacing: Int!
     nameAlignment: String!
     layout: String!
+    orientation: String
     columnWidths: ColumnWidths!
     
     # Images
@@ -51,10 +57,12 @@ const emailSignatureTypeDefs = gql`
     
     # Espacements
     spacings: SignatureSpacings!
+    detailedSpacing: Boolean!
     
     # Typographie
     fontFamily: String!
     fontSize: FontSizes!
+    typography: DetailedTypography!
     
     # Métadonnées
     createdBy: ID!
@@ -90,6 +98,50 @@ const emailSignatureTypeDefs = gql`
     websiteToAddress: Int!
     separatorTop: Int!
     separatorBottom: Int!
+    logoToSocial: Int!
+    verticalSeparatorLeft: Int!
+    verticalSeparatorRight: Int!
+  }
+
+  type SocialNetworks {
+    facebook: String
+    instagram: String
+    linkedin: String
+    x: String
+  }
+
+  type SocialColors {
+    facebook: String
+    instagram: String
+    linkedin: String
+    x: String
+  }
+
+  type CustomSocialIcons {
+    facebook: String
+    instagram: String
+    linkedin: String
+    x: String
+  }
+
+  type TypographyField {
+    fontFamily: String!
+    fontSize: Int!
+    color: String!
+    fontWeight: String!
+    fontStyle: String
+    textDecoration: String
+  }
+
+  type DetailedTypography {
+    fullName: TypographyField!
+    position: TypographyField!
+    company: TypographyField!
+    email: TypographyField!
+    phone: TypographyField!
+    mobile: TypographyField!
+    website: TypographyField!
+    address: TypographyField!
   }
 
   type FontSizes {
@@ -116,6 +168,11 @@ const emailSignatureTypeDefs = gql`
     address: String
     companyName: String
     
+    # Réseaux sociaux
+    socialNetworks: SocialNetworksInput
+    socialColors: SocialColorsInput
+    customSocialIcons: CustomSocialIconsInput
+    
     # Options d'affichage des icônes
     showPhoneIcon: Boolean
     showMobileIcon: Boolean
@@ -131,6 +188,7 @@ const emailSignatureTypeDefs = gql`
     nameSpacing: Int
     nameAlignment: String
     layout: String
+    orientation: String
     columnWidths: ColumnWidthsInput
     
     # Images
@@ -148,10 +206,12 @@ const emailSignatureTypeDefs = gql`
     
     # Espacements
     spacings: SignatureSpacingsInput
+    detailedSpacing: Boolean
     
     # Typographie
     fontFamily: String
     fontSize: FontSizesInput
+    typography: DetailedTypographyInput
   }
 
   input SignatureColorsInput {
@@ -182,12 +242,56 @@ const emailSignatureTypeDefs = gql`
     websiteToAddress: Int
     separatorTop: Int
     separatorBottom: Int
+    logoToSocial: Int
+    verticalSeparatorLeft: Int
+    verticalSeparatorRight: Int
   }
 
   input FontSizesInput {
     name: Int
     position: Int
     contact: Int
+  }
+
+  input SocialNetworksInput {
+    facebook: String
+    instagram: String
+    linkedin: String
+    x: String
+  }
+
+  input SocialColorsInput {
+    facebook: String
+    instagram: String
+    linkedin: String
+    x: String
+  }
+
+  input CustomSocialIconsInput {
+    facebook: String
+    instagram: String
+    linkedin: String
+    x: String
+  }
+
+  input TypographyFieldInput {
+    fontFamily: String
+    fontSize: Int
+    color: String
+    fontWeight: String
+    fontStyle: String
+    textDecoration: String
+  }
+
+  input DetailedTypographyInput {
+    fullName: TypographyFieldInput
+    position: TypographyFieldInput
+    company: TypographyFieldInput
+    email: TypographyFieldInput
+    phone: TypographyFieldInput
+    mobile: TypographyFieldInput
+    website: TypographyFieldInput
+    address: TypographyFieldInput
   }
 
   input UpdateEmailSignatureInput {
@@ -209,6 +313,11 @@ const emailSignatureTypeDefs = gql`
     address: String
     companyName: String
     
+    # Réseaux sociaux
+    socialNetworks: SocialNetworksInput
+    socialColors: SocialColorsInput
+    customSocialIcons: CustomSocialIconsInput
+    
     # Options d'affichage des icônes
     showPhoneIcon: Boolean
     showMobileIcon: Boolean
@@ -224,6 +333,7 @@ const emailSignatureTypeDefs = gql`
     nameSpacing: Int
     nameAlignment: String
     layout: String
+    orientation: String
     columnWidths: ColumnWidthsInput
     
     # Images
@@ -241,10 +351,12 @@ const emailSignatureTypeDefs = gql`
     
     # Espacements
     spacings: SignatureSpacingsInput
+    detailedSpacing: Boolean
     
     # Typographie
     fontFamily: String
     fontSize: FontSizesInput
+    typography: DetailedTypographyInput
   }
 
   extend type Query {

@@ -37,6 +37,8 @@ const imageUploadTypeDefs = gql`
   enum ImageType {
     PROFILE
     COMPANY
+    imgProfil
+    logoReseau
   }
 
   extend type Query {
@@ -48,11 +50,12 @@ const imageUploadTypeDefs = gql`
 
   extend type Mutation {
     """
-    Upload une image de signature vers Cloudflare R2
+    Upload une image de signature vers Cloudflare R2 (nouvelle structure)
     """
     uploadSignatureImage(
       file: Upload!
-      imageType: String = "profile"
+      imageType: String = "imgProfil"
+      signatureId: String!
     ): ImageUploadResult!
 
     """

@@ -67,6 +67,30 @@ const emailSignatureSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Réseaux sociaux
+    socialNetworks: {
+      facebook: { type: String, trim: true, default: "" },
+      instagram: { type: String, trim: true, default: "" },
+      linkedin: { type: String, trim: true, default: "" },
+      x: { type: String, trim: true, default: "" },
+    },
+
+    // Couleurs personnalisées pour chaque réseau social
+    socialColors: {
+      facebook: { type: String, trim: true, default: "#1877F2" },
+      instagram: { type: String, trim: true, default: "#E4405F" },
+      linkedin: { type: String, trim: true, default: "#0077B5" },
+      x: { type: String, trim: true, default: "#000000" },
+    },
+
+    // URLs des icônes personnalisées sur Cloudflare
+    customSocialIcons: {
+      facebook: { type: String, trim: true, default: "" },
+      instagram: { type: String, trim: true, default: "" },
+      linkedin: { type: String, trim: true, default: "" },
+      x: { type: String, trim: true, default: "" },
+    },
+
     // Options d'affichage des icônes
     showPhoneIcon: {
       type: Boolean,
@@ -461,6 +485,16 @@ const emailSignatureSchema = new mongoose.Schema(
           default: "normal",
           enum: ["normal", "bold", "lighter", "bolder"],
         },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
+        },
       },
       email: {
         fontFamily: {
@@ -482,6 +516,16 @@ const emailSignatureSchema = new mongoose.Schema(
           type: String,
           default: "normal",
           enum: ["normal", "bold", "lighter", "bolder"],
+        },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
         },
       },
       phone: {
@@ -505,6 +549,16 @@ const emailSignatureSchema = new mongoose.Schema(
           default: "normal",
           enum: ["normal", "bold", "lighter", "bolder"],
         },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
+        },
       },
       mobile: {
         fontFamily: {
@@ -526,6 +580,16 @@ const emailSignatureSchema = new mongoose.Schema(
           type: String,
           default: "normal",
           enum: ["normal", "bold", "lighter", "bolder"],
+        },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
         },
       },
       website: {
@@ -549,6 +613,16 @@ const emailSignatureSchema = new mongoose.Schema(
           default: "normal",
           enum: ["normal", "bold", "lighter", "bolder"],
         },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
+        },
       },
       address: {
         fontFamily: {
@@ -570,6 +644,16 @@ const emailSignatureSchema = new mongoose.Schema(
           type: String,
           default: "normal",
           enum: ["normal", "bold", "lighter", "bolder"],
+        },
+        fontStyle: {
+          type: String,
+          default: "normal",
+          enum: ["normal", "italic", "oblique"],
+        },
+        textDecoration: {
+          type: String,
+          default: "none",
+          enum: ["none", "underline", "overline", "line-through"],
         },
       },
     },
