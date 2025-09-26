@@ -1,0 +1,43 @@
+# Types pour les icônes sociales personnalisées
+
+type SocialIcon {
+  url: String!
+  key: String!
+}
+
+type SocialIcons {
+  facebook: SocialIcon
+  instagram: SocialIcon
+  linkedin: SocialIcon
+  x: SocialIcon
+}
+
+type SocialIconResult {
+  success: Boolean!
+  message: String!
+  icons: SocialIcons
+}
+
+type SocialIconDeleteResult {
+  success: Boolean!
+  message: String!
+}
+
+extend type Mutation {
+  # Génère les icônes sociales personnalisées pour une signature
+  generateCustomSocialIcons(
+    signatureId: String!
+    logoUrl: String!
+  ): SocialIconResult!
+
+  # Met à jour les icônes sociales quand le logo change
+  updateCustomSocialIcons(
+    signatureId: String!
+    newLogoUrl: String!
+  ): SocialIconResult!
+
+  # Supprime les icônes sociales personnalisées d'une signature
+  deleteCustomSocialIcons(
+    signatureId: String!
+  ): SocialIconDeleteResult!
+}

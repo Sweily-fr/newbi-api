@@ -6,6 +6,7 @@ import {
   createValidationError,
 } from "../utils/errors.js";
 import { deleteFile } from "../utils/fileUpload.js";
+import cloudflareService from "../services/cloudflareService.js";
 
 const emailSignatureResolvers = {
   Query: {
@@ -313,6 +314,60 @@ const emailSignatureResolvers = {
       await signature.save(); // Le middleware pre-save s'occupera de mettre à jour les autres signatures
 
       return signature;
+    }),
+
+    // Nettoyer les fichiers temporaires sur Cloudflare
+    cleanupTemporaryFiles: isAuthenticated(async (_, { userId, newSignatureId }, { user }) => {
+      try {
+        console.log('🗑️ Nettoyage des fichiers temporaires pour utilisateur:', userId);
+        console.log('🆔 Nouveau signatureId:', newSignatureId);
+
+        // Vérifier que l'utilisateur peut nettoyer ses propres fichiers
+        if (userId !== user.id) {
+          throw createValidationError('Vous ne pouvez nettoyer que vos propres fichiers');
+        }
+
+        let deletedCount = 0;
+
+        // Nettoyer les dossiers temporaires pour cet utilisateur
+        const tempFolders = [
+          `${userId}/temp-*`,
+        ];
+
+        for (const pattern of tempFolders) {
+          try {
+            // Lister tous les dossiers temporaires
+            const tempFoldersList = await cloudflareService.listObjects(`${userId}/`, 'temp-');
+            
+            for (const folder of tempFoldersList) {
+              // Supprimer chaque dossier temporaire trouvé
+              const deleteResult = await cloudflareService.deleteSignatureFolder(userId, folder.signatureId, null);
+              if (deleteResult.success) {
+                deletedCount += deleteResult.deletedCount || 1;
+                console.log(`✅ Dossier temporaire supprimé: ${folder.signatureId}`);
+              }
+            }
+          } catch (error) {
+            console.warn(`⚠️ Erreur lors du nettoyage du pattern ${pattern}:`, error.message);
+          }
+        }
+
+        console.log(`✅ Nettoyage terminé. ${deletedCount} éléments supprimés.`);
+
+        return {
+          success: true,
+          deletedCount,
+          message: `${deletedCount} fichiers temporaires supprimés avec succès`,
+        };
+
+      } catch (error) {
+        console.error('❌ Erreur lors du nettoyage des fichiers temporaires:', error);
+        return {
+          success: false,
+          deletedCount: 0,
+          message: `Erreur lors du nettoyage: ${error.message}`,
+        };
+      }
     }),
   },
 };

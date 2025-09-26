@@ -23,6 +23,7 @@ import ocrResolvers from "./ocr.js";
 import eventResolvers from "./event.js";
 import bankingResolvers from "./banking.js";
 import referralResolvers from "./referral.js";
+// import socialIconResolvers from "./socialIcon.js"; // Désactivé - remplacé par le nouveau système API REST
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -50,6 +51,7 @@ const resolvers = mergeResolvers([
   eventResolvers,
   bankingResolvers,
   referralResolvers,
+  // socialIconResolvers, // Désactivé - remplacé par le nouveau système API REST
 ]);
 
 export default resolvers;
