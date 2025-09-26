@@ -16,7 +16,7 @@ class JWKSValidator {
     this.requestCount = new Map(); // Rate limiting par IP
     this.failedAttempts = new Map(); // Tentatives échouées
     this.suspiciousKids = new Set(); // Kids suspects
-    this.maxRequestsPerMinute = 60;
+    this.maxRequestsPerMinute = 300; // Augmenté pour éviter les blocages
     this.maxFailedAttempts = 10;
     this.blockDuration = 15 * 60 * 1000; // 15 minutes
   }
