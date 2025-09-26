@@ -82,35 +82,6 @@ class CloudflareService {
       let key;
       
       switch (imageType) {
-        case 'ocr': {
-          // Pour les reçus OCR, organiser par organisation (ID organisation uniquement)
-          if (!organizationId) {
-            throw new Error('Organization ID requis pour les uploads OCR');
-          }
-          console.log('🏢 CloudflareService - Organization ID pour OCR:', organizationId);
-          key = `${organizationId}/${uniqueId}${fileExtension}`;
-          break;
-        }
-        case 'imgCompany': {
-          // Pour les logos d'entreprise
-          const orgId = organizationId || userId;
-          key = `${orgId}/company/${uniqueId}${fileExtension}`;
-          break;
-        }
-        case 'documents': {
-          // Pour les documents généraux
-          key = `documents/${userId}/${uniqueId}${fileExtension}`;
-          break;
-        }
-        case 'profile': {
-          // Pour les images de profil - sans préfixe signatures/
-          key = `${userId}/image/${uniqueId}${fileExtension}`;
-          break;
-        }
-        default: {
-          // Pour les signatures et autres (comportement par défaut)
-          key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
-          break;
       case 'imgProfil': {
         // Structure : idUser/idSignature/ImgProfil/fichier
         if (!signatureId) {
@@ -314,43 +285,6 @@ class CloudflareService {
   async getImageUrl(key, expiresIn = 86400) {
     if (!key) return null;
 
-    console.log('🔍 CloudflareService - getImageUrl appelée avec key:', key);
-
-    // Déterminer l'URL publique appropriée selon le type d'image
-    let targetPublicUrl = process.env.AWS_R2_PUBLIC_URL;
-
-    // Analyser la clé pour déterminer le type d'image
-    const keyParts = key.split("/");
-    
-    if (keyParts.length >= 2 && keyParts[1] === "image") {
-      // Format: userId/image/filename -> Image de profil
-      targetPublicUrl = process.env.AWS_S3_API_URL_PROFILE;
-      console.log('👤 CloudflareService - Image de profil détectée');
-      console.log('🌐 CloudflareService - URL publique profil:', targetPublicUrl);
-      console.log('🔍 CloudflareService - Variable env AWS_S3_API_URL_PROFILE:', process.env.AWS_S3_API_URL_PROFILE);
-    } else if (keyParts.length >= 2 && keyParts[1] === "company") {
-      // Format: userId/company/filename -> Image d'entreprise
-      targetPublicUrl = process.env.COMPANY_IMAGES_PUBLIC_URL;
-      console.log('🏢 CloudflareService - Image d\'entreprise détectée');
-    } else if (keyParts.length >= 1 && !key.includes("signatures")) {
-      // Format: orgId/filename -> Image OCR
-      targetPublicUrl = process.env.IMAGE_OCR_PUBLIC_URL;
-      console.log('📄 CloudflareService - Image OCR détectée');
-    } else if (key.includes("signatures")) {
-      // Format signatures/userId/type/filename -> Image signature
-      targetPublicUrl = process.env.IMAGE_PUBLIC_URL;
-      console.log('✍️ CloudflareService - Image signature détectée');
-    }
-
-    if (
-      targetPublicUrl &&
-      targetPublicUrl !== "your_r2_public_url" &&
-      targetPublicUrl !== undefined
-    ) {
-      // Si URL publique configurée, utiliser l'URL publique directe
-      const finalUrl = `${targetPublicUrl}/${key}`;
-      console.log('🌐 CloudflareService - URL finale générée:', finalUrl);
-      return finalUrl;
     // Déterminer l'URL publique selon le type de clé
     let publicUrl = process.env.AWS_R2_PUBLIC_URL;
     if (key.includes('/ImgProfil/') || key.includes('/logoReseau/')) {
