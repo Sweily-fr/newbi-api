@@ -339,7 +339,7 @@ const invoiceResolvers = {
           for (const draft of conflictingDrafts) {
             // Utiliser le format DRAFT-ID avec timestamp
             const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-            const finalDraftNumber = `DRAFT-${newNumber}-${timestamp}`;
+            const finalDraftNumber = `${newNumber}-${timestamp}`;
 
             // Mettre à jour la facture en brouillon avec le nouveau numéro
             await Invoice.findByIdAndUpdate(draft._id, {

@@ -127,7 +127,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
           // Renommer le brouillon en conflit
           const uniqueSuffix = Date.now().toString().slice(-6);
           await Invoice.findByIdAndUpdate(conflictingDraft._id, {
-            number: `DRAFT-${options.originalDraftNumber}-${uniqueSuffix}`
+            number: `${options.originalDraftNumber}-${uniqueSuffix}`
           });
         }
         
@@ -162,7 +162,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
         // Renommer le brouillon existant avec un suffixe unique pour éviter les conflits
         const uniqueSuffix = Date.now().toString().slice(-6);
         await Invoice.findByIdAndUpdate(conflictingDraft._id, {
-          number: `DRAFT-${targetNumber}-${uniqueSuffix}`
+          number: `${targetNumber}-${uniqueSuffix}`
         });
         // Brouillon existant renommé avec suffixe unique pour éviter les conflits
       }
@@ -186,7 +186,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
     for (const draft of lowerDrafts) {
       const uniqueSuffix = Date.now().toString().slice(-6);
       await Invoice.findByIdAndUpdate(draft._id, {
-        number: `DRAFT-${draft.number}-${uniqueSuffix}`
+        number: `${draft.number}-${uniqueSuffix}`
       });
     }
     
@@ -236,7 +236,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
   for (const draft of conflictingDrafts) {
     const uniqueSuffix = Date.now().toString().slice(-6);
     await Invoice.findByIdAndUpdate(draft._id, {
-      number: `DRAFT-${draft.number}-${uniqueSuffix}`
+      number: `${draft.number}-${uniqueSuffix}`
     });
     // Brouillon renommé pour éviter conflit avec numéro séquentiel
   }
@@ -335,8 +335,12 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       if (existingDraft) {
         // Renommer l'ancien brouillon avec un suffixe unique
         const timestamp = Date.now();
+        // Éviter le double préfixe DRAFT- si le numéro commence déjà par DRAFT-
+        const baseNumber = options.manualNumber.startsWith('DRAFT-') 
+          ? options.manualNumber.replace('DRAFT-', '') 
+          : options.manualNumber;
         await Invoice.findByIdAndUpdate(existingDraft._id, {
-          number: `DRAFT-${options.manualNumber}-${timestamp}`
+          number: `${baseNumber}-${timestamp}`
         });
       }
       
@@ -344,8 +348,12 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       return `DRAFT-${options.manualNumber}`;
     }
     
-    // Brouillon sans numéro manuel
-    return `DRAFT-${Date.now().toString(36).toUpperCase()}`;
+    // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-
+    const nextSequentialNumber = await generateInvoiceSequentialNumber(prefix, {
+      ...options,
+      year: currentYear
+    });
+    return `DRAFT-${nextSequentialNumber}`;
   }
   
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
@@ -422,17 +430,25 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       if (existingDraft) {
         // Renommer l'ancien brouillon avec un suffixe unique
         const timestamp = Date.now();
+        // Éviter le double préfixe DRAFT- si le numéro commence déjà par DRAFT-
+        const baseNumber = options.manualNumber.startsWith('DRAFT-') 
+          ? options.manualNumber.replace('DRAFT-', '') 
+          : options.manualNumber;
         await Quote.findByIdAndUpdate(existingDraft._id, {
-          number: `DRAFT-${options.manualNumber}-${timestamp}`
+          number: `${baseNumber}-${timestamp}`
         });
       }
       
       // TOUS les brouillons utilisent le format DRAFT-ID
-      return `DRAFT-${options.manualNumber}`;
+      return `${options.manualNumber}`;
     }
     
-    // Brouillon sans numéro manuel
-    return `DRAFT-${Date.now().toString(36).toUpperCase()}`;
+    // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-
+    const nextSequentialNumber = await generateQuoteSequentialNumber(prefix, {
+      ...options,
+      year: currentYear
+    });
+    return `DRAFT-${nextSequentialNumber}`;
   }
   
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
@@ -639,7 +655,7 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
       // Transformer le brouillon en conflit en DRAFT-ID
       const timestamp = Date.now() + Math.floor(Math.random() * 1000);
       await Quote.findByIdAndUpdate(conflictingDraft._id, {
-        number: `DRAFT-${conflictingDraft.number}-${timestamp}`
+        number: `${conflictingDraft.number}-${timestamp}`
       });
     }
     
@@ -692,7 +708,7 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
     for (const draft of duplicateDrafts) {
       const timestamp = Date.now() + Math.floor(Math.random() * 1000);
       await Quote.findByIdAndUpdate(draft._id, {
-        number: `DRAFT-${draft.number}-${timestamp}`
+        number: `${draft.number}-${timestamp}`
       });
     }
     
@@ -723,7 +739,7 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
   for (const draft of duplicateDrafts) {
     const timestamp = Date.now() + Math.floor(Math.random() * 1000);
     await Quote.findByIdAndUpdate(draft._id, {
-      number: `DRAFT-${draft.number}-${timestamp}`
+      number: `${draft.number}-${timestamp}`
     });
   }
   
@@ -848,7 +864,7 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
         if (conflictingDraft) {
           const uniqueSuffix = Date.now().toString().slice(-6);
           await CreditNote.findByIdAndUpdate(conflictingDraft._id, {
-            number: `DRAFT-${options.originalDraftNumber}-${uniqueSuffix}`
+            number: `${options.originalDraftNumber}-${uniqueSuffix}`
           });
         }
         
@@ -879,7 +895,7 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
       if (conflictingDraft) {
         const uniqueSuffix = Date.now().toString().slice(-6);
         await CreditNote.findByIdAndUpdate(conflictingDraft._id, {
-          number: `DRAFT-${targetNumber}-${uniqueSuffix}`
+          number: `${targetNumber}-${uniqueSuffix}`
         });
       }
     }
@@ -927,7 +943,7 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
   for (const draft of conflictingDrafts) {
     const uniqueSuffix = Date.now().toString().slice(-6);
     await CreditNote.findByIdAndUpdate(draft._id, {
-      number: `DRAFT-${draft.number}-${uniqueSuffix}`
+      number: `${draft.number}-${uniqueSuffix}`
     });
   }
   
@@ -992,7 +1008,7 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
         // Seul l'ancien brouillon devient DRAFT-ID
         const timestamp = Date.now();
         await CreditNote.findByIdAndUpdate(existingDraft._id, {
-          number: `DRAFT-${options.manualNumber}-${timestamp}`
+          number: `${options.manualNumber}-${timestamp}`
         });
         
         // Le nouveau brouillon garde le numéro original
@@ -1002,8 +1018,12 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
       return options.manualNumber;
     }
     
-    // Brouillon sans numéro manuel
-    return `DRAFT-${Date.now().toString(36).toUpperCase()}`;
+    // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-
+    const nextSequentialNumber = await generateCreditNoteSequentialNumber(prefix, {
+      ...options,
+      year: currentYear
+    });
+    return `DRAFT-${nextSequentialNumber}`;
   }
   
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
