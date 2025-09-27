@@ -317,7 +317,7 @@ const quoteResolvers = {
           for (const draft of conflictingDrafts) {
             // Utiliser le format DRAFT-ID avec timestamp
             const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-            const finalDraftNumber = `DRAFT-${newNumber}-${timestamp}`;
+            const finalDraftNumber = `${newNumber}-${timestamp}`;
 
             // Mettre à jour le devis en brouillon avec le nouveau numéro
             await Quote.findByIdAndUpdate(draft._id, {
