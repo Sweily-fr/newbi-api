@@ -81,6 +81,8 @@ type SocialNetworks {
   instagram: String
   linkedin: String
   x: String
+  github: String
+  youtube: String
 }
 
 type SocialColors {
@@ -88,6 +90,8 @@ type SocialColors {
   instagram: String
   linkedin: String
   x: String
+  github: String
+  youtube: String
 }
 
 type CustomSocialIcons {
@@ -95,6 +99,8 @@ type CustomSocialIcons {
   instagram: String
   linkedin: String
   x: String
+  github: String
+  youtube: String
 }
 
 type ColumnWidths {
@@ -225,6 +231,8 @@ input SocialNetworksInput {
   instagram: String
   linkedin: String
   x: String
+  github: String
+  youtube: String
 }
 
 input SocialColorsInput {
@@ -232,6 +240,8 @@ input SocialColorsInput {
   instagram: String
   linkedin: String
   x: String
+  github: String
+  youtube: String
 }
 
 input CustomSocialIconsInput {
@@ -239,6 +249,8 @@ input CustomSocialIconsInput {
   instagram: String
   linkedin: String
   x: String
+  github: String
+  youtube: String
 }
 
 input ColumnWidthsInput {

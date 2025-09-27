@@ -73,6 +73,8 @@ const emailSignatureSchema = new mongoose.Schema(
       instagram: { type: String, trim: true, default: "" },
       linkedin: { type: String, trim: true, default: "" },
       x: { type: String, trim: true, default: "" },
+      github: { type: String, trim: true, default: "" },
+      youtube: { type: String, trim: true, default: "" },
     },
 
     // Couleurs personnalisées pour chaque réseau social
@@ -81,6 +83,8 @@ const emailSignatureSchema = new mongoose.Schema(
       instagram: { type: String, trim: true, default: "#E4405F" },
       linkedin: { type: String, trim: true, default: "#0077B5" },
       x: { type: String, trim: true, default: "#000000" },
+      github: { type: String, trim: true, default: "#333333" },
+      youtube: { type: String, trim: true, default: "#FF0000" },
     },
 
     // URLs des icônes personnalisées sur Cloudflare
@@ -89,6 +93,8 @@ const emailSignatureSchema = new mongoose.Schema(
       instagram: { type: String, trim: true, default: "" },
       linkedin: { type: String, trim: true, default: "" },
       x: { type: String, trim: true, default: "" },
+      github: { type: String, trim: true, default: "" },
+      youtube: { type: String, trim: true, default: "" },
     },
 
     // Options d'affichage des icônes
