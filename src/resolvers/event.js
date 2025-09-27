@@ -14,6 +14,7 @@ const eventResolvers = {
     getEvents: withWorkspace(async (_, { startDate, endDate, type, limit = 100, offset = 0, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        
 
         // Construire le filtre
         const filter = { workspaceId: finalWorkspaceId };
@@ -34,16 +35,54 @@ const eventResolvers = {
 
         // Récupérer les événements
         const events = await Event.find(filter)
-          .populate('invoiceId')
+          .populate({
+            path: 'invoiceId',
+            populate: {
+              path: 'client',
+              select: 'name'
+            }
+          })
           .sort({ start: 1 })
           .limit(limit)
           .skip(offset);
 
         const totalCount = await Event.countDocuments(filter);
 
+
+        // S'assurer que tous les champs sont correctement sérialisés
+        const serializedEvents = events.map(event => {
+          const baseEvent = {
+            ...event.toObject(),
+            id: event._id.toString(),
+            start: event.start.toISOString(),
+            end: event.end.toISOString(),
+            invoiceId: event.invoiceId ? event.invoiceId._id?.toString() || event.invoiceId.toString() : null
+          };
+
+          // Seulement inclure invoice si invoiceId existe et est populé
+          if (event.invoiceId && event.invoiceId._id) {
+            baseEvent.invoice = {
+              id: event.invoiceId._id.toString(),
+              prefix: event.invoiceId.prefix || '',
+              number: event.invoiceId.number || '',
+              client: event.invoiceId.client ? {
+                name: event.invoiceId.client.name || ''
+              } : null,
+              finalTotalTTC: event.invoiceId.finalTotalTTC || 0,
+              status: event.invoiceId.status || 'DRAFT'
+            };
+          } else {
+            // Ne pas inclure invoice du tout si pas d'invoiceId
+            baseEvent.invoice = null;
+          }
+
+          return baseEvent;
+        });
+
+
         return {
           success: true,
-          events,
+          events: serializedEvents,
           totalCount,
           message: `${events.length} événement(s) récupéré(s)`
         };
