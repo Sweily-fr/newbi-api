@@ -133,6 +133,14 @@ export const authorizeDownload = async (req, res) => {
 
 async function generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, buyerUserAgent, accessGrant = null) {
   try {
+    // Vérifier la configuration R2/S3
+    if (!process.env.TRANSFER_BUCKET_NAME) {
+      logger.error('❌ TRANSFER_BUCKET_NAME non configuré');
+      return res.status(500).json({
+        success: false,
+        error: 'Configuration de stockage manquante'
+      });
+    }
     const downloadUrls = [];
     const filesToProcess = fileId 
       ? fileTransfer.files.filter(f => f._id.toString() === fileId)
