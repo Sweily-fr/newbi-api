@@ -25,36 +25,36 @@ const safePublish = (channel, payload, context = '') => {
 
 const resolvers = {
   Query: {
-    boards: withWorkspace(async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    boards: withWorkspace(async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       return await Board.find({ workspaceId: finalWorkspaceId }).sort({ createdAt: -1 });
     }),
     
-    board: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    board: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const board = await Board.findOne({ _id: id, workspaceId: finalWorkspaceId });
       if (!board) throw new Error('Board not found');
       return board;
     }),
     
-    columns: withWorkspace(async (_, { boardId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    columns: withWorkspace(async (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       return await Column.find({ boardId, workspaceId: finalWorkspaceId }).sort('order');
     }),
     
-    column: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    column: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       return await Column.findOne({ _id: id, workspaceId: finalWorkspaceId });
     }),
     
-    tasks: withWorkspace(async (_, { boardId, columnId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    tasks: withWorkspace(async (_, { boardId, columnId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const query = { boardId, workspaceId: finalWorkspaceId };
       if (columnId) query.columnId = columnId;
       return await Task.find(query).sort('position');
     }),
     
-    task: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    task: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       return await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
     })
@@ -110,7 +110,7 @@ const resolvers = {
       return savedBoard;
     }),
     
-    updateBoard: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    updateBoard: withWorkspace(async (_, { input, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const board = await Board.findOneAndUpdate(
         { _id: input.id, workspaceId: finalWorkspaceId },
@@ -129,7 +129,7 @@ const resolvers = {
       return board;
     }),
     
-    deleteBoard: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    deleteBoard: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
@@ -168,10 +168,20 @@ const resolvers = {
         workspaceId: finalWorkspaceId
       });
       
-      return await column.save();
+      const savedColumn = await column.save();
+      
+      // Publier l'événement de création de colonne
+      safePublish(`${COLUMN_UPDATED}_${finalWorkspaceId}_${savedColumn.boardId}`, {
+        type: 'CREATED',
+        column: savedColumn,
+        boardId: savedColumn.boardId,
+        workspaceId: finalWorkspaceId
+      }, 'Colonne créée');
+      
+      return savedColumn;
     }),
     
-    updateColumn: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    updateColumn: withWorkspace(async (_, { input, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const { id, ...updates } = input;
       const column = await Column.findOneAndUpdate(
@@ -180,18 +190,41 @@ const resolvers = {
         { new: true }
       );
       if (!column) throw new Error('Column not found');
+      
+      // Publier l'événement de mise à jour de colonne
+      safePublish(`${COLUMN_UPDATED}_${finalWorkspaceId}_${column.boardId}`, {
+        type: 'UPDATED',
+        column: column,
+        boardId: column.boardId,
+        workspaceId: finalWorkspaceId
+      }, 'Colonne mise à jour');
+      
       return column;
     }),
     
-    deleteColumn: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    deleteColumn: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
+        // Récupérer la colonne avant suppression pour avoir le boardId
+        const column = await Column.findOne({ _id: id, workspaceId: finalWorkspaceId });
+        if (!column) throw new Error('Column not found');
+        
         // Supprimer les tâches associées à la colonne
         await Task.deleteMany({ columnId: id, workspaceId: finalWorkspaceId });
         
         // Supprimer la colonne
         const result = await Column.deleteOne({ _id: id, workspaceId: finalWorkspaceId });
+        
+        if (result.deletedCount > 0) {
+          // Publier l'événement de suppression de colonne
+          safePublish(`${COLUMN_UPDATED}_${finalWorkspaceId}_${column.boardId}`, {
+            type: 'DELETED',
+            columnId: id,
+            boardId: column.boardId,
+            workspaceId: finalWorkspaceId
+          }, 'Colonne supprimée');
+        }
         
         return result.deletedCount > 0;
       } catch (error) {
@@ -200,10 +233,14 @@ const resolvers = {
       }
     }),
     
-    reorderColumns: withWorkspace(async (_, { columns, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    reorderColumns: withWorkspace(async (_, { columns, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
+        // Récupérer une colonne pour avoir le boardId
+        const firstColumn = await Column.findOne({ _id: columns[0], workspaceId: finalWorkspaceId });
+        if (!firstColumn) throw new Error('Column not found');
+        
         const updatePromises = columns.map((id, index) =>
           Column.updateOne(
             { _id: id, workspaceId: finalWorkspaceId },
@@ -212,6 +249,15 @@ const resolvers = {
         );
         
         await Promise.all(updatePromises);
+        
+        // Publier l'événement de réorganisation des colonnes
+        safePublish(`${COLUMN_UPDATED}_${finalWorkspaceId}_${firstColumn.boardId}`, {
+          type: 'REORDERED',
+          columns: columns,
+          boardId: firstColumn.boardId,
+          workspaceId: finalWorkspaceId
+        }, 'Colonnes réorganisées');
+        
         return true;
       } catch (error) {
         console.error('Error reordering columns:', error);
@@ -222,8 +268,22 @@ const resolvers = {
     // Task mutations
     createTask: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      
+      // Nettoyer les IDs temporaires de la checklist
+      const cleanedInput = { ...input };
+      if (cleanedInput.checklist) {
+        cleanedInput.checklist = cleanedInput.checklist.map(item => {
+          const cleanedItem = { ...item };
+          // Supprimer les IDs temporaires (qui commencent par 'temp-')
+          if (cleanedItem.id && cleanedItem.id.startsWith('temp-')) {
+            delete cleanedItem.id;
+          }
+          return cleanedItem;
+        });
+      }
+      
       const task = new Task({
-        ...input,
+        ...cleanedInput,
         userId: user.id,
         workspaceId: finalWorkspaceId,
         position: input.position || 0
@@ -241,9 +301,22 @@ const resolvers = {
       return savedTask;
     }),
     
-    updateTask: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    updateTask: withWorkspace(async (_, { input, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const { id, ...updates } = input;
+      
+      // Nettoyer les IDs temporaires de la checklist
+      if (updates.checklist) {
+        updates.checklist = updates.checklist.map(item => {
+          const cleanedItem = { ...item };
+          // Supprimer les IDs temporaires (qui commencent par 'temp-')
+          if (cleanedItem.id && cleanedItem.id.startsWith('temp-')) {
+            delete cleanedItem.id;
+          }
+          return cleanedItem;
+        });
+      }
+      
       const task = await Task.findOneAndUpdate(
         { _id: id, workspaceId: finalWorkspaceId },
         { ...updates, updatedAt: new Date() },
@@ -262,13 +335,29 @@ const resolvers = {
       return task;
     }),
     
-    deleteTask: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    deleteTask: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      
+      // Récupérer la tâche avant suppression pour avoir le boardId
+      const task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
+      if (!task) throw new Error('Task not found');
+      
       const result = await Task.deleteOne({ _id: id, workspaceId: finalWorkspaceId });
+      
+      if (result.deletedCount > 0) {
+        // Publier l'événement de suppression de tâche
+        safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
+          type: 'DELETED',
+          taskId: id,
+          boardId: task.boardId,
+          workspaceId: finalWorkspaceId
+        }, 'Tâche supprimée');
+      }
+      
       return result.deletedCount > 0;
     }),
     
-    moveTask: withWorkspace(async (_, { id, columnId, position, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    moveTask: withWorkspace(async (_, { id, columnId, position, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
@@ -314,12 +403,21 @@ const resolvers = {
         
         await Promise.all(updatePromises);
         
+        // Publier l'événement de déplacement de tâche
+        safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
+          type: 'MOVED',
+          task: task,
+          boardId: task.boardId,
+          workspaceId: finalWorkspaceId
+        }, 'Tâche déplacée');
+        
         return task;
       } catch (error) {
         console.error('Error moving task:', error);
         throw new Error('Failed to move task');
       }
     })
+    
   },
   
   Board: {
@@ -341,7 +439,7 @@ const resolvers = {
 
   Subscription: {
     boardUpdated: {
-      subscribe: withWorkspace((_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      subscribe: withWorkspace((_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         try {
           const pubsub = getPubSub();
@@ -363,7 +461,7 @@ const resolvers = {
     },
 
     taskUpdated: {
-      subscribe: withWorkspace((_, { boardId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      subscribe: withWorkspace((_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         try {
           const pubsub = getPubSub();
@@ -385,7 +483,7 @@ const resolvers = {
     },
 
     columnUpdated: {
-      subscribe: withWorkspace((_, { boardId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      subscribe: withWorkspace((_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         try {
           const pubsub = getPubSub();

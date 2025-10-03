@@ -47,7 +47,7 @@ type Tag {
 }
 
 type ChecklistItem {
-  id: ID!
+  id: ID
   text: String!
   completed: Boolean!
 }
