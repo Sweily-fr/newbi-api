@@ -2,6 +2,26 @@
 import { Board, Column, Task } from '../models/kanban.js';
 import { AuthenticationError } from 'apollo-server-express';
 import { withWorkspace } from '../middlewares/better-auth-jwt.js';
+import { getPubSub } from '../config/redis.js';
+import logger from '../utils/logger.js';
+
+// Événements de subscription
+const BOARD_UPDATED = 'BOARD_UPDATED';
+const TASK_UPDATED = 'TASK_UPDATED';
+const COLUMN_UPDATED = 'COLUMN_UPDATED';
+
+// Fonction utilitaire pour publier en toute sécurité
+const safePublish = (channel, payload, context = '') => {
+  try {
+    const pubsub = getPubSub();
+    pubsub.publish(channel, payload).catch(error => {
+      logger.error(`❌ [Kanban] Erreur publication ${context}:`, error);
+    });
+    logger.debug(`📢 [Kanban] ${context} publié sur ${channel}`);
+  } catch (error) {
+    logger.error(`❌ [Kanban] Erreur getPubSub ${context}:`, error);
+  }
+};
 
 const resolvers = {
   Query: {
@@ -80,6 +100,13 @@ const resolvers = {
         // Ne pas faire échouer la création du tableau si les colonnes échouent
       }
       
+      // Publier l'événement de création de board
+      safePublish(`${BOARD_UPDATED}_${finalWorkspaceId}`, {
+        type: 'CREATED',
+        board: savedBoard,
+        workspaceId: finalWorkspaceId
+      }, 'Board créé');
+      
       return savedBoard;
     }),
     
@@ -91,6 +118,14 @@ const resolvers = {
         { new: true }
       );
       if (!board) throw new Error('Board not found');
+      
+      // Publier l'événement de mise à jour de board
+      safePublish(`${BOARD_UPDATED}_${finalWorkspaceId}`, {
+        type: 'UPDATED',
+        board: board,
+        workspaceId: finalWorkspaceId
+      }, 'Board mis à jour');
+      
       return board;
     }),
     
@@ -106,6 +141,15 @@ const resolvers = {
         
         // Supprimer le tableau
         const result = await Board.deleteOne({ _id: id, workspaceId: finalWorkspaceId });
+        
+        if (result.deletedCount > 0) {
+          // Publier l'événement de suppression de board
+          safePublish(`${BOARD_UPDATED}_${finalWorkspaceId}`, {
+            type: 'DELETED',
+            boardId: id,
+            workspaceId: finalWorkspaceId
+          }, 'Board supprimé');
+        }
         
         return result.deletedCount > 0;
       } catch (error) {
@@ -184,7 +228,17 @@ const resolvers = {
         workspaceId: finalWorkspaceId,
         position: input.position || 0
       });
-      return await task.save();
+      const savedTask = await task.save();
+      
+      // Publier l'événement de création de tâche
+      safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${savedTask.boardId}`, {
+        type: 'CREATED',
+        task: savedTask,
+        boardId: savedTask.boardId,
+        workspaceId: finalWorkspaceId
+      }, 'Tâche créée');
+      
+      return savedTask;
     }),
     
     updateTask: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
@@ -196,6 +250,15 @@ const resolvers = {
         { new: true }
       );
       if (!task) throw new Error('Task not found');
+      
+      // Publier l'événement de mise à jour de tâche
+      safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
+        type: 'UPDATED',
+        task: task,
+        boardId: task.boardId,
+        workspaceId: finalWorkspaceId
+      }, 'Tâche mise à jour');
+      
       return task;
     }),
     
@@ -273,6 +336,74 @@ const resolvers = {
   Column: {
     tasks: async (parent) => {
       return await Task.find({ columnId: parent.id }).sort('position');
+    }
+  },
+
+  Subscription: {
+    boardUpdated: {
+      subscribe: withWorkspace((_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        try {
+          const pubsub = getPubSub();
+          // Utiliser un canal spécifique au workspace pour optimiser les performances
+          return pubsub.asyncIterableIterator([`${BOARD_UPDATED}_${finalWorkspaceId}`]);
+        } catch (error) {
+          logger.error('❌ [Kanban] Erreur subscription boardUpdated:', error);
+          throw new Error('Subscription failed');
+        }
+      }),
+      resolve: (payload, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        // Filtrer les événements par workspace
+        if (payload.workspaceId === finalWorkspaceId) {
+          return payload;
+        }
+        return null;
+      }
+    },
+
+    taskUpdated: {
+      subscribe: withWorkspace((_, { boardId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        try {
+          const pubsub = getPubSub();
+          // Utiliser un canal spécifique au workspace et board pour optimiser
+          return pubsub.asyncIterableIterator([`${TASK_UPDATED}_${finalWorkspaceId}_${boardId}`]);
+        } catch (error) {
+          logger.error('❌ [Kanban] Erreur subscription taskUpdated:', error);
+          throw new Error('Subscription failed');
+        }
+      }),
+      resolve: (payload, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        // Filtrer les événements par workspace et board
+        if (payload.workspaceId === finalWorkspaceId && payload.boardId === boardId) {
+          return payload;
+        }
+        return null;
+      }
+    },
+
+    columnUpdated: {
+      subscribe: withWorkspace((_, { boardId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        try {
+          const pubsub = getPubSub();
+          // Utiliser un canal spécifique au workspace et board pour optimiser
+          return pubsub.asyncIterableIterator([`${COLUMN_UPDATED}_${finalWorkspaceId}_${boardId}`]);
+        } catch (error) {
+          logger.error('❌ [Kanban] Erreur subscription columnUpdated:', error);
+          throw new Error('Subscription failed');
+        }
+      }),
+      resolve: (payload, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        // Filtrer les événements par workspace et board
+        if (payload.workspaceId === finalWorkspaceId && payload.boardId === boardId) {
+          return payload;
+        }
+        return null;
+      }
     }
   }
 };

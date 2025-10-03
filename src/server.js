@@ -2,6 +2,10 @@ import dotenv from "dotenv";
 dotenv.config();
 import express from "express";
 import { ApolloServer } from "apollo-server-express";
+import { createServer } from "http";
+import { execute, subscribe } from "graphql";
+import { SubscriptionServer } from "subscriptions-transport-ws";
+import { makeExecutableSchema } from "@graphql-tools/schema";
 import mongoose from "mongoose";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -22,6 +26,7 @@ import {
   betterAuthJWTMiddleware,
   validateJWT,
 } from "./middlewares/better-auth-jwt.js";
+import { initializeRedis, closeRedis } from "./config/redis.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
 import webhookRoutes from "./routes/webhook.js";
@@ -142,16 +147,22 @@ async function startServer() {
   // Autres routes API
   setupRoutes(app);
 
-  // Configuration Apollo Server
-  const server = new ApolloServer({
+  // Créer le schéma GraphQL exécutable
+  const schema = makeExecutableSchema({
     typeDefs,
     resolvers,
+  });
+
+  // Configuration Apollo Server
+  const server = new ApolloServer({
+    schema,
     context: async ({ req }) => {
       const user = await betterAuthJWTMiddleware(req);
       logger.debug(`GraphQL Context - User: ${user ? user._id : 'null'}`);
       return {
         req,
         user,
+        workspaceId: user?.workspaceId,
       };
     },
     formatError: formatError,
@@ -162,6 +173,70 @@ async function startServer() {
   await server.start();
   server.applyMiddleware({ app, cors: false });
 
+  // Créer le serveur HTTP
+  const httpServer = createServer(app);
+
+  // Configurer les subscriptions WebSocket
+  const subscriptionServer = SubscriptionServer.create({
+    schema,
+    execute,
+    subscribe,
+    onConnect: async (connectionParams, webSocket) => {
+      logger.info('🔌 [WebSocket] Client connecté');
+      
+      // Récupérer le token d'authentification depuis les paramètres de connexion
+      const token = connectionParams?.authorization?.replace('Bearer ', '');
+      
+      if (token) {
+        try {
+          // Créer un faux objet req pour le middleware
+          const fakeReq = {
+            headers: {
+              authorization: `Bearer ${token}`
+            },
+            ip: '127.0.0.1', // IP par défaut pour WebSocket
+            get: (header) => {
+              if (header.toLowerCase() === 'authorization') {
+                return `Bearer ${token}`;
+              }
+              return null;
+            }
+          };
+          
+          // Utiliser betterAuthJWTMiddleware directement
+          const user = await betterAuthJWTMiddleware(fakeReq);
+          const workspaceId = user?.workspaceId;
+          
+          logger.debug(`WebSocket Context - User: ${user ? user._id : 'null'}`);
+          
+          return {
+            user,
+            workspaceId,
+          };
+        } catch (error) {
+          logger.error('❌ [WebSocket] Erreur authentification:', error);
+          throw new Error('Authentication failed');
+        }
+      }
+      
+      throw new Error('No authentication token provided');
+    },
+    onDisconnect: (webSocket, context) => {
+      logger.info('🔌 [WebSocket] Client déconnecté');
+    },
+  }, {
+    server: httpServer,
+    path: '/graphql',
+  });
+
+  // Initialiser Redis PubSub
+  try {
+    await initializeRedis();
+    logger.info("✅ Redis PubSub initialisé");
+  } catch (error) {
+    logger.warn("⚠️ Redis PubSub non disponible, fallback vers PubSub en mémoire:", error.message);
+  }
+
   // Initialiser le système banking
   try {
     await initializeBankingSystem();
@@ -169,13 +244,41 @@ async function startServer() {
     logger.warn("⚠️ Système banking non disponible:", error.message);
   }
 
-  // Démarrer le serveur
+  // Démarrer le serveur HTTP avec WebSocket
   const PORT = process.env.PORT || 4000;
-  app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     logger.info(
-      `🚀 Serveur démarré sur http://localhost:${PORT}${server.graphqlPath}`
+      `🚀 Serveur HTTP démarré sur http://localhost:${PORT}${server.graphqlPath}`
+    );
+    logger.info(
+      `🔌 WebSocket subscriptions sur ws://localhost:${PORT}/graphql`
     );
     setupScheduledJobs();
+  });
+
+  // Nettoyage propre à l'arrêt
+  process.on('SIGTERM', async () => {
+    logger.info('🛑 Arrêt du serveur en cours...');
+    try {
+      subscriptionServer.close();
+      await closeRedis();
+      logger.info('✅ Serveur arrêté proprement');
+    } catch (error) {
+      logger.error('❌ Erreur lors de l\'arrêt:', error);
+    }
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    logger.info('🛑 Interruption du serveur (Ctrl+C)...');
+    try {
+      subscriptionServer.close();
+      await closeRedis();
+      logger.info('✅ Serveur arrêté proprement');
+    } catch (error) {
+      logger.error('❌ Erreur lors de l\'arrêt:', error);
+    }
+    process.exit(0);
   });
 }
 

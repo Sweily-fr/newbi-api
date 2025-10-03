@@ -141,3 +141,32 @@ type Mutation {
   deleteTask(id: ID!, workspaceId: ID): Boolean!
   moveTask(id: ID!, columnId: String!, position: Int!, workspaceId: ID): Task!
 }
+
+type Subscription {
+  boardUpdated(workspaceId: ID!): BoardUpdatePayload!
+  taskUpdated(boardId: ID!, workspaceId: ID!): TaskUpdatePayload!
+  columnUpdated(boardId: ID!, workspaceId: ID!): ColumnUpdatePayload!
+}
+
+type BoardUpdatePayload {
+  type: String!
+  board: Board
+  boardId: ID
+  workspaceId: ID!
+}
+
+type TaskUpdatePayload {
+  type: String!
+  task: Task
+  taskId: ID
+  boardId: ID!
+  workspaceId: ID!
+}
+
+type ColumnUpdatePayload {
+  type: String!
+  column: Column
+  columnId: ID
+  boardId: ID!
+  workspaceId: ID!
+}
