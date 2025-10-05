@@ -178,6 +178,8 @@ const betterAuthMiddleware = async (req) => {
               trialEndDate: organization.trialEndDate || null,
               trialStartDate: organization.trialStartDate || null,
               hasUsedTrial: organization.hasUsedTrial || false,
+              // Structure moderne (subscription)
+              subscription: organization.subscription || null,
               ...organization
             };
           }
@@ -186,11 +188,13 @@ const betterAuthMiddleware = async (req) => {
           user.organization = {
             id: organization.id,
             name: organization.name,
-            // Données trial
+            // Données trial (structure ancienne)
             isTrialActive: organization.isTrialActive || false,
             trialEndDate: organization.trialEndDate || null,
             trialStartDate: organization.trialStartDate || null,
             hasUsedTrial: organization.hasUsedTrial || false,
+            // Structure moderne (subscription)
+            subscription: organization.subscription || null,
             // Autres données d'organisation si nécessaires
             ...organization
           };

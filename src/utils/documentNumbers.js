@@ -353,7 +353,29 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       ...options,
       year: currentYear
     });
-    return `DRAFT-${nextSequentialNumber}`;
+    
+    // Vérifier si le numéro DRAFT-{number} existe déjà
+    const draftNumber = `DRAFT-${nextSequentialNumber}`;
+    const existingQuery = {
+      number: draftNumber,
+      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+    };
+    
+    if (options.workspaceId) {
+      existingQuery.workspaceId = options.workspaceId;
+    } else if (options.userId) {
+      existingQuery.createdBy = options.userId;
+    }
+    
+    const existingInvoice = await Invoice.findOne(existingQuery);
+    
+    if (existingInvoice) {
+      // Si le numéro existe déjà, générer un suffixe unique
+      const timestamp = Date.now().toString().slice(-6);
+      return `DRAFT-${nextSequentialNumber}-${timestamp}`;
+    }
+    
+    return draftNumber;
   }
   
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
@@ -440,7 +462,7 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       }
       
       // TOUS les brouillons utilisent le format DRAFT-ID
-      return `${options.manualNumber}`;
+      return `DRAFT-${options.manualNumber}`;
     }
     
     // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-
@@ -448,7 +470,29 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       ...options,
       year: currentYear
     });
-    return `DRAFT-${nextSequentialNumber}`;
+    
+    // Vérifier si le numéro DRAFT-{number} existe déjà
+    const draftNumber = `DRAFT-${nextSequentialNumber}`;
+    const existingQuery = {
+      number: draftNumber,
+      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+    };
+    
+    if (options.workspaceId) {
+      existingQuery.workspaceId = options.workspaceId;
+    } else if (options.userId) {
+      existingQuery.createdBy = options.userId;
+    }
+    
+    const existingQuote = await Quote.findOne(existingQuery);
+    
+    if (existingQuote) {
+      // Si le numéro existe déjà, générer un suffixe unique
+      const timestamp = Date.now().toString().slice(-6);
+      return `DRAFT-${nextSequentialNumber}-${timestamp}`;
+    }
+    
+    return draftNumber;
   }
   
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)

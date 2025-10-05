@@ -158,6 +158,14 @@ async function generateDownloadUrls(
   accessGrant = null
 ) {
   try {
+    // Vérifier la configuration R2/S3
+    if (!process.env.TRANSFER_BUCKET_NAME) {
+      logger.error('❌ TRANSFER_BUCKET_NAME non configuré');
+      return res.status(500).json({
+        success: false,
+        error: 'Configuration de stockage manquante'
+      });
+    }
     const downloadUrls = [];
     const filesToProcess = fileId
       ? fileTransfer.files.filter((f) => f._id.toString() === fileId)
