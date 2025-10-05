@@ -16,7 +16,28 @@ const stripeConnectResolvers = {
       }
 
       try {
-        return await StripeConnectAccount.findOne({ userId: user._id });
+        console.log('🔍 Recherche compte Stripe Connect pour userId:', user._id);
+        console.log('👤 User email:', user.email);
+        
+        const account = await StripeConnectAccount.findOne({ userId: user._id });
+        
+        console.log('📊 Compte trouvé:', account ? 'OUI' : 'NON');
+        if (account) {
+          console.log('✅ Détails:', {
+            accountId: account.accountId,
+            isOnboarded: account.isOnboarded,
+            chargesEnabled: account.chargesEnabled,
+            userId: account.userId.toString(),
+          });
+          
+          // Vérification de sécurité
+          if (account.userId.toString() !== user._id.toString()) {
+            console.error('🚨 SÉCURITÉ: Compte appartient à un autre utilisateur!');
+            return null;
+          }
+        }
+        
+        return account;
       } catch (error) {
         logger.error(
           "Erreur lors de la récupération du compte Stripe Connect:",

@@ -1,13 +1,13 @@
-import FileTransfer from '../models/FileTransfer.js';
-import AccessGrant from '../models/AccessGrant.js';
-import DownloadEvent from '../models/DownloadEvent.js';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import logger from '../utils/logger.js';
+import FileTransfer from "../models/FileTransfer.js";
+import AccessGrant from "../models/AccessGrant.js";
+import DownloadEvent from "../models/DownloadEvent.js";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import logger from "../utils/logger.js";
 
 // Configuration R2
 const s3Client = new S3Client({
-  region: 'auto',
+  region: "auto",
   endpoint: process.env.AWS_S3_API_URL,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -18,47 +18,57 @@ const s3Client = new S3Client({
 // Autoriser le téléchargement après vérification du paiement
 export const authorizeDownload = async (req, res) => {
   try {
-    console.log('🔐 Route authorize appelée avec params:', req.params);
-    console.log('🔐 Route authorize appelée avec body:', req.body);
-    
+    console.log("🔐 Route authorize appelée avec params:", req.params);
+    console.log("🔐 Route authorize appelée avec body:", req.body);
+
     const { transferId } = req.params;
     const { fileId, email } = req.body;
-    
+
     // Vérifier que transferId est valide
     if (!transferId) {
-      console.log('❌ transferId manquant');
-      return res.status(400).json({ 
-        success: false, 
-        error: 'ID de transfert manquant' 
+      console.log("❌ transferId manquant");
+      return res.status(400).json({
+        success: false,
+        error: "ID de transfert manquant",
       });
     }
-    
-    // Récupérer l'IP et User-Agent
-    const buyerIp = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
-    const buyerUserAgent = req.headers['user-agent'];
 
-    logger.info('🔐 Demande d\'autorisation de téléchargement', {
+    // Récupérer l'IP et User-Agent
+    const buyerIp =
+      req.ip || req.connection.remoteAddress || req.headers["x-forwarded-for"];
+    const buyerUserAgent = req.headers["user-agent"];
+
+    logger.info("🔐 Demande d'autorisation de téléchargement", {
       transferId,
       fileId,
       email,
-      buyerIp
+      buyerIp,
     });
 
-    console.log('🔍 Recherche du transfert avec ID:', transferId);
-    
+    console.log("🔍 Recherche du transfert avec ID:", transferId);
+
     // Vérifier que le transfert existe
-    const fileTransfer = await FileTransfer.findById(transferId).populate('files');
-    console.log('🔍 Transfert trouvé:', fileTransfer ? 'OUI' : 'NON');
+    const fileTransfer = await FileTransfer.findById(transferId).populate(
+      "files"
+    );
+    console.log("🔍 Transfert trouvé:", fileTransfer ? "OUI" : "NON");
     if (!fileTransfer) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Transfert non trouvé' 
+      return res.status(404).json({
+        success: false,
+        error: "Transfert non trouvé",
       });
     }
 
     // Si pas de paiement requis, autoriser directement
     if (!fileTransfer.isPaymentRequired) {
-      return await generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, buyerUserAgent);
+      return await generateDownloadUrls(
+        res,
+        fileTransfer,
+        fileId,
+        email,
+        buyerIp,
+        buyerUserAgent
+      );
     }
 
     // DÉSACTIVÉ : Vérification AccessGrant - Accès libre après paiement global
@@ -83,65 +93,80 @@ export const authorizeDownload = async (req, res) => {
     //   });
     // }
 
-    console.log('🔍 Statut du transfert:', {
+    console.log("🔍 Statut du transfert:", {
       isPaymentRequired: fileTransfer.isPaymentRequired,
       isPaid: fileTransfer.isPaid,
-      paymentAmount: fileTransfer.paymentAmount
+      paymentAmount: fileTransfer.paymentAmount,
     });
 
     // Vérifier seulement si le transfert est payé globalement
     if (fileTransfer.isPaymentRequired && !fileTransfer.isPaid) {
-      console.log('❌ Paiement requis mais non effectué');
+      console.log("❌ Paiement requis mais non effectué");
       return res.status(402).json({
         success: false,
-        error: 'Paiement requis',
+        error: "Paiement requis",
         requiresPayment: true,
         paymentAmount: fileTransfer.paymentAmount,
-        paymentCurrency: fileTransfer.paymentCurrency
+        paymentCurrency: fileTransfer.paymentCurrency,
       });
     }
 
-    console.log('✅ Vérification paiement OK, détection activité suspecte...');
-    
+    console.log("✅ Vérification paiement OK, détection activité suspecte...");
+
     // Détecter une activité suspecte
     const isSuspicious = await DownloadEvent.detectSuspiciousActivity(buyerIp);
-    console.log('🔍 Activité suspecte détectée:', isSuspicious);
-    
+    console.log("🔍 Activité suspecte détectée:", isSuspicious);
+
     if (isSuspicious) {
-      logger.warn('🚨 Activité suspecte détectée', { buyerIp, email });
+      logger.warn("🚨 Activité suspecte détectée", { buyerIp, email });
       return res.status(429).json({
         success: false,
-        error: 'Trop de téléchargements récents. Veuillez réessayer plus tard.'
+        error: "Trop de téléchargements récents. Veuillez réessayer plus tard.",
       });
     }
 
-    console.log('✅ Génération des URLs de téléchargement...');
-    
-    // Générer les URLs de téléchargement (sans AccessGrant)
-    return await generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, buyerUserAgent, null);
+    console.log("✅ Génération des URLs de téléchargement...");
 
+    // Générer les URLs de téléchargement (sans AccessGrant)
+    return await generateDownloadUrls(
+      res,
+      fileTransfer,
+      fileId,
+      email,
+      buyerIp,
+      buyerUserAgent,
+      null
+    );
   } catch (error) {
-    console.error('❌ ERREUR DÉTAILLÉE dans authorizeDownload:', error);
-    console.error('❌ Stack trace:', error.stack);
-    logger.error('❌ Erreur autorisation téléchargement:', error);
+    console.error("❌ ERREUR DÉTAILLÉE dans authorizeDownload:", error);
+    console.error("❌ Stack trace:", error.stack);
+    logger.error("❌ Erreur autorisation téléchargement:", error);
     res.status(500).json({
       success: false,
-      error: 'Erreur interne du serveur'
+      error: "Erreur interne du serveur",
     });
   }
 };
 
-async function generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, buyerUserAgent, accessGrant = null) {
+async function generateDownloadUrls(
+  res,
+  fileTransfer,
+  fileId,
+  email,
+  buyerIp,
+  buyerUserAgent,
+  accessGrant = null
+) {
   try {
     const downloadUrls = [];
-    const filesToProcess = fileId 
-      ? fileTransfer.files.filter(f => f._id.toString() === fileId)
+    const filesToProcess = fileId
+      ? fileTransfer.files.filter((f) => f._id.toString() === fileId)
       : fileTransfer.files;
 
     if (filesToProcess.length === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Fichier non trouvé'
+        error: "Fichier non trouvé",
       });
     }
 
@@ -154,23 +179,23 @@ async function generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, b
       let downloadUrl;
 
       // Générer l'URL selon le type de stockage
-      if (file.downloadUrl && !file.downloadUrl.includes('undefined')) {
+      if (file.downloadUrl && !file.downloadUrl.includes("undefined")) {
         // URL publique directe (temporaire)
         downloadUrl = file.downloadUrl;
-      } else if (file.storageType === 'r2' && file.r2Key) {
+      } else if (file.storageType === "r2" && file.r2Key) {
         // URL signée R2 courte
         const command = new GetObjectCommand({
           Bucket: process.env.TRANSFER_BUCKET_NAME,
           Key: file.r2Key,
         });
-        
-        downloadUrl = await getSignedUrl(s3Client, command, { 
-          expiresIn: urlExpirationMinutes * 60 // en secondes
+
+        downloadUrl = await getSignedUrl(s3Client, command, {
+          expiresIn: urlExpirationMinutes * 60, // en secondes
         });
       } else {
-        logger.error('❌ Impossible de générer URL pour fichier', { 
-          fileId: file._id, 
-          storageType: file.storageType 
+        logger.error("❌ Impossible de générer URL pour fichier", {
+          fileId: file._id,
+          storageType: file.storageType,
         });
         continue;
       }
@@ -182,12 +207,12 @@ async function generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, b
         fileId: file._id,
         fileName: file.originalName,
         fileSize: file.size,
-        downloadType: fileId ? 'single' : 'bulk',
+        downloadType: fileId ? "single" : "bulk",
         buyerEmail: email,
         buyerIp,
         buyerUserAgent,
         downloadUrl,
-        urlExpiresAt
+        urlExpiresAt,
       });
 
       downloadUrls.push({
@@ -196,7 +221,7 @@ async function generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, b
         fileSize: file.size,
         downloadUrl,
         expiresAt: urlExpiresAt,
-        downloadEventId: downloadEvent._id
+        downloadEventId: downloadEvent._id,
       });
 
       // Consommer un téléchargement si AccessGrant existe
@@ -205,22 +230,21 @@ async function generateDownloadUrls(res, fileTransfer, fileId, email, buyerIp, b
       }
     }
 
-    logger.info('✅ URLs de téléchargement générées', {
+    logger.info("✅ URLs de téléchargement générées", {
       transferId: fileTransfer._id,
       filesCount: downloadUrls.length,
       email,
-      expiresAt: urlExpiresAt
+      expiresAt: urlExpiresAt,
     });
 
     res.json({
       success: true,
       downloads: downloadUrls,
       expiresAt: urlExpiresAt,
-      remainingDownloads: accessGrant?.remainingDownloads || null
+      remainingDownloads: accessGrant?.remainingDownloads || null,
     });
-
   } catch (error) {
-    logger.error('❌ Erreur génération URLs:', error);
+    logger.error("❌ Erreur génération URLs:", error);
     throw error;
   }
 }
@@ -235,25 +259,24 @@ export const markDownloadCompleted = async (req, res) => {
     if (!downloadEvent) {
       return res.status(404).json({
         success: false,
-        error: 'Événement de téléchargement non trouvé'
+        error: "Événement de téléchargement non trouvé",
       });
     }
 
     await downloadEvent.markCompleted(duration);
 
-    logger.info('✅ Téléchargement marqué comme terminé', {
+    logger.info("✅ Téléchargement marqué comme terminé", {
       downloadEventId,
       fileName: downloadEvent.fileName,
-      duration
+      duration,
     });
 
     res.json({ success: true });
-
   } catch (error) {
-    logger.error('❌ Erreur marquage téléchargement:', error);
+    logger.error("❌ Erreur marquage téléchargement:", error);
     res.status(500).json({
       success: false,
-      error: 'Erreur interne du serveur'
+      error: "Erreur interne du serveur",
     });
   }
 };
@@ -264,19 +287,21 @@ export const getDownloadStats = async (req, res) => {
     const { transferId } = req.params;
 
     const stats = await DownloadEvent.getDownloadStats(transferId);
-    const recentDownloads = await DownloadEvent.getRecentDownloads(transferId, 20);
+    const recentDownloads = await DownloadEvent.getRecentDownloads(
+      transferId,
+      20
+    );
 
     res.json({
       success: true,
       stats,
-      recentDownloads
+      recentDownloads,
     });
-
   } catch (error) {
-    logger.error('❌ Erreur récupération stats:', error);
+    logger.error("❌ Erreur récupération stats:", error);
     res.status(500).json({
       success: false,
-      error: 'Erreur interne du serveur'
+      error: "Erreur interne du serveur",
     });
   }
 };
