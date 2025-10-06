@@ -20,6 +20,8 @@ type EmailSignature {
   socialNetworks: SocialNetworks
   socialColors: SocialColors
   customSocialIcons: CustomSocialIcons
+  socialGlobalColor: String
+  socialSize: Int
   
   # Options d'affichage des icônes
   showPhoneIcon: Boolean!
@@ -175,6 +177,8 @@ input EmailSignatureInput {
   socialNetworks: SocialNetworksInput
   socialColors: SocialColorsInput
   customSocialIcons: CustomSocialIconsInput
+  socialGlobalColor: String
+  socialSize: Int
   
   # Options d'affichage des icônes
   showPhoneIcon: Boolean
@@ -326,6 +330,8 @@ input UpdateEmailSignatureInput {
   socialNetworks: SocialNetworksInput
   socialColors: SocialColorsInput
   customSocialIcons: CustomSocialIconsInput
+  socialGlobalColor: String
+  socialSize: Int
   
   # Options d'affichage des icônes
   showPhoneIcon: Boolean
