@@ -124,6 +124,22 @@ const taskSchema = new mongoose.Schema({
     min: 0
   },
   checklist: [checklistItemSchema],
+  // Membres assignés à la tâche
+  assignedMembers: [{
+    userId: {
+      type: String,
+      required: true
+    },
+    name: {
+      type: String,
+      required: true
+    },
+    email: {
+      type: String,
+      required: true
+    },
+    image: String
+  }],
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,

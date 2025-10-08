@@ -30,6 +30,87 @@ const resolvers = {
       return await Board.find({ workspaceId: finalWorkspaceId }).sort({ createdAt: -1 });
     }),
     
+    organizationMembers: withWorkspace(async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      
+      try {
+        const { ObjectId } = require('mongodb');
+        
+        // Convertir le workspaceId en ObjectId pour la recherche
+        const orgId = typeof finalWorkspaceId === 'string' 
+          ? new ObjectId(finalWorkspaceId) 
+          : finalWorkspaceId;
+        
+        logger.info(`🔍 [Kanban] Recherche membres pour organisation: ${orgId}`);
+        
+        // 1. Récupérer l'organisation
+        const organization = await db.collection('organization').findOne({ _id: orgId });
+        
+        if (!organization) {
+          logger.warn(`⚠️ [Kanban] Organisation non trouvée: ${orgId}`);
+          return [];
+        }
+        
+        logger.info(`🏢 [Kanban] Organisation trouvée: ${organization.name}`);
+        
+        // 2. Récupérer TOUS les membres (y compris owner) via la collection member
+        // Better Auth stocke TOUS les membres dans la collection member, même l'owner
+        const members = await db.collection('member').find({
+          organizationId: orgId
+        }).toArray();
+        
+        logger.info(`📋 [Kanban] ${members.length} membres trouvés (incluant owner)`);
+        
+        if (members.length === 0) {
+          logger.warn(`⚠️ [Kanban] Aucun membre trouvé pour l'organisation ${orgId}`);
+          return [];
+        }
+        
+        // 3. Récupérer les IDs utilisateurs
+        const userIds = members.map(m => {
+          const userId = m.userId;
+          return typeof userId === 'string' ? new ObjectId(userId) : userId;
+        });
+        
+        logger.info(`👥 [Kanban] Recherche de ${userIds.length} utilisateurs`);
+        
+        // 4. Récupérer les informations des utilisateurs
+        const users = await db.collection('user').find({
+          _id: { $in: userIds }
+        }).toArray();
+        
+        logger.info(`✅ [Kanban] ${users.length} utilisateurs trouvés`);
+        
+        // 5. Créer le résultat en combinant membres et users
+        const result = members.map(member => {
+          const memberUserId = member.userId?.toString();
+          const user = users.find(u => u._id.toString() === memberUserId);
+          
+          if (!user) {
+            logger.warn(`⚠️ [Kanban] Utilisateur non trouvé pour member: ${memberUserId}`);
+            return null;
+          }
+          
+          return {
+            id: memberUserId,
+            name: user.name || user.email || 'Utilisateur inconnu',
+            email: user.email || '',
+            image: user.image || null,
+            role: member.role || 'member'
+          };
+        }).filter(Boolean); // Retirer les null
+        
+        logger.info(`✅ [Kanban] Retour de ${result.length} membres`);
+        logger.info(`📋 [Kanban] Détails:`, result.map(r => ({ email: r.email, role: r.role })));
+        
+        return result;
+      } catch (error) {
+        logger.error('❌ [Kanban] Erreur récupération membres:', error);
+        logger.error('Stack:', error.stack);
+        return [];
+      }
+    }),
+    
     board: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const board = await Board.findOne({ _id: id, workspaceId: finalWorkspaceId });

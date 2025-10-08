@@ -77,14 +77,14 @@ const emailSignatureSchema = new mongoose.Schema(
       youtube: { type: String, trim: true, default: "" },
     },
 
-    // Couleurs personnalisées pour chaque réseau social
+    // Couleurs personnalisées pour chaque réseau social (noms de couleurs pour Cloudflare)
     socialColors: {
-      facebook: { type: String, trim: true, default: "#1877F2" },
-      instagram: { type: String, trim: true, default: "#E4405F" },
-      linkedin: { type: String, trim: true, default: "#0077B5" },
-      x: { type: String, trim: true, default: "#000000" },
-      github: { type: String, trim: true, default: "#333333" },
-      youtube: { type: String, trim: true, default: "#FF0000" },
+      facebook: { type: String, trim: true, default: null },
+      instagram: { type: String, trim: true, default: null },
+      linkedin: { type: String, trim: true, default: null },
+      x: { type: String, trim: true, default: null },
+      github: { type: String, trim: true, default: null },
+      youtube: { type: String, trim: true, default: null },
     },
 
     // URLs des icônes personnalisées sur Cloudflare
@@ -95,6 +95,21 @@ const emailSignatureSchema = new mongoose.Schema(
       x: { type: String, trim: true, default: "" },
       github: { type: String, trim: true, default: "" },
       youtube: { type: String, trim: true, default: "" },
+    },
+
+    // Couleur globale des icônes sociales (blue, red, pink, black, etc.)
+    socialGlobalColor: {
+      type: String,
+      trim: true,
+      default: null, // null = couleurs par défaut de chaque réseau
+    },
+
+    // Taille des icônes sociales
+    socialSize: {
+      type: Number,
+      default: 24,
+      min: [16, "Taille minimum de 16px"],
+      max: [48, "Taille maximum de 48px"],
     },
 
     // Options d'affichage des icônes
@@ -198,6 +213,13 @@ const emailSignatureSchema = new mongoose.Schema(
       type: String,
       enum: ["horizontal", "vertical"],
       default: "horizontal",
+    },
+
+    // Orientation de la signature (vertical ou horizontal) - nouveau champ
+    orientation: {
+      type: String,
+      enum: ["horizontal", "vertical"],
+      default: "vertical",
     },
 
     // Largeurs des colonnes (en pourcentage)

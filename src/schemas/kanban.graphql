@@ -21,6 +21,13 @@ type Column {
   updatedAt: DateTime!
 }
 
+type AssignedMember {
+  userId: String!
+  name: String!
+  email: String!
+  image: String
+}
+
 type Task {
   id: ID!
   title: String!
@@ -33,6 +40,7 @@ type Task {
   columnId: String!
   position: Int
   checklist: [ChecklistItem!]
+  assignedMembers: [AssignedMember!]
   userId: ID!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -77,6 +85,13 @@ input UpdateColumnInput {
   order: Int
 }
 
+input AssignedMemberInput {
+  userId: String!
+  name: String!
+  email: String!
+  image: String
+}
+
 input CreateTaskInput {
   title: String!
   description: String
@@ -88,6 +103,7 @@ input CreateTaskInput {
   columnId: String!
   position: Int
   checklist: [ChecklistItemInput!]
+  assignedMembers: [AssignedMemberInput!]
 }
 
 input UpdateTaskInput {
@@ -101,6 +117,7 @@ input UpdateTaskInput {
   columnId: String
   position: Int
   checklist: [ChecklistItemInput!]
+  assignedMembers: [AssignedMemberInput!]
 }
 
 input TagInput {
@@ -117,6 +134,14 @@ input ChecklistItemInput {
   completed: Boolean
 }
 
+type OrganizationMember {
+  id: String!
+  name: String!
+  email: String!
+  image: String
+  role: String
+}
+
 type Query {
   boards(workspaceId: ID): [Board!]!
   board(id: ID!, workspaceId: ID): Board
@@ -124,6 +149,7 @@ type Query {
   column(id: ID!, workspaceId: ID): Column
   tasks(boardId: ID!, columnId: ID, workspaceId: ID): [Task!]!
   task(id: ID!, workspaceId: ID): Task
+  organizationMembers(workspaceId: ID!): [OrganizationMember!]!
 }
 
 type Mutation {

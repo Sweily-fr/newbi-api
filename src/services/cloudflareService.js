@@ -8,11 +8,11 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import path from 'path';
-import dotenv from 'dotenv';
-import crypto from 'crypto';
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import path from "path";
+import dotenv from "dotenv";
+import crypto from "crypto";
 
 // Charger les variables d'environnement
 dotenv.config();
@@ -21,7 +21,7 @@ class CloudflareService {
   constructor() {
     // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
     this.client = new S3Client({
-      region: 'auto',
+      region: "auto",
       endpoint: process.env.AWS_S3_API_URL,
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -31,22 +31,33 @@ class CloudflareService {
 
     this.bucketName = process.env.IMAGE_BUCKET_NAME;
     this.publicUrl = process.env.IMAGE_PUBLIC_URL; // URL publique de votre domaine custom
-    
+
     // Configuration spécifique pour l'OCR
     this.ocrBucketName = process.env.IMAGE_OCR_BUCKET_NAME;
     this.ocrPublicUrl = process.env.IMAGE_OCR_PUBLIC_URL;
-    
+
     // Configuration spécifique pour les signatures mail
-    this.signatureBucketName = process.env.IMAGE_SIGNATURE_BUCKET_NAME || 'image-signature';
-    this.signaturePublicUrl = process.env.IMAGE_SIGNATURE_PUBLIC_URL || 
-      'https://pub-e2f65bd10e4e4c9dbfb9ccad034abd75.r2.dev';
-    
+    this.signatureBucketName =
+      process.env.IMAGE_SIGNATURE_BUCKET_NAME || "image-signature";
+    this.signaturePublicUrl =
+      process.env.IMAGE_SIGNATURE_PUBLIC_URL ||
+      "https://pub-e2f65bd10e4e4c9dbfb9ccad034abd75.r2.dev";
+
     // Configuration spécifique pour les images de profil
     this.profileBucketName = process.env.AWS_S3_BUCKET_NAME_IMG_PROFILE;
-    this.profilePublicUrl = process.env.AWS_S3_API_URL_PROFILE || "https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev";
-    
+    this.profilePublicUrl =
+      process.env.AWS_S3_API_URL_PROFILE ||
+      "https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev";
+
+    // Configuration spécifique pour les images d'entreprise
+    this.companyImagesBucketName =
+      process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY || "image-company";
+    this.companyImagesPublicUrl =
+      process.env.COMPANY_IMAGES_PUBLIC_URL ||
+      "https://157ce0fed50fe542bc92a07317a09205.r2.cloudflarestorage.com";
+
     if (!this.bucketName) {
-      throw new Error('Configuration manquante: IMAGE_BUCKET_NAME');
+      throw new Error("Configuration manquante: IMAGE_BUCKET_NAME");
     }
   }
 
@@ -56,10 +67,10 @@ class CloudflareService {
    * @returns {string} - Nom de fichier nettoyé
    */
   sanitizeFileName(fileName) {
-    if (!fileName) return 'unknown';
+    if (!fileName) return "unknown";
 
     // Remplacer les caractères spéciaux par des tirets
-    return fileName.replace(/[^\w\d.-]/g, '-');
+    return fileName.replace(/[^\w\d.-]/g, "-");
   }
 
   /**
@@ -72,66 +83,93 @@ class CloudflareService {
    * @param {string} signatureId - ID de la signature (requis pour imgProfil et logoReseau)
    * @returns {Promise<{key: string, url: string}>}
    */
-  async uploadImage(fileBuffer, fileName, userId, imageType = 'profile', organizationId = null, signatureId = null) {
+  async uploadImage(
+    fileBuffer,
+    fileName,
+    userId,
+    imageType = "profile",
+    organizationId = null,
+    signatureId = null
+  ) {
     try {
       // Générer une clé unique pour l'image
       const uniqueId = crypto.randomUUID();
-      
+
       // Déterminer le chemin selon le type de fichier
       const fileExtension = path.extname(fileName).toLowerCase();
       let key;
-      
+
       switch (imageType) {
-      case 'imgProfil': {
-        // Structure : idUser/idSignature/ImgProfil/fichier
-        if (!signatureId) {
-          throw new Error('Signature ID requis pour les images de profil de signature');
+        case "imgProfil": {
+          // Structure : idUser/idSignature/ImgProfil/fichier
+          if (!signatureId) {
+            throw new Error(
+              "Signature ID requis pour les images de profil de signature"
+            );
+          }
+          key = `${userId}/${signatureId}/ImgProfil/${uniqueId}${fileExtension}`;
+          break;
         }
-        key = `${userId}/${signatureId}/ImgProfil/${uniqueId}${fileExtension}`;
-        break;
-      }
-      case 'logoReseau': {
-        // Structure : idUser/idSignature/logoReseau/fichier
-        if (!signatureId) {
-          throw new Error('Signature ID requis pour les logos réseaux sociaux');
+        case "logoReseau": {
+          // Structure : idUser/idSignature/logoReseau/fichier
+          if (!signatureId) {
+            throw new Error(
+              "Signature ID requis pour les logos réseaux sociaux"
+            );
+          }
+          key = `${userId}/${signatureId}/logoReseau/${uniqueId}${fileExtension}`;
+          break;
         }
-        key = `${userId}/${signatureId}/logoReseau/${uniqueId}${fileExtension}`;
-        break;
-      }
-      case 'ocr': {
-        // Pour les reçus OCR, organiser par organisation (ID organisation uniquement)
-        if (!organizationId) {
-          throw new Error('Organization ID requis pour les uploads OCR');
+        case "imgCompany": {
+          // Pour les logos d'entreprise - Structure: image-company/{idOrganisation}/{NomImage}
+          if (!organizationId) {
+            throw new Error(
+              "Organization ID requis pour les logos d'entreprise"
+            );
+          }
+          // Garder le nom original du fichier (nettoyé)
+          const sanitizedName = fileName.replace(/[^a-zA-Z0-9.-]/g, "_");
+          key = `${organizationId}/${sanitizedName}`;
+          break;
         }
-        key = `${organizationId}/${uniqueId}${fileExtension}`;
-        break;
-      }
-      case 'documents': {
-        // Pour les documents généraux
-        key = `documents/${userId}/${uniqueId}${fileExtension}`;
-        break;
-      }
-      case 'profile': {
-        // Pour les images de profil - sans préfixe signatures/
-        key = `${userId}/image/${uniqueId}${fileExtension}`;
-        break;
-      }
-      default: {
-        // Pour les signatures et autres (comportement par défaut)
-        key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
-        break;
-      }
+        case "ocr": {
+          // Pour les reçus OCR, organiser par organisation (ID organisation uniquement)
+          if (!organizationId) {
+            throw new Error("Organization ID requis pour les uploads OCR");
+          }
+          key = `${organizationId}/${uniqueId}${fileExtension}`;
+          break;
+        }
+        case "documents": {
+          // Pour les documents généraux
+          key = `documents/${userId}/${uniqueId}${fileExtension}`;
+          break;
+        }
+        case "profile": {
+          // Pour les images de profil - sans préfixe signatures/
+          key = `${userId}/image/${uniqueId}${fileExtension}`;
+          break;
+        }
+        default: {
+          // Pour les signatures et autres (comportement par défaut)
+          key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
+          break;
+        }
       }
 
       // Déterminer le bucket et l'URL publique selon le type
       let targetBucket, targetPublicUrl;
-      if (imageType === 'imgProfil' || imageType === 'logoReseau') {
+      if (imageType === "imgProfil" || imageType === "logoReseau") {
         targetBucket = this.signatureBucketName;
         targetPublicUrl = this.signaturePublicUrl;
-      } else if (imageType === 'ocr') {
+      } else if (imageType === "imgCompany") {
+        // Utiliser le bucket dédié aux images d'entreprise
+        targetBucket = this.companyImagesBucketName || this.bucketName;
+        targetPublicUrl = this.companyImagesPublicUrl || this.publicUrl;
+      } else if (imageType === "ocr") {
         targetBucket = this.ocrBucketName || this.bucketName;
         targetPublicUrl = this.ocrPublicUrl || this.publicUrl;
-      } else if (imageType === 'profile') {
+      } else if (imageType === "profile") {
         targetBucket = this.profileBucketName || this.bucketName;
         targetPublicUrl = this.profilePublicUrl || this.publicUrl;
       } else {
@@ -167,25 +205,30 @@ class CloudflareService {
       // Utilisation directe des URLs publiques Cloudflare R2
       if (
         targetPublicUrl &&
-        targetPublicUrl !== 'https://your_image_bucket_public_url'
+        targetPublicUrl !== "https://your_image_bucket_public_url"
       ) {
         // Éviter les doubles barres obliques
-        const cleanUrl = targetPublicUrl.endsWith('/') ? targetPublicUrl.slice(0, -1) : targetPublicUrl;
+        const cleanUrl = targetPublicUrl.endsWith("/")
+          ? targetPublicUrl.slice(0, -1)
+          : targetPublicUrl;
         imageUrl = `${cleanUrl}/${key}`;
       } else {
         // Fallback sur le proxy backend si pas d'URL publique configurée
 
-        const keyParts = key.split('/');
-        if (keyParts.length >= 3 && keyParts[0] === 'signatures') {
+        const keyParts = key.split("/");
+        if (keyParts.length >= 3 && keyParts[0] === "signatures") {
           const userId = keyParts[1];
           const imageType = keyParts[2];
-          const filename = keyParts.slice(3).join('/');
+          const filename = keyParts.slice(3).join("/");
 
-          const baseUrl = process.env.BACKEND_URL || 'http://localhost:4000';
+          const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
           imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
         } else {
           // Dernier fallback sur URL signée avec le bon bucket
-          console.log('🔐 CloudflareService - Fallback URL signée, bucket:', targetBucket);
+          console.log(
+            "🔐 CloudflareService - Fallback URL signée, bucket:",
+            targetBucket
+          );
           imageUrl = await this.getSignedUrlForBucket(key, targetBucket, 86400);
         }
       }
@@ -210,23 +253,34 @@ class CloudflareService {
    * @param {string} color - Couleur du logo (optionnel)
    * @returns {Promise<{key: string, url: string}>}
    */
-  async uploadSocialLogo(fileBuffer, fileName, userId, signatureId, logoType, color = null) {
+  async uploadSocialLogo(
+    fileBuffer,
+    fileName,
+    userId,
+    signatureId,
+    logoType,
+    color = null
+  ) {
     try {
       // Valider les paramètres requis
       if (!userId || !signatureId || !logoType) {
-        throw new Error('userId, signatureId et logoType sont requis pour l\'upload de logos sociaux');
+        throw new Error(
+          "userId, signatureId et logoType sont requis pour l'upload de logos sociaux"
+        );
       }
 
       // Valider le type de logo social
-      const validLogoTypes = ['facebook', 'instagram', 'linkedin', 'x'];
+      const validLogoTypes = ["facebook", "instagram", "linkedin", "x"];
       if (!validLogoTypes.includes(logoType)) {
-        throw new Error(`Type de logo invalide. Types supportés: ${validLogoTypes.join(', ')}`);
+        throw new Error(
+          `Type de logo invalide. Types supportés: ${validLogoTypes.join(", ")}`
+        );
       }
 
       // Générer une clé unique pour l'image avec structure spécifique aux logos sociaux
       const uniqueId = crypto.randomUUID();
       const fileExtension = path.extname(fileName).toLowerCase();
-      
+
       // Structure : userId/signatureId/logo/logoType/fichier
       const key = `${userId}/${signatureId}/logo/${logoType}/${uniqueId}${fileExtension}`;
 
@@ -246,18 +300,18 @@ class CloudflareService {
           userId: userId,
           signatureId: signatureId,
           logoType: logoType,
-          imageType: 'socialLogo',
+          imageType: "socialLogo",
           originalName: sanitizedFileName,
           uploadedAt: new Date().toISOString(),
-          ...(color && { color: color })
+          ...(color && { color: color }),
         },
       });
 
       await this.client.send(command);
 
       // Générer l'URL publique
-      const cleanUrl = this.signaturePublicUrl.endsWith('/') 
-        ? this.signaturePublicUrl.slice(0, -1) 
+      const cleanUrl = this.signaturePublicUrl.endsWith("/")
+        ? this.signaturePublicUrl.slice(0, -1)
         : this.signaturePublicUrl;
       const imageUrl = `${cleanUrl}/${key}`;
 
@@ -272,7 +326,9 @@ class CloudflareService {
       };
     } catch (error) {
       console.error(`❌ Erreur upload logo social ${logoType}:`, error.message);
-      throw new Error(`Échec de l'upload du logo social ${logoType}: ${error.message}`);
+      throw new Error(
+        `Échec de l'upload du logo social ${logoType}: ${error.message}`
+      );
     }
   }
 
@@ -287,18 +343,21 @@ class CloudflareService {
 
     // Déterminer l'URL publique selon le type de clé
     let publicUrl = process.env.AWS_R2_PUBLIC_URL;
-    if (key.includes('/ImgProfil/') || key.includes('/logoReseau/')) {
+    if (key.includes("/ImgProfil/") || key.includes("/logoReseau/")) {
       publicUrl = this.signaturePublicUrl;
     }
 
-    if (publicUrl && publicUrl !== 'your_r2_public_url') {
+    if (publicUrl && publicUrl !== "your_r2_public_url") {
       // Si URL publique configurée, utiliser l'URL publique directe
       return `${publicUrl}/${key}`;
     } else {
       // Sinon, générer une URL signée temporaire avec le bon bucket
-      console.log('🔐 CloudflareService - Fallback sur URL signée');
-      console.log('🔍 CloudflareService - targetPublicUrl était:', targetPublicUrl);
-      
+      console.log("🔐 CloudflareService - Fallback sur URL signée");
+      console.log(
+        "🔍 CloudflareService - targetPublicUrl était:",
+        targetPublicUrl
+      );
+
       // Déterminer le bon bucket pour l'URL signée
       let targetBucket = this.bucketName;
       if (keyParts.length >= 2 && keyParts[1] === "image") {
@@ -308,8 +367,11 @@ class CloudflareService {
       } else if (keyParts.length >= 1 && !key.includes("signatures")) {
         targetBucket = this.ocrBucketName || this.bucketName;
       }
-      
-      console.log('🪣 CloudflareService - Bucket pour URL signée:', targetBucket);
+
+      console.log(
+        "🪣 CloudflareService - Bucket pour URL signée:",
+        targetBucket
+      );
       return await this.getSignedUrlForBucket(key, targetBucket, expiresIn);
     }
   }
@@ -335,10 +397,10 @@ class CloudflareService {
     try {
       // Déterminer le bucket selon le type de clé
       let targetBucket = this.bucketName;
-      if (key.includes('/ImgProfil/') || key.includes('/logoReseau/')) {
+      if (key.includes("/ImgProfil/") || key.includes("/logoReseau/")) {
         targetBucket = this.signatureBucketName;
       }
-      
+
       const command = new GetObjectCommand({
         Bucket: targetBucket,
         Key: key,
@@ -347,11 +409,16 @@ class CloudflareService {
       const signedUrl = await getSignedUrl(this.client, command, {
         expiresIn,
         // Ajouter des paramètres spécifiques à Cloudflare R2
-        signableHeaders: new Set(['host']),
-        unhoistableHeaders: new Set(['x-amz-content-sha256']),
+        signableHeaders: new Set(["host"]),
+        unhoistableHeaders: new Set(["x-amz-content-sha256"]),
       });
 
-      console.log(`🌐 CloudflareService - URL signée générée: ${signedUrl.substring(0, 100)}...`);
+      console.log(
+        `🌐 CloudflareService - URL signée générée: ${signedUrl.substring(
+          0,
+          100
+        )}...`
+      );
       return signedUrl;
     } catch (error) {
       throw new Error(`Échec de la génération d'URL signée: ${error.message}`);
@@ -371,23 +438,26 @@ class CloudflareService {
       const folders = [
         `${userId}/`,
         `${userId}/${signatureId}/`,
-        `${userId}/${signatureId}/${imageType}/`
+        `${userId}/${signatureId}/${imageType}/`,
       ];
-      
+
       // Créer chaque dossier
       for (const folder of folders) {
         try {
           const command = new PutObjectCommand({
             Bucket: this.signatureBucketName || this.bucketName,
             Key: folder,
-            Body: '',
-            ContentType: 'application/x-directory'
+            Body: "",
+            ContentType: "application/x-directory",
           });
-          
+
           await this.client.send(command);
         } catch (error) {
           // Ignorer l'erreur si le dossier existe déjà
-          if (error.name !== 'BucketAlreadyOwnedByYou' && error.code !== 'BucketAlreadyOwnedByYou') {
+          if (
+            error.name !== "BucketAlreadyOwnedByYou" &&
+            error.code !== "BucketAlreadyOwnedByYou"
+          ) {
             // Ignorer les erreurs de dossier existant
           }
         }
@@ -407,7 +477,7 @@ class CloudflareService {
   async deleteImage(key, bucketName = null) {
     try {
       const targetBucket = bucketName || this.bucketName;
-      
+
       const command = new DeleteObjectCommand({
         Bucket: targetBucket,
         Key: key,
@@ -417,7 +487,7 @@ class CloudflareService {
       return true;
     } catch (error) {
       // Ne pas faire échouer si l'image n'existe pas
-      if (error.name === 'NoSuchKey') {
+      if (error.name === "NoSuchKey") {
         return true;
       }
       throw new Error(`Échec de la suppression: ${error.message}`);
@@ -433,10 +503,11 @@ class CloudflareService {
    */
   async deleteSignatureFolder(userId, signatureId, folderType) {
     try {
-      const { ListObjectsV2Command } = await import('@aws-sdk/client-s3');
-      
+      const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+
       // Convertir le type d'image en nom de dossier correct
-      const folderName = folderType === 'imgProfil' ? 'ImgProfil' : 'logoReseau';
+      const folderName =
+        folderType === "imgProfil" ? "ImgProfil" : "logoReseau";
       const prefix = `${userId}/${signatureId}/${folderName}/`;
 
       console.log(`🗑️ Suppression du dossier: ${prefix}`);
@@ -448,13 +519,15 @@ class CloudflareService {
       });
 
       const listResponse = await this.client.send(listCommand);
-      
+
       if (!listResponse.Contents || listResponse.Contents.length === 0) {
         console.log(`🗑️ Aucun fichier à supprimer dans: ${prefix}`);
         return true;
       }
 
-      console.log(`🗑️ Suppression de ${listResponse.Contents.length} fichier(s)`);
+      console.log(
+        `🗑️ Suppression de ${listResponse.Contents.length} fichier(s)`
+      );
 
       // Supprimer chaque fichier (y compris les marqueurs de dossiers)
       const deletePromises = listResponse.Contents.map((object) => {
@@ -466,7 +539,7 @@ class CloudflareService {
       console.log(`✅ Dossier ${prefix} nettoyé avec succès`);
       return true;
     } catch (error) {
-      console.warn('⚠️ Erreur suppression dossier:', error.message);
+      console.warn("⚠️ Erreur suppression dossier:", error.message);
       // Ne pas faire échouer l'upload si la suppression échoue
       return false;
     }
@@ -480,8 +553,8 @@ class CloudflareService {
    */
   async deleteSocialLogos(userId, signatureId) {
     try {
-      const { ListObjectsV2Command } = await import('@aws-sdk/client-s3');
-      
+      const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+
       // Préfixe pour tous les logos sociaux
       const prefix = `${userId}/${signatureId}/logo/`;
 
@@ -494,13 +567,15 @@ class CloudflareService {
       });
 
       const listResponse = await this.client.send(listCommand);
-      
+
       if (!listResponse.Contents || listResponse.Contents.length === 0) {
         console.log(`🗑️ Aucun logo social à supprimer dans: ${prefix}`);
         return true;
       }
 
-      console.log(`🗑️ Suppression de ${listResponse.Contents.length} logo(s) social(aux)`);
+      console.log(
+        `🗑️ Suppression de ${listResponse.Contents.length} logo(s) social(aux)`
+      );
 
       // Supprimer chaque fichier
       const deletePromises = listResponse.Contents.map((object) => {
@@ -512,7 +587,7 @@ class CloudflareService {
       console.log(`✅ Logos sociaux supprimés avec succès`);
       return true;
     } catch (error) {
-      console.warn('⚠️ Erreur suppression logos sociaux:', error.message);
+      console.warn("⚠️ Erreur suppression logos sociaux:", error.message);
       return false;
     }
   }
@@ -525,16 +600,20 @@ class CloudflareService {
    */
   async createSocialLogosStructure(userId, signatureId) {
     try {
-      console.log(`📁 Création structure logos sociaux pour signature ${signatureId}`);
-      
+      console.log(
+        `📁 Création structure logos sociaux pour signature ${signatureId}`
+      );
+
       // Créer les dossiers pour chaque réseau social
-      const socialNetworks = ['facebook', 'instagram', 'linkedin', 'x'];
-      
+      const socialNetworks = ["facebook", "instagram", "linkedin", "x"];
+
       const foldersToCreate = [
         `${userId}/`,
         `${userId}/${signatureId}/`,
         `${userId}/${signatureId}/logo/`,
-        ...socialNetworks.map(network => `${userId}/${signatureId}/logo/${network}/`)
+        ...socialNetworks.map(
+          (network) => `${userId}/${signatureId}/logo/${network}/`
+        ),
       ];
 
       for (const folderKey of foldersToCreate) {
@@ -543,11 +622,11 @@ class CloudflareService {
             Bucket: this.signatureBucketName,
             Key: folderKey,
             Body: Buffer.alloc(0), // Contenu vide
-            ContentType: 'application/x-directory',
+            ContentType: "application/x-directory",
             Metadata: {
-              'folder-marker': 'true',
-              'folder-type': 'social-logos'
-            }
+              "folder-marker": "true",
+              "folder-type": "social-logos",
+            },
           });
 
           await this.client.send(command);
@@ -557,10 +636,13 @@ class CloudflareService {
           console.log(`📁 Dossier existe déjà: ${folderKey}`);
         }
       }
-      
+
       console.log(`✅ Structure logos sociaux créée`);
     } catch (error) {
-      console.warn('⚠️ Erreur création structure logos sociaux:', error.message);
+      console.warn(
+        "⚠️ Erreur création structure logos sociaux:",
+        error.message
+      );
       // Ne pas faire échouer le processus si la création des dossiers échoue
     }
   }
@@ -573,14 +655,14 @@ class CloudflareService {
    */
   async createSignatureFolders(userId, signatureId, imageType) {
     try {
-      const folderName = imageType === 'imgProfil' ? 'ImgProfil' : 'logoReseau';
-      
+      const folderName = imageType === "imgProfil" ? "ImgProfil" : "logoReseau";
+
       // Créer des objets "marqueurs" pour les dossiers avec des clés se terminant par /
       // Cela aide Cloudflare R2 à reconnaître la structure de dossiers
       const foldersToCreate = [
         `${userId}/`,
         `${userId}/${signatureId}/`,
-        `${userId}/${signatureId}/${folderName}/`
+        `${userId}/${signatureId}/${folderName}/`,
       ];
 
       for (const folderKey of foldersToCreate) {
@@ -589,10 +671,10 @@ class CloudflareService {
             Bucket: this.signatureBucketName,
             Key: folderKey,
             Body: Buffer.alloc(0), // Contenu vide
-            ContentType: 'application/x-directory',
+            ContentType: "application/x-directory",
             Metadata: {
-              'folder-marker': 'true'
-            }
+              "folder-marker": "true",
+            },
           });
 
           await this.client.send(command);
@@ -603,7 +685,7 @@ class CloudflareService {
         }
       }
     } catch (error) {
-      console.warn('⚠️ Erreur création dossiers:', error.message);
+      console.warn("⚠️ Erreur création dossiers:", error.message);
       // Ne pas faire échouer l'upload si la création des dossiers échoue
     }
   }
@@ -617,37 +699,51 @@ class CloudflareService {
    * @param {string} imageType - Le type d'image ('imgProfil' ou 'logoReseau')
    * @returns {Promise<Object>} - Les informations sur l'image téléchargée
    */
-  async uploadSignatureImage(fileBuffer, fileName, userId, signatureId, imageType) {
+  async uploadSignatureImage(
+    fileBuffer,
+    fileName,
+    userId,
+    signatureId,
+    imageType
+  ) {
     try {
-      console.log(`🚀 Début upload signature - userId: ${userId}, signatureId: ${signatureId}, imageType: ${imageType}`);
-      
+      console.log(
+        `🚀 Début upload signature - userId: ${userId}, signatureId: ${signatureId}, imageType: ${imageType}`
+      );
+
       // Validation des paramètres
       if (!signatureId) {
-        throw new Error('Signature ID requis pour l\'upload d\'images de signature');
+        throw new Error(
+          "Signature ID requis pour l'upload d'images de signature"
+        );
       }
-      
-      if (!['imgProfil', 'logoReseau'].includes(imageType)) {
-        throw new Error('Type d\'image invalide. Doit être \'imgProfil\' ou \'logoReseau\'');
+
+      if (!["imgProfil", "logoReseau"].includes(imageType)) {
+        throw new Error(
+          "Type d'image invalide. Doit être 'imgProfil' ou 'logoReseau'"
+        );
       }
 
       // Supprimer les anciennes images du même type
       console.log(`🗑️ Suppression des anciennes images pour ${imageType}`);
       await this.deleteSignatureFolder(userId, signatureId, imageType);
-      
+
       // Cloudflare R2 créera automatiquement la structure de dossiers basée sur la clé du fichier
-      console.log('📁 Structure de dossiers sera créée automatiquement par Cloudflare R2');
-      
+      console.log(
+        "📁 Structure de dossiers sera créée automatiquement par Cloudflare R2"
+      );
+
       // Uploader la nouvelle image
       console.log(`📤 Upload de la nouvelle image`);
       const result = await this.uploadImage(
-        fileBuffer, 
-        fileName, 
-        userId, 
-        imageType, 
+        fileBuffer,
+        fileName,
+        userId,
+        imageType,
         null, // organizationId
         signatureId
       );
-      
+
       console.log(`✅ Upload terminé avec succès:`, result);
       return result;
     } catch (error) {
@@ -663,19 +759,19 @@ class CloudflareService {
    */
   getContentType(extension) {
     const mimeTypes = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-      '.svg': 'image/svg+xml',
-      '.pdf': 'application/pdf', // Support des PDF
-      '.tiff': 'image/tiff',
-      '.tif': 'image/tiff',
-      '.bmp': 'image/bmp',
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".svg": "image/svg+xml",
+      ".pdf": "application/pdf", // Support des PDF
+      ".tiff": "image/tiff",
+      ".tif": "image/tiff",
+      ".bmp": "image/bmp",
     };
 
-    return mimeTypes[extension] || 'application/octet-stream';
+    return mimeTypes[extension] || "application/octet-stream";
   }
 
   /**
@@ -684,7 +780,7 @@ class CloudflareService {
    * @returns {boolean}
    */
   isValidImageFile(fileName) {
-    const validExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+    const validExtensions = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
     const extension = path.extname(fileName).toLowerCase();
     return validExtensions.includes(extension);
   }
@@ -708,34 +804,44 @@ class CloudflareService {
    * @param {string} fileName - Nom du fichier
    * @returns {Promise<string>} URL publique du fichier uploadé
    */
-  async uploadCustomSocialIcon(userId, signatureId, platform, svgBuffer, fileName) {
+  async uploadCustomSocialIcon(
+    userId,
+    signatureId,
+    platform,
+    svgBuffer,
+    fileName
+  ) {
     try {
       if (!userId || !signatureId || !platform) {
-        throw new Error('userId, signatureId et platform sont requis pour les icônes personnalisées');
+        throw new Error(
+          "userId, signatureId et platform sont requis pour les icônes personnalisées"
+        );
       }
 
       // Structure : userId/signatureId/customSocialIcons/platform/fileName
       const key = `${userId}/${signatureId}/customSocialIcons/${platform}/${fileName}`;
-      
+
       console.log(`📤 Upload icône personnalisée: ${key}`);
 
       const command = new PutObjectCommand({
         Bucket: this.signatureBucketName,
         Key: key,
         Body: svgBuffer,
-        ContentType: 'image/svg+xml',
-        CacheControl: 'public, max-age=31536000', // Cache 1 an
+        ContentType: "image/svg+xml",
+        CacheControl: "public, max-age=31536000", // Cache 1 an
       });
 
       await this.client.send(command);
-      
+
       const publicUrl = `${this.signaturePublicUrl}/${key}`;
       console.log(`✅ Icône personnalisée uploadée: ${publicUrl}`);
-      
+
       return publicUrl;
     } catch (error) {
-      console.error('❌ Erreur upload icône personnalisée:', error);
-      throw new Error(`Erreur lors de l'upload de l'icône personnalisée: ${error.message}`);
+      console.error("❌ Erreur upload icône personnalisée:", error);
+      throw new Error(
+        `Erreur lors de l'upload de l'icône personnalisée: ${error.message}`
+      );
     }
   }
 
@@ -747,16 +853,16 @@ class CloudflareService {
   async deleteCustomSocialIcons(userId, signatureId) {
     try {
       if (!userId || !signatureId) {
-        throw new Error('userId et signatureId sont requis');
+        throw new Error("userId et signatureId sont requis");
       }
 
-      const platforms = ['facebook', 'instagram', 'linkedin', 'x'];
-      
+      const platforms = ["facebook", "instagram", "linkedin", "x"];
+
       for (const platform of platforms) {
         try {
           // Supprimer tous les fichiers du dossier de la plateforme
           const folderKey = `${userId}/${signatureId}/customSocialIcons/${platform}/`;
-          
+
           // Note: En production, il faudrait lister les objets d'abord puis les supprimer
           // Pour simplifier, on supprime les fichiers les plus courants
           const commonFiles = [
@@ -765,7 +871,7 @@ class CloudflareService {
             `${platform}-0077B5.svg`, // LinkedIn bleu
             `${platform}-000000.svg`, // X noir
           ];
-          
+
           for (const file of commonFiles) {
             const key = `${userId}/${signatureId}/customSocialIcons/${platform}/${file}`;
             try {
@@ -776,20 +882,30 @@ class CloudflareService {
               await this.client.send(deleteCommand);
             } catch (deleteError) {
               // Ignorer si le fichier n'existe pas
-              if (deleteError.name !== 'NoSuchKey') {
-                console.warn(`⚠️ Erreur suppression ${key}:`, deleteError.message);
+              if (deleteError.name !== "NoSuchKey") {
+                console.warn(
+                  `⚠️ Erreur suppression ${key}:`,
+                  deleteError.message
+                );
               }
             }
           }
         } catch (platformError) {
-          console.warn(`⚠️ Erreur suppression plateforme ${platform}:`, platformError.message);
+          console.warn(
+            `⚠️ Erreur suppression plateforme ${platform}:`,
+            platformError.message
+          );
         }
       }
-      
-      console.log(`✅ Icônes personnalisées supprimées pour signature ${signatureId}`);
+
+      console.log(
+        `✅ Icônes personnalisées supprimées pour signature ${signatureId}`
+      );
     } catch (error) {
-      console.error('❌ Erreur suppression icônes personnalisées:', error);
-      throw new Error(`Erreur lors de la suppression des icônes personnalisées: ${error.message}`);
+      console.error("❌ Erreur suppression icônes personnalisées:", error);
+      throw new Error(
+        `Erreur lors de la suppression des icônes personnalisées: ${error.message}`
+      );
     }
   }
 
@@ -801,28 +917,35 @@ class CloudflareService {
   async createCustomSocialIconsStructure(userId, signatureId) {
     try {
       if (!userId || !signatureId) {
-        throw new Error('userId et signatureId sont requis');
+        throw new Error("userId et signatureId sont requis");
       }
 
-      const platforms = ['facebook', 'instagram', 'linkedin', 'x'];
-      
+      const platforms = ["facebook", "instagram", "linkedin", "x"];
+
       for (const platform of platforms) {
         const key = `${userId}/${signatureId}/customSocialIcons/${platform}/.keep`;
-        
+
         const command = new PutObjectCommand({
           Bucket: this.signatureBucketName,
           Key: key,
-          Body: Buffer.from(''),
-          ContentType: 'text/plain',
+          Body: Buffer.from(""),
+          ContentType: "text/plain",
         });
 
         await this.client.send(command);
       }
-      
-      console.log(`✅ Structure icônes personnalisées créée pour signature ${signatureId}`);
+
+      console.log(
+        `✅ Structure icônes personnalisées créée pour signature ${signatureId}`
+      );
     } catch (error) {
-      console.error('❌ Erreur création structure icônes personnalisées:', error);
-      throw new Error(`Erreur lors de la création de la structure: ${error.message}`);
+      console.error(
+        "❌ Erreur création structure icônes personnalisées:",
+        error
+      );
+      throw new Error(
+        `Erreur lors de la création de la structure: ${error.message}`
+      );
     }
   }
 
@@ -832,9 +955,11 @@ class CloudflareService {
    * @param {string} filter - Filtre supplémentaire (ex: "temp-")
    * @returns {Promise<Array>} Liste des objets trouvés
    */
-  async listObjects(prefix, filter = '') {
+  async listObjects(prefix, filter = "") {
     try {
-      console.log(`📋 Listage des objets avec préfixe: ${prefix}, filtre: ${filter}`);
+      console.log(
+        `📋 Listage des objets avec préfixe: ${prefix}, filtre: ${filter}`
+      );
 
       const command = new ListObjectsV2Command({
         Bucket: this.signatureBucketName,
@@ -843,34 +968,31 @@ class CloudflareService {
       });
 
       const response = await this.client.send(command);
-      
+
       if (!response.Contents) {
-        console.log('📋 Aucun objet trouvé');
+        console.log("📋 Aucun objet trouvé");
         return [];
       }
 
       // Filtrer les résultats selon le filtre fourni
-      const filteredObjects = response.Contents
-        .filter(obj => {
-          if (!filter) return true;
-          const keyParts = obj.Key.split('/');
-          return keyParts.some(part => part.includes(filter));
-        })
-        .map(obj => {
-          const keyParts = obj.Key.split('/');
-          return {
-            key: obj.Key,
-            signatureId: keyParts[1], // Supposer que la structure est userId/signatureId/...
-            lastModified: obj.LastModified,
-            size: obj.Size,
-          };
-        });
+      const filteredObjects = response.Contents.filter((obj) => {
+        if (!filter) return true;
+        const keyParts = obj.Key.split("/");
+        return keyParts.some((part) => part.includes(filter));
+      }).map((obj) => {
+        const keyParts = obj.Key.split("/");
+        return {
+          key: obj.Key,
+          signatureId: keyParts[1], // Supposer que la structure est userId/signatureId/...
+          lastModified: obj.LastModified,
+          size: obj.Size,
+        };
+      });
 
       console.log(`📋 ${filteredObjects.length} objets trouvés après filtrage`);
       return filteredObjects;
-
     } catch (error) {
-      console.error('❌ Erreur lors du listage des objets:', error);
+      console.error("❌ Erreur lors du listage des objets:", error);
       throw error;
     }
   }
