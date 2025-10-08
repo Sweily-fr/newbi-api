@@ -24,6 +24,7 @@ type Quote {
   totalTTC: Float!
   totalVAT: Float!
   finalTotalHT: Float!
+  finalTotalVAT: Float
   finalTotalTTC: Float!
   discountAmount: Float
   showBankDetails: Boolean

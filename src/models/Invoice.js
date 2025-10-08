@@ -247,6 +247,14 @@ const invoiceSchema = new mongoose.Schema(
         message: "Le montant final HT doit être un nombre positif",
       },
     },
+    finalTotalVAT: {
+      type: Number,
+      min: 0,
+      validate: {
+        validator: isPositiveAmount,
+        message: "Le montant final de TVA doit être un nombre positif",
+      },
+    },
     finalTotalTTC: {
       type: Number,
       min: 0,

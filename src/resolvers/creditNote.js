@@ -79,7 +79,11 @@ const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED') 
   }
 
   // Recalculer la TVA après remise globale
-  const finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
+  // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
+  let finalTotalVAT = 0;
+  if (finalTotalHT > 0 && totalHT > 0) {
+    finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
+  }
   const finalTotalTTC = finalTotalHT + finalTotalVAT;
 
   // Les avoirs ont des montants négatifs
@@ -88,6 +92,7 @@ const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED') 
     totalVAT: -Math.abs(totalVAT),
     totalTTC: -Math.abs(totalHT + totalVAT),
     finalTotalHT: -Math.abs(finalTotalHT),
+    finalTotalVAT: -Math.abs(finalTotalVAT),
     finalTotalTTC: -Math.abs(finalTotalTTC),
   };
 };

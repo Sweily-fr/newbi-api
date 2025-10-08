@@ -26,6 +26,7 @@ type Invoice {
   totalTTC: Float!
   totalVAT: Float!
   finalTotalHT: Float!
+  finalTotalVAT: Float
   finalTotalTTC: Float!
   customFields: [CustomField!]
   discountAmount: Float

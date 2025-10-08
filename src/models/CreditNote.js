@@ -243,6 +243,16 @@ const creditNoteSchema = new mongoose.Schema(
         message: "Le montant final HT d'un avoir doit être négatif ou nul",
       },
     },
+    finalTotalVAT: {
+      type: Number,
+      max: 0, // Négatif car c'est un avoir
+      validate: {
+        validator: function (value) {
+          return value <= 0; // Doit être négatif ou zéro
+        },
+        message: "Le montant final de TVA d'un avoir doit être négatif ou nul",
+      },
+    },
     finalTotalTTC: {
       type: Number,
       max: 0, // Négatif car c'est un avoir

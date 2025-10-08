@@ -68,7 +68,11 @@ const calculateQuoteTotals = (
   
   // Recalculer la TVA après application de la remise globale
   // La TVA doit être proportionnelle au montant final HT
-  const finalTotalVAT = totalVAT * (finalTotalHT / (totalHT || 1));
+  // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
+  let finalTotalVAT = 0;
+  if (finalTotalHT > 0 && totalHT > 0) {
+    finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
+  }
   const finalTotalTTC = finalTotalHT + finalTotalVAT;
 
   return {
@@ -76,6 +80,7 @@ const calculateQuoteTotals = (
     totalVAT,
     totalTTC,
     finalTotalHT,
+    finalTotalVAT,
     finalTotalTTC,
     discountAmount,
   };

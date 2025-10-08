@@ -177,6 +177,14 @@ const quoteSchema = new mongoose.Schema({
       message: 'Le montant HT final doit être un nombre positif'
     }
   },
+  finalTotalVAT: {
+    type: Number,
+    min: 0,
+    validate: {
+      validator: isPositiveAmount,
+      message: 'Le montant de TVA final doit être un nombre positif'
+    }
+  },
   finalTotalTTC: {
     type: Number,
     min: 0,
@@ -287,12 +295,20 @@ quoteSchema.pre('save', function(next) {
     }
 
     const finalTotalHT = Math.max(0, totalHT - discountAmount);
-    const finalTotalTTC = finalTotalHT + totalVAT;
+    
+    // Calculer la TVA finale après remise
+    let finalTotalVAT = 0;
+    if (finalTotalHT > 0 && totalHT > 0) {
+      finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
+    }
+    
+    const finalTotalTTC = finalTotalHT + finalTotalVAT;
 
     this.totalHT = parseFloat(totalHT.toFixed(2));
     this.totalVAT = parseFloat(totalVAT.toFixed(2));
     this.totalTTC = parseFloat((totalHT + totalVAT).toFixed(2));
     this.finalTotalHT = parseFloat(finalTotalHT.toFixed(2));
+    this.finalTotalVAT = parseFloat(finalTotalVAT.toFixed(2));
     this.finalTotalTTC = parseFloat(finalTotalTTC.toFixed(2));
     this.discountAmount = parseFloat(discountAmount.toFixed(2));
   }
