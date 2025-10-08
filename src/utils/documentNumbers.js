@@ -333,18 +333,18 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       const existingDraft = await Invoice.findOne(draftQuery);
       
       if (existingDraft) {
-        // Renommer l'ancien brouillon avec un suffixe unique
+        // Renommer l'ancien brouillon avec un suffixe unique au format DRAFT-numéro-timestamp
         const timestamp = Date.now();
         // Éviter le double préfixe DRAFT- si le numéro commence déjà par DRAFT-
         const baseNumber = options.manualNumber.startsWith('DRAFT-') 
           ? options.manualNumber.replace('DRAFT-', '') 
           : options.manualNumber;
         await Invoice.findByIdAndUpdate(existingDraft._id, {
-          number: `${baseNumber}-${timestamp}`
+          number: `DRAFT-${baseNumber}-${timestamp}`
         });
       }
       
-      // TOUS les brouillons utilisent le format DRAFT-ID
+      // Le nouveau brouillon utilise aussi le format DRAFT-numéro
       return `DRAFT-${options.manualNumber}`;
     }
     
@@ -370,11 +370,14 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
     const existingInvoice = await Invoice.findOne(existingQuery);
     
     if (existingInvoice) {
-      // Si le numéro existe déjà, générer un suffixe unique
-      const timestamp = Date.now().toString().slice(-6);
-      return `DRAFT-${nextSequentialNumber}-${timestamp}`;
+      // Renommer l'ancien brouillon avec un suffixe unique
+      const timestamp = Date.now();
+      await Invoice.findByIdAndUpdate(existingInvoice._id, {
+        number: `DRAFT-${nextSequentialNumber}-${timestamp}`
+      });
     }
     
+    // Le nouveau brouillon garde le numéro propre
     return draftNumber;
   }
   
@@ -450,18 +453,18 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       const existingDraft = await Quote.findOne(draftQuery);
       
       if (existingDraft) {
-        // Renommer l'ancien brouillon avec un suffixe unique
+        // Renommer l'ancien brouillon avec un suffixe unique au format DRAFT-numéro-timestamp
         const timestamp = Date.now();
         // Éviter le double préfixe DRAFT- si le numéro commence déjà par DRAFT-
         const baseNumber = options.manualNumber.startsWith('DRAFT-') 
           ? options.manualNumber.replace('DRAFT-', '') 
           : options.manualNumber;
         await Quote.findByIdAndUpdate(existingDraft._id, {
-          number: `${baseNumber}-${timestamp}`
+          number: `DRAFT-${baseNumber}-${timestamp}`
         });
       }
       
-      // TOUS les brouillons utilisent le format DRAFT-ID
+      // Le nouveau brouillon utilise aussi le format DRAFT-numéro
       return `DRAFT-${options.manualNumber}`;
     }
     
@@ -487,11 +490,14 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
     const existingQuote = await Quote.findOne(existingQuery);
     
     if (existingQuote) {
-      // Si le numéro existe déjà, générer un suffixe unique
-      const timestamp = Date.now().toString().slice(-6);
-      return `DRAFT-${nextSequentialNumber}-${timestamp}`;
+      // Renommer l'ancien brouillon avec un suffixe unique
+      const timestamp = Date.now();
+      await Quote.findByIdAndUpdate(existingQuote._id, {
+        number: `DRAFT-${nextSequentialNumber}-${timestamp}`
+      });
     }
     
+    // Le nouveau brouillon garde le numéro propre
     return draftNumber;
   }
   
@@ -1049,17 +1055,18 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
       const existingDraft = await CreditNote.findOne(draftQuery);
       
       if (existingDraft) {
-        // Seul l'ancien brouillon devient DRAFT-ID
+        // Renommer l'ancien brouillon avec un suffixe unique au format DRAFT-numéro-timestamp
         const timestamp = Date.now();
+        const baseNumber = options.manualNumber.startsWith('DRAFT-') 
+          ? options.manualNumber.replace('DRAFT-', '') 
+          : options.manualNumber;
         await CreditNote.findByIdAndUpdate(existingDraft._id, {
-          number: `${options.manualNumber}-${timestamp}`
+          number: `DRAFT-${baseNumber}-${timestamp}`
         });
-        
-        // Le nouveau brouillon garde le numéro original
-        return options.manualNumber;
       }
       
-      return options.manualNumber;
+      // Le nouveau brouillon utilise aussi le format DRAFT-numéro
+      return `DRAFT-${options.manualNumber}`;
     }
     
     // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-

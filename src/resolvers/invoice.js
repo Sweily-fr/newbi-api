@@ -122,7 +122,11 @@ const calculateInvoiceTotals = (
   }
 
   const finalTotalHT = totalHT - discountAmount;
-  const finalTotalTTC = finalTotalHT + totalVAT;
+  
+  // Recalculer la TVA après application de la remise globale
+  // La TVA doit être proportionnelle au montant final HT
+  const finalTotalVAT = totalVAT * (finalTotalHT / (totalHT || 1));
+  const finalTotalTTC = finalTotalHT + finalTotalVAT;
 
   return {
     totalHT,
@@ -332,14 +336,16 @@ const invoiceResolvers = {
             number: newNumber,
             status: "DRAFT",
             workspaceId,
-            createdBy: context.user._id,
           });
 
-          // S'il y a des factures en conflit, mettre à jour leur numéro
+          // S'il y a des factures en conflit, mettre à jour leur numéro avec le format DRAFT-numéro-timestamp
           for (const draft of conflictingDrafts) {
-            // Utiliser le format DRAFT-ID avec timestamp
             const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-            const finalDraftNumber = `${newNumber}-${timestamp}`;
+            // Extraire le numéro de base sans le préfixe DRAFT- s'il existe
+            const baseNumber = newNumber.startsWith('DRAFT-') 
+              ? newNumber.replace('DRAFT-', '') 
+              : newNumber;
+            const finalDraftNumber = `DRAFT-${baseNumber}-${timestamp}`;
 
             // Mettre à jour la facture en brouillon avec le nouveau numéro
             await Invoice.findByIdAndUpdate(draft._id, {
@@ -354,7 +360,13 @@ const invoiceResolvers = {
         let number;
 
         if (input.status === "DRAFT") {
-          // Pour les brouillons : utiliser generateInvoiceNumber avec isDraft: true
+          // Pour les brouillons : gérer les conflits AVANT de générer le numéro
+          if (input.number) {
+            // Si un numéro manuel est fourni, gérer les conflits d'abord
+            await handleDraftConflicts(`DRAFT-${input.number}`);
+          }
+          
+          // Puis utiliser generateInvoiceNumber avec isDraft: true
           const currentUser = await mongoose
             .model("User")
             .findById(context.user._id);
@@ -473,7 +485,18 @@ const invoiceResolvers = {
             ...totals, // Ajouter tous les totaux calculés
           });
 
-          await invoice.save();
+          try {
+            await invoice.save();
+          } catch (saveError) {
+            // Gestion spécifique des erreurs de clé dupliquée MongoDB
+            if (saveError.code === 11000 && saveError.keyPattern?.number) {
+              throw new AppError(
+                `Un brouillon avec le numéro "${number}" existe déjà. Veuillez réessayer, le système va automatiquement renommer l'ancien brouillon.`,
+                ERROR_CODES.DUPLICATE_ERROR
+              );
+            }
+            throw saveError;
+          }
 
           // Créer automatiquement un événement de calendrier pour l'échéance de la facture
           if (invoice.dueDate) {
