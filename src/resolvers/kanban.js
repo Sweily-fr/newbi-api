@@ -386,6 +386,8 @@ const resolvers = {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const { id, ...updates } = input;
       
+      logger.info('📝 [UpdateTask] Input reçu:', JSON.stringify(input, null, 2));
+      
       // Nettoyer les IDs temporaires de la checklist
       if (updates.checklist) {
         updates.checklist = updates.checklist.map(item => {
@@ -401,7 +403,7 @@ const resolvers = {
       const task = await Task.findOneAndUpdate(
         { _id: id, workspaceId: finalWorkspaceId },
         { ...updates, updatedAt: new Date() },
-        { new: true }
+        { new: true, runValidators: true }
       );
       if (!task) throw new Error('Task not found');
       
