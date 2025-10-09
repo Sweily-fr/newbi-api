@@ -52,17 +52,16 @@ const companyInfoSchema = new mongoose.Schema({
   vatNumber: {
     type: String,
     trim: true,
-    match: [VAT_FR_REGEX, 'Veuillez fournir un numéro de TVA valide (format FR)'],
     validate: {
       validator: function(v) {
-        // Validation conditionnelle basée sur le statut juridique
-        const requiredForStatuses = ['SARL', 'SAS', 'EURL', 'SASU', 'SA', 'SNC', 'SCOP'];
-        if (requiredForStatuses.includes(this.companyStatus) && !v) {
-          return false;
+        // Si le champ est vide ou undefined, c'est valide
+        if (!v || v.trim() === '') {
+          return true;
         }
-        return !v || VAT_FR_REGEX.test(v);
+        // Si le champ est rempli, il doit respecter le format FR
+        return VAT_FR_REGEX.test(v);
       },
-      message: 'Le numéro de TVA est obligatoire pour ce statut juridique et doit être valide (format FR)'
+      message: 'Le numéro de TVA doit être au format FR (ex: FR12345678901) ou vide'
     }
   },
   bankDetails: {

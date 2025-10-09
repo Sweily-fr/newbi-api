@@ -1,10 +1,16 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import Invoice from '../src/models/Invoice.js';
 import Quote from '../src/models/Quote.js';
 import { VAT_FR_REGEX } from '../src/utils/validators.js';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Charger les variables d'environnement
+dotenv.config({ path: join(__dirname, '..', '.env') });
 
 /**
  * Script de migration pour corriger les numéros de TVA invalides
@@ -15,17 +21,43 @@ dotenv.config();
  * 2. Vide le champ vatNumber s'il est invalide
  * 3. Log les modifications effectuées
  * 
- * Usage: node scripts/fix-vat-numbers.js
+ * Usage: 
+ * - Local: node scripts/fix-vat-numbers.js
+ * - Serveur: MONGODB_URI="mongodb://..." node scripts/fix-vat-numbers.js
  */
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/newbi';
+// Récupérer l'URI MongoDB depuis les variables d'environnement
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/newbi';
+
+if (!MONGODB_URI || MONGODB_URI === 'mongodb://localhost:27017/newbi') {
+  console.error('⚠️  ATTENTION: Variable MONGODB_URI non définie ou utilise la valeur par défaut');
+  console.error('   Pour exécuter sur le serveur, utilisez:');
+  console.error('   MONGODB_URI="votre_uri_mongodb" node scripts/fix-vat-numbers.js');
+  console.error('');
+}
 
 async function connectDB() {
   try {
-    await mongoose.connect(MONGODB_URI);
+    if (!process.env.MONGODB_URI) {
+      console.warn('⚠️  MONGODB_URI non défini dans .env, utilisation de la valeur par défaut');
+      console.warn('   Pour la production, assurez-vous que le fichier .env contient MONGODB_URI');
+    }
+    
+    await mongoose.connect(MONGODB_URI, {
+      // Options de connexion recommandées
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
     console.log('✅ Connecté à MongoDB');
+    console.log(`   URI: ${MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@')}`); // Masquer le mot de passe dans les logs
   } catch (error) {
-    console.error('❌ Erreur de connexion à MongoDB:', error);
+    console.error('❌ Erreur de connexion à MongoDB:', error.message);
+    console.error('\n💡 Vérifiez que :');
+    console.error('   1. Le fichier .env existe et contient MONGODB_URI');
+    console.error('   2. Les credentials MongoDB sont corrects');
+    console.error('   3. MongoDB est accessible depuis ce serveur');
+    console.error('\nExemple de MONGODB_URI dans .env :');
+    console.error('   MONGODB_URI=mongodb://username:password@host:port/database');
     process.exit(1);
   }
 }

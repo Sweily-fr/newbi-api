@@ -25,10 +25,34 @@ mongodump --uri="mongodb://localhost:27017/newbi" --out=./backup-before-vat-fix
 
 ### 2. Exécuter le script
 
+#### En local (développement)
+
 ```bash
 cd newbi-api
 node scripts/fix-vat-numbers.js
 ```
+
+#### Sur le serveur de production
+
+Le script nécessite l'URI MongoDB avec authentification. Vous avez deux options :
+
+**Option A : Passer l'URI en ligne de commande (RECOMMANDÉ)**
+
+```bash
+cd api.newbi.fr
+MONGODB_URI="mongodb://username:password@host:port/database" node scripts/fix-vat-numbers.js
+```
+
+**Option B : Créer un fichier .env temporaire**
+
+```bash
+cd api.newbi.fr
+echo 'MONGODB_URI="mongodb://username:password@host:port/database"' > .env
+node scripts/fix-vat-numbers.js
+rm .env  # Supprimer après utilisation
+```
+
+**Note de sécurité :** Ne commitez JAMAIS le fichier `.env` avec les credentials de production !
 
 ### 3. Vérifier les résultats
 
