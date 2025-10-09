@@ -55,13 +55,12 @@ class RedisService {
         publisher: this.publisher,
         subscriber: this.subscriber,
       });
-
       this.isConnected = true;
-      console.log('✅ Redis connecté avec succès');
+      // Redis connecté
       
       return true;
     } catch (error) {
-      console.error('❌ Erreur de connexion Redis:', error);
+      console.error('Redis: Erreur de connexion', error);
       this.isConnected = false;
       return false;
     }
@@ -70,7 +69,7 @@ class RedisService {
   async disconnect() {
     try {
       if (this.client) await this.client.quit();
-      if (this.publisher) await this.publisher.quit();
+      if (this.publishers) await this.publishers.quit();
       if (this.subscriber) await this.subscriber.quit();
       this.isConnected = false;
       console.log('✅ Redis déconnecté');
@@ -78,8 +77,6 @@ class RedisService {
       console.error('❌ Erreur lors de la déconnexion Redis:', error);
     }
   }
-
-  // Publier un événement
   async publish(channel, data) {
     try {
       if (!this.isConnected || !this.pubsub) {
@@ -88,7 +85,7 @@ class RedisService {
       }
       
       await this.pubsub.publish(channel, data);
-      console.log(`📢 Redis: Événement publié sur ${channel}`);
+      // Événement publié
       return true;
     } catch (error) {
       console.error('❌ Erreur lors de la publication:', error);
