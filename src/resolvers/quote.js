@@ -15,7 +15,7 @@ import {
   AppError,
   ERROR_CODES,
 } from "../utils/errors.js";
-import { getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import { requireCompanyInfo, getOrganizationInfo } from "../middlewares/company-info-guard.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 const calculateQuoteTotals = (
@@ -267,8 +267,9 @@ const quoteResolvers = {
   },
 
   Mutation: {
-    createQuote: isAuthenticated(
-      async (_, { workspaceId, input }, { user }) => {
+    createQuote: requireCompanyInfo(
+      isAuthenticated(
+        async (_, { workspaceId, input }, { user }) => {
         // Utiliser le préfixe fourni ou 'D' par défaut
         const prefix = input.prefix || "D";
 
@@ -509,10 +510,12 @@ const quoteResolvers = {
 
         await quote.save();
         return await quote.populate("createdBy");
-      }
+        }
+      )
     ),
 
-    updateQuote: isAuthenticated(async (_, { id, input }, { user }) => {
+    updateQuote: requireCompanyInfo(
+      isAuthenticated(async (_, { id, input }, { user }) => {
       const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
       if (!quote) {
@@ -583,9 +586,11 @@ const quoteResolvers = {
       Object.assign(quote, updateData);
       await quote.save();
       return await quote.populate("createdBy");
-    }),
+      })
+    ),
 
-    deleteQuote: isAuthenticated(async (_, { id }, { user }) => {
+    deleteQuote: requireCompanyInfo(
+      isAuthenticated(async (_, { id }, { user }) => {
       const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
       if (!quote) {
@@ -608,9 +613,11 @@ const quoteResolvers = {
 
       await Quote.deleteOne({ _id: id, createdBy: user.id });
       return true;
-    }),
+      })
+    ),
 
-    changeQuoteStatus: isAuthenticated(async (_, { id, status }, { user }) => {
+    changeQuoteStatus: requireCompanyInfo(
+      isAuthenticated(async (_, { id, status }, { user }) => {
       const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
       if (!quote) {
@@ -729,7 +736,8 @@ const quoteResolvers = {
       quote.status = status;
       await quote.save();
       return await quote.populate("createdBy");
-    }),
+      })
+    ),
 
     convertQuoteToInvoice: isAuthenticated(
       async (_, { id, distribution, isDeposit, skipValidation }, { user }) => {

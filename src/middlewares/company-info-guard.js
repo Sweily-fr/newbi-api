@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 
 /**
  * Vérifie si les informations d'entreprise de l'organisation sont complètes
+ * Vérifie TOUTES les informations: générales ET légales
  * @param {Object} organization - Objet organization (Better Auth)
  * @returns {boolean} - true si les informations sont complètes
  */
@@ -13,13 +14,18 @@ const isCompanyInfoComplete = (organization) => {
   }
 
   // Vérifier les champs obligatoires de l'organisation
+  // Informations générales + Informations légales
   const requiredFields = [
+    // Informations générales
     organization.companyName,
     organization.companyEmail,
     organization.addressStreet,
     organization.addressCity,
     organization.addressZipCode,
-    organization.addressCountry
+    organization.addressCountry,
+    // Informations légales
+    organization.siret,
+    organization.legalForm
   ];
 
   return requiredFields.every(field => field && field.toString().trim().length > 0);
@@ -44,7 +50,42 @@ const requireCompanyInfo = (resolver) => {
     }
 
     // Récupérer le workspaceId depuis les arguments ou le contexte
-    const finalWorkspaceId = args.workspaceId || workspaceId;
+    let finalWorkspaceId = args.workspaceId || workspaceId;
+    
+    // Si workspaceId n'est pas fourni, essayer de le récupérer depuis le document
+    // Cela permet de gérer les mutations update/delete qui n'ont que l'ID
+    if (!finalWorkspaceId && args.id) {
+      try {
+        const db = mongoose.connection.db;
+        
+        // Déterminer la collection à interroger selon le type de mutation
+        let collectionName = null;
+        const mutationName = info.fieldName;
+        
+        if (mutationName.toLowerCase().includes('quote')) {
+          collectionName = 'quotes';
+        } else if (mutationName.toLowerCase().includes('invoice')) {
+          collectionName = 'invoices';
+        } else if (mutationName.toLowerCase().includes('creditnote')) {
+          collectionName = 'creditnotes';
+        }
+        
+        if (collectionName) {
+          const collection = db.collection(collectionName);
+          const document = await collection.findOne({ 
+            _id: new mongoose.Types.ObjectId(args.id),
+            createdBy: new mongoose.Types.ObjectId(user.id)
+          });
+          
+          if (document && document.workspaceId) {
+            finalWorkspaceId = document.workspaceId.toString();
+          }
+        }
+      } catch (error) {
+        logger.error('Erreur lors de la récupération du workspaceId depuis le document:', error);
+      }
+    }
+    
     if (!finalWorkspaceId) {
       throw new AppError(
         'workspaceId requis',
@@ -77,7 +118,7 @@ const requireCompanyInfo = (resolver) => {
       );
     }
 
-    // Vérifier les informations d'entreprise
+    // Vérifier les informations d'entreprise (générales + légales)
     if (!isCompanyInfoComplete(organization)) {
       logger.warn(`WorkspaceId ${finalWorkspaceId} - Informations d'entreprise incomplètes`, {
         workspaceId: finalWorkspaceId,
@@ -88,19 +129,23 @@ const requireCompanyInfo = (resolver) => {
           addressStreet: organization.addressStreet,
           addressCity: organization.addressCity,
           addressZipCode: organization.addressZipCode,
-          addressCountry: organization.addressCountry
+          addressCountry: organization.addressCountry,
+          siret: organization.siret,
+          legalForm: organization.legalForm
         }
       });
 
       throw new AppError(
-        'Les informations d\'entreprise doivent être complétées avant d\'utiliser cette fonctionnalité. Veuillez configurer votre entreprise dans les paramètres.',
+        'Les informations d\'entreprise doivent être complétées avant d\'utiliser cette fonctionnalité. Veuillez configurer les informations générales ET légales dans les paramètres.',
         ERROR_CODES.COMPANY_INFO_INCOMPLETE,
         403,
         {
           missingFields: [
             'Nom de l\'entreprise',
             'Email de contact',
-            'Adresse complète (rue, ville, code postal, pays)'
+            'Adresse complète (rue, ville, code postal, pays)',
+            'SIRET',
+            'Forme juridique'
           ],
           currentCompany: {
             hasName: !!organization.companyName,
@@ -108,7 +153,9 @@ const requireCompanyInfo = (resolver) => {
             hasAddress: !!(organization.addressStreet && 
                           organization.addressCity && 
                           organization.addressZipCode && 
-                          organization.addressCountry)
+                          organization.addressCountry),
+            hasSiret: !!organization.siret,
+            hasLegalForm: !!organization.legalForm
           }
         }
       );
