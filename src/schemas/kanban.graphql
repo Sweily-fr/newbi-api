@@ -192,6 +192,7 @@ type TaskUpdatePayload {
 type ColumnUpdatePayload {
   type: String!
   column: Column
+  columns: [ID!]
   columnId: ID
   boardId: ID!
   workspaceId: ID!
