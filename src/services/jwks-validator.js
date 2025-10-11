@@ -6,12 +6,12 @@ class JWKSValidator {
   constructor() {
     this.keyCache = new Map(); // Cache des clés publiques
     this.cacheExpiry = 5 * 60 * 1000; // 5 minutes
-    this.jwksUrl = process.env.FRONTEND_URL ? 
-      `${process.env.FRONTEND_URL}/api/auth/jwks` : 
-      'http://localhost:3000/api/auth/jwks';
+    this.jwksUrl = process.env.FRONTEND_URL
+      ? `${process.env.FRONTEND_URL}/api/auth/jwks`
+      : "http://localhost:3000/api/auth/jwks";
     this.cacheHits = 0;
     this.cacheMisses = 0;
-    
+
     // Protection DoS
     this.requestCount = new Map(); // Rate limiting par IP
     this.failedAttempts = new Map(); // Tentatives échouées
@@ -28,35 +28,36 @@ class JWKSValidator {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-      
+
       const response = await fetch(this.jwksUrl, {
-        method: 'GET',
+        method: "GET",
         headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'JWKS-Validator/1.0'
+          Accept: "application/json",
+          "User-Agent": "JWKS-Validator/1.0",
         },
         signal: controller.signal,
-        redirect: 'error',
-        referrerPolicy: 'no-referrer'
+        redirect: "error",
+        referrerPolicy: "no-referrer",
       });
-      
+
       clearTimeout(timeoutId);
-      
+
       if (!response.ok) {
-        throw new Error(`Erreur HTTP ${response.status} lors de la récupération JWKS`);
+        throw new Error(
+          `Erreur HTTP ${response.status} lors de la récupération JWKS`
+        );
       }
-      
+
       const jwks = await response.json();
-      
+
       if (!jwks.keys || !Array.isArray(jwks.keys) || jwks.keys.length === 0) {
         throw new Error("Format JWKS invalide ou vide");
       }
-      
+
       logger.info(` JWKS récupéré avec succès: ${jwks.keys.length} clé(s)`);
       return jwks;
-      
     } catch (error) {
-      logger.error("Erreur récupération JWKS:", error.message);
+      logger.error("Erreur récupération JWKS :", error.message);
       throw error;
     }
   }
@@ -69,8 +70,8 @@ class JWKSValidator {
       // Vérifier le cache d'abord
       const cacheKey = `jwks_${kid}`;
       const cached = this.keyCache.get(cacheKey);
-      
-      if (cached && (Date.now() - cached.timestamp) < this.cacheExpiry) {
+
+      if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
         logger.info(`Clé récupérée depuis le cache pour kid: ${kid}`);
         this.cacheHits++;
         return cached.key;
@@ -80,31 +81,33 @@ class JWKSValidator {
 
       // Récupérer les clés JWKS
       const jwks = await this.fetchJWKS();
-      
+
       // Trouver la clé correspondant au kid
-      const jwk = jwks.keys.find(key => key.kid === kid);
-      
+      const jwk = jwks.keys.find((key) => key.kid === kid);
+
       if (!jwk) {
         logger.warn(`Aucune clé JWKS trouvée pour le kid: ${kid}`);
         return null;
       }
 
       // Importer la clé JWK avec jose
-      const keyLike = await importJWK(jwk, jwk.alg || 'EdDSA');
-      
+      const keyLike = await importJWK(jwk, jwk.alg || "EdDSA");
+
       // Mettre en cache
       this.keyCache.set(cacheKey, {
         key: keyLike,
         timestamp: Date.now(),
         kid: kid,
-        algorithm: jwk.alg || 'EdDSA'
+        algorithm: jwk.alg || "EdDSA",
       });
-      
+
       logger.info(` Clé JWKS mise en cache pour kid: ${kid}`);
       return keyLike;
-      
     } catch (error) {
-      logger.error(` Erreur récupération clé publique pour kid ${kid}:`, error.message);
+      logger.error(
+        ` Erreur récupération clé publique pour kid ${kid}:`,
+        error.message
+      );
       return null;
     }
   }
@@ -115,20 +118,20 @@ class JWKSValidator {
   checkRateLimit(clientIP) {
     const now = Date.now();
     const windowStart = now - 60000; // 1 minute
-    
+
     if (!this.requestCount.has(clientIP)) {
       this.requestCount.set(clientIP, []);
     }
-    
+
     const requests = this.requestCount.get(clientIP);
     // Nettoyer les anciennes requêtes
-    const recentRequests = requests.filter(time => time > windowStart);
-    
+    const recentRequests = requests.filter((time) => time > windowStart);
+
     if (recentRequests.length >= this.maxRequestsPerMinute) {
       logger.warn(`Rate limit dépassé pour IP: ${clientIP}`);
       return false;
     }
-    
+
     recentRequests.push(now);
     this.requestCount.set(clientIP, recentRequests);
     return true;
@@ -140,16 +143,16 @@ class JWKSValidator {
   checkIPBlocked(clientIP) {
     const blocked = this.failedAttempts.get(clientIP);
     if (!blocked) return false;
-    
+
     const { count, lastAttempt } = blocked;
     const now = Date.now();
-    
+
     // Débloquer après la durée de blocage
     if (now - lastAttempt > this.blockDuration) {
       this.failedAttempts.delete(clientIP);
       return false;
     }
-    
+
     return count >= this.maxFailedAttempts;
   }
 
@@ -158,15 +161,20 @@ class JWKSValidator {
    */
   recordFailedAttempt(clientIP, reason) {
     const now = Date.now();
-    const current = this.failedAttempts.get(clientIP) || { count: 0, lastAttempt: 0 };
-    
+    const current = this.failedAttempts.get(clientIP) || {
+      count: 0,
+      lastAttempt: 0,
+    };
+
     current.count++;
     current.lastAttempt = now;
-    
+
     this.failedAttempts.set(clientIP, current);
-    
+
     if (current.count >= this.maxFailedAttempts) {
-      logger.error(`IP bloquée pour tentatives suspectes: ${clientIP} (${reason})`);
+      logger.error(
+        `IP bloquée pour tentatives suspectes: ${clientIP} (${reason})`
+      );
     }
   }
 
@@ -197,7 +205,7 @@ class JWKSValidator {
 
       // 1. Décoder le header pour récupérer le kid
       const decoded = jwt.decode(token, { complete: true });
-      
+
       if (!decoded || !decoded.header || !decoded.payload) {
         logger.warn("JWT invalide - structure malformée");
         this.recordFailedAttempt(clientIP, "JWT malformé");
@@ -214,7 +222,7 @@ class JWKSValidator {
       }
 
       // 3. Vérifier l'algorithme
-      if (header.alg !== 'EdDSA') {
+      if (header.alg !== "EdDSA") {
         logger.warn(`Algorithme JWT non autorisé: ${header.alg}`);
         this.recordFailedAttempt(clientIP, "Algorithme non autorisé");
         return null;
@@ -229,7 +237,7 @@ class JWKSValidator {
 
       // 5. Récupérer la clé publique par kid
       const publicKey = await this.getPublicKeyByKid(header.kid);
-      
+
       if (!publicKey) {
         logger.warn(`Aucune clé publique trouvée pour le kid: ${header.kid}`);
         this.recordFailedAttempt(clientIP, "Aucune clé publique trouvée");
@@ -238,23 +246,29 @@ class JWKSValidator {
 
       // 6. Vérification cryptographique avec jose
       try {
-        const { jwtVerify } = await import('jose');
-        
+        const { jwtVerify } = await import("jose");
+
         const { payload: verifiedPayload } = await jwtVerify(token, publicKey, {
-          algorithms: ['EdDSA'],
-          issuer: process.env.FRONTEND_URL || 'http://localhost:3000',
-          clockTolerance: '30s'
+          algorithms: ["EdDSA"],
+          issuer: process.env.FRONTEND_URL || "http://localhost:3000",
+          clockTolerance: "30s",
         });
 
-        logger.info(`JWT validé avec succès pour l'utilisateur ${verifiedPayload.sub}`);
+        logger.info(
+          `JWT validé avec succès pour l'utilisateur ${verifiedPayload.sub}`
+        );
         return verifiedPayload;
-
       } catch (verifyError) {
-        logger.warn("Échec de la vérification cryptographique JWT:", verifyError.message);
-        this.recordFailedAttempt(clientIP, "Échec de la vérification cryptographique");
+        logger.warn(
+          "Échec de la vérification cryptographique JWT:",
+          verifyError.message
+        );
+        this.recordFailedAttempt(
+          clientIP,
+          "Échec de la vérification cryptographique"
+        );
         return null;
       }
-
     } catch (error) {
       logger.error("Erreur validation JWT JWKS:", error.message);
       this.recordFailedAttempt(clientIP, "Erreur validation JWT");
@@ -268,9 +282,9 @@ class JWKSValidator {
   cleanCache() {
     const now = Date.now();
     let cleanedCount = 0;
-    
+
     for (const [key, value] of this.keyCache.entries()) {
-      if ((now - value.timestamp) > this.cacheExpiry) {
+      if (now - value.timestamp > this.cacheExpiry) {
         this.keyCache.delete(key);
         cleanedCount++;
       }
