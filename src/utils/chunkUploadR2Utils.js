@@ -6,8 +6,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 const readFileAsync = promisify(fs.readFile);
 
-// Taille de chunk définie à 2Mo
-export const CHUNK_SIZE = 2 * 1024 * 1024;
+// Taille de chunk définie à 10Mo (minimum S3 multipart = 5MB)
+export const CHUNK_SIZE = 10 * 1024 * 1024;
 
 // Dossier temporaire local pour les chunks (fallback)
 const TEMP_CHUNKS_DIR = path.join(process.cwd(), 'public', 'uploads', 'temp-chunks');

@@ -8,6 +8,7 @@ import {
   uploadFileDirectToR2,
   uploadBase64FileToR2,
 } from "../utils/chunkUploadR2Utils.js";
+import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import FileTransfer from "../models/FileTransfer.js";
 import { v4 as uuidv4 } from "uuid";
 
@@ -64,6 +65,337 @@ const getFileInfoByTransferId = async (fileId) => {
 
 export default {
   Mutation: {
+    // Démarrer un multipart upload natif S3/R2
+    startMultipartUpload: isAuthenticated(
+      async (
+        _,
+        { transferId, fileId, fileName, fileSize, mimeType, totalParts },
+        { user }
+      ) => {
+        try {
+          if (!transferId || !fileId || !fileName || !fileSize || !totalParts) {
+            throw new UserInputError(
+              "Paramètres manquants: transferId, fileId, fileName, fileSize ou totalParts"
+            );
+          }
+
+          if (totalParts < 1 || totalParts > 10000) {
+            throw new UserInputError(
+              "Le nombre de parts doit être entre 1 et 10000"
+            );
+          }
+
+          // Déterminer le type MIME si non fourni
+          const ext = fileName.split(".").pop()?.toLowerCase();
+          const mimeTypes = {
+            jpg: "image/jpeg",
+            jpeg: "image/jpeg",
+            png: "image/png",
+            pdf: "application/pdf",
+            doc: "application/msword",
+            docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            txt: "text/plain",
+            zip: "application/zip",
+            rar: "application/x-rar-compressed",
+            "7z": "application/x-7z-compressed",
+          };
+          const finalMimeType = mimeType || mimeTypes[ext] || "application/octet-stream";
+
+          console.log(
+            `🚀 Démarrage Multipart Upload pour ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB, ${totalParts} parts)`
+          );
+
+          const result = await cloudflareTransferService.startMultipartUpload(
+            transferId,
+            fileId,
+            fileName,
+            fileSize,
+            finalMimeType,
+            totalParts
+          );
+
+          return {
+            uploadId: result.uploadId,
+            key: result.key,
+            presignedUrls: result.presignedUrls,
+          };
+        } catch (error) {
+          console.error("❌ Erreur démarrage multipart upload:", error);
+
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+
+          throw new ApolloError(
+            "Une erreur est survenue lors du démarrage du multipart upload.",
+            "MULTIPART_START_ERROR"
+          );
+        }
+      }
+    ),
+
+    // Compléter un multipart upload
+    completeMultipartUpload: isAuthenticated(
+      async (
+        _,
+        { uploadId, key, parts, transferId, fileId },
+        { user }
+      ) => {
+        try {
+          if (!uploadId || !key || !parts || parts.length === 0) {
+            throw new UserInputError(
+              "Paramètres manquants: uploadId, key ou parts"
+            );
+          }
+
+          console.log(
+            `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`
+          );
+
+          const result = await cloudflareTransferService.completeMultipartUpload(
+            uploadId,
+            key,
+            parts
+          );
+
+          // Stocker les métadonnées dans le cache
+          const fileMetadata = {
+            originalName: key.split("/").pop(),
+            displayName: key.split("/").pop(),
+            fileName: key.split("/").pop(),
+            filePath: result.url,
+            r2Key: result.key,
+            mimeType: "application/octet-stream",
+            size: result.size,
+            storageType: "r2",
+            fileId: fileId,
+            uploadedAt: new Date(),
+          };
+
+          fileMetadataCache.set(fileId, fileMetadata);
+
+          setTimeout(() => {
+            fileMetadataCache.delete(fileId);
+          }, 60 * 60 * 1000);
+
+          return {
+            success: true,
+            key: result.key,
+            url: result.url,
+            size: result.size,
+            etag: result.etag,
+            fileId: fileId,
+          };
+        } catch (error) {
+          console.error("❌ Erreur finalisation multipart upload:", error);
+
+          // En cas d'erreur, annuler le multipart upload
+          if (uploadId && key) {
+            try {
+              await cloudflareTransferService.abortMultipartUpload(uploadId, key);
+            } catch (abortError) {
+              console.error("Erreur annulation multipart:", abortError);
+            }
+          }
+
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+
+          throw new ApolloError(
+            "Une erreur est survenue lors de la finalisation du multipart upload.",
+            "MULTIPART_COMPLETE_ERROR"
+          );
+        }
+      }
+    ),
+
+    // Générer des URLs signées pour upload direct vers R2
+    generatePresignedUploadUrls: isAuthenticated(
+      async (
+        _,
+        { fileId, totalChunks, fileName },
+        { user }
+      ) => {
+        try {
+          if (!fileId || !fileName || !totalChunks) {
+            throw new UserInputError(
+              "Paramètres manquants: fileId, fileName ou totalChunks"
+            );
+          }
+
+          if (totalChunks < 1 || totalChunks > 10000) {
+            throw new UserInputError(
+              "Le nombre de chunks doit être entre 1 et 10000"
+            );
+          }
+
+          // Générer un transferId temporaire
+          const transferId = `temp_${fileId}`;
+
+          console.log(
+            `🔑 Génération de ${totalChunks} URLs signées pour ${fileName}`
+          );
+
+          // Générer toutes les URLs signées en parallèle
+          const urlPromises = [];
+          for (let i = 0; i < totalChunks; i++) {
+            urlPromises.push(
+              (async () => {
+                const { uploadUrl, key, chunkIndex } =
+                  await cloudflareTransferService.generatePresignedUploadUrl(
+                    transferId,
+                    fileId,
+                    i,
+                    fileName,
+                    3600 // 1 heure de validité
+                  );
+
+                return {
+                  chunkIndex,
+                  uploadUrl,
+                  key,
+                };
+              })()
+            );
+          }
+
+          const uploadUrls = await Promise.all(urlPromises);
+
+          console.log(
+            `✅ ${uploadUrls.length} URLs signées générées pour ${fileName}`
+          );
+
+          return {
+            fileId,
+            transferId,
+            uploadUrls,
+            expiresIn: 3600,
+          };
+        } catch (error) {
+          console.error(
+            "❌ Erreur génération URLs signées:",
+            error
+          );
+
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+
+          throw new ApolloError(
+            "Une erreur est survenue lors de la génération des URLs signées.",
+            "PRESIGNED_URL_GENERATION_ERROR"
+          );
+        }
+      }
+    ),
+
+    // Confirmer qu'un chunk a été uploadé directement vers R2
+    confirmChunkUploadedToR2: isAuthenticated(
+      async (
+        _,
+        { fileId, chunkIndex, totalChunks, fileName, fileSize },
+        { user }
+      ) => {
+        try {
+          if (!fileId || chunkIndex === undefined || !totalChunks) {
+            throw new UserInputError(
+              "Paramètres manquants: fileId, chunkIndex ou totalChunks"
+            );
+          }
+
+          // Vérifier si c'est le dernier chunk
+          const isLastChunk = chunkIndex === totalChunks - 1;
+
+          let fileInfo = null;
+
+          if (isLastChunk) {
+            const transferId = `temp_${fileId}`;
+
+            // Vérifier que tous les chunks sont présents
+            const allChunksReceived = await areAllChunksReceivedOnR2(
+              transferId,
+              fileId,
+              totalChunks
+            );
+
+            if (!allChunksReceived) {
+              throw new Error(
+                `Tous les chunks ne sont pas présents pour le fichier ${fileId}`
+              );
+            }
+
+            // Déterminer le type MIME
+            const ext = fileName.split(".").pop()?.toLowerCase();
+            const mimeTypes = {
+              jpg: "image/jpeg",
+              jpeg: "image/jpeg",
+              png: "image/png",
+              pdf: "application/pdf",
+              doc: "application/msword",
+              docx:
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              txt: "text/plain",
+              zip: "application/zip",
+            };
+            const mimeType = mimeTypes[ext] || "application/octet-stream";
+
+            // Reconstruire le fichier
+            fileInfo = await reconstructFileFromR2(
+              transferId,
+              fileId,
+              fileName,
+              totalChunks,
+              mimeType
+            );
+
+            // Stocker les métadonnées dans le cache
+            const fileMetadata = {
+              originalName: fileInfo.originalName,
+              displayName: fileInfo.displayName,
+              fileName: fileInfo.fileName,
+              filePath: fileInfo.filePath,
+              r2Key: fileInfo.r2Key,
+              mimeType: fileInfo.mimeType,
+              size: fileInfo.size,
+              storageType: "r2",
+              fileId: fileId,
+              uploadedAt: new Date(),
+            };
+
+            fileMetadataCache.set(fileId, fileMetadata);
+
+            setTimeout(() => {
+              fileMetadataCache.delete(fileId);
+            }, 60 * 60 * 1000);
+          }
+
+          return {
+            chunkReceived: true,
+            fileCompleted: isLastChunk,
+            fileId,
+            fileName: fileInfo ? fileInfo.fileName : null,
+            filePath: fileInfo ? fileInfo.filePath : null,
+            storageType: "r2",
+          };
+        } catch (error) {
+          console.error(
+            "❌ Erreur confirmation chunk:",
+            error
+          );
+
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+
+          throw new ApolloError(
+            "Une erreur est survenue lors de la confirmation du chunk.",
+            "CHUNK_CONFIRMATION_ERROR"
+          );
+        }
+      }
+    ),
+
     // Uploader un chunk de fichier vers R2
     uploadFileChunkToR2: isAuthenticated(
       async (
@@ -95,18 +427,24 @@ export default {
             transferId
           );
 
-          // Vérifier si c'était le dernier chunk
-          const allChunksReceived = await areAllChunksReceivedOnR2(
-            transferId,
-            fileId,
-            totalChunks
-          );
+          // Vérifier si c'est le dernier chunk (index commence à 0)
+          const isLastChunk = chunkIndex === totalChunks - 1;
 
           // Si tous les chunks sont reçus, reconstruire le fichier
           let fileInfo = null;
           let fileTransferId = null;
 
-          if (allChunksReceived) {
+          if (isLastChunk) {
+            // Double vérification : s'assurer que tous les chunks sont bien présents
+            const allChunksReceived = await areAllChunksReceivedOnR2(
+              transferId,
+              fileId,
+              totalChunks
+            );
+
+            if (!allChunksReceived) {
+              throw new Error(`Tous les chunks ne sont pas présents pour le fichier ${fileId}`);
+            }
             // Déterminer le type MIME
             const ext = fileName.split(".").pop()?.toLowerCase();
             const mimeTypes = {
@@ -155,7 +493,7 @@ export default {
 
           return {
             chunkReceived: true,
-            fileCompleted: allChunksReceived,
+            fileCompleted: isLastChunk,
             fileId,
             fileName: fileInfo ? fileInfo.fileName : null,
             filePath: fileInfo ? fileInfo.filePath : null,

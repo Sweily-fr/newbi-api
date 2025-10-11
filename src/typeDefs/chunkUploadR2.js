@@ -28,7 +28,36 @@ export default gql`
     base64: String!
   }
 
+  type PresignedUploadUrl {
+    chunkIndex: Int!
+    uploadUrl: String!
+    key: String!
+  }
+
+  type PresignedUploadUrlsResponse {
+    fileId: String!
+    transferId: String!
+    uploadUrls: [PresignedUploadUrl!]!
+    expiresIn: Int!
+  }
+
   extend type Mutation {
+    # Générer des URLs signées pour upload direct vers R2
+    generatePresignedUploadUrls(
+      fileId: String!
+      totalChunks: Int!
+      fileName: String!
+    ): PresignedUploadUrlsResponse!
+
+    # Confirmer qu'un chunk a été uploadé directement vers R2
+    confirmChunkUploadedToR2(
+      fileId: String!
+      chunkIndex: Int!
+      totalChunks: Int!
+      fileName: String!
+      fileSize: Int!
+    ): ChunkUploadR2Result!
+
     # Upload d'un chunk vers Cloudflare R2
     uploadFileChunkToR2(
       chunk: Upload!
