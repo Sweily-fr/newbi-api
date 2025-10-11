@@ -4,6 +4,8 @@ import { AuthenticationError } from 'apollo-server-express';
 import { withWorkspace } from '../middlewares/better-auth-jwt.js';
 import { getPubSub } from '../config/redis.js';
 import logger from '../utils/logger.js';
+import mongoose from 'mongoose';
+import User from '../models/User.js';
 
 // Événements de subscription
 const BOARD_UPDATED = 'BOARD_UPDATED';
@@ -363,11 +365,27 @@ const resolvers = {
         });
       }
       
+      // Récupérer les données utilisateur pour l'image
+      const db = mongoose.connection.db;
+      const userData = await db.collection('user').findOne({ 
+        _id: new mongoose.Types.ObjectId(user.id) 
+      });
+      const userImage = userData?.image || userData?.avatar || userData?.profile?.profilePicture || userData?.profile?.profilePictureUrl || null;
+      
       const task = new Task({
         ...cleanedInput,
         userId: user.id,
         workspaceId: finalWorkspaceId,
-        position: input.position || 0
+        position: input.position || 0,
+        // Ajouter une entrée d'activité pour la création
+        activity: [{
+          userId: user.id,
+          userName: userData?.name || user.name || user.email,
+          userImage: userImage,
+          type: 'created',
+          description: 'a créé la tâche',
+          createdAt: new Date()
+        }]
       });
       const savedTask = await task.save();
       
@@ -382,11 +400,16 @@ const resolvers = {
       return savedTask;
     }),
     
-    updateTask: withWorkspace(async (_, { input, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+    updateTask: withWorkspace(async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       const { id, ...updates } = input;
       
-      logger.info('📝 [UpdateTask] Input reçu:', JSON.stringify(input, null, 2));
+      logger.info('📝 [UpdateTask] dueDate reçue:', input.dueDate);
+      logger.info('📝 [UpdateTask] dueDate type:', typeof input.dueDate);
+      
+      // Récupérer la tâche avant modification pour comparer
+      const oldTask = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
+      if (!oldTask) throw new Error('Task not found');
       
       // Nettoyer les IDs temporaires de la checklist
       if (updates.checklist) {
@@ -400,12 +423,158 @@ const resolvers = {
         });
       }
       
+      // Récupérer les données utilisateur pour l'activité
+      const db = mongoose.connection.db;
+      const userData = user ? await db.collection('user').findOne({ 
+        _id: new mongoose.Types.ObjectId(user.id) 
+      }) : null;
+      const userImage = userData?.image || userData?.avatar || userData?.profile?.profilePicture || userData?.profile?.profilePictureUrl || null;
+      
+      // Tracker les changements et créer une entrée d'activité groupée
+      const changes = [];
+      
+      // Titre modifié
+      if (updates.title !== undefined) {
+        const oldTitle = (oldTask.title || '').trim();
+        const newTitle = (updates.title || '').trim();
+        if (oldTitle !== newTitle) {
+          changes.push('le titre');
+        }
+      }
+      
+      // Description modifiée
+      if (updates.description !== undefined) {
+        const oldDesc = (oldTask.description || '').trim();
+        const newDesc = (updates.description || '').trim();
+        if (oldDesc !== newDesc) {
+          changes.push('la description');
+        }
+      }
+      
+      // Priorité modifiée
+      if (updates.priority !== undefined && updates.priority !== oldTask.priority) {
+        const priorityLabels = { low: 'Basse', medium: 'Moyenne', high: 'Haute' };
+        changes.push(`la priorité (${priorityLabels[updates.priority] || updates.priority})`);
+      }
+      
+      // Date d'échéance modifiée
+      if (updates.dueDate !== undefined) {
+        const oldDate = oldTask.dueDate ? new Date(oldTask.dueDate).toISOString() : null;
+        const newDate = updates.dueDate ? new Date(updates.dueDate).toISOString() : null;
+        if (oldDate !== newDate) {
+          changes.push(updates.dueDate ? 'la date d\'échéance' : 'supprimé la date d\'échéance');
+        }
+      }
+      
+      // Colonne modifiée
+      if (updates.columnId !== undefined && updates.columnId !== oldTask.columnId) {
+        changes.push('la colonne');
+      }
+      
+      // Tags modifiés
+      if (updates.tags !== undefined) {
+        const oldTags = oldTask.tags || [];
+        const newTags = updates.tags || [];
+        const getTagName = (tag) => typeof tag === 'string' ? tag : tag?.name || tag;
+        const oldTagNames = oldTags.map(getTagName);
+        const newTagNames = newTags.map(getTagName);
+        const addedTags = newTagNames.filter(tag => !oldTagNames.includes(tag));
+        const removedTags = oldTagNames.filter(tag => !newTagNames.includes(tag));
+        
+        if (addedTags.length > 0) {
+          changes.push(`ajouté le${addedTags.length > 1 ? 's' : ''} tag${addedTags.length > 1 ? 's' : ''} ${addedTags.join(', ')}`);
+        }
+        if (removedTags.length > 0) {
+          changes.push(`supprimé le${removedTags.length > 1 ? 's' : ''} tag${removedTags.length > 1 ? 's' : ''} ${removedTags.join(', ')}`);
+        }
+      }
+      
+      // Membres assignés modifiés
+      if (updates.assignedMembers !== undefined) {
+        // Normaliser les IDs en strings et trier
+        const normalizeMembers = (members) => {
+          return (members || [])
+            .map(m => {
+              // Si c'est un objet avec userId (format frontend)
+              if (m && m.userId) return m.userId.toString();
+              // Si c'est un objet avec _id (format MongoDB)
+              if (m && m._id) return m._id.toString();
+              // Si c'est déjà une string
+              if (typeof m === 'string') return m;
+              // Si c'est un ObjectId
+              if (m && m.toString) return m.toString();
+              return String(m);
+            })
+            .filter(Boolean) // Enlever les valeurs vides
+            .sort();
+        };
+        
+        const oldMembers = normalizeMembers(oldTask.assignedMembers);
+        const newMembers = normalizeMembers(updates.assignedMembers);
+        
+        // Comparer les tableaux triés
+        const hasChanged = oldMembers.length !== newMembers.length || 
+                          oldMembers.some((m, i) => m !== newMembers[i]);
+        
+        if (hasChanged) {
+          const addedMembers = newMembers.filter(m => !oldMembers.includes(m));
+          const removedMembers = oldMembers.filter(m => !newMembers.includes(m));
+          
+          if (addedMembers.length > 0) {
+            changes.push(`assigné ${addedMembers.length} membre${addedMembers.length > 1 ? 's' : ''}`);
+          }
+          if (removedMembers.length > 0) {
+            changes.push(`désassigné ${removedMembers.length} membre${removedMembers.length > 1 ? 's' : ''}`);
+          }
+        }
+      }
+      
+      // Checklist modifiée
+      if (updates.checklist !== undefined) {
+        const oldChecklist = oldTask.checklist || [];
+        const newChecklist = updates.checklist || [];
+        if (oldChecklist.length !== newChecklist.length) {
+          changes.push('la checklist');
+        } else {
+          // Vérifier si des items ont changé
+          const hasChanges = newChecklist.some((item, index) => {
+            const oldItem = oldChecklist[index];
+            return !oldItem || item.text !== oldItem.text || item.completed !== oldItem.completed;
+          });
+          if (hasChanges) {
+            changes.push('la checklist');
+          }
+        }
+      }
+      
+      // Créer une seule entrée d'activité groupée si des changements existent
+      if (changes.length > 0) {
+        const description = changes.length === 1 
+          ? `a modifié ${changes[0]}`
+          : `a modifié ${changes.slice(0, -1).join(', ')} et ${changes[changes.length - 1]}`;
+        
+        updates.activity = [...(oldTask.activity || []), {
+          userId: user?.id,
+          userName: userData?.name || user?.name || user?.email,
+          userImage: userImage,
+          type: 'updated',
+          description: description,
+          createdAt: new Date()
+        }];
+      }
+      
       const task = await Task.findOneAndUpdate(
         { _id: id, workspaceId: finalWorkspaceId },
         { ...updates, updatedAt: new Date() },
         { new: true, runValidators: true }
       );
       if (!task) throw new Error('Task not found');
+      
+      logger.info('📝 [UpdateTask] Task après sauvegarde:', {
+        dueDate: task.dueDate,
+        dueDateType: typeof task.dueDate,
+        dueDateISO: task.dueDate ? task.dueDate.toISOString() : null
+      });
       
       // Publier l'événement de mise à jour de tâche
       safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
@@ -440,7 +609,7 @@ const resolvers = {
       return result.deletedCount > 0;
     }),
     
-    moveTask: withWorkspace(async (_, { id, columnId, position, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+    moveTask: withWorkspace(async (_, { id, columnId, position, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
@@ -448,10 +617,34 @@ const resolvers = {
         const task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
         if (!task) throw new Error('Task not found');
         
-        // If the column is changing, update the column reference
+        const oldColumnId = task.columnId;
+        
+        // If the column is changing, update the column reference and add activity
         if (task.columnId !== columnId) {
           task.columnId = columnId;
           task.status = columnId;
+          
+          // Ajouter une entrée d'activité pour le déplacement
+          if (user) {
+            // Récupérer les données utilisateur pour l'image
+            const db = mongoose.connection.db;
+            const userData = await db.collection('user').findOne({ 
+              _id: new mongoose.Types.ObjectId(user.id) 
+            });
+            const userImage = userData?.image || userData?.avatar || userData?.profile?.profilePicture || userData?.profile?.profilePictureUrl || null;
+            
+            task.activity.push({
+              userId: user.id,
+              userName: userData?.name || user.name || user.email,
+              userImage: userImage,
+              type: 'moved',
+              field: 'columnId',
+              oldValue: oldColumnId,
+              newValue: columnId,
+              description: 'a déplacé la tâche',
+              createdAt: new Date()
+            });
+          }
         }
         
         // Update the position of the moved task
@@ -499,6 +692,161 @@ const resolvers = {
         console.error('Error moving task:', error);
         throw new Error('Failed to move task');
       }
+    }),
+
+    // Ajouter un commentaire
+    addComment: withWorkspace(async (_, { taskId, input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      
+      try {
+        logger.info('💬 [Kanban] Adding comment:', { taskId, workspaceId: finalWorkspaceId, userId: user?.id });
+        
+        if (!user) {
+          throw new Error('User not authenticated');
+        }
+        
+        const task = await Task.findOne({ _id: taskId, workspaceId: finalWorkspaceId });
+        if (!task) {
+          logger.error('❌ [Kanban] Task not found:', taskId);
+          throw new Error('Task not found');
+        }
+
+        // Récupérer les données utilisateur depuis Better Auth (collection MongoDB directe)
+        const db = mongoose.connection.db;
+        const userData = await db.collection('user').findOne({ 
+          _id: new mongoose.Types.ObjectId(user.id) 
+        });
+        
+        // Better Auth peut stocker l'image dans différents champs
+        const userImage = userData?.image || userData?.avatar || userData?.profile?.profilePicture || userData?.profile?.profilePictureUrl || null;
+        
+        logger.info('📸 [Kanban] Photo utilisateur récupérée:', { 
+          userId: user.id,
+          image: userData?.image || 'null',
+          avatar: userData?.avatar || 'null',
+          profilePicture: userData?.profile?.profilePicture || 'null',
+          profilePictureUrl: userData?.profile?.profilePictureUrl || 'null',
+          finalImage: userImage || 'null',
+          name: userData?.name || 'null',
+          email: userData?.email || 'null',
+          allKeys: userData ? Object.keys(userData).join(', ') : 'userData is null'
+        });
+        
+        const comment = {
+          userId: user.id,
+          userName: userData?.name || user.name || user.email,
+          userImage: userImage,
+          content: input.content,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+        
+        logger.info('💬 [Kanban] Commentaire créé:', {
+          userId: comment.userId,
+          userName: comment.userName,
+          userImage: comment.userImage
+        });
+
+        task.comments.push(comment);
+        
+        // Ajouter une entrée dans l'activité
+        task.activity.push({
+          userId: user.id,
+          userName: userData?.name || user.name || user.email,
+          userImage: userImage,
+          type: 'comment_added',
+          description: 'a ajouté un commentaire',
+          createdAt: new Date()
+        });
+
+        await task.save();
+
+        // Publier l'événement
+        safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
+          type: 'COMMENT_ADDED',
+          task: task,
+          taskId: task._id,
+          boardId: task.boardId,
+          workspaceId: finalWorkspaceId
+        }, 'Commentaire ajouté');
+
+        return task;
+      } catch (error) {
+        logger.error('Error adding comment:', error);
+        throw new Error('Failed to add comment');
+      }
+    }),
+
+    // Modifier un commentaire
+    updateComment: withWorkspace(async (_, { taskId, commentId, content, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      
+      try {
+        const task = await Task.findOne({ _id: taskId, workspaceId: finalWorkspaceId });
+        if (!task) throw new Error('Task not found');
+
+        const comment = task.comments.id(commentId);
+        if (!comment) throw new Error('Comment not found');
+        
+        // Vérifier que l'utilisateur est le créateur du commentaire
+        if (comment.userId !== user.id) {
+          throw new Error('Not authorized to edit this comment');
+        }
+
+        comment.content = content;
+        comment.updatedAt = new Date();
+        await task.save();
+
+        // Publier l'événement
+        safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
+          type: 'COMMENT_UPDATED',
+          task: task,
+          taskId: task._id,
+          boardId: task.boardId,
+          workspaceId: finalWorkspaceId
+        }, 'Commentaire modifié');
+
+        return task;
+      } catch (error) {
+        logger.error('Error updating comment:', error);
+        throw new Error('Failed to update comment');
+      }
+    }),
+
+    // Supprimer un commentaire
+    deleteComment: withWorkspace(async (_, { taskId, commentId, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      
+      try {
+        const task = await Task.findOne({ _id: taskId, workspaceId: finalWorkspaceId });
+        if (!task) throw new Error('Task not found');
+
+        const comment = task.comments.id(commentId);
+        if (!comment) throw new Error('Comment not found');
+        
+        // Vérifier que l'utilisateur est le créateur du commentaire
+        if (comment.userId !== user.id) {
+          throw new Error('Not authorized to delete this comment');
+        }
+
+        // Supprimer le commentaire du tableau
+        task.comments.pull(commentId);
+        await task.save();
+
+        // Publier l'événement
+        safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
+          type: 'COMMENT_DELETED',
+          task: task,
+          taskId: task._id,
+          boardId: task.boardId,
+          workspaceId: finalWorkspaceId
+        }, 'Commentaire supprimé');
+
+        return task;
+      } catch (error) {
+        logger.error('Error deleting comment:', error);
+        throw new Error('Failed to delete comment');
+      }
     })
     
   },
@@ -511,6 +859,94 @@ const resolvers = {
     tasks: async (parent, _, { user }) => {
       if (!user) return [];
       return await Task.find({ boardId: parent.id, workspaceId: parent.workspaceId }).sort('position');
+    },
+    members: async (board) => {
+      try {
+        const db = mongoose.connection.db;
+        
+        // Convertir le workspaceId en ObjectId
+        const orgId = typeof board.workspaceId === 'string' 
+          ? new mongoose.Types.ObjectId(board.workspaceId) 
+          : board.workspaceId;
+        
+        logger.info(`🔍 [Kanban Board.members] Recherche membres pour organisation: ${orgId}`);
+        
+        // 1. Récupérer l'organisation
+        const organization = await db.collection('organization').findOne({ _id: orgId });
+        
+        if (!organization) {
+          logger.warn(`⚠️ [Kanban Board.members] Organisation non trouvée: ${orgId}`);
+          return [];
+        }
+        
+        logger.info(`🏢 [Kanban Board.members] Organisation trouvée: ${organization.name}`);
+        
+        // 2. Récupérer TOUS les membres via la collection member (Better Auth)
+        const members = await db.collection('member').find({
+          organizationId: orgId
+        }).toArray();
+        
+        logger.info(`📋 [Kanban Board.members] ${members.length} membres trouvés`);
+        
+        if (members.length === 0) {
+          logger.warn(`⚠️ [Kanban Board.members] Aucun membre trouvé`);
+          return [];
+        }
+        
+        // 3. Récupérer les IDs utilisateurs
+        const userIds = members.map(m => {
+          const userId = m.userId;
+          return typeof userId === 'string' ? new mongoose.Types.ObjectId(userId) : userId;
+        });
+        
+        logger.info(`👥 [Kanban Board.members] Recherche de ${userIds.length} utilisateurs`);
+        
+        // 4. Récupérer les informations des utilisateurs avec leurs photos
+        const users = await db.collection('user').find({
+          _id: { $in: userIds }
+        }).toArray();
+        
+        logger.info(`✅ [Kanban Board.members] ${users.length} utilisateurs trouvés`);
+        
+        // 5. Créer le résultat en combinant membres et users
+        const result = members.map(member => {
+          const memberUserId = member.userId?.toString();
+          const user = users.find(u => u._id.toString() === memberUserId);
+          
+          if (!user) {
+            logger.warn(`⚠️ [Kanban Board.members] Utilisateur non trouvé: ${memberUserId}`);
+            return null;
+          }
+          
+          // Better Auth peut stocker l'image dans différents champs
+          const userImage = user.image || user.avatar || user.profile?.profilePicture || user.profile?.profilePictureUrl || null;
+          
+          logger.info(`📸 [Kanban Board.members] Utilisateur: ${user.email}`, {
+            image: user.image || 'null',
+            avatar: user.avatar || 'null',
+            profilePicture: user.profile?.profilePicture || 'null',
+            profilePictureUrl: user.profile?.profilePictureUrl || 'null',
+            finalImage: userImage || 'null'
+          });
+          
+          return {
+            id: memberUserId,
+            userId: memberUserId,
+            name: user.name || user.email || 'Utilisateur inconnu',
+            email: user.email || '',
+            image: userImage,
+            role: member.role || 'member'
+          };
+        }).filter(Boolean); // Retirer les null
+        
+        logger.info(`✅ [Kanban Board.members] Retour de ${result.length} membres avec photos`);
+        
+        return result;
+      } catch (error) {
+        logger.error('❌ [Kanban Board.members] Erreur:', error);
+        logger.error('Stack:', error.stack);
+        return [];
+      }
     }
   },
   
@@ -518,6 +954,14 @@ const resolvers = {
     tasks: async (parent) => {
       return await Task.find({ columnId: parent.id }).sort('position');
     }
+  },
+
+  Comment: {
+    id: (parent) => parent._id || parent.id,
+  },
+
+  Activity: {
+    id: (parent) => parent._id || parent.id,
   },
 
   Subscription: {
