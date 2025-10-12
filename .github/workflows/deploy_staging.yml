@@ -1,0 +1,82 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch: # Permet le déclenchement manuel
+
+jobs:
+  deploy:
+    name: Deploy to Staging Server
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps_key
+          chmod 600 ~/.ssh/vps_key
+          ssh-keyscan -H 51.91.254.74 >> ~/.ssh/known_hosts
+
+      - name: Deploy to Staging
+        env:
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+        run: |
+          echo "🚀 Déploiement STAGING en cours..."
+          
+          # Sync files
+          rsync -avz --exclude='uploads' --exclude='node_modules' --exclude='.git' \
+            -e 'ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no' \
+            ./* joaquim@51.91.254.74:~/staging
+          
+          # Execute deployment commands
+          ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no joaquim@51.91.254.74 << 'ENDSSH'
+            source ~/.nvm/nvm.sh
+            cd staging
+            
+            echo "🔄 Vérification Redis..."
+            if redis.cli -a "$REDIS_PASSWORD" ping > /dev/null 2>&1; then
+              echo "✅ Redis opérationnel"
+            else
+              echo "❌ Redis problème - redémarrage..."
+              sudo snap restart redis
+              sleep 3
+              if redis.cli -a "$REDIS_PASSWORD" ping > /dev/null 2>&1; then
+                echo "✅ Redis redémarré avec succès"
+              else
+                echo "⚠️ Redis indisponible - l'app utilisera le fallback mémoire"
+              fi
+            fi
+            
+            echo "📦 Installation des dépendances..."
+            npm ci --omit=dev
+            npm install
+            
+            echo "🔄 Rechargement PM2..."
+            pm2 reload newbi-staging
+            
+            echo "✅ Vérification du statut..."
+            pm2 status newbi-staging
+            
+            echo "🎉 Déploiement STAGING terminé avec succès!"
+          ENDSSH
+
+      - name: Cleanup SSH Key
+        if: always()
+        run: rm -f ~/.ssh/vps_key
+
+      - name: Notify Success
+        if: success()
+        run: |
+          echo "✅ Déploiement STAGING réussi!"
+          echo "🌐 URL: https://staging.newbi.fr (ou votre URL staging)"
+
+      - name: Notify Failure
+        if: failure()
+        run: |
+          echo "❌ Déploiement STAGING échoué!"
+          echo "📋 Vérifiez les logs ci-dessus pour plus de détails"
