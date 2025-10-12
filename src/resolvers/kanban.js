@@ -522,9 +522,29 @@ const resolvers = {
           
           if (addedMembers.length > 0) {
             changes.push(`assigné ${addedMembers.length} membre${addedMembers.length > 1 ? 's' : ''}`);
+            // Ajouter une activité spécifique pour l'assignation avec les IDs des membres
+            updates.activity = [...(oldTask.activity || []), {
+              userId: user?.id,
+              userName: userData?.name || user?.name || user?.email,
+              userImage: userImage,
+              type: 'assigned',
+              description: `assigné ${addedMembers.length} membre${addedMembers.length > 1 ? 's' : ''}`,
+              newValue: addedMembers, // Stocker les IDs des membres ajoutés
+              createdAt: new Date()
+            }];
           }
           if (removedMembers.length > 0) {
             changes.push(`désassigné ${removedMembers.length} membre${removedMembers.length > 1 ? 's' : ''}`);
+            // Ajouter une activité spécifique pour la désassignation
+            updates.activity = [...(updates.activity || oldTask.activity || []), {
+              userId: user?.id,
+              userName: userData?.name || user?.name || user?.email,
+              userImage: userImage,
+              type: 'unassigned',
+              description: `désassigné ${removedMembers.length} membre${removedMembers.length > 1 ? 's' : ''}`,
+              oldValue: removedMembers, // Stocker les IDs des membres retirés
+              createdAt: new Date()
+            }];
           }
         }
       }
