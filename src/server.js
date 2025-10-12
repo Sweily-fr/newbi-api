@@ -100,10 +100,14 @@ async function startServer() {
     process.env.FRONTEND_URL,
   ].filter(Boolean);
 
+  // Regex pour les URLs de preview Vercel (staging)
+  const previewOriginRegex =
+    /^https:\/\/newbi-v2-git-develop-[a-z0-9-]+(?:-sofianemtimet6-2653s-projects)?\.vercel\.app$/i;
+
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (!origin || allowedOrigins.includes(origin) || previewOriginRegex.test(origin)) {
           callback(null, true);
         } else {
           callback(new Error(`Origine non autorisée: ${origin}`));
