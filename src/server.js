@@ -97,7 +97,7 @@ async function startServer() {
     "https://newbi.fr",
     "https://api.newbi.fr",
     "https://newbi-v2.vercel.app",
-    /^https:\/\/newbi-v2-git-develop-[a-z0-9-]+(?:-sofianemtimet6-2653s-projects)?\.vercel\.app$/i,
+    "https://newbi-v2-git-develop-sofianemtimet6-2653s-projects.vercel.app",
     process.env.FRONTEND_URL,
   ].filter(Boolean);
 
