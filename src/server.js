@@ -97,17 +97,14 @@ async function startServer() {
     "https://newbi.fr",
     "https://api.newbi.fr",
     "https://newbi-v2.vercel.app",
+    /^https:\/\/newbi-v2-git-develop-[a-z0-9-]+(?:-sofianemtimet6-2653s-projects)?\.vercel\.app$/i,
     process.env.FRONTEND_URL,
   ].filter(Boolean);
-
-  // Regex pour les URLs de preview Vercel (staging)
-  const previewOriginRegex =
-    /^https:\/\/newbi-v2-git-develop-[a-z0-9-]+(?:-sofianemtimet6-2653s-projects)?\.vercel\.app$/i;
 
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin) || previewOriginRegex.test(origin)) {
+        if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
           callback(new Error(`Origine non autorisée: ${origin}`));
