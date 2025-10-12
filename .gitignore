@@ -31,6 +31,3 @@ public/uploads/*
 
 # Fichiers de couverture de tests
 coverage/
-
-# Makefile
-Makefile
