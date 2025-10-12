@@ -5,7 +5,18 @@ import { isAuthenticated, withWorkspace } from '../middlewares/better-auth-jwt.j
 const eventResolvers = {
   Event: {
     // Mapper le champ invoiceId populé vers invoice pour la compatibilité GraphQL
-    invoice: (parent) => parent.invoiceId,
+    invoice: (parent) => {
+      // Retourner null si pas d'invoiceId ou si non populé (juste un ObjectId)
+      if (!parent.invoiceId) return null;
+      
+      // Si invoiceId est un objet avec _id, c'est qu'il est populé
+      if (parent.invoiceId._id) {
+        return parent.invoiceId;
+      }
+      
+      // Sinon c'est juste un ObjectId, retourner null
+      return null;
+    },
     // Convertir l'ObjectId en string pour GraphQL
     invoiceId: (parent) => parent.invoiceId ? parent.invoiceId._id?.toString() || parent.invoiceId.toString() : null,
   },

@@ -10,6 +10,10 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
@@ -136,6 +140,68 @@ class CloudflareTransferService {
   }
 
   /**
+   * Génère une URL signée pour upload direct d'un chunk vers R2
+   * @param {string} transferId - ID du transfert
+   * @param {string} fileId - ID du fichier
+   * @param {number} chunkIndex - Index du chunk
+   * @param {string} originalName - Nom original du fichier
+   * @param {number} expiresIn - Durée de validité en secondes (défaut: 1h)
+   * @returns {Promise<{uploadUrl: string, key: string}>}
+   */
+  async generatePresignedUploadUrl(
+    transferId,
+    fileId,
+    chunkIndex,
+    originalName,
+    expiresIn = 3600
+  ) {
+    try {
+      // Générer le chemin pour le chunk temporaire
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+
+      const key = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${chunkIndex}`;
+
+      // Créer la commande PUT
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        ContentType: "application/octet-stream",
+        Metadata: {
+          transferId: transferId,
+          fileId: fileId,
+          chunkIndex: chunkIndex.toString(),
+          originalName: this.sanitizeFileName(originalName),
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      // Générer l'URL signée
+      const uploadUrl = await getSignedUrl(this.client, command, {
+        expiresIn,
+      });
+
+      console.log(`✅ URL signée générée pour chunk ${chunkIndex}: ${uploadUrl.substring(0, 100)}...`);
+
+      return {
+        uploadUrl,
+        key,
+        chunkIndex,
+      };
+    } catch (error) {
+      console.error(
+        `Erreur génération presigned URL pour chunk ${chunkIndex}:`,
+        error
+      );
+      throw new Error(
+        `Échec génération presigned URL: ${error.message}`
+      );
+    }
+  }
+
+  /**
    * Upload un chunk de fichier vers Cloudflare R2
    * @param {Buffer} chunkBuffer - Buffer du chunk
    * @param {string} transferId - ID du transfert
@@ -184,13 +250,187 @@ class CloudflareTransferService {
   }
 
   /**
-   * Reconstruit un fichier à partir de ses chunks sur R2
+   * Démarre un multipart upload et génère des presigned URLs pour chaque part
+   * @param {string} transferId - ID du transfert
+   * @param {string} fileId - ID du fichier
+   * @param {string} fileName - Nom du fichier
+   * @param {number} fileSize - Taille du fichier
+   * @param {string} mimeType - Type MIME
+   * @param {number} totalParts - Nombre total de parts
+   * @returns {Promise<{uploadId: string, key: string, presignedUrls: Array}>}
+   */
+  async startMultipartUpload(
+    transferId,
+    fileId,
+    fileName,
+    fileSize,
+    mimeType,
+    totalParts
+  ) {
+    try {
+      console.log(
+        `🚀 Démarrage Multipart Upload: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB) en ${totalParts} parts`
+      );
+
+      // Générer le chemin final du fichier (pas de temp/)
+      const finalKey = this.generateR2Path(transferId, fileId, fileName);
+      const contentType = mimeType || this.getContentType(path.extname(fileName));
+
+      // Créer le multipart upload
+      const createCommand = new CreateMultipartUploadCommand({
+        Bucket: this.bucketName,
+        Key: finalKey,
+        ContentType: contentType,
+        Metadata: {
+          transferId: transferId,
+          fileId: fileId,
+          originalName: this.sanitizeFileName(fileName),
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      const createResponse = await this.client.send(createCommand);
+      const uploadId = createResponse.UploadId;
+
+      console.log(`📦 Multipart Upload créé: ${uploadId}`);
+
+      // Générer des presigned URLs pour chaque part
+      const presignedUrls = [];
+      const urlPromises = [];
+
+      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+        urlPromises.push(
+          (async () => {
+            const uploadPartCommand = new UploadPartCommand({
+              Bucket: this.bucketName,
+              Key: finalKey,
+              UploadId: uploadId,
+              PartNumber: partNumber,
+            });
+
+            const presignedUrl = await getSignedUrl(
+              this.client,
+              uploadPartCommand,
+              { expiresIn: 3600 }
+            );
+
+            return { partNumber, uploadUrl: presignedUrl };
+          })()
+        );
+      }
+
+      presignedUrls.push(...(await Promise.all(urlPromises)));
+
+      console.log(`✅ ${presignedUrls.length} URLs presigned générées`);
+
+      return {
+        uploadId,
+        key: finalKey,
+        presignedUrls: presignedUrls.sort((a, b) => a.partNumber - b.partNumber),
+      };
+    } catch (error) {
+      console.error("❌ Erreur démarrage multipart upload:", error);
+      throw new Error(`Échec démarrage multipart: ${error.message}`);
+    }
+  }
+
+  /**
+   * Complète un multipart upload
+   * @param {string} uploadId - ID du multipart upload
+   * @param {string} key - Clé du fichier
+   * @param {Array} parts - Liste des parts avec {partNumber, etag}
+   * @returns {Promise<{key: string, url: string, size: number}>}
+   */
+  async completeMultipartUpload(uploadId, key, parts) {
+    try {
+      console.log(
+        `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`
+      );
+
+      // Trier les parts par numéro
+      const sortedParts = parts
+        .sort((a, b) => a.partNumber - b.partNumber)
+        .map(({ partNumber, etag }) => ({
+          PartNumber: partNumber,
+          ETag: etag.replace(/"/g, ""), // Enlever les guillemets si présents
+        }));
+
+      const completeCommand = new CompleteMultipartUploadCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: sortedParts,
+        },
+      });
+
+      const response = await this.client.send(completeCommand);
+
+      // Obtenir la taille du fichier
+      const headCommand = new HeadObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      });
+      const headResponse = await this.client.send(headCommand);
+      const fileSize = headResponse.ContentLength;
+
+      console.log(
+        `✅ Multipart Upload complété: ${key} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`
+      );
+
+      // Générer l'URL d'accès
+      let fileUrl;
+      if (
+        this.publicUrl &&
+        this.publicUrl !== "https://your_transfer_bucket_public_url"
+      ) {
+        fileUrl = `${this.publicUrl}/${key}`;
+      } else {
+        fileUrl = await this.getSignedUrl(key, 86400);
+      }
+
+      return {
+        key,
+        url: fileUrl,
+        size: fileSize,
+        etag: response.ETag,
+      };
+    } catch (error) {
+      console.error("❌ Erreur finalisation multipart upload:", error);
+      throw new Error(`Échec finalisation multipart: ${error.message}`);
+    }
+  }
+
+  /**
+   * Annule un multipart upload
+   * @param {string} uploadId - ID du multipart upload
+   * @param {string} key - Clé du fichier
+   */
+  async abortMultipartUpload(uploadId, key) {
+    try {
+      const abortCommand = new AbortMultipartUploadCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        UploadId: uploadId,
+      });
+
+      await this.client.send(abortCommand);
+      console.log(`🗑️ Multipart Upload annulé: ${uploadId}`);
+    } catch (error) {
+      console.error("❌ Erreur annulation multipart upload:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Reconstruit un fichier à partir de ses chunks sur R2 en utilisant Multipart Upload
    * @param {string} transferId - ID du transfert
    * @param {string} fileId - ID du fichier
    * @param {string} originalName - Nom original du fichier
    * @param {number} totalChunks - Nombre total de chunks
    * @param {string} mimeType - Type MIME du fichier
    * @returns {Promise<{key: string, url: string, size: number}>}
+   * @deprecated Utiliser startMultipartUpload + completeMultipartUpload à la place
    */
   async reconstructFileFromChunks(
     transferId,
@@ -199,56 +439,154 @@ class CloudflareTransferService {
     totalChunks,
     mimeType
   ) {
-    try {
-      // Récupérer tous les chunks
-      const chunks = [];
-      let totalSize = 0;
+    let uploadId = null;
 
+    try {
+      console.log(`🔧 Reconstruction du fichier ${originalName} avec Multipart Upload (${totalChunks} chunks)`);
+
+      // Générer le chemin final du fichier
+      const finalKey = this.generateR2Path(transferId, fileId, originalName);
+      const contentType = mimeType || this.getContentType(path.extname(originalName));
+
+      // Étape 1 : Créer un multipart upload
+      const createCommand = new CreateMultipartUploadCommand({
+        Bucket: this.bucketName,
+        Key: finalKey,
+        ContentType: contentType,
+        Metadata: {
+          transferId: transferId,
+          fileId: fileId,
+          originalName: this.sanitizeFileName(originalName),
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      const createResponse = await this.client.send(createCommand);
+      uploadId = createResponse.UploadId;
+
+      console.log(`📦 Multipart Upload créé: ${uploadId}`);
+
+      // Étape 2 : Copier chaque chunk comme une part du multipart upload
       const now = new Date();
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, "0");
       const day = String(now.getDate()).padStart(2, "0");
 
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkKey = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${i}`;
+      const uploadedParts = [];
+      let totalSize = 0;
 
-        try {
-          const getCommand = new GetObjectCommand({
-            Bucket: this.bucketName,
-            Key: chunkKey,
-          });
+      // Uploader les parts en parallèle (par batch de 10)
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+        const batchPromises = [];
 
-          const response = await this.client.send(getCommand);
-          const chunkBuffer = Buffer.from(
-            await response.Body.transformToByteArray()
+        for (let j = i; j < Math.min(i + BATCH_SIZE, totalChunks); j++) {
+          const chunkKey = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${j}`;
+
+          batchPromises.push(
+            (async () => {
+              try {
+                // Récupérer le chunk
+                const getCommand = new GetObjectCommand({
+                  Bucket: this.bucketName,
+                  Key: chunkKey,
+                });
+
+                const response = await this.client.send(getCommand);
+                const chunkBuffer = Buffer.from(
+                  await response.Body.transformToByteArray()
+                );
+
+                // Uploader comme part du multipart upload (les parts commencent à 1)
+                const uploadPartCommand = new UploadPartCommand({
+                  Bucket: this.bucketName,
+                  Key: finalKey,
+                  UploadId: uploadId,
+                  PartNumber: j + 1,
+                  Body: chunkBuffer,
+                });
+
+                const uploadPartResponse = await this.client.send(uploadPartCommand);
+
+                return {
+                  PartNumber: j + 1,
+                  ETag: uploadPartResponse.ETag,
+                  size: chunkBuffer.length,
+                };
+              } catch (error) {
+                console.error(`❌ Erreur upload part ${j + 1}:`, error);
+                throw new Error(`Part ${j + 1} échec: ${error.message}`);
+              }
+            })()
           );
+        }
 
-          chunks.push(chunkBuffer);
-          totalSize += chunkBuffer.length;
-        } catch (error) {
-          console.error(`❌ Erreur récupération chunk ${i}:`, error);
-          throw new Error(`Chunk ${i} manquant ou inaccessible`);
+        // Attendre que le batch soit terminé
+        const batchResults = await Promise.all(batchPromises);
+        uploadedParts.push(...batchResults);
+
+        // Calculer la taille totale
+        batchResults.forEach(part => {
+          totalSize += part.size;
+        });
+
+        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(totalChunks / BATCH_SIZE)} uploadé (${uploadedParts.length}/${totalChunks} parts)`);
+      }
+
+      // Étape 3 : Compléter le multipart upload
+      const completeCommand = new CompleteMultipartUploadCommand({
+        Bucket: this.bucketName,
+        Key: finalKey,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: uploadedParts
+            .sort((a, b) => a.PartNumber - b.PartNumber)
+            .map(({ PartNumber, ETag }) => ({ PartNumber, ETag })),
+        },
+      });
+
+      await this.client.send(completeCommand);
+
+      console.log(`✅ Multipart Upload complété: ${finalKey} (${totalSize} octets)`);
+
+      // Étape 4 : Nettoyer les chunks temporaires
+      await this.cleanupChunks(transferId, fileId, totalChunks);
+
+      // Générer l'URL d'accès
+      let fileUrl;
+      if (
+        this.publicUrl &&
+        this.publicUrl !== "https://your_transfer_bucket_public_url"
+      ) {
+        fileUrl = `${this.publicUrl}/${finalKey}`;
+      } else {
+        fileUrl = await this.getSignedUrl(finalKey, 86400);
+      }
+
+      return {
+        key: finalKey,
+        url: fileUrl,
+        size: totalSize,
+        contentType,
+      };
+    } catch (error) {
+      console.error("❌ Erreur reconstruction fichier:", error);
+
+      // En cas d'erreur, annuler le multipart upload
+      if (uploadId) {
+        try {
+          const abortCommand = new AbortMultipartUploadCommand({
+            Bucket: this.bucketName,
+            Key: this.generateR2Path(transferId, fileId, originalName),
+            UploadId: uploadId,
+          });
+          await this.client.send(abortCommand);
+          console.log(`🗑️ Multipart Upload annulé: ${uploadId}`);
+        } catch (abortError) {
+          console.error("Erreur lors de l'annulation du multipart upload:", abortError);
         }
       }
 
-      // Concaténer tous les chunks
-      const completeFileBuffer = Buffer.concat(chunks);
-
-      // Upload du fichier complet
-      const result = await this.uploadFile(
-        completeFileBuffer,
-        transferId,
-        fileId,
-        originalName,
-        mimeType
-      );
-
-      // Nettoyer les chunks temporaires
-      await this.cleanupChunks(transferId, fileId, totalChunks);
-
-      return result;
-    } catch (error) {
-      console.error("Erreur reconstruction fichier:", error);
       throw new Error(
         `Échec de la reconstruction du fichier: ${error.message}`
       );
