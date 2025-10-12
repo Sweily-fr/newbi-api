@@ -7,6 +7,7 @@ import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import mistralOcrService from "../services/mistralOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import financialAnalysisService from "../services/financialAnalysisService.js";
+import mistralIntelligentAnalysisService from "../services/mistralIntelligentAnalysisService.js";
 import OcrDocument from "../models/OcrDocument.js";
 import {
   createValidationError,
@@ -237,9 +238,11 @@ const ocrResolvers = {
             throw createInternalServerError(`Erreur OCR: ${ocrResult.message}`);
           }
 
-          // Étape 2: Analyse financière des données OCR
+          // Étape 2: Analyse financière intelligente avec Mistral AI
+          console.log('🤖 Démarrage de l\'analyse intelligente avec Mistral AI...');
           const financialAnalysis =
-            await financialAnalysisService.analyzeDocument(ocrResult);
+            await mistralIntelligentAnalysisService.analyzeDocument(ocrResult);
+          console.log('✅ Analyse intelligente terminée:', financialAnalysis.transaction_data?.vendor_name);
 
           // Étape 3: Sauvegarder le résultat en base de données
 
