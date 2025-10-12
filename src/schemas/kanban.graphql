@@ -6,6 +6,7 @@ type Board {
   userId: ID!
   columns: [Column!]!
   tasks: [Task!]!
+  members: [OrganizationMember!]!
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -28,6 +29,29 @@ type AssignedMember {
   image: String
 }
 
+type Comment {
+  id: ID!
+  userId: String!
+  userName: String!
+  userImage: String
+  content: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Activity {
+  id: ID!
+  userId: String!
+  userName: String!
+  userImage: String
+  type: String!
+  field: String
+  oldValue: String
+  newValue: String
+  description: String
+  createdAt: DateTime!
+}
+
 type Task {
   id: ID!
   title: String!
@@ -41,6 +65,8 @@ type Task {
   position: Int
   checklist: [ChecklistItem!]
   assignedMembers: [AssignedMember!]
+  comments: [Comment!]
+  activity: [Activity!]
   userId: ID!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -134,8 +160,13 @@ input ChecklistItemInput {
   completed: Boolean
 }
 
+input CommentInput {
+  content: String!
+}
+
 type OrganizationMember {
   id: String!
+  userId: String!
   name: String!
   email: String!
   image: String
@@ -166,6 +197,10 @@ type Mutation {
   updateTask(input: UpdateTaskInput!, workspaceId: ID): Task!
   deleteTask(id: ID!, workspaceId: ID): Boolean!
   moveTask(id: ID!, columnId: String!, position: Int!, workspaceId: ID): Task!
+  
+  addComment(taskId: ID!, input: CommentInput!, workspaceId: ID): Task!
+  updateComment(taskId: ID!, commentId: ID!, content: String!, workspaceId: ID): Task!
+  deleteComment(taskId: ID!, commentId: ID!, workspaceId: ID): Task!
 }
 
 type Subscription {

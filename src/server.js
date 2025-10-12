@@ -309,7 +309,9 @@ function setupRoutes(app) {
 
 // Gestion des erreurs
 function formatError(error) {
-  console.error(error);
+  console.error('❌ [GraphQL Error]:', error.message);
+  console.error('Path:', error.path);
+  console.error('Extensions:', error.extensions);
   const originalError = error.originalError;
 
   if (originalError?.name === "AppError") {

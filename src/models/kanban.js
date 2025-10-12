@@ -16,6 +16,58 @@ const tagSchema = new mongoose.Schema({
   border: String
 }, { _id: false });
 
+// Schéma pour les commentaires
+const commentSchema = new mongoose.Schema({
+  userId: {
+    type: String,
+    required: true
+  },
+  userName: {
+    type: String,
+    required: true
+  },
+  userImage: String,
+  content: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: true });
+
+// Schéma pour l'historique d'activité
+const activitySchema = new mongoose.Schema({
+  userId: {
+    type: String,
+    required: true
+  },
+  userName: {
+    type: String,
+    required: true
+  },
+  userImage: String,
+  type: {
+    type: String,
+    required: true,
+    enum: ['created', 'updated', 'moved', 'assigned', 'unassigned', 'priority_changed', 'due_date_changed', 'status_changed', 'comment_added']
+  },
+  field: String, // Champ modifié (ex: 'priority', 'dueDate', 'columnId')
+  oldValue: String, // Ancienne valeur
+  newValue: String, // Nouvelle valeur
+  description: String, // Description de l'activité
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: true });
+
 // Schéma du tableau (Board)
 const boardSchema = new mongoose.Schema({
   title: { 
@@ -140,6 +192,10 @@ const taskSchema = new mongoose.Schema({
     },
     image: String
   }],
+  // Commentaires
+  comments: [commentSchema],
+  // Historique d'activité
+  activity: [activitySchema],
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
