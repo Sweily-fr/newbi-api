@@ -29,15 +29,15 @@ class CloudflareTransferService {
     // Configuration Cloudflare R2 (compatible S3)
     this.client = new S3Client({
       region: "auto",
-      endpoint: process.env.AWS_S3_API_URL,
+      endpoint: process.env.R2_API_URL,
       credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
       },
     });
 
-    this.bucketName = process.env.TRANSFER_BUCKET_NAME || "app-transfers-prod";
-    this.publicUrl = process.env.TRANSFER_PUBLIC_URL;
+    this.bucketName = process.env.TRANSFER_BUCKET || "app-transfers-prod";
+    this.publicUrl = process.env.TRANSFER_URL;
 
     if (!this.bucketName) {
       console.error("❌ ERREUR: TRANSFER_BUCKET_NAME n'est pas définie!");

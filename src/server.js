@@ -1,5 +1,24 @@
 import dotenv from "dotenv";
-dotenv.config();
+import path from "path";
+import { fileURLToPath } from "url";
+
+// Configuration des chemins (doit être avant dotenv.config)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Charger le fichier .env selon l'environnement
+const envFile = process.env.NODE_ENV === 'production' 
+  ? '.env.production' 
+  : process.env.NODE_ENV === 'staging' 
+    ? '.env.staging' 
+    : '.env';
+
+const envPath = path.resolve(process.cwd(), envFile);
+dotenv.config({ path: envPath });
+
+console.log(`🌍 Environnement: ${process.env.NODE_ENV || 'development'}`);
+console.log(`📄 Fichier .env chargé: ${envFile}`);
+
 import express from "express";
 import { ApolloServer } from "apollo-server-express";
 import { createServer } from "http";
@@ -7,8 +26,6 @@ import { execute, subscribe } from "graphql";
 import { SubscriptionServer } from "subscriptions-transport-ws";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import mongoose from "mongoose";
-import path from "path";
-import { fileURLToPath } from "url";
 import { graphqlUploadExpress } from "graphql-upload";
 import fs from "fs";
 import cors from "cors";
@@ -37,10 +54,6 @@ import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
-
-// Configuration des chemins
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Connexion à MongoDB
 mongoose

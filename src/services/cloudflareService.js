@@ -19,46 +19,54 @@ dotenv.config();
 
 class CloudflareService {
   constructor() {
-    // Configuration Cloudflare R2 (compatible S3) - utilise les variables AWS existantes
+    // Configuration Cloudflare R2 (compatible S3)
     this.client = new S3Client({
       region: "auto",
-      endpoint: process.env.AWS_S3_API_URL,
+      endpoint: process.env.R2_API_URL,
       credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
       },
     });
 
-    this.bucketName = process.env.IMAGE_BUCKET_NAME;
-    this.publicUrl = process.env.IMAGE_PUBLIC_URL; // URL publique de votre domaine custom
+    this.bucketName = process.env.USER_IMAGE_BUCKET;
+    this.publicUrl = process.env.USER_IMAGE_URL; // URL publique de votre domaine custom
 
     // Configuration spécifique pour l'OCR
-    this.ocrBucketName = process.env.IMAGE_OCR_BUCKET_NAME;
-    this.ocrPublicUrl = process.env.IMAGE_OCR_PUBLIC_URL;
+    this.ocrBucketName = process.env.OCR_BUCKET;
+    this.ocrPublicUrl = process.env.OCR_URL;
 
     // Configuration spécifique pour les signatures mail
-    this.signatureBucketName =
-      process.env.IMAGE_SIGNATURE_BUCKET_NAME || "image-signature";
+    this.signatureBucketName = process.env.SIGNATURE_BUCKET || "image-signature-staging";
     this.signaturePublicUrl =
-      process.env.IMAGE_SIGNATURE_PUBLIC_URL ||
-      "https://pub-e2f65bd10e4e4c9dbfb9ccad034abd75.r2.dev";
+      process.env.SIGNATURE_URL ||
+      "https://pub-f4c5982b836541739955ba7662828aa2.r2.dev";
 
     // Configuration spécifique pour les images de profil
-    this.profileBucketName = process.env.AWS_S3_BUCKET_NAME_IMG_PROFILE;
+    this.profileBucketName = process.env.PROFILE_IMAGE_BUCKET || "profil-staging";
     this.profilePublicUrl =
-      process.env.AWS_S3_API_URL_PROFILE ||
-      "https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev";
+      process.env.PROFILE_IMAGE_URL ||
+      "https://pub-47fd700687d247b786fdd97634f23e12.r2.dev";
 
     // Configuration spécifique pour les images d'entreprise
     this.companyImagesBucketName =
-      process.env.AWS_S3_BUCKET_NAME_IMG_COMPANY || "image-company";
+      process.env.COMPANY_IMAGE_BUCKET || "image-company-staging";
     this.companyImagesPublicUrl =
-      process.env.COMPANY_IMAGES_PUBLIC_URL ||
-      "https://157ce0fed50fe542bc92a07317a09205.r2.cloudflarestorage.com";
+      process.env.COMPANY_IMAGE_URL ||
+      "https://pub-f609a47148ad4ae39fe95fc7b850fc03.r2.dev";
 
     if (!this.bucketName) {
-      throw new Error("Configuration manquante: IMAGE_BUCKET_NAME");
+      throw new Error("Configuration manquante: USER_IMAGE_BUCKET");
     }
+
+    // Logs de configuration pour debug
+    console.log("🔧 CloudflareService - Configuration chargée:");
+    console.log("  - Endpoint:", process.env.R2_API_URL);
+    console.log("  - User Images:", this.bucketName, "→", this.publicUrl);
+    console.log("  - Profile Images:", this.profileBucketName, "→", this.profilePublicUrl);
+    console.log("  - Company Images:", this.companyImagesBucketName, "→", this.companyImagesPublicUrl);
+    console.log("  - Signatures:", this.signatureBucketName, "→", this.signaturePublicUrl);
+    console.log("  - OCR:", this.ocrBucketName, "→", this.ocrPublicUrl);
   }
 
   /**
@@ -166,6 +174,9 @@ class CloudflareService {
         // Utiliser le bucket dédié aux images d'entreprise
         targetBucket = this.companyImagesBucketName || this.bucketName;
         targetPublicUrl = this.companyImagesPublicUrl || this.publicUrl;
+        console.log('🏢 [COMPANY_LOGO] Upload vers bucket:', targetBucket);
+        console.log('🌐 [COMPANY_LOGO] URL publique:', targetPublicUrl);
+        console.log('🔑 [COMPANY_LOGO] Clé:', key);
       } else if (imageType === "ocr") {
         targetBucket = this.ocrBucketName || this.bucketName;
         targetPublicUrl = this.ocrPublicUrl || this.publicUrl;
@@ -342,7 +353,7 @@ class CloudflareService {
     if (!key) return null;
 
     // Déterminer l'URL publique selon le type de clé
-    let publicUrl = process.env.AWS_R2_PUBLIC_URL;
+    let publicUrl = process.env.R2_PUBLIC_URL;
     if (key.includes("/ImgProfil/") || key.includes("/logoReseau/")) {
       publicUrl = this.signaturePublicUrl;
     }
