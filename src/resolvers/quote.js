@@ -412,8 +412,10 @@ const quoteResolvers = {
         // Gérer les conflits avec les devis en DRAFT
         number = await handleDraftConflicts(number);
 
-        const userWithCompany = await User.findById(user.id).select("company");
-        if (!userWithCompany?.company) {
+        // Récupérer les informations de l'organisation
+        const organization = await getOrganizationInfo(workspaceId);
+        
+        if (!organization?.companyName) {
           throw new AppError(
             "Les informations de votre entreprise doivent être configurées avant de créer un devis",
             ERROR_CODES.COMPANY_INFO_REQUIRED
@@ -484,13 +486,41 @@ const quoteResolvers = {
           }
         }
 
-        // Créer le devis avec les informations de l'entreprise du profil utilisateur si non fournies
+        // Créer le devis avec les informations de l'entreprise depuis l'organisation si non fournies
         const quote = new Quote({
           ...input,
           number, // S'assurer que le numéro est défini
           prefix,
           workspaceId, // Ajouter le workspaceId
-          companyInfo: input.companyInfo || userWithCompany.company,
+          companyInfo: input.companyInfo || {
+            name: organization.companyName || "",
+            email: organization.companyEmail || "",
+            phone: organization.companyPhone || "",
+            website: organization.website || "",
+            address: {
+              street: organization.addressStreet || "",
+              city: organization.addressCity || "",
+              postalCode: organization.addressZipCode || "",
+              country: organization.addressCountry || "France",
+            },
+            siret: organization.siret || "",
+            vatNumber: organization.vatNumber || "",
+            companyStatus: organization.legalForm || "AUTRE",
+            logo: organization.logo || "",
+            ...(organization.bankIban && organization.bankBic && organization.bankName
+              ? {
+                  bankDetails: {
+                    iban: organization.bankIban,
+                    bic: organization.bankBic,
+                    bankName: organization.bankName,
+                  },
+                }
+              : {}),
+            transactionCategory: organization.activityCategory,
+            vatPaymentCondition: organization.fiscalRegime,
+            capitalSocial: organization.capitalSocial,
+            rcs: organization.rcs,
+          },
           client: {
             ...input.client,
             shippingAddress: input.client.hasDifferentShippingAddress
