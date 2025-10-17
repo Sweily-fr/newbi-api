@@ -60,8 +60,10 @@ const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED') 
     const itemDiscountType = item.discountType || 'FIXED';
     
     let itemTotalAfterDiscount = itemTotal;
-    if (itemDiscountType === 'PERCENTAGE') {
-      itemTotalAfterDiscount = itemTotal * (1 - itemDiscount / 100);
+    if (itemDiscountType === 'PERCENTAGE' || itemDiscountType === 'percentage') {
+      // Limiter la remise à 100% maximum
+      const discountPercent = Math.min(itemDiscount, 100);
+      itemTotalAfterDiscount = itemTotal * (1 - discountPercent / 100);
     } else {
       itemTotalAfterDiscount = itemTotal - itemDiscount;
     }
@@ -72,8 +74,10 @@ const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED') 
 
   // Appliquer la remise globale
   let finalTotalHT = totalHT;
-  if (discountType === 'PERCENTAGE') {
-    finalTotalHT = totalHT * (1 - discount / 100);
+  if (discountType === 'PERCENTAGE' || discountType === 'percentage') {
+    // Limiter la remise à 100% maximum
+    const discountPercent = Math.min(discount, 100);
+    finalTotalHT = totalHT * (1 - discountPercent / 100);
   } else {
     finalTotalHT = totalHT - discount;
   }

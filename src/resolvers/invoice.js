@@ -88,8 +88,10 @@ const calculateInvoiceTotals = (
 
     // Appliquer la remise au niveau de l'item si elle existe
     if (item.discount) {
-      if (item.discountType === "PERCENTAGE") {
-        itemHT = itemHT * (1 - item.discount / 100);
+      if (item.discountType === "PERCENTAGE" || item.discountType === "percentage") {
+        // Limiter la remise à 100% maximum
+        const discountPercent = Math.min(item.discount, 100);
+        itemHT = itemHT * (1 - discountPercent / 100);
       } else {
         itemHT = Math.max(0, itemHT - item.discount);
       }
@@ -114,8 +116,10 @@ const calculateInvoiceTotals = (
   // Calculer la remise globale
   let discountAmount = 0;
   if (discount) {
-    if (discountType === "PERCENTAGE") {
-      discountAmount = (totalHT * discount) / 100;
+    if (discountType === "PERCENTAGE" || discountType === "percentage") {
+      // Limiter la remise à 100% maximum
+      const discountPercent = Math.min(discount, 100);
+      discountAmount = (totalHT * discountPercent) / 100;
     } else {
       discountAmount = discount;
     }
