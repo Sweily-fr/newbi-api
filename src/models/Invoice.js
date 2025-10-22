@@ -312,6 +312,11 @@ const invoiceSchema = new mongoose.Schema(
         shippingVatRate: 20
       })
     },
+    // Auto-liquidation de TVA (reverse charge)
+    isReverseCharge: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

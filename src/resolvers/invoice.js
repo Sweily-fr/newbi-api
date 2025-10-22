@@ -71,13 +71,15 @@ const withWorkspace = (resolver, requiredPermission = "read") => {
  * @param {Number} discount - Remise globale
  * @param {String} discountType - Type de remise (FIXED ou PERCENTAGE)
  * @param {Object} shipping - Informations de livraison
+ * @param {Boolean} isReverseCharge - Indique si la facture est soumise à l'auto-liquidation (TVA = 0)
  * @returns {Object} - Totaux calculés
  */
 const calculateInvoiceTotals = (
   items,
   discount = 0,
   discountType = "FIXED",
-  shipping = null
+  shipping = null,
+  isReverseCharge = false
 ) => {
   let totalHT = 0;
   let totalVAT = 0;
@@ -97,7 +99,8 @@ const calculateInvoiceTotals = (
       }
     }
 
-    const itemVAT = itemHT * (item.vatRate / 100);
+    // Auto-liquidation : TVA = 0 si isReverseCharge = true
+    const itemVAT = isReverseCharge ? 0 : itemHT * (item.vatRate / 100);
     totalHT += itemHT;
     totalVAT += itemVAT;
   });
@@ -105,7 +108,8 @@ const calculateInvoiceTotals = (
   // Ajouter les frais de livraison si facturés
   if (shipping && shipping.billShipping) {
     const shippingHT = shipping.shippingAmountHT || 0;
-    const shippingVAT = shippingHT * (shipping.shippingVatRate / 100);
+    // Auto-liquidation : TVA = 0 si isReverseCharge = true
+    const shippingVAT = isReverseCharge ? 0 : shippingHT * (shipping.shippingVatRate / 100);
 
     totalHT += shippingHT;
     totalVAT += shippingVAT;
@@ -130,8 +134,9 @@ const calculateInvoiceTotals = (
   // Recalculer la TVA après application de la remise globale
   // La TVA doit être proportionnelle au montant final HT
   // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
+  // Auto-liquidation : TVA = 0 si isReverseCharge = true
   let finalTotalVAT = 0;
-  if (finalTotalHT > 0 && totalHT > 0) {
+  if (!isReverseCharge && finalTotalHT > 0 && totalHT > 0) {
     finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
   }
   const finalTotalTTC = finalTotalHT + finalTotalVAT;
@@ -428,7 +433,8 @@ const invoiceResolvers = {
           input.items,
           input.discount,
           input.discountType,
-          input.shipping
+          input.shipping,
+          input.isReverseCharge
         );
 
         try {
@@ -661,7 +667,8 @@ const invoiceResolvers = {
             updatedInput.items,
             updatedInput.discount || invoiceData.discount,
             updatedInput.discountType || invoiceData.discountType,
-            updatedInput.shipping || invoiceData.shipping
+            updatedInput.shipping || invoiceData.shipping,
+            updatedInput.isReverseCharge !== undefined ? updatedInput.isReverseCharge : invoiceData.isReverseCharge
           );
           updatedInput = { ...updatedInput, ...totals };
         }
@@ -1346,7 +1353,8 @@ const invoiceResolvers = {
           invoice.items,
           invoice.discount,
           invoice.discountType,
-          invoice.shipping
+          invoice.shipping,
+          invoice.isReverseCharge
         );
         Object.assign(invoice, totals);
 

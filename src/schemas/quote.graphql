@@ -30,6 +30,7 @@ type Quote {
   showBankDetails: Boolean
   appearance: Appearance
   shipping: Shipping
+  isReverseCharge: Boolean
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -63,6 +64,7 @@ input CreateQuoteInput {
   showBankDetails: Boolean
   appearance: AppearanceInput
   shipping: ShippingInput
+  isReverseCharge: Boolean
 }
 
 input UpdateQuoteInput {
@@ -85,6 +87,7 @@ input UpdateQuoteInput {
   showBankDetails: Boolean
   appearance: AppearanceInput
   shipping: ShippingInput
+  isReverseCharge: Boolean
 }
 
 extend type Query {

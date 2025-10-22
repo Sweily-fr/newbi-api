@@ -246,6 +246,11 @@ const quoteSchema = new mongoose.Schema({
       shippingAmountHT: 0,
       shippingVatRate: 20
     })
+  },
+  // Auto-liquidation de TVA (reverse charge)
+  isReverseCharge: {
+    type: Boolean,
+    default: false,
   }
 }, {
   timestamps: true
@@ -279,7 +284,8 @@ quoteSchema.pre('save', function(next) {
         }
       }
       
-      const itemVAT = itemHT * (item.vatRate / 100);
+      // Auto-liquidation : TVA = 0 si isReverseCharge = true
+      const itemVAT = this.isReverseCharge ? 0 : itemHT * (item.vatRate / 100);
       totalHT += itemHT;
       totalVAT += itemVAT;
     });
@@ -297,8 +303,9 @@ quoteSchema.pre('save', function(next) {
     const finalTotalHT = Math.max(0, totalHT - discountAmount);
     
     // Calculer la TVA finale après remise
+    // Auto-liquidation : TVA = 0 si isReverseCharge = true
     let finalTotalVAT = 0;
-    if (finalTotalHT > 0 && totalHT > 0) {
+    if (!this.isReverseCharge && finalTotalHT > 0 && totalHT > 0) {
       finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
     }
     
