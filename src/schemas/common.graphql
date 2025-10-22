@@ -61,6 +61,7 @@ type Item {
   discount: Float
   discountType: DiscountType
   details: String
+  progressPercentage: Float
 }
 
 input ItemInput {
@@ -72,6 +73,7 @@ input ItemInput {
   discount: Float
   discountType: DiscountType
   details: String
+  progressPercentage: Float
 }
 
 type Shipping {

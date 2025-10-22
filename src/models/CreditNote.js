@@ -202,6 +202,11 @@ const creditNoteSchema = new mongoose.Schema(
         return this.showBankDetails;
       },
     },
+    // Auto-liquidation de TVA (reverse charge) - copié depuis la facture originale
+    isReverseCharge: {
+      type: Boolean,
+      default: false,
+    },
     // Montants de l'avoir (toujours négatifs pour représenter un crédit)
     totalHT: {
       type: Number,

@@ -95,6 +95,18 @@ const itemSchema = new mongoose.Schema({
       },
       message: 'Les détails ne doivent pas dépasser 500 caractères'
     }
+  },
+  progressPercentage: {
+    type: Number,
+    default: 100,
+    min: 0,
+    max: 100,
+    validate: {
+      validator: function(value) {
+        return value >= 0 && value <= 100;
+      },
+      message: 'Le pourcentage d\'avancement doit être entre 0 et 100'
+    }
   }
 });
 

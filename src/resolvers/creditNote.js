@@ -49,8 +49,9 @@ const withWorkspace = (resolver) => {
 
 /**
  * Calcule les totaux d'un avoir
+ * @param {Boolean} isReverseCharge - Indique si l'avoir est soumis à l'auto-liquidation (TVA = 0)
  */
-const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED') => {
+const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED', isReverseCharge = false) => {
   let totalHT = 0;
   let totalVAT = 0;
 
@@ -69,7 +70,9 @@ const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED') 
     }
     
     totalHT += itemTotalAfterDiscount;
-    totalVAT += itemTotalAfterDiscount * (item.vatRate / 100);
+    // Auto-liquidation : TVA = 0 si isReverseCharge = true
+    const itemVAT = isReverseCharge ? 0 : itemTotalAfterDiscount * (item.vatRate / 100);
+    totalVAT += itemVAT;
   });
 
   // Appliquer la remise globale
@@ -84,8 +87,9 @@ const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED') 
 
   // Recalculer la TVA après remise globale
   // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
+  // Auto-liquidation : TVA = 0 si isReverseCharge = true
   let finalTotalVAT = 0;
-  if (finalTotalHT > 0 && totalHT > 0) {
+  if (!isReverseCharge && finalTotalHT > 0 && totalHT > 0) {
     finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
   }
   const finalTotalTTC = finalTotalHT + finalTotalVAT;
@@ -234,11 +238,12 @@ const creditNoteResolvers = {
             );
           }
 
-          // Calculer les totaux du nouvel avoir
+          // Calculer les totaux du nouvel avoir avec auto-liquidation si nécessaire
           const totals = calculateCreditNoteTotals(
             input.items,
             input.discount,
-            input.discountType
+            input.discountType,
+            originalInvoice.isReverseCharge || false
           );
 
           // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture
@@ -280,6 +285,8 @@ const creditNoteResolvers = {
             status: 'CREATED',
             originalInvoice: originalInvoice._id,
             originalInvoiceNumber: originalInvoice.number,
+            // Copier l'auto-liquidation depuis la facture originale
+            isReverseCharge: originalInvoice.isReverseCharge || false,
             client: {
               ...input.client,
               // Pour les avoirs, ne pas copier l'adresse de livraison du client
@@ -345,18 +352,20 @@ const creditNoteResolvers = {
           // Calculer les nouveaux totaux si les items ont changé
           let totals = {};
           if (input.items) {
-            totals = calculateCreditNoteTotals(
-              input.items,
-              input.discount || creditNote.discount,
-              input.discountType || creditNote.discountType
-            );
-
-            // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture lors de la modification
+            // Récupérer la facture originale pour obtenir isReverseCharge
             const originalInvoice = await Invoice.findById(creditNote.originalInvoice);
             if (!originalInvoice) {
               throw createNotFoundError('Facture originale non trouvée');
             }
 
+            totals = calculateCreditNoteTotals(
+              input.items,
+              input.discount || creditNote.discount,
+              input.discountType || creditNote.discountType,
+              originalInvoice.isReverseCharge || false
+            );
+
+            // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture lors de la modification
             // Récupérer tous les autres avoirs pour cette facture (excluant celui en cours de modification)
             const otherCreditNotes = await CreditNote.find({
               originalInvoice: creditNote.originalInvoice,

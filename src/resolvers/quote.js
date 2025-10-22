@@ -1113,6 +1113,7 @@ const quoteResolvers = {
             createdBy: user.id,
             sourceQuote: quote._id, // Référence vers le devis source
             isDeposit: isInvoiceDeposit, // Marquer comme facture d'acompte si spécifié
+            isReverseCharge: quote.isReverseCharge || false, // Copier l'auto-liquidation depuis le devis
             // Ajouter une note appropriée selon le type de facture
             notes: isInvoiceDeposit
               ? `Facture d'acompte (${invoiceDistribution[i]}% du montant total)`
