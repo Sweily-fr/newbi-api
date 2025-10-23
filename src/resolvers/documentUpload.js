@@ -167,6 +167,66 @@ const documentUploadResolvers = {
     },
 
     /**
+     * Promeut un fichier temporaire en fichier permanent (déplace de temp/ vers ocr/)
+     */
+    promoteTemporaryFile: isAuthenticated(async (_, { tempKey }, { user }) => {
+      try {
+        console.log('🚀 DocumentUpload - Promotion du fichier temporaire:', tempKey);
+        
+        // Récupérer l'ID de l'organisation de l'utilisateur
+        let organizationId = null;
+        organizationId =
+          user.organizationId ||
+          user.organization?.id ||
+          user.organization ||
+          user.currentOrganizationId;
+
+        // Si pas trouvé, chercher dans la collection member
+        if (!organizationId) {
+          try {
+            const mongoose = await import('mongoose');
+            const ObjectId = mongoose.default.Types.ObjectId;
+            
+            const userObjectId = typeof user.id === 'string' ? new ObjectId(user.id) : user.id;
+            
+            const memberRecord = await mongoose.default.connection.db
+              .collection('member')
+              .findOne({ userId: userObjectId });
+            
+            if (memberRecord && memberRecord.organizationId) {
+              organizationId = memberRecord.organizationId.toString();
+            }
+          } catch (memberError) {
+            console.error('❌ Erreur recherche member:', memberError);
+          }
+        }
+
+        if (!organizationId) {
+          throw new Error('Organization ID requis pour promouvoir un fichier temporaire');
+        }
+
+        // Appeler le service pour déplacer le fichier
+        const result = await cloudflareService.promoteTemporaryFile(tempKey, organizationId);
+
+        return {
+          success: true,
+          key: result.key,
+          url: result.url,
+          message: 'Fichier promu avec succès',
+        };
+      } catch (error) {
+        console.error('❌ Erreur promotion fichier:', error);
+
+        return {
+          success: false,
+          key: null,
+          url: null,
+          message: error.message || 'Erreur lors de la promotion du fichier',
+        };
+      }
+    }),
+
+    /**
      * Supprime un document de Cloudflare R2
      */
     deleteDocument: isAuthenticated(async (_, { key }, { user }) => {

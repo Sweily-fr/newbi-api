@@ -17,6 +17,13 @@ type DocumentDeleteResult {
   message: String
 }
 
+type PromoteTemporaryFileResult {
+  success: Boolean!
+  key: String
+  url: String
+  message: String
+}
+
 extend type Mutation {
   """
   Upload un document vers Cloudflare R2
@@ -25,6 +32,13 @@ extend type Mutation {
     file: Upload!
     folderType: String
   ): DocumentUploadResult!
+  
+  """
+  Promeut un fichier temporaire en fichier permanent (déplace de temp/ vers ocr/)
+  """
+  promoteTemporaryFile(
+    tempKey: String!
+  ): PromoteTemporaryFileResult!
   
   """
   Supprime un document de Cloudflare R2

@@ -9,9 +9,34 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { processFileWithOCR } from "../utils/ocrProcessor.js";
+import cloudflareService from "../services/cloudflareService.js";
 
 const unlinkAsync = promisify(fs.unlink);
 const mkdirAsync = promisify(fs.mkdir);
+
+// Fonction pour supprimer un fichier (local ou Cloudflare)
+const deleteFile = async (file) => {
+  try {
+    // Vérifier si c'est une URL Cloudflare
+    if (file.url && file.url.includes('r2.dev')) {
+      console.log('🗑️ Suppression du fichier Cloudflare:', file.url);
+      // Extraire la clé du fichier de l'URL
+      // Format: https://pub-xxx.r2.dev/{key}
+      const urlParts = file.url.split('/');
+      const key = urlParts.slice(3).join('/');
+      await cloudflareService.deleteImage(key);
+      console.log('✅ Fichier Cloudflare supprimé');
+    } else if (file.path) {
+      // Fichier local
+      console.log('🗑️ Suppression du fichier local:', file.path);
+      await unlinkAsync(file.path);
+      console.log('✅ Fichier local supprimé');
+    }
+  } catch (error) {
+    console.warn('⚠️ Impossible de supprimer le fichier:', error.message);
+    // Ne pas bloquer la suppression de la dépense en cas d'erreur
+  }
+};
 
 // Fonction utilitaire pour vérifier si l'utilisateur est autorisé à accéder à une dépense
 const checkExpenseAccess = async (expenseId, userId) => {
@@ -390,17 +415,10 @@ const expenseResolvers = {
 
       const expense = await checkExpenseAccess(id, user.id);
 
-      // Supprimer les fichiers associés
+      // Supprimer les fichiers associés (locaux et Cloudflare)
       if (expense.files && expense.files.length > 0) {
         for (const file of expense.files) {
-          try {
-            await unlinkAsync(file.path);
-          } catch (error) {
-            console.warn(
-              `Impossible de supprimer le fichier ${file.path}:`,
-              error
-            );
-          }
+          await deleteFile(file);
         }
       }
 
@@ -423,17 +441,10 @@ const expenseResolvers = {
         try {
           const expense = await checkExpenseAccess(id, user.id);
 
-          // Supprimer les fichiers associés
+          // Supprimer les fichiers associés (locaux et Cloudflare)
           if (expense.files && expense.files.length > 0) {
             for (const file of expense.files) {
-              try {
-                await unlinkAsync(file.path);
-              } catch (error) {
-                console.warn(
-                  `Impossible de supprimer le fichier ${file.path}:`,
-                  error
-                );
-              }
+              await deleteFile(file);
             }
           }
 

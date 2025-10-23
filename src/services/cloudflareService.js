@@ -148,6 +148,12 @@ class CloudflareService {
           key = `${organizationId}/${uniqueId}${fileExtension}`;
           break;
         }
+        case "temp": {
+          // Pour les uploads temporaires (reçus optionnels avant sauvegarde)
+          // Structure: temp/{userId}/{uniqueId}
+          key = `temp/${userId}/${uniqueId}${fileExtension}`;
+          break;
+        }
         case "documents": {
           // Pour les documents généraux
           key = `documents/${userId}/${uniqueId}${fileExtension}`;
@@ -178,6 +184,10 @@ class CloudflareService {
         console.log('🌐 [COMPANY_LOGO] URL publique:', targetPublicUrl);
         console.log('🔑 [COMPANY_LOGO] Clé:', key);
       } else if (imageType === "ocr") {
+        targetBucket = this.ocrBucketName || this.bucketName;
+        targetPublicUrl = this.ocrPublicUrl || this.publicUrl;
+      } else if (imageType === "temp") {
+        // Les uploads temporaires utilisent aussi le bucket OCR
         targetBucket = this.ocrBucketName || this.bucketName;
         targetPublicUrl = this.ocrPublicUrl || this.publicUrl;
       } else if (imageType === "profile") {
@@ -251,6 +261,87 @@ class CloudflareService {
       };
     } catch (error) {
       throw new Error(`Échec de l'upload vers Cloudflare: ${error.message}`);
+    }
+  }
+
+  /**
+   * Promeut un fichier temporaire en fichier permanent (déplace de temp/ vers ocr/)
+   * @param {string} tempKey - Clé du fichier temporaire (temp/userId/uniqueId.ext)
+   * @param {string} organizationId - ID de l'organisation
+   * @returns {Promise<{key: string, url: string}>}
+   */
+  async promoteTemporaryFile(tempKey, organizationId) {
+    try {
+      console.log('🚀 CloudflareService - Promotion du fichier:', tempKey);
+      
+      if (!tempKey || !organizationId) {
+        throw new Error('tempKey et organizationId sont requis');
+      }
+
+      // Extraire l'extension du fichier temporaire
+      const fileExtension = tempKey.substring(tempKey.lastIndexOf('.'));
+      const crypto = await import('crypto');
+      const uniqueId = crypto.default.randomUUID();
+      
+      // Nouvelle clé permanente dans le dossier ocr/
+      const newKey = `${organizationId}/${uniqueId}${fileExtension}`;
+      
+      console.log('📋 CloudflareService - Ancien clé:', tempKey);
+      console.log('📋 CloudflareService - Nouvelle clé:', newKey);
+
+      // Lire le fichier temporaire
+      const getCommand = new GetObjectCommand({
+        Bucket: this.ocrBucketName,
+        Key: tempKey,
+      });
+
+      const response = await this.client.send(getCommand);
+      const fileBuffer = await response.Body.transformToByteArray();
+
+      // Uploader le fichier à la nouvelle location
+      const putCommand = new PutObjectCommand({
+        Bucket: this.ocrBucketName,
+        Key: newKey,
+        Body: fileBuffer,
+        ContentType: response.ContentType,
+        Metadata: {
+          organizationId: organizationId,
+          imageType: 'ocr',
+          promotedAt: new Date().toISOString(),
+          originalTempKey: tempKey,
+        },
+      });
+
+      await this.client.send(putCommand);
+      console.log('✅ CloudflareService - Fichier uploadé à la nouvelle location');
+
+      // Supprimer le fichier temporaire
+      const deleteCommand = new DeleteObjectCommand({
+        Bucket: this.ocrBucketName,
+        Key: tempKey,
+      });
+
+      await this.client.send(deleteCommand);
+      console.log('🗑️ CloudflareService - Fichier temporaire supprimé');
+
+      // Générer l'URL publique
+      let imageUrl;
+      if (this.ocrPublicUrl && this.ocrPublicUrl !== 'https://your_image_bucket_public_url') {
+        const cleanUrl = this.ocrPublicUrl.endsWith('/')
+          ? this.ocrPublicUrl.slice(0, -1)
+          : this.ocrPublicUrl;
+        imageUrl = `${cleanUrl}/${newKey}`;
+      } else {
+        imageUrl = await this.getSignedUrlForBucket(newKey, this.ocrBucketName, 86400);
+      }
+
+      return {
+        key: newKey,
+        url: imageUrl,
+      };
+    } catch (error) {
+      console.error('❌ CloudflareService - Erreur promotion:', error);
+      throw new Error(`Échec de la promotion du fichier: ${error.message}`);
     }
   }
 
