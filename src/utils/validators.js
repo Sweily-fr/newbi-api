@@ -26,7 +26,8 @@ const PHONE_FR_REGEX =
 
 // Regex pour la validation des noms et prénoms (lettres, chiffres, espaces, tirets, apostrophes)
 // Exclut explicitement les caractères < et > pour prévenir les risques d'injection XSS
-const NAME_REGEX = /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-'.(),&]{2,50}$/;
+// Autorise tous les caractères spéciaux courants pour les noms de produits: / \ : ; ! ? @ # $ % * + = [ ] { } | ~ " _
+const NAME_REGEX = /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-'.(),&/\\:;!?@#$%*+=[\]{}|~"_]{2,200}$/;
 
 // Regex pour la validation de SIRET (14 chiffres)
 const SIRET_REGEX = /^\d{14}$/;
