@@ -489,7 +489,7 @@ const expenseResolvers = {
             mimetype: input.mimeType || "application/pdf",
             path: input.cloudflareUrl, // Utiliser l'URL Cloudflare comme path
             url: input.cloudflareUrl,
-            size: input.fileSize || 0,
+            size: input.fileSize || 1, // Taille par défaut à 1 pour éviter l'erreur de validation
             ocrProcessed: !!input.ocrData,
             ocrData: input.ocrData ? JSON.parse(input.ocrData) : null,
             createdAt: new Date(),
