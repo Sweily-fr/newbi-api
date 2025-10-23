@@ -1,6 +1,11 @@
 # Schéma GraphQL pour la gestion des dépenses
 
 # Types d'énumération pour les dépenses
+enum ExpenseType {
+  ORGANIZATION
+  EXPENSE_REPORT
+}
+
 enum ExpenseCategory {
   OFFICE_SUPPLIES
   TRAVEL
@@ -67,6 +72,14 @@ type OCRMetadata {
   rawExtractedText: String
 }
 
+# Type pour le membre assigné
+type AssignedMember {
+  userId: String
+  name: String
+  email: String
+  image: String
+}
+
 # Type principal pour les dépenses
 type Expense {
   id: ID!
@@ -91,6 +104,9 @@ type Expense {
   ocrMetadata: OCRMetadata
   notes: String
   tags: [String!]
+  expenseType: ExpenseType!
+  assignedMember: AssignedMember
+  taskId: ID
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -150,6 +166,14 @@ type DeleteError {
   error: String!
 }
 
+# Input pour le membre assigné
+input AssignedMemberInput {
+  userId: String
+  name: String
+  email: String
+  image: String
+}
+
 # Input pour la création d'une dépense
 input CreateExpenseInput {
   title: String!
@@ -171,6 +195,9 @@ input CreateExpenseInput {
   paymentDate: String
   notes: String
   tags: [String!]
+  expenseType: ExpenseType = ORGANIZATION
+  assignedMember: AssignedMemberInput
+  taskId: ID
 }
 
 # Input pour la mise à jour d'une dépense
@@ -194,6 +221,9 @@ input UpdateExpenseInput {
   paymentDate: String
   notes: String
   tags: [String!]
+  expenseType: ExpenseType
+  assignedMember: AssignedMemberInput
+  taskId: ID
 }
 
 # Input pour le téléchargement de fichiers
