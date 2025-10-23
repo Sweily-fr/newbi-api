@@ -116,6 +116,12 @@ const EXPENSE_CATEGORY = {
   OTHER: 'OTHER'
 };
 
+// Énumération pour les types de dépenses
+const EXPENSE_TYPE = {
+  ORGANIZATION: 'ORGANIZATION', // Dépense de l'organisation
+  EXPENSE_REPORT: 'EXPENSE_REPORT' // Note de frais (assignée à un membre)
+};
+
 // Énumération pour les statuts de dépenses
 const EXPENSE_STATUS = {
   DRAFT: 'DRAFT',
@@ -299,6 +305,32 @@ const expenseSchema = new mongoose.Schema({
       message: 'Un tag ne doit pas dépasser 30 caractères'
     }
   }],
+  // Type de dépense (organisation ou note de frais)
+  expenseType: {
+    type: String,
+    enum: Object.values(EXPENSE_TYPE),
+    default: EXPENSE_TYPE.ORGANIZATION,
+    required: true
+  },
+  // Membre assigné (uniquement pour les notes de frais)
+  assignedMember: {
+    userId: {
+      type: String
+    },
+    name: {
+      type: String
+    },
+    email: {
+      type: String
+    },
+    image: String
+  },
+  // Référence vers une tâche Kanban (optionnel)
+  taskId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Task',
+    index: true
+  },
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -327,6 +359,7 @@ expenseSchema.index({ createdBy: 1 });
 expenseSchema.index({ 'tags': 1 });
 
 // Exporter les constantes pour les utiliser dans d'autres fichiers
+expenseSchema.statics.EXPENSE_TYPE = EXPENSE_TYPE;
 expenseSchema.statics.EXPENSE_CATEGORY = EXPENSE_CATEGORY;
 expenseSchema.statics.EXPENSE_STATUS = EXPENSE_STATUS;
 expenseSchema.statics.EXPENSE_PAYMENT_METHOD = EXPENSE_PAYMENT_METHOD;

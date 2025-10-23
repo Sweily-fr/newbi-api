@@ -271,6 +271,10 @@ const expenseResolvers = {
         ...input,
         createdBy: user.id,
         workspaceId: user.workspaceId || user.id, // Utiliser workspaceId de l'utilisateur ou son ID comme fallback
+        // Gérer expenseType et assignedMember
+        expenseType: input.expenseType || 'ORGANIZATION',
+        assignedMember: input.assignedMember || null,
+        taskId: input.taskId || null,
       };
 
       // Convertir les dates avec gestion du format français
@@ -344,15 +348,24 @@ const expenseResolvers = {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
 
       await checkExpenseAccess(id, user.id);
+      
+      // Préparer les données de mise à jour
+      const updateData = { ...input };
+      
       // Convertir les dates
-      if (input.date) input.date = new Date(input.date);
-      if (input.paymentDate) input.paymentDate = new Date(input.paymentDate);
+      if (input.date) updateData.date = new Date(input.date);
+      if (input.paymentDate) updateData.paymentDate = new Date(input.paymentDate);
+      
+      // Gérer expenseType et assignedMember
+      if (input.expenseType) updateData.expenseType = input.expenseType;
+      if (input.assignedMember !== undefined) updateData.assignedMember = input.assignedMember;
+      if (input.taskId !== undefined) updateData.taskId = input.taskId;
 
       try {
         // Utiliser findByIdAndUpdate au lieu de save() pour éviter les problèmes de détection de modifications
         const updatedExpense = await Expense.findByIdAndUpdate(
           id,
-          { $set: input },
+          { $set: updateData },
           { new: true, runValidators: true }
         );
 
@@ -736,6 +749,24 @@ const expenseResolvers = {
       // Si les loaders ne sont pas disponibles, utiliser une méthode alternative
       const User = (await import("../models/User.js")).default;
       return User.findById(expense.createdBy);
+    },
+    
+    // Résoudre assignedMember pour retourner null si l'objet est vide ou invalide
+    assignedMember: (expense) => {
+      const member = expense.assignedMember;
+      
+      // Si assignedMember n'existe pas ou est null, retourner null
+      if (!member) {
+        return null;
+      }
+      
+      // Si assignedMember est un objet vide ou n'a pas de userId, retourner null
+      if (typeof member === 'object' && (!member.userId || member.userId === '')) {
+        return null;
+      }
+      
+      // Sinon, retourner l'objet assignedMember
+      return member;
     },
   },
 };
