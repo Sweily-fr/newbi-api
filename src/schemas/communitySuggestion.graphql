@@ -1,0 +1,117 @@
+type Vote {
+  userId: ID!
+  voteType: VoteType!
+  createdAt: DateTime!
+}
+
+enum VoteType {
+  upvote
+  downvote
+}
+
+enum SuggestionType {
+  idea
+  bug
+}
+
+enum SuggestionStatus {
+  pending
+  validated
+  rejected
+}
+
+enum BugSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+type SuggestionUser {
+  id: ID!
+  name: String!
+  email: String!
+}
+
+type CommunitySuggestion {
+  id: ID!
+  type: SuggestionType!
+  title: String!
+  description: String!
+  status: SuggestionStatus!
+  votes: [Vote!]!
+  validatedBy: [ID!]!
+  validatedAt: DateTime
+  createdBy: ID!
+  createdByUser: SuggestionUser
+  workspaceId: ID!
+  isAnonymous: Boolean!
+  severity: BugSeverity
+  stepsToReproduce: String
+  upvoteCount: Int!
+  downvoteCount: Int!
+  validationCount: Int!
+  netScore: Int!
+  userVote: VoteType
+  userHasValidated: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type SuggestionStats {
+  totalIdeas: Int!
+  totalBugs: Int!
+  totalValidated: Int!
+  totalPending: Int!
+}
+
+input CreateSuggestionInput {
+  type: SuggestionType!
+  title: String!
+  description: String!
+  isAnonymous: Boolean
+  severity: BugSeverity
+  stepsToReproduce: String
+}
+
+input UpdateSuggestionInput {
+  title: String
+  description: String
+  severity: BugSeverity
+  stepsToReproduce: String
+}
+
+type Query {
+  # Récupérer toutes les suggestions
+  getCommunitySuggestions(
+    type: SuggestionType
+    status: SuggestionStatus
+    sortBy: String
+  ): [CommunitySuggestion!]!
+  
+  # Récupérer une suggestion par ID
+  getCommunitySuggestion(id: ID!): CommunitySuggestion
+  
+  # Récupérer les statistiques
+  getCommunitySuggestionStats: SuggestionStats!
+}
+
+type Mutation {
+  # Créer une suggestion
+  createCommunitySuggestion(input: CreateSuggestionInput!): CommunitySuggestion!
+  
+  # Mettre à jour une suggestion (seulement le créateur)
+  updateCommunitySuggestion(id: ID!, input: UpdateSuggestionInput!): CommunitySuggestion!
+  
+  # Supprimer une suggestion (seulement le créateur)
+  deleteCommunitySuggestion(id: ID!): Boolean!
+  
+  # Voter pour une suggestion
+  voteCommunitySuggestion(id: ID!, voteType: VoteType!): CommunitySuggestion!
+  
+  # Valider qu'une suggestion a été implémentée
+  validateCommunitySuggestion(id: ID!): CommunitySuggestion!
+  
+  # Retirer sa validation
+  unvalidateCommunitySuggestion(id: ID!): CommunitySuggestion!
+}

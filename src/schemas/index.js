@@ -27,6 +27,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./types/banking.graphql"), // Chargement explicite du schéma Banking
   path.join(__dirname, "./types/trial.graphql"), // Chargement explicite du schéma Trial
   path.join(__dirname, "./socialIcon.graphql"), // Chargement explicite du schéma Social Icons
+  path.join(__dirname, "./communitySuggestion.graphql"), // Chargement explicite du schéma Community Suggestion
   path.join(__dirname, "./*.graphql"),
 ]);
 

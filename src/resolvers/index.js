@@ -24,6 +24,7 @@ import eventResolvers from "./event.js";
 import bankingResolvers from "./banking.js";
 import referralResolvers from "./referral.js";
 import trialResolvers from "./trialResolvers.js";
+import communitySuggestionResolvers from "./communitySuggestion.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -52,6 +53,7 @@ const resolvers = mergeResolvers([
   bankingResolvers,
   referralResolvers,
   trialResolvers,
+  communitySuggestionResolvers,
 ]);
 
 export default resolvers;
