@@ -2,7 +2,7 @@ import { mergeResolvers } from "@graphql-tools/merge";
 import userResolvers from "./user.js";
 import invoiceResolvers from "./invoice.js";
 import quoteResolvers from "./quote.js";
-import creditNoteResolvers from './creditNote.js';
+import creditNoteResolvers from "./creditNote.js";
 import clientResolvers from "./client.js";
 import productResolvers from "./product.js";
 import contactResolvers from "./contact.js";
@@ -25,13 +25,13 @@ import bankingResolvers from "./banking.js";
 import referralResolvers from "./referral.js";
 import trialResolvers from "./trialResolvers.js";
 import communitySuggestionResolvers from "./communitySuggestion.js";
+import blogResolvers from "./blog.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
   invoiceResolvers,
   quoteResolvers,
   creditNoteResolvers,
-
   clientResolvers,
   productResolvers,
   contactResolvers,
@@ -54,6 +54,7 @@ const resolvers = mergeResolvers([
   referralResolvers,
   trialResolvers,
   communitySuggestionResolvers,
+  blogResolvers,
 ]);
 
 export default resolvers;

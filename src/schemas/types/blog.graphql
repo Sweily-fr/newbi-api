@@ -1,0 +1,54 @@
+type BlogPost {
+  _id: ID!
+  slug: String!
+  title: String!
+  metaTitle: String!
+  metaDescription: String!
+  summary: String!
+  author: String!
+  authorAvatar: String!
+  category: String!
+  tags: [String!]!
+  image: String!
+  content: String!
+  published: Boolean!
+  publishedAt: String!
+  views: Int!
+  readTime: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type BlogPostsResponse {
+  success: Boolean!
+  message: String
+  posts: [BlogPost!]!
+  total: Int!
+  hasMore: Boolean
+}
+
+type BlogPostResponse {
+  success: Boolean!
+  message: String
+  post: BlogPost
+}
+
+type Query {
+  # Récupérer tous les articles publiés
+  getAllBlogPosts(limit: Int, offset: Int): BlogPostsResponse!
+  
+  # Récupérer un article par slug
+  getBlogPostBySlug(slug: String!): BlogPostResponse!
+  
+  # Récupérer les articles par catégorie
+  getBlogPostsByCategory(category: String!, limit: Int): BlogPostsResponse!
+  
+  # Récupérer les articles par tag
+  getBlogPostsByTag(tag: String!, limit: Int): BlogPostsResponse!
+  
+  # Récupérer les articles populaires
+  getPopularBlogPosts(limit: Int): BlogPostsResponse!
+  
+  # Rechercher des articles
+  searchBlogPosts(query: String!, limit: Int): BlogPostsResponse!
+}
