@@ -116,6 +116,7 @@ const expenseResolvers = {
     expenses: async (
       _,
       {
+        workspaceId,
         startDate,
         endDate,
         category,
@@ -128,8 +129,12 @@ const expenseResolvers = {
       { user }
     ) => {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
+      if (!workspaceId) throw new UserInputError("workspaceId requis");
 
-      const query = { createdBy: user.id };
+      const query = { 
+        workspaceId: workspaceId,
+        createdBy: user.id 
+      };
 
       // Appliquer les filtres de date
       if (startDate || endDate) {
@@ -176,14 +181,18 @@ const expenseResolvers = {
     },
 
     // Récupérer les statistiques des dépenses
-    expenseStats: async (_, { startDate, endDate }, { user }) => {
+    expenseStats: async (_, { workspaceId, startDate, endDate }, { user }) => {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
+      if (!workspaceId) throw new UserInputError("workspaceId requis");
 
       const dateQuery = {};
       if (startDate) dateQuery.$gte = new Date(startDate);
       if (endDate) dateQuery.$lte = new Date(endDate);
 
-      const match = { createdBy: new mongoose.Types.ObjectId(user.id) };
+      const match = { 
+        workspaceId: workspaceId,
+        createdBy: new mongoose.Types.ObjectId(user.id) 
+      };
       if (startDate || endDate) match.date = dateQuery;
 
       // Aggrégation pour obtenir les statistiques
@@ -291,11 +300,12 @@ const expenseResolvers = {
     // Créer une nouvelle dépense
     createExpense: async (_, { input }, { user }) => {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
+      if (!input.workspaceId) throw new UserInputError("workspaceId requis");
 
       const expenseData = {
         ...input,
         createdBy: user.id,
-        workspaceId: user.workspaceId || user.id, // Utiliser workspaceId de l'utilisateur ou son ID comme fallback
+        workspaceId: input.workspaceId,
         // Gérer expenseType et assignedMember
         expenseType: input.expenseType || 'ORGANIZATION',
         assignedMember: input.assignedMember || null,

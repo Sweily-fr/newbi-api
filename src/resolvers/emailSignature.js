@@ -11,8 +11,15 @@ import cloudflareService from "../services/cloudflareService.js";
 const emailSignatureResolvers = {
   Query: {
     // Récupérer toutes les signatures de l'utilisateur connecté
-    getMyEmailSignatures: isAuthenticated(async (_, __, { user }) => {
-      return EmailSignature.find({ createdBy: user.id }).sort({
+    getMyEmailSignatures: isAuthenticated(async (_, { workspaceId }, { user }) => {
+      if (!workspaceId) {
+        throw new Error('workspaceId requis');
+      }
+
+      return EmailSignature.find({ 
+        workspaceId: workspaceId,
+        createdBy: user.id 
+      }).sort({
         updatedAt: -1,
       }); // Tri par date de mise à jour (plus récent en premier)
     }),
@@ -28,8 +35,13 @@ const emailSignatureResolvers = {
     }),
 
     // Récupérer la signature par défaut de l'utilisateur
-    getDefaultEmailSignature: isAuthenticated(async (_, __, { user }) => {
+    getDefaultEmailSignature: isAuthenticated(async (_, { workspaceId }, { user }) => {
+      if (!workspaceId) {
+        throw new Error('workspaceId requis');
+      }
+
       const signature = await EmailSignature.findOne({
+        workspaceId: workspaceId,
         createdBy: user.id,
         isDefault: true,
       });
@@ -45,9 +57,14 @@ const emailSignatureResolvers = {
         throw createValidationError("Le nom de la signature est requis");
       }
 
-      // Vérifier si une signature avec ce nom existe déjà pour cet utilisateur
+      if (!input.workspaceId) {
+        throw new Error('workspaceId requis');
+      }
+
+      // Vérifier si une signature avec ce nom existe déjà pour cet utilisateur dans ce workspace
       const existingSignature = await EmailSignature.findOne({
         signatureName: input.signatureName,
+        workspaceId: input.workspaceId,
         createdBy: user.id,
       });
 
@@ -59,8 +76,9 @@ const emailSignatureResolvers = {
         );
       }
 
-      // Si c'est la première signature de l'utilisateur, la définir comme signature par défaut
+      // Si c'est la première signature de l'utilisateur dans ce workspace, la définir comme signature par défaut
       const signatureCount = await EmailSignature.countDocuments({
+        workspaceId: input.workspaceId,
         createdBy: user.id,
       });
       const isFirstSignature = signatureCount === 0;
@@ -68,6 +86,7 @@ const emailSignatureResolvers = {
       // Préparer les données de la signature avec les valeurs par défaut
       const signatureData = {
         ...input,
+        workspaceId: input.workspaceId,
         createdBy: user.id,
         isDefault:
           input.isDefault !== undefined ? input.isDefault : isFirstSignature,

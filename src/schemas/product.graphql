@@ -19,6 +19,7 @@ type ProductPagination {
 }
 
 input CreateProductInput {
+  workspaceId: ID!
   name: String!
   description: String
   unitPrice: Float!
@@ -40,7 +41,7 @@ input UpdateProductInput {
 
 extend type Query {
   product(id: ID!): Product!
-  products(search: String, category: String, page: Int, limit: Int): ProductPagination!
+  products(workspaceId: ID!, search: String, category: String, page: Int, limit: Int): ProductPagination!
 }
 
 extend type Mutation {

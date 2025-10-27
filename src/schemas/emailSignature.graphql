@@ -383,13 +383,13 @@ type CleanupResult {
 
 extend type Query {
   # Récupérer toutes les signatures de l'utilisateur connecté
-  getMyEmailSignatures: [EmailSignature!]!
+  getMyEmailSignatures(workspaceId: ID!): [EmailSignature!]!
   
   # Récupérer une signature spécifique
   getEmailSignature(id: ID!): EmailSignature
   
   # Récupérer la signature par défaut de l'utilisateur
-  getDefaultEmailSignature: EmailSignature
+  getDefaultEmailSignature(workspaceId: ID!): EmailSignature
 }
 
 extend type Mutation {

@@ -176,6 +176,7 @@ input AssignedMemberInput {
 
 # Input pour la création d'une dépense
 input CreateExpenseInput {
+  workspaceId: ID!
   title: String!
   description: String
   amount: Float!
@@ -260,6 +261,7 @@ extend type Query {
 
   # Récupérer une liste paginée de dépenses avec filtres
   expenses(
+    workspaceId: ID!
     startDate: String
     endDate: String
     category: ExpenseCategory
@@ -271,7 +273,7 @@ extend type Query {
   ): ExpensePagination!
 
   # Récupérer les statistiques des dépenses
-  expenseStats(startDate: String, endDate: String): ExpenseStats!
+  expenseStats(workspaceId: ID!, startDate: String, endDate: String): ExpenseStats!
 }
 
 # Mutations pour les dépenses

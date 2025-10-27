@@ -13,8 +13,15 @@ const productResolvers = {
       return product;
     }),
 
-    products: isAuthenticated(async (_, { search, category, page = 1, limit = 20 }, { user }) => {
-      const query = { createdBy: user.id };
+    products: isAuthenticated(async (_, { workspaceId, search, category, page = 1, limit = 20 }, { user }) => {
+      if (!workspaceId) {
+        throw new Error('workspaceId requis');
+      }
+
+      const query = { 
+        workspaceId: workspaceId,
+        createdBy: user.id 
+      };
       
       if (search && search.trim() !== '') {
         // Créer une requête OR pour rechercher dans plusieurs champs
@@ -67,9 +74,14 @@ const productResolvers = {
 
   Mutation: {
     createProduct: isAuthenticated(async (_, { input }, { user }) => {
-      // Vérifier si un produit avec ce nom existe déjà pour cet utilisateur
+      if (!input.workspaceId) {
+        throw new Error('workspaceId requis');
+      }
+
+      // Vérifier si un produit avec ce nom existe déjà pour cet utilisateur dans ce workspace
       const existingProduct = await Product.findOne({ 
         name: input.name,
+        workspaceId: input.workspaceId,
         createdBy: user.id 
       });
       
@@ -79,6 +91,7 @@ const productResolvers = {
       
       const product = new Product({
         ...input,
+        workspaceId: input.workspaceId,
         createdBy: user.id
       });
       

@@ -39,6 +39,13 @@ const productSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Référence vers l'organisation/workspace (Better Auth)
+  workspaceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -49,6 +56,11 @@ const productSchema = new mongoose.Schema({
 });
 
 // Index pour améliorer les performances des recherches
+// Index composés workspace + autres champs pour les requêtes fréquentes
+productSchema.index({ workspaceId: 1, name: 1 });
+productSchema.index({ workspaceId: 1, category: 1 });
+productSchema.index({ workspaceId: 1, createdBy: 1 });
+// Index legacy pour la migration
 productSchema.index({ createdBy: 1 });
 productSchema.index({ name: 'text', description: 'text', reference: 'text' });
 
