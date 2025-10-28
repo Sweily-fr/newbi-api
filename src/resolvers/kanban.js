@@ -752,29 +752,30 @@ const resolvers = {
         task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
         
         // Get all tasks in the target column, sorted by position
-        const tasks = await Task.find({
+        const allTasks = await Task.find({
           boardId: task.boardId,
           columnId: columnId,
-          _id: { $ne: task._id },
           workspaceId: finalWorkspaceId
         }).sort('position');
         
-        // Update positions of other tasks in the column
-        const updatePromises = [];
-        let currentPosition = 0;
+        // Créer un nouvel ordre avec la tâche à sa nouvelle position
+        const tasksWithoutMoved = allTasks.filter(t => t._id.toString() !== id);
+        const reorderedTasks = [
+          ...tasksWithoutMoved.slice(0, position),
+          task,
+          ...tasksWithoutMoved.slice(position)
+        ];
         
-        for (let i = 0; i < tasks.length; i++) {
-          if (currentPosition === position) currentPosition++;
-          if (tasks[i]._id.toString() === id) continue;
-          
+        // Update positions of all tasks in the column
+        const updatePromises = [];
+        
+        for (let i = 0; i < reorderedTasks.length; i++) {
           updatePromises.push(
             Task.updateOne(
-              { _id: tasks[i]._id },
-              { $set: { position: currentPosition, updatedAt: new Date() } }
+              { _id: reorderedTasks[i]._id },
+              { $set: { position: i, updatedAt: new Date() } }
             )
           );
-          
-          currentPosition++;
         }
         
         await Promise.all(updatePromises);
