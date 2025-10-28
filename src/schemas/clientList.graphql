@@ -1,0 +1,71 @@
+extend type Query {
+  # Get all client lists for a workspace
+  clientLists(workspaceId: String!): [ClientList!]!
+  
+  # Get a single client list by ID
+  clientList(workspaceId: String!, id: ID!): ClientList!
+  
+  # Get clients in a specific list
+  clientsInList(workspaceId: String!, listId: ID!, page: Int, limit: Int, search: String): ClientsResult!
+  
+  # Get lists that contain a specific client
+  clientListsByClient(workspaceId: String!, clientId: ID!): [ClientList!]!
+}
+
+extend type Mutation {
+  # Create a new client list
+  createClientList(workspaceId: String!, input: CreateClientListInput!): ClientList!
+  
+  # Update an existing client list
+  updateClientList(workspaceId: String!, id: ID!, input: UpdateClientListInput!): ClientList!
+  
+  # Delete a client list
+  deleteClientList(workspaceId: String!, id: ID!): Boolean!
+  
+  # Add a client to a list
+  addClientToList(workspaceId: String!, listId: ID!, clientId: ID!): ClientList!
+  
+  # Remove a client from a list
+  removeClientFromList(workspaceId: String!, listId: ID!, clientId: ID!): ClientList!
+  
+  # Add multiple clients to a list
+  addClientsToList(workspaceId: String!, listId: ID!, clientIds: [ID!]!): ClientList!
+  
+  # Remove multiple clients from a list
+  removeClientsFromList(workspaceId: String!, listId: ID!, clientIds: [ID!]!): ClientList!
+  
+  # Add a client to multiple lists
+  addClientToLists(workspaceId: String!, clientId: ID!, listIds: [ID!]!): [ClientList!]!
+  
+  # Remove a client from multiple lists
+  removeClientFromLists(workspaceId: String!, clientId: ID!, listIds: [ID!]!): [ClientList!]!
+}
+
+type ClientList {
+  id: ID!
+  name: String!
+  description: String
+  workspaceId: String!
+  createdBy: String!
+  clients: [Client!]!
+  clientCount: Int!
+  color: String!
+  icon: String!
+  isDefault: Boolean!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input CreateClientListInput {
+  name: String!
+  description: String
+  color: String
+  icon: String
+}
+
+input UpdateClientListInput {
+  name: String
+  description: String
+  color: String
+  icon: String
+}
