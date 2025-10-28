@@ -116,7 +116,6 @@ const expenseResolvers = {
     expenses: async (
       _,
       {
-        workspaceId,
         startDate,
         endDate,
         category,
@@ -129,10 +128,8 @@ const expenseResolvers = {
       { user }
     ) => {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
-      if (!workspaceId) throw new UserInputError("workspaceId requis");
 
       const query = { 
-        workspaceId: workspaceId,
         createdBy: user.id 
       };
 
@@ -181,16 +178,14 @@ const expenseResolvers = {
     },
 
     // Récupérer les statistiques des dépenses
-    expenseStats: async (_, { workspaceId, startDate, endDate }, { user }) => {
+    expenseStats: async (_, { startDate, endDate }, { user }) => {
       if (!user) throw new ForbiddenError("Vous devez être connecté");
-      if (!workspaceId) throw new UserInputError("workspaceId requis");
 
       const dateQuery = {};
       if (startDate) dateQuery.$gte = new Date(startDate);
       if (endDate) dateQuery.$lte = new Date(endDate);
 
       const match = { 
-        workspaceId: workspaceId,
         createdBy: new mongoose.Types.ObjectId(user.id) 
       };
       if (startDate || endDate) match.date = dateQuery;

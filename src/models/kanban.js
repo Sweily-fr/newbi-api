@@ -22,11 +22,8 @@ const commentSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  userName: {
-    type: String,
-    required: true
-  },
-  userImage: String,
+  userName: String, // Optionnel - récupéré dynamiquement au frontend
+  userImage: String, // Optionnel - récupéré dynamiquement au frontend
   content: {
     type: String,
     required: true,
@@ -48,11 +45,8 @@ const activitySchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  userName: {
-    type: String,
-    required: true
-  },
-  userImage: String,
+  userName: String, // Optionnel - récupéré dynamiquement au frontend
+  userImage: String, // Optionnel - récupéré dynamiquement au frontend
   type: {
     type: String,
     required: true,
@@ -176,22 +170,8 @@ const taskSchema = new mongoose.Schema({
     min: 0
   },
   checklist: [checklistItemSchema],
-  // Membres assignés à la tâche
-  assignedMembers: [{
-    userId: {
-      type: String,
-      required: true
-    },
-    name: {
-      type: String,
-      required: true
-    },
-    email: {
-      type: String,
-      required: true
-    },
-    image: String
-  }],
+  // Membres assignés à la tâche (seulement les userId, les infos sont récupérées depuis la collection user)
+  assignedMembers: [String],
   // Commentaires
   comments: [commentSchema],
   // Historique d'activité

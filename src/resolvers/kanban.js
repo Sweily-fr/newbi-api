@@ -6,6 +6,7 @@ import { getPubSub } from '../config/redis.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
 import User from '../models/User.js';
+import { ObjectId } from 'mongodb';
 
 // Événements de subscription
 const BOARD_UPDATED = 'BOARD_UPDATED';
@@ -36,20 +37,36 @@ const resolvers = {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
       
       try {
-        const { ObjectId } = require('mongodb');
+        logger.info(`🔍 [Kanban] organizationMembers appelé`);
+        logger.info(`🔍 [Kanban] workspaceId (args): ${workspaceId}`);
+        logger.info(`🔍 [Kanban] contextWorkspaceId: ${contextWorkspaceId}`);
+        logger.info(`🔍 [Kanban] finalWorkspaceId: ${finalWorkspaceId}`);
+        logger.info(`🔍 [Kanban] db disponible: ${!!db}`);
         
         // Convertir le workspaceId en ObjectId pour la recherche
-        const orgId = typeof finalWorkspaceId === 'string' 
-          ? new ObjectId(finalWorkspaceId) 
-          : finalWorkspaceId;
+        let orgId;
+        try {
+          orgId = typeof finalWorkspaceId === 'string' 
+            ? new ObjectId(finalWorkspaceId) 
+            : finalWorkspaceId;
+          logger.info(`✅ [Kanban] orgId converti: ${orgId}`);
+        } catch (conversionError) {
+          logger.error(`❌ [Kanban] Erreur conversion ObjectId: ${conversionError.message}`);
+          return [];
+        }
         
         logger.info(`🔍 [Kanban] Recherche membres pour organisation: ${orgId}`);
         
         // 1. Récupérer l'organisation
         const organization = await db.collection('organization').findOne({ _id: orgId });
         
+        logger.info(`🔍 [Kanban] Résultat findOne organisation: ${organization ? 'trouvée' : 'non trouvée'}`);
+        
         if (!organization) {
           logger.warn(`⚠️ [Kanban] Organisation non trouvée: ${orgId}`);
+          // Essayer de lister toutes les organisations pour déboguer
+          const allOrgs = await db.collection('organization').find({}).limit(5).toArray();
+          logger.info(`📋 [Kanban] Organisations en base (premiers 5): ${allOrgs.map(o => o._id).join(', ')}`);
           return [];
         }
         
@@ -93,17 +110,29 @@ const resolvers = {
             return null;
           }
           
+          // Nettoyer l'image : Better Auth stocke dans 'image' ou 'avatar'
+          const cleanImage = (user.image || user.avatar) && 
+                            (user.image || user.avatar) !== 'null' && 
+                            (user.image || user.avatar) !== '' 
+                            ? (user.image || user.avatar) 
+                            : null;
+          
           return {
             id: memberUserId,
             name: user.name || user.email || 'Utilisateur inconnu',
             email: user.email || '',
-            image: user.image || null,
+            image: cleanImage,
             role: member.role || 'member'
           };
         }).filter(Boolean); // Retirer les null
         
         logger.info(`✅ [Kanban] Retour de ${result.length} membres`);
-        logger.info(`📋 [Kanban] Détails:`, result.map(r => ({ email: r.email, role: r.role })));
+        logger.info(`📋 [Kanban] Détails:`, result.map(r => ({ 
+          email: r.email, 
+          role: r.role,
+          hasImage: !!r.image,
+          image: r.image
+        })));
         
         return result;
       } catch (error) {
@@ -112,6 +141,51 @@ const resolvers = {
         return [];
       }
     }),
+
+    usersInfo: async (_, { userIds }, { db }) => {
+      try {
+        if (!userIds || userIds.length === 0) {
+          return [];
+        }
+
+        // Convertir les userIds en ObjectId
+        const objectIds = userIds.map(id => {
+          try {
+            return new ObjectId(id);
+          } catch (e) {
+            logger.warn(`⚠️ [Kanban] ID utilisateur invalide: ${id}`);
+            return null;
+          }
+        }).filter(Boolean);
+
+        if (objectIds.length === 0) {
+          return [];
+        }
+
+        // Récupérer les infos des utilisateurs
+        const users = await db.collection('user').find({
+          _id: { $in: objectIds }
+        }).toArray();
+
+        logger.info(`✅ [Kanban] Récupéré ${users.length} utilisateurs sur ${userIds.length} demandés`);
+
+        // Mapper les résultats
+        return users.map(user => {
+          // Utiliser avatar au lieu de image
+          const avatarUrl = user.avatar && user.avatar !== 'null' && user.avatar !== '' ? user.avatar : null;
+          
+          return {
+            id: user._id.toString(),
+            name: user.name || user.email || 'Utilisateur inconnu',
+            email: user.email || '',
+            image: avatarUrl,
+          };
+        });
+      } catch (error) {
+        logger.error('❌ [Kanban] Erreur récupération infos utilisateurs:', error);
+        return [];
+      }
+    },
     
     board: withWorkspace(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -365,13 +439,7 @@ const resolvers = {
         });
       }
       
-      // Récupérer les données utilisateur pour l'image
-      const db = mongoose.connection.db;
-      const userData = await db.collection('user').findOne({ 
-        _id: new mongoose.Types.ObjectId(user.id) 
-      });
-      const userImage = userData?.image || userData?.avatar || userData?.profile?.profilePicture || userData?.profile?.profilePictureUrl || null;
-      
+      // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
       const task = new Task({
         ...cleanedInput,
         userId: user.id,
@@ -380,8 +448,6 @@ const resolvers = {
         // Ajouter une entrée d'activité pour la création
         activity: [{
           userId: user.id,
-          userName: userData?.name || user.name || user.email,
-          userImage: userImage,
           type: 'created',
           description: 'a créé la tâche',
           createdAt: new Date()
@@ -646,17 +712,9 @@ const resolvers = {
           
           // Ajouter une entrée d'activité pour le déplacement
           if (user) {
-            // Récupérer les données utilisateur pour l'image
-            const db = mongoose.connection.db;
-            const userData = await db.collection('user').findOne({ 
-              _id: new mongoose.Types.ObjectId(user.id) 
-            });
-            const userImage = userData?.image || userData?.avatar || userData?.profile?.profilePicture || userData?.profile?.profilePictureUrl || null;
-            
+            // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
             task.activity.push({
               userId: user.id,
-              userName: userData?.name || user.name || user.email,
-              userImage: userImage,
               type: 'moved',
               field: 'columnId',
               oldValue: oldColumnId,
@@ -731,31 +789,9 @@ const resolvers = {
           throw new Error('Task not found');
         }
 
-        // Récupérer les données utilisateur depuis Better Auth (collection MongoDB directe)
-        const db = mongoose.connection.db;
-        const userData = await db.collection('user').findOne({ 
-          _id: new mongoose.Types.ObjectId(user.id) 
-        });
-        
-        // Better Auth peut stocker l'image dans différents champs
-        const userImage = userData?.image || userData?.avatar || userData?.profile?.profilePicture || userData?.profile?.profilePictureUrl || null;
-        
-        logger.info('📸 [Kanban] Photo utilisateur récupérée:', { 
-          userId: user.id,
-          image: userData?.image || 'null',
-          avatar: userData?.avatar || 'null',
-          profilePicture: userData?.profile?.profilePicture || 'null',
-          profilePictureUrl: userData?.profile?.profilePictureUrl || 'null',
-          finalImage: userImage || 'null',
-          name: userData?.name || 'null',
-          email: userData?.email || 'null',
-          allKeys: userData ? Object.keys(userData).join(', ') : 'userData is null'
-        });
-        
+        // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
         const comment = {
           userId: user.id,
-          userName: userData?.name || user.name || user.email,
-          userImage: userImage,
           content: input.content,
           createdAt: new Date(),
           updatedAt: new Date()
@@ -763,8 +799,7 @@ const resolvers = {
         
         logger.info('💬 [Kanban] Commentaire créé:', {
           userId: comment.userId,
-          userName: comment.userName,
-          userImage: comment.userImage
+          content: comment.content
         });
 
         task.comments.push(comment);
@@ -772,8 +807,6 @@ const resolvers = {
         // Ajouter une entrée dans l'activité
         task.activity.push({
           userId: user.id,
-          userName: userData?.name || user.name || user.email,
-          userImage: userImage,
           type: 'comment_added',
           description: 'a ajouté un commentaire',
           createdAt: new Date()
