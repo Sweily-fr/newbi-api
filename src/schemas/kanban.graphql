@@ -22,17 +22,11 @@ type Column {
   updatedAt: DateTime!
 }
 
-type AssignedMember {
-  userId: String!
-  name: String!
-  email: String!
-  image: String
-}
 
 type Comment {
   id: ID!
   userId: String!
-  userName: String!
+  userName: String
   userImage: String
   content: String!
   createdAt: DateTime!
@@ -42,7 +36,7 @@ type Comment {
 type Activity {
   id: ID!
   userId: String!
-  userName: String!
+  userName: String
   userImage: String
   type: String!
   field: String
@@ -64,7 +58,7 @@ type Task {
   columnId: String!
   position: Int
   checklist: [ChecklistItem!]
-  assignedMembers: [AssignedMember!]
+  assignedMembers: [String!]
   comments: [Comment!]
   activity: [Activity!]
   userId: ID!
@@ -111,12 +105,6 @@ input UpdateColumnInput {
   order: Int
 }
 
-input AssignedMemberInput {
-  userId: String!
-  name: String!
-  email: String!
-  image: String
-}
 
 input CreateTaskInput {
   title: String!
@@ -129,7 +117,7 @@ input CreateTaskInput {
   columnId: String!
   position: Int
   checklist: [ChecklistItemInput!]
-  assignedMembers: [AssignedMemberInput!]
+  assignedMembers: [String!]
 }
 
 input UpdateTaskInput {
@@ -143,7 +131,7 @@ input UpdateTaskInput {
   columnId: String
   position: Int
   checklist: [ChecklistItemInput!]
-  assignedMembers: [AssignedMemberInput!]
+  assignedMembers: [String!]
 }
 
 input TagInput {
@@ -173,6 +161,13 @@ type OrganizationMember {
   role: String
 }
 
+type UserInfo {
+  id: String!
+  name: String!
+  email: String!
+  image: String
+}
+
 type Query {
   boards(workspaceId: ID): [Board!]!
   board(id: ID!, workspaceId: ID): Board
@@ -181,6 +176,7 @@ type Query {
   tasks(boardId: ID!, columnId: ID, workspaceId: ID): [Task!]!
   task(id: ID!, workspaceId: ID): Task
   organizationMembers(workspaceId: ID!): [OrganizationMember!]!
+  usersInfo(userIds: [String!]!): [UserInfo!]!
 }
 
 type Mutation {

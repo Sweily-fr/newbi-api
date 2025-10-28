@@ -11,13 +11,8 @@ import cloudflareService from "../services/cloudflareService.js";
 const emailSignatureResolvers = {
   Query: {
     // Récupérer toutes les signatures de l'utilisateur connecté
-    getMyEmailSignatures: isAuthenticated(async (_, { workspaceId }, { user }) => {
-      if (!workspaceId) {
-        throw new Error('workspaceId requis');
-      }
-
+    getMyEmailSignatures: isAuthenticated(async (_, {}, { user }) => {
       return EmailSignature.find({ 
-        workspaceId: workspaceId,
         createdBy: user.id 
       }).sort({
         updatedAt: -1,
@@ -35,13 +30,8 @@ const emailSignatureResolvers = {
     }),
 
     // Récupérer la signature par défaut de l'utilisateur
-    getDefaultEmailSignature: isAuthenticated(async (_, { workspaceId }, { user }) => {
-      if (!workspaceId) {
-        throw new Error('workspaceId requis');
-      }
-
+    getDefaultEmailSignature: isAuthenticated(async (_, {}, { user }) => {
       const signature = await EmailSignature.findOne({
-        workspaceId: workspaceId,
         createdBy: user.id,
         isDefault: true,
       });

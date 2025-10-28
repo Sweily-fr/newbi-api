@@ -178,6 +178,7 @@ async function startServer() {
         req,
         user,
         workspaceId: user?.workspaceId,
+        db: mongoose.connection.db, // Ajouter l'accès à la base de données MongoDB
       };
     },
     formatError: formatError,
@@ -227,6 +228,7 @@ async function startServer() {
           return {
             user,
             workspaceId,
+            db: mongoose.connection.db, // Ajouter l'accès à la base de données MongoDB
           };
         } catch (error) {
           logger.error('❌ [WebSocket] Erreur authentification:', error);
