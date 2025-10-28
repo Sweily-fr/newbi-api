@@ -104,11 +104,13 @@ const clientResolvers = {
         let clientData = { ...input };
 
         if (input.type === "COMPANY") {
-          // Pour une entreprise, le SIRET est recommandé
-          if (!input.siret && !input.vatNumber) {
-            console.warn(
-              "Création d'un client entreprise sans SIRET ni numéro de TVA"
-            );
+          // Pour une entreprise, le SIRET est obligatoire
+          if (!input.siret || input.siret.trim() === "") {
+            throw new Error("Le SIRET est obligatoire pour une entreprise");
+          }
+          // Valider le format du SIRET (14 chiffres)
+          if (!/^\d{14}$/.test(input.siret)) {
+            throw new Error("Le SIRET doit contenir exactement 14 chiffres");
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
@@ -170,16 +172,13 @@ const clientResolvers = {
         let updateData = { ...input };
 
         if (input.type === "COMPANY") {
-          // Pour une entreprise, le SIRET est recommandé
-          if (
-            !input.siret &&
-            !input.vatNumber &&
-            !client.siret &&
-            !client.vatNumber
-          ) {
-            console.warn(
-              "Mise à jour d'un client entreprise sans SIRET ni numéro de TVA"
-            );
+          // Pour une entreprise, le SIRET est obligatoire
+          if (!input.siret || input.siret.trim() === "") {
+            throw new Error("Le SIRET est obligatoire pour une entreprise");
+          }
+          // Valider le format du SIRET (14 chiffres)
+          if (!/^\d{14}$/.test(input.siret)) {
+            throw new Error("Le SIRET doit contenir exactement 14 chiffres");
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
