@@ -700,20 +700,37 @@ const resolvers = {
       
       try {
         // Get the task to move
-        const task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
+        let task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
         if (!task) throw new Error('Task not found');
         
         const oldColumnId = task.columnId;
         
-        // If the column is changing, update the column reference and add activity
-        if (task.columnId !== columnId) {
-          task.columnId = columnId;
-          task.status = columnId;
-          
-          // Ajouter une entrée d'activité pour le déplacement
-          if (user) {
-            // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
-            task.activity.push({
+        // Nettoyer assignedMembers pour s'assurer qu'on ne stocke que les IDs
+        let cleanedAssignedMembers = task.assignedMembers;
+        if (cleanedAssignedMembers && Array.isArray(cleanedAssignedMembers)) {
+          cleanedAssignedMembers = cleanedAssignedMembers.map(member => {
+            // Si c'est un objet avec userId, retourner juste l'ID
+            if (typeof member === 'object' && member.userId) {
+              return member.userId;
+            }
+            // Sinon, c'est déjà un ID (string)
+            return member;
+          }).filter(Boolean);
+        }
+        
+        // Préparer les updates
+        const updates = {
+          columnId: columnId,
+          status: columnId,
+          position: position,
+          assignedMembers: cleanedAssignedMembers,
+          updatedAt: new Date()
+        };
+        
+        // Ajouter une entrée d'activité si la colonne change
+        if (oldColumnId !== columnId && user) {
+          updates.$push = {
+            activity: {
               userId: user.id,
               type: 'moved',
               field: 'columnId',
@@ -721,13 +738,18 @@ const resolvers = {
               newValue: columnId,
               description: 'a déplacé la tâche',
               createdAt: new Date()
-            });
-          }
+            }
+          };
         }
         
-        // Update the position of the moved task
-        task.position = position;
-        await task.save();
+        // Utiliser updateOne pour éviter les problèmes de validation
+        await Task.updateOne(
+          { _id: id, workspaceId: finalWorkspaceId },
+          { $set: updates, ...(updates.$push && { $push: updates.$push }) }
+        );
+        
+        // Récupérer la tâche mise à jour
+        task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
         
         // Get all tasks in the target column, sorted by position
         const tasks = await Task.find({
