@@ -1,14 +1,25 @@
 // Contenu complet de l'article de blog avec SEO et backlinks
 export const blogPosts = [
   {
-    slug: 'gestion-factures-freelance-pme-guide-complet',
-    title: 'Guide Complet sur la Gestion de Factures pour Freelance et PME',
-    metaTitle: 'Gestion de Factures : Guide Complet 2025 pour Freelances et PME | Newbi',
-    metaDescription: 'Découvrez comment simplifier votre gestion de factures avec un logiciel adapté. Astuces, erreurs à éviter et meilleures pratiques pour freelances et PME.',
-    summary: 'Simplifiez votre gestion de factures avec nos conseils d\'experts. Découvrez les erreurs à éviter et comment un logiciel peut vous faire gagner du temps.',
-    category: 'Gestion',
-    tags: ['facturation', 'freelance', 'PME', 'gestion', 'comptabilité', 'logiciel'],
-    image: 'https://images.unsplash.com/photo-1554224154-22dec7ec8818?w=1200&h=630&fit=crop',
+    slug: "gestion-factures-freelance-pme-guide-complet",
+    title: "Guide Complet sur la Gestion de Factures pour Freelance et PME",
+    metaTitle:
+      "Gestion de Factures : Guide Complet 2025 pour Freelances et PME | Newbi",
+    metaDescription:
+      "Découvrez comment simplifier votre gestion de factures avec un logiciel adapté. Astuces, erreurs à éviter et meilleures pratiques pour freelances et PME.",
+    summary:
+      "Simplifiez votre gestion de factures avec nos conseils d'experts. Découvrez les erreurs à éviter et comment un logiciel peut vous faire gagner du temps.",
+    category: "Gestion",
+    tags: [
+      "facturation",
+      "freelance",
+      "PME",
+      "gestion",
+      "comptabilité",
+      "logiciel",
+    ],
+    image:
+      "https://images.unsplash.com/photo-1554224154-22dec7ec8818?w=1200&h=630&fit=crop",
     readTime: 12,
     content: `La gestion des factures est l'une des tâches les plus importantes mais aussi les plus chronophages pour les freelances et les PME. Une facturation efficace garantit non seulement une trésorerie saine, mais aussi une relation de confiance avec vos clients.
 
@@ -85,7 +96,7 @@ Pour être valide légalement, votre facture doit contenir ces informations obli
 
 **Solution** : Indiquez toujours "Paiement à réception" ou "Paiement sous 30 jours" avec la date exacte
 
-> **Erreur à éviter**
+> **Erreur à eviter**
 >
 > Ne jamais envoyer une facture sans l'avoir relue. Une erreur de montant peut créer des complications comptables importantes.
 
