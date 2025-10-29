@@ -158,7 +158,6 @@ type DetailedTypography {
 input EmailSignatureInput {
   signatureName: String!
   isDefault: Boolean
-  workspaceId: ID!
   
   # Informations personnelles
   firstName: String
@@ -311,7 +310,6 @@ input UpdateEmailSignatureInput {
   id: ID!
   signatureName: String
   isDefault: Boolean
-  workspaceId: ID
   
   # Informations personnelles
   firstName: String

@@ -198,7 +198,7 @@ const emailSignatureSchema = new mongoose.Schema(
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Organization",
-      required: true,
+      required: false,
       index: true,
     },
     // Alignement du nom et prénom (left, center, right)
@@ -700,7 +700,7 @@ const emailSignatureSchema = new mongoose.Schema(
 
 // Index pour améliorer les performances des recherches
 // Index composés workspace + autres champs
-emailSignatureSchema.index({ workspaceId: 1, name: "text" });
+emailSignatureSchema.index({ workspaceId: 1, signatureName: "text" });
 emailSignatureSchema.index({ workspaceId: 1, createdBy: 1 });
 // Index legacy pour la migration
 emailSignatureSchema.index({ createdBy: 1 });
@@ -708,6 +708,9 @@ emailSignatureSchema.index({ signatureName: "text" });
 
 // S'assurer qu'il n'y a qu'une seule signature par défaut par utilisateur
 emailSignatureSchema.pre("save", async function (next) {
+  if (!this.workspaceId) {
+    this.workspaceId = this.createdBy;
+  }
   if (this.isDefault) {
     // Trouver toutes les autres signatures de cet utilisateur et les définir comme non par défaut
     await this.constructor.updateMany(

@@ -153,7 +153,6 @@ const emailSignatureTypeDefs = gql`
   input EmailSignatureInput {
     signatureName: String!
     isDefault: Boolean
-    workspaceId: ID!
     
     # Informations personnelles
     firstName: String!
@@ -298,7 +297,6 @@ const emailSignatureTypeDefs = gql`
     id: ID!
     signatureName: String
     isDefault: Boolean
-    workspaceId: ID
     
     # Informations personnelles
     firstName: String
