@@ -46,7 +46,7 @@ router.get('/download/:transferId/:fileId', async (req, res) => {
 
     // Récupérer le fichier depuis R2
     const command = new GetObjectCommand({
-      Bucket: process.env.TRANSFER_BUCKET_NAME,
+      Bucket: process.env.TRANSFER_BUCKET,
       Key: file.r2Key,
     });
 

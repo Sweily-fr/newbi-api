@@ -40,8 +40,8 @@ class CloudflareTransferService {
     this.publicUrl = process.env.TRANSFER_URL;
 
     if (!this.bucketName) {
-      console.error("❌ ERREUR: TRANSFER_BUCKET_NAME n'est pas définie!");
-      throw new Error("Configuration manquante: TRANSFER_BUCKET_NAME");
+      console.error("❌ ERREUR: TRANSFER_BUCKET n'est pas définie!");
+      throw new Error("Configuration manquante: TRANSFER_BUCKET");
     }
   }
 

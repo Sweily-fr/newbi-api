@@ -159,8 +159,8 @@ async function generateDownloadUrls(
 ) {
   try {
     // Vérifier la configuration R2/S3
-    if (!process.env.TRANSFER_BUCKET_NAME) {
-      logger.error('❌ TRANSFER_BUCKET_NAME non configuré');
+    if (!process.env.TRANSFER_BUCKET) {
+      logger.error('❌ TRANSFER_BUCKET non configuré');
       return res.status(500).json({
         success: false,
         error: 'Configuration de stockage manquante'
@@ -193,7 +193,7 @@ async function generateDownloadUrls(
       } else if (file.storageType === "r2" && file.r2Key) {
         // URL signée R2 courte
         const command = new GetObjectCommand({
-          Bucket: process.env.TRANSFER_BUCKET_NAME,
+          Bucket: process.env.TRANSFER_BUCKET,
           Key: file.r2Key,
         });
 
