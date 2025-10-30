@@ -439,12 +439,29 @@ const resolvers = {
         });
       }
       
+      // Calculer la position correcte en fonction des tâches existantes dans la colonne
+      let position = input.position !== undefined ? input.position : 0;
+      
+      // Si pas de position fournie, ajouter à la fin
+      if (input.position === undefined) {
+        // Récupérer TOUTES les tâches de la colonne et les compter
+        // (plutôt que de chercher la dernière, ce qui peut créer des trous)
+        const allTasks = await Task.find({
+          boardId: input.boardId,
+          columnId: input.columnId,
+          workspaceId: finalWorkspaceId
+        }).sort({ position: 1 });
+        
+        // La nouvelle position = nombre de tâches existantes
+        position = allTasks.length;
+      }
+      
       // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
       const task = new Task({
         ...cleanedInput,
         userId: user.id,
         workspaceId: finalWorkspaceId,
-        position: input.position || 0,
+        position: position,
         // Ajouter une entrée d'activité pour la création
         activity: [{
           userId: user.id,
@@ -718,6 +735,22 @@ const resolvers = {
           }).filter(Boolean);
         }
         
+        // IMPORTANT: Récupérer les tâches de la colonne AVANT de mettre à jour la tâche
+        // Mais EXCLURE la tâche qu'on est en train de déplacer (elle peut être dans la colonne cible si c'est un réordonnancement)
+        let allTasksBeforeUpdate = await Task.find({
+          boardId: task.boardId,
+          columnId: columnId,
+          workspaceId: finalWorkspaceId,
+          _id: { $ne: id }  // Exclure la tâche qu'on déplace
+        }).sort('position');
+        
+        console.log('📊 [moveTask] Tâches de la colonne cible AVANT update (sans la tâche déplacée):', {
+          columnId: columnId,
+          tasksCount: allTasksBeforeUpdate.length,
+          taskIds: allTasksBeforeUpdate.map(t => t._id.toString()),
+          excludedTaskId: id
+        });
+        
         // Préparer les updates
         const updates = {
           columnId: columnId,
@@ -751,20 +784,29 @@ const resolvers = {
         // Récupérer la tâche mise à jour
         task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
         
-        // Get all tasks in the target column, sorted by position
-        const allTasks = await Task.find({
-          boardId: task.boardId,
-          columnId: columnId,
-          workspaceId: finalWorkspaceId
-        }).sort('position');
+        // Utiliser les tâches récupérées AVANT la mise à jour (déjà sans la tâche déplacée)
+        let allTasks = allTasksBeforeUpdate;
         
-        // Créer un nouvel ordre avec la tâche à sa nouvelle position
-        const tasksWithoutMoved = allTasks.filter(t => t._id.toString() !== id);
+        console.log('📊 [moveTask] Avant réorganisation:', {
+          taskId: id,
+          targetPosition: position,
+          tasksInColumn: allTasks.length,
+          taskIds: allTasks.map(t => ({ id: t._id.toString(), pos: t.position }))
+        });
+        
+        // Insérer la tâche à la position spécifiée
+        // allTasks ne contient déjà pas la tâche déplacée, donc on peut insérer directement
         const reorderedTasks = [
-          ...tasksWithoutMoved.slice(0, position),
+          ...allTasks.slice(0, position),
           task,
-          ...tasksWithoutMoved.slice(position)
+          ...allTasks.slice(position)
         ];
+        
+        console.log('📊 [moveTask] Après réorganisation:', {
+          taskId: id,
+          newPosition: reorderedTasks.findIndex(t => t._id.toString() === id),
+          reorderedTaskIds: reorderedTasks.map((t, idx) => ({ id: t._id.toString(), idx }))
+        });
         
         // Update positions of all tasks in the column
         const updatePromises = [];
@@ -780,13 +822,21 @@ const resolvers = {
         
         await Promise.all(updatePromises);
         
-        // Publier l'événement de déplacement de tâche
-        safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
-          type: 'MOVED',
-          task: task,
-          boardId: task.boardId,
-          workspaceId: finalWorkspaceId
-        }, 'Tâche déplacée');
+        // Publier un événement pour CHAQUE tâche réorganisée
+        for (const reorderedTask of reorderedTasks) {
+          const updatedTask = await Task.findOne({ _id: reorderedTask._id });
+          console.log('📢 [moveTask] Publication événement:', {
+            taskId: updatedTask._id.toString(),
+            position: updatedTask.position,
+            columnId: updatedTask.columnId
+          });
+          safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
+            type: 'MOVED',
+            task: updatedTask,
+            boardId: task.boardId,
+            workspaceId: finalWorkspaceId
+          }, 'Tâche déplacée');
+        }
         
         return task;
       } catch (error) {
