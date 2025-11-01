@@ -274,18 +274,39 @@ const quoteResolvers = {
     createQuote: requireCompanyInfo(
       isAuthenticated(
         async (_, { workspaceId, input }, { user }) => {
-        // Utiliser le préfixe fourni ou 'D' par défaut
-        const prefix = input.prefix || "D";
+        console.log('🔍 [createQuote] Input received:', { prefix: input.prefix, number: input.number, status: input.status });
+        
+        // Utiliser le préfixe fourni, ou celui du dernier devis, ou 'D' par défaut
+        let prefix = input.prefix;
+        
+        if (!prefix) {
+          // Chercher le dernier devis créé pour récupérer son préfixe
+          const lastQuote = await Quote.findOne({ workspaceId })
+            .sort({ createdAt: -1 })
+            .select('prefix')
+            .lean();
+          
+          if (lastQuote && lastQuote.prefix) {
+            prefix = lastQuote.prefix;
+          } else {
+            // Aucun devis existant, utiliser le préfixe par défaut
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            prefix = `D-${month}${year}`;
+          }
+        }
 
         // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
         // Vérifie tous les numéros existants et trouve le premier trou disponible
+        // Le préfixe n'affecte PAS la numérotation - la séquence est globale
         const forceSequentialNumber = async () => {
-          // Debug: Log des paramètres de recherche
+          console.log('🔍 [forceSequentialNumber] Searching for quotes in workspace:', workspaceId);
 
           // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
+          // NE PAS filtrer par préfixe - la numérotation est globale
           const officialQuotes = await Quote.find(
             {
-              prefix,
               status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
               workspaceId,
               createdBy: user.id,
@@ -297,8 +318,12 @@ const quoteResolvers = {
             .sort({ number: 1 })
             .lean(); // Tri croissant
 
+          console.log('🔍 [forceSequentialNumber] Found quotes:', officialQuotes.length);
+          console.log('🔍 [forceSequentialNumber] Quote numbers:', officialQuotes.map(q => q.number));
+
           // Si aucun devis officiel n'existe, commencer à 1
           if (officialQuotes.length === 0) {
+            console.log('⚠️ [forceSequentialNumber] No quotes found, returning 000001');
             return "000001";
           }
 
@@ -310,6 +335,8 @@ const quoteResolvers = {
           // Prendre le plus grand numéro et ajouter 1
           const maxNumber = Math.max(...numbers);
           const nextNumber = maxNumber + 1;
+
+          console.log('✅ [forceSequentialNumber] Max number:', maxNumber, '→ Next number:', nextNumber);
 
           // Formater avec des zéros à gauche (6 chiffres)
           return String(nextNumber).padStart(6, "0");
@@ -387,12 +414,26 @@ const quoteResolvers = {
             number = input.number;
           }
         } else if (input.number) {
-          // Ce n'est pas le premier devis, on ignore le numéro fourni et on en génère un nouveau
-
-          if (input.status === "PENDING") {
+          // Ce n'est pas le premier devis
+          // Pour les brouillons, utiliser le numéro fourni comme manualNumber pour maintenir la séquence
+          if (input.status === "DRAFT") {
+            number = await generateQuoteNumber(prefix, {
+              isDraft: true,
+              manualNumber: input.number,
+              workspaceId,
+              userId: user.id,
+            });
+            console.log('✅ [createQuote] Generated number for DRAFT:', number);
+          } else if (input.status === "PENDING") {
             number = await forceSequentialNumber();
+            console.log('✅ [createQuote] Generated number for PENDING:', number);
           } else {
-            number = await generateQuoteNumber(prefix, { userId: user.id });
+            // Pour les autres statuts, générer un numéro séquentiel
+            number = await generateQuoteNumber(prefix, {
+              workspaceId,
+              userId: user.id,
+            });
+            console.log('✅ [createQuote] Generated number for other status:', number);
           }
         } else {
           // Aucun numéro fourni, on en génère un nouveau
@@ -676,11 +717,30 @@ const quoteResolvers = {
 
       // Si le devis passe de DRAFT à PENDING, générer un nouveau numéro séquentiel
       if (quote.status === "DRAFT" && status === "PENDING") {
-        // Conserver l'ancien préfixe ou utiliser le préfixe standard
+        // Récupérer le préfixe du dernier devis créé (non-DRAFT)
+        const lastQuote = await Quote.findOne({
+          workspaceId: quote.workspaceId,
+          status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
+        })
+          .sort({ createdAt: -1 })
+          .select('prefix')
+          .lean();
+        
+        // Définir l'année et la date pour les fonctions de génération de numéro
         const now = new Date();
         const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const prefix = quote.prefix || `D-${year}${month}-`;
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        
+        let prefix;
+        if (lastQuote && lastQuote.prefix) {
+          // Utiliser le préfixe du dernier devis
+          prefix = lastQuote.prefix;
+        } else {
+          // Aucun devis existant, utiliser le préfixe par défaut
+          prefix = `D-${month}${year}-`;
+        }
+        
+        console.log('🔍 [changeQuoteStatus] DRAFT → PENDING, prefix:', prefix);
 
         // Sauvegarder le numéro original avant modification
         const originalDraftNumber = quote.number;

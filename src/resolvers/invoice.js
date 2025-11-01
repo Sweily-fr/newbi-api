@@ -336,11 +336,26 @@ const invoiceResolvers = {
           throw new Error("Informations d'entreprise non configurées");
         }
 
-        // Utiliser le préfixe fourni ou générer un préfixe par défaut
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const prefix = input.prefix || `F-${year}${month}-`;
+        // Utiliser le préfixe fourni, ou celui de la dernière facture, ou générer un préfixe par défaut
+        let prefix = input.prefix;
+        
+        if (!prefix) {
+          // Chercher la dernière facture créée pour récupérer son préfixe
+          const lastInvoice = await Invoice.findOne({ workspaceId })
+            .sort({ createdAt: -1 })
+            .select('prefix')
+            .lean();
+          
+          if (lastInvoice && lastInvoice.prefix) {
+            prefix = lastInvoice.prefix;
+          } else {
+            // Aucune facture existante, générer le préfixe par défaut
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            prefix = `F-${month}${year}`;
+          }
+        }
 
         // Fonction pour gérer les conflits de brouillons
         const handleDraftConflicts = async (newNumber) => {
@@ -756,7 +771,7 @@ const invoiceResolvers = {
           const now = new Date();
           const year = now.getFullYear();
           const month = String(now.getMonth() + 1).padStart(2, "0");
-          const prefix = invoiceData.prefix || `F-${year}${month}-`;
+          const prefix = invoiceData.prefix || `F-${month}${year}`;
 
           // Utiliser generateInvoiceNumber pour générer le prochain numéro séquentiel
           // Cela garantit que le numéro est unique et suit la séquence correcte
@@ -1042,11 +1057,30 @@ const invoiceResolvers = {
           invoice.number = tempNumber;
           await invoice.save();
 
-          // Utiliser la logique de validation de brouillon
+          // Récupérer le préfixe de la dernière facture créée (non-DRAFT)
+          const lastInvoice = await Invoice.findOne({
+            workspaceId: workspaceId,
+            status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
+          })
+            .sort({ createdAt: -1 })
+            .select('prefix')
+            .lean();
+          
+          // Définir l'année et la date pour les fonctions de génération de numéro
           const now = new Date();
           const year = now.getFullYear();
-          const month = String(now.getMonth() + 1).padStart(2, "0");
-          const prefix = `F-${year}${month}-`;
+          const month = String(now.getMonth() + 1).padStart(2, '0');
+          
+          let prefix;
+          if (lastInvoice && lastInvoice.prefix) {
+            // Utiliser le préfixe de la dernière facture
+            prefix = lastInvoice.prefix;
+          } else {
+            // Aucune facture existante, utiliser le préfixe par défaut
+            prefix = `F-${month}${year}`;
+          }
+          
+          console.log('🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:', prefix);
 
           // Utiliser la fonction handleDraftValidation pour respecter la séquence
           const newNumber = await generateInvoiceNumber(prefix, {

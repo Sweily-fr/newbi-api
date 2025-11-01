@@ -246,12 +246,13 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
 
 /**
  * Génère un numéro séquentiel pour les devis (logique simplifiée)
+ * Le préfixe n'affecte PAS la numérotation - la séquence est globale
  */
 const generateQuoteSequentialNumber = async (prefix, options = {}) => {
   const currentYear = options.year || new Date().getFullYear();
   
+  // Ne PAS filtrer par préfixe - la numérotation est globale
   const query = {
-    prefix: { $regex: '^D-' },
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
     $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
@@ -262,10 +263,16 @@ const generateQuoteSequentialNumber = async (prefix, options = {}) => {
     query.createdBy = options.userId;
   }
   
-  const lastQuote = await Quote.findOne(query, { number: 1 }).sort({ number: -1 });
+  // Récupérer tous les devis finalisés pour trouver le plus grand numéro
+  const quotes = await Quote.find(query, { number: 1 }).lean();
+  
+  console.log('🔍 [generateQuoteSequentialNumber] Query:', JSON.stringify(query));
+  console.log('🔍 [generateQuoteSequentialNumber] Found quotes:', quotes.length);
+  console.log('🔍 [generateQuoteSequentialNumber] Quote numbers:', quotes.map(q => q.number));
   
   // If no finalized quotes exist, check if this is the first quote being finalized
-  if (!lastQuote) {
+  if (!quotes || quotes.length === 0) {
+    console.log('⚠️ [generateQuoteSequentialNumber] No quotes found, returning 000001');
     // If we have a manual number from a draft being finalized, use it as the starting point
     if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
       return options.manualNumber;
@@ -273,12 +280,28 @@ const generateQuoteSequentialNumber = async (prefix, options = {}) => {
     return '000001';
   }
   
-  let lastNumber = 0;
-  if (/^\d+$/.test(lastQuote.number)) {
-    lastNumber = parseInt(lastQuote.number, 10);
+  // Extraire tous les numéros numériques et trouver le maximum
+  const numericNumbers = quotes
+    .map(quote => {
+      // Ignorer les numéros avec préfixes DRAFT- ou TEMP-
+      if (quote.number && /^\d+$/.test(quote.number)) {
+        return parseInt(quote.number, 10);
+      }
+      return null;
+    })
+    .filter(num => num !== null);
+  
+  console.log('🔍 [generateQuoteSequentialNumber] Numeric numbers:', numericNumbers);
+  
+  if (numericNumbers.length === 0) {
+    console.log('⚠️ [generateQuoteSequentialNumber] No numeric numbers found, returning 000001');
+    return '000001';
   }
   
-  return String(lastNumber + 1).padStart(6, '0');
+  const lastNumber = Math.max(...numericNumbers);
+  const nextNumber = String(lastNumber + 1).padStart(6, '0');
+  console.log('✅ [generateQuoteSequentialNumber] Last number:', lastNumber, '→ Next number:', nextNumber);
+  return nextNumber;
 };
 
 const generateInvoiceNumber = async (customPrefix, options = {}) => {
@@ -292,7 +315,7 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    prefix = `F-${year}${month}-`;
+    prefix = `F-${month}${year}`;
   }
   
   // Gestion des brouillons
@@ -412,7 +435,7 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    prefix = `D-${year}${month}-`;
+    prefix = `D-${month}${year}`;
   }
   
   // Gestion des brouillons
