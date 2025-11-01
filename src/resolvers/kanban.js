@@ -822,21 +822,10 @@ const resolvers = {
         
         await Promise.all(updatePromises);
         
-        // Publier un événement pour CHAQUE tâche réorganisée
-        for (const reorderedTask of reorderedTasks) {
-          const updatedTask = await Task.findOne({ _id: reorderedTask._id });
-          console.log('📢 [moveTask] Publication événement:', {
-            taskId: updatedTask._id.toString(),
-            position: updatedTask.position,
-            columnId: updatedTask.columnId
-          });
-          safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
-            type: 'MOVED',
-            task: updatedTask,
-            boardId: task.boardId,
-            workspaceId: finalWorkspaceId
-          }, 'Tâche déplacée');
-        }
+        // NOTE: On ne publie PAS d'événements MOVED car le frontend les ignore pendant le drag
+        // Le frontend gère l'optimistic update directement sur localColumns
+        // Les données du serveur seront récupérées via la query Apollo après le drag
+        console.log('✅ [moveTask] Tâches réorganisées avec succès (pas de publication WebSocket)');
         
         return task;
       } catch (error) {
