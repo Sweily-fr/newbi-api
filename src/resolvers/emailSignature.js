@@ -7,6 +7,24 @@ import {
 } from "../utils/errors.js";
 import { deleteFile } from "../utils/fileUpload.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { getPubSub } from "../config/redis.js";
+import logger from "../utils/logger.js";
+
+// Événement de subscription
+const SIGNATURE_UPDATED = 'SIGNATURE_UPDATED';
+
+// Fonction utilitaire pour publier en toute sécurité
+const safePublish = (channel, payload, context = '') => {
+  try {
+    const pubsub = getPubSub();
+    pubsub.publish(channel, payload).catch(error => {
+      logger.error(`❌ [Signatures] Erreur publication ${context}:`, error);
+    });
+    logger.debug(`📢 [Signatures] ${context} publié sur ${channel}`);
+  } catch (error) {
+    logger.error(`❌ [Signatures] Erreur getPubSub ${context}:`, error);
+  }
+};
 
 const emailSignatureResolvers = {
   Query: {
@@ -211,6 +229,13 @@ const emailSignatureResolvers = {
           throw new Error("Aucune signature trouvée à supprimer");
         }
 
+        // Publier l'événement de suppression
+        safePublish(`${SIGNATURE_UPDATED}_${user.id}`, {
+          type: 'DELETED',
+          signatureId: id,
+          workspaceId: user.activeOrganizationId || user.id,
+        }, `Signature supprimée: ${id}`);
+
         return true;
       } catch (error) {
         console.error(`❌ [BACKEND] Erreur lors de la suppression:`, error);
@@ -281,6 +306,16 @@ const emailSignatureResolvers = {
           console.log(
             `✅ [BACKEND] ${deleteResult.deletedCount} signatures supprimées`
           );
+
+          // 5. Publier les événements de suppression pour chaque signature
+          ids.forEach((signatureId) => {
+            safePublish(`${SIGNATURE_UPDATED}_${user.id}`, {
+              type: 'DELETED',
+              signatureId,
+              workspaceId: user.activeOrganizationId || user.id,
+            }, `Signature supprimée: ${signatureId}`);
+          });
+
           return deleteResult.deletedCount;
         } catch (error) {
           console.error(
@@ -372,6 +407,24 @@ const emailSignatureResolvers = {
       }
     }),
   },
+
+  Subscription: {
+    signatureUpdated: {
+      subscribe: isAuthenticated((_, {}, { user }) => {
+        try {
+          const pubsub = getPubSub();
+          // Chaque utilisateur s'abonne à ses propres mises à jour de signatures
+          return pubsub.asyncIterableIterator([`${SIGNATURE_UPDATED}_${user.id}`]);
+        } catch (error) {
+          logger.error('❌ [Signatures] Erreur subscription signatureUpdated:', error);
+          throw new Error('Subscription failed');
+        }
+      }),
+      resolve: (payload) => {
+        return payload;
+      }
+    }
+  }
 };
 
 export default emailSignatureResolvers;

@@ -409,3 +409,15 @@ extend type Mutation {
   # Nettoyer les fichiers temporaires sur Cloudflare
   cleanupTemporaryFiles(userId: String!, newSignatureId: String): CleanupResult!
 }
+
+extend type Subscription {
+  # Subscription pour les mises à jour temps réel des signatures
+  signatureUpdated: SignatureUpdateEvent!
+}
+
+type SignatureUpdateEvent {
+  type: String! # CREATED, UPDATED, DELETED
+  signature: EmailSignature
+  signatureId: ID
+  workspaceId: ID!
+}
