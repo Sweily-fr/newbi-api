@@ -703,6 +703,7 @@ const resolvers = {
         // Publier l'événement de suppression de tâche
         safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
           type: 'DELETED',
+          task: task,
           taskId: id,
           boardId: task.boardId,
           workspaceId: finalWorkspaceId
