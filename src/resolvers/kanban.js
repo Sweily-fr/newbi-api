@@ -1125,13 +1125,10 @@ const resolvers = {
           throw new Error('Subscription failed');
         }
       }),
-      resolve: (payload, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        // Filtrer les événements par workspace et board
-        if (payload.workspaceId === finalWorkspaceId && payload.boardId === boardId) {
-          return payload;
-        }
-        return null;
+      resolve: (payload) => {
+        // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique
+        // Toujours retourner le payload car il vient du bon canal
+        return payload;
       }
     },
 
@@ -1147,13 +1144,10 @@ const resolvers = {
           throw new Error('Subscription failed');
         }
       }),
-      resolve: (payload, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        // Filtrer les événements par workspace et board
-        if (payload.workspaceId === finalWorkspaceId && payload.boardId === boardId) {
-          return payload;
-        }
-        return null;
+      resolve: (payload) => {
+        // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique
+        // Toujours retourner le payload car il vient du bon canal
+        return payload;
       }
     }
   }

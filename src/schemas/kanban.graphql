@@ -214,7 +214,7 @@ type BoardUpdatePayload {
 
 type TaskUpdatePayload {
   type: String!
-  task: Task
+  task: Task!
   taskId: ID
   boardId: ID!
   workspaceId: ID!
