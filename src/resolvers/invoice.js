@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import Quote from "../models/Quote.js";
 import Event from "../models/Event.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { withRBAC, requireWrite, requireRead, requireDelete } from "../middlewares/rbac.js";
 import { requireCompanyInfo } from "../middlewares/company-info-guard.js";
 import { generateInvoiceNumber } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
@@ -15,55 +16,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 
-/**
- * Wrapper pour les resolvers nécessitant un workspace
- * Vérifie que l'utilisateur a accès au workspace et les permissions nécessaires
- * @param {Function} resolver - Resolver GraphQL à exécuter
- * @param {String} requiredPermission - Permission requise (read, write, admin)
- * @returns {Function} - Resolver avec vérification de workspace
- */
-const withWorkspace = (resolver, requiredPermission = "read") => {
-  return isAuthenticated(async (parent, args, context, info) => {
-    try {
-      // Récupérer le workspaceId depuis les arguments ou le contexte
-      const workspaceId = args.workspaceId || context.workspaceId;
-      if (!workspaceId)
-        throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
-
-      // Pour l'instant, on assume que l'utilisateur est propriétaire/admin du workspace
-      // car Better Auth gère l'authentification et l'accès aux workspaces
-      // TODO: Récupérer le vrai rôle depuis Better Auth ou la base de données
-
-      // Créer l'objet workspace avec les permissions basées sur le rôle
-      // Par défaut, on donne les permissions d'admin/owner pour éviter les erreurs
-      const workspace = {
-        id: workspaceId,
-        role: "owner", // Par défaut owner, à récupérer depuis Better Auth
-        permissions: {
-          canRead: true,
-          canWrite: true,
-          canDelete: true,
-          canAdmin: true,
-        },
-      };
-
-      // Enrichir le contexte avec le workspaceId et les informations du workspace
-      const enrichedContext = {
-        ...context,
-        workspaceId,
-        workspace,
-      };
-
-      return await resolver(parent, args, enrichedContext, info);
-    } catch (error) {
-      console.error(
-        `Erreur dans withWorkspace pour ${resolver.name || "unknown"}:`,
-        error.message
-      );
-      throw error;
-    }
-  });
-};
+// ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
 /**
  * Calcule les totaux d'une facture
@@ -154,7 +107,7 @@ const calculateInvoiceTotals = (
 
 const invoiceResolvers = {
   Query: {
-    invoice: withWorkspace(async (_, { id, workspaceId }, context) => {
+    invoice: requireRead("invoices")(async (_, { id, workspaceId }, context) => {
       const invoice = await Invoice.findOne({
         _id: id,
         workspaceId: workspaceId, // ✅ Filtrage par workspace au lieu de createdBy
@@ -163,7 +116,7 @@ const invoiceResolvers = {
       return invoice;
     }),
 
-    invoices: withWorkspace(
+    invoices: requireRead("invoices")(
       async (
         _,
         {
@@ -206,8 +159,9 @@ const invoiceResolvers = {
         }
 
         // ✅ Filtrage par rôle utilisateur dans le workspace
-        if (workspace.role === "guest") {
-          // Les invités ne voient que leurs propres factures
+        const { userRole } = context;
+        if (userRole === "viewer") {
+          // Les viewers ne voient que leurs propres factures
           query.createdBy = user._id;
         }
         // Les membres et admins voient toutes les factures du workspace
@@ -229,16 +183,16 @@ const invoiceResolvers = {
       }
     ),
 
-    invoiceStats: withWorkspace(async (_, { workspaceId }, context) => {
-      const { workspace, user } = context;
+    invoiceStats: requireRead("invoices")(async (_, { workspaceId }, context) => {
+      const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
       // Base match avec workspaceId
       let matchQuery = {
         workspaceId: new mongoose.Types.ObjectId(workspaceId),
       };
 
-      // Filtrage par rôle si nécessaire
-      if (workspace.role === "guest") {
+      // Filtrage par rôle si nécessaire (viewer voit seulement ses propres factures)
+      if (userRole === "viewer") {
         matchQuery.createdBy = new mongoose.Types.ObjectId(user._id);
       }
 
@@ -288,7 +242,7 @@ const invoiceResolvers = {
       );
     }),
 
-    nextInvoiceNumber: withWorkspace(
+    nextInvoiceNumber: requireRead("invoices")(
       async (_, { workspaceId, prefix, isDraft }, context) => {
         const { user } = context || {};
         if (!user) {
@@ -319,16 +273,10 @@ const invoiceResolvers = {
 
   Mutation: {
     createInvoice: requireCompanyInfo(
-      withWorkspace(async (_, { workspaceId, input }, context) => {
-        const { user, workspace } = context;
+      requireWrite("invoices")(async (_, { workspaceId, input }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
 
-        // ✅ Vérifier les permissions d'écriture
-        if (!workspace.permissions.canWrite) {
-          throw new AppError(
-            "Permission d'\u00e9criture requise",
-            ERROR_CODES.FORBIDDEN
-          );
-        }
+        // ✅ Les permissions sont déjà vérifiées par requireWrite("invoices")
 
         // Récupérer les informations actuelles de l'entreprise de l'utilisateur
         const userWithCompany = await User.findById(user._id);
@@ -611,8 +559,8 @@ const invoiceResolvers = {
     ),
 
     updateInvoice: requireCompanyInfo(
-      withWorkspace(async (_, { id, workspaceId, input }, context) => {
-        const { user, workspace } = context;
+      requireWrite("invoices")(async (_, { id, workspaceId, input }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
 
         // Rechercher la facture sans utiliser Mongoose pour éviter les validations automatiques
         const invoiceData = await Invoice.findOne({
@@ -625,25 +573,21 @@ const invoiceResolvers = {
         }
 
         // ✅ Vérifications de permissions granulaires
+        const { userRole } = context;
         if (
-          workspace.role === "guest" &&
+          userRole === "viewer" &&
           invoiceData.createdBy.toString() !== user._id.toString()
         ) {
           throw new AppError(
-            "Vous ne pouvez modifier que vos propres factures",
+            "Permission refusée",
             ERROR_CODES.FORBIDDEN
           );
         }
 
-        if (!workspace.permissions.canWrite) {
-          throw new AppError(
-            "Permission d'\u00e9criture requise",
-            ERROR_CODES.FORBIDDEN
-          );
-        }
+        // ✅ Les permissions d'écriture sont déjà vérifiées par requireWrite("invoices")
 
         // Vérifier si la facture peut être modifiée (statut)
-        if (invoiceData.status === "COMPLETED" && workspace.role !== "admin") {
+        if (invoiceData.status === "COMPLETED" && userRole !== "admin" && userRole !== "owner") {
           throw createResourceLockedError("Cette facture est verrouillée");
         }
 
@@ -911,16 +855,10 @@ const invoiceResolvers = {
       })
     ),
 
-    deleteInvoice: withWorkspace(async (_, { id, workspaceId }, context) => {
-      const { workspace } = context;
+    deleteInvoice: requireDelete("invoices")(async (_, { id, workspaceId }, context) => {
+      const { user, workspaceId: contextWorkspaceId } = context;
 
-      // ✅ Seuls les admins peuvent supprimer
-      if (!workspace.permissions.canDelete) {
-        throw new AppError(
-          "Permission d'administrateur requise",
-          ERROR_CODES.FORBIDDEN
-        );
-      }
+      // ✅ Les permissions de suppression sont déjà vérifiées par requireDelete("invoices")
 
       const invoice = await Invoice.findOne({
         _id: id,
@@ -982,9 +920,9 @@ const invoiceResolvers = {
       return true;
     }),
 
-    changeInvoiceStatus: withWorkspace(
+    changeInvoiceStatus: requireWrite("invoices")(
       async (_, { id, workspaceId, status }, context) => {
-        const { user, workspace } = context;
+        const { user, workspaceId: contextWorkspaceId } = context;
 
         const invoice = await Invoice.findOne({
           _id: id,
@@ -996,8 +934,9 @@ const invoiceResolvers = {
         }
 
         // ✅ Vérifications de permissions
+        const { userRole } = context;
         if (
-          workspace.role === "guest" &&
+          userRole === "viewer" &&
           invoice.createdBy._id.toString() !== user._id.toString()
         ) {
           throw new AppError(
@@ -1006,12 +945,7 @@ const invoiceResolvers = {
           );
         }
 
-        if (!workspace.permissions.canWrite) {
-          throw new AppError(
-            "Permission d'\u00e9criture requise",
-            ERROR_CODES.FORBIDDEN
-          );
-        }
+        // ✅ Les permissions d'écriture sont déjà vérifiées par requireWrite("invoices")
 
         // Vérifier si le changement de statut est autorisé
         if (invoice.status === status) {
@@ -1104,9 +1038,9 @@ const invoiceResolvers = {
       }
     ),
 
-    markInvoiceAsPaid: withWorkspace(
+    markInvoiceAsPaid: requireWrite("invoices")(
       async (_, { id, workspaceId, paymentDate }, context) => {
-        const { user, workspace } = context;
+        const { user, workspaceId: contextWorkspaceId } = context;
 
         const invoice = await Invoice.findOne({
           _id: id,
@@ -1118,8 +1052,9 @@ const invoiceResolvers = {
         }
 
         // ✅ Vérifications de permissions
+        const { userRole } = context;
         if (
-          workspace.role === "guest" &&
+          userRole === "viewer" &&
           invoice.createdBy._id.toString() !== user._id.toString()
         ) {
           throw new AppError(
@@ -1128,12 +1063,7 @@ const invoiceResolvers = {
           );
         }
 
-        if (!workspace.permissions.canWrite) {
-          throw new AppError(
-            "Permission d'\u00e9criture requise",
-            ERROR_CODES.FORBIDDEN
-          );
-        }
+        // ✅ Les permissions d'écriture sont déjà vérifiées par requireWrite("invoices")
 
         // Vérifier si la facture peut être marquée comme payée
         if (invoice.status === "DRAFT") {
@@ -1174,7 +1104,8 @@ const invoiceResolvers = {
       }
     ),
 
-    sendInvoice: withWorkspace(async (_, { id, workspaceId }, { user }) => {
+    sendInvoice: requireWrite("invoices")(async (_, { id, workspaceId }, context) => {
+      const { user } = context;
       const invoice = await Invoice.findOne({ _id: id, workspaceId });
 
       if (!invoice) {
@@ -1188,12 +1119,13 @@ const invoiceResolvers = {
       return true;
     }),
 
-    createLinkedInvoice: withWorkspace(
+    createLinkedInvoice: requireWrite("invoices")(
       async (
         _,
         { quoteId, amount, isDeposit, workspaceId },
-        { user, workspace }
+        context
       ) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
         // Validation et conversion explicite du montant
         const numericAmount = parseFloat(amount);
         if (isNaN(numericAmount) || numericAmount <= 0) {
@@ -1435,8 +1367,9 @@ const invoiceResolvers = {
       }
     ),
 
-    deleteLinkedInvoice: withWorkspace(
-      async (_, { id, workspaceId }, { user }) => {
+    deleteLinkedInvoice: requireDelete("invoices")(
+      async (_, { id, workspaceId }, context) => {
+        const { user } = context;
         const invoice = await Invoice.findOne({ _id: id, workspaceId });
 
         if (!invoice) {
