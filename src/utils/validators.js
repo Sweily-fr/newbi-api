@@ -86,6 +86,7 @@ const ITEM_DESCRIPTION_REGEX =
 
 // Regex pour la validation des unités de mesure
 // Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)
+// Accepte 1-20 caractères OU une chaîne vide
 const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-²³]{1,20}$/;
 
 // Regex pour la validation des notes de pied de page
@@ -243,8 +244,9 @@ const isValidItemDescription = (description) => {
 };
 
 // Validation des unités de mesure
+// Accepte soit une chaîne vide, soit 1-20 caractères valides
 const isValidUnit = (unit) => {
-  return UNIT_REGEX.test(unit);
+  return unit === '' || UNIT_REGEX.test(unit);
 };
 
 // Validation des notes de pied de page

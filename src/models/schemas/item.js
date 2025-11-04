@@ -67,7 +67,7 @@ const itemSchema = new mongoose.Schema({
   unit: {
     type: String,
     trim: true,
-    default: 'unité',
+    default: '',
     validate: {
       validator: isValidUnit,
       message: 'L\'unité contient des caractères non autorisés ou dépasse 20 caractères'
