@@ -703,6 +703,7 @@ const resolvers = {
         // Publier l'événement de suppression de tâche
         safePublish(`${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`, {
           type: 'DELETED',
+          task: task,
           taskId: id,
           boardId: task.boardId,
           workspaceId: finalWorkspaceId
@@ -808,7 +809,7 @@ const resolvers = {
           reorderedTaskIds: reorderedTasks.map((t, idx) => ({ id: t._id.toString(), idx }))
         });
         
-        // Update positions of all tasks in the column
+        // Update positions of all tasks in the DESTINATION column
         const updatePromises = [];
         
         for (let i = 0; i < reorderedTasks.length; i++) {
@@ -818,6 +819,37 @@ const resolvers = {
               { $set: { position: i, updatedAt: new Date() } }
             )
           );
+        }
+        
+        // Si la tâche a changé de colonne, recalculer aussi les positions dans la SOURCE
+        if (oldColumnId !== columnId) {
+          console.log('📊 [moveTask] Recalcul positions colonne source:', {
+            oldColumnId,
+            newColumnId: columnId
+          });
+          
+          // Récupérer toutes les tâches restantes dans la colonne source
+          const sourceColumnTasks = await Task.find({
+            boardId: task.boardId,
+            columnId: oldColumnId,
+            workspaceId: finalWorkspaceId,
+            _id: { $ne: id }  // Exclure la tâche qu'on vient de déplacer
+          }).sort('position');
+          
+          // Recalculer les positions dans la source (0, 1, 2, ...)
+          for (let i = 0; i < sourceColumnTasks.length; i++) {
+            updatePromises.push(
+              Task.updateOne(
+                { _id: sourceColumnTasks[i]._id },
+                { $set: { position: i, updatedAt: new Date() } }
+              )
+            );
+          }
+          
+          console.log('📊 [moveTask] Positions recalculées colonne source:', {
+            tasksCount: sourceColumnTasks.length,
+            taskIds: sourceColumnTasks.map(t => t._id.toString())
+          });
         }
         
         await Promise.all(updatePromises);
@@ -1125,13 +1157,10 @@ const resolvers = {
           throw new Error('Subscription failed');
         }
       }),
-      resolve: (payload, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        // Filtrer les événements par workspace et board
-        if (payload.workspaceId === finalWorkspaceId && payload.boardId === boardId) {
-          return payload;
-        }
-        return null;
+      resolve: (payload) => {
+        // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique
+        // Toujours retourner le payload car il vient du bon canal
+        return payload;
       }
     },
 
@@ -1147,13 +1176,10 @@ const resolvers = {
           throw new Error('Subscription failed');
         }
       }),
-      resolve: (payload, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        // Filtrer les événements par workspace et board
-        if (payload.workspaceId === finalWorkspaceId && payload.boardId === boardId) {
-          return payload;
-        }
-        return null;
+      resolve: (payload) => {
+        // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique
+        // Toujours retourner le payload car il vient du bon canal
+        return payload;
       }
     }
   }

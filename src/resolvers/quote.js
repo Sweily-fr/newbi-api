@@ -3,6 +3,7 @@ import Quote from "../models/Quote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { withRBAC, requireWrite, requireRead, requireDelete } from "../middlewares/rbac.js";
 import {
   generateQuoteNumber,
   generateInvoiceNumber,
@@ -116,7 +117,8 @@ const quoteResolvers = {
     },
   },
   Query: {
-    quote: isAuthenticated(async (_, { workspaceId, id }, { user }) => {
+    quote: requireRead("quotes")(async (_, { workspaceId, id }, context) => {
+      const { user } = context;
       const quote = await Quote.findOne({ _id: id, workspaceId })
         .populate("createdBy")
         .populate("convertedToInvoice");
@@ -125,7 +127,7 @@ const quoteResolvers = {
       return quote;
     }),
 
-    quotes: isAuthenticated(
+    quotes: requireRead("quotes")(
       async (
         _,
         {
@@ -185,7 +187,8 @@ const quoteResolvers = {
       }
     ),
 
-    quoteStats: isAuthenticated(async (_, { workspaceId }, { user }) => {
+    quoteStats: requireRead("quotes")(async (_, { workspaceId }, context) => {
+      const { user } = context;
       const [stats] = await Quote.aggregate([
         { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
         {
@@ -257,7 +260,7 @@ const quoteResolvers = {
       return defaultStats;
     }),
 
-    nextQuoteNumber: isAuthenticated(
+    nextQuoteNumber: requireRead("quotes")(
       async (_, { workspaceId, prefix }, { user }) => {
         // Récupérer le préfixe personnalisé de l'utilisateur ou utiliser le format par défaut
         const userObj = await mongoose.model("User").findById(user.id);
@@ -272,8 +275,9 @@ const quoteResolvers = {
 
   Mutation: {
     createQuote: requireCompanyInfo(
-      isAuthenticated(
-        async (_, { workspaceId, input }, { user }) => {
+      requireWrite("quotes")(
+        async (_, { workspaceId, input }, context) => {
+        const { user } = context;
         console.log('🔍 [createQuote] Input received:', { prefix: input.prefix, number: input.number, status: input.status });
         
         // Utiliser le préfixe fourni, ou celui du dernier devis, ou 'D' par défaut
@@ -590,7 +594,8 @@ const quoteResolvers = {
     ),
 
     updateQuote: requireCompanyInfo(
-      isAuthenticated(async (_, { id, input }, { user }) => {
+      requireWrite("quotes")(async (_, { id, input }, context) => {
+      const { user, workspaceId } = context;
       const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
       if (!quote) {
@@ -665,7 +670,8 @@ const quoteResolvers = {
     ),
 
     deleteQuote: requireCompanyInfo(
-      isAuthenticated(async (_, { id }, { user }) => {
+      requireDelete("quotes")(async (_, { id }, context) => {
+      const { user, workspaceId } = context;
       const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
       if (!quote) {
@@ -692,7 +698,8 @@ const quoteResolvers = {
     ),
 
     changeQuoteStatus: requireCompanyInfo(
-      isAuthenticated(async (_, { id, status }, { user }) => {
+      requireWrite("quotes")(async (_, { id, status }, context) => {
+      const { user } = context;
       const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
       if (!quote) {
@@ -833,8 +840,9 @@ const quoteResolvers = {
       })
     ),
 
-    convertQuoteToInvoice: isAuthenticated(
-      async (_, { id, distribution, isDeposit, skipValidation }, { user }) => {
+    convertQuoteToInvoice: requireWrite("quotes")(
+      async (_, { id, distribution, isDeposit, skipValidation }, context) => {
+        const { user } = context;
         const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
         if (!quote) {
@@ -1249,7 +1257,8 @@ const quoteResolvers = {
       }
     ),
 
-    sendQuote: isAuthenticated(async (_, { id /* email */ }, { user }) => {
+    sendQuote: requireWrite("quotes")(async (_, { id /* email */ }, context) => {
+      const { user } = context;
       const quote = await Quote.findOne({ _id: id, createdBy: user.id });
 
       if (!quote) {
