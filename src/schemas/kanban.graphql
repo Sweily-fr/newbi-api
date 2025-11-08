@@ -53,6 +53,7 @@ type Task {
   status: String!
   priority: String
   tags: [Tag!]
+  startDate: DateTime
   dueDate: DateTime
   boardId: ID!
   columnId: String!
@@ -112,6 +113,7 @@ input CreateTaskInput {
   status: String!
   priority: String
   tags: [TagInput!]
+  startDate: DateTime
   dueDate: DateTime
   boardId: ID!
   columnId: String!
@@ -127,6 +129,7 @@ input UpdateTaskInput {
   status: String
   priority: String
   tags: [TagInput!]
+  startDate: DateTime
   dueDate: DateTime
   columnId: String
   position: Int

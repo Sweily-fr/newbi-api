@@ -232,7 +232,7 @@ const resolvers = {
       
       // Créer automatiquement les 4 colonnes par défaut
       const defaultColumns = [
-        { title: 'À faire', color: '#ef4444', order: 0 },
+        { title: 'À faire', color: '#8E8E93', order: 0 },
         { title: 'En cours', color: '#f59e0b', order: 1 },
         { title: 'En attente', color: '#8b5cf6', order: 2 },
         { title: 'Terminées', color: '#10b981', order: 3 }
@@ -538,6 +538,15 @@ const resolvers = {
       if (updates.priority !== undefined && updates.priority !== oldTask.priority) {
         const priorityLabels = { low: 'Basse', medium: 'Moyenne', high: 'Haute' };
         changes.push(`la priorité (${priorityLabels[updates.priority] || updates.priority})`);
+      }
+      
+      // Date de début modifiée
+      if (updates.startDate !== undefined) {
+        const oldDate = oldTask.startDate ? new Date(oldTask.startDate).toISOString() : null;
+        const newDate = updates.startDate ? new Date(updates.startDate).toISOString() : null;
+        if (oldDate !== newDate) {
+          changes.push(updates.startDate ? 'la date de début' : 'supprimé la date de début');
+        }
       }
       
       // Date d'échéance modifiée

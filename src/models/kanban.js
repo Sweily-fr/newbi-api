@@ -149,11 +149,12 @@ const taskSchema = new mongoose.Schema({
   priority: {
     type: String,
     enum: {
-      values: ['low', 'medium', 'high'],
-      message: 'La priorité doit être low, medium ou high'
+      values: ['low', 'medium', 'high', ''],
+      message: 'La priorité doit être low, medium, high ou vide'
     }
   },
   tags: [tagSchema],
+  startDate: Date,
   dueDate: Date,
   boardId: { 
     type: mongoose.Schema.Types.ObjectId, 
