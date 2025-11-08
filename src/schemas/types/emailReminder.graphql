@@ -1,0 +1,94 @@
+type EmailReminder {
+  enabled: Boolean!
+  anticipation: String
+  sentAt: String
+  status: String!
+  scheduledFor: String
+  failureReason: String
+}
+
+input EmailReminderInput {
+  enabled: Boolean!
+  anticipation: String
+}
+
+type EmailPreferences {
+  enabled: Boolean!
+  types: [String!]!
+  doNotDisturb: DoNotDisturbPreferences
+}
+
+type DoNotDisturbPreferences {
+  weekday: TimePeriod!
+  weekend: TimePeriod!
+}
+
+type TimePeriod {
+  start: String!
+  end: String!
+}
+
+input EmailPreferencesInput {
+  enabled: Boolean!
+  types: [String!]
+  doNotDisturb: DoNotDisturbInput
+}
+
+input DoNotDisturbInput {
+  weekday: TimePeriodInput
+  weekend: TimePeriodInput
+}
+
+input TimePeriodInput {
+  start: String!
+  end: String!
+}
+
+type EmailLog {
+  id: ID!
+  eventId: ID!
+  workspaceId: ID!
+  recipientEmail: String!
+  recipientUserId: ID!
+  reminderType: String!
+  anticipation: String
+  status: String!
+  sentAt: String!
+  scheduledFor: String!
+  failureReason: String
+  deferredReason: String
+  eventSnapshot: EventSnapshot
+  createdAt: String!
+}
+
+type EventSnapshot {
+  title: String!
+  description: String
+  start: String!
+  end: String!
+}
+
+type EmailLogsResponse {
+  logs: [EmailLog!]!
+  totalCount: Int!
+  hasMore: Boolean!
+}
+
+type Query {
+  getEmailPreferences: EmailPreferences!
+  getEmailLogs(
+    workspaceId: ID!
+    status: String
+    limit: Int
+    offset: Int
+  ): EmailLogsResponse!
+  testEmailReminder(eventId: ID!): GenericResponse!
+}
+
+type Mutation {
+  updateEmailPreferences(
+    input: EmailPreferencesInput!
+  ): GenericResponse!
+  
+  sendTestEmail: GenericResponse!
+}
