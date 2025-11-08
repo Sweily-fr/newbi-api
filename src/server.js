@@ -54,6 +54,7 @@ import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
+import emailReminderScheduler from "./services/emailReminderScheduler.js";
 
 // Connexion à MongoDB
 mongoose
@@ -271,12 +272,16 @@ async function startServer() {
       `🔌 WebSocket subscriptions sur ws://localhost:${PORT}/graphql`
     );
     setupScheduledJobs();
+    
+    // Démarrer le scheduler de rappels email
+    emailReminderScheduler.start();
   });
 
   // Nettoyage propre à l'arrêt
   process.on('SIGTERM', async () => {
     logger.info('🛑 Arrêt du serveur en cours...');
     try {
+      emailReminderScheduler.stop();
       subscriptionServer.close();
       await closeRedis();
       logger.info('✅ Serveur arrêté proprement');
@@ -289,6 +294,7 @@ async function startServer() {
   process.on('SIGINT', async () => {
     logger.info('🛑 Interruption du serveur (Ctrl+C)...');
     try {
+      emailReminderScheduler.stop();
       subscriptionServer.close();
       await closeRedis();
       logger.info('✅ Serveur arrêté proprement');

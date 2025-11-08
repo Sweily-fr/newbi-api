@@ -52,6 +52,11 @@ type Appearance {
   headerBgColor: String
 }
 
+type GenericResponse {
+  success: Boolean!
+  message: String
+}
+
 type Company {
   name: String
   email: String

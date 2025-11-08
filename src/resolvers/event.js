@@ -1,6 +1,7 @@
 import Event from '../models/Event.js';
 import Invoice from '../models/Invoice.js';
 import { isAuthenticated, withWorkspace } from '../middlewares/better-auth-jwt.js';
+import emailReminderService from '../services/emailReminderService.js';
 
 const eventResolvers = {
   Event: {
@@ -150,6 +151,21 @@ const eventResolvers = {
           workspaceId: finalWorkspaceId
         });
 
+        // Si rappel email activé, calculer la date d'envoi
+        if (input.emailReminder?.enabled) {
+          const scheduledTime = emailReminderService.calculateScheduledTime(
+            input.start,
+            input.emailReminder.anticipation
+          );
+          
+          event.emailReminder = {
+            enabled: true,
+            anticipation: input.emailReminder.anticipation || null,
+            status: 'pending',
+            scheduledFor: scheduledTime
+          };
+        }
+
         await event.save();
 
         return {
@@ -172,6 +188,50 @@ const eventResolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         const { id, ...updateData } = input;
+
+        // Si la date ou le rappel email change, recalculer la date d'envoi
+        if (updateData.emailReminder || updateData.start) {
+          const event = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId });
+          
+          if (event) {
+            const newStart = updateData.start || event.start;
+            
+            if (updateData.emailReminder?.enabled) {
+              const scheduledTime = emailReminderService.calculateScheduledTime(
+                newStart,
+                updateData.emailReminder.anticipation
+              );
+              
+              updateData.emailReminder = {
+                enabled: true,
+                anticipation: updateData.emailReminder.anticipation || null,
+                status: 'pending',
+                scheduledFor: scheduledTime,
+                sentAt: null,
+                failureReason: null
+              };
+            } else if (updateData.emailReminder && !updateData.emailReminder.enabled) {
+              // Désactiver le rappel
+              updateData.emailReminder = {
+                enabled: false,
+                status: 'cancelled'
+              };
+            } else if (updateData.start && event.emailReminder?.enabled) {
+              // La date change mais le rappel reste activé, recalculer
+              const scheduledTime = emailReminderService.calculateScheduledTime(
+                newStart,
+                event.emailReminder.anticipation
+              );
+              
+              updateData.emailReminder = {
+                ...event.emailReminder.toObject(),
+                scheduledFor: scheduledTime,
+                status: 'pending',
+                sentAt: null
+              };
+            }
+          }
+        }
 
         const event = await Event.findOneAndUpdate(
           { _id: id, workspaceId: finalWorkspaceId },

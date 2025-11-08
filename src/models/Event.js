@@ -68,6 +68,36 @@ const eventSchema = new mongoose.Schema({
     required: true
   },
   
+  // Rappel par email
+  emailReminder: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    anticipation: {
+      type: String,
+      enum: [null, '1h', '3h', '1d', '3d'],
+      default: null
+    },
+    sentAt: {
+      type: Date,
+      default: null
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'sent', 'failed', 'cancelled'],
+      default: 'pending'
+    },
+    scheduledFor: {
+      type: Date,
+      default: null
+    },
+    failureReason: {
+      type: String,
+      default: null
+    }
+  },
+  
   // Métadonnées
   createdAt: {
     type: Date,

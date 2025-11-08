@@ -328,6 +328,42 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    
+    // Préférences email pour les rappels
+    emailPreferences: {
+      reminders: {
+        enabled: {
+          type: Boolean,
+          default: false
+        },
+        types: {
+          type: [String],
+          default: ['due', 'anticipated']
+        },
+        doNotDisturb: {
+          weekday: {
+            start: {
+              type: String,
+              default: '22:00'
+            },
+            end: {
+              type: String,
+              default: '08:00'
+            }
+          },
+          weekend: {
+            start: {
+              type: String,
+              default: '22:00'
+            },
+            end: {
+              type: String,
+              default: '10:00'
+            }
+          }
+        }
+      }
+    },
   },
   {
     timestamps: true,
