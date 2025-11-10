@@ -626,6 +626,7 @@ const resolvers = {
         // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
         const task = new Task({
           ...cleanedInput,
+          status: cleanedInput.status || cleanedInput.columnId, // Utiliser columnId comme status par défaut
           userId: user.id,
           workspaceId: finalWorkspaceId,
           position: position,

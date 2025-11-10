@@ -110,7 +110,7 @@ input UpdateColumnInput {
 input CreateTaskInput {
   title: String!
   description: String
-  status: String!
+  status: String
   priority: String
   tags: [TagInput!]
   startDate: DateTime
