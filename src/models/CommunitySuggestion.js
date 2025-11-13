@@ -36,6 +36,11 @@ const communitySuggestionSchema = new mongoose.Schema({
     minlength: 10,
     maxlength: 1000
   },
+  page: {
+    type: String,
+    trim: true,
+    maxlength: 50
+  },
   status: {
     type: String,
     enum: ['pending', 'validated', 'rejected'],

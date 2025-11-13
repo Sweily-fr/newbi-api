@@ -4,7 +4,7 @@ type CreditNote {
   id: ID!
   number: String!
   prefix: String
-  originalInvoice: Invoice!
+  originalInvoice: Invoice
   originalInvoiceNumber: String!
   creditType: CreditType!
   reason: String
@@ -22,6 +22,8 @@ type CreditNote {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   totalHT: Float!
   totalTTC: Float!
   totalVAT: Float!
@@ -33,6 +35,7 @@ type CreditNote {
   bankDetails: BankDetails
   shipping: Shipping
   appearance: Appearance
+  clientPositionRight: Boolean
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -69,6 +72,8 @@ input CreateCreditNoteInput {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   customFields: [CustomFieldInput!]
   number: String
   prefix: String
@@ -76,6 +81,7 @@ input CreateCreditNoteInput {
   bankDetails: BankDetailsInput
   shipping: ShippingInput
   appearance: AppearanceInput
+  clientPositionRight: Boolean
 }
 
 input UpdateCreditNoteInput {
@@ -96,6 +102,8 @@ input UpdateCreditNoteInput {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   customFields: [CustomFieldInput!]
   number: String
   prefix: String
@@ -103,6 +111,7 @@ input UpdateCreditNoteInput {
   bankDetails: BankDetailsInput
   shipping: ShippingInput
   appearance: AppearanceInput
+  clientPositionRight: Boolean
 }
 
 extend type Query {

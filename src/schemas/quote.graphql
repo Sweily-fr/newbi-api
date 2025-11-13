@@ -19,6 +19,8 @@ type Quote {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   customFields: [CustomField!]
   totalHT: Float!
   totalTTC: Float!
@@ -31,6 +33,7 @@ type Quote {
   appearance: Appearance
   shipping: Shipping
   isReverseCharge: Boolean
+  clientPositionRight: Boolean
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -47,12 +50,12 @@ type QuotePagination {
 input CreateQuoteInput {
   prefix: String
   number: String
-  issueDate: String
+  issueDate: String!
   validUntil: String
   client: ClientInput!
   companyInfo: CompanyInput
   items: [ItemInput!]!
-  status: QuoteStatus = PENDING
+  status: QuoteStatus = DRAFT
   headerNotes: String
   footerNotes: String
   termsAndConditions: String
@@ -60,11 +63,14 @@ input CreateQuoteInput {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   customFields: [CustomFieldInput!]
   showBankDetails: Boolean
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  clientPositionRight: Boolean
 }
 
 input UpdateQuoteInput {
@@ -83,11 +89,14 @@ input UpdateQuoteInput {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   customFields: [CustomFieldInput!]
   showBankDetails: Boolean
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  clientPositionRight: Boolean
 }
 
 extend type Query {

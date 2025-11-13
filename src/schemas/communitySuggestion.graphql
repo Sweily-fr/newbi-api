@@ -38,6 +38,7 @@ type CommunitySuggestion {
   type: SuggestionType!
   title: String!
   description: String!
+  page: String
   status: SuggestionStatus!
   votes: [Vote!]!
   validatedBy: [ID!]!
@@ -69,6 +70,7 @@ input CreateSuggestionInput {
   type: SuggestionType!
   title: String!
   description: String!
+  page: String
   isAnonymous: Boolean
   severity: BugSeverity
   stepsToReproduce: String
@@ -77,6 +79,7 @@ input CreateSuggestionInput {
 input UpdateSuggestionInput {
   title: String
   description: String
+  page: String
   severity: BugSeverity
   stepsToReproduce: String
 }

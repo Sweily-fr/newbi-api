@@ -22,6 +22,8 @@ type Invoice {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   totalHT: Float!
   totalTTC: Float!
   totalVAT: Float!
@@ -34,6 +36,7 @@ type Invoice {
   appearance: Appearance
   shipping: Shipping
   isReverseCharge: Boolean
+  clientPositionRight: Boolean
   createdBy: User!
   stripeInvoiceId: String
   createdAt: String!
@@ -67,6 +70,8 @@ input CreateInvoiceInput {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   customFields: [CustomFieldInput!]
   number: String
   prefix: String
@@ -76,6 +81,7 @@ input CreateInvoiceInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  clientPositionRight: Boolean
 }
 
 input UpdateInvoiceInput {
@@ -94,6 +100,8 @@ input UpdateInvoiceInput {
   termsAndConditionsLink: String
   discount: Float
   discountType: DiscountType
+  retenueGarantie: Float
+  escompte: Float
   customFields: [CustomFieldInput!]
   number: String
   prefix: String
@@ -103,6 +111,7 @@ input UpdateInvoiceInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  clientPositionRight: Boolean
 }
 
 extend type Query {

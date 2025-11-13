@@ -156,6 +156,7 @@ const communitySuggestionResolvers = {
           type: input.type,
           title: validatedData.title,
           description: validatedData.description,
+          page: input.page,
           severity: validatedData.severity,
           stepsToReproduce: validatedData.stepsToReproduce,
           createdBy: user.id,

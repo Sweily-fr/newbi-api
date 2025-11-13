@@ -251,6 +251,25 @@ const quoteSchema = new mongoose.Schema({
   isReverseCharge: {
     type: Boolean,
     default: false,
+  },
+  // Position du client dans le PDF (false = centre, true = droite)
+  clientPositionRight: {
+    type: Boolean,
+    default: false,
+  },
+  // Retenue de garantie (en pourcentage)
+  retenueGarantie: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100,
+  },
+  // Escompte (en pourcentage)
+  escompte: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100,
   }
 }, {
   timestamps: true
