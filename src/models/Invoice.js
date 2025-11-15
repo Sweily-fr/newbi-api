@@ -61,17 +61,6 @@ const invoiceSchema = new mongoose.Schema(
       required: true,
       default: Date.now,
     },
-    executionDate: {
-      type: Date,
-      validate: {
-        validator: function (value) {
-          // La date d'exécution n'est pas obligatoire, mais si elle est fournie,
-          // elle doit être valide
-          return !value || value instanceof Date;
-        },
-        message: "La date d'exécution doit être une date valide",
-      },
-    },
     dueDate: {
       type: Date,
       validate: {

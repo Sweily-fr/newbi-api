@@ -18,7 +18,7 @@ const itemSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: isValidItemDescription,
-      message: 'La description de l\'article contient des caractères non autorisés ou dépasse 200 caractères'
+      message: 'La description de l\'article contient des caractères non autorisés ou dépasse 255 caractères'
     }
   },
   quantity: {

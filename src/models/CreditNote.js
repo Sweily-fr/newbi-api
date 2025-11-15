@@ -85,15 +85,6 @@ const creditNoteSchema = new mongoose.Schema(
       required: true,
       default: Date.now,
     },
-    executionDate: {
-      type: Date,
-      validate: {
-        validator: function (value) {
-          return !value || value instanceof Date;
-        },
-        message: "La date d'exécution doit être une date valide",
-      },
-    },
     // Les articles de l'avoir (peuvent être différents de la facture originale)
     items: {
       type: [creditNoteItemSchema],

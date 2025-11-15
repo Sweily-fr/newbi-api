@@ -13,7 +13,6 @@ type CreditNote {
   items: [Item!]!
   status: CreditNoteStatus!
   issueDate: String!
-  executionDate: String
   refundMethod: RefundMethod!
   headerNotes: String
   footerNotes: String
@@ -63,7 +62,6 @@ input CreateCreditNoteInput {
   items: [ItemInput!]!
   status: CreditNoteStatus = CREATED
   issueDate: String!
-  executionDate: String
   refundMethod: RefundMethod = NEXT_INVOICE
   headerNotes: String
   footerNotes: String
@@ -93,7 +91,6 @@ input UpdateCreditNoteInput {
   items: [ItemInput!]
   status: CreditNoteStatus
   issueDate: String
-  executionDate: String
   refundMethod: RefundMethod
   headerNotes: String
   footerNotes: String

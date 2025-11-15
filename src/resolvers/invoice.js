@@ -286,7 +286,29 @@ const invoiceResolvers = {
 
         // Utiliser le préfixe fourni, ou celui de la dernière facture, ou générer un préfixe par défaut
         let prefix = input.prefix;
-        
+
+        // Validation du format du préfixe (optionnel, mais sans espaces ni caractères spéciaux)
+        if (prefix && !/^[A-Za-z0-9-]*$/.test(prefix)) {
+          throw createValidationError(
+            "Le préfixe de facture contient des caractères non autorisés",
+            {
+              prefix:
+                "Le préfixe ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+            }
+          );
+        }
+
+        // Validation du format de la référence devis si fournie
+        if (input.purchaseOrderNumber && !/^[A-Za-z0-9-]*$/.test(input.purchaseOrderNumber)) {
+          throw createValidationError(
+            "La référence devis contient des caractères non autorisés",
+            {
+              purchaseOrderNumber:
+                "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+            }
+          );
+        }
+
         if (!prefix) {
           // Chercher la dernière facture créée pour récupérer son préfixe
           const lastInvoice = await Invoice.findOne({ workspaceId })
@@ -619,6 +641,28 @@ const invoiceResolvers = {
 
         // Créer une copie des données d'entrée pour éviter de modifier l'original
         let updatedInput = { ...input };
+
+        // Validation du format du préfixe si fourni
+        if (updatedInput.prefix && !/^[A-Za-z0-9-]*$/.test(updatedInput.prefix)) {
+          throw createValidationError(
+            "Le préfixe de facture contient des caractères non autorisés",
+            {
+              prefix:
+                "Le préfixe ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+            }
+          );
+        }
+
+        // Validation du format de la référence devis si fournie
+        if (updatedInput.purchaseOrderNumber && !/^[A-Za-z0-9-]*$/.test(updatedInput.purchaseOrderNumber)) {
+          throw createValidationError(
+            "La référence devis contient des caractères non autorisés",
+            {
+              purchaseOrderNumber:
+                "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+            }
+          );
+        }
 
         // Si les items sont modifiés, recalculer les totaux
         if (updatedInput.items) {

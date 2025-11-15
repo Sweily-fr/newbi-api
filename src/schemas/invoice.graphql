@@ -13,7 +13,6 @@ type Invoice {
   items: [Item!]!
   status: InvoiceStatus!
   issueDate: String!
-  executionDate: String
   dueDate: String!
   headerNotes: String
   footerNotes: String
@@ -61,7 +60,6 @@ input CreateInvoiceInput {
   items: [ItemInput!]!
   status: InvoiceStatus = DRAFT
   issueDate: String!
-  executionDate: String
   dueDate: String!
   headerNotes: String
   footerNotes: String
@@ -91,7 +89,6 @@ input UpdateInvoiceInput {
   items: [ItemInput!]
   status: InvoiceStatus
   issueDate: String
-  executionDate: String
   dueDate: String
   headerNotes: String
   footerNotes: String

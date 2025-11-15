@@ -80,9 +80,9 @@ const CUSTOM_FIELD_VALUE_REGEX =
 
 // Regex pour la validation des descriptions d'articles
 // Accepte les lettres, chiffres, espaces et caractères spéciaux courants
-// Limite à 200 caractères pour éviter les attaques par injection
+// Limite à 255 caractères pour éviter les attaques par injection
 const ITEM_DESCRIPTION_REGEX =
-  /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\]{1,200}$/;
+  /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\]{1,255}$/;
 
 // Regex pour la validation des unités de mesure
 // Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)

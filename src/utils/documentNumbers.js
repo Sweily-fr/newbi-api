@@ -491,36 +491,12 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       return `DRAFT-${options.manualNumber}`;
     }
     
-    // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-
-    const nextSequentialNumber = await generateQuoteSequentialNumber(prefix, {
-      ...options,
-      year: currentYear
-    });
+    // Brouillon sans numéro manuel - utiliser un timestamp unique pour éviter les conflits
+    // Les brouillons utilisent le format DRAFT-{timestamp} pour garantir l'unicité
+    const timestamp = Date.now();
+    const draftNumber = `DRAFT-${timestamp}`;
     
-    // Vérifier si le numéro DRAFT-{number} existe déjà
-    const draftNumber = `DRAFT-${nextSequentialNumber}`;
-    const existingQuery = {
-      number: draftNumber,
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
-    };
-    
-    if (options.workspaceId) {
-      existingQuery.workspaceId = options.workspaceId;
-    } else if (options.userId) {
-      existingQuery.createdBy = options.userId;
-    }
-    
-    const existingQuote = await Quote.findOne(existingQuery);
-    
-    if (existingQuote) {
-      // Renommer l'ancien brouillon avec un suffixe unique
-      const timestamp = Date.now();
-      await Quote.findByIdAndUpdate(existingQuote._id, {
-        number: `DRAFT-${nextSequentialNumber}-${timestamp}`
-      });
-    }
-    
-    // Le nouveau brouillon garde le numéro propre
+    // Retourner le numéro unique
     return draftNumber;
   }
   

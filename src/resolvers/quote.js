@@ -419,11 +419,11 @@ const quoteResolvers = {
           }
         } else if (input.number) {
           // Ce n'est pas le premier devis
-          // Pour les brouillons, utiliser le numéro fourni comme manualNumber pour maintenir la séquence
+          // Pour les brouillons, IGNORER le numéro fourni et générer un timestamp unique
           if (input.status === "DRAFT") {
             number = await generateQuoteNumber(prefix, {
               isDraft: true,
-              manualNumber: input.number,
+              // Ne pas passer manualNumber pour les brouillons - utiliser timestamp
               workspaceId,
               userId: user.id,
             });
@@ -661,6 +661,66 @@ const quoteResolvers = {
       // Si les informations de l'entreprise ne sont pas fournies, les supprimer pour ne pas écraser les existantes
       if (!updateData.companyInfo) {
         delete updateData.companyInfo;
+      }
+
+      // Gérer la transition DRAFT → PENDING : générer automatiquement le numéro séquentiel
+      if (quote.status === "DRAFT" && updateData.status === "PENDING") {
+        console.log('🔍 [updateQuote] DRAFT → PENDING transition detected');
+        console.log('🔍 [updateQuote] Current number:', quote.number);
+        console.log('🔍 [updateQuote] Input number:', input.number);
+        console.log('🔍 [updateQuote] Input prefix:', input.prefix);
+        
+        try {
+          // Si le numéro ou le prefix ne sont pas fournis dans l'input, générer automatiquement
+          if (!input.number || !input.prefix) {
+            // Récupérer le préfixe du dernier devis créé (non-DRAFT)
+            const lastQuote = await Quote.findOne({
+              workspaceId: quote.workspaceId,
+              status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
+            })
+              .sort({ createdAt: -1 })
+              .select('prefix')
+              .lean();
+            
+            // Définir l'année et la date pour les fonctions de génération de numéro
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            
+            let prefix;
+            if (lastQuote && lastQuote.prefix) {
+              // Utiliser le préfixe du dernier devis
+              prefix = lastQuote.prefix;
+            } else {
+              // Aucun devis existant, utiliser le préfixe par défaut
+              prefix = `D-${month}${year}-`;
+            }
+            
+            console.log('🔍 [updateQuote] Using prefix:', prefix);
+            
+            // Générer le prochain numéro séquentiel
+            const newNumber = await generateQuoteNumber(prefix, {
+              isValidatingDraft: true,
+              currentDraftNumber: quote.number,
+              workspaceId: quote.workspaceId,
+              userId: user.id,
+              year,
+              currentQuoteId: quote._id,
+            });
+            
+            console.log('✅ [updateQuote] Generated new number:', newNumber);
+            
+            // Mettre à jour le numéro et le préfixe
+            updateData.number = newNumber;
+            updateData.prefix = prefix;
+          }
+        } catch (error) {
+          console.error('❌ [updateQuote] Error generating quote number:', error);
+          throw new AppError(
+            'Erreur lors de la génération du numéro de devis',
+            ERROR_CODES.INTERNAL_ERROR
+          );
+        }
       }
 
       Object.assign(quote, updateData);
