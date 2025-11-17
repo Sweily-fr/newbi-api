@@ -106,6 +106,7 @@ async function startServer() {
   const allowedOrigins = [
     "http://localhost:3000",
     "http://localhost:4000",
+    "http://192.168.1.65:8081", // Expo mobile
     "https://studio.apollographql.com",
     "https://www.newbi.fr",
     "https://newbi.fr",
@@ -119,6 +120,7 @@ async function startServer() {
   app.use(
     cors({
       origin: (origin, callback) => {
+        // Autoriser les requêtes sans origin (mobile apps) ou depuis les origines autorisées
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
