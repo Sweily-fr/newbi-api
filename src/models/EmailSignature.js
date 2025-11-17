@@ -247,6 +247,10 @@ const emailSignatureSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    photoVisible: {
+      type: Boolean,
+      default: true,
+    },
     logo: {
       type: String,
       trim: true,
