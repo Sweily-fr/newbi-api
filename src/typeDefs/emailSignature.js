@@ -45,6 +45,7 @@ const emailSignatureTypeDefs = gql`
     # Images
     photo: String
     photoKey: String
+    photoVisible: Boolean!
     logo: String
     logoKey: String
     imageSize: Int!
@@ -193,6 +194,7 @@ const emailSignatureTypeDefs = gql`
     # Images
     photo: String
     photoKey: String
+    photoVisible: Boolean
     logo: String
     logoKey: String
     imageSize: Int
@@ -337,6 +339,7 @@ const emailSignatureTypeDefs = gql`
     # Images
     photo: String
     photoKey: String
+    photoVisible: Boolean
     logo: String
     logoKey: String
     imageSize: Int

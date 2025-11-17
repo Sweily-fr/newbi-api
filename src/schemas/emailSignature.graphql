@@ -44,6 +44,7 @@ type EmailSignature {
   # Images
   photo: String
   photoKey: String
+  photoVisible: Boolean!
   logo: String
   logoKey: String
   imageSize: Int!
@@ -200,6 +201,7 @@ input EmailSignatureInput {
   # Images
   photo: String
   photoKey: String
+  photoVisible: Boolean
   logo: String
   logoKey: String
   imageSize: Int
@@ -352,6 +354,7 @@ input UpdateEmailSignatureInput {
   # Images
   photo: String
   photoKey: String
+  photoVisible: Boolean
   logo: String
   logoKey: String
   imageSize: Int
