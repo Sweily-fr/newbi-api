@@ -18,6 +18,10 @@ type ClientsResult {
   totalPages: Int!
 }
 
+input ClientNoteInput {
+  content: String!
+}
+
 extend type Mutation {
   # Create a new client
   createClient(workspaceId: String, input: ClientInput!): Client!
@@ -27,4 +31,13 @@ extend type Mutation {
   
   # Delete a client
   deleteClient(workspaceId: String, id: ID!): Boolean!
+  
+  # Add a note to a client
+  addClientNote(workspaceId: String, clientId: ID!, input: ClientNoteInput!): Client!
+  
+  # Update a client note
+  updateClientNote(workspaceId: String, clientId: ID!, noteId: ID!, content: String!): Client!
+  
+  # Delete a client note
+  deleteClientNote(workspaceId: String, clientId: ID!, noteId: ID!): Client!
 }

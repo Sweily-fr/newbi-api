@@ -2,9 +2,7 @@ import Stripe from 'stripe';
 import FileTransfer from '../models/FileTransfer.js';
 import AccessGrant from '../models/AccessGrant.js';
 import User from '../models/User.js';
-import ReferralEvent from '../models/ReferralEvent.js';
 import logger from '../utils/logger.js';
-import { processReferralPayout, scheduleReferralPayout } from '../services/referralService.js';
 import { sendFileTransferPaymentNotification } from '../utils/mailer.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -296,27 +294,13 @@ async function handleInvoicePaymentSucceeded(invoice) {
       return;
     }
 
-    // Traiter le paiement de parrainage si l'utilisateur a été parrainé
-    if (user.referredBy) {
-      logger.info('🎯 Premier paiement réel d\'un utilisateur parrainé détecté', {
-        userId: user._id,
-        referralCode: user.referredBy,
-        subscriptionId: subscription.id,
-        amountPaid: invoice.amount_paid / 100,
-        invoiceId: invoice.id
-      });
-
-      // Programmer le paiement de parrainage avec un délai de 7 jours
-      await scheduleReferralPayout(
-        user._id,
-        subscription.id,
-        invoice.amount_paid / 100 // Convertir de centimes en euros
-      );
-    } else {
-      logger.info('🔍 Utilisateur non parrainé, pas de paiement à effectuer', {
-        userId: user._id
-      });
-    }
+    // Logique de traitement du paiement
+    logger.info('✅ Paiement traité avec succès', {
+      userId: user._id,
+      subscriptionId: subscription.id,
+      amountPaid: invoice.amount_paid / 100,
+      invoiceId: invoice.id
+    });
 
   } catch (error) {
     logger.error('❌ Erreur handleInvoicePaymentSucceeded:', error);
@@ -343,37 +327,12 @@ async function handleSubscriptionChange(subscription) {
       return;
     }
 
-    // Vérifier si c'est un nouvel abonnement annuel actif
-    const isAnnualSubscription = subscription.items.data.some(item => 
-      item.price.recurring && item.price.recurring.interval === 'year'
-    );
-
-    if (subscription.status === 'active' && isAnnualSubscription && user.referredBy) {
-      // Vérifier si ce n'est pas déjà traité
-      const existingEvent = await ReferralEvent.findOne({
-        referredUserId: user._id,
-        subscriptionId: subscription.id,
-        type: { $in: ['REFERRAL_SUBSCRIPTION', 'REFERRAL_PAYOUT'] }
-      });
-
-      if (!existingEvent) {
-        logger.info('🎯 Nouvel abonnement annuel détecté, traitement du paiement', {
-          userId: user._id,
-          referralCode: user.referredBy,
-          subscriptionId: subscription.id
-        });
-
-        await processReferralPayout(
-          user._id,
-          subscription.id,
-          subscription.items.data[0]?.price?.unit_amount / 100 || 0
-        );
-      } else {
-        logger.info('✅ Paiement de parrainage déjà traité pour cet abonnement', {
-          existingEventId: existingEvent._id
-        });
-      }
-    }
+    // Logique de gestion de l'abonnement
+    logger.info('✅ Abonnement traité', {
+      userId: user._id,
+      subscriptionId: subscription.id,
+      status: subscription.status
+    });
 
   } catch (error) {
     logger.error('❌ Erreur handleSubscriptionChange:', error);

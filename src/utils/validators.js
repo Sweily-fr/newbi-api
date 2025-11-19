@@ -29,8 +29,8 @@ const PHONE_FR_REGEX =
 // Autorise tous les caractères spéciaux courants pour les noms de produits: / \ : ; ! ? @ # $ % * + = [ ] { } | ~ " _
 const NAME_REGEX = /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-'.(),&/\\:;!?@#$%*+=[\]{}|~"_]{2,200}$/;
 
-// Regex pour la validation de SIRET (14 chiffres)
-const SIRET_REGEX = /^\d{14}$/;
+// Regex pour la validation de SIREN (9 chiffres) ou SIRET (14 chiffres)
+const SIRET_REGEX = /^\d{9}$|^\d{14}$/;
 
 // Regex pour la validation de numéro de TVA (format FR)
 const VAT_FR_REGEX = /^FR\d{2}\d{9}$/;
@@ -123,7 +123,7 @@ const isValidName = (name) => {
   return NAME_REGEX.test(name);
 };
 
-// Validation de SIRET (14 chiffres)
+// Validation de SIREN (9 chiffres) ou SIRET (14 chiffres)
 const isValidSIRET = (siret) => {
   return SIRET_REGEX.test(siret);
 };

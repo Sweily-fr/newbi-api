@@ -104,13 +104,13 @@ const clientResolvers = {
         let clientData = { ...input };
 
         if (input.type === "COMPANY") {
-          // Pour une entreprise, le SIRET est obligatoire
+          // Pour une entreprise, le SIREN/SIRET est obligatoire
           if (!input.siret || input.siret.trim() === "") {
-            throw new Error("Le SIRET est obligatoire pour une entreprise");
+            throw new Error("Le SIREN/SIRET est obligatoire pour une entreprise");
           }
-          // Valider le format du SIRET (14 chiffres)
-          if (!/^\d{14}$/.test(input.siret)) {
-            throw new Error("Le SIRET doit contenir exactement 14 chiffres");
+          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
+          if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
+            throw new Error("Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres");
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
@@ -132,6 +132,17 @@ const clientResolvers = {
           email: input.email.toLowerCase(),
           createdBy: user.id,
           workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          activity: [
+            {
+              id: new mongoose.Types.ObjectId().toString(),
+              userId: user.id,
+              userName: user.name || user.email,
+              userImage: user.image || null,
+              type: "created",
+              description: "a créé le client",
+              createdAt: new Date(),
+            },
+          ],
         });
 
         await client.save();
@@ -172,13 +183,13 @@ const clientResolvers = {
         let updateData = { ...input };
 
         if (input.type === "COMPANY") {
-          // Pour une entreprise, le SIRET est obligatoire
+          // Pour une entreprise, le SIREN/SIRET est obligatoire
           if (!input.siret || input.siret.trim() === "") {
-            throw new Error("Le SIRET est obligatoire pour une entreprise");
+            throw new Error("Le SIREN/SIRET est obligatoire pour une entreprise");
           }
-          // Valider le format du SIRET (14 chiffres)
-          if (!/^\d{14}$/.test(input.siret)) {
-            throw new Error("Le SIRET doit contenir exactement 14 chiffres");
+          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
+          if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
+            throw new Error("Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres");
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
@@ -200,11 +211,65 @@ const clientResolvers = {
           }
         }
 
-        // Mettre à jour le client
+        // Fonction pour comparer deux valeurs en profondeur
+        const hasChanged = (oldVal, newVal) => {
+          // Si les deux sont null/undefined, pas de changement
+          if ((oldVal == null) && (newVal == null)) return false;
+          // Si l'un est null/undefined et pas l'autre, changement
+          if ((oldVal == null) !== (newVal == null)) return true;
+          // Pour les objets, comparer en JSON (trié pour éviter les faux positifs)
+          if (typeof oldVal === 'object' && typeof newVal === 'object') {
+            return JSON.stringify(oldVal) !== JSON.stringify(newVal);
+          }
+          // Pour les valeurs primitives, comparaison directe
+          return oldVal !== newVal;
+        };
+
+        // Tracker les changements
+        const changes = [];
         Object.keys(updateData).forEach((key) => {
-          client[key] =
-            key === "email" ? updateData[key].toLowerCase() : updateData[key];
+          if (key !== 'notes' && key !== 'activity') {
+            const oldValue = client[key];
+            const newValue = key === "email" ? updateData[key].toLowerCase() : updateData[key];
+            
+            // Vérifier si la valeur a réellement changé
+            if (hasChanged(oldValue, newValue)) {
+              const fieldNames = {
+                name: 'le nom',
+                firstName: 'le prénom',
+                lastName: 'le nom de famille',
+                email: 'l\'email',
+                phone: 'le téléphone',
+                address: 'l\'adresse de facturation',
+                hasDifferentShippingAddress: 'l\'option adresse de livraison différente',
+                shippingAddress: 'l\'adresse de livraison',
+                siret: 'le SIRET',
+                vatNumber: 'le numéro de TVA',
+                type: 'le type',
+              };
+              changes.push(fieldNames[key] || key);
+            }
+            
+            client[key] = newValue;
+          }
         });
+
+        // Ajouter une activité si des changements ont été effectués
+        if (changes.length > 0) {
+          const description = changes.length === 1
+            ? `a modifié ${changes[0]}`
+            : `a modifié ${changes.slice(0, -1).join(', ')} et ${changes[changes.length - 1]}`;
+          
+          client.activity.push({
+            id: new mongoose.Types.ObjectId().toString(),
+            userId: user.id,
+            userName: user.name || user.email,
+            userImage: user.image || null,
+            type: 'updated',
+            description: description,
+            createdAt: new Date(),
+          });
+        }
 
         await client.save();
         return client;
@@ -254,6 +319,156 @@ const clientResolvers = {
         return true;
       }
     ),
+
+    addClientNote: withWorkspace(
+      async (
+        _,
+        { clientId, input, workspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const client = await Client.findOne({
+          _id: clientId,
+          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+        });
+
+        if (!client) {
+          throw createNotFoundError("Client");
+        }
+
+        const noteId = new mongoose.Types.ObjectId().toString();
+        const newNote = {
+          id: noteId,
+          content: input.content,
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+
+        // Ajouter la note
+        client.notes.push(newNote);
+
+        // Ajouter l'activité
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          type: "note_added",
+          description: "a ajouté une note",
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          createdAt: new Date(),
+        });
+
+        await client.save();
+        return client;
+      }
+    ),
+
+    updateClientNote: withWorkspace(
+      async (
+        _,
+        { clientId, noteId, content, workspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const client = await Client.findOne({
+          _id: clientId,
+          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+        });
+
+        if (!client) {
+          throw createNotFoundError("Client");
+        }
+
+        const note = client.notes.find((n) => n.id === noteId);
+        if (!note) {
+          throw createNotFoundError("Note");
+        }
+
+        // Vérifier que l'utilisateur est le créateur de la note
+        if (note.userId.toString() !== user.id) {
+          throw new Error("Vous n'êtes pas autorisé à modifier cette note");
+        }
+
+        note.content = content;
+        note.updatedAt = new Date();
+
+        // Ajouter l'activité
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          type: "note_updated",
+          description: "a modifié une note",
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          createdAt: new Date(),
+        });
+
+        await client.save();
+        return client;
+      }
+    ),
+
+    deleteClientNote: withWorkspace(
+      async (
+        _,
+        { clientId, noteId, workspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const client = await Client.findOne({
+          _id: clientId,
+          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+        });
+
+        if (!client) {
+          throw createNotFoundError("Client");
+        }
+
+        const noteIndex = client.notes.findIndex((n) => n.id === noteId);
+        if (noteIndex === -1) {
+          throw createNotFoundError("Note");
+        }
+
+        // Vérifier que l'utilisateur est le créateur de la note
+        if (client.notes[noteIndex].userId.toString() !== user.id) {
+          throw new Error("Vous n'êtes pas autorisé à supprimer cette note");
+        }
+
+        client.notes.splice(noteIndex, 1);
+
+        // Ajouter l'activité
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          type: "note_deleted",
+          description: "a supprimé une note",
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          createdAt: new Date(),
+        });
+
+        await client.save();
+        return client;
+      }
+    ),
+  },
+  
+  // Resolvers de champs pour convertir les dates en strings ISO
+  Client: {
+    createdAt: (parent) => parent.createdAt?.toISOString?.() || parent.createdAt,
+    updatedAt: (parent) => parent.updatedAt?.toISOString?.() || parent.updatedAt,
+  },
+  
+  ClientNote: {
+    createdAt: (parent) => parent.createdAt?.toISOString?.() || parent.createdAt,
+    updatedAt: (parent) => parent.updatedAt?.toISOString?.() || parent.updatedAt,
+  },
+  
+  ClientActivity: {
+    createdAt: (parent) => parent.createdAt?.toISOString?.() || parent.createdAt,
   },
 };
 

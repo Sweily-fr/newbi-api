@@ -313,20 +313,10 @@ const userSchema = new mongoose.Schema(
     resetPasswordToken: String,
     resetPasswordExpires: Date,
     
-    // Champs pour le système de parrainage
+    // Code partenaire (apporteur d'affaires)
     referralCode: {
       type: String,
-      unique: true,
-      sparse: true, // Index sparse pour éviter les conflits avec les valeurs null
       index: true,
-    },
-    referredBy: {
-      type: String,
-      index: true, // Index pour optimiser les recherches de filleuls
-    },
-    referralEarnings: {
-      type: Number,
-      default: 0,
     },
     
     // Préférences email pour les rappels

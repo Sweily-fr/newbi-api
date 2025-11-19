@@ -93,7 +93,7 @@ const clientSchema = new mongoose.Schema({
       validator: function(v) {
         return !v || isValidSIRET(v);
       },
-      message: 'Le SIRET doit contenir exactement 14 chiffres'
+      message: 'Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres'
     }
   },
   vatNumber: {
@@ -141,7 +141,69 @@ const clientSchema = new mongoose.Schema({
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
     required: true
-  }
+  },
+  // Notes ajoutées au client (comme les commentaires dans les tâches kanban)
+  notes: [{
+    id: {
+      type: String,
+      required: true,
+      default: () => new mongoose.Types.ObjectId().toString()
+    },
+    content: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    userName: String,
+    userImage: String,
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  // Historique d'activité du client
+  activity: [{
+    id: {
+      type: String,
+      required: true,
+      default: () => new mongoose.Types.ObjectId().toString()
+    },
+    type: {
+      type: String,
+      enum: ['created', 'updated', 'invoice_created', 'invoice_status_changed', 'quote_created', 'quote_status_changed', 'note_added', 'note_updated', 'note_deleted'],
+      required: true
+    },
+    description: String,
+    field: String,
+    oldValue: mongoose.Schema.Types.Mixed,
+    newValue: mongoose.Schema.Types.Mixed,
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    userName: String,
+    userImage: String,
+    metadata: {
+      documentType: String, // 'invoice' ou 'quote'
+      documentId: String,
+      documentNumber: String,
+      status: String
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }]
 }, {
   timestamps: true
 });

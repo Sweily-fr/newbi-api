@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
+import Client from "../models/Client.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { withRBAC, requireWrite, requireRead, requireDelete } from "../middlewares/rbac.js";
 import {
@@ -588,6 +589,35 @@ const quoteResolvers = {
         });
 
         await quote.save();
+        
+        // Enregistrer l'activité dans le client si c'est un client existant
+        if (clientData.id) {
+          try {
+            await Client.findByIdAndUpdate(clientData.id, {
+              $push: {
+                activity: {
+                  id: new mongoose.Types.ObjectId().toString(),
+                  type: 'quote_created',
+                  description: `a créé le devis ${prefix}${number}`,
+                  userId: user._id,
+                  userName: user.name || user.email,
+                  userImage: user.image || null,
+                  metadata: {
+                    documentType: 'quote',
+                    documentId: quote._id.toString(),
+                    documentNumber: `${prefix}${number}`,
+                    status: quote.status
+                  },
+                  createdAt: new Date()
+                }
+              }
+            });
+          } catch (activityError) {
+            console.error('Erreur lors de l\'enregistrement de l\'activité:', activityError);
+            // Ne pas faire échouer la création de devis si l'activité échoue
+          }
+        }
+        
         return await quote.populate("createdBy");
         }
       )
@@ -894,8 +924,45 @@ const quoteResolvers = {
         }
       }
 
+      const oldStatus = quote.status;
       quote.status = status;
       await quote.save();
+      
+      // Enregistrer l'activité dans le client si c'est un client existant
+      if (quote.client && quote.client.id) {
+        try {
+          const statusLabels = {
+            'DRAFT': 'Brouillon',
+            'PENDING': 'En attente',
+            'COMPLETED': 'Accepté',
+            'CANCELED': 'Refusé'
+          };
+          
+          await Client.findByIdAndUpdate(quote.client.id, {
+            $push: {
+              activity: {
+                id: new mongoose.Types.ObjectId().toString(),
+                type: 'quote_status_changed',
+                description: `a changé le statut du devis ${quote.prefix}${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                userId: user._id,
+                userName: user.name || user.email,
+                userImage: user.image || null,
+                metadata: {
+                  documentType: 'quote',
+                  documentId: quote._id.toString(),
+                  documentNumber: `${quote.prefix}${quote.number}`,
+                  status: status
+                },
+                createdAt: new Date()
+              }
+            }
+          });
+        } catch (activityError) {
+          console.error('Erreur lors de l\'enregistrement de l\'activité:', activityError);
+          // Ne pas faire échouer le changement de statut si l'activité échoue
+        }
+      }
+      
       return await quote.populate("createdBy");
       })
     ),

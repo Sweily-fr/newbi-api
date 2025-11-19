@@ -2,6 +2,7 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Quote from "../models/Quote.js";
 import Event from "../models/Event.js";
+import Client from "../models/Client.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { withRBAC, requireWrite, requireRead, requireDelete } from "../middlewares/rbac.js";
 import { requireCompanyInfo } from "../middlewares/company-info-guard.js";
@@ -496,6 +497,34 @@ const invoiceResolvers = {
               );
             }
             throw saveError;
+          }
+
+          // Enregistrer l'activité dans le client si c'est un client existant
+          if (clientData.id) {
+            try {
+              await Client.findByIdAndUpdate(clientData.id, {
+                $push: {
+                  activity: {
+                    id: new mongoose.Types.ObjectId().toString(),
+                    type: 'invoice_created',
+                    description: `a créé la facture ${prefix}${number}`,
+                    userId: user._id,
+                    userName: user.name || user.email,
+                    userImage: user.image || null,
+                    metadata: {
+                      documentType: 'invoice',
+                      documentId: invoice._id.toString(),
+                      documentNumber: `${prefix}${number}`,
+                      status: invoice.status
+                    },
+                    createdAt: new Date()
+                  }
+                }
+              });
+            } catch (activityError) {
+              console.error('Erreur lors de l\'enregistrement de l\'activité:', activityError);
+              // Ne pas faire échouer la création de facture si l'activité échoue
+            }
           }
 
           // Créer automatiquement un événement de calendrier pour l'échéance de la facture
@@ -1075,8 +1104,44 @@ const invoiceResolvers = {
           invoice.prefix = prefix;
         }
 
+        const oldStatus = invoice.status;
         invoice.status = status;
         await invoice.save();
+
+        // Enregistrer l'activité dans le client si c'est un client existant
+        if (invoice.client && invoice.client.id) {
+          try {
+            const statusLabels = {
+              'DRAFT': 'Brouillon',
+              'PENDING': 'En attente',
+              'COMPLETED': 'Payée',
+              'CANCELED': 'Annulée'
+            };
+            
+            await Client.findByIdAndUpdate(invoice.client.id, {
+              $push: {
+                activity: {
+                  id: new mongoose.Types.ObjectId().toString(),
+                  type: 'invoice_status_changed',
+                  description: `a changé le statut de la facture ${invoice.prefix}${invoice.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                  userId: user._id,
+                  userName: user.name || user.email,
+                  userImage: user.image || null,
+                  metadata: {
+                    documentType: 'invoice',
+                    documentId: invoice._id.toString(),
+                    documentNumber: `${invoice.prefix}${invoice.number}`,
+                    status: status
+                  },
+                  createdAt: new Date()
+                }
+              }
+            });
+          } catch (activityError) {
+            console.error('Erreur lors de l\'enregistrement de l\'activité:', activityError);
+            // Ne pas faire échouer le changement de statut si l'activité échoue
+          }
+        }
 
         return await invoice.populate("createdBy");
       }

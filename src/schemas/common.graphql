@@ -14,6 +14,37 @@ input AddressInput {
   country: String!
 }
 
+type ClientNote {
+  id: ID!
+  content: String!
+  userId: ID!
+  userName: String
+  userImage: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ClientActivity {
+  id: ID!
+  type: String!
+  description: String
+  field: String
+  oldValue: String
+  newValue: String
+  userId: ID!
+  userName: String
+  userImage: String
+  createdAt: String!
+  metadata: ClientActivityMetadata
+}
+
+type ClientActivityMetadata {
+  documentType: String
+  documentId: String
+  documentNumber: String
+  status: String
+}
+
 type Client {
   id: ID!
   name: String!
@@ -26,6 +57,16 @@ type Client {
   # Champs spécifiques aux particuliers
   firstName: String
   lastName: String
+  # Adresse de livraison différente
+  hasDifferentShippingAddress: Boolean
+  shippingAddress: Address
+  # Timeline d'activité
+  notes: [ClientNote!]
+  activity: [ClientActivity!]
+  # Métadonnées
+  createdBy: ID!
+  createdAt: String!
+  updatedAt: String!
 }
 
 input ClientInput {
