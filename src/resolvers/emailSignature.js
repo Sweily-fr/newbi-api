@@ -147,6 +147,8 @@ const emailSignatureResolvers = {
             };
           } else if (key === "spacings" && input[key]) {
             signature.spacings = { ...signature.spacings, ...input[key] };
+          } else if (key === "paddings" && input[key]) {
+            signature.paddings = { ...signature.paddings, ...input[key] };
           } else if (key === "fontSize" && input[key]) {
             signature.fontSize = { ...signature.fontSize, ...input[key] };
           } else {
