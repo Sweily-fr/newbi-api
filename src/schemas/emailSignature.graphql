@@ -58,6 +58,7 @@ type EmailSignature {
   # Espacements
   spacings: SignatureSpacings!
   detailedSpacing: Boolean!
+  paddings: DetailedPaddings
   
   # Typographie
   fontFamily: String!
@@ -156,6 +157,52 @@ type DetailedTypography {
   address: TypographyField!
 }
 
+type PaddingField {
+  top: Int!
+  right: Int!
+  bottom: Int!
+  left: Int!
+}
+
+type DetailedPaddings {
+  photo: PaddingField!
+  name: PaddingField!
+  position: PaddingField!
+  company: PaddingField!
+  phone: PaddingField!
+  mobile: PaddingField!
+  email: PaddingField!
+  website: PaddingField!
+  address: PaddingField!
+  separatorHorizontal: PaddingField!
+  separatorVertical: PaddingField!
+  logo: PaddingField!
+  social: PaddingField!
+}
+
+input PaddingFieldInput {
+  top: Int
+  right: Int
+  bottom: Int
+  left: Int
+}
+
+input DetailedPaddingsInput {
+  photo: PaddingFieldInput
+  name: PaddingFieldInput
+  position: PaddingFieldInput
+  company: PaddingFieldInput
+  phone: PaddingFieldInput
+  mobile: PaddingFieldInput
+  email: PaddingFieldInput
+  website: PaddingFieldInput
+  address: PaddingFieldInput
+  separatorHorizontal: PaddingFieldInput
+  separatorVertical: PaddingFieldInput
+  logo: PaddingFieldInput
+  social: PaddingFieldInput
+}
+
 input EmailSignatureInput {
   signatureName: String!
   isDefault: Boolean
@@ -215,6 +262,7 @@ input EmailSignatureInput {
   # Espacements
   spacings: SignatureSpacingsInput
   detailedSpacing: Boolean
+  paddings: DetailedPaddingsInput
   
   # Typographie
   fontFamily: String
@@ -368,6 +416,7 @@ input UpdateEmailSignatureInput {
   # Espacements
   spacings: SignatureSpacingsInput
   detailedSpacing: Boolean
+  paddings: DetailedPaddingsInput
   
   # Typographie
   fontFamily: String
