@@ -179,7 +179,7 @@ const clientSchema = new mongoose.Schema({
     },
     type: {
       type: String,
-      enum: ['created', 'updated', 'invoice_created', 'invoice_status_changed', 'quote_created', 'quote_status_changed', 'note_added', 'note_updated', 'note_deleted'],
+      enum: ['created', 'updated', 'invoice_created', 'invoice_status_changed', 'quote_created', 'quote_status_changed', 'credit_note_created', 'note_added', 'note_updated', 'note_deleted'],
       required: true
     },
     description: String,
@@ -194,10 +194,11 @@ const clientSchema = new mongoose.Schema({
     userName: String,
     userImage: String,
     metadata: {
-      documentType: String, // 'invoice' ou 'quote'
+      documentType: String, // 'invoice', 'quote' ou 'creditNote'
       documentId: String,
       documentNumber: String,
-      status: String
+      status: String,
+      originalInvoiceNumber: String // Pour les avoirs
     },
     createdAt: {
       type: Date,

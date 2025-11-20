@@ -43,6 +43,7 @@ type ClientActivityMetadata {
   documentId: String
   documentNumber: String
   status: String
+  originalInvoiceNumber: String
 }
 
 type Client {

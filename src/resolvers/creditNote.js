@@ -1,6 +1,7 @@
 import CreditNote from '../models/CreditNote.js';
 import Invoice from '../models/Invoice.js';
 import User from '../models/User.js';
+import Client from '../models/Client.js';
 import Event from '../models/Event.js';
 import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
 import { requireCompanyInfo } from '../middlewares/company-info-guard.js';
@@ -326,6 +327,41 @@ const creditNoteResolvers = {
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             userId: new mongoose.Types.ObjectId(context.user.id),
           });
+
+          // Ajouter une activité au client
+          try {
+            const client = await Client.findOne({
+              email: creditNote.client.email,
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            });
+
+            if (client) {
+              client.activity.push({
+                id: new mongoose.Types.ObjectId().toString(),
+                type: 'credit_note_created',
+                description: `a créé un avoir en référence à la facture ${originalInvoice.prefix}${originalInvoice.number}`,
+                userId: new mongoose.Types.ObjectId(context.user.id),
+                userName: context.user.name || context.user.email,
+                userImage: context.user.image,
+                metadata: {
+                  documentType: 'creditNote',
+                  documentId: creditNote._id.toString(),
+                  documentNumber: `${creditNote.prefix}${creditNote.number}`,
+                  status: creditNote.status,
+                  originalInvoiceNumber: `${originalInvoice.prefix}${originalInvoice.number}`,
+                },
+                createdAt: new Date(),
+              });
+
+              await client.save();
+              console.log(`✅ Activité ajoutée au client ${client.name} pour l'avoir ${creditNote.prefix}${creditNote.number}`);
+            } else {
+              console.log(`⚠️ Client non trouvé avec l'email ${creditNote.client.email} dans le workspace ${workspaceId}`);
+            }
+          } catch (clientError) {
+            console.error('Erreur lors de l\'ajout de l\'activité au client:', clientError);
+            // Ne pas bloquer la création de l'avoir si l'ajout de l'activité échoue
+          }
 
           return await CreditNote.findById(creditNote._id).populate('originalInvoice');
         } catch (error) {
