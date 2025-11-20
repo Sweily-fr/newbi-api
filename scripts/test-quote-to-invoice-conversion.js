@@ -49,7 +49,7 @@ async function testConversionConflict() {
     console.log('\n📝 Étape 1: Créer une facture existante avec numéro DRAFT-000003');
     const existingInvoice = new Invoice({
       number: 'DRAFT-000003',
-      prefix: 'F-202510-',
+      prefix: 'F-202510',
       status: 'DRAFT',
       issueDate: new Date(),
       workspaceId: testOptions.workspaceId,
@@ -72,7 +72,7 @@ async function testConversionConflict() {
     
     // Étape 2: Tenter de générer un nouveau numéro de facture (simulation de conversion)
     console.log('\n🔄 Étape 2: Générer un nouveau numéro de facture (simulation conversion devis)');
-    const newInvoiceNumber = await generateInvoiceNumber('F-202510-', {
+    const newInvoiceNumber = await generateInvoiceNumber('F-202510', {
       isDraft: true,
       workspaceId: testOptions.workspaceId,
       userId: testOptions.userId,
@@ -95,7 +95,7 @@ async function testConversionConflict() {
     console.log('\n💾 Étape 3: Créer la nouvelle facture en base');
     const newInvoice = new Invoice({
       number: newInvoiceNumber,
-      prefix: 'F-202510-',
+      prefix: 'F-202510',
       status: 'DRAFT',
       issueDate: new Date(),
       workspaceId: testOptions.workspaceId,

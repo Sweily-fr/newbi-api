@@ -22,7 +22,7 @@ const quoteSchema = new mongoose.Schema({
       const now = new Date();
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
-      return `D-${year}${month}-`;
+      return `D-${year}${month}`;
     },
     trim: true,
     validate: {

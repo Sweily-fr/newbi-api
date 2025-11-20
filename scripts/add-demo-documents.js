@@ -245,7 +245,7 @@ async function createDemoInvoices(userInfo, clients) {
     
     const invoice = {
       _id: new ObjectId(),
-      prefix: 'F-202409-',
+      prefix: 'F-202409',
       number: status === 'DRAFT' ? `DRAFT-${String(i).padStart(6, '0')}-${Date.now() + i}` : String(i).padStart(6, '0'),
       issueDate: issueDate,
       dueDate: new Date(issueDate.getTime() + 30 * 24 * 60 * 60 * 1000),
@@ -405,7 +405,7 @@ async function createDemoQuotes(userInfo, clients) {
     
     const quote = {
       _id: new ObjectId(),
-      prefix: 'D-202409-',
+      prefix: 'D-202409',
       number: String(i).padStart(6, '0'),
       issueDate: issueDate,
       validUntil: validUntil,
@@ -555,7 +555,7 @@ async function createDemoCreditNotes(userInfo, clients, invoices) {
     
     const creditNote = {
       _id: new ObjectId(),
-      prefix: 'AV-202409-',
+      prefix: 'AV-202409',
       number: String(i).padStart(6, '0'),
       originalInvoice: originalInvoice._id,
       originalInvoiceNumber: originalInvoice.number,

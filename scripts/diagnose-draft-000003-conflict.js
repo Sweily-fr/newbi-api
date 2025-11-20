@@ -61,7 +61,7 @@ async function testNumberGeneration() {
   
   try {
     console.log('🔄 Génération d\'un nouveau numéro de facture brouillon...');
-    const newNumber = await generateInvoiceNumber('F-202510-', testOptions);
+    const newNumber = await generateInvoiceNumber('F-202510', testOptions);
     console.log(`✅ Numéro généré: ${newNumber}`);
     
     // Vérifier si ce numéro existe déjà
@@ -91,7 +91,7 @@ async function simulateQuoteConversion() {
   
   try {
     // Simuler exactement ce qui se passe dans le resolver de conversion
-    const prefix = 'F-202510-';
+    const prefix = 'F-202510';
     const options = {
       isDraft: true,
       workspaceId: WORKSPACE_ID,

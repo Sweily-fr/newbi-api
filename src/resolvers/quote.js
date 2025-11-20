@@ -723,7 +723,7 @@ const quoteResolvers = {
               prefix = lastQuote.prefix;
             } else {
               // Aucun devis existant, utiliser le préfixe par défaut
-              prefix = `D-${month}${year}-`;
+              prefix = `D-${month}${year}`;
             }
             
             console.log('🔍 [updateQuote] Using prefix:', prefix);
@@ -834,7 +834,7 @@ const quoteResolvers = {
           prefix = lastQuote.prefix;
         } else {
           // Aucun devis existant, utiliser le préfixe par défaut
-          prefix = `D-${month}${year}-`;
+          prefix = `D-${month}${year}`;
         }
         
         console.log('🔍 [changeQuoteStatus] DRAFT → PENDING, prefix:', prefix);
@@ -1044,7 +1044,7 @@ const quoteResolvers = {
         const now = new Date();
         const year = now.getFullYear();
         const month = String(now.getMonth() + 1).padStart(2, "0");
-        const prefix = `F-${year}${month}-`;
+        const prefix = `F-${year}${month}`;
 
         // Par défaut, créer une seule facture pour le montant total
         const invoiceDistribution = distribution || [100];
