@@ -7,16 +7,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Charger le fichier .env selon l'environnement
-const envFile = process.env.NODE_ENV === 'production' 
-  ? '.env.production' 
-  : process.env.NODE_ENV === 'staging' 
-    ? '.env.staging' 
-    : '.env';
+const envFile =
+  process.env.NODE_ENV === "production"
+    ? ".env.production"
+    : process.env.NODE_ENV === "staging"
+    ? ".env.staging"
+    : ".env";
 
 const envPath = path.resolve(process.cwd(), envFile);
 dotenv.config({ path: envPath });
 
-console.log(`🌍 Environnement: ${process.env.NODE_ENV || 'development'}`);
+console.log(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
 console.log(`📄 Fichier .env chargé: ${envFile}`);
 
 import express from "express";
@@ -50,6 +51,7 @@ import webhookRoutes from "./routes/webhook.js";
 import stripeWebhookRoutes from "./routes/stripeWebhook.js";
 import fileTransferAuthRoutes from "./routes/fileTransferAuth.js";
 import fileDownloadRoutes from "./routes/fileDownload.js";
+import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
@@ -143,6 +145,13 @@ async function startServer() {
   app.use("/webhook", webhookRoutes);
   app.use("/webhook/stripe", stripeWebhookRoutes);
 
+  // Webhook pour les transferts de fichiers (DOIT être avant express.json())
+  app.post(
+    "/webhook/file-transfer",
+    express.raw({ type: "application/json" }),
+    handleFileTransferStripeWebhook
+  );
+
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
@@ -152,6 +161,9 @@ async function startServer() {
 
   // Routes file download proxy
   app.use("/api/files", fileDownloadRoutes);
+
+  // Routes admin cleanup (nécessite authentification)
+  app.use("/api/admin", validateJWT, cleanupAdminRoutes);
 
   // Routes banking (avec authentification JWT)
   app.use("/banking", validateJWT, bankingRoutes);
@@ -174,7 +186,7 @@ async function startServer() {
     schema,
     context: async ({ req }) => {
       const user = await betterAuthJWTMiddleware(req);
-      logger.debug(`GraphQL Context - User: ${user ? user._id : 'null'}`);
+      logger.debug(`GraphQL Context - User: ${user ? user._id : "null"}`);
       return {
         req,
         user,
@@ -194,65 +206,73 @@ async function startServer() {
   const httpServer = createServer(app);
 
   // Configurer les subscriptions WebSocket
-  const subscriptionServer = SubscriptionServer.create({
-    schema,
-    execute,
-    subscribe,
-    onConnect: async (connectionParams, webSocket) => {
-      logger.info('🔌 [WebSocket] Client connecté');
-      
-      // Récupérer le token d'authentification depuis les paramètres de connexion
-      const token = connectionParams?.authorization?.replace('Bearer ', '');
-      
-      if (token) {
-        try {
-          // Créer un faux objet req pour le middleware
-          const fakeReq = {
-            headers: {
-              authorization: `Bearer ${token}`
-            },
-            ip: '127.0.0.1', // IP par défaut pour WebSocket
-            get: (header) => {
-              if (header.toLowerCase() === 'authorization') {
-                return `Bearer ${token}`;
-              }
-              return null;
-            }
-          };
-          
-          // Utiliser betterAuthJWTMiddleware directement
-          const user = await betterAuthJWTMiddleware(fakeReq);
-          const workspaceId = user?.workspaceId;
-          
-          logger.debug(`WebSocket Context - User: ${user ? user._id : 'null'}`);
-          
-          return {
-            user,
-            workspaceId,
-            db: mongoose.connection.db, // Ajouter l'accès à la base de données MongoDB
-          };
-        } catch (error) {
-          logger.error('❌ [WebSocket] Erreur authentification:', error);
-          throw new Error('Authentication failed');
+  const subscriptionServer = SubscriptionServer.create(
+    {
+      schema,
+      execute,
+      subscribe,
+      onConnect: async (connectionParams, webSocket) => {
+        logger.info("🔌 [WebSocket] Client connecté");
+
+        // Récupérer le token d'authentification depuis les paramètres de connexion
+        const token = connectionParams?.authorization?.replace("Bearer ", "");
+
+        if (token) {
+          try {
+            // Créer un faux objet req pour le middleware
+            const fakeReq = {
+              headers: {
+                authorization: `Bearer ${token}`,
+              },
+              ip: "127.0.0.1", // IP par défaut pour WebSocket
+              get: (header) => {
+                if (header.toLowerCase() === "authorization") {
+                  return `Bearer ${token}`;
+                }
+                return null;
+              },
+            };
+
+            // Utiliser betterAuthJWTMiddleware directement
+            const user = await betterAuthJWTMiddleware(fakeReq);
+            const workspaceId = user?.workspaceId;
+
+            logger.debug(
+              `WebSocket Context - User: ${user ? user._id : "null"}`
+            );
+
+            return {
+              user,
+              workspaceId,
+              db: mongoose.connection.db, // Ajouter l'accès à la base de données MongoDB
+            };
+          } catch (error) {
+            logger.error("❌ [WebSocket] Erreur authentification:", error);
+            throw new Error("Authentication failed");
+          }
         }
-      }
-      
-      throw new Error('No authentication token provided');
+
+        throw new Error("No authentication token provided");
+      },
+      onDisconnect: (webSocket, context) => {
+        logger.info("🔌 [WebSocket] Client déconnecté");
+      },
     },
-    onDisconnect: (webSocket, context) => {
-      logger.info('🔌 [WebSocket] Client déconnecté');
-    },
-  }, {
-    server: httpServer,
-    path: '/graphql',
-  });
+    {
+      server: httpServer,
+      path: "/graphql",
+    }
+  );
 
   // Initialiser Redis PubSub
   try {
     await initializeRedis();
     logger.info("✅ Redis PubSub initialisé");
   } catch (error) {
-    logger.warn("⚠️ Redis PubSub non disponible, fallback vers PubSub en mémoire:", error.message);
+    logger.warn(
+      "⚠️ Redis PubSub non disponible, fallback vers PubSub en mémoire:",
+      error.message
+    );
   }
 
   // Initialiser le système banking
@@ -272,34 +292,34 @@ async function startServer() {
       `🔌 WebSocket subscriptions sur ws://localhost:${PORT}/graphql`
     );
     setupScheduledJobs();
-    
+
     // Démarrer le scheduler de rappels email
     emailReminderScheduler.start();
   });
 
   // Nettoyage propre à l'arrêt
-  process.on('SIGTERM', async () => {
-    logger.info('🛑 Arrêt du serveur en cours...');
+  process.on("SIGTERM", async () => {
+    logger.info("🛑 Arrêt du serveur en cours...");
     try {
       emailReminderScheduler.stop();
       subscriptionServer.close();
       await closeRedis();
-      logger.info('✅ Serveur arrêté proprement');
+      logger.info("✅ Serveur arrêté proprement");
     } catch (error) {
-      logger.error('❌ Erreur lors de l\'arrêt:', error);
+      logger.error("❌ Erreur lors de l'arrêt:", error);
     }
     process.exit(0);
   });
 
-  process.on('SIGINT', async () => {
-    logger.info('🛑 Interruption du serveur (Ctrl+C)...');
+  process.on("SIGINT", async () => {
+    logger.info("🛑 Interruption du serveur (Ctrl+C)...");
     try {
       emailReminderScheduler.stop();
       subscriptionServer.close();
       await closeRedis();
-      logger.info('✅ Serveur arrêté proprement');
+      logger.info("✅ Serveur arrêté proprement");
     } catch (error) {
-      logger.error('❌ Erreur lors de l\'arrêt:', error);
+      logger.error("❌ Erreur lors de l'arrêt:", error);
     }
     process.exit(0);
   });
@@ -307,19 +327,8 @@ async function startServer() {
 
 // Configuration des routes
 function setupRoutes(app) {
-  // Webhook Stripe
-  app.post(
-    "/webhook/stripe",
-    express.raw({ type: "application/json" }),
-    handleStripeWebhook
-  );
-
-  // Webhook pour les transferts de fichiers
-  app.post(
-    "/webhook/file-transfer",
-    express.raw({ type: "application/json" }),
-    handleFileTransferStripeWebhook
-  );
+  // Webhook Stripe (déjà configuré plus haut avec les autres webhooks)
+  // La route /webhook/file-transfer est maintenant définie avant express.json()
 
   // Téléchargement de fichiers
   app.get("/file-transfer/download-file", downloadFile);
@@ -332,9 +341,9 @@ function setupRoutes(app) {
 
 // Gestion des erreurs
 function formatError(error) {
-  console.error('❌ [GraphQL Error]:', error.message);
-  console.error('Path:', error.path);
-  console.error('Extensions:', error.extensions);
+  console.error("❌ [GraphQL Error]:", error.message);
+  console.error("Path:", error.path);
+  console.error("Extensions:", error.extensions);
   const originalError = error.originalError;
 
   if (originalError?.name === "AppError") {

@@ -99,10 +99,15 @@ export default {
             rar: "application/x-rar-compressed",
             "7z": "application/x-7z-compressed",
           };
-          const finalMimeType = mimeType || mimeTypes[ext] || "application/octet-stream";
+          const finalMimeType =
+            mimeType || mimeTypes[ext] || "application/octet-stream";
 
           console.log(
-            `🚀 Démarrage Multipart Upload pour ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB, ${totalParts} parts)`
+            `🚀 Démarrage Multipart Upload pour ${fileName} (${(
+              fileSize /
+              1024 /
+              1024
+            ).toFixed(2)} MB, ${totalParts} parts)`
           );
 
           const result = await cloudflareTransferService.startMultipartUpload(
@@ -136,11 +141,7 @@ export default {
 
     // Compléter un multipart upload
     completeMultipartUpload: isAuthenticated(
-      async (
-        _,
-        { uploadId, key, parts, transferId, fileId },
-        { user }
-      ) => {
+      async (_, { uploadId, key, parts, transferId, fileId }, { user }) => {
         try {
           if (!uploadId || !key || !parts || parts.length === 0) {
             throw new UserInputError(
@@ -152,17 +153,26 @@ export default {
             `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`
           );
 
-          const result = await cloudflareTransferService.completeMultipartUpload(
-            uploadId,
-            key,
-            parts
+          const result =
+            await cloudflareTransferService.completeMultipartUpload(
+              uploadId,
+              key,
+              parts
+            );
+
+          // ✅ CORRECTION: Extraire le nom original en retirant le préfixe f_fileId_
+          const keyFileName = key.split("/").pop(); // Ex: f_99bc5d90-b713-4250-be02-ab0ff68203d9_Capture.png
+          const cleanOriginalName = keyFileName.replace(/^f_[a-f0-9-]+_/, ""); // Retirer f_fileId_
+
+          console.log(
+            `📝 Nettoyage du nom: "${keyFileName}" → "${cleanOriginalName}"`
           );
 
           // Stocker les métadonnées dans le cache
           const fileMetadata = {
-            originalName: key.split("/").pop(),
-            displayName: key.split("/").pop(),
-            fileName: key.split("/").pop(),
+            originalName: cleanOriginalName, // ✅ Nom propre sans ID
+            displayName: cleanOriginalName, // ✅ Nom propre sans ID
+            fileName: keyFileName, // Nom complet avec ID pour le stockage
             filePath: result.url,
             r2Key: result.key,
             mimeType: "application/octet-stream",
@@ -192,7 +202,10 @@ export default {
           // En cas d'erreur, annuler le multipart upload
           if (uploadId && key) {
             try {
-              await cloudflareTransferService.abortMultipartUpload(uploadId, key);
+              await cloudflareTransferService.abortMultipartUpload(
+                uploadId,
+                key
+              );
             } catch (abortError) {
               console.error("Erreur annulation multipart:", abortError);
             }
@@ -212,11 +225,7 @@ export default {
 
     // Générer des URLs signées pour upload direct vers R2
     generatePresignedUploadUrls: isAuthenticated(
-      async (
-        _,
-        { fileId, totalChunks, fileName },
-        { user }
-      ) => {
+      async (_, { fileId, totalChunks, fileName }, { user }) => {
         try {
           if (!fileId || !fileName || !totalChunks) {
             throw new UserInputError(
@@ -273,10 +282,7 @@ export default {
             expiresIn: 3600,
           };
         } catch (error) {
-          console.error(
-            "❌ Erreur génération URLs signées:",
-            error
-          );
+          console.error("❌ Erreur génération URLs signées:", error);
 
           if (error instanceof UserInputError) {
             throw error;
@@ -333,8 +339,7 @@ export default {
               png: "image/png",
               pdf: "application/pdf",
               doc: "application/msword",
-              docx:
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
               txt: "text/plain",
               zip: "application/zip",
             };
@@ -379,10 +384,7 @@ export default {
             storageType: "r2",
           };
         } catch (error) {
-          console.error(
-            "❌ Erreur confirmation chunk:",
-            error
-          );
+          console.error("❌ Erreur confirmation chunk:", error);
 
           if (error instanceof UserInputError) {
             throw error;
@@ -443,7 +445,9 @@ export default {
             );
 
             if (!allChunksReceived) {
-              throw new Error(`Tous les chunks ne sont pas présents pour le fichier ${fileId}`);
+              throw new Error(
+                `Tous les chunks ne sont pas présents pour le fichier ${fileId}`
+              );
             }
             // Déterminer le type MIME
             const ext = fileName.split(".").pop()?.toLowerCase();
