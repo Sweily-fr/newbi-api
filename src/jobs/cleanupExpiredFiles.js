@@ -5,10 +5,10 @@
  * 2. Supprimer les fichiers physiques associés aux transferts expirés depuis plus de 48h
  */
 
-import FileTransfer from '../models/FileTransfer.js';
-import { deleteFile } from '../utils/fileTransferUtils.js';
-import { deleteFileFromR2 } from '../utils/chunkUploadR2Utils.js';
-import logger from '../utils/logger.js';
+import FileTransfer from "../models/FileTransfer.js";
+import { deleteFile } from "../utils/fileTransferUtils.js";
+import { deleteFileFromR2 } from "../utils/chunkUploadR2Utils.js";
+import logger from "../utils/logger.js";
 
 /**
  * Marque les transferts de fichiers expirés comme tels
@@ -16,25 +16,25 @@ import logger from '../utils/logger.js';
 async function markExpiredTransfers() {
   try {
     const now = new Date();
-    
+
     // Recherche tous les transferts actifs dont la date d'expiration est passée
     const expiredTransfers = await FileTransfer.find({
-      status: 'active',
-      expiryDate: { $lt: now }
+      status: "active",
+      expiryDate: { $lt: now },
     });
-    
+
     logger.info(`Marquage de ${expiredTransfers.length} transferts expirés`);
-    
+
     // Marquer chaque transfert comme expiré
     for (const transfer of expiredTransfers) {
-      transfer.status = 'expired';
+      transfer.status = "expired";
       await transfer.save();
       logger.info(`Transfert ${transfer._id} marqué comme expiré`);
     }
-    
+
     return expiredTransfers.length;
   } catch (error) {
-    logger.error('Erreur lors du marquage des transferts expirés:', error);
+    logger.error("Erreur lors du marquage des transferts expirés:", error);
     throw error;
   }
 }
@@ -45,61 +45,100 @@ async function markExpiredTransfers() {
 async function deleteExpiredFiles() {
   try {
     const now = new Date();
-    
+
     // Recherche tous les transferts expirés
     const expiredTransfers = await FileTransfer.find({
-      status: 'expired',
+      status: "expired",
       // On ne supprime que les fichiers des transferts expirés depuis au moins 48h
       // pour laisser une marge de sécurité
-      expiryDate: { $lt: new Date(now.getTime() - 48 * 60 * 60 * 1000) }
+      expiryDate: { $lt: new Date(now.getTime() - 48 * 60 * 60 * 1000) },
     });
-    
-    logger.info(`Suppression des fichiers de ${expiredTransfers.length} transferts expirés`);
-    
+
+    logger.info(
+      `🧹 Suppression des fichiers de ${expiredTransfers.length} transferts expirés (expirés depuis plus de 48h)`
+    );
+
     let deletedFilesCount = 0;
     let deletedR2FilesCount = 0;
-    
+    let failedDeletions = 0;
+    let totalSize = 0;
+
     // Supprimer les fichiers de chaque transfert
     for (const transfer of expiredTransfers) {
+      logger.info(
+        `📦 Traitement du transfert ${transfer._id} (${
+          transfer.files.length
+        } fichiers, expiré le ${transfer.expiryDate.toISOString()})`
+      );
+
       for (const file of transfer.files) {
         // Vérifier le type de stockage du fichier
-        if (file.storageType === 'r2' && file.r2Key) {
+        if (file.storageType === "r2" && file.r2Key) {
           // Fichier stocké sur Cloudflare R2
           try {
             const r2DeleteResult = await deleteFileFromR2(file.r2Key);
             if (r2DeleteResult) {
               deletedR2FilesCount++;
-              logger.info(`Fichier R2 supprimé: ${file.r2Key} (${file.originalName})`);
+              totalSize += file.size || 0;
+              logger.info(
+                `✅ Fichier R2 supprimé: ${file.r2Key} (${
+                  file.originalName
+                }) - ${(file.size / 1024 / 1024).toFixed(2)} MB`
+              );
             } else {
-              logger.warn(`Échec de suppression R2: ${file.r2Key} (${file.originalName})`);
+              failedDeletions++;
+              logger.warn(
+                `⚠️ Échec de suppression R2: ${file.r2Key} (${file.originalName})`
+              );
             }
           } catch (error) {
-            logger.error(`Erreur suppression R2 ${file.r2Key}:`, error);
+            failedDeletions++;
+            logger.error(`❌ Erreur suppression R2 ${file.r2Key}:`, error);
           }
         } else if (file.filePath) {
           // Fichier stocké localement
           const localDeleteResult = deleteFile(file.filePath);
           if (localDeleteResult) {
             deletedFilesCount++;
-            logger.info(`Fichier local supprimé: ${file.filePath} (${file.originalName})`);
+            totalSize += file.size || 0;
+            logger.info(
+              `✅ Fichier local supprimé: ${file.filePath} (${
+                file.originalName
+              }) - ${(file.size / 1024 / 1024).toFixed(2)} MB`
+            );
           } else {
-            logger.warn(`Échec de suppression locale: ${file.filePath} (${file.originalName})`);
+            failedDeletions++;
+            logger.warn(
+              `⚠️ Échec de suppression locale: ${file.filePath} (${file.originalName})`
+            );
           }
         }
       }
-      
-      logger.info(`Nettoyage terminé pour transfert ${transfer._id}`);
+
+      // Marquer le transfert comme "deleted" après suppression des fichiers
+      transfer.status = "deleted";
+      await transfer.save();
+
+      logger.info(`✅ Nettoyage terminé pour transfert ${transfer._id}`);
     }
-    
-    logger.info(`Suppression terminée: ${deletedFilesCount} fichiers locaux, ${deletedR2FilesCount} fichiers R2`);
-    
+
+    const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
+    logger.info(
+      `🎉 Suppression terminée: ${deletedFilesCount} fichiers locaux, ${deletedR2FilesCount} fichiers R2, ${failedDeletions} échecs, ${totalSizeMB} MB libérés`
+    );
+
     return {
       localFiles: deletedFilesCount,
       r2Files: deletedR2FilesCount,
-      total: deletedFilesCount + deletedR2FilesCount
+      failed: failedDeletions,
+      totalSizeMB,
+      total: deletedFilesCount + deletedR2FilesCount,
     };
   } catch (error) {
-    logger.error('Erreur lors de la suppression des fichiers expirés:', error);
+    logger.error(
+      "❌ Erreur lors de la suppression des fichiers expirés:",
+      error
+    );
     throw error;
   }
 }
@@ -109,25 +148,26 @@ async function deleteExpiredFiles() {
  */
 async function cleanupExpiredFiles() {
   try {
-    logger.info('Démarrage du job de nettoyage des fichiers expirés');
-    
+    logger.info("Démarrage du job de nettoyage des fichiers expirés");
+
     // Marquer les transferts expirés
     const markedCount = await markExpiredTransfers();
-    
+
     // Supprimer les fichiers physiques
     const deletedResult = await deleteExpiredFiles();
-    
-    logger.info(`Job de nettoyage terminé: ${markedCount} transferts marqués comme expirés, ${deletedResult.total} fichiers supprimés (${deletedResult.localFiles} locaux, ${deletedResult.r2Files} R2)`);
-    
+
+    logger.info(
+      `Job de nettoyage terminé: ${markedCount} transferts marqués comme expirés, ${deletedResult.total} fichiers supprimés (${deletedResult.localFiles} locaux, ${deletedResult.r2Files} R2)`
+    );
+
     return { markedCount, deletedResult };
   } catch (error) {
-    logger.error('Erreur lors du job de nettoyage des fichiers expirés:', error);
+    logger.error(
+      "Erreur lors du job de nettoyage des fichiers expirés:",
+      error
+    );
     throw error;
   }
 }
 
-export {
-  cleanupExpiredFiles,
-  markExpiredTransfers,
-  deleteExpiredFiles
-};
+export { cleanupExpiredFiles, markExpiredTransfers, deleteExpiredFiles };

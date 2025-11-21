@@ -137,10 +137,21 @@ export default {
         // La vérification d'accès individuel se fait dans le contrôleur d'autorisation
         const isAccessible = fileTransfer.isAccessible();
 
+        // Fonction pour nettoyer les noms de fichiers avec ID
+        const cleanFileName = (fileName) => {
+          if (!fileName) return fileName;
+          // Retirer l'UUID au début: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx_
+          const uuidPattern =
+            /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}_/i;
+          return fileName.replace(uuidPattern, "");
+        };
+
         // Préparer les informations du transfert avec URLs de téléchargement
         const filesWithDownloadUrls = fileTransfer.files.map((file) => ({
           ...file.toObject(),
           id: file._id.toString(), // Assurer que l'ID est présent
+          originalName: cleanFileName(file.originalName), // ✅ Nettoyer le nom à la volée
+          displayName: cleanFileName(file.displayName || file.originalName), // ✅ Nettoyer le displayName
           downloadUrl:
             file.storageType === "r2" ? file.filePath : file.filePath,
         }));
