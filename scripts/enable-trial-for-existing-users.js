@@ -151,9 +151,9 @@ class TrialActivationService {
     const orgName = organization.companyName || orgId.toString();
     
     try {
-      // Calculer les dates de trial (14 jours)
+      // Calculer les dates de trial (180 jours - 6 mois)
       const now = new Date();
-      const trialEndDate = new Date(now.getTime() + (14 * 24 * 60 * 60 * 1000));
+      const trialEndDate = new Date(now.getTime() + (180 * 24 * 60 * 60 * 1000));
       
       const trialData = {
         trialStartDate: now,
@@ -178,7 +178,7 @@ class TrialActivationService {
       );
       
       if (result.modifiedCount === 1) {
-        console.log(`✅ Trial activé pour ${orgName} (14 jours)`);
+        console.log(`✅ Trial activé pour ${orgName} (180 jours - 6 mois)`);
         this.stats.organizationsTrialActivated++;
         return true;
       } else {

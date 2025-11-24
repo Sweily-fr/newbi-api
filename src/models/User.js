@@ -319,6 +319,13 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
     
+    // Statut partenaire (apporteur d'affaires)
+    isPartner: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    
     // Préférences email pour les rappels
     emailPreferences: {
       reminders: {

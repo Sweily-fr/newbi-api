@@ -44,6 +44,7 @@ import {
   betterAuthJWTMiddleware,
   validateJWT,
 } from "./middlewares/better-auth-jwt.js";
+import { betterAuthMiddleware } from "./middlewares/better-auth.js";
 import { initializeRedis, closeRedis } from "./config/redis.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
@@ -107,6 +108,7 @@ async function startServer() {
   // Configuration CORS
   const allowedOrigins = [
     "http://localhost:3000",
+    "http://localhost:3001", // Espace partenaire
     "http://localhost:4000",
     "https://studio.apollographql.com",
     "https://www.newbi.fr",
@@ -185,7 +187,11 @@ async function startServer() {
   const server = new ApolloServer({
     schema,
     context: async ({ req }) => {
-      const user = await betterAuthJWTMiddleware(req);
+      // Essayer d'abord better-auth (cookies), puis JWT
+      let user = await betterAuthMiddleware(req);
+      if (!user) {
+        user = await betterAuthJWTMiddleware(req);
+      }
       logger.debug(`GraphQL Context - User: ${user ? user._id : "null"}`);
       return {
         req,

@@ -27,6 +27,7 @@ import trialResolvers from "./trialResolvers.js";
 import communitySuggestionResolvers from "./communitySuggestion.js";
 import blogResolvers from "./blog.js";
 import { clientListResolvers } from "./clientList.js";
+import partnerResolvers from "./partner.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -57,6 +58,7 @@ const resolvers = mergeResolvers([
   trialResolvers,
   communitySuggestionResolvers,
   blogResolvers,
+  partnerResolvers,
 ]);
 
 export default resolvers;

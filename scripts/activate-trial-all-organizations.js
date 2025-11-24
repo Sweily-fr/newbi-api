@@ -5,7 +5,7 @@
  * - hasUsedTrial: true
  * - isTrialActive: true
  * - trialStartDate: Date actuelle
- * - trialEndDate: Date actuelle + 14 jours
+ * - trialEndDate: Date actuelle + 180 jours (6 mois)
  * 
  * Usage:
  *   node scripts/activate-trial-all-organizations.js
@@ -104,7 +104,7 @@ async function activateTrialForAllOrganizations(dryRun = true) {
 
     // Calcule les dates
     const now = new Date();
-    const trialEndDate = new Date(now.getTime() + (14 * 24 * 60 * 60 * 1000)); // +14 jours
+    const trialEndDate = new Date(now.getTime() + (180 * 24 * 60 * 60 * 1000)); // +180 jours (6 mois)
 
     console.log('\n🚀 Mise à jour en cours...\n');
 

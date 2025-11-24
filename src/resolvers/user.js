@@ -921,6 +921,42 @@ const userResolvers = {
     ),
 
     /**
+     * Met à jour le statut partenaire d'un utilisateur
+     */
+    updatePartnerStatus: async (_, { email, isPartner }) => {
+      try {
+        // Trouver l'utilisateur par email
+        const user = await User.findOne({ email: email.toLowerCase() });
+        
+        if (!user) {
+          throw createNotFoundError("Utilisateur non trouvé");
+        }
+
+        // Mettre à jour le statut partenaire
+        user.isPartner = isPartner;
+        
+        // Générer un code de parrainage si l'utilisateur devient partenaire et n'en a pas
+        if (isPartner && !user.referralCode) {
+          user.referralCode = crypto.randomBytes(8).toString("hex").toUpperCase();
+        }
+        
+        await user.save();
+
+        console.log(`✅ Utilisateur ${email} mis à jour : isPartner=${isPartner}`);
+        
+        return user;
+      } catch (error) {
+        if (error.name === "AppError") throw error;
+        
+        console.error("Erreur lors de la mise à jour du statut partenaire:", error);
+        throw new AppError(
+          "Erreur lors de la mise à jour du statut partenaire",
+          ERROR_CODES.INTERNAL_ERROR
+        );
+      }
+    },
+
+    /**
      * Met à jour uniquement le logo de l'entreprise
      */
     updateCompanyLogo: withWorkspace(

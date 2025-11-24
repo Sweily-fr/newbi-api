@@ -1,0 +1,74 @@
+type PartnerStats {
+  totalEarnings: Float!
+  availableBalance: Float!
+  totalRevenue: Float!
+  activeReferrals: Int!
+  totalReferrals: Int!
+  commissionRate: Float!
+  currentTier: String!
+  nextTier: String
+  progressToNextTier: Float!
+  earningsHistory: [MonthlyEarnings!]!
+  revenueHistory: [MonthlyRevenue!]!
+  withdrawals: [Withdrawal!]!
+}
+
+type MonthlyEarnings {
+  month: String!
+  year: Int!
+  earnings: Float!
+}
+
+type MonthlyRevenue {
+  month: String!
+  year: Int!
+  revenue: Float!
+}
+
+type Withdrawal {
+  id: ID!
+  amount: Float!
+  status: String!
+  requestedAt: String!
+  processedAt: String
+  method: String
+  bankDetails: BankDetailsInfo
+}
+
+type BankDetailsInfo {
+  iban: String
+  bic: String
+  accountHolder: String
+}
+
+type CommissionTier {
+  name: String!
+  percentage: Float!
+  minRevenue: Float!
+  maxRevenue: Float
+}
+
+type WithdrawalResponse {
+  success: Boolean!
+  message: String!
+  withdrawal: Withdrawal
+}
+
+type Query {
+  # Récupérer les statistiques du partenaire connecté
+  getPartnerStats: PartnerStats!
+  
+  # Récupérer les paliers de commission
+  getCommissionTiers: [CommissionTier!]!
+  
+  # Récupérer l'historique des retraits
+  getWithdrawals: [Withdrawal!]!
+}
+
+type Mutation {
+  # Demander un retrait de gains
+  requestWithdrawal(
+    amount: Float!
+    method: String!
+  ): WithdrawalResponse!
+}

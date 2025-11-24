@@ -16,6 +16,8 @@ type User {
   profile: UserProfile
   company: Company
   subscription: Subscription
+  isPartner: Boolean
+  referralCode: String
   createdAt: String!
   updatedAt: String!
 }
@@ -118,4 +120,5 @@ extend type Mutation {
     password: String!
   ): ReactivateAccountResponse!
   setStripeCustomerId(stripeCustomerId: String!): User!
+  updatePartnerStatus(email: String!, isPartner: Boolean!): User!
 }

@@ -180,7 +180,7 @@ class OrganizationTrialService {
       }
 
       const now = new Date();
-      const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 14 jours
+      const trialEnd = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000); // 6 mois (180 jours)
 
       const organizationCollection = this.getOrganizationCollection();
       await organizationCollection.updateOne(
