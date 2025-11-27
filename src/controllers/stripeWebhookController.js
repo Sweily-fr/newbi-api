@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import FileTransfer from '../models/FileTransfer.js';
 import AccessGrant from '../models/AccessGrant.js';
 import User from '../models/User.js';
+import PartnerCommission from '../models/PartnerCommission.js';
 import logger from '../utils/logger.js';
 import { sendFileTransferPaymentNotification } from '../utils/mailer.js';
 
@@ -294,11 +295,117 @@ async function handleInvoicePaymentSucceeded(invoice) {
       return;
     }
 
-    // Logique de traitement du paiement
-    logger.info('✅ Paiement traité avec succès', {
-      userId: user._id,
+    // Vérifier si l'utilisateur a été parrainé
+    if (!user.referredBy) {
+      logger.info('🔍 Utilisateur non parrainé, pas de commission à créer', {
+        userId: user._id
+      });
+      return;
+    }
+
+    // Trouver le partenaire qui a parrainé cet utilisateur
+    const partner = await User.findOne({ 
+      referralCode: user.referredBy,
+      isPartner: true 
+    });
+
+    if (!partner) {
+      logger.warn('⚠️  Code de parrainage invalide ou partenaire non trouvé', {
+        referredBy: user.referredBy,
+        userId: user._id
+      });
+      return;
+    }
+
+    // Calculer le CA cumulé du partenaire (commissions confirmées/payées)
+    const existingCommissions = await PartnerCommission.find({
+      partnerId: partner._id,
+      status: { $in: ['confirmed', 'paid'] }
+    });
+
+    const cumulativeRevenue = existingCommissions.reduce((sum, c) => sum + (c.paymentAmount || 0), 0);
+    const paymentAmount = invoice.amount_paid / 100; // Convertir de centimes en euros
+    const newCumulativeRevenue = cumulativeRevenue + paymentAmount;
+
+    // Paliers de commission
+    const tiers = [
+      { min: 0, max: 1000, rate: 20, name: 'Bronze 🥉' },
+      { min: 1000, max: 5000, rate: 25, name: 'Argent 🥈' },
+      { min: 5000, max: 10000, rate: 30, name: 'Or 🥇' },
+      { min: 10000, max: Infinity, rate: 50, name: 'Platine 💎' }
+    ];
+
+    // Fonction pour calculer la commission avec paliers progressifs
+    const calculateCommission = (startRevenue, amount) => {
+      let remaining = amount;
+      let totalCommission = 0;
+      let currentRevenue = startRevenue;
+
+      for (const tier of tiers) {
+        if (currentRevenue >= tier.max) {
+          // On a déjà dépassé ce palier
+          continue;
+        }
+
+        // Calculer combien on peut mettre dans ce palier
+        const availableInTier = tier.max - Math.max(currentRevenue, tier.min);
+        const amountInTier = Math.min(remaining, availableInTier);
+
+        if (amountInTier > 0) {
+          const commissionInTier = (amountInTier * tier.rate) / 100;
+          totalCommission += commissionInTier;
+          remaining -= amountInTier;
+          currentRevenue += amountInTier;
+
+          logger.info(`  📊 ${tier.name}: ${amountInTier.toFixed(2)}€ × ${tier.rate}% = ${commissionInTier.toFixed(2)}€`);
+        }
+
+        if (remaining <= 0) break;
+      }
+
+      return totalCommission;
+    };
+
+    // Calculer la commission
+    const commissionAmount = calculateCommission(cumulativeRevenue, paymentAmount);
+    const commissionRate = (commissionAmount / paymentAmount) * 100; // Taux moyen
+
+    // Déterminer le palier actuel pour le log
+    const currentTier = tiers.find(t => newCumulativeRevenue > t.min && newCumulativeRevenue <= t.max) || tiers[tiers.length - 1];
+    
+    logger.info(`💰 Commission calculée avec paliers progressifs`, {
+      cumulativeRevenue: cumulativeRevenue.toFixed(2),
+      newCumulativeRevenue: newCumulativeRevenue.toFixed(2),
+      paymentAmount: paymentAmount.toFixed(2),
+      commissionAmount: commissionAmount.toFixed(2),
+      averageRate: `${commissionRate.toFixed(2)}%`,
+      currentTier: currentTier.name
+    });
+
+    // Créer la commission
+    const commission = new PartnerCommission({
+      partnerId: partner._id,
+      referralId: user._id,
       subscriptionId: subscription.id,
-      amountPaid: invoice.amount_paid / 100,
+      paymentAmount: paymentAmount,
+      commissionRate: commissionRate,
+      commissionAmount: commissionAmount,
+      subscriptionType: 'annual',
+      status: 'confirmed',
+      generatedAt: new Date(),
+      confirmedAt: new Date(),
+    });
+
+    await commission.save();
+
+    logger.info('✅ Commission de parrainage créée', {
+      partnerId: partner._id,
+      partnerEmail: partner.email,
+      referralId: user._id,
+      referralEmail: user.email,
+      commissionAmount: commissionAmount,
+      paymentAmount: paymentAmount,
+      subscriptionId: subscription.id,
       invoiceId: invoice.id
     });
 

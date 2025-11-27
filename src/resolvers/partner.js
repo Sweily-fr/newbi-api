@@ -1,5 +1,7 @@
+import mongoose from 'mongoose';
 import PartnerCommission from '../models/PartnerCommission.js';
 import Withdrawal from '../models/Withdrawal.js';
+import User from '../models/User.js';
 import { AppError, ERROR_CODES } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 
@@ -148,13 +150,13 @@ const partnerResolvers = {
           0
         );
 
-        // Calculer le solde disponible (gains - retraits complétés)
-        const completedWithdrawals = await Withdrawal.find({
+        // Calculer le solde disponible (gains - retraits complétés et en cours)
+        const allWithdrawals = await Withdrawal.find({
           partnerId: user._id,
-          status: 'completed',
+          status: { $in: ['completed', 'pending', 'processing'] },
         });
 
-        const totalWithdrawn = completedWithdrawals.reduce(
+        const totalWithdrawn = allWithdrawals.reduce(
           (sum, w) => sum + w.amount,
           0
         );
@@ -265,9 +267,226 @@ const partnerResolvers = {
         throw new AppError('Erreur lors de la récupération des retraits', ERROR_CODES.INTERNAL_ERROR);
       }
     },
+
+    /**
+     * Récupère les coordonnées bancaires de l'organisation
+     */
+    getOrganizationBankDetails: async (_, { organizationId }) => {
+      try {
+        const db = mongoose.connection.db;
+        
+        const organization = await db.collection('organization').findOne({
+          _id: new mongoose.Types.ObjectId(organizationId)
+        });
+
+        if (!organization) {
+          return null;
+        }
+
+        return {
+          bankName: organization.bankName || null,
+          bankIban: organization.bankIban || null,
+          bankBic: organization.bankBic || null,
+        };
+      } catch (error) {
+        logger.error('Erreur lors de la récupération des coordonnées bancaires:', error);
+        return null;
+      }
+    },
+
+    /**
+     * ADMIN: Récupère tous les retraits (avec filtre optionnel par statut)
+     */
+    getAllWithdrawals: async (_, { status }, { user }) => {
+      if (!user) {
+        throw new AppError('Non authentifié', ERROR_CODES.UNAUTHORIZED);
+      }
+
+      // Vérifier que l'utilisateur est admin
+      const adminDomains = ['@sweily.fr', '@newbi.fr'];
+      const isAdmin = adminDomains.some(domain => user.email?.toLowerCase().endsWith(domain));
+      
+      if (!isAdmin) {
+        throw new AppError('Accès refusé - Réservé aux administrateurs', ERROR_CODES.FORBIDDEN);
+      }
+
+      try {
+        const filter = status ? { status } : {};
+        const withdrawals = await Withdrawal.find(filter)
+          .sort({ requestedAt: -1 })
+          .lean();
+
+        // Récupérer les infos des partenaires et calculer leurs stats
+        const withdrawalsWithPartnerInfo = await Promise.all(
+          withdrawals.map(async (w) => {
+            const partner = await User.findById(w.partnerId).lean();
+            
+            if (!partner) {
+              return null;
+            }
+
+            // Calculer les gains totaux
+            const confirmedCommissions = await PartnerCommission.find({
+              partnerId: w.partnerId,
+              status: { $in: ['confirmed', 'paid'] },
+            });
+
+            const totalEarnings = confirmedCommissions.reduce(
+              (sum, comm) => sum + comm.commissionAmount,
+              0
+            );
+
+            // Calculer le solde disponible
+            const allWithdrawals = await Withdrawal.find({
+              partnerId: w.partnerId,
+              status: { $in: ['completed', 'pending', 'processing'] },
+            });
+
+            const totalWithdrawn = allWithdrawals.reduce(
+              (sum, withdrawal) => sum + withdrawal.amount,
+              0
+            );
+
+            const availableBalance = totalEarnings - totalWithdrawn;
+
+            return {
+              id: w._id.toString(),
+              amount: w.amount,
+              status: w.status,
+              requestedAt: w.requestedAt.toISOString(),
+              processedAt: w.processedAt?.toISOString() || null,
+              method: w.method,
+              bankDetails: w.bankDetails || null,
+              partner: {
+                id: partner._id.toString(),
+                name: partner.name || partner.email,
+                email: partner.email,
+                totalEarnings,
+                availableBalance,
+              },
+            };
+          })
+        );
+
+        return withdrawalsWithPartnerInfo.filter(w => w !== null);
+      } catch (error) {
+        logger.error('Erreur lors de la récupération des retraits (admin):', error);
+        throw new AppError('Erreur lors de la récupération des retraits', ERROR_CODES.INTERNAL_ERROR);
+      }
+    },
+
+    /**
+     * Récupère la liste détaillée des filleuls avec leurs commissions
+     */
+    getPartnerReferrals: async (_, __, { user }) => {
+      if (!user) {
+        throw new AppError('Non authentifié', ERROR_CODES.UNAUTHORIZED);
+      }
+
+      if (!user.isPartner) {
+        throw new AppError('Accès refusé - Vous devez être partenaire', ERROR_CODES.FORBIDDEN);
+      }
+
+      try {
+        // Récupérer le code de parrainage du partenaire
+        const partner = await User.findById(user._id);
+        if (!partner || !partner.referralCode) {
+          logger.warn(`Partenaire ${user._id} sans code de parrainage`);
+          return [];
+        }
+
+        logger.info(`Recherche des filleuls avec referredBy: ${partner.referralCode}`);
+
+        // Récupérer tous les utilisateurs qui ont ce code de parrainage
+        const referrals = await User.find({
+          referredBy: partner.referralCode
+        }).sort({ createdAt: -1 });
+
+        logger.info(`${referrals.length} filleuls trouvés`);
+
+        // Pour chaque filleul, récupérer ses commissions
+        const referralsWithCommissions = await Promise.all(
+          referrals.map(async (referral) => {
+            // Récupérer les commissions confirmées/payées pour ce filleul
+            const commissions = await PartnerCommission.find({
+              partnerId: partner._id,
+              referralId: referral._id,
+              status: { $in: ['confirmed', 'paid'] }
+            });
+
+            // Calculer les totaux
+            const totalRevenue = commissions.reduce((sum, c) => sum + (c.paymentAmount || 0), 0);
+            const totalCommission = commissions.reduce((sum, c) => sum + (c.commissionAmount || 0), 0);
+
+            // Déterminer le type d'abonnement et le prix (prendre la dernière commission)
+            const lastCommission = commissions[0];
+            const subscriptionType = lastCommission?.subscriptionType === 'annual' ? 'ANNUAL' : 'MONTHLY';
+            const subscriptionPrice = lastCommission?.paymentAmount || 0;
+
+            // Déterminer le statut
+            const status = commissions.length > 0 ? 'ACTIVE' : 'TRIAL';
+
+            return {
+              id: referral._id.toString(),
+              name: referral.profile?.firstName && referral.profile?.lastName
+                ? `${referral.profile.firstName} ${referral.profile.lastName}`
+                : null,
+              email: referral.email || 'Email non disponible',
+              company: referral.company?.name || null,
+              subscriptionType,
+              subscriptionPrice,
+              status,
+              registrationDate: referral.createdAt 
+                ? referral.createdAt.toISOString() 
+                : new Date().toISOString(),
+              totalRevenue,
+              commission: totalCommission,
+            };
+          })
+        );
+
+        logger.info(`Données complètes préparées pour ${referralsWithCommissions.length} filleuls`);
+
+        return referralsWithCommissions;
+      } catch (error) {
+        logger.error('Erreur lors de la récupération des filleuls:', error);
+        logger.error('Stack trace:', error.stack);
+        throw new AppError('Erreur lors de la récupération des filleuls', ERROR_CODES.INTERNAL_ERROR);
+      }
+    },
   },
 
   Mutation: {
+    /**
+     * Mettre à jour les coordonnées bancaires de l'organisation
+     */
+    updateOrganizationBankDetails: async (_, { organizationId, bankName, bankIban, bankBic }) => {
+      try {
+        const db = mongoose.connection.db;
+
+        await db.collection('organization').updateOne(
+          { _id: new mongoose.Types.ObjectId(organizationId) },
+          {
+            $set: {
+              bankName,
+              bankIban,
+              bankBic,
+            }
+          }
+        );
+
+        logger.info(`Coordonnées bancaires mises à jour pour l'organisation: ${organizationId}`);
+
+        return {
+          success: true,
+          message: 'Coordonnées bancaires mises à jour avec succès',
+        };
+      } catch (error) {
+        logger.error('Erreur lors de la mise à jour des coordonnées bancaires:', error);
+        throw new AppError('Erreur lors de la mise à jour des coordonnées bancaires', ERROR_CODES.INTERNAL_ERROR);
+      }
+    },
+
     /**
      * Demander un retrait de gains
      */
@@ -281,6 +500,18 @@ const partnerResolvers = {
       }
 
       try {
+        // Vérifier la période de retrait autorisée (28 au 5 de chaque mois)
+        const today = new Date();
+        const day = today.getDate();
+        const isWithdrawalPeriod = day >= 28 || day <= 5;
+        
+        if (!isWithdrawalPeriod) {
+          throw new AppError(
+            'Les demandes de retrait sont autorisées uniquement du 28 au 5 de chaque mois',
+            ERROR_CODES.VALIDATION_ERROR
+          );
+        }
+
         // Vérifier le montant minimum
         if (amount < 50) {
           throw new AppError('Le montant minimum de retrait est de 50€', ERROR_CODES.VALIDATION_ERROR);
@@ -297,12 +528,13 @@ const partnerResolvers = {
           0
         );
 
-        const completedWithdrawals = await Withdrawal.find({
+        // Déduire tous les retraits (complétés et en cours)
+        const allWithdrawals = await Withdrawal.find({
           partnerId: user._id,
-          status: 'completed',
+          status: { $in: ['completed', 'pending', 'processing'] },
         });
 
-        const totalWithdrawn = completedWithdrawals.reduce(
+        const totalWithdrawn = allWithdrawals.reduce(
           (sum, w) => sum + w.amount,
           0
         );
@@ -342,6 +574,23 @@ const partnerResolvers = {
 
         logger.info(`Demande de retrait créée: ${withdrawal._id} - ${amount}€ pour ${user.email}`);
 
+        // Envoyer les emails de notification
+        try {
+          const { sendWithdrawalEmails } = await import('../services/emailService.js');
+          
+          await sendWithdrawalEmails({
+            partnerEmail: user.email,
+            partnerName: user.name || user.email,
+            amount,
+            withdrawalId: withdrawal._id.toString(),
+          });
+          
+          logger.info(`Emails de retrait envoyés pour ${user.email}`);
+        } catch (emailError) {
+          // Ne pas bloquer la demande de retrait si l'email échoue
+          logger.error('Erreur lors de l\'envoi des emails de retrait:', emailError);
+        }
+
         return {
           success: true,
           message: 'Demande de retrait créée avec succès',
@@ -359,6 +608,113 @@ const partnerResolvers = {
         if (error.name === 'AppError') throw error;
         logger.error('Erreur lors de la création du retrait:', error);
         throw new AppError('Erreur lors de la création de la demande de retrait', ERROR_CODES.INTERNAL_ERROR);
+      }
+    },
+
+    /**
+     * ADMIN: Approuver un retrait
+     */
+    approveWithdrawal: async (_, { withdrawalId }, { user }) => {
+      if (!user) {
+        throw new AppError('Non authentifié', ERROR_CODES.UNAUTHORIZED);
+      }
+
+      // Vérifier que l'utilisateur est admin
+      const adminDomains = ['@sweily.fr', '@newbi.fr'];
+      const isAdmin = adminDomains.some(domain => user.email?.toLowerCase().endsWith(domain));
+      
+      if (!isAdmin) {
+        throw new AppError('Accès refusé - Réservé aux administrateurs', ERROR_CODES.FORBIDDEN);
+      }
+
+      try {
+        const withdrawal = await Withdrawal.findById(withdrawalId);
+
+        if (!withdrawal) {
+          throw new AppError('Retrait introuvable', ERROR_CODES.NOT_FOUND);
+        }
+
+        if (withdrawal.status !== 'pending') {
+          throw new AppError('Ce retrait a déjà été traité', ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        withdrawal.status = 'completed';
+        withdrawal.processedAt = new Date();
+        await withdrawal.save();
+
+        logger.info(`Retrait ${withdrawalId} approuvé par ${user.email}`);
+
+        return {
+          success: true,
+          message: 'Retrait approuvé avec succès',
+          withdrawal: {
+            id: withdrawal._id.toString(),
+            amount: withdrawal.amount,
+            status: withdrawal.status,
+            requestedAt: withdrawal.requestedAt.toISOString(),
+            processedAt: withdrawal.processedAt.toISOString(),
+            method: withdrawal.method,
+            bankDetails: withdrawal.bankDetails || null,
+          },
+        };
+      } catch (error) {
+        if (error.name === 'AppError') throw error;
+        logger.error('Erreur lors de l\'approbation du retrait:', error);
+        throw new AppError('Erreur lors de l\'approbation du retrait', ERROR_CODES.INTERNAL_ERROR);
+      }
+    },
+
+    /**
+     * ADMIN: Rejeter un retrait
+     */
+    rejectWithdrawal: async (_, { withdrawalId, reason }, { user }) => {
+      if (!user) {
+        throw new AppError('Non authentifié', ERROR_CODES.UNAUTHORIZED);
+      }
+
+      // Vérifier que l'utilisateur est admin
+      const adminDomains = ['@sweily.fr', '@newbi.fr'];
+      const isAdmin = adminDomains.some(domain => user.email?.toLowerCase().endsWith(domain));
+      
+      if (!isAdmin) {
+        throw new AppError('Accès refusé - Réservé aux administrateurs', ERROR_CODES.FORBIDDEN);
+      }
+
+      try {
+        const withdrawal = await Withdrawal.findById(withdrawalId);
+
+        if (!withdrawal) {
+          throw new AppError('Retrait introuvable', ERROR_CODES.NOT_FOUND);
+        }
+
+        if (withdrawal.status !== 'pending') {
+          throw new AppError('Ce retrait a déjà été traité', ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        withdrawal.status = 'rejected';
+        withdrawal.processedAt = new Date();
+        withdrawal.rejectionReason = reason || 'Non spécifié';
+        await withdrawal.save();
+
+        logger.info(`Retrait ${withdrawalId} rejeté par ${user.email}. Raison: ${reason}`);
+
+        return {
+          success: true,
+          message: 'Retrait rejeté',
+          withdrawal: {
+            id: withdrawal._id.toString(),
+            amount: withdrawal.amount,
+            status: withdrawal.status,
+            requestedAt: withdrawal.requestedAt.toISOString(),
+            processedAt: withdrawal.processedAt.toISOString(),
+            method: withdrawal.method,
+            bankDetails: withdrawal.bankDetails || null,
+          },
+        };
+      } catch (error) {
+        if (error.name === 'AppError') throw error;
+        logger.error('Erreur lors du rejet du retrait:', error);
+        throw new AppError('Erreur lors du rejet du retrait', ERROR_CODES.INTERNAL_ERROR);
       }
     },
   },

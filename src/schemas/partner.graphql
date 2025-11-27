@@ -35,6 +35,25 @@ type Withdrawal {
   bankDetails: BankDetailsInfo
 }
 
+type WithdrawalAdmin {
+  id: ID!
+  amount: Float!
+  status: String!
+  requestedAt: String!
+  processedAt: String
+  method: String
+  bankDetails: BankDetailsInfo
+  partner: PartnerInfo!
+}
+
+type PartnerInfo {
+  id: ID!
+  name: String!
+  email: String!
+  totalEarnings: Float!
+  availableBalance: Float!
+}
+
 type BankDetailsInfo {
   iban: String
   bic: String
@@ -54,6 +73,25 @@ type WithdrawalResponse {
   withdrawal: Withdrawal
 }
 
+type ReferralDetail {
+  id: ID!
+  name: String
+  email: String!
+  company: String
+  subscriptionType: String
+  subscriptionPrice: Float
+  status: String!
+  registrationDate: String!
+  totalRevenue: Float!
+  commission: Float!
+}
+
+type OrganizationBankDetails {
+  bankName: String
+  bankIban: String
+  bankBic: String
+}
+
 type Query {
   # Récupérer les statistiques du partenaire connecté
   getPartnerStats: PartnerStats!
@@ -63,6 +101,15 @@ type Query {
   
   # Récupérer l'historique des retraits
   getWithdrawals: [Withdrawal!]!
+  
+  # Récupérer la liste détaillée des filleuls avec leurs commissions
+  getPartnerReferrals: [ReferralDetail!]!
+  
+  # Récupérer les coordonnées bancaires de l'organisation
+  getOrganizationBankDetails(organizationId: ID!): OrganizationBankDetails
+  
+  # ADMIN: Récupérer tous les retraits en attente (admin uniquement)
+  getAllWithdrawals(status: String): [WithdrawalAdmin!]!
 }
 
 type Mutation {
@@ -71,4 +118,18 @@ type Mutation {
     amount: Float!
     method: String!
   ): WithdrawalResponse!
+  
+  # Mettre à jour les coordonnées bancaires de l'organisation
+  updateOrganizationBankDetails(
+    organizationId: ID!
+    bankName: String!
+    bankIban: String!
+    bankBic: String!
+  ): WithdrawalResponse!
+  
+  # ADMIN: Approuver un retrait (admin uniquement)
+  approveWithdrawal(withdrawalId: ID!): WithdrawalResponse!
+  
+  # ADMIN: Rejeter un retrait (admin uniquement)
+  rejectWithdrawal(withdrawalId: ID!, reason: String): WithdrawalResponse!
 }
