@@ -70,9 +70,19 @@ async function generateDocumentPdf(documentId, documentType) {
   }
   
   try {
+    // Construire le body avec le bon paramètre selon le type de document
+    const body = {};
+    if (documentType === DOCUMENT_TYPES.INVOICE) {
+      body.invoiceId = documentId;
+    } else if (documentType === DOCUMENT_TYPES.QUOTE) {
+      body.quoteId = documentId;
+    } else if (documentType === DOCUMENT_TYPES.CREDIT_NOTE) {
+      body.creditNoteId = documentId;
+    }
+    
     const response = await axios.post(
       `${frontendUrl}${endpoint}`,
-      { [`${documentType}Id`]: documentId, invoiceId: documentId },
+      body,
       { responseType: 'arraybuffer', timeout: 60000 }
     );
     return Buffer.from(response.data);
