@@ -138,6 +138,8 @@ async function startServer() {
         "Range",
         "apollo-require-preflight",
         "x-workspace-id",
+        "x-organization-id", // Nouveau: ID de l'organisation
+        "x-user-role", // Nouveau: Rôle de l'utilisateur
       ],
       exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
     })
@@ -192,11 +194,25 @@ async function startServer() {
       if (!user) {
         user = await betterAuthJWTMiddleware(req);
       }
-      logger.debug(`GraphQL Context - User: ${user ? user._id : "null"}`);
+
+      // Récupérer l'organizationId depuis les headers (envoyé par le frontend)
+      const organizationId = req.headers["x-organization-id"] || null;
+
+      // Récupérer le userRole depuis les headers (envoyé par le frontend)
+      const userRole = req.headers["x-user-role"] || null;
+
+      logger.debug(
+        `GraphQL Context - User: ${
+          user ? user._id : "null"
+        }, Organization: ${organizationId}, Role: ${userRole}`
+      );
+
       return {
         req,
         user,
         workspaceId: user?.workspaceId,
+        organizationId, // Nouveau: ID de l'organisation active
+        userRole, // Nouveau: Rôle de l'utilisateur dans l'organisation
         db: mongoose.connection.db, // Ajouter l'accès à la base de données MongoDB
       };
     },

@@ -1,9 +1,9 @@
-import dotenv from 'dotenv';
+import dotenv from "dotenv";
 dotenv.config();
 
-import Stripe from 'stripe';
-import logger from '../utils/logger.js';
-import StripeConnectAccount from '../models/StripeConnectAccount.js';
+import Stripe from "stripe";
+import logger from "../utils/logger.js";
+import StripeConnectAccount from "../models/StripeConnectAccount.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -12,19 +12,32 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
  */
 const stripeConnectService = {
   /**
-   * Crée un compte Stripe Connect Express pour un utilisateur
-   * @param {string} userId - ID de l'utilisateur
+   * Crée un compte Stripe Connect Express pour une organisation
+   * @param {string} organizationId - ID de l'organisation (Better Auth)
+   * @param {string} userId - ID de l'utilisateur (pour fallback/compatibilité)
    * @returns {Promise<Object>} - Réponse avec l'ID du compte Stripe Connect
    */
-  async createConnectAccount(userId) {
+  async createConnectAccount(organizationId, userId = null) {
     try {
-      // Vérifier si l'utilisateur a déjà un compte Stripe Connect
-      const existingAccount = await StripeConnectAccount.findOne({ userId });
+      // Vérifier si l'organisation a déjà un compte Stripe Connect
+      let existingAccount = null;
+      if (organizationId) {
+        existingAccount = await StripeConnectAccount.findOne({
+          organizationId,
+        });
+      }
+
+      // Fallback: vérifier avec userId pour compatibilité
+      if (!existingAccount && userId) {
+        existingAccount = await StripeConnectAccount.findOne({ userId });
+      }
+
       if (existingAccount) {
         return {
           success: true,
           accountId: existingAccount.accountId,
-          message: "Un compte Stripe Connect existe déjà pour cet utilisateur",
+          message:
+            "Un compte Stripe Connect existe déjà pour cette organisation",
         };
       }
 
@@ -37,13 +50,15 @@ const stripeConnectService = {
         },
         business_type: "individual",
         metadata: {
-          userId: userId.toString(), // Convertir l'ObjectId en string pour Stripe
+          organizationId: organizationId || "N/A",
+          userId: userId ? userId.toString() : "N/A",
         },
       });
 
       // Enregistrer le compte dans la base de données
       const stripeConnectAccount = new StripeConnectAccount({
-        userId,
+        organizationId, // Nouveau: ID de l'organisation
+        userId, // Ancien: gardé pour compatibilité
         accountId: account.id,
         isOnboarded: false,
         chargesEnabled: account.charges_enabled || false,
@@ -87,6 +102,7 @@ const stripeConnectService = {
       }
 
       // Générer un lien d'onboarding
+      // Type "account_onboarding" pour permettre une configuration progressive
       const accountLink = await stripe.accountLinks.create({
         account: accountId,
         refresh_url: returnUrl,
@@ -118,11 +134,25 @@ const stripeConnectService = {
       // Récupérer les informations du compte depuis Stripe
       const stripeAccount = await stripe.accounts.retrieve(accountId);
 
+      // Un compte est considéré comme "onboarded" seulement si :
+      // 1. Les détails sont soumis (details_submitted)
+      // 2. Les paiements sont activés (charges_enabled)
+      const isFullyOnboarded =
+        stripeAccount.details_submitted && stripeAccount.charges_enabled;
+
+      logger.info("Statut Stripe récupéré:", {
+        accountId,
+        details_submitted: stripeAccount.details_submitted,
+        charges_enabled: stripeAccount.charges_enabled,
+        payouts_enabled: stripeAccount.payouts_enabled,
+        isFullyOnboarded,
+      });
+
       // Mettre à jour les informations dans notre base de données
       const account = await StripeConnectAccount.findOneAndUpdate(
         { accountId },
         {
-          isOnboarded: stripeAccount.details_submitted || false,
+          isOnboarded: isFullyOnboarded,
           chargesEnabled: stripeAccount.charges_enabled || false,
           payoutsEnabled: stripeAccount.payouts_enabled || false,
         },
@@ -153,6 +183,38 @@ const stripeConnectService = {
       return {
         success: false,
         message: `Erreur lors de la vérification du statut du compte: ${error.message}`,
+      };
+    }
+  },
+
+  /**
+   * Génère un lien de connexion au tableau de bord Stripe Express
+   * @param {string} accountId - ID du compte Stripe Connect
+   * @returns {Promise<Object>} - Réponse avec l'URL du tableau de bord
+   */
+  async generateDashboardLink(accountId) {
+    try {
+      // Créer un login link pour accéder au tableau de bord Express
+      const loginLink = await stripe.accounts.createLoginLink(accountId);
+
+      logger.info("Lien de tableau de bord généré:", {
+        accountId,
+        url: loginLink.url,
+      });
+
+      return {
+        success: true,
+        url: loginLink.url,
+        message: "Lien de tableau de bord généré avec succès",
+      };
+    } catch (error) {
+      logger.error(
+        "Erreur lors de la génération du lien de tableau de bord:",
+        error
+      );
+      return {
+        success: false,
+        message: `Erreur lors de la génération du lien de tableau de bord: ${error.message}`,
       };
     }
   },
@@ -243,14 +305,20 @@ const stripeConnectService = {
    * @param {Object} metadata - Métadonnées du transfert
    * @returns {Promise<Object>} - Résultat du transfert
    */
-  async transferToStripeConnect(accountId, amount, currency = 'eur', metadata = {}) {
+  async transferToStripeConnect(
+    accountId,
+    amount,
+    currency = "eur",
+    metadata = {}
+  ) {
     try {
       // Vérifier si le compte existe et peut recevoir des paiements
       const account = await StripeConnectAccount.findOne({ accountId });
       if (!account || !account.payoutsEnabled) {
         return {
           success: false,
-          error: "Le compte Stripe Connect n'est pas configuré pour recevoir des virements"
+          error:
+            "Le compte Stripe Connect n'est pas configuré pour recevoir des virements",
         };
       }
 
@@ -260,20 +328,20 @@ const stripeConnectService = {
         amount: amount,
         currency: currency,
         destination: accountId,
-        description: metadata.description || 'Paiement de parrainage Newbi',
+        description: metadata.description || "Paiement de parrainage Newbi",
         metadata: {
           ...metadata,
-          source: 'newbi_referral_payout',
-          timestamp: new Date().toISOString()
-        }
+          source: "newbi_referral_payout",
+          timestamp: new Date().toISOString(),
+        },
       });
 
-      logger.info('✅ Virement de parrainage effectué depuis le solde Newbi', {
+      logger.info("✅ Virement de parrainage effectué depuis le solde Newbi", {
         transferId: transfer.id,
         accountId,
         amount: amount / 100, // Afficher en euros
         currency,
-        description: transfer.description
+        description: transfer.description,
       });
 
       return {
@@ -282,27 +350,31 @@ const stripeConnectService = {
         amount: transfer.amount,
         currency: transfer.currency,
         destination: transfer.destination,
-        description: transfer.description
+        description: transfer.description,
       };
-
     } catch (error) {
-      logger.error('❌ Erreur lors du virement de parrainage depuis Newbi:', error);
-      
+      logger.error(
+        "❌ Erreur lors du virement de parrainage depuis Newbi:",
+        error
+      );
+
       // Messages d'erreur plus spécifiques
       let errorMessage = error.message;
-      if (error.code === 'insufficient_funds') {
-        errorMessage = 'Solde insuffisant sur le compte Stripe de Newbi pour effectuer le virement';
-      } else if (error.code === 'account_invalid') {
-        errorMessage = 'Compte Stripe Connect destinataire invalide ou non configuré';
+      if (error.code === "insufficient_funds") {
+        errorMessage =
+          "Solde insuffisant sur le compte Stripe de Newbi pour effectuer le virement";
+      } else if (error.code === "account_invalid") {
+        errorMessage =
+          "Compte Stripe Connect destinataire invalide ou non configuré";
       }
-      
+
       return {
         success: false,
         error: errorMessage,
-        stripeError: error.code
+        stripeError: error.code,
       };
     }
-  }
+  },
 };
 
 export default stripeConnectService;
@@ -313,5 +385,5 @@ export const {
   generateOnboardingLink,
   checkAccountStatus,
   createPaymentSession,
-  transferToStripeConnect
+  transferToStripeConnect,
 } = stripeConnectService;

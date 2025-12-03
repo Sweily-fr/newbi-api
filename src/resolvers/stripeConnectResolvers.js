@@ -6,9 +6,9 @@ import logger from "../utils/logger.js";
 const stripeConnectResolvers = {
   Query: {
     /**
-     * Récupère le compte Stripe Connect de l'utilisateur connecté
+     * Récupère le compte Stripe Connect de l'organisation active
      */
-    myStripeConnectAccount: async (_, args, { user }) => {
+    myStripeConnectAccount: async (_, args, { user, organizationId }) => {
       if (!user) {
         throw new Error(
           "Vous devez être connecté pour accéder à cette ressource"
@@ -16,27 +16,53 @@ const stripeConnectResolvers = {
       }
 
       try {
-        console.log('🔍 Recherche compte Stripe Connect pour userId:', user._id);
-        console.log('👤 User email:', user.email);
-        
-        const account = await StripeConnectAccount.findOne({ userId: user._id });
-        
-        console.log('📊 Compte trouvé:', account ? 'OUI' : 'NON');
+        console.log(
+          "🔍 Recherche compte Stripe Connect pour organizationId:",
+          organizationId
+        );
+        console.log("👤 User email:", user.email);
+
+        // Essayer d'abord avec organizationId (nouveau système)
+        let account = null;
+        if (organizationId) {
+          account = await StripeConnectAccount.findOne({ organizationId });
+        }
+
+        // Fallback: Si pas de compte trouvé avec organizationId, essayer avec userId (ancien système)
+        if (!account) {
+          console.log("⚠️ Fallback: Recherche par userId pour compatibilité");
+          account = await StripeConnectAccount.findOne({ userId: user._id });
+        }
+
+        console.log("📊 Compte trouvé:", account ? "OUI" : "NON");
         if (account) {
-          console.log('✅ Détails:', {
+          console.log("✅ Détails (avant mise à jour):", {
             accountId: account.accountId,
             isOnboarded: account.isOnboarded,
             chargesEnabled: account.chargesEnabled,
-            userId: account.userId.toString(),
+            organizationId: account.organizationId || "N/A",
+            userId: account.userId ? account.userId.toString() : "N/A",
           });
-          
-          // Vérification de sécurité
-          if (account.userId.toString() !== user._id.toString()) {
-            console.error('🚨 SÉCURITÉ: Compte appartient à un autre utilisateur!');
-            return null;
+
+          // Mettre à jour le statut depuis Stripe pour avoir les dernières informations
+          console.log("🔄 Mise à jour du statut depuis Stripe...");
+          const statusUpdate = await stripeConnectService.checkAccountStatus(
+            account.accountId
+          );
+
+          if (statusUpdate.success) {
+            console.log("✅ Statut mis à jour:", {
+              isOnboarded: statusUpdate.isOnboarded,
+              chargesEnabled: statusUpdate.chargesEnabled,
+            });
+
+            // Récupérer le compte mis à jour
+            account = await StripeConnectAccount.findOne({
+              accountId: account.accountId,
+            });
           }
         }
-        
+
         return account;
       } catch (error) {
         logger.error(
@@ -52,17 +78,43 @@ const stripeConnectResolvers = {
 
   Mutation: {
     /**
-     * Crée un compte Stripe Connect pour l'utilisateur connecté
+     * Crée un compte Stripe Connect pour l'organisation
+     * Réservé aux owners et admins
      */
-    createStripeConnectAccount: async (_, args, { user }) => {
+    createStripeConnectAccount: async (
+      _,
+      args,
+      { user, organizationId, userRole }
+    ) => {
       if (!user) {
         throw new Error(
           "Vous devez être connecté pour créer un compte Stripe Connect"
         );
       }
 
+      if (!organizationId) {
+        return {
+          success: false,
+          message:
+            "Aucune organisation active. Veuillez sélectionner une organisation.",
+        };
+      }
+
+      // Vérifier les permissions (owner ou admin uniquement)
+      const normalizedRole = userRole?.toLowerCase();
+      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+        return {
+          success: false,
+          message:
+            "Seuls les propriétaires et administrateurs peuvent connecter Stripe Connect",
+        };
+      }
+
       try {
-        return await stripeConnectService.createConnectAccount(user._id);
+        return await stripeConnectService.createConnectAccount(
+          organizationId,
+          user._id
+        );
       } catch (error) {
         logger.error(
           "Erreur lors de la création du compte Stripe Connect:",
@@ -77,11 +129,12 @@ const stripeConnectResolvers = {
 
     /**
      * Génère un lien d'onboarding pour un compte Stripe Connect
+     * Réservé aux owners et admins
      */
     generateStripeOnboardingLink: async (
       _,
       { accountId, returnUrl },
-      { user }
+      { user, organizationId, userRole }
     ) => {
       if (!user) {
         throw new Error(
@@ -89,17 +142,43 @@ const stripeConnectResolvers = {
         );
       }
 
+      if (!organizationId) {
+        return {
+          success: false,
+          message: "Aucune organisation active",
+        };
+      }
+
+      // Vérifier les permissions (owner ou admin uniquement)
+      const normalizedRole = userRole?.toLowerCase();
+      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+        return {
+          success: false,
+          message:
+            "Seuls les propriétaires et administrateurs peuvent accéder à cette fonctionnalité",
+        };
+      }
+
       try {
-        // Vérifier que le compte appartient bien à l'utilisateur connecté
+        // Vérifier que le compte appartient bien à l'organisation
         const account = await StripeConnectAccount.findOne({
           accountId,
-          userId: user._id,
+          organizationId,
         });
+
+        // Fallback: vérifier avec userId pour compatibilité
         if (!account) {
-          return {
-            success: false,
-            message: "Compte Stripe Connect non trouvé ou non autorisé",
-          };
+          const accountByUser = await StripeConnectAccount.findOne({
+            accountId,
+            userId: user._id,
+          });
+          if (!accountByUser) {
+            return {
+              success: false,
+              message:
+                "Compte Stripe Connect non trouvé ou non autorisé pour cette organisation",
+            };
+          }
         }
 
         return await stripeConnectService.generateOnboardingLink(
@@ -120,27 +199,65 @@ const stripeConnectResolvers = {
 
     /**
      * Vérifie le statut d'un compte Stripe Connect
+     * Réservé aux owners et admins
      */
-    checkStripeConnectAccountStatus: async (_, { accountId }, { user }) => {
+    checkStripeConnectAccountStatus: async (
+      _,
+      { accountId },
+      { user, organizationId, userRole }
+    ) => {
       if (!user) {
         throw new Error(
           "Vous devez être connecté pour vérifier le statut d'un compte"
         );
       }
 
+      if (!organizationId) {
+        return {
+          success: false,
+          message: "Aucune organisation active",
+        };
+      }
+
+      // Vérifier les permissions (owner ou admin uniquement)
+      const normalizedRole = userRole?.toLowerCase();
+      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+        return {
+          success: false,
+          message:
+            "Seuls les propriétaires et administrateurs peuvent vérifier le statut",
+        };
+      }
+
       try {
-        // Vérifier que le compte appartient bien à l'utilisateur connecté
-        const account = await StripeConnectAccount.findOne({
+        logger.info("🔍 Vérification du statut Stripe Connect:", {
           accountId,
+          organizationId,
           userId: user._id,
         });
+
+        // Vérifier que le compte appartient bien à l'organisation
+        const account = await StripeConnectAccount.findOne({
+          accountId,
+          organizationId,
+        });
+
+        // Fallback: vérifier avec userId pour compatibilité
         if (!account) {
-          return {
-            success: false,
-            message: "Compte Stripe Connect non trouvé ou non autorisé",
-          };
+          const accountByUser = await StripeConnectAccount.findOne({
+            accountId,
+            userId: user._id,
+          });
+          if (!accountByUser) {
+            logger.warn("❌ Compte Stripe Connect non trouvé");
+            return {
+              success: false,
+              message: "Compte Stripe Connect non trouvé ou non autorisé",
+            };
+          }
         }
 
+        logger.info("✅ Appel du service checkAccountStatus");
         return await stripeConnectService.checkAccountStatus(accountId);
       } catch (error) {
         logger.error(
@@ -150,6 +267,131 @@ const stripeConnectResolvers = {
         return {
           success: false,
           message: `Erreur lors de la vérification du statut du compte: ${error.message}`,
+        };
+      }
+    },
+
+    /**
+     * Génère un lien de connexion au tableau de bord Stripe Express
+     * Réservé aux owners et admins
+     */
+    generateStripeDashboardLink: async (
+      _,
+      { accountId },
+      { user, organizationId, userRole }
+    ) => {
+      if (!user) {
+        throw new Error("Vous devez être connecté");
+      }
+
+      if (!organizationId) {
+        return {
+          success: false,
+          message: "Aucune organisation active",
+        };
+      }
+
+      // Vérifier les permissions (owner ou admin uniquement)
+      const normalizedRole = userRole?.toLowerCase();
+      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+        return {
+          success: false,
+          message:
+            "Seuls les propriétaires et administrateurs peuvent accéder au tableau de bord",
+        };
+      }
+
+      try {
+        // Vérifier que le compte appartient bien à l'organisation
+        const account = await StripeConnectAccount.findOne({
+          accountId,
+          organizationId,
+        });
+
+        // Fallback: vérifier avec userId pour compatibilité
+        if (!account) {
+          const accountByUser = await StripeConnectAccount.findOne({
+            accountId,
+            userId: user._id,
+          });
+          if (!accountByUser) {
+            return {
+              success: false,
+              message: "Compte Stripe Connect non trouvé ou non autorisé",
+            };
+          }
+        }
+
+        return await stripeConnectService.generateDashboardLink(accountId);
+      } catch (error) {
+        logger.error(
+          "Erreur lors de la génération du lien de tableau de bord:",
+          error
+        );
+        return {
+          success: false,
+          message: `Erreur lors de la génération du lien de tableau de bord: ${error.message}`,
+        };
+      }
+    },
+
+    /**
+     * Déconnecte le compte Stripe Connect de l'organisation
+     * Réservé aux owners et admins
+     */
+    disconnectStripe: async (_, args, { user, organizationId, userRole }) => {
+      if (!user) {
+        throw new Error("Vous devez être connecté");
+      }
+
+      if (!organizationId) {
+        return {
+          success: false,
+          message: "Aucune organisation active",
+        };
+      }
+
+      // Vérifier les permissions (owner ou admin uniquement)
+      const normalizedRole = userRole?.toLowerCase();
+      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+        return {
+          success: false,
+          message:
+            "Seuls les propriétaires et administrateurs peuvent déconnecter Stripe Connect",
+        };
+      }
+
+      try {
+        const account = await StripeConnectAccount.findOne({ organizationId });
+
+        // Fallback: chercher par userId pour compatibilité
+        if (!account) {
+          const accountByUser = await StripeConnectAccount.findOne({
+            userId: user._id,
+          });
+          if (!accountByUser) {
+            return {
+              success: false,
+              message:
+                "Aucun compte Stripe Connect trouvé pour cette organisation",
+            };
+          }
+          // Supprimer le compte trouvé par userId
+          await StripeConnectAccount.deleteOne({ userId: user._id });
+        } else {
+          // Supprimer le compte
+          await StripeConnectAccount.deleteOne({ organizationId });
+        }
+
+        return {
+          success: true,
+          message: "Compte Stripe Connect déconnecté avec succès",
+        };
+      } catch (error) {
+        logger.error("Erreur lors de la déconnexion:", error);
+        return {
+          success: false,
+          message: `Erreur lors de la déconnexion: ${error.message}`,
         };
       }
     },

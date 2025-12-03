@@ -122,6 +122,23 @@ const FileTransferSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    // Nouvelles options
+    notifyOnDownload: {
+      type: Boolean,
+      default: false,
+    },
+    passwordProtected: {
+      type: Boolean,
+      default: false,
+    },
+    password: {
+      type: String,
+      trim: true,
+    },
+    allowPreview: {
+      type: Boolean,
+      default: true,
+    },
     uploadMethod: {
       type: String,
       enum: ["direct", "base64", "chunk"],

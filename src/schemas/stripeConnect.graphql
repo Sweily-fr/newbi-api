@@ -54,18 +54,21 @@ extend type Query {
 extend type Mutation {
   # Créer un nouveau compte Stripe Connect pour l'utilisateur connecté
   createStripeConnectAccount: StripeConnectAccountResponse!
-  
+
   # Générer un lien d'onboarding pour un compte Stripe Connect
   generateStripeOnboardingLink(
     accountId: String!
     returnUrl: String!
   ): StripeOnboardingLinkResponse!
-  
+
   # Vérifier le statut d'un compte Stripe Connect
   checkStripeConnectAccountStatus(
     accountId: String!
   ): StripeConnectAccountStatusResponse!
-  
+
+  # Générer un lien de connexion au tableau de bord Stripe Express
+  generateStripeDashboardLink(accountId: String!): StripeOnboardingLinkResponse!
+
   # Créer une session de paiement pour un transfert de fichiers
   createPaymentSessionForFileTransfer(
     transferId: ID!

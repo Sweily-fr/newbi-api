@@ -44,6 +44,9 @@ type FileTransfer {
   lastDownloadDate: Date
   recipientEmail: String
   notificationSent: Boolean
+  notifyOnDownload: Boolean
+  passwordProtected: Boolean
+  allowPreview: Boolean
   message: String
   createdAt: Date
   updatedAt: Date
@@ -89,18 +92,29 @@ input FileTransferInput {
   currency: String = "EUR" # Alias pour paymentCurrency pour compatibilité avec le frontend
   recipientEmail: String
   message: String
+  # Nouvelles options
+  notifyOnDownload: Boolean = false
+  passwordProtected: Boolean = false
+  password: String
+  allowPreview: Boolean = true
 }
 
 # Étendre le type Query
 extend type Query {
   # Obtenir tous les transferts de fichiers de l'utilisateur connecté avec pagination
-  myFileTransfers(page: Int = 1, limit: Int = 10): FileTransferPaginatedResponse!
-  
+  myFileTransfers(
+    page: Int = 1
+    limit: Int = 10
+  ): FileTransferPaginatedResponse!
+
   # Obtenir un transfert de fichiers par son ID
   fileTransferById(id: ID!): FileTransfer
-  
+
   # Obtenir un transfert de fichiers par son lien de partage et sa clé d'accès
-  getFileTransferByLink(shareLink: String!, accessKey: String!): FileTransferAccessResponse
+  getFileTransferByLink(
+    shareLink: String!
+    accessKey: String!
+  ): FileTransferAccessResponse
 }
 
 # Input pour un fichier en base64
@@ -118,16 +132,16 @@ extend type Mutation {
     files: [Upload!]!
     input: FileTransferInput
   ): FileTransferResponse!
-  
+
   # Créer un nouveau transfert de fichiers avec des fichiers en base64
   createFileTransferBase64(
     files: [Base64FileInput!]!
     input: FileTransferInput
   ): FileTransferResponse!
-  
+
   # Supprimer un transfert de fichiers
   deleteFileTransfer(id: ID!): Boolean!
-  
+
   # Générer un lien de paiement pour un transfert de fichiers
   generateFileTransferPaymentLink(id: ID!): FileTransferPaymentResponse!
 }

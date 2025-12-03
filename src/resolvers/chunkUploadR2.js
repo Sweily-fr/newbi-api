@@ -577,6 +577,12 @@ export default {
           const recipientEmail = input?.recipientEmail || null;
           const message = input?.message || null;
 
+          // Nouvelles options
+          const notifyOnDownload = input?.notifyOnDownload || false;
+          const passwordProtected = input?.passwordProtected || false;
+          const password = input?.password || null;
+          const allowPreview = input?.allowPreview !== false; // true par défaut
+
           // Créer un nouveau transfert de fichier
           const fileTransfer = new FileTransfer({
             userId: user.id,
@@ -591,6 +597,11 @@ export default {
             recipientEmail,
             message,
             uploadMethod: "chunk",
+            // Nouvelles options
+            notifyOnDownload,
+            passwordProtected,
+            password: passwordProtected ? password : null,
+            allowPreview,
           });
 
           // Générer les liens de partage et clé d'accès
