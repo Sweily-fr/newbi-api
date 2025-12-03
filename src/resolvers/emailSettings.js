@@ -33,11 +33,18 @@ const emailSettingsResolvers = {
       // Si aucun paramètre n'existe, retourner des valeurs par défaut
       if (!settings) {
         return {
+          id: `default-${actualWorkspaceId}`,
           workspaceId: actualWorkspaceId,
           fromEmail: '',
           fromName: '',
           replyTo: '',
+          invoiceEmailTemplate: '',
+          quoteEmailTemplate: '',
+          creditNoteEmailTemplate: '',
           verified: false,
+          verifiedAt: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         };
       }
 
