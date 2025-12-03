@@ -516,4 +516,138 @@ const validatePayment = async (req, res) => {
   }
 };
 
-export { handleStripeWebhook, downloadFile, downloadAllFiles, validatePayment };
+// Vérifier le mot de passe d'un transfert
+const verifyTransferPassword = async (req, res) => {
+  try {
+    const { transferId, password } = req.body;
+
+    if (!transferId || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "ID de transfert et mot de passe requis",
+      });
+    }
+
+    const fileTransfer = await FileTransfer.findById(transferId);
+
+    if (!fileTransfer) {
+      return res.status(404).json({
+        success: false,
+        message: "Transfert non trouvé",
+      });
+    }
+
+    if (!fileTransfer.passwordProtected) {
+      return res.status(400).json({
+        success: false,
+        message: "Ce transfert n'est pas protégé par mot de passe",
+      });
+    }
+
+    // Vérifier le mot de passe (comparaison simple pour l'instant)
+    // TODO: Utiliser bcrypt pour une comparaison sécurisée
+    if (fileTransfer.password === password) {
+      return res.json({
+        success: true,
+        message: "Mot de passe correct",
+      });
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Mot de passe incorrect",
+      });
+    }
+  } catch (error) {
+    console.error("Erreur lors de la vérification du mot de passe:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Erreur lors de la vérification du mot de passe",
+    });
+  }
+};
+
+// Prévisualiser un fichier
+const previewFile = async (req, res) => {
+  try {
+    const { transferId, fileId } = req.params;
+
+    const fileTransfer = await FileTransfer.findById(transferId);
+
+    if (!fileTransfer) {
+      return res.status(404).json({
+        success: false,
+        message: "Transfert non trouvé",
+      });
+    }
+
+    // Vérifier si la prévisualisation est autorisée
+    if (!fileTransfer.allowPreview) {
+      return res.status(403).json({
+        success: false,
+        message: "La prévisualisation n'est pas autorisée pour ce transfert",
+      });
+    }
+
+    // Trouver le fichier
+    const file = fileTransfer.files.find(
+      (f) => f.fileId === fileId || f._id.toString() === fileId
+    );
+
+    if (!file) {
+      return res.status(404).json({
+        success: false,
+        message: "Fichier non trouvé",
+      });
+    }
+
+    // Si le fichier est sur R2, générer une URL signée pour la prévisualisation
+    if (file.storageType === "r2" && file.r2Key) {
+      const { cloudflareTransferService } = await import(
+        "../services/cloudflareTransferService.js"
+      );
+
+      const presignedUrl =
+        await cloudflareTransferService.getPresignedDownloadUrl(
+          file.r2Key,
+          3600 // 1 heure
+        );
+
+      // Rediriger vers l'URL signée
+      return res.redirect(presignedUrl);
+    }
+
+    // Sinon, servir le fichier local
+    const filePath = path.join(process.cwd(), file.filePath);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: "Fichier non trouvé sur le serveur",
+      });
+    }
+
+    res.setHeader("Content-Type", file.mimeType);
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${file.originalName}"`
+    );
+
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error("Erreur lors de la prévisualisation:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Erreur lors de la prévisualisation du fichier",
+    });
+  }
+};
+
+export {
+  handleStripeWebhook,
+  downloadFile,
+  downloadAllFiles,
+  validatePayment,
+  verifyTransferPassword,
+  previewFile,
+};

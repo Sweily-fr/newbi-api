@@ -169,6 +169,9 @@ export default {
           downloadCount: fileTransfer.downloadCount,
           paymentInfo,
           isAccessible,
+          // Nouvelles options
+          passwordProtected: fileTransfer.passwordProtected || false,
+          allowPreview: fileTransfer.allowPreview !== false, // true par défaut
         };
 
         return {

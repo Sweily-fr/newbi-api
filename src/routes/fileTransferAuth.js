@@ -4,6 +4,10 @@ import {
   markDownloadCompleted,
   getDownloadStats,
 } from "../controllers/fileTransferAuthController.js";
+import {
+  verifyTransferPassword,
+  previewFile,
+} from "../controllers/fileTransferController.js";
 
 const router = express.Router();
 
@@ -15,5 +19,8 @@ router.post("/download-event/:downloadEventId/complete", markDownloadCompleted);
 
 // Route pour obtenir les statistiques de téléchargement
 router.get("/:transferId/stats", getDownloadStats);
+
+// Route pour vérifier le mot de passe d'un transfert
+router.post("/verify-password", verifyTransferPassword);
 
 export default router;
