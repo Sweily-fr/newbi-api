@@ -1,0 +1,21 @@
+# Schéma GraphQL pour l'envoi de documents par email
+
+input SendDocumentEmailInput {
+  documentId: ID!
+  emailSubject: String!
+  emailBody: String!
+  recipientEmail: String!
+  ccEmails: [String]
+}
+
+type SendDocumentEmailResult {
+  success: Boolean!
+  messageId: String
+  recipientEmail: String!
+}
+
+extend type Mutation {
+  sendInvoiceEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
+  sendQuoteEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
+  sendCreditNoteEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
+}

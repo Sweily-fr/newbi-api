@@ -304,15 +304,16 @@ const quoteResolvers = {
 
         // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
         // Vérifie tous les numéros existants et trouve le premier trou disponible
-        // Le préfixe n'affecte PAS la numérotation - la séquence est globale
+        // La séquence est PAR PRÉFIXE - chaque préfixe a sa propre numérotation
         const forceSequentialNumber = async () => {
-          console.log('🔍 [forceSequentialNumber] Searching for quotes in workspace:', workspaceId);
+          console.log('🔍 [forceSequentialNumber] Searching for quotes in workspace:', workspaceId, 'with prefix:', prefix);
 
           // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
-          // NE PAS filtrer par préfixe - la numérotation est globale
+          // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
           const officialQuotes = await Quote.find(
             {
               status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+              prefix, // Filtrage par préfixe
               workspaceId,
               createdBy: user.id,
               // Ne considérer que les numéros sans suffixe
@@ -343,8 +344,8 @@ const quoteResolvers = {
 
           console.log('✅ [forceSequentialNumber] Max number:', maxNumber, '→ Next number:', nextNumber);
 
-          // Formater avec des zéros à gauche (6 chiffres)
-          return String(nextNumber).padStart(6, "0");
+          // Formater avec des zéros à gauche (4 chiffres)
+          return String(nextNumber).padStart(4, "0");
         };
 
         // Si le statut est PENDING, vérifier d'abord s'il existe des devis en DRAFT

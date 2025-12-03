@@ -11,6 +11,7 @@ import CreditNote from '../models/CreditNote.js';
  * 3. Les factures créées doivent être séquentielles sans écart de chiffres (Status: PENDING, COMPLETED, CANCELED)
  * 4. TOUS les brouillons utilisent le format DRAFT-ID, même s'ils sont les derniers créés
  * 5. Quand le préfixe arrive à l'année suivante, les numéros de facture doivent repasser à 0
+ * 6. La numérotation est séquentielle PAR PRÉFIXE (chaque préfixe a sa propre séquence)
  */
 const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
   const currentYear = options.year || new Date().getFullYear();
@@ -20,6 +21,11 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
     $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
+  
+  // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
+  if (prefix) {
+    baseQuery.prefix = prefix;
+  }
   
   // Ajouter le filtre par workspace ou utilisateur
   if (options.workspaceId) {
@@ -36,9 +42,9 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
     if (options.manualNumber) {
       // S'assurer que le numéro manuel est formaté correctement
       const num = parseInt(options.manualNumber, 10);
-      return String(num).padStart(6, '0');
+      return String(num).padStart(4, '0');
     }
-    return '000001';
+    return '0001';
   }
   
   // Extraire tous les numéros numériques et les trier
@@ -53,7 +59,7 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
     .sort((a, b) => a - b);
   
   if (numericNumbers.length === 0) {
-    return '000001';
+    return '0001';
   }
   
   // NOUVELLE RÈGLE: Numérotation strictement séquentielle
@@ -61,7 +67,7 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
   const maxNumber = Math.max(...numericNumbers);
   const nextNumber = maxNumber + 1;
   
-  return String(nextNumber).padStart(6, '0');
+  return String(nextNumber).padStart(4, '0');
 };
 
 /**
@@ -89,6 +95,11 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
     $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
+  
+  // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
+  if (prefix) {
+    existingNonDraftsQuery.prefix = prefix;
+  }
   
   if (options.workspaceId) {
     existingNonDraftsQuery.workspaceId = options.workspaceId;
@@ -134,7 +145,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
         return options.originalDraftNumber;
       }
       // Sinon, commencer à 000001 par défaut
-      return '000001';
+      return '0001';
     }
     
     // Si c'est un brouillon avec préfixe DRAFT-, vérifier s'il y a un conflit avec un autre brouillon
@@ -206,7 +217,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
   
   // RÈGLE STRICTE: Numérotation séquentielle obligatoire
   if (numericNumbers.length === 0) {
-    return '000001';
+    return '0001';
   }
   
   // Toujours utiliser le prochain numéro séquentiel
@@ -216,7 +227,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
   // Renommer tous les brouillons avec des numéros qui pourraient entrer en conflit
   const conflictingDraftsQuery = {
     status: 'DRAFT',
-    number: { $lte: String(nextSequentialNumber).padStart(6, '0'), $regex: /^\d+$/ },
+    number: { $lte: String(nextSequentialNumber).padStart(4, '0'), $regex: /^\d+$/ },
     $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
   
@@ -241,21 +252,26 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
     // Brouillon renommé pour éviter conflit avec numéro séquentiel
   }
   
-  return String(nextSequentialNumber).padStart(6, '0');
+  return String(nextSequentialNumber).padStart(4, '0');
 };
 
 /**
  * Génère un numéro séquentiel pour les devis (logique simplifiée)
- * Le préfixe n'affecte PAS la numérotation - la séquence est globale
+ * La numérotation est séquentielle PAR PRÉFIXE (chaque préfixe a sa propre séquence)
  */
 const generateQuoteSequentialNumber = async (prefix, options = {}) => {
   const currentYear = options.year || new Date().getFullYear();
   
-  // Ne PAS filtrer par préfixe - la numérotation est globale
+  // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
   const query = {
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
     $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
+  
+  // Filtrer par préfixe pour séquence indépendante
+  if (prefix) {
+    query.prefix = prefix;
+  }
   
   if (options.workspaceId) {
     query.workspaceId = options.workspaceId;
@@ -277,7 +293,7 @@ const generateQuoteSequentialNumber = async (prefix, options = {}) => {
     if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
       return options.manualNumber;
     }
-    return '000001';
+    return '0001';
   }
   
   // Extraire tous les numéros numériques et trouver le maximum
@@ -295,11 +311,11 @@ const generateQuoteSequentialNumber = async (prefix, options = {}) => {
   
   if (numericNumbers.length === 0) {
     console.log('⚠️ [generateQuoteSequentialNumber] No numeric numbers found, returning 000001');
-    return '000001';
+    return '0001';
   }
   
   const lastNumber = Math.max(...numericNumbers);
-  const nextNumber = String(lastNumber + 1).padStart(6, '0');
+  const nextNumber = String(lastNumber + 1).padStart(4, '0');
   console.log('✅ [generateQuoteSequentialNumber] Last number:', lastNumber, '→ Next number:', nextNumber);
   return nextNumber;
 };
@@ -577,14 +593,14 @@ const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
     if (inputNumber <= maxNumber) {
       return {
         isValid: false,
-        message: `Le numéro doit être supérieur à ${String(maxNumber).padStart(6, '0')}`
+        message: `Le numéro doit être supérieur à ${String(maxNumber).padStart(4, '0')}`
       };
     }
     
     if (inputNumber > maxNumber + 1) {
       return {
         isValid: false,
-        message: `Le numéro doit être ${String(maxNumber + 1).padStart(6, '0')} pour maintenir la séquence`
+        message: `Le numéro doit être ${String(maxNumber + 1).padStart(4, '0')} pour maintenir la séquence`
       };
     }
   }
@@ -804,6 +820,7 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
 /**
  * Génère un numéro séquentiel pour les avoirs selon les règles métier
  * Les avoirs suivent une numérotation séquentielle similaire aux factures
+ * La numérotation est séquentielle PAR PRÉFIXE (chaque préfixe a sa propre séquence)
  */
 const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
   const currentYear = options.year || new Date().getFullYear();
@@ -813,6 +830,11 @@ const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
     $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
+  
+  // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
+  if (prefix) {
+    baseQuery.prefix = prefix;
+  }
   
   // Ajouter le filtre par workspace ou utilisateur
   if (options.workspaceId) {
@@ -828,9 +850,9 @@ const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
     // Aucun avoir officiel n'existe, on peut utiliser un numéro manuel si fourni
     if (options.manualNumber) {
       const num = parseInt(options.manualNumber, 10);
-      return String(num).padStart(6, '0');
+      return String(num).padStart(4, '0');
     }
-    return '000001';
+    return '0001';
   }
   
   // Extraire tous les numéros numériques et les trier
@@ -845,14 +867,14 @@ const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
     .sort((a, b) => a - b);
   
   if (numericNumbers.length === 0) {
-    return '000001';
+    return '0001';
   }
   
   // Numérotation strictement séquentielle
   const maxNumber = Math.max(...numericNumbers);
   const nextNumber = maxNumber + 1;
   
-  return String(nextNumber).padStart(6, '0');
+  return String(nextNumber).padStart(4, '0');
 };
 
 /**
@@ -919,7 +941,7 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
         
         return options.originalDraftNumber;
       }
-      return '000001';
+      return '0001';
     }
     
     if (isDraftPrefixed) {
@@ -964,7 +986,7 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
     .sort((a, b) => a - b);
   
   if (numericNumbers.length === 0) {
-    return '000001';
+    return '0001';
   }
   
   const maxNumber = Math.max(...numericNumbers);
@@ -973,7 +995,7 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
   // Renommer tous les brouillons avec des numéros qui pourraient entrer en conflit
   const conflictingDraftsQuery = {
     status: 'DRAFT',
-    number: { $lte: String(nextSequentialNumber).padStart(6, '0'), $regex: /^\d+$/ },
+    number: { $lte: String(nextSequentialNumber).padStart(4, '0'), $regex: /^\d+$/ },
     $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
   
@@ -996,7 +1018,7 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
     });
   }
   
-  return String(nextSequentialNumber).padStart(6, '0');
+  return String(nextSequentialNumber).padStart(4, '0');
 };
 
 /**

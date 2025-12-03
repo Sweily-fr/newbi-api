@@ -1,0 +1,42 @@
+type SmtpSettings {
+  id: ID!
+  workspaceId: ID!
+  enabled: Boolean!
+  smtpHost: String!
+  smtpPort: Int!
+  smtpSecure: Boolean!
+  smtpUser: String!
+  fromEmail: String!
+  fromName: String
+  lastTestedAt: String
+  lastTestStatus: String
+  lastTestError: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input SmtpSettingsInput {
+  enabled: Boolean
+  smtpHost: String
+  smtpPort: Int
+  smtpSecure: Boolean
+  smtpUser: String
+  smtpPassword: String
+  fromEmail: String
+  fromName: String
+}
+
+type SmtpTestResult {
+  success: Boolean!
+  message: String!
+  error: String
+}
+
+extend type Query {
+  getSmtpSettings: SmtpSettings
+}
+
+extend type Mutation {
+  updateSmtpSettings(input: SmtpSettingsInput!): SmtpSettings
+  testSmtpConnection: SmtpTestResult
+}

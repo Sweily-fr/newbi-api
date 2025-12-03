@@ -367,10 +367,12 @@ invoiceSchema.add({
   }
 });
 
-// Création d'un index composé pour garantir l'unicité des numéros de facture par année et organisation
-// Cela permet de réutiliser les numéros d'une année à l'autre et d'avoir les mêmes numéros dans différentes organisations
+// Création d'un index composé pour garantir l'unicité des numéros de facture par préfixe, année et organisation
+// Cela permet de réutiliser les numéros d'une année à l'autre, d'avoir les mêmes numéros dans différentes organisations
+// et d'avoir les mêmes numéros avec des préfixes différents
 invoiceSchema.index(
   {
+    prefix: 1,
     number: 1,
     workspaceId: 1,
     issueYear: 1
@@ -378,7 +380,7 @@ invoiceSchema.index(
   {
     unique: true,
     partialFilterExpression: { number: { $exists: true } }, // Ignorer les documents sans numéro
-    name: "number_workspaceId_year_unique",
+    name: "prefix_number_workspaceId_year_unique",
   }
 );
 

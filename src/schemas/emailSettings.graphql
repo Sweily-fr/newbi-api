@@ -1,0 +1,31 @@
+type EmailSettings {
+  id: ID!
+  workspaceId: ID!
+  fromEmail: String!
+  fromName: String
+  replyTo: String
+  invoiceEmailTemplate: String
+  quoteEmailTemplate: String
+  creditNoteEmailTemplate: String
+  verified: Boolean!
+  verifiedAt: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input EmailSettingsInput {
+  fromEmail: String!
+  fromName: String
+  replyTo: String
+  invoiceEmailTemplate: String
+  quoteEmailTemplate: String
+  creditNoteEmailTemplate: String
+}
+
+extend type Query {
+  getEmailSettings: EmailSettings
+}
+
+extend type Mutation {
+  updateEmailSettings(input: EmailSettingsInput!): EmailSettings
+}

@@ -58,6 +58,7 @@ import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
+import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
 
 // Connexion à MongoDB
 mongoose
@@ -171,6 +172,7 @@ async function startServer() {
   app.use("/banking", validateJWT, bankingRoutes);
   app.use("/banking-connect", validateJWT, bankingConnectRoutes);
   app.use("/banking-sync", validateJWT, bankingSyncRoutes);
+
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 
@@ -301,6 +303,10 @@ async function startServer() {
 
     // Démarrer le scheduler de rappels email
     emailReminderScheduler.start();
+
+    // Démarrer le cron de relance automatique des factures
+    startInvoiceReminderCron();
+    logger.info('✅ Cron de relance automatique des factures démarré');
   });
 
   // Nettoyage propre à l'arrêt
@@ -321,6 +327,9 @@ async function startServer() {
     logger.info("🛑 Interruption du serveur (Ctrl+C)...");
     try {
       emailReminderScheduler.stop();
+      // Arrêter la queue de relances
+      const { stopInvoiceReminderCron } = await import("./cron/invoiceReminderCron.js");
+      await stopInvoiceReminderCron();
       subscriptionServer.close();
       await closeRedis();
       logger.info("✅ Serveur arrêté proprement");

@@ -1,0 +1,41 @@
+type InvoiceReminderSettings {
+  id: ID!
+  workspaceId: ID!
+  enabled: Boolean!
+  firstReminderDays: Int!
+  secondReminderDays: Int!
+  reminderHour: Int!
+  useCustomSender: Boolean!
+  customSenderEmail: String
+  fromEmail: String
+  fromName: String
+  replyTo: String
+  excludedClientIds: [ID!]
+  emailSubject: String!
+  emailBody: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input InvoiceReminderSettingsInput {
+  enabled: Boolean
+  firstReminderDays: Int
+  secondReminderDays: Int
+  reminderHour: Int
+  useCustomSender: Boolean
+  customSenderEmail: String
+  fromEmail: String
+  fromName: String
+  replyTo: String
+  excludedClientIds: [ID!]
+  emailSubject: String
+  emailBody: String
+}
+
+extend type Query {
+  getInvoiceReminderSettings: InvoiceReminderSettings
+}
+
+extend type Mutation {
+  updateInvoiceReminderSettings(input: InvoiceReminderSettingsInput!): InvoiceReminderSettings
+}

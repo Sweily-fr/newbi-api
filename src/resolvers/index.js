@@ -28,6 +28,9 @@ import communitySuggestionResolvers from "./communitySuggestion.js";
 import blogResolvers from "./blog.js";
 import { clientListResolvers } from "./clientList.js";
 import partnerResolvers from "./partner.js";
+import emailSettingsResolvers from "./emailSettings.js";
+import invoiceReminderSettingsResolvers from "./invoiceReminderSettings.js";
+import documentEmailResolvers from "./documentEmail.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -59,6 +62,9 @@ const resolvers = mergeResolvers([
   communitySuggestionResolvers,
   blogResolvers,
   partnerResolvers,
+  emailSettingsResolvers,
+  invoiceReminderSettingsResolvers,
+  documentEmailResolvers,
 ]);
 
 export default resolvers;

@@ -14,6 +14,11 @@ const CLIENT_TYPES = {
  * Schéma pour les informations du client
  */
 const clientSchema = new mongoose.Schema({
+  // ID du client original (pour référencer le client dans la collection Client)
+  id: {
+    type: String,
+    default: null,
+  },
   // Type de client (particulier ou entreprise)
   type: {
     type: String,
