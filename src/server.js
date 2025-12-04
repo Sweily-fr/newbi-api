@@ -11,8 +11,8 @@ const envFile =
   process.env.NODE_ENV === "production"
     ? ".env.production"
     : process.env.NODE_ENV === "staging"
-    ? ".env.staging"
-    : ".env";
+      ? ".env.staging"
+      : ".env";
 
 const envPath = path.resolve(process.cwd(), envFile);
 dotenv.config({ path: envPath });
@@ -49,7 +49,6 @@ import { initializeRedis, closeRedis } from "./config/redis.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
 import webhookRoutes from "./routes/webhook.js";
-import stripeWebhookRoutes from "./routes/stripeWebhook.js";
 import fileTransferAuthRoutes from "./routes/fileTransferAuth.js";
 import fileDownloadRoutes from "./routes/fileDownload.js";
 import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
@@ -146,16 +145,15 @@ async function startServer() {
     })
   );
 
-  // Routes webhook (avant les middlewares JSON)
-  app.use("/webhook", webhookRoutes);
-  app.use("/webhook/stripe", stripeWebhookRoutes);
-
-  // Webhook pour les transferts de fichiers (DOIT être avant express.json())
+  // Webhook pour les transferts de fichiers (DOIT être AVANT les autres routes /webhook)
   app.post(
     "/webhook/file-transfer",
     express.raw({ type: "application/json" }),
     handleFileTransferStripeWebhook
   );
+
+  // Routes webhook (avant les middlewares JSON)
+  app.use("/webhook", webhookRoutes);
 
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
@@ -174,7 +172,6 @@ async function startServer() {
   app.use("/banking", validateJWT, bankingRoutes);
   app.use("/banking-connect", validateJWT, bankingConnectRoutes);
   app.use("/banking-sync", validateJWT, bankingSyncRoutes);
-
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 
@@ -322,7 +319,7 @@ async function startServer() {
 
     // Démarrer le cron de relance automatique des factures
     startInvoiceReminderCron();
-    logger.info('✅ Cron de relance automatique des factures démarré');
+    logger.info("✅ Cron de relance automatique des factures démarré");
   });
 
   // Nettoyage propre à l'arrêt
@@ -344,7 +341,8 @@ async function startServer() {
     try {
       emailReminderScheduler.stop();
       // Arrêter la queue de relances
-      const { stopInvoiceReminderCron } = await import("./cron/invoiceReminderCron.js");
+      const { stopInvoiceReminderCron } =
+        await import("./cron/invoiceReminderCron.js");
       await stopInvoiceReminderCron();
       subscriptionServer.close();
       await closeRedis();

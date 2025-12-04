@@ -472,6 +472,14 @@ export default {
             },
           ],
           mode: "payment",
+          // Créer un customer Stripe et envoyer le reçu à l'email saisi
+          customer_creation: "always",
+          invoice_creation: {
+            enabled: true,
+            invoice_data: {
+              description: `Accès aux fichiers partagés - ${fileTransfer.files.length} fichier(s)`,
+            },
+          },
           success_url: `${BASE_URL}/file-transfer/success?share=${shareLink}&key=${accessKey}&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${BASE_URL}/file-transfer/cancel?share=${shareLink}&key=${accessKey}`,
           metadata: {

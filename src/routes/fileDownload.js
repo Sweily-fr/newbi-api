@@ -23,9 +23,8 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
     logger.info("📥 Demande de téléchargement proxy", { transferId, fileId });
 
     // Vérifier que le transfert existe et récupérer le fichier
-    const fileTransfer = await FileTransfer.findById(transferId).populate(
-      "files"
-    );
+    const fileTransfer =
+      await FileTransfer.findById(transferId).populate("files");
     if (!fileTransfer) {
       return res.status(404).json({ error: "Transfert non trouvé" });
     }
@@ -133,9 +132,16 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       "Content-Disposition",
       `inline; filename="${encodeURIComponent(file.originalName)}"`
     );
-    res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+    // Pour les PDF, forcer le bon Content-Type
+    const contentType = file.originalName?.toLowerCase().endsWith(".pdf")
+      ? "application/pdf"
+      : file.mimeType || "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", file.size);
     res.setHeader("Cache-Control", "public, max-age=3600");
+    // Headers CORS pour permettre l'affichage dans un iframe
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Content-Type-Options", "nosniff");
 
     // Streamer le fichier vers le client
     response.Body.pipe(res);
