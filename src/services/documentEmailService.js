@@ -222,6 +222,7 @@ async function sendDocumentEmail({
   emailBody,
   recipientEmail,
   ccEmails = [],
+  pdfBase64 = null,
 }) {
   // Récupérer le document
   const document = await getDocument(documentId, documentType, workspaceId);
@@ -270,8 +271,15 @@ async function sendDocumentEmail({
   // Générer le HTML
   const emailHtml = generateEmailHtml(finalBody, variables, documentType, dueDate);
   
-  // Générer le PDF
-  const pdfBuffer = await generateDocumentPdf(documentId, documentType);
+  // Utiliser le PDF envoyé depuis le client, sinon essayer de le générer côté serveur
+  let pdfBuffer = null;
+  if (pdfBase64) {
+    // Décoder le PDF base64 envoyé depuis le client
+    pdfBuffer = Buffer.from(pdfBase64, 'base64');
+  } else {
+    // Fallback: essayer de générer le PDF côté serveur (peut échouer sur Vercel)
+    pdfBuffer = await generateDocumentPdf(documentId, documentType);
+  }
   
   const attachments = pdfBuffer ? [{
     filename: `${documentNumber}.pdf`,

@@ -13,6 +13,7 @@ const documentEmailResolvers = {
           emailBody: input.emailBody,
           recipientEmail: input.recipientEmail,
           ccEmails: input.ccEmails || [],
+          pdfBase64: input.pdfBase64 || null,
         });
         
         return result;
@@ -29,6 +30,7 @@ const documentEmailResolvers = {
           emailBody: input.emailBody,
           recipientEmail: input.recipientEmail,
           ccEmails: input.ccEmails || [],
+          pdfBase64: input.pdfBase64 || null,
         });
         
         return result;
@@ -45,6 +47,7 @@ const documentEmailResolvers = {
           emailBody: input.emailBody,
           recipientEmail: input.recipientEmail,
           ccEmails: input.ccEmails || [],
+          pdfBase64: input.pdfBase64 || null,
         });
         
         return result;
