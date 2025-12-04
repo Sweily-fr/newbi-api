@@ -70,6 +70,25 @@ type Client {
   updatedAt: String!
 }
 
+# Client embarqué dans les documents (factures, devis, avoirs)
+# L'id peut être null pour les anciens documents sans client.id
+type EmbeddedClient {
+  id: ID
+  name: String!
+  email: String!
+  address: Address!
+  type: ClientType!
+  # Champs spécifiques aux entreprises
+  siret: String
+  vatNumber: String
+  # Champs spécifiques aux particuliers
+  firstName: String
+  lastName: String
+  # Adresse de livraison différente
+  hasDifferentShippingAddress: Boolean
+  shippingAddress: Address
+}
+
 input ClientInput {
   id: ID
   name: String!
