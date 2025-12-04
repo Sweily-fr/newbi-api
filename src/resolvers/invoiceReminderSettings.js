@@ -36,12 +36,18 @@ const invoiceReminderSettingsResolvers = {
       // Si aucun paramètre n'existe, retourner des valeurs par défaut
       if (!settings) {
         return {
+          id: `default-${actualWorkspaceId}`,
           workspaceId: actualWorkspaceId,
           enabled: false,
           firstReminderDays: 7,
           secondReminderDays: 14,
+          reminderHour: 9,
           useCustomSender: false,
           customSenderEmail: '',
+          fromEmail: '',
+          fromName: '',
+          replyTo: '',
+          excludedClientIds: [],
           emailSubject: 'Rappel de paiement - Facture {invoiceNumber}',
           emailBody: `Bonjour {clientName},
 
@@ -51,6 +57,8 @@ Nous vous remercions de bien vouloir procéder au règlement dans les plus brefs
 
 Cordialement,
 {companyName}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         };
       }
 
