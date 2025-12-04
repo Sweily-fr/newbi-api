@@ -14,7 +14,7 @@ type File {
   originalName: String!
   displayName: String
   mimeType: String!
-  size: Int!
+  size: Float!
   filePath: String!
   downloadUrl: String
   r2Key: String

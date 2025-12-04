@@ -8,7 +8,7 @@ type CreditNote {
   originalInvoiceNumber: String!
   creditType: CreditType!
   reason: String
-  client: Client!
+  client: EmbeddedClient!
   companyInfo: Company!
   items: [Item!]!
   status: CreditNoteStatus!

@@ -8,7 +8,7 @@ type Quote {
   number: String!
   issueDate: String!
   validUntil: String
-  client: Client!
+  client: EmbeddedClient!
   companyInfo: Company!
   items: [Item!]!
   status: QuoteStatus!

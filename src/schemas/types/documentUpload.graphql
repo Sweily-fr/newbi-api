@@ -1,14 +1,13 @@
 """
 Types GraphQL pour l'upload de documents vers Cloudflare R2
 """
-
 type DocumentUploadResult {
   success: Boolean!
   key: String
   url: String
   contentType: String
   fileName: String
-  fileSize: Int
+  fileSize: Float
   message: String
 }
 
@@ -28,22 +27,15 @@ extend type Mutation {
   """
   Upload un document vers Cloudflare R2
   """
-  uploadDocument(
-    file: Upload!
-    folderType: String
-  ): DocumentUploadResult!
-  
+  uploadDocument(file: Upload!, folderType: String): DocumentUploadResult!
+
   """
   Promeut un fichier temporaire en fichier permanent (déplace de temp/ vers ocr/)
   """
-  promoteTemporaryFile(
-    tempKey: String!
-  ): PromoteTemporaryFileResult!
-  
+  promoteTemporaryFile(tempKey: String!): PromoteTemporaryFileResult!
+
   """
   Supprime un document de Cloudflare R2
   """
-  deleteDocument(
-    key: String!
-  ): DocumentDeleteResult!
+  deleteDocument(key: String!): DocumentDeleteResult!
 }

@@ -23,32 +23,21 @@ const invoiceReminderSettingsResolvers = {
           throw new AuthenticationError("Non authentifié");
         }
 
-        // Utiliser organization.id si workspaceId n'est pas disponible
-        const actualWorkspaceId =
-          workspaceId || organization?.id || user?.activeOrganizationId;
-
-        console.log(
-          "🔔 [InvoiceReminderSettings] actualWorkspaceId:",
-          actualWorkspaceId
-        );
-
-        if (!actualWorkspaceId) {
-          throw new UserInputError("Workspace ID requis");
-        }
-
-        let settings = await InvoiceReminderSettings.findOne({
-          workspaceId: actualWorkspaceId,
-        });
-
         // Si aucun paramètre n'existe, retourner des valeurs par défaut
         if (!settings) {
           return {
+            id: `default-${actualWorkspaceId}`,
             workspaceId: actualWorkspaceId,
             enabled: false,
             firstReminderDays: 7,
             secondReminderDays: 14,
+            reminderHour: 9,
             useCustomSender: false,
             customSenderEmail: "",
+            fromEmail: "",
+            fromName: "",
+            replyTo: "",
+            excludedClientIds: [],
             emailSubject: "Rappel de paiement - Facture {invoiceNumber}",
             emailBody: `Bonjour {clientName},
 
@@ -58,6 +47,8 @@ Nous vous remercions de bien vouloir procéder au règlement dans les plus brefs
 
 Cordialement,
 {companyName}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
           };
         }
 

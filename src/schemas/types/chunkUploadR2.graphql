@@ -13,7 +13,7 @@ type FileUploadR2Result {
   fileName: String!
   filePath: String!
   r2Key: String!
-  size: Int!
+  size: Float!
   mimeType: String!
   storageType: String!
 }
@@ -21,7 +21,7 @@ type FileUploadR2Result {
 input Base64FileInputR2 {
   name: String!
   type: String!
-  size: Int!
+  size: Float!
   base64: String!
 }
 
@@ -53,7 +53,7 @@ type CompleteMultipartUploadResponse {
   success: Boolean!
   key: String!
   url: String!
-  size: Int!
+  size: Float!
   etag: String
   fileId: String!
 }
@@ -69,7 +69,7 @@ extend type Mutation {
     transferId: String!
     fileId: String!
     fileName: String!
-    fileSize: Int!
+    fileSize: Float!
     mimeType: String
     totalParts: Int!
   ): StartMultipartUploadResponse!
@@ -96,7 +96,7 @@ extend type Mutation {
     chunkIndex: Int!
     totalChunks: Int!
     fileName: String!
-    fileSize: Int!
+    fileSize: Float!
   ): ChunkUploadR2Result!
 
   # Upload d'un chunk vers Cloudflare R2
@@ -106,7 +106,7 @@ extend type Mutation {
     chunkIndex: Int!
     totalChunks: Int!
     fileName: String!
-    fileSize: Int!
+    fileSize: Float!
   ): ChunkUploadR2Result!
 
   # Créer un transfert à partir d'IDs de fichiers R2
@@ -116,10 +116,7 @@ extend type Mutation {
   ): FileTransferResponse!
 
   # Upload direct d'un fichier vers R2
-  uploadFileDirectToR2(
-    file: Upload!
-    transferId: String
-  ): FileUploadR2Result!
+  uploadFileDirectToR2(file: Upload!, transferId: String): FileUploadR2Result!
 
   # Upload d'un fichier base64 vers R2
   uploadBase64FileToR2(

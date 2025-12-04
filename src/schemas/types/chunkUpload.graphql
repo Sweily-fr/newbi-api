@@ -19,9 +19,9 @@ extend type Mutation {
     chunkIndex: Int!
     totalChunks: Int!
     fileName: String!
-    fileSize: Int!
+    fileSize: Float!
   ): ChunkUploadResponse!
-  
+
   # Créer un transfert de fichier à partir des IDs de fichiers déjà uploadés en chunks
   createFileTransferWithIds(
     fileIds: [String!]!

@@ -50,7 +50,7 @@ type ExpenseFile {
   originalFilename: String!
   mimetype: String!
   path: String!
-  size: Int!
+  size: Float!
   url: String!
   ocrProcessed: Boolean!
   ocrData: JSON
@@ -235,7 +235,7 @@ input FileUploadInput {
   cloudflareUrl: String
   fileName: String
   mimeType: String
-  fileSize: Int
+  fileSize: Float
   ocrData: JSON
   ocrDocumentId: String
 }
@@ -273,7 +273,11 @@ extend type Query {
   ): ExpensePagination!
 
   # Récupérer les statistiques des dépenses
-  expenseStats(workspaceId: ID!, startDate: String, endDate: String): ExpenseStats!
+  expenseStats(
+    workspaceId: ID!
+    startDate: String
+    endDate: String
+  ): ExpenseStats!
 }
 
 # Mutations pour les dépenses
