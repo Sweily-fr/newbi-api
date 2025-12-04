@@ -8,7 +8,7 @@ type Invoice {
   prefix: String
   purchaseOrderNumber: String
   isDeposit: Boolean!
-  client: Client!
+  client: EmbeddedClient!
   companyInfo: Company!
   items: [Item!]!
   status: InvoiceStatus!
