@@ -1,0 +1,263 @@
+"""
+Types GraphQL pour les factures importées via OCR
+"""
+
+# Statuts des factures importées
+enum ImportedInvoiceStatus {
+  PENDING_REVIEW
+  VALIDATED
+  REJECTED
+  ARCHIVED
+}
+
+# Catégories de dépenses
+enum ExpenseCategory {
+  OFFICE_SUPPLIES
+  TRAVEL
+  MEALS
+  EQUIPMENT
+  MARKETING
+  TRAINING
+  SERVICES
+  RENT
+  SALARIES
+  UTILITIES
+  INSURANCE
+  SUBSCRIPTIONS
+  OTHER
+}
+
+# Moyens de paiement
+enum PaymentMethodType {
+  CARD
+  CASH
+  CHECK
+  TRANSFER
+  DIRECT_DEBIT
+  OTHER
+  UNKNOWN
+}
+
+# Informations du fournisseur
+type ImportedInvoiceVendor {
+  name: String
+  address: String
+  city: String
+  postalCode: String
+  country: String
+  siret: String
+  vatNumber: String
+  email: String
+  phone: String
+}
+
+# Ligne de facture
+type ImportedInvoiceItem {
+  description: String
+  quantity: Float
+  unitPrice: Float
+  totalPrice: Float
+  vatRate: Float
+  productCode: String
+}
+
+# Fichier associé
+type ImportedInvoiceFile {
+  url: String!
+  cloudflareKey: String!
+  originalFileName: String!
+  mimeType: String
+  fileSize: Int
+}
+
+# Données OCR
+type ImportedInvoiceOcrData {
+  extractedText: String
+  confidence: Float
+  processedAt: String
+}
+
+# Type principal de facture importée
+type ImportedInvoice {
+  id: ID!
+  workspaceId: ID!
+  importedBy: ID!
+  status: ImportedInvoiceStatus!
+  originalInvoiceNumber: String
+  vendor: ImportedInvoiceVendor
+  invoiceDate: String
+  dueDate: String
+  paymentDate: String
+  totalHT: Float
+  totalVAT: Float
+  totalTTC: Float!
+  currency: String
+  items: [ImportedInvoiceItem!]
+  category: ExpenseCategory
+  paymentMethod: PaymentMethodType
+  file: ImportedInvoiceFile!
+  ocrData: ImportedInvoiceOcrData
+  notes: String
+  linkedExpenseId: ID
+  isDuplicate: Boolean
+  duplicateOf: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Résultat d'import d'une facture
+type ImportedInvoiceResult {
+  success: Boolean!
+  invoice: ImportedInvoice
+  error: String
+  isDuplicate: Boolean
+}
+
+# Résultat d'import en lot
+type BatchImportResult {
+  success: Boolean!
+  totalProcessed: Int!
+  successCount: Int!
+  errorCount: Int!
+  results: [ImportedInvoiceResult!]!
+  errors: [String!]
+}
+
+# Statistiques des factures importées
+type ImportedInvoiceStats {
+  pendingReview: Int!
+  validated: Int!
+  rejected: Int!
+  archived: Int!
+  totalAmount: Float!
+}
+
+# Pagination
+type ImportedInvoicePagination {
+  invoices: [ImportedInvoice!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+  hasMore: Boolean!
+}
+
+# Input pour la mise à jour d'une facture importée
+input UpdateImportedInvoiceInput {
+  originalInvoiceNumber: String
+  vendorName: String
+  vendorAddress: String
+  vendorCity: String
+  vendorPostalCode: String
+  vendorCountry: String
+  vendorSiret: String
+  vendorVatNumber: String
+  invoiceDate: String
+  dueDate: String
+  paymentDate: String
+  totalHT: Float
+  totalVAT: Float
+  totalTTC: Float
+  currency: String
+  category: ExpenseCategory
+  paymentMethod: PaymentMethodType
+  notes: String
+}
+
+# Input pour les filtres de recherche
+input ImportedInvoiceFilters {
+  status: ImportedInvoiceStatus
+  category: ExpenseCategory
+  vendorName: String
+  dateFrom: String
+  dateTo: String
+  minAmount: Float
+  maxAmount: Float
+}
+
+# Queries
+extend type Query {
+  """
+  Récupère une facture importée par son ID
+  """
+  importedInvoice(id: ID!): ImportedInvoice
+
+  """
+  Liste les factures importées avec pagination et filtres
+  """
+  importedInvoices(
+    workspaceId: ID!
+    page: Int
+    limit: Int
+    filters: ImportedInvoiceFilters
+  ): ImportedInvoicePagination!
+
+  """
+  Statistiques des factures importées
+  """
+  importedInvoiceStats(workspaceId: ID!): ImportedInvoiceStats!
+}
+
+# Mutations
+extend type Mutation {
+  """
+  Importe une facture PDF avec OCR
+  """
+  importInvoice(
+    workspaceId: ID!
+    cloudflareUrl: String!
+    fileName: String!
+    mimeType: String!
+    fileSize: Int
+    cloudflareKey: String!
+  ): ImportedInvoiceResult!
+
+  """
+  Import en lot de factures (max 100)
+  """
+  batchImportInvoices(
+    workspaceId: ID!
+    files: [BatchImportFileInput!]!
+  ): BatchImportResult!
+
+  """
+  Met à jour une facture importée
+  """
+  updateImportedInvoice(
+    id: ID!
+    input: UpdateImportedInvoiceInput!
+  ): ImportedInvoice!
+
+  """
+  Valide une facture importée
+  """
+  validateImportedInvoice(id: ID!): ImportedInvoice!
+
+  """
+  Rejette une facture importée
+  """
+  rejectImportedInvoice(id: ID!, reason: String): ImportedInvoice!
+
+  """
+  Archive une facture importée
+  """
+  archiveImportedInvoice(id: ID!): ImportedInvoice!
+
+  """
+  Supprime une facture importée
+  """
+  deleteImportedInvoice(id: ID!): Boolean!
+
+  """
+  Supprime plusieurs factures importées
+  """
+  deleteImportedInvoices(ids: [ID!]!): Int!
+}
+
+# Input pour l'import en lot
+input BatchImportFileInput {
+  cloudflareUrl: String!
+  fileName: String!
+  mimeType: String!
+  fileSize: Int
+  cloudflareKey: String!
+}
