@@ -23,6 +23,23 @@ const invoiceReminderSettingsResolvers = {
           throw new AuthenticationError("Non authentifié");
         }
 
+        // Utiliser organization.id si workspaceId n'est pas disponible
+        const actualWorkspaceId =
+          workspaceId || organization?.id || user?.activeOrganizationId;
+
+        console.log(
+          "🔔 [InvoiceReminderSettings] actualWorkspaceId:",
+          actualWorkspaceId
+        );
+
+        if (!actualWorkspaceId) {
+          throw new UserInputError("Workspace ID requis");
+        }
+
+        let settings = await InvoiceReminderSettings.findOne({
+          workspaceId: actualWorkspaceId,
+        });
+
         // Si aucun paramètre n'existe, retourner des valeurs par défaut
         if (!settings) {
           return {
