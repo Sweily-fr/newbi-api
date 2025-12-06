@@ -144,6 +144,15 @@ const FileTransferSchema = new Schema(
       enum: ["direct", "base64", "chunk"],
       default: "direct",
     },
+    // Rappel avant expiration
+    expiryReminderEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    expiryReminderSent: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

@@ -1,9 +1,11 @@
 import FileTransfer from "../models/FileTransfer.js";
 import AccessGrant from "../models/AccessGrant.js";
 import DownloadEvent from "../models/DownloadEvent.js";
+import User from "../models/User.js";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import logger from "../utils/logger.js";
+import { sendDownloadNotificationEmail } from "../utils/mailer.js";
 
 // Configuration R2
 const s3Client = new S3Client({
@@ -48,9 +50,8 @@ export const authorizeDownload = async (req, res) => {
     console.log("🔍 Recherche du transfert avec ID:", transferId);
 
     // Vérifier que le transfert existe
-    const fileTransfer = await FileTransfer.findById(transferId).populate(
-      "files"
-    );
+    const fileTransfer =
+      await FileTransfer.findById(transferId).populate("files");
     console.log("🔍 Transfert trouvé:", fileTransfer ? "OUI" : "NON");
     if (!fileTransfer) {
       return res.status(404).json({
@@ -160,10 +161,10 @@ async function generateDownloadUrls(
   try {
     // Vérifier la configuration R2/S3
     if (!process.env.TRANSFER_BUCKET) {
-      logger.error('❌ TRANSFER_BUCKET non configuré');
+      logger.error("❌ TRANSFER_BUCKET non configuré");
       return res.status(500).json({
         success: false,
-        error: 'Configuration de stockage manquante'
+        error: "Configuration de stockage manquante",
       });
     }
     const downloadUrls = [];
@@ -261,7 +262,7 @@ async function generateDownloadUrls(
 export const markDownloadCompleted = async (req, res) => {
   try {
     const { downloadEventId } = req.params;
-    const { duration } = req.body;
+    const { duration, isLastFile } = req.body;
 
     const downloadEvent = await DownloadEvent.findById(downloadEventId);
     if (!downloadEvent) {
@@ -273,15 +274,51 @@ export const markDownloadCompleted = async (req, res) => {
 
     await downloadEvent.markCompleted(duration);
 
-    logger.info("✅ Téléchargement marqué comme terminé", {
+    logger.info(" Téléchargement marqué comme terminé", {
       downloadEventId,
       fileName: downloadEvent.fileName,
       duration,
+      isLastFile,
     });
+
+    // Envoyer notification de téléchargement SEULEMENT pour le dernier fichier
+    if (isLastFile) {
+      try {
+        const fileTransfer = await FileTransfer.findById(
+          downloadEvent.transferId
+        );
+        if (fileTransfer && fileTransfer.notifyOnDownload) {
+          const owner = await User.findById(fileTransfer.userId);
+          if (owner && owner.email) {
+            const transferUrl = `${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers`;
+            // Utiliser le nom du transfert ou le premier fichier
+            const displayName =
+              fileTransfer.files.length > 1
+                ? `${fileTransfer.files.length} fichiers`
+                : fileTransfer.files[0]?.originalName || downloadEvent.fileName;
+
+            await sendDownloadNotificationEmail(owner.email, {
+              fileName: displayName,
+              downloadDate: new Date(),
+              filesCount: fileTransfer.files.length,
+              shareLink: fileTransfer.shareLink,
+              transferUrl,
+            });
+            logger.info(" Notification de téléchargement envoyée", {
+              ownerEmail: owner.email,
+              filesCount: fileTransfer.files.length,
+            });
+          }
+        }
+      } catch (emailError) {
+        logger.error(" Erreur envoi notification téléchargement:", emailError);
+        // Ne pas bloquer la réponse si l'email échoue
+      }
+    }
 
     res.json({ success: true });
   } catch (error) {
-    logger.error("❌ Erreur marquage téléchargement:", error);
+    logger.error(" Erreur marquage téléchargement:", error);
     res.status(500).json({
       success: false,
       error: "Erreur interne du serveur",

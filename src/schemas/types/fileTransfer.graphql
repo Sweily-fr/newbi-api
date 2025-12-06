@@ -48,6 +48,8 @@ type FileTransfer {
   passwordProtected: Boolean
   allowPreview: Boolean
   message: String
+  expiryReminderEnabled: Boolean
+  expiryReminderSent: Boolean
   createdAt: Date
   updatedAt: Date
   zipDownloadUrl: String
@@ -97,6 +99,7 @@ input FileTransferInput {
   passwordProtected: Boolean = false
   password: String
   allowPreview: Boolean = true
+  expiryReminderEnabled: Boolean = false
 }
 
 # Étendre le type Query

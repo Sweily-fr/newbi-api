@@ -1,7 +1,9 @@
 import express from "express";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import FileTransfer from "../models/FileTransfer.js";
+import User from "../models/User.js";
 import logger from "../utils/logger.js";
+import { sendDownloadNotificationEmail } from "../utils/mailer.js";
 
 const router = express.Router();
 
@@ -60,6 +62,33 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
       transferId,
       newCount: fileTransfer.downloadCount,
     });
+
+    // ✅ Envoyer notification de téléchargement si activée
+    if (fileTransfer.notifyOnDownload) {
+      try {
+        const owner = await User.findById(fileTransfer.userId);
+        if (owner && owner.email) {
+          const transferUrl = `${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers`;
+          await sendDownloadNotificationEmail(owner.email, {
+            fileName: file.originalName,
+            downloadDate: new Date(),
+            filesCount: fileTransfer.files.length,
+            shareLink: fileTransfer.shareLink,
+            transferUrl,
+          });
+          logger.info("📧 Notification de téléchargement envoyée", {
+            ownerEmail: owner.email,
+            fileName: file.originalName,
+          });
+        }
+      } catch (emailError) {
+        logger.error(
+          "❌ Erreur envoi notification téléchargement:",
+          emailError
+        );
+        // Ne pas bloquer le téléchargement si l'email échoue
+      }
+    }
 
     // Configurer les headers pour forcer le téléchargement
     res.setHeader(

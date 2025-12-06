@@ -3,14 +3,14 @@ import nodemailer from "nodemailer";
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT),
-  secure: process.env.SMTP_SECURE === 'true', // false en local, true en staging/production
+  secure: process.env.SMTP_SECURE === "true", // false en local, true en staging/production
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
   tls: {
-    rejectUnauthorized: false
-  }
+    rejectUnauthorized: false,
+  },
 });
 
 const sendPasswordResetEmail = async (email, resetToken) => {
@@ -450,21 +450,25 @@ const sendPasswordResetConfirmationEmail = async (email) => {
 };
 
 const sendFileTransferEmail = async (recipientEmail, transferData) => {
-  const { shareLink, accessKey, senderName, message, files, expiryDate } = transferData;
+  const { shareLink, accessKey, senderName, message, files, expiryDate } =
+    transferData;
   const transferUrl = `${process.env.FRONTEND_URL}/transfer/${shareLink}?accessKey=${accessKey}`;
-  
-  const filesList = files.map(file => 
-    `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+
+  const filesList = files
+    .map(
+      (file) =>
+        `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
       <strong>${file.originalName}</strong> 
       <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
     </li>`
-  ).join('');
+    )
+    .join("");
 
   const mailOptions = {
     from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: recipientEmail,
-    subject: `${senderName || 'Quelqu\'un'} vous a envoyé des fichiers via Newbi`,
+    subject: `${senderName || "Quelqu'un"} vous a envoyé des fichiers via Newbi`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -567,14 +571,18 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
           <div class="content">
             <h1>📁 Vous avez reçu des fichiers</h1>
             <p>Bonjour,</p>
-            <p><strong>${senderName || 'Quelqu\'un'}</strong> vous a envoyé ${files.length} fichier(s) via Newbi.</p>
+            <p><strong>${senderName || "Quelqu'un"}</strong> vous a envoyé ${files.length} fichier(s) via Newbi.</p>
             
-            ${message ? `
+            ${
+              message
+                ? `
               <div class="message-box">
                 <strong>Message :</strong><br>
                 ${message}
               </div>
-            ` : ''}
+            `
+                : ""
+            }
             
             <div class="files-list">
               <h3 style="margin-top: 0; color: #374151;">Fichiers inclus :</h3>
@@ -586,12 +594,14 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
             </div>
             
             <div class="expiry">
-              <strong>⏰ Attention :</strong> Ce transfert expire le ${new Date(expiryDate).toLocaleDateString('fr-FR', { 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
+              <strong>⏰ Attention :</strong> Ce transfert expire le ${new Date(
+                expiryDate
+              ).toLocaleDateString("fr-FR", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
               })}.
             </div>
             
@@ -629,7 +639,11 @@ const formatFileSize = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 };
 
-const sendReferralThankYouEmail = async (referrer, referredUser, payoutAmount) => {
+const sendReferralThankYouEmail = async (
+  referrer,
+  referredUser,
+  payoutAmount
+) => {
   const dashboardLink = `${process.env.FRONTEND_URL}/dashboard`;
 
   const mailOptions = {
@@ -782,13 +796,16 @@ const sendReferralThankYouEmail = async (referrer, referredUser, payoutAmount) =
             <div class="referral-info">
               <h3>📊 Détails du parrainage</h3>
               <p><strong>Filleul :</strong> ${referredUser.email}</p>
-              <p><strong>Date de souscription :</strong> ${new Date().toLocaleDateString('fr-FR', { 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-              })}</p>
+              <p><strong>Date de souscription :</strong> ${new Date().toLocaleDateString(
+                "fr-FR",
+                {
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }
+              )}</p>
               <p><strong>Récompense :</strong> ${payoutAmount}€</p>
               <p><strong>Statut :</strong> <span style="color: #f59e0b; font-weight: 600;">⏳ Programmé</span></p>
             </div>
@@ -796,7 +813,7 @@ const sendReferralThankYouEmail = async (referrer, referredUser, payoutAmount) =
             <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 15px; margin: 20px 0;">
               <h4 style="margin-top: 0; color: #92400e; font-size: 16px;">⏰ Délai de paiement</h4>
               <p style="margin-bottom: 0; color: #92400e;">
-                Pour des raisons de sécurité financière, votre récompense de <strong>${payoutAmount}€</strong> sera versée sur votre compte Stripe Connect dans <strong>7 jours</strong>, soit le <strong>${new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' })}</strong>.
+                Pour des raisons de sécurité financière, votre récompense de <strong>${payoutAmount}€</strong> sera versée sur votre compte Stripe Connect dans <strong>7 jours</strong>, soit le <strong>${new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("fr-FR", { year: "numeric", month: "long", day: "numeric" })}</strong>.
               </p>
             </div>
             
@@ -844,27 +861,36 @@ const sendReferralThankYouEmail = async (referrer, referredUser, payoutAmount) =
     await transporter.sendMail(mailOptions);
     return true;
   } catch (error) {
-    console.error("Erreur lors de l'envoi de l'email de remerciement parrainage:", error);
+    console.error(
+      "Erreur lors de l'envoi de l'email de remerciement parrainage:",
+      error
+    );
     return false;
   }
 };
 
-const sendFileTransferPaymentNotification = async (senderEmail, paymentData) => {
-  const { 
-    buyerEmail, 
-    paidAmount, 
-    currency, 
-    files, 
+const sendFileTransferPaymentNotification = async (
+  senderEmail,
+  paymentData
+) => {
+  const {
+    buyerEmail,
+    paidAmount,
+    currency,
+    files,
     transferId,
-    paymentDate = new Date()
+    paymentDate = new Date(),
   } = paymentData;
-  
-  const filesList = files.map(file => 
-    `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+
+  const filesList = files
+    .map(
+      (file) =>
+        `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
       <strong>${file.originalName || file.displayName}</strong> 
       <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
     </li>`
-  ).join('');
+    )
+    .join("");
 
   const mailOptions = {
     from: "Newbi <contact@newbi.fr>",
@@ -995,7 +1021,7 @@ const sendFileTransferPaymentNotification = async (senderEmail, paymentData) => 
       <body>
         <div class="container">
           <div class="header">
-            <img src="${process.env.AWS_S3_API_URL || 'https://via.placeholder.com/120x40/000000/FFFFFF?text=NEWBI'}/logobewbi/Logo_Texte_Black.png" alt="Newbi" class="logo">
+            <img src="${process.env.AWS_S3_API_URL || "https://via.placeholder.com/120x40/000000/FFFFFF?text=NEWBI"}/logobewbi/Logo_Texte_Black.png" alt="Newbi" class="logo">
           </div>
           
           <div class="content">
@@ -1010,11 +1036,11 @@ const sendFileTransferPaymentNotification = async (senderEmail, paymentData) => 
               </div>
               <div class="detail-row">
                 <span class="detail-label">Date</span>
-                <span class="detail-value">${paymentDate.toLocaleDateString('fr-FR')}</span>
+                <span class="detail-value">${paymentDate.toLocaleDateString("fr-FR")}</span>
               </div>
               <div class="detail-row">
                 <span class="detail-label">Fichiers</span>
-                <span class="detail-value">${files.length} fichier${files.length > 1 ? 's' : ''}</span>
+                <span class="detail-value">${files.length} fichier${files.length > 1 ? "s" : ""}</span>
               </div>
             </div>
             
@@ -1035,7 +1061,170 @@ const sendFileTransferPaymentNotification = async (senderEmail, paymentData) => 
     await transporter.sendMail(mailOptions);
     return true;
   } catch (error) {
-    console.error("Erreur lors de l'envoi de l'email de notification de paiement:", error);
+    console.error(
+      "Erreur lors de l'envoi de l'email de notification de paiement:",
+      error
+    );
+    return false;
+  }
+};
+
+/**
+ * Envoyer une notification de téléchargement au propriétaire du transfert
+ */
+const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
+  const {
+    fileName,
+    downloaderEmail,
+    downloadDate,
+    shareLink,
+    filesCount,
+    transferUrl,
+  } = downloadData;
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: ownerEmail,
+    subject: `Vos fichiers ont été téléchargés`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f0eeff;">
+        <div style="max-width: 500px; margin: 40px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
+          <div style="text-align: center; padding: 30px 20px; background-color: #f0eeff;">
+            <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 100px; height: auto;">
+          </div>
+          
+          <div style="padding: 40px 30px; text-align: center;">
+            <h1 style="color: #1f2937; font-size: 24px; font-weight: 400; margin: 0 0 30px 0; line-height: 1.4;">
+              ${fileName} a été téléchargé !
+            </h1>
+            
+            <p style="color: #4b5563; font-size: 14px; line-height: 1.6; margin: 0 0 30px 0;">
+              Quelqu'un vient de télécharger vos fichiers. Vous pouvez consulter les détails de ce transfert dans votre tableau de bord.
+            </p>
+            
+            <a href="${transferUrl}" style="display: inline-block; background-color: #5b50ff; color: white; font-weight: 400; text-decoration: none; padding: 14px 40px; border-radius: 30px; font-size: 14px;">
+              Voir mon transfert
+            </a>
+          </div>
+          
+          <div style="padding: 20px 30px; border-top: 1px solid #e5e7eb;">
+            <p style="color: #6b7280; font-size: 12px; margin: 0 0 8px 0;">Date du téléchargement</p>
+            <p style="color: #1f2937; font-size: 14px; margin: 0;">${new Date(
+              downloadDate
+            ).toLocaleDateString("fr-FR", {
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}</p>
+          </div>
+          
+          <div style="padding: 20px 30px; border-top: 1px solid #e5e7eb;">
+            <p style="color: #1f2937; font-size: 14px; margin: 0;">${filesCount} élément${filesCount > 1 ? "s" : ""}</p>
+            <p style="color: #6b7280; font-size: 12px; margin: 8px 0 0 0;">${fileName}</p>
+          </div>
+          
+          <div style="text-align: center; padding: 20px 30px; color: #9ca3af; font-size: 11px; border-top: 1px solid #e5e7eb;">
+            <p style="margin: 0 0 10px 0;">Pour être sûr(e) de recevoir nos e-mails, veuillez ajouter contact@newbi.fr à vos contacts.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error(
+      "Erreur lors de l'envoi de l'email de notification de téléchargement:",
+      error
+    );
+    return false;
+  }
+};
+
+/**
+ * Envoyer un rappel d'expiration au propriétaire du transfert
+ */
+const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
+  const { fileName, filesCount, expiryDate, daysLeft, shareLink, transferUrl } =
+    reminderData;
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: ownerEmail,
+    subject: `Votre transfert expire dans ${daysLeft} jour${daysLeft > 1 ? "s" : ""}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f0eeff;">
+        <div style="max-width: 500px; margin: 40px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
+          <div style="text-align: center; padding: 30px 20px; background-color: #f0eeff;">
+            <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 100px; height: auto;">
+          </div>
+          
+          <div style="padding: 40px 30px; text-align: center;">
+            <h1 style="color: #1f2937; font-size: 24px; font-weight: 400; margin: 0 0 30px 0; line-height: 1.4;">
+              ${fileName} expire dans ${daysLeft} jour${daysLeft > 1 ? "s" : ""} !
+            </h1>
+            
+            <p style="color: #4b5563; font-size: 14px; line-height: 1.6; margin: 0 0 30px 0; text-align: left;">
+              Mmh, il semble que vos fichiers n'aient pas encore été téléchargés, et ce transfert expirera le <strong>${new Date(
+                expiryDate
+              ).toLocaleDateString("fr-FR", {
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              })}</strong>. À cette date, les fichiers seront supprimés de nos serveurs.
+            </p>
+            
+            <a href="${transferUrl}" style="display: inline-block; background-color: #5b50ff; color: white; font-weight: 400; text-decoration: none; padding: 14px 40px; border-radius: 30px; font-size: 14px;">
+              Voir mon transfert
+            </a>
+          </div>
+          
+          <div style="padding: 20px 30px; border-top: 1px solid #e5e7eb;">
+            <p style="color: #6b7280; font-size: 12px; margin: 0 0 8px 0;">Lien de téléchargement</p>
+            <a href="${transferUrl}" style="color: #5b50ff; font-size: 14px; word-break: break-all; text-decoration: none;">${transferUrl}</a>
+          </div>
+          
+          <div style="padding: 20px 30px; border-top: 1px solid #e5e7eb;">
+            <p style="color: #1f2937; font-size: 14px; margin: 0;">${filesCount} élément${filesCount > 1 ? "s" : ""}</p>
+            <p style="color: #6b7280; font-size: 12px; margin: 8px 0 0 0;">${fileName}</p>
+          </div>
+          
+          <div style="text-align: center; padding: 20px 30px; color: #9ca3af; font-size: 11px; border-top: 1px solid #e5e7eb;">
+            <p style="margin: 0 0 10px 0;">Pour être sûr(e) de recevoir nos e-mails, veuillez ajouter contact@newbi.fr à vos contacts.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error(
+      "Erreur lors de l'envoi de l'email de rappel d'expiration:",
+      error
+    );
     return false;
   }
 };
@@ -1046,5 +1235,7 @@ export {
   sendPasswordResetConfirmationEmail,
   sendFileTransferEmail,
   sendReferralThankYouEmail,
-  sendFileTransferPaymentNotification
+  sendFileTransferPaymentNotification,
+  sendDownloadNotificationEmail,
+  sendExpiryReminderEmail,
 };

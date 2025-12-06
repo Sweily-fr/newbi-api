@@ -184,9 +184,12 @@ export default {
 
           fileMetadataCache.set(fileId, fileMetadata);
 
-          setTimeout(() => {
-            fileMetadataCache.delete(fileId);
-          }, 60 * 60 * 1000);
+          setTimeout(
+            () => {
+              fileMetadataCache.delete(fileId);
+            },
+            60 * 60 * 1000
+          );
 
           return {
             success: true,
@@ -370,9 +373,12 @@ export default {
 
             fileMetadataCache.set(fileId, fileMetadata);
 
-            setTimeout(() => {
-              fileMetadataCache.delete(fileId);
-            }, 60 * 60 * 1000);
+            setTimeout(
+              () => {
+                fileMetadataCache.delete(fileId);
+              },
+              60 * 60 * 1000
+            );
           }
 
           return {
@@ -490,9 +496,12 @@ export default {
             fileMetadataCache.set(fileId, fileMetadata);
 
             // Nettoyer le cache après 1 heure (pour éviter l'accumulation)
-            setTimeout(() => {
-              fileMetadataCache.delete(fileId);
-            }, 60 * 60 * 1000);
+            setTimeout(
+              () => {
+                fileMetadataCache.delete(fileId);
+              },
+              60 * 60 * 1000
+            );
           }
 
           return {
@@ -582,6 +591,7 @@ export default {
           const passwordProtected = input?.passwordProtected || false;
           const password = input?.password || null;
           const allowPreview = input?.allowPreview !== false; // true par défaut
+          const expiryReminderEnabled = input?.expiryReminderEnabled || false;
 
           // Créer un nouveau transfert de fichier
           const fileTransfer = new FileTransfer({
@@ -602,6 +612,7 @@ export default {
             passwordProtected,
             password: passwordProtected ? password : null,
             allowPreview,
+            expiryReminderEnabled,
           });
 
           // Générer les liens de partage et clé d'accès
@@ -618,9 +629,8 @@ export default {
             process.env.SMTP_PASS
           ) {
             try {
-              const { sendFileTransferEmail } = await import(
-                "../utils/mailer.js"
-              );
+              const { sendFileTransferEmail } =
+                await import("../utils/mailer.js");
 
               const transferData = {
                 shareLink: fileTransfer.shareLink,

@@ -58,6 +58,7 @@ import bankingSyncRoutes from "./routes/banking-sync.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
+import fileTransferReminderService from "./services/fileTransferReminderService.js";
 
 // Connexion à MongoDB
 mongoose
@@ -168,9 +169,9 @@ async function startServer() {
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
 
-  // Routes banking (avec authentification JWT)
+  // Routes banking (authentification gérée par betterAuthMiddleware dans chaque route)
   app.use("/banking", validateJWT, bankingRoutes);
-  app.use("/banking-connect", validateJWT, bankingConnectRoutes);
+  app.use("/banking-connect", bankingConnectRoutes); // Auth via betterAuthMiddleware
   app.use("/banking-sync", validateJWT, bankingSyncRoutes);
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
@@ -320,6 +321,10 @@ async function startServer() {
     // Démarrer le cron de relance automatique des factures
     startInvoiceReminderCron();
     logger.info("✅ Cron de relance automatique des factures démarré");
+
+    // Démarrer le service de rappel d'expiration des transferts
+    fileTransferReminderService.start();
+    logger.info("✅ Service de rappel d'expiration des transferts démarré");
   });
 
   // Nettoyage propre à l'arrêt

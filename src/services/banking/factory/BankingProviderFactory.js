@@ -1,4 +1,4 @@
-import { BankingProvider } from '../interfaces/BankingProvider.js';
+import { BankingProvider } from "../interfaces/BankingProvider.js";
 
 /**
  * Factory Pattern pour l'instanciation dynamique des providers bancaires
@@ -24,27 +24,30 @@ export class BankingProviderFactory {
    * @returns {BankingProvider} Instance du provider
    */
   static createProvider(providerName = null, config = {}) {
-    const selectedProvider = providerName || 
-                           process.env.BANKING_PROVIDER || 
-                           process.env.DEFAULT_BANKING_PROVIDER || 
-                           'bridge';
+    const selectedProvider =
+      providerName ||
+      process.env.BANKING_PROVIDER ||
+      process.env.DEFAULT_BANKING_PROVIDER ||
+      "gocardless";
 
     console.log(`🏦 Création du provider banking: ${selectedProvider}`);
 
     const ProviderClass = this.providers.get(selectedProvider);
-    
+
     if (!ProviderClass) {
       throw new Error(`Provider bancaire non supporté: ${selectedProvider}`);
     }
 
     // Merge de la configuration par défaut avec celle fournie
     const providerConfig = this.getProviderConfig(selectedProvider, config);
-    
+
     const instance = new ProviderClass(providerConfig);
-    
+
     // Validation de la configuration
     if (!instance.validateConfig()) {
-      throw new Error(`Configuration invalide pour le provider: ${selectedProvider}`);
+      throw new Error(
+        `Configuration invalide pour le provider: ${selectedProvider}`
+      );
     }
 
     return instance;
@@ -58,43 +61,51 @@ export class BankingProviderFactory {
    */
   static getProviderConfig(providerName, customConfig = {}) {
     const baseConfig = {
-      environment: process.env.NODE_ENV || 'development',
+      environment: process.env.NODE_ENV || "development",
       timeout: 30000,
       retries: 3,
-      logRequests: process.env.LOG_BANKING_REQUESTS === 'true'
+      logRequests: process.env.LOG_BANKING_REQUESTS === "true",
     };
 
     const providerConfigs = {
+      gocardless: {
+        secretId: process.env.GOCARDLESS_SECRET_ID,
+        secretKey: process.env.GOCARDLESS_SECRET_KEY,
+        baseUrl:
+          process.env.GOCARDLESS_BASE_URL ||
+          "https://bankaccountdata.gocardless.com/api/v2",
+        redirectUri: process.env.GOCARDLESS_REDIRECT_URI,
+      },
       bridge: {
         clientId: process.env.BRIDGE_CLIENT_ID,
         clientSecret: process.env.BRIDGE_CLIENT_SECRET,
-        baseUrl: process.env.BRIDGE_BASE_URL || 'https://api.bridgeapi.io',
-        version: process.env.BRIDGE_API_VERSION || 'v2',
-        webhookSecret: process.env.BRIDGE_WEBHOOK_SECRET
+        baseUrl: process.env.BRIDGE_BASE_URL || "https://api.bridgeapi.io",
+        version: process.env.BRIDGE_API_VERSION || "v2",
+        webhookSecret: process.env.BRIDGE_WEBHOOK_SECRET,
       },
       stripe: {
         secretKey: process.env.STRIPE_SECRET_KEY,
         publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
         webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
-        apiVersion: process.env.STRIPE_API_VERSION || '2023-10-16'
+        apiVersion: process.env.STRIPE_API_VERSION || "2023-10-16",
       },
       paypal: {
         clientId: process.env.PAYPAL_CLIENT_ID,
         clientSecret: process.env.PAYPAL_CLIENT_SECRET,
-        baseUrl: process.env.PAYPAL_BASE_URL || 'https://api.paypal.com',
-        webhookId: process.env.PAYPAL_WEBHOOK_ID
+        baseUrl: process.env.PAYPAL_BASE_URL || "https://api.paypal.com",
+        webhookId: process.env.PAYPAL_WEBHOOK_ID,
       },
       mock: {
         enabled: true,
-        simulateDelay: parseInt(process.env.MOCK_DELAY || '1000'),
-        failureRate: parseFloat(process.env.MOCK_FAILURE_RATE || '0.1')
-      }
+        simulateDelay: parseInt(process.env.MOCK_DELAY || "1000"),
+        failureRate: parseFloat(process.env.MOCK_FAILURE_RATE || "0.1"),
+      },
     };
 
     return {
       ...baseConfig,
       ...providerConfigs[providerName],
-      ...customConfig
+      ...customConfig,
     };
   }
 
@@ -122,16 +133,19 @@ export class BankingProviderFactory {
    */
   static createMultipleProviders(providerNames) {
     const providers = new Map();
-    
+
     for (const providerName of providerNames) {
       try {
         const provider = this.createProvider(providerName);
         providers.set(providerName, provider);
       } catch (error) {
-        console.warn(`Impossible de créer le provider ${providerName}:`, error.message);
+        console.warn(
+          `Impossible de créer le provider ${providerName}:`,
+          error.message
+        );
       }
     }
-    
+
     return providers;
   }
 
@@ -143,7 +157,7 @@ export class BankingProviderFactory {
     if (!this.isProviderAvailable(newProviderName)) {
       throw new Error(`Provider ${newProviderName} non disponible`);
     }
-    
+
     this.defaultProvider = newProviderName;
     console.log(`🔄 Provider par défaut changé pour: ${newProviderName}`);
   }
@@ -153,7 +167,9 @@ export class BankingProviderFactory {
    */
   static async initialize() {
     // Les providers seront enregistrés lors de leur import
-    console.log('🏭 Factory Banking initialisée');
-    console.log(`📋 Providers disponibles: ${this.getAvailableProviders().join(', ')}`);
+    console.log("🏭 Factory Banking initialisée");
+    console.log(
+      `📋 Providers disponibles: ${this.getAvailableProviders().join(", ")}`
+    );
   }
 }
