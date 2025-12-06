@@ -55,6 +55,13 @@ class CloudflareService {
       process.env.COMPANY_IMAGE_URL ||
       "https://pub-f609a47148ad4ae39fe95fc7b850fc03.r2.dev";
 
+    // Configuration spécifique pour les factures importées
+    this.importedInvoicesBucketName =
+      process.env.IMPORTED_INVOICES_BUCKET || "imported-invoices-staging";
+    this.importedInvoicesPublicUrl =
+      process.env.IMPORTED_INVOICES_URL ||
+      "https://pub-e4f26dbdae324a3eb3a2c49ed9723c1d.r2.dev";
+
     if (!this.bucketName) {
       throw new Error("Configuration manquante: USER_IMAGE_BUCKET");
     }
@@ -67,6 +74,7 @@ class CloudflareService {
     console.log("  - Company Images:", this.companyImagesBucketName, "→", this.companyImagesPublicUrl);
     console.log("  - Signatures:", this.signatureBucketName, "→", this.signaturePublicUrl);
     console.log("  - OCR:", this.ocrBucketName, "→", this.ocrPublicUrl);
+    console.log("  - Imported Invoices:", this.importedInvoicesBucketName, "→", this.importedInvoicesPublicUrl);
   }
 
   /**
@@ -159,6 +167,14 @@ class CloudflareService {
           key = `documents/${userId}/${uniqueId}${fileExtension}`;
           break;
         }
+        case "importedInvoice": {
+          // Pour les factures importées, organiser par organisation
+          if (!organizationId) {
+            throw new Error("Organization ID requis pour les factures importées");
+          }
+          key = `${organizationId}/${uniqueId}${fileExtension}`;
+          break;
+        }
         case "profile": {
           // Pour les images de profil - sans préfixe signatures/
           key = `${userId}/image/${uniqueId}${fileExtension}`;
@@ -193,6 +209,9 @@ class CloudflareService {
       } else if (imageType === "profile") {
         targetBucket = this.profileBucketName || this.bucketName;
         targetPublicUrl = this.profilePublicUrl || this.publicUrl;
+      } else if (imageType === "importedInvoice") {
+        targetBucket = this.importedInvoicesBucketName || this.bucketName;
+        targetPublicUrl = this.importedInvoicesPublicUrl || this.publicUrl;
       } else {
         targetBucket = this.bucketName;
         targetPublicUrl = this.publicUrl;

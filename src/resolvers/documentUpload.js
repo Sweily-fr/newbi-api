@@ -89,13 +89,20 @@ const documentUploadResolvers = {
         // Récupérer l'ID de l'organisation de l'utilisateur
         let organizationId = null;
 
-        if (finalFolderType === "imgCompany" || finalFolderType === "ocr") {
+        if (finalFolderType === "imgCompany" || finalFolderType === "ocr" || finalFolderType === "importedInvoice") {
           // Essayer différentes propriétés pour l'organizationId
-          organizationId =
+          const rawOrgId =
             user.organizationId ||
             user.organization?.id ||
-            user.organization ||
+            user.organization?._id ||
             user.currentOrganizationId;
+          
+          // S'assurer que c'est une string et pas un objet
+          if (rawOrgId) {
+            organizationId = typeof rawOrgId === 'object' 
+              ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
+              : rawOrgId.toString();
+          }
 
           // Si pas trouvé, chercher dans la collection member
           if (!organizationId) {
@@ -122,8 +129,8 @@ const documentUploadResolvers = {
           }
 
           if (!organizationId) {
-            if (finalFolderType === "ocr") {
-              throw new Error("Organization ID requis pour les uploads OCR. L'utilisateur doit être associé à une organisation.");
+            if (finalFolderType === "ocr" || finalFolderType === "importedInvoice") {
+              throw new Error("Organization ID requis pour les uploads OCR/factures importées. L'utilisateur doit être associé à une organisation.");
             }
             // Utiliser l'userId comme fallback uniquement pour les images d'entreprise
             organizationId = user.id;
