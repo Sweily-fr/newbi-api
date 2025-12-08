@@ -1,4 +1,6 @@
+import mongoose from 'mongoose';
 import Invoice from '../models/Invoice.js';
+import Client from '../models/Client.js';
 import InvoiceReminderSettings from '../models/InvoiceReminderSettings.js';
 import InvoiceReminderLog from '../models/InvoiceReminderLog.js';
 import EmailSettings from '../models/EmailSettings.js';
@@ -237,6 +239,39 @@ async function sendReminder(invoice, settings, reminderType) {
       emailBody: emailBody,
       status: 'SENT',
     });
+    
+    // Ajouter l'activité au client
+    try {
+      if (invoice.client?.id || invoice.client?._id) {
+        const clientId = invoice.client.id || invoice.client._id;
+        const client = await Client.findById(clientId);
+        
+        if (client) {
+          const reminderLabel = reminderType === 'first' ? '1ère' : '2ème';
+          
+          client.activity.push({
+            id: new mongoose.Types.ObjectId().toString(),
+            type: 'invoice_reminder_sent',
+            description: `a envoyé la ${reminderLabel} relance pour la facture ${variables.invoiceNumber}`,
+            userId: invoice.createdBy || invoice.userId,
+            userName: variables.companyName,
+            metadata: {
+              documentType: 'invoice',
+              documentId: invoice._id.toString(),
+              documentNumber: variables.invoiceNumber,
+              reminderType: reminderType,
+              recipientEmail: clientEmail,
+            },
+            createdAt: new Date(),
+          });
+          
+          await client.save();
+        }
+      }
+    } catch (activityError) {
+      // Ne pas bloquer l'envoi si l'ajout d'activité échoue
+      console.warn('⚠️ [InvoiceReminder] Erreur ajout activité client:', activityError.message);
+    }
     
     console.log(`✅ [InvoiceReminder] Relance ${reminderType} envoyée pour ${invoice.number}`);
   } catch (error) {

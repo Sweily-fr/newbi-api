@@ -1,6 +1,8 @@
+import mongoose from 'mongoose';
 import Invoice from '../models/Invoice.js';
 import Quote from '../models/Quote.js';
 import CreditNote from '../models/CreditNote.js';
+import Client from '../models/Client.js';
 import EmailSettings from '../models/EmailSettings.js';
 import emailReminderService from './emailReminderService.js';
 import axios from 'axios';
@@ -327,6 +329,42 @@ async function sendDocumentEmail({
   
   // Envoyer l'email
   const mailResult = await emailReminderService.transporter.sendMail(mailOptions);
+  
+  // Ajouter l'activité au client
+  try {
+    if (document.client?.id || document.client?._id) {
+      const clientId = document.client.id || document.client._id;
+      const client = await Client.findById(clientId);
+      
+      if (client) {
+        const documentLabel = documentType === DOCUMENT_TYPES.INVOICE 
+          ? 'facture' 
+          : documentType === DOCUMENT_TYPES.QUOTE 
+            ? 'devis' 
+            : 'avoir';
+        
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          type: 'document_email_sent',
+          description: `a envoyé ${documentLabel === 'avoir' ? 'l\'' : 'le '}${documentLabel} ${documentNumber} par email`,
+          userId: document.createdBy || document.userId,
+          userName: variables.companyName,
+          metadata: {
+            documentType: documentType,
+            documentId: documentId,
+            documentNumber: documentNumber,
+            recipientEmail: recipientEmail,
+          },
+          createdAt: new Date(),
+        });
+        
+        await client.save();
+      }
+    }
+  } catch (activityError) {
+    // Ne pas bloquer l'envoi si l'ajout d'activité échoue
+    console.warn('⚠️ [DocumentEmail] Erreur ajout activité client:', activityError.message);
+  }
   
   return {
     success: true,
