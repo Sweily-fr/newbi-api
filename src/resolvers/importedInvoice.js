@@ -5,7 +5,7 @@
 import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
 import ImportedInvoice from '../models/ImportedInvoice.js';
 import mistralOcrService from '../services/mistralOcrService.js';
-import mistralIntelligentAnalysisService from '../services/mistralIntelligentAnalysisService.js';
+import invoiceExtractionService from '../services/invoiceExtractionService.js';
 import cloudflareService from '../services/cloudflareService.js';
 import {
   createValidationError,
@@ -129,10 +129,11 @@ function transformOcrToInvoiceData(ocrResult, financialAnalysis) {
 }
 
 /**
- * Traite une facture avec OCR
+ * Traite une facture avec OCR - Version améliorée
+ * Utilise le nouveau service d'extraction avec patterns français
  */
 async function processInvoiceWithOcr(cloudflareUrl, fileName, mimeType) {
-  // Étape 1: OCR avec Mistral
+  // Étape 1: OCR avec Mistral pour extraire le texte brut
   const ocrResult = await mistralOcrService.processDocumentFromUrl(
     cloudflareUrl,
     fileName,
@@ -144,11 +145,150 @@ async function processInvoiceWithOcr(cloudflareUrl, fileName, mimeType) {
     throw createInternalServerError('Erreur lors du traitement OCR');
   }
 
-  // Étape 2: Analyse financière intelligente
-  const financialAnalysis = await mistralIntelligentAnalysisService.analyzeDocument(ocrResult);
+  console.log('📄 OCR réussi, texte extrait:', ocrResult.extractedText?.substring(0, 500));
+
+  // Étape 2: Extraction intelligente avec le nouveau service amélioré
+  // Utilise patterns regex français + IA Mistral + validation croisée
+  const extractionResult = await invoiceExtractionService.extractInvoiceData(ocrResult);
+
+  console.log('🔍 Extraction terminée, confiance:', extractionResult.document_analysis?.confidence);
 
   // Étape 3: Transformer en données de facture
-  return transformOcrToInvoiceData(ocrResult, financialAnalysis);
+  return transformOcrToInvoiceDataV2(ocrResult, extractionResult);
+}
+
+/**
+ * Transforme les données d'extraction améliorées en données de facture
+ */
+function transformOcrToInvoiceDataV2(ocrResult, extractionResult) {
+  const transactionData = extractionResult?.transaction_data || {};
+  const extractedFields = extractionResult?.extracted_fields || {};
+  const documentAnalysis = extractionResult?.document_analysis || {};
+
+  // Mapper la catégorie
+  const categoryMap = {
+    'OFFICE_SUPPLIES': 'OFFICE_SUPPLIES',
+    'TRAVEL': 'TRAVEL',
+    'MEALS': 'MEALS',
+    'EQUIPMENT': 'EQUIPMENT',
+    'MARKETING': 'MARKETING',
+    'TRAINING': 'TRAINING',
+    'SERVICES': 'SERVICES',
+    'RENT': 'RENT',
+    'SALARIES': 'SALARIES',
+    'UTILITIES': 'UTILITIES',
+    'INSURANCE': 'INSURANCE',
+    'SUBSCRIPTIONS': 'SUBSCRIPTIONS',
+  };
+
+  // Mapper le moyen de paiement
+  const paymentMethodMap = {
+    'card': 'CARD',
+    'cash': 'CASH',
+    'check': 'CHECK',
+    'transfer': 'TRANSFER',
+    'direct_debit': 'DIRECT_DEBIT',
+    'unknown': 'UNKNOWN',
+  };
+
+  // Parser les dates
+  let invoiceDate = null;
+  if (transactionData.transaction_date) {
+    try {
+      invoiceDate = new Date(transactionData.transaction_date);
+      if (isNaN(invoiceDate.getTime())) {
+        invoiceDate = null;
+      }
+    } catch (e) {
+      invoiceDate = null;
+    }
+  }
+
+  let dueDate = null;
+  if (transactionData.due_date) {
+    try {
+      dueDate = new Date(transactionData.due_date);
+      if (isNaN(dueDate.getTime())) {
+        dueDate = null;
+      }
+    } catch (e) {
+      dueDate = null;
+    }
+  }
+
+  let paymentDate = null;
+  if (transactionData.payment_date) {
+    try {
+      paymentDate = new Date(transactionData.payment_date);
+      if (isNaN(paymentDate.getTime())) {
+        paymentDate = null;
+      }
+    } catch (e) {
+      paymentDate = null;
+    }
+  }
+
+  // Extraire les items
+  const items = (extractedFields.items || []).map(item => ({
+    description: item.description || '',
+    quantity: parseFloat(item.quantity) || 1,
+    unitPrice: parseFloat(item.unit_price_ht) || parseFloat(item.unit_price_ttc) || 0,
+    totalPrice: parseFloat(item.total_ttc) || parseFloat(item.total_ht) || 0,
+    vatRate: parseFloat(item.vat_rate) || 20,
+    productCode: item.code || null,
+    unit: item.unit || 'unité',
+  }));
+
+  // Construire les totaux
+  const totals = extractedFields.totals || {};
+
+  return {
+    originalInvoiceNumber: transactionData.document_number || null,
+    vendor: {
+      name: transactionData.vendor_name || '',
+      address: extractedFields.vendor_address || '',
+      city: extractedFields.vendor_city || '',
+      postalCode: extractedFields.vendor_postal_code || '',
+      country: extractedFields.vendor_country || 'France',
+      siret: extractedFields.vendor_siret || null,
+      vatNumber: extractedFields.vendor_vat_number || null,
+      email: extractedFields.vendor_email || null,
+      phone: extractedFields.vendor_phone || null,
+      website: extractedFields.vendor_website || null,
+      rcs: extractedFields.vendor_rcs || null,
+      ape: extractedFields.vendor_ape || null,
+      capitalSocial: extractedFields.vendor_capital || null,
+    },
+    client: {
+      name: extractedFields.client_name || transactionData.client_name || null,
+      address: extractedFields.client_address || null,
+      clientNumber: extractedFields.client_number || transactionData.client_number || null,
+    },
+    invoiceDate,
+    dueDate,
+    paymentDate,
+    totalHT: parseFloat(totals.total_ht) || 0,
+    totalVAT: parseFloat(totals.total_tax) || parseFloat(transactionData.tax_amount) || 0,
+    totalTTC: parseFloat(totals.total_ttc) || parseFloat(transactionData.amount) || 0,
+    currency: transactionData.currency || 'EUR',
+    items,
+    taxDetails: extractedFields.tax_details || [],
+    category: categoryMap[transactionData.category?.toUpperCase()] || 'OTHER',
+    paymentMethod: paymentMethodMap[transactionData.payment_method?.toLowerCase()] || 'UNKNOWN',
+    paymentDetails: {
+      iban: extractedFields.payment_details?.iban || null,
+      bic: extractedFields.payment_details?.bic || null,
+      bankName: extractedFields.payment_details?.bank_name || null,
+    },
+    ocrData: {
+      extractedText: ocrResult.extractedText || '',
+      rawData: ocrResult.data || {},
+      financialAnalysis: extractionResult || {},
+      confidence: documentAnalysis.confidence || 0,
+      processedAt: new Date(),
+    },
+    description: transactionData.description || 'Facture importée',
+  };
 }
 
 const importedInvoiceResolvers = {
