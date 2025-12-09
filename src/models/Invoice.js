@@ -1,22 +1,22 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 import {
   isDateAfter,
   URL_REGEX,
   isPositiveAmount,
   isValidFooterNotes,
-} from '../utils/validators.js';
+} from "../utils/validators.js";
 
-import clientSchema from './schemas/client.js';
-import itemSchema from './schemas/item.js';
-import companyInfoSchema from './schemas/companyInfo.js';
-import customFieldSchema from './schemas/customField.js';
-import bankDetailsSchema from './schemas/bankDetails.js';
-import shippingSchema from './schemas/shipping.js';
+import clientSchema from "./schemas/client.js";
+import itemSchema from "./schemas/item.js";
+import companyInfoSchema from "./schemas/companyInfo.js";
+import customFieldSchema from "./schemas/customField.js";
+import bankDetailsSchema from "./schemas/bankDetails.js";
+import shippingSchema from "./schemas/shipping.js";
 import {
   INVOICE_STATUS,
   PAYMENT_METHOD,
   DISCOUNT_TYPE,
-} from './constants/enums.js';
+} from "./constants/enums.js";
 
 /**
  * Schéma principal de facture
@@ -257,7 +257,7 @@ const invoiceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Organization", // Référence vers la collection Better Auth
       required: true,
-      index: true
+      index: true,
     },
     // Utilisateur qui a créé la facture (pour audit trail)
     createdBy: {
@@ -298,8 +298,8 @@ const invoiceSchema = new mongoose.Schema(
       default: () => ({
         billShipping: false,
         shippingAmountHT: 0,
-        shippingVatRate: 20
-      })
+        shippingVatRate: 20,
+      }),
     },
     // Auto-liquidation de TVA (reverse charge)
     isReverseCharge: {
@@ -325,6 +325,13 @@ const invoiceSchema = new mongoose.Schema(
       min: 0,
       max: 100,
     },
+    // Rapprochement avec transaction bancaire
+    linkedTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -342,12 +349,14 @@ invoiceSchema.index({ createdBy: 1 });
 invoiceSchema.index({ issueDate: -1 });
 
 // Ajout d'un champ virtuel pour l'année d'émission
-invoiceSchema.virtual('issueYear').get(function() {
-  return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+invoiceSchema.virtual("issueYear").get(function () {
+  return this.issueDate
+    ? this.issueDate.getFullYear()
+    : new Date().getFullYear();
 });
 
 // Middleware pre-save pour définir l'année d'émission
-invoiceSchema.pre('save', function(next) {
+invoiceSchema.pre("save", function (next) {
   if (this.issueDate) {
     this.issueYear = this.issueDate.getFullYear();
   } else {
@@ -360,11 +369,13 @@ invoiceSchema.pre('save', function(next) {
 invoiceSchema.add({
   issueYear: {
     type: Number,
-    default: function() {
-      return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+    default: function () {
+      return this.issueDate
+        ? this.issueDate.getFullYear()
+        : new Date().getFullYear();
     },
-    index: true
-  }
+    index: true,
+  },
 });
 
 // Création d'un index composé pour garantir l'unicité des numéros de facture par préfixe, année et organisation
@@ -375,7 +386,7 @@ invoiceSchema.index(
     prefix: 1,
     number: 1,
     workspaceId: 1,
-    issueYear: 1
+    issueYear: 1,
   },
   {
     unique: true,

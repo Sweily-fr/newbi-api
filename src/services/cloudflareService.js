@@ -37,13 +37,15 @@ class CloudflareService {
     this.ocrPublicUrl = process.env.OCR_URL;
 
     // Configuration spécifique pour les signatures mail
-    this.signatureBucketName = process.env.SIGNATURE_BUCKET || "image-signature-staging";
+    this.signatureBucketName =
+      process.env.SIGNATURE_BUCKET || "image-signature-staging";
     this.signaturePublicUrl =
       process.env.SIGNATURE_URL ||
       "https://pub-f4c5982b836541739955ba7662828aa2.r2.dev";
 
     // Configuration spécifique pour les images de profil
-    this.profileBucketName = process.env.PROFILE_IMAGE_BUCKET || "profil-staging";
+    this.profileBucketName =
+      process.env.PROFILE_IMAGE_BUCKET || "profil-staging";
     this.profilePublicUrl =
       process.env.PROFILE_IMAGE_URL ||
       "https://pub-47fd700687d247b786fdd97634f23e12.r2.dev";
@@ -62,6 +64,11 @@ class CloudflareService {
       process.env.IMPORTED_INVOICES_URL ||
       "https://pub-e4f26dbdae324a3eb3a2c49ed9723c1d.r2.dev";
 
+    // Configuration spécifique pour les justificatifs de dépenses
+    this.receiptsBucketName = process.env.RECEIPTS_BUCKET || "receipts-staging";
+    this.receiptsPublicUrl =
+      process.env.RECEIPTS_URL || "https://pub-receipts.r2.dev";
+
     if (!this.bucketName) {
       throw new Error("Configuration manquante: USER_IMAGE_BUCKET");
     }
@@ -70,11 +77,37 @@ class CloudflareService {
     console.log("🔧 CloudflareService - Configuration chargée:");
     console.log("  - Endpoint:", process.env.R2_API_URL);
     console.log("  - User Images:", this.bucketName, "→", this.publicUrl);
-    console.log("  - Profile Images:", this.profileBucketName, "→", this.profilePublicUrl);
-    console.log("  - Company Images:", this.companyImagesBucketName, "→", this.companyImagesPublicUrl);
-    console.log("  - Signatures:", this.signatureBucketName, "→", this.signaturePublicUrl);
+    console.log(
+      "  - Profile Images:",
+      this.profileBucketName,
+      "→",
+      this.profilePublicUrl
+    );
+    console.log(
+      "  - Company Images:",
+      this.companyImagesBucketName,
+      "→",
+      this.companyImagesPublicUrl
+    );
+    console.log(
+      "  - Signatures:",
+      this.signatureBucketName,
+      "→",
+      this.signaturePublicUrl
+    );
     console.log("  - OCR:", this.ocrBucketName, "→", this.ocrPublicUrl);
-    console.log("  - Imported Invoices:", this.importedInvoicesBucketName, "→", this.importedInvoicesPublicUrl);
+    console.log(
+      "  - Imported Invoices:",
+      this.importedInvoicesBucketName,
+      "→",
+      this.importedInvoicesPublicUrl
+    );
+    console.log(
+      "  - Receipts:",
+      this.receiptsBucketName,
+      "→",
+      this.receiptsPublicUrl
+    );
   }
 
   /**
@@ -170,9 +203,20 @@ class CloudflareService {
         case "importedInvoice": {
           // Pour les factures importées, organiser par organisation
           if (!organizationId) {
-            throw new Error("Organization ID requis pour les factures importées");
+            throw new Error(
+              "Organization ID requis pour les factures importées"
+            );
           }
           key = `${organizationId}/${uniqueId}${fileExtension}`;
+          break;
+        }
+        case "receipt": {
+          // Pour les justificatifs de dépenses, organiser par organisation
+          // Structure: {organizationId}/{uniqueId}-receipt.ext
+          if (!organizationId) {
+            throw new Error("Organization ID requis pour les justificatifs");
+          }
+          key = `${organizationId}/${uniqueId}-receipt${fileExtension}`;
           break;
         }
         case "profile": {
@@ -196,9 +240,9 @@ class CloudflareService {
         // Utiliser le bucket dédié aux images d'entreprise
         targetBucket = this.companyImagesBucketName || this.bucketName;
         targetPublicUrl = this.companyImagesPublicUrl || this.publicUrl;
-        console.log('🏢 [COMPANY_LOGO] Upload vers bucket:', targetBucket);
-        console.log('🌐 [COMPANY_LOGO] URL publique:', targetPublicUrl);
-        console.log('🔑 [COMPANY_LOGO] Clé:', key);
+        console.log("🏢 [COMPANY_LOGO] Upload vers bucket:", targetBucket);
+        console.log("🌐 [COMPANY_LOGO] URL publique:", targetPublicUrl);
+        console.log("🔑 [COMPANY_LOGO] Clé:", key);
       } else if (imageType === "ocr") {
         targetBucket = this.ocrBucketName || this.bucketName;
         targetPublicUrl = this.ocrPublicUrl || this.publicUrl;
@@ -212,6 +256,13 @@ class CloudflareService {
       } else if (imageType === "importedInvoice") {
         targetBucket = this.importedInvoicesBucketName || this.bucketName;
         targetPublicUrl = this.importedInvoicesPublicUrl || this.publicUrl;
+      } else if (imageType === "receipt") {
+        // Bucket dédié aux justificatifs de dépenses
+        targetBucket = this.receiptsBucketName || this.bucketName;
+        targetPublicUrl = this.receiptsPublicUrl || this.publicUrl;
+        console.log("🧾 [RECEIPT] Upload vers bucket:", targetBucket);
+        console.log("🌐 [RECEIPT] URL publique:", targetPublicUrl);
+        console.log("🔑 [RECEIPT] Clé:", key);
       } else {
         targetBucket = this.bucketName;
         targetPublicUrl = this.publicUrl;
@@ -291,22 +342,22 @@ class CloudflareService {
    */
   async promoteTemporaryFile(tempKey, organizationId) {
     try {
-      console.log('🚀 CloudflareService - Promotion du fichier:', tempKey);
-      
+      console.log("🚀 CloudflareService - Promotion du fichier:", tempKey);
+
       if (!tempKey || !organizationId) {
-        throw new Error('tempKey et organizationId sont requis');
+        throw new Error("tempKey et organizationId sont requis");
       }
 
       // Extraire l'extension du fichier temporaire
-      const fileExtension = tempKey.substring(tempKey.lastIndexOf('.'));
-      const crypto = await import('crypto');
+      const fileExtension = tempKey.substring(tempKey.lastIndexOf("."));
+      const crypto = await import("crypto");
       const uniqueId = crypto.default.randomUUID();
-      
+
       // Nouvelle clé permanente dans le dossier ocr/
       const newKey = `${organizationId}/${uniqueId}${fileExtension}`;
-      
-      console.log('📋 CloudflareService - Ancien clé:', tempKey);
-      console.log('📋 CloudflareService - Nouvelle clé:', newKey);
+
+      console.log("📋 CloudflareService - Ancien clé:", tempKey);
+      console.log("📋 CloudflareService - Nouvelle clé:", newKey);
 
       // Lire le fichier temporaire
       const getCommand = new GetObjectCommand({
@@ -325,14 +376,16 @@ class CloudflareService {
         ContentType: response.ContentType,
         Metadata: {
           organizationId: organizationId,
-          imageType: 'ocr',
+          imageType: "ocr",
           promotedAt: new Date().toISOString(),
           originalTempKey: tempKey,
         },
       });
 
       await this.client.send(putCommand);
-      console.log('✅ CloudflareService - Fichier uploadé à la nouvelle location');
+      console.log(
+        "✅ CloudflareService - Fichier uploadé à la nouvelle location"
+      );
 
       // Supprimer le fichier temporaire
       const deleteCommand = new DeleteObjectCommand({
@@ -341,17 +394,24 @@ class CloudflareService {
       });
 
       await this.client.send(deleteCommand);
-      console.log('🗑️ CloudflareService - Fichier temporaire supprimé');
+      console.log("🗑️ CloudflareService - Fichier temporaire supprimé");
 
       // Générer l'URL publique
       let imageUrl;
-      if (this.ocrPublicUrl && this.ocrPublicUrl !== 'https://your_image_bucket_public_url') {
-        const cleanUrl = this.ocrPublicUrl.endsWith('/')
+      if (
+        this.ocrPublicUrl &&
+        this.ocrPublicUrl !== "https://your_image_bucket_public_url"
+      ) {
+        const cleanUrl = this.ocrPublicUrl.endsWith("/")
           ? this.ocrPublicUrl.slice(0, -1)
           : this.ocrPublicUrl;
         imageUrl = `${cleanUrl}/${newKey}`;
       } else {
-        imageUrl = await this.getSignedUrlForBucket(newKey, this.ocrBucketName, 86400);
+        imageUrl = await this.getSignedUrlForBucket(
+          newKey,
+          this.ocrBucketName,
+          86400
+        );
       }
 
       return {
@@ -359,7 +419,7 @@ class CloudflareService {
         url: imageUrl,
       };
     } catch (error) {
-      console.error('❌ CloudflareService - Erreur promotion:', error);
+      console.error("❌ CloudflareService - Erreur promotion:", error);
       throw new Error(`Échec de la promotion du fichier: ${error.message}`);
     }
   }
