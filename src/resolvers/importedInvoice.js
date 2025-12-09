@@ -4,7 +4,7 @@
 
 import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
 import ImportedInvoice from '../models/ImportedInvoice.js';
-import mistralOcrService from '../services/mistralOcrService.js';
+import hybridOcrService from '../services/hybridOcrService.js';
 import invoiceExtractionService from '../services/invoiceExtractionService.js';
 import cloudflareService from '../services/cloudflareService.js';
 import {
@@ -133,12 +133,11 @@ function transformOcrToInvoiceData(ocrResult, financialAnalysis) {
  * Utilise le nouveau service d'extraction avec patterns français
  */
 async function processInvoiceWithOcr(cloudflareUrl, fileName, mimeType) {
-  // Étape 1: OCR avec Mistral pour extraire le texte brut
-  const ocrResult = await mistralOcrService.processDocumentFromUrl(
+  // Étape 1: OCR avec le service hybride (Google Document AI > Mistral)
+  const ocrResult = await hybridOcrService.processDocumentFromUrl(
     cloudflareUrl,
     fileName,
-    mimeType,
-    {}
+    mimeType
   );
 
   if (!ocrResult.success) {
@@ -471,11 +470,10 @@ const importedInvoiceResolvers = {
           batch.map(async (file, batchIndex) => {
             const fileIndex = i + batchIndex;
             try {
-              const ocrResult = await mistralOcrService.processDocumentFromUrl(
+              const ocrResult = await hybridOcrService.processDocumentFromUrl(
                 file.cloudflareUrl,
                 file.fileName,
-                file.mimeType,
-                {}
+                file.mimeType
               );
               return { fileIndex, file, ocrResult, error: null };
             } catch (error) {
