@@ -6,6 +6,13 @@ enum ExpenseType {
   EXPENSE_REPORT
 }
 
+# Source de la dépense
+enum ExpenseSource {
+  MANUAL
+  OCR
+  BANK
+}
+
 enum ExpenseCategory {
   OFFICE_SUPPLIES
   TRAVEL
@@ -107,6 +114,10 @@ type Expense {
   expenseType: ExpenseType!
   assignedMember: AssignedMember
   taskId: ID
+  # Nouveaux champs pour la vue unifiée
+  linkedTransactionId: ID
+  source: ExpenseSource
+  isReconciled: Boolean
   createdBy: User!
   createdAt: String!
   updatedAt: String!

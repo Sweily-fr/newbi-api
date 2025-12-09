@@ -55,6 +55,8 @@ import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
+import reconciliationRoutes from "./routes/reconciliation.js";
+import unifiedExpensesRoutes from "./routes/unified-expenses.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -170,9 +172,11 @@ async function startServer() {
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
 
   // Routes banking (authentification gérée par betterAuthMiddleware dans chaque route)
-  app.use("/banking", validateJWT, bankingRoutes);
+  app.use("/banking", bankingRoutes); // Auth via betterAuthMiddleware dans chaque route
   app.use("/banking-connect", bankingConnectRoutes); // Auth via betterAuthMiddleware
-  app.use("/banking-sync", validateJWT, bankingSyncRoutes);
+  app.use("/banking-sync", bankingSyncRoutes); // Auth via betterAuthMiddleware dans chaque route
+  app.use("/reconciliation", reconciliationRoutes); // Rapprochement factures/transactions
+  app.use("/unified-expenses", unifiedExpensesRoutes); // Dépenses unifiées (bancaires + manuelles)
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 

@@ -140,8 +140,41 @@ router.get("/gocardless/callback", async (req, res) => {
 });
 
 // ============================================
-// ROUTES BRIDGE (legacy)
+// ROUTES BRIDGE
 // ============================================
+
+/**
+ * Liste les banques disponibles via Bridge
+ * GET /banking-connect/bridge/institutions
+ */
+router.get("/bridge/institutions", async (req, res) => {
+  try {
+    const user = await betterAuthMiddleware(req);
+    if (!user) {
+      return res.status(401).json({ error: "Non authentifié" });
+    }
+
+    const country = req.query.country || "FR";
+
+    await bankingService.initialize("bridge");
+    const provider = bankingService.currentProvider;
+
+    const institutions = await provider.listInstitutions(country);
+
+    res.json({
+      institutions,
+      country,
+      count: institutions.length,
+      provider: "bridge",
+    });
+  } catch (error) {
+    logger.error("Erreur liste banques Bridge:", error);
+    res.status(500).json({
+      error: "Erreur lors de la récupération des banques",
+      details: error.message,
+    });
+  }
+});
 
 /**
  * Génère l'URL de connexion bancaire pour Bridge
@@ -155,7 +188,14 @@ router.get("/bridge/connect", async (req, res) => {
     }
 
     const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    console.log("🔍 Route /bridge/connect - workspaceId reçu:", workspaceId);
+    const providerId = req.query.providerId || req.query.bankId; // Provider pré-sélectionné (optionnel)
+
+    console.log(
+      "🔍 Route /bridge/connect - workspaceId:",
+      workspaceId,
+      "providerId:",
+      providerId
+    );
     if (!workspaceId) {
       return res.status(400).json({ error: "WorkspaceId requis" });
     }
@@ -165,33 +205,17 @@ router.get("/bridge/connect", async (req, res) => {
     const provider = bankingService.currentProvider;
 
     // Vérifier si un utilisateur Bridge existe déjà pour ce workspaceId
+    // Si oui, on génère quand même une URL de connexion pour ajouter un nouveau compte
+    let existingBridgeUser = null;
     try {
-      const existingUser =
+      existingBridgeUser =
         await provider.getBridgeUserByExternalId(workspaceId);
-      if (existingUser && existingUser.external_user_id !== "undefined") {
-        return res.status(400).json({
-          error: "Un utilisateur Bridge existe déjà pour ce workspace",
-          bridgeUserId: existingUser.uuid || existingUser.id,
-        });
-      }
-      // Si l'utilisateur existe mais avec external_user_id undefined, on continue pour le recréer
-      if (existingUser && existingUser.external_user_id === "undefined") {
+      if (existingBridgeUser) {
         console.log(
-          "⚠️ Utilisateur Bridge trouvé avec external_user_id undefined, suppression..."
+          "ℹ️ Utilisateur Bridge existant trouvé:",
+          existingBridgeUser.uuid
         );
-        try {
-          await provider.client.delete(
-            `/v3/aggregation/users/${existingUser.uuid}`
-          );
-          console.log(
-            "✅ Utilisateur Bridge avec external_user_id undefined supprimé"
-          );
-        } catch (deleteError) {
-          console.error(
-            "❌ Erreur suppression utilisateur Bridge:",
-            deleteError.message
-          );
-        }
+        // On continue pour permettre d'ajouter un nouveau compte bancaire
       }
     } catch (error) {
       // Si l'utilisateur n'existe pas (erreur 404), continuer normalement
@@ -200,10 +224,11 @@ router.get("/bridge/connect", async (req, res) => {
       }
     }
 
-    // Générer l'URL de connexion
+    // Générer l'URL de connexion (avec provider pré-sélectionné si fourni)
     const connectUrl = await provider.generateConnectUrl(
       user._id.toString(),
-      workspaceId
+      workspaceId,
+      providerId
     );
 
     logger.info(`URL de connexion Bridge générée pour user ${user._id}`);

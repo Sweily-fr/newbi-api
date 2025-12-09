@@ -69,20 +69,93 @@ export class BridgeProvider extends BankingProvider {
   }
 
   /**
-   * Génère l'URL de connexion pour Bridge v3
+   * Liste les banques disponibles via Bridge
+   * @param {string} country - Code pays ISO (FR, DE, etc.)
    */
-  async generateConnectUrl(userId, workspaceId) {
-    console.log("🔍 generateConnectUrl appelé avec userId:", userId, "workspaceId:", workspaceId);
+  async listInstitutions(country = "FR") {
+    try {
+      console.log("🔍 Appel /v3/providers avec:", {
+        clientId: this.clientId
+          ? this.clientId.substring(0, 20) + "..."
+          : "non défini",
+        clientSecret: this.clientSecret
+          ? "***" + this.clientSecret.slice(-10)
+          : "non défini",
+        baseUrl: this.config.baseUrl,
+      });
+
+      // Bridge utilise /v3/providers pour lister les banques
+      const response = await this.client.get("/v3/providers", {
+        params: {
+          country_code: country.toUpperCase(),
+          limit: 200,
+        },
+      });
+
+      const providers = response.data.resources || response.data || [];
+
+      console.log(`✅ ${providers.length} banques récupérées pour ${country}`);
+
+      // Filtrer pour ne garder que ceux avec la capacité "aggregation"
+      const aggregationProviders = providers.filter((p) =>
+        p.capabilities?.includes("aggregation")
+      );
+
+      console.log(`✅ ${aggregationProviders.length} banques avec agrégation`);
+
+      return aggregationProviders.map((provider) => ({
+        id: provider.id.toString(),
+        name: provider.name,
+        logo: provider.images?.logo || provider.logo_url || null,
+        country: provider.country_code || country,
+        groupName: provider.group_name,
+        capabilities: provider.capabilities || [],
+      }));
+    } catch (error) {
+      console.error(
+        "❌ Erreur liste banques Bridge:",
+        error.response?.data || error.message
+      );
+      throw new Error(`Erreur récupération banques: ${error.message}`);
+    }
+  }
+
+  /**
+   * Génère l'URL de connexion pour Bridge v3 avec provider pré-sélectionné
+   */
+  async generateConnectUrl(userId, workspaceId, providerId = null) {
+    console.log(
+      "🔍 generateConnectUrl appelé avec userId:",
+      userId,
+      "workspaceId:",
+      workspaceId,
+      "providerId:",
+      providerId
+    );
     try {
       // Créer un token d'autorisation pour le workspace
       const userToken = await this.createUserAuthToken(workspaceId);
 
+      // Préparer les données de la session avec callback_url pour la redirection
+      const callbackUrl =
+        this.config.redirectUri || "http://localhost:3000/dashboard";
+      const sessionData = {
+        user_email: `workspace-${workspaceId}@example.com`,
+        callback_url: callbackUrl,
+      };
+
+      console.log(`🔗 Callback URL configuré: ${callbackUrl}`);
+
+      // Si un provider est pré-sélectionné, l'ajouter à la session
+      if (providerId) {
+        sessionData.provider_id = parseInt(providerId, 10);
+        console.log(`🏦 Provider pré-sélectionné: ${providerId}`);
+      }
+
       // Créer une session de connexion
       const response = await this.client.post(
         "/v3/aggregation/connect-sessions",
-        {
-          user_email: `workspace-${workspaceId}@example.com`,
-        },
+        sessionData,
         {
           headers: {
             Authorization: `Bearer ${userToken}`,
@@ -172,21 +245,26 @@ export class BridgeProvider extends BankingProvider {
         },
       });
 
-      console.log("🔍 Réponse complète API Bridge:", JSON.stringify(response.data, null, 2));
+      console.log(
+        "🔍 Réponse complète API Bridge:",
+        JSON.stringify(response.data, null, 2)
+      );
       console.log(
         `📊 API Bridge: ${response.data.resources?.length || 0} comptes reçus`
       );
       console.log(
         `🔍 Comptes avec data_access enabled: ${
-          response.data.resources?.filter((acc) => acc.data_access === "enabled")
-            ?.length || 0
+          response.data.resources?.filter(
+            (acc) => acc.data_access === "enabled"
+          )?.length || 0
         }`
       );
 
       // Debug: analyser les données reçues
-      const enabledAccounts = response.data.resources?.filter(
-        (account) => account.data_access === "enabled"
-      ) || [];
+      const enabledAccounts =
+        response.data.resources?.filter(
+          (account) => account.data_access === "enabled"
+        ) || [];
       console.log(`🔍 Analyse des ${enabledAccounts.length} comptes enabled:`);
 
       enabledAccounts.slice(0, 5).forEach((account, index) => {
@@ -214,7 +292,40 @@ export class BridgeProvider extends BankingProvider {
         `🔧 Après déduplication par nom: ${uniqueAccounts.size} comptes uniques`
       );
 
+      // Récupérer les informations des providers (banques) pour enrichir les comptes
+      const providerIds = [
+        ...new Set(
+          Array.from(uniqueAccounts.values()).map((a) => a.provider_id)
+        ),
+      ];
+      const providersInfo = {};
+
+      for (const providerId of providerIds) {
+        try {
+          const providerResponse = await this.client.get(
+            `/v3/providers/${providerId}`
+          );
+          const provider = providerResponse.data;
+          providersInfo[providerId] = {
+            name: provider.name,
+            logo: provider.images?.logo || provider.logo_url || null,
+          };
+          console.log(`✅ Provider ${providerId}: ${provider.name}`);
+        } catch (err) {
+          console.warn(
+            `⚠️ Impossible de récupérer le provider ${providerId}:`,
+            err.message
+          );
+          providersInfo[providerId] = { name: "Banque", logo: null };
+        }
+      }
+
       const accounts = Array.from(uniqueAccounts.values()).map((account) => {
+        const providerInfo = providersInfo[account.provider_id] || {
+          name: "Banque",
+          logo: null,
+        };
+
         const accountData = {
           externalId: account.id.toString(),
           name: account.name,
@@ -225,6 +336,9 @@ export class BridgeProvider extends BankingProvider {
           iban: account.iban,
           workspaceId,
           lastSyncAt: new Date(account.updated_at || new Date()),
+          // Ajouter les informations de la banque
+          institutionName: providerInfo.name,
+          institutionLogo: providerInfo.logo,
           raw: account,
         };
 
@@ -254,9 +368,8 @@ export class BridgeProvider extends BankingProvider {
    */
   async _saveAccountsToDatabase(accounts, workspaceId) {
     try {
-      const { default: AccountBanking } = await import(
-        "../../../models/AccountBanking.js"
-      );
+      const { default: AccountBanking } =
+        await import("../../../models/AccountBanking.js");
       const { default: mongoose } = await import("mongoose");
 
       // Les modèles Transaction et AccountBanking utilisent workspaceId comme String
@@ -427,9 +540,8 @@ export class BridgeProvider extends BankingProvider {
    */
   async _saveTransactionsToDatabase(transactions, workspaceId) {
     try {
-      const { default: Transaction } = await import(
-        "../../../models/Transaction.js"
-      );
+      const { default: Transaction } =
+        await import("../../../models/Transaction.js");
       const { default: mongoose } = await import("mongoose");
 
       // Les modèles Transaction et AccountBanking utilisent workspaceId comme String
@@ -555,9 +667,8 @@ export class BridgeProvider extends BankingProvider {
         console.log("✅ Utilisateur Bridge existe déjà, récupération...");
         try {
           // Récupérer l'utilisateur existant
-          const existingUser = await this.getBridgeUserByExternalId(
-            workspaceId
-          );
+          const existingUser =
+            await this.getBridgeUserByExternalId(workspaceId);
           return existingUser;
         } catch (getError) {
           console.error(
@@ -579,10 +690,15 @@ export class BridgeProvider extends BankingProvider {
    * Récupère un utilisateur Bridge par external_user_id
    */
   async getBridgeUserByExternalId(workspaceId) {
-    console.log("🔍 getBridgeUserByExternalId appelé avec workspaceId:", workspaceId);
+    console.log(
+      "🔍 getBridgeUserByExternalId appelé avec workspaceId:",
+      workspaceId
+    );
     try {
       // D'abord essayer de récupérer tous les utilisateurs et filtrer (méthode actuelle qui fonctionne)
-      console.log("🔍 Requête API Bridge avec params:", { external_user_id: workspaceId });
+      console.log("🔍 Requête API Bridge avec params:", {
+        external_user_id: workspaceId,
+      });
       const response = await this.client.get("/v3/aggregation/users", {
         params: {
           external_user_id: workspaceId,
@@ -591,12 +707,16 @@ export class BridgeProvider extends BankingProvider {
 
       if (response.data.resources && response.data.resources.length > 0) {
         // Filtrer pour trouver l'utilisateur avec le bon external_user_id
-        const user = response.data.resources.find(u => u.external_user_id === workspaceId);
+        const user = response.data.resources.find(
+          (u) => u.external_user_id === workspaceId
+        );
         if (user) {
           console.log("✅ Utilisateur Bridge trouvé:", user);
           return user;
         } else {
-          console.log(`❌ Aucun utilisateur trouvé avec external_user_id: ${workspaceId}`);
+          console.log(
+            `❌ Aucun utilisateur trouvé avec external_user_id: ${workspaceId}`
+          );
           throw new Error("Utilisateur Bridge non trouvé");
         }
       } else {
@@ -705,9 +825,8 @@ export class BridgeProvider extends BankingProvider {
       console.log(`✅ Utilisateur Bridge supprimé: ${bridgeUser.uuid}`);
 
       // 3. Supprimer les comptes bancaires de la base de données
-      const { default: AccountBanking } = await import(
-        "../../../models/AccountBanking.js"
-      );
+      const { default: AccountBanking } =
+        await import("../../../models/AccountBanking.js");
       const deletedAccounts = await AccountBanking.deleteMany({
         workspaceId: workspaceId.toString(),
         provider: this.name,
@@ -717,9 +836,8 @@ export class BridgeProvider extends BankingProvider {
       );
 
       // 4. Supprimer les transactions de la base de données
-      const { default: Transaction } = await import(
-        "../../../models/Transaction.js"
-      );
+      const { default: Transaction } =
+        await import("../../../models/Transaction.js");
       const deletedTransactions = await Transaction.deleteMany({
         workspaceId: workspaceId.toString(),
         provider: this.name,

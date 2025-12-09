@@ -1,5 +1,5 @@
 # Importe les types communs
-# Note: GraphQL n'a pas de directive d'importation native, 
+# Note: GraphQL n'a pas de directive d'importation native,
 # mais la fusion des schémas gère cela pour nous
 
 type Invoice {
@@ -38,6 +38,7 @@ type Invoice {
   clientPositionRight: Boolean
   createdBy: User!
   stripeInvoiceId: String
+  linkedTransactionId: ID
   createdAt: String!
   updatedAt: String!
 }
@@ -113,7 +114,15 @@ input UpdateInvoiceInput {
 
 extend type Query {
   invoice(id: ID!, workspaceId: ID!): Invoice!
-  invoices(workspaceId: ID!, startDate: String, endDate: String, status: InvoiceStatus, search: String, page: Int, limit: Int): InvoicePagination!
+  invoices(
+    workspaceId: ID!
+    startDate: String
+    endDate: String
+    status: InvoiceStatus
+    search: String
+    page: Int
+    limit: Int
+  ): InvoicePagination!
   invoiceStats(workspaceId: ID!): InvoiceStats!
   nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
 }
@@ -124,7 +133,16 @@ extend type Mutation {
   deleteInvoice(id: ID!, workspaceId: ID!): Boolean!
   sendInvoice(id: ID!, workspaceId: ID!, email: String!): Boolean!
   markInvoiceAsPaid(id: ID!, workspaceId: ID!, paymentDate: String!): Invoice!
-  changeInvoiceStatus(id: ID!, workspaceId: ID!, status: InvoiceStatus!): Invoice!
-  createLinkedInvoice(quoteId: ID!, workspaceId: ID!, amount: Float!, isDeposit: Boolean!): LinkedInvoiceResult!
+  changeInvoiceStatus(
+    id: ID!
+    workspaceId: ID!
+    status: InvoiceStatus!
+  ): Invoice!
+  createLinkedInvoice(
+    quoteId: ID!
+    workspaceId: ID!
+    amount: Float!
+    isDeposit: Boolean!
+  ): LinkedInvoiceResult!
   deleteLinkedInvoice(id: ID!, workspaceId: ID!): Boolean!
 }
