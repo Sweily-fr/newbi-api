@@ -95,51 +95,79 @@ class MistralOcrService {
           options.documentAnnotationFormat;
       }
 
-      // Appel à l'API Mistral
-      const response = await fetch(this.endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
+      // Appel à l'API Mistral avec retry et backoff exponentiel
+      const MAX_RETRIES = 3;
+      const INITIAL_DELAY = 3000; // 3 secondes
+      let lastError = null;
 
-      if (!response.ok) {
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        const response = await fetch(this.endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          // Succès - continuer le traitement
+          return this.processOcrResult(result, fileName, mimeType, documentUrl);
+        }
+
+        // Gestion des erreurs
         const errorText = await response.text();
+        
+        // Rate limiting (429) - retry avec backoff
+        if (response.status === 429 && attempt < MAX_RETRIES) {
+          const delay = INITIAL_DELAY * Math.pow(2, attempt - 1); // 3s, 6s, 12s
+          console.warn(`⚠️ Rate limit Mistral OCR (tentative ${attempt}/${MAX_RETRIES}), retry dans ${delay/1000}s...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          lastError = `Rate limit (429)`;
+          continue;
+        }
+
+        // Autre erreur ou dernière tentative
         console.error("Erreur API Mistral:", response.status, errorText);
         throw new Error(
           `Erreur API Mistral (${response.status}): ${errorText}`
         );
       }
 
-      const result = await response.json();
-
-      // Extraire le texte brut
-      const extractedText = this.extractTextFromResult(result);
-
-      // Parser le markdown pour obtenir des données structurées
-      const structuredData = this.parseMarkdownToStructuredData(extractedText);
-
-      return {
-        success: true,
-        data: result, // Réponse brute de Mistral
-        extractedText: extractedText, // Texte brut extrait
-        structuredData: structuredData, // Données structurées
-        metadata: {
-          fileName,
-          mimeType,
-          documentUrl,
-          processedAt: new Date().toISOString(),
-          model: result.model || "mistral-ocr-latest",
-          pagesProcessed: result.usage_info?.pages_processed || 0,
-          docSizeBytes: result.usage_info?.doc_size_bytes || 0,
-        },
-      };
+      // Si on arrive ici, toutes les tentatives ont échoué
+      throw new Error(`Échec après ${MAX_RETRIES} tentatives: ${lastError}`);
     } catch (error) {
-      console.error("Erreur lors du traitement OCR:", error);
+      console.error('Erreur lors du traitement OCR:', error);
       throw new Error(`Échec de l'OCR: ${error.message}`);
     }
+  }
+
+  /**
+   * Traite le résultat OCR et retourne les données structurées
+   */
+  processOcrResult(result, fileName, mimeType, documentUrl) {
+    // Extraire le texte brut
+    const extractedText = this.extractTextFromResult(result);
+
+    // Parser le markdown pour obtenir des données structurées
+    const structuredData = this.parseMarkdownToStructuredData(extractedText);
+
+    return {
+      success: true,
+      data: result,
+      extractedText: extractedText,
+      structuredData: structuredData,
+      metadata: {
+        fileName,
+        mimeType,
+        documentUrl,
+        processedAt: new Date().toISOString(),
+        model: result.model || 'mistral-ocr-latest',
+        pagesProcessed: result.usage_info?.pages_processed || 0,
+        docSizeBytes: result.usage_info?.doc_size_bytes || 0,
+      },
+    };
   }
 
   /**

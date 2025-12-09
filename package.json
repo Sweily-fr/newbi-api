@@ -27,6 +27,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.848.0",
     "@aws-sdk/s3-request-presigner": "^3.848.0",
+    "@google-cloud/documentai": "^9.5.0",
     "@graphql-tools/schema": "^10.0.25",
     "@react-email/render": "^2.0.0",
     "apollo-server-express": "^3.12.1",
@@ -47,6 +48,7 @@
     "graphql-ws": "^6.0.6",
     "jose": "^6.1.0",
     "jsonwebtoken": "^9.0.2",
+    "mindee": "^4.34.0",
     "mongoose": "^8.10.1",
     "multer": "^1.4.5-lts.2",
     "node-cron": "^3.0.3",
