@@ -1,5 +1,5 @@
 import express from "express";
-import { betterAuthMiddleware } from "../middlewares/better-auth.js";
+import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -11,7 +11,7 @@ const router = express.Router();
 // Récupérer les transactions non rapprochées avec suggestions
 router.get("/suggestions", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -113,7 +113,7 @@ router.get("/suggestions", async (req, res) => {
 // Récupérer les transactions non rapprochées pour une facture spécifique
 router.get("/transactions-for-invoice/:invoiceId", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -197,7 +197,7 @@ router.get("/transactions-for-invoice/:invoiceId", async (req, res) => {
 // Lier une transaction à une facture
 router.post("/link", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -288,7 +288,7 @@ router.post("/link", async (req, res) => {
 // Délier une transaction d'une facture
 router.post("/unlink", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -362,7 +362,7 @@ router.post("/unlink", async (req, res) => {
 // Ignorer une transaction (ne plus la suggérer)
 router.post("/ignore", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }

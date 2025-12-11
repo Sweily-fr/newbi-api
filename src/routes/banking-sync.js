@@ -1,6 +1,6 @@
 import express from "express";
 import { bankingService } from "../services/banking/index.js";
-import { betterAuthMiddleware } from "../middlewares/better-auth.js";
+import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
 
@@ -11,7 +11,7 @@ const router = express.Router();
  */
 router.post("/accounts", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -60,7 +60,7 @@ router.post("/accounts", async (req, res) => {
  */
 router.post("/transactions", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -123,7 +123,7 @@ router.post("/transactions", async (req, res) => {
  */
 router.post("/full", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }

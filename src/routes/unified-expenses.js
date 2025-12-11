@@ -1,6 +1,6 @@
 import express from "express";
 import multer from "multer";
-import { betterAuthMiddleware } from "../middlewares/better-auth.js";
+import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import Transaction from "../models/Transaction.js";
 import Expense from "../models/Expense.js";
 import logger from "../utils/logger.js";
@@ -39,7 +39,7 @@ const router = express.Router();
  */
 router.get("/", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -332,7 +332,7 @@ router.get("/", async (req, res) => {
  */
 router.post("/link", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -396,7 +396,7 @@ router.post("/link", async (req, res) => {
  */
 router.post("/unlink", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -450,7 +450,7 @@ router.post("/unlink", async (req, res) => {
  */
 router.put("/:id/category", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -492,7 +492,7 @@ router.put("/:id/category", async (req, res) => {
  */
 router.post("/:id/receipt", upload.single("file"), async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -574,7 +574,7 @@ router.post("/:id/receipt", upload.single("file"), async (req, res) => {
  */
 router.delete("/:id/receipt", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -637,7 +637,7 @@ router.delete("/:id/receipt", async (req, res) => {
  */
 router.post("/match", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -977,7 +977,7 @@ router.post("/match", async (req, res) => {
  */
 router.post("/auto-reconcile", upload.single("file"), async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }

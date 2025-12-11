@@ -1,5 +1,5 @@
 import express from "express";
-import { betterAuthMiddleware } from "../middlewares/better-auth.js";
+import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
 
@@ -10,7 +10,7 @@ const router = express.Router();
  */
 router.get("/status", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -40,7 +40,7 @@ router.get("/status", async (req, res) => {
  */
 router.post("/invalidate", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -73,7 +73,7 @@ router.post("/invalidate", async (req, res) => {
  */
 router.post("/invalidate/:type", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -130,7 +130,7 @@ router.post("/invalidate/:type", async (req, res) => {
  */
 router.post("/refresh", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }

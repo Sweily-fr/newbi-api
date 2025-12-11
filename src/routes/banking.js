@@ -1,6 +1,6 @@
 import express from "express";
 import { bankingService } from "../services/banking/BankingService.js";
-import { betterAuthMiddleware } from "../middlewares/better-auth.js";
+import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
 
@@ -62,7 +62,7 @@ router.post(
 // Switch de provider (admin only)
 router.post(
   "/admin/switch-provider",
-  betterAuthMiddleware,
+  betterAuthJWTMiddleware,
   async (req, res) => {
     try {
       const user = req.user;
@@ -108,7 +108,7 @@ router.get("/status", async (req, res) => {
 // Récupérer les comptes bancaires (avec cache)
 router.get("/accounts", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -169,7 +169,7 @@ router.get("/accounts", async (req, res) => {
 // Endpoint pour récupérer les transactions (avec cache)
 router.get("/transactions", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -269,7 +269,7 @@ router.get("/transactions", async (req, res) => {
 // Endpoint pour supprimer l'utilisateur Bridge
 router.delete("/user", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
