@@ -1,6 +1,6 @@
 import express from "express";
 import { bankingService } from "../services/banking/index.js";
-import { betterAuthMiddleware } from "../middlewares/better-auth.js";
+import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 
@@ -19,7 +19,7 @@ const DEFAULT_PROVIDER = process.env.BANKING_PROVIDER || "gocardless";
  */
 router.get("/gocardless/institutions", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -51,7 +51,7 @@ router.get("/gocardless/institutions", async (req, res) => {
  */
 router.get("/gocardless/connect", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -149,7 +149,7 @@ router.get("/gocardless/callback", async (req, res) => {
  */
 router.get("/bridge/institutions", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -182,7 +182,7 @@ router.get("/bridge/institutions", async (req, res) => {
  */
 router.get("/bridge/connect", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -294,7 +294,7 @@ router.get("/bridge/callback", async (req, res) => {
  */
 router.get("/status", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }
@@ -369,7 +369,7 @@ router.get("/status", async (req, res) => {
  */
 router.post("/disconnect", async (req, res) => {
   try {
-    const user = await betterAuthMiddleware(req);
+    const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
     }

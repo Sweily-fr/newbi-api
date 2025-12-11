@@ -55,6 +55,7 @@ import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
+import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import unifiedExpensesRoutes from "./routes/unified-expenses.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
@@ -175,6 +176,7 @@ async function startServer() {
   app.use("/banking", bankingRoutes); // Auth via betterAuthMiddleware dans chaque route
   app.use("/banking-connect", bankingConnectRoutes); // Auth via betterAuthMiddleware
   app.use("/banking-sync", bankingSyncRoutes); // Auth via betterAuthMiddleware dans chaque route
+  app.use("/banking-cache", bankingCacheRoutes); // Gestion du cache bancaire
   app.use("/reconciliation", reconciliationRoutes); // Rapprochement factures/transactions
   app.use("/unified-expenses", unifiedExpensesRoutes); // Dépenses unifiées (bancaires + manuelles)
 

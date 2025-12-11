@@ -1,6 +1,7 @@
 import express from "express";
 import { bankingService } from "../services/banking/index.js";
 import { betterAuthMiddleware } from "../middlewares/better-auth.js";
+import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -31,14 +32,19 @@ router.post("/accounts", async (req, res) => {
       workspaceId
     );
 
+    // Invalider le cache après synchronisation
+    await bankingCacheService.invalidateAccounts(workspaceId);
+    await bankingCacheService.invalidateBalances(workspaceId);
+
     logger.info(
-      `Comptes synchronisés pour user ${user._id}: ${accounts.length} comptes`
+      `Comptes synchronisés pour user ${user._id}: ${accounts.length} comptes (cache invalidé)`
     );
 
     res.json({
       success: true,
       accounts: accounts.length,
       data: accounts,
+      cacheInvalidated: true,
     });
   } catch (error) {
     logger.error("Erreur synchronisation comptes:", error);
@@ -90,13 +96,18 @@ router.post("/transactions", async (req, res) => {
       );
     }
 
+    // Invalider le cache après synchronisation
+    await bankingCacheService.invalidateTransactions(workspaceId);
+    await bankingCacheService.invalidateStats(workspaceId);
+
     logger.info(
-      `Transactions synchronisées pour user ${user._id}: ${result.transactions} transactions`
+      `Transactions synchronisées pour user ${user._id}: ${result.transactions} transactions (cache invalidé)`
     );
 
     res.json({
       success: true,
       ...result,
+      cacheInvalidated: true,
     });
   } catch (error) {
     logger.error("Erreur synchronisation transactions:", error);
@@ -135,14 +146,18 @@ router.post("/full", async (req, res) => {
       { limit, since, until }
     );
 
+    // Invalider tout le cache après synchronisation complète
+    await bankingCacheService.invalidateAll(workspaceId);
+
     logger.info(
-      `Synchronisation complète pour user ${user._id}: ${result.accounts} comptes, ${result.transactions} transactions`
+      `Synchronisation complète pour user ${user._id}: ${result.accounts} comptes, ${result.transactions} transactions (cache invalidé)`
     );
 
     res.json({
       success: true,
       message: "Synchronisation complète terminée",
       ...result,
+      cacheInvalidated: true,
     });
   } catch (error) {
     logger.error("Erreur synchronisation complète:", error);

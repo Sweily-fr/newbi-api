@@ -70,10 +70,10 @@ router.get("/", async (req, res) => {
       dateFilter.$lte = new Date(endDate);
     }
 
-    // 1. Récupérer les transactions bancaires négatives (sorties d'argent)
+    // 1. Récupérer TOUTES les transactions bancaires (entrées et sorties)
     const transactionQuery = {
       workspaceId,
-      amount: { $lt: 0 }, // Uniquement les sorties
+      // Récupérer toutes les transactions (entrées et sorties)
       status: "completed",
     };
 
@@ -157,7 +157,7 @@ router.get("/", async (req, res) => {
         // Données de base
         title: linkedExpense?.title || tx.description,
         description: tx.description,
-        amount: Math.abs(tx.amount), // Montant positif pour l'affichage
+        amount: tx.amount, // Conserver le signe (négatif = sortie, positif = entrée)
         currency: tx.currency,
         // Utiliser processedAt ou metadata.bridgeTransactionDate pour la vraie date de transaction
         date:
@@ -218,6 +218,12 @@ router.get("/", async (req, res) => {
 
     // Ajouter les dépenses manuelles
     for (const expense of manualExpenses) {
+      // Les dépenses manuelles sont des sorties (montant négatif) sauf si type INCOME
+      const isIncome = expense.type === "INCOME";
+      const amount = isIncome
+        ? Math.abs(expense.amount)
+        : -Math.abs(expense.amount);
+
       unifiedExpenses.push({
         id: expense._id.toString(),
         type: "MANUAL_EXPENSE",
@@ -226,7 +232,7 @@ router.get("/", async (req, res) => {
         // Données de base
         title: expense.title,
         description: expense.description,
-        amount: expense.amount,
+        amount: amount, // Négatif pour dépenses, positif pour revenus
         currency: expense.currency,
         date: expense.date,
 
