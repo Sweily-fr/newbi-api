@@ -9,11 +9,11 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Provider utilisé
+    // Provider utilisé (manual pour les transactions manuelles)
     provider: {
       type: String,
       required: true,
-      enum: ["bridge", "stripe", "paypal", "mock"],
+      enum: ["bridge", "stripe", "paypal", "mock", "manual"],
       index: true,
     },
 

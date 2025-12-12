@@ -41,7 +41,7 @@ type AccountBanking {
   bankName: String!
   accountHolder: AccountHolder!
   workspaceId: String!
-  userId: ID!
+  userId: ID
   lastSyncAt: DateTime!
   notifications: AccountNotifications
   limits: AccountLimits
@@ -257,37 +257,83 @@ input MetricsFiltersInput {
 
 extend type Query {
   # Transactions
-  transactions(filters: TransactionFiltersInput, limit: Int, offset: Int): [Transaction!]!
+  transactions(
+    workspaceId: ID!
+    filters: TransactionFiltersInput
+    limit: Int
+    offset: Int
+  ): [Transaction!]!
   transaction(id: ID!): Transaction
-  transactionByExternalId(provider: BankingProvider!, externalId: String!): Transaction
-  
+  transactionByExternalId(
+    provider: BankingProvider!
+    externalId: String!
+  ): Transaction
+
   # Comptes
-  bankingAccounts: [AccountBanking!]!
+  bankingAccounts(workspaceId: ID!): [AccountBanking!]!
   bankingAccount(id: ID!): AccountBanking
   accountBalance(accountId: String!): AccountBalance!
-  
+
   # Métriques
   apiMetrics(filters: MetricsFiltersInput!): [ApiMetric!]!
-  providerStats(provider: BankingProvider!, startDate: DateTime!, endDate: DateTime!): ProviderStats
+  providerStats(
+    provider: BankingProvider!
+    startDate: DateTime!
+    endDate: DateTime!
+  ): ProviderStats
   costComparison(startDate: DateTime!, endDate: DateTime!): [CostComparison!]!
-  
+
   # Historique
-  transactionHistory(accountId: String!, filters: TransactionFiltersInput): [Transaction!]!
+  transactionHistory(
+    accountId: String!
+    filters: TransactionFiltersInput
+  ): [Transaction!]!
+}
+
+# Input pour créer une transaction manuelle
+input CreateTransactionInput {
+  workspaceId: ID!
+  amount: Float!
+  currency: String
+  description: String!
+  type: TransactionType!
+  date: DateTime
+  category: String
+  vendor: String
+  notes: String
+  tags: [String!]
+}
+
+input UpdateTransactionInput {
+  amount: Float
+  currency: String
+  description: String
+  type: TransactionType
+  date: DateTime
+  category: String
+  vendor: String
+  notes: String
+  tags: [String!]
 }
 
 # Mutations
 
 extend type Mutation {
+  # Transactions manuelles
+  createTransaction(input: CreateTransactionInput!): Transaction!
+  updateTransaction(id: ID!, input: UpdateTransactionInput!): Transaction!
+  deleteTransaction(id: ID!): Boolean!
+
   # Paiements
   processPayment(input: ProcessPaymentInput!): PaymentResult!
   processRefund(input: ProcessRefundInput!): RefundResult!
-  
+
   # Gestion des comptes
   createBankingAccount(input: CreateAccountInput!): AccountBanking!
   updateBankingAccount(id: ID!, input: UpdateAccountInput!): AccountBanking!
   deleteBankingAccount(id: ID!): Boolean!
   syncAccountBalance(accountId: String!): AccountBalance!
-  
+
   # Administration
   switchBankingProvider(provider: BankingProvider!): Boolean!
   syncTransactionHistory(accountId: String!): [Transaction!]!

@@ -1,0 +1,104 @@
+# Types pour le rapprochement factures/transactions bancaires
+
+type ReconciliationSuggestion {
+  transaction: ReconciliationTransaction!
+  matchingInvoices: [ReconciliationInvoice!]!
+  confidence: ReconciliationConfidence!
+}
+
+type ReconciliationTransaction {
+  id: ID!
+  amount: Float!
+  description: String
+  date: DateTime
+  reconciliationStatus: String
+  score: Int
+}
+
+type ReconciliationInvoice {
+  id: ID!
+  number: String
+  clientName: String
+  totalTTC: Float
+  dueDate: DateTime
+  status: String
+}
+
+type ReconciliationSuggestionsResponse {
+  success: Boolean!
+  suggestions: [ReconciliationSuggestion!]!
+  unmatchedCount: Int!
+  pendingInvoicesCount: Int!
+}
+
+type TransactionsForInvoiceResponse {
+  success: Boolean!
+  transactions: [ReconciliationTransaction!]!
+  invoiceAmount: Float!
+}
+
+type ReconciliationLinkResponse {
+  success: Boolean!
+  message: String
+  transaction: ReconciliationTransaction
+  invoice: ReconciliationInvoice
+}
+
+type ReconciliationUnlinkResponse {
+  success: Boolean!
+  message: String
+}
+
+type ReconciliationIgnoreResponse {
+  success: Boolean!
+  message: String
+}
+
+# Enums
+enum ReconciliationConfidence {
+  high
+  medium
+  low
+}
+
+# Inputs
+input ReconciliationLinkInput {
+  transactionId: ID!
+  invoiceId: ID!
+}
+
+input ReconciliationUnlinkInput {
+  transactionId: ID
+  invoiceId: ID
+}
+
+input ReconciliationIgnoreInput {
+  transactionId: ID!
+}
+
+# Queries
+extend type Query {
+  # Suggestions de rapprochement
+  reconciliationSuggestions: ReconciliationSuggestionsResponse!
+
+  # Transactions pour une facture spécifique
+  transactionsForInvoice(invoiceId: ID!): TransactionsForInvoiceResponse!
+}
+
+# Mutations
+extend type Mutation {
+  # Lier une transaction à une facture
+  linkTransactionToInvoice(
+    input: ReconciliationLinkInput!
+  ): ReconciliationLinkResponse!
+
+  # Délier une transaction d'une facture
+  unlinkTransactionFromInvoice(
+    input: ReconciliationUnlinkInput!
+  ): ReconciliationUnlinkResponse!
+
+  # Ignorer une transaction (ne plus la suggérer)
+  ignoreTransaction(
+    input: ReconciliationIgnoreInput!
+  ): ReconciliationIgnoreResponse!
+}
