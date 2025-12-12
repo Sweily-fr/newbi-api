@@ -26,9 +26,9 @@ router.post("/accounts", async (req, res) => {
     await bankingService.initialize("bridge");
     const provider = bankingService.currentProvider;
 
-    // Synchroniser les comptes
+    // Synchroniser les comptes - utiliser "webhook-sync" pour créer un token à la volée
     const accounts = await provider.syncUserAccounts(
-      user._id.toString(),
+      "webhook-sync",
       workspaceId
     );
 
@@ -82,18 +82,18 @@ router.post("/transactions", async (req, res) => {
       // Synchroniser les transactions pour un compte spécifique
       const transactions = await provider.getTransactions(
         accountId,
-        user._id.toString(),
+        "webhook-sync",
         workspaceId,
         { limit, since, until }
       );
       result = { accounts: 1, transactions: transactions.length };
     } else {
       // Synchroniser toutes les transactions pour tous les comptes
-      result = await provider.syncAllTransactions(
-        user._id.toString(),
-        workspaceId,
-        { limit, since, until }
-      );
+      result = await provider.syncAllTransactions("webhook-sync", workspaceId, {
+        limit,
+        since,
+        until,
+      });
     }
 
     // Invalider le cache après synchronisation
@@ -139,9 +139,9 @@ router.post("/full", async (req, res) => {
     await bankingService.initialize("bridge");
     const provider = bankingService.currentProvider;
 
-    // Synchronisation complète
+    // Synchronisation complète - utiliser "webhook-sync" pour créer un token à la volée
     const result = await provider.syncAllTransactions(
-      user._id.toString(),
+      "webhook-sync",
       workspaceId,
       { limit, since, until }
     );
