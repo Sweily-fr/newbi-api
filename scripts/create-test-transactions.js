@@ -19,36 +19,36 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 // Transactions de test à créer
 const TEST_TRANSACTIONS = [
+  // {
+  //   amount: 1500.0,
+  //   currency_code: "EUR",
+  //   description: "VIR SEPA CLIENT DUPONT FACTURE",
+  //   date: new Date().toISOString().split("T")[0],
+  // },
   {
-    amount: 1500.0,
+    amount: 2013.0,
     currency_code: "EUR",
-    description: "VIR SEPA CLIENT DUPONT FACTURE",
+    description: "VIR MTIMET SARL REGLEMENT",
     date: new Date().toISOString().split("T")[0],
   },
-  {
-    amount: 2500.0,
-    currency_code: "EUR",
-    description: "VIR MARTIN SARL REGLEMENT",
-    date: new Date().toISOString().split("T")[0],
-  },
-  {
-    amount: 850.0,
-    currency_code: "EUR",
-    description: "VIREMENT ENTREPRISE ABC",
-    date: new Date(Date.now() - 86400000).toISOString().split("T")[0], // Hier
-  },
-  {
-    amount: -120.5,
-    currency_code: "EUR",
-    description: "CB AMAZON MARKETPLACE",
-    date: new Date().toISOString().split("T")[0],
-  },
-  {
-    amount: -45.0,
-    currency_code: "EUR",
-    description: "PRLV FREE MOBILE",
-    date: new Date().toISOString().split("T")[0],
-  },
+  // {
+  //   amount: 850.0,
+  //   currency_code: "EUR",
+  //   description: "VIREMENT ENTREPRISE ABC",
+  //   date: new Date(Date.now() - 86400000).toISOString().split("T")[0], // Hier
+  // },
+  // {
+  //   amount: -120.5,
+  //   currency_code: "EUR",
+  //   description: "CB AMAZON MARKETPLACE",
+  //   date: new Date().toISOString().split("T")[0],
+  // },
+  // {
+  //   amount: -45.0,
+  //   currency_code: "EUR",
+  //   description: "PRLV FREE MOBILE",
+  //   date: new Date().toISOString().split("T")[0],
+  // },
 ];
 
 async function getItemIds() {

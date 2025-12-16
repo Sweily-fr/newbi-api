@@ -153,6 +153,11 @@ const FileTransferSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    // Filigrane sur les images
+    hasWatermark: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

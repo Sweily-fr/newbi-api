@@ -172,6 +172,7 @@ export default {
           // Nouvelles options
           passwordProtected: fileTransfer.passwordProtected || false,
           allowPreview: fileTransfer.allowPreview !== false, // true par défaut
+          hasWatermark: fileTransfer.hasWatermark || false,
         };
 
         return {

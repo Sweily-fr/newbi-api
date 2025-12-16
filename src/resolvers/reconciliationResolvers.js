@@ -2,27 +2,64 @@ import { withOrganization } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
 import logger from "../utils/logger.js";
+import mongoose from "mongoose";
 
 const reconciliationResolvers = {
   Query: {
     reconciliationSuggestions: withOrganization(
-      async (parent, args, { user, workspaceId }) => {
+      async (
+        parent,
+        { workspaceId: argsWorkspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
         try {
+          // Utiliser le workspaceId des arguments (comme les autres resolvers)
+          const workspaceId = argsWorkspaceId || contextWorkspaceId;
+
+          logger.info(
+            `[RECONCILIATION-GQL] Recherche suggestions pour workspace: ${workspaceId}`
+          );
+
           // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent)
           const unmatchedTransactions = await Transaction.find({
-            workspaceId,
+            workspaceId: workspaceId.toString(),
             reconciliationStatus: { $in: ["unmatched", "suggested"] },
             amount: { $gt: 0 },
           })
             .sort({ date: -1 })
             .limit(50);
 
+          logger.info(
+            `[RECONCILIATION-GQL] Transactions non rapprochées trouvées: ${unmatchedTransactions.length}`
+          );
+
           // Récupérer les factures en attente de paiement
+          // Note: Invoice stocke workspaceId comme ObjectId, Transaction comme String
+          const workspaceObjectId = mongoose.Types.ObjectId.isValid(workspaceId)
+            ? new mongoose.Types.ObjectId(workspaceId)
+            : workspaceId;
+
           const pendingInvoices = await Invoice.find({
-            workspaceId,
+            workspaceId: workspaceObjectId,
             status: "PENDING",
             linkedTransactionId: null,
           }).sort({ dueDate: 1 });
+
+          logger.info(
+            `[RECONCILIATION-GQL] Factures en attente trouvées: ${pendingInvoices.length}`
+          );
+
+          // Debug: afficher les montants pour vérifier la correspondance
+          if (unmatchedTransactions.length > 0) {
+            logger.info(
+              `[RECONCILIATION-GQL] Transactions: ${unmatchedTransactions.map((t) => `${t.amount}€`).join(", ")}`
+            );
+          }
+          if (pendingInvoices.length > 0) {
+            logger.info(
+              `[RECONCILIATION-GQL] Factures: ${pendingInvoices.map((i) => `${i.finalTotalTTC || i.totalTTC}€ (${i.number})`).join(", ")}`
+            );
+          }
 
           // Générer des suggestions de correspondance
           const suggestions = [];
@@ -47,6 +84,9 @@ const reconciliationResolvers = {
             });
 
             if (matchingInvoices.length > 0) {
+              logger.info(
+                `[RECONCILIATION-GQL] Match trouvé: Transaction ${transaction.amount}€ -> ${matchingInvoices.length} facture(s)`
+              );
               suggestions.push({
                 transaction: {
                   id: transaction._id.toString(),
@@ -92,23 +132,39 @@ const reconciliationResolvers = {
     ),
 
     transactionsForInvoice: withOrganization(
-      async (parent, { invoiceId }, { user, workspaceId }) => {
+      async (
+        parent,
+        { invoiceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
         try {
           const invoice = await Invoice.findById(invoiceId);
           if (!invoice) {
             throw new Error("Facture non trouvée");
           }
 
+          // Utiliser le workspaceId de la facture (plus fiable)
+          const workspaceId =
+            invoice.workspaceId?.toString() || contextWorkspaceId;
+
+          logger.info(
+            `[RECONCILIATION-GQL] transactionsForInvoice - workspace: ${workspaceId}, invoice: ${invoiceId}`
+          );
+
           const invoiceAmount = invoice.finalTotalTTC || invoice.totalTTC || 0;
 
           // Récupérer les transactions non rapprochées (crédits uniquement)
           const transactions = await Transaction.find({
-            workspaceId,
+            workspaceId: workspaceId.toString(),
             reconciliationStatus: { $in: ["unmatched", "suggested"] },
             amount: { $gt: 0 },
           })
             .sort({ date: -1 })
             .limit(100);
+
+          logger.info(
+            `[RECONCILIATION-GQL] Transactions trouvées: ${transactions.length}, montant facture: ${invoiceAmount}€`
+          );
 
           // Trier par pertinence
           const scoredTransactions = transactions.map((tx) => {
@@ -166,26 +222,28 @@ const reconciliationResolvers = {
 
   Mutation: {
     linkTransactionToInvoice: withOrganization(
-      async (parent, { input }, { user, workspaceId }) => {
+      async (parent, { input }, { user, workspaceId: contextWorkspaceId }) => {
         try {
           const { transactionId, invoiceId } = input;
 
-          // Vérifier que la transaction existe
-          const transaction = await Transaction.findOne({
-            _id: transactionId,
-            workspaceId,
-          });
-          if (!transaction) {
-            return { success: false, message: "Transaction non trouvée" };
-          }
-
-          // Vérifier que la facture existe
-          const invoice = await Invoice.findOne({
-            _id: invoiceId,
-            workspaceId,
-          });
+          // Récupérer d'abord la facture pour avoir son workspaceId (plus fiable)
+          const invoice = await Invoice.findById(invoiceId);
           if (!invoice) {
             return { success: false, message: "Facture non trouvée" };
+          }
+
+          // Utiliser le workspaceId de la facture (comme dans transactionsForInvoice)
+          const wsId =
+            invoice.workspaceId?.toString() || contextWorkspaceId?.toString();
+
+          // Vérifier que la transaction existe avec le même workspaceId que la facture
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId: wsId,
+          });
+
+          if (!transaction) {
+            return { success: false, message: "Transaction non trouvée" };
           }
 
           // Vérifier que la transaction n'est pas déjà liée

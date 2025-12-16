@@ -79,7 +79,9 @@ input ReconciliationIgnoreInput {
 # Queries
 extend type Query {
   # Suggestions de rapprochement
-  reconciliationSuggestions: ReconciliationSuggestionsResponse!
+  reconciliationSuggestions(
+    workspaceId: ID!
+  ): ReconciliationSuggestionsResponse!
 
   # Transactions pour une facture spécifique
   transactionsForInvoice(invoiceId: ID!): TransactionsForInvoiceResponse!

@@ -17,8 +17,27 @@ type Transaction {
   failureReason: String
   fees: TransactionFees
   metadata: JSON
+  receiptFile: ReceiptFile
+  receiptRequired: Boolean
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+type ReceiptFile {
+  url: String
+  key: String
+  filename: String
+  mimetype: String
+  size: Int
+  uploadedAt: DateTime
+  uploadedBy: String
+}
+
+type UploadReceiptResult {
+  success: Boolean!
+  message: String
+  receiptFile: ReceiptFile
+  transaction: Transaction
 }
 
 type TransactionFees {
@@ -323,6 +342,13 @@ extend type Mutation {
   createTransaction(input: CreateTransactionInput!): Transaction!
   updateTransaction(id: ID!, input: UpdateTransactionInput!): Transaction!
   deleteTransaction(id: ID!): Boolean!
+
+  # Upload de justificatif
+  uploadTransactionReceipt(
+    transactionId: ID!
+    workspaceId: ID!
+    file: Upload!
+  ): UploadReceiptResult!
 
   # Paiements
   processPayment(input: ProcessPaymentInput!): PaymentResult!

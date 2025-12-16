@@ -4,8 +4,12 @@ import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
 import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import cloudflareService from "../services/cloudflareService.js";
+import { GraphQLUpload } from "graphql-upload";
 
 const bankingResolvers = {
+  Upload: GraphQLUpload,
+
   Query: {
     // Transactions - workspaceId passé en argument (comme les factures)
     transactions: withWorkspace(
@@ -30,11 +34,13 @@ const bankingResolvers = {
         }
         if (filters.accountId) query.fromAccount = filters.accountId;
 
-        return await Transaction.find(query)
+        const transactions = await Transaction.find(query)
           .sort({ date: -1, createdAt: -1 })
           .limit(limit)
           .skip(offset)
           .lean();
+
+        return transactions;
       }
     ),
 
@@ -245,6 +251,116 @@ const bankingResolvers = {
         }
 
         return true;
+      }
+    ),
+
+    // Upload de justificatif pour une transaction
+    uploadTransactionReceipt: withWorkspace(
+      async (parent, { transactionId, workspaceId, file }, { user }) => {
+        try {
+          console.log(
+            `🧾 [RECEIPT] Upload justificatif pour transaction ${transactionId}, workspaceId: ${workspaceId}`
+          );
+
+          // Vérifier que la transaction existe dans le workspace
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+          });
+
+          if (!transaction) {
+            throw new AppError(
+              "Transaction non trouvée",
+              ERROR_CODES.NOT_FOUND
+            );
+          }
+
+          // Récupérer les informations du fichier
+          const { createReadStream, filename, mimetype } = await file;
+
+          // Lire le fichier en buffer
+          const stream = createReadStream();
+          const chunks = [];
+          for await (const chunk of stream) {
+            chunks.push(chunk);
+          }
+          const fileBuffer = Buffer.concat(chunks);
+          const fileSize = fileBuffer.length;
+
+          // Valider la taille du fichier (10MB max)
+          const maxSize = 10 * 1024 * 1024;
+          if (fileSize > maxSize) {
+            throw new AppError(
+              `Fichier trop volumineux. Taille maximum: 10MB`,
+              ERROR_CODES.BAD_REQUEST
+            );
+          }
+
+          // Valider le type de fichier
+          const allowedTypes = [
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp",
+            "application/pdf",
+          ];
+          if (!allowedTypes.includes(mimetype)) {
+            throw new AppError(
+              "Type de fichier non supporté. Types acceptés: JPEG, PNG, WebP, PDF",
+              ERROR_CODES.BAD_REQUEST
+            );
+          }
+
+          // Upload vers Cloudflare R2 (bucket receipts)
+          const uploadResult = await cloudflareService.uploadImage(
+            fileBuffer,
+            filename,
+            user._id.toString(),
+            "receipt", // Type "receipt" pour le bucket des justificatifs
+            workspaceId // organizationId requis pour le type receipt
+          );
+
+          console.log(`✅ [RECEIPT] Upload réussi: ${uploadResult.url}`);
+
+          // Mettre à jour la transaction avec le justificatif
+          const receiptFile = {
+            url: uploadResult.url,
+            key: uploadResult.key,
+            filename: filename,
+            mimetype: mimetype,
+            size: fileSize,
+            uploadedAt: new Date(),
+            uploadedBy: user._id.toString(),
+          };
+
+          // Utiliser findByIdAndUpdate pour éviter la validation complète du schéma
+          const updatedTransaction = await Transaction.findByIdAndUpdate(
+            transactionId,
+            {
+              $set: {
+                receiptFile: receiptFile,
+                receiptRequired: false,
+              },
+            },
+            { new: true }
+          );
+
+          return {
+            success: true,
+            message: "Justificatif uploadé avec succès",
+            receiptFile,
+            transaction: updatedTransaction,
+          };
+        } catch (error) {
+          console.error("❌ [RECEIPT] Erreur upload:", error);
+          if (error instanceof AppError) {
+            throw error;
+          }
+          throw new AppError(
+            `Erreur lors de l'upload du justificatif: ${error.message}`,
+            ERROR_CODES.INTERNAL_ERROR
+          );
+        }
       }
     ),
 
