@@ -75,6 +75,16 @@ const invoiceSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    invoiceType: {
+      type: String,
+      enum: ['standard', 'deposit', 'situation'],
+      default: 'standard',
+    },
+    situationNumber: {
+      type: Number,
+      min: 1,
+      default: 1,
+    },
     depositAmount: {
       type: Number,
       min: 0,

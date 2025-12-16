@@ -8,6 +8,8 @@ type Invoice {
   prefix: String
   purchaseOrderNumber: String
   isDeposit: Boolean!
+  invoiceType: String
+  situationNumber: Int
   client: EmbeddedClient!
   companyInfo: Company!
   items: [Item!]!
@@ -56,6 +58,8 @@ type LinkedInvoiceResult {
 
 input CreateInvoiceInput {
   isDeposit: Boolean
+  invoiceType: String
+  situationNumber: Int
   client: ClientInput!
   companyInfo: CompanyInput
   items: [ItemInput!]!
@@ -85,6 +89,8 @@ input CreateInvoiceInput {
 
 input UpdateInvoiceInput {
   isDeposit: Boolean
+  invoiceType: String
+  situationNumber: Int
   client: ClientInput
   companyInfo: CompanyInput
   items: [ItemInput!]
@@ -125,6 +131,16 @@ extend type Query {
   ): InvoicePagination!
   invoiceStats(workspaceId: ID!): InvoiceStats!
   nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
+  situationInvoicesByQuoteRef(workspaceId: ID!, purchaseOrderNumber: String!): [Invoice!]!
+  situationReferences(workspaceId: ID!, search: String): [SituationReference!]!
+}
+
+type SituationReference {
+  reference: String!
+  count: Int!
+  lastInvoiceDate: String
+  totalTTC: Float
+  contractTotal: Float
 }
 
 extend type Mutation {

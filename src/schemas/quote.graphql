@@ -104,6 +104,7 @@ extend type Query {
   quotes(workspaceId: ID!, startDate: String, endDate: String, status: QuoteStatus, search: String, page: Int, limit: Int): QuotePagination!
   quoteStats(workspaceId: ID!): QuoteStats!
   nextQuoteNumber(workspaceId: ID!, prefix: String): String!
+  quoteByNumber(workspaceId: ID!, number: String!): Quote
 }
 
 extend type Mutation {

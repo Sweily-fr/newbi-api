@@ -270,6 +270,130 @@ const invoiceResolvers = {
         }
       }
     ),
+
+    // Rechercher les factures de situation par référence devis
+    situationInvoicesByQuoteRef: requireRead('invoices')(
+      async (_, { workspaceId, purchaseOrderNumber }, context) => {
+        if (!purchaseOrderNumber || purchaseOrderNumber.trim() === '') {
+          return [];
+        }
+
+        const invoices = await Invoice.find({
+          workspaceId: workspaceId,
+          purchaseOrderNumber: purchaseOrderNumber.trim(),
+          invoiceType: 'situation',
+        })
+          .populate('createdBy')
+          .sort({ createdAt: 1 }); // Trier par date de création croissante
+
+        return invoices;
+      }
+    ),
+
+    // Récupérer les références de situation uniques (pour la recherche)
+    situationReferences: requireRead('invoices')(
+      async (_, { workspaceId, search }, context) => {
+        // Construire le filtre de recherche
+        const matchFilter = {
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          invoiceType: 'situation',
+          purchaseOrderNumber: { $exists: true, $nin: [null, ''] }
+        };
+
+        // Ajouter le filtre de recherche si fourni
+        if (search && search.trim() !== '') {
+          matchFilter.purchaseOrderNumber = { 
+            $regex: search.trim(), 
+            $options: 'i' 
+          };
+        }
+
+        // Agréger les références uniques avec la première facture pour calculer le contrat
+        const references = await Invoice.aggregate([
+          { $match: matchFilter },
+          { $sort: { issueDate: 1, createdAt: 1 } }, // Trier par date pour avoir la première
+          {
+            $group: {
+              _id: '$purchaseOrderNumber',
+              count: { $sum: 1 },
+              lastInvoiceDate: { $max: '$issueDate' },
+              totalTTC: { $sum: '$finalTotalTTC' },
+              // Garder la première facture pour calculer le montant du contrat
+              firstInvoice: { $first: '$$ROOT' }
+            }
+          },
+          { $sort: { lastInvoiceDate: -1 } },
+          { $limit: 20 }
+        ]);
+
+        // Pour chaque référence, calculer le montant du contrat
+        const referencesWithContract = await Promise.all(references.map(async (ref) => {
+          let contractTotal = 0;
+          
+          // Essayer de trouver le devis associé
+          const purchaseOrderNumber = ref._id;
+          if (purchaseOrderNumber) {
+            // Chercher le devis par son numéro complet
+            let quote = null;
+            
+            if (purchaseOrderNumber.includes('-')) {
+              const lastDashIndex = purchaseOrderNumber.lastIndexOf('-');
+              const possiblePrefix = purchaseOrderNumber.substring(0, lastDashIndex);
+              const possibleNumber = purchaseOrderNumber.substring(lastDashIndex + 1);
+              
+              quote = await Quote.findOne({
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                prefix: possiblePrefix,
+                number: possibleNumber
+              });
+            }
+            
+            if (!quote) {
+              quote = await Quote.findOne({
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                number: purchaseOrderNumber
+              });
+            }
+            
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
+            }
+          }
+          
+          // Si pas de devis, calculer depuis la première facture (sans les %)
+          if (contractTotal === 0 && ref.firstInvoice?.items) {
+            contractTotal = ref.firstInvoice.items.reduce((sum, item) => {
+              const quantity = item.quantity || 1;
+              const unitPrice = item.unitPrice || 0;
+              const vatRate = item.vatRate || 0;
+              const discount = item.discount || 0;
+              const discountType = item.discountType || 'PERCENTAGE';
+              
+              let lineTotal = quantity * unitPrice;
+              if (discountType === 'PERCENTAGE') {
+                lineTotal = lineTotal * (1 - discount / 100);
+              } else {
+                lineTotal = lineTotal - discount;
+              }
+              // Ajouter la TVA
+              lineTotal = lineTotal * (1 + vatRate / 100);
+              
+              return sum + lineTotal;
+            }, 0);
+          }
+          
+          return {
+            reference: ref._id,
+            count: ref.count,
+            lastInvoiceDate: ref.lastInvoiceDate,
+            totalTTC: ref.totalTTC,
+            contractTotal: contractTotal
+          };
+        }));
+
+        return referencesWithContract;
+      }
+    ),
   },
 
   Mutation: {

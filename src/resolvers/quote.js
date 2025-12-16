@@ -272,6 +272,51 @@ const quoteResolvers = {
         });
       }
     ),
+
+    // Récupérer un devis par son numéro (pour les factures de situation)
+    quoteByNumber: requireRead("quotes")(
+      async (_, { workspaceId, number }, context) => {
+        console.log('📋 [quoteByNumber] Recherche devis:', { workspaceId, number });
+        
+        if (!number || number.trim() === '') {
+          return null;
+        }
+
+        // Rechercher le devis par son numéro complet (prefix-number ou juste number)
+        const trimmedNumber = number.trim();
+        
+        // Essayer de trouver avec le numéro exact
+        let quote = await Quote.findOne({
+          workspaceId,
+          $or: [
+            { number: trimmedNumber },
+            // Si le numéro contient un tiret, essayer de matcher prefix-number
+            { $expr: { $eq: [{ $concat: ["$prefix", "-", "$number"] }, trimmedNumber] } }
+          ]
+        }).populate('createdBy');
+
+        console.log('📋 [quoteByNumber] Première recherche:', quote ? { id: quote.id, number: quote.number, prefix: quote.prefix, finalTotalTTC: quote.finalTotalTTC } : null);
+
+        // Si pas trouvé, essayer de parser le numéro (ex: "D-122024-000001" -> prefix="D-122024", number="000001")
+        if (!quote && trimmedNumber.includes('-')) {
+          const lastDashIndex = trimmedNumber.lastIndexOf('-');
+          const possiblePrefix = trimmedNumber.substring(0, lastDashIndex);
+          const possibleNumber = trimmedNumber.substring(lastDashIndex + 1);
+          
+          console.log('📋 [quoteByNumber] Parsing:', { possiblePrefix, possibleNumber });
+          
+          quote = await Quote.findOne({
+            workspaceId,
+            prefix: possiblePrefix,
+            number: possibleNumber
+          }).populate('createdBy');
+          
+          console.log('📋 [quoteByNumber] Deuxième recherche:', quote ? { id: quote.id, number: quote.number, prefix: quote.prefix, finalTotalTTC: quote.finalTotalTTC } : null);
+        }
+
+        return quote;
+      }
+    ),
   },
 
   Mutation: {
