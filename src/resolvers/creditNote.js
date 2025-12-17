@@ -57,7 +57,11 @@ const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED', 
   let totalVAT = 0;
 
   items.forEach(item => {
-    const itemTotal = item.quantity * item.unitPrice;
+    // Prendre en compte le pourcentage d'avancement
+    const progressPercentage = item.progressPercentage !== undefined && item.progressPercentage !== null 
+      ? parseFloat(item.progressPercentage) 
+      : 100;
+    const itemTotal = item.quantity * item.unitPrice * (progressPercentage / 100);
     const itemDiscount = item.discount || 0;
     const itemDiscountType = item.discountType || 'FIXED';
     

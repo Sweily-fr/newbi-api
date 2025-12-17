@@ -553,8 +553,59 @@ const invoiceResolvers = {
             0
           );
           
-          // Calculer le total de la nouvelle facture
-          const newInvoiceTotal = input.finalTotalTTC || 0;
+          // Calculer le total de la nouvelle facture à partir des items (car finalTotalTTC n'est pas envoyé dans l'input)
+          let newInvoiceTotal = 0;
+          if (input.items && input.items.length > 0) {
+            // Appliquer la remise globale si présente
+            const globalDiscount = input.discount || 0;
+            const globalDiscountType = input.discountType || 'PERCENTAGE';
+            
+            let totalHT = 0;
+            let totalVAT = 0;
+            
+            input.items.forEach(item => {
+              const quantity = parseFloat(item.quantity) || 1;
+              const unitPrice = parseFloat(item.unitPrice) || 0;
+              const vatRate = parseFloat(item.vatRate) || 0;
+              const discount = parseFloat(item.discount) || 0;
+              const discountType = item.discountType || 'PERCENTAGE';
+              const progressPercentage = parseFloat(item.progressPercentage) || 100;
+              
+              // Calculer le total HT de la ligne avec avancement
+              let lineHT = quantity * unitPrice * (progressPercentage / 100);
+              
+              // Appliquer la remise de ligne
+              if (discount > 0) {
+                if (discountType === 'PERCENTAGE') {
+                  lineHT = lineHT * (1 - discount / 100);
+                } else {
+                  lineHT = Math.max(0, lineHT - discount);
+                }
+              }
+              
+              totalHT += lineHT;
+              totalVAT += lineHT * (vatRate / 100);
+            });
+            
+            // Appliquer la remise globale
+            if (globalDiscount > 0) {
+              if (globalDiscountType === 'PERCENTAGE') {
+                const discountMultiplier = 1 - globalDiscount / 100;
+                totalHT = totalHT * discountMultiplier;
+                totalVAT = totalVAT * discountMultiplier;
+              } else {
+                // Remise fixe : répartir proportionnellement sur HT et TVA
+                const totalBeforeDiscount = totalHT + totalVAT;
+                if (totalBeforeDiscount > 0) {
+                  const discountRatio = Math.min(1, globalDiscount / totalBeforeDiscount);
+                  totalHT = totalHT * (1 - discountRatio);
+                  totalVAT = totalVAT * (1 - discountRatio);
+                }
+              }
+            }
+            
+            newInvoiceTotal = totalHT + totalVAT;
+          }
           
           // Vérifier si le total dépasserait le contrat
           if (contractTotal > 0 && (alreadyInvoicedTotal + newInvoiceTotal) > contractTotal) {
@@ -1029,8 +1080,61 @@ const invoiceResolvers = {
             0
           );
           
-          // Calculer le total de la facture mise à jour
-          const newInvoiceTotal = updatedInput.finalTotalTTC || invoiceData.finalTotalTTC || 0;
+          // Calculer le total de la facture mise à jour à partir des items (car finalTotalTTC n'est pas envoyé dans l'input)
+          let newInvoiceTotal = 0;
+          const itemsToUse = updatedInput.items || invoiceData.items;
+          
+          if (itemsToUse && itemsToUse.length > 0) {
+            // Appliquer la remise globale si présente
+            const globalDiscount = updatedInput.discount !== undefined ? updatedInput.discount : (invoiceData.discount || 0);
+            const globalDiscountType = updatedInput.discountType || invoiceData.discountType || 'PERCENTAGE';
+            
+            let totalHT = 0;
+            let totalVAT = 0;
+            
+            itemsToUse.forEach(item => {
+              const quantity = parseFloat(item.quantity) || 1;
+              const unitPrice = parseFloat(item.unitPrice) || 0;
+              const vatRate = parseFloat(item.vatRate) || 0;
+              const discount = parseFloat(item.discount) || 0;
+              const discountType = item.discountType || 'PERCENTAGE';
+              const progressPercentage = parseFloat(item.progressPercentage) || 100;
+              
+              // Calculer le total HT de la ligne avec avancement
+              let lineHT = quantity * unitPrice * (progressPercentage / 100);
+              
+              // Appliquer la remise de ligne
+              if (discount > 0) {
+                if (discountType === 'PERCENTAGE') {
+                  lineHT = lineHT * (1 - discount / 100);
+                } else {
+                  lineHT = Math.max(0, lineHT - discount);
+                }
+              }
+              
+              totalHT += lineHT;
+              totalVAT += lineHT * (vatRate / 100);
+            });
+            
+            // Appliquer la remise globale
+            if (globalDiscount > 0) {
+              if (globalDiscountType === 'PERCENTAGE') {
+                const discountMultiplier = 1 - globalDiscount / 100;
+                totalHT = totalHT * discountMultiplier;
+                totalVAT = totalVAT * discountMultiplier;
+              } else {
+                // Remise fixe : répartir proportionnellement sur HT et TVA
+                const totalBeforeDiscount = totalHT + totalVAT;
+                if (totalBeforeDiscount > 0) {
+                  const discountRatio = Math.min(1, globalDiscount / totalBeforeDiscount);
+                  totalHT = totalHT * (1 - discountRatio);
+                  totalVAT = totalVAT * (1 - discountRatio);
+                }
+              }
+            }
+            
+            newInvoiceTotal = totalHT + totalVAT;
+          }
           
           // Vérifier si le total dépasserait le contrat
           if (contractTotal > 0 && (alreadyInvoicedTotal + newInvoiceTotal) > contractTotal) {
