@@ -17,8 +17,19 @@ type Transaction {
   failureReason: String
   fees: TransactionFees
   metadata: JSON
+  receiptRequired: Boolean
+  receiptFile: ReceiptFile
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+type ReceiptFile {
+  url: String
+  key: String
+  filename: String
+  mimetype: String
+  size: Int
+  uploadedAt: DateTime
 }
 
 type TransactionFees {

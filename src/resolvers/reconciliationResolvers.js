@@ -6,8 +6,15 @@ import logger from "../utils/logger.js";
 const reconciliationResolvers = {
   Query: {
     reconciliationSuggestions: withOrganization(
-      async (parent, args, { user, workspaceId }) => {
+      async (
+        parent,
+        { workspaceId: argWorkspaceId },
+        { user, workspaceId: ctxWorkspaceId }
+      ) => {
         try {
+          // Utiliser le workspaceId passé en argument ou celui du contexte
+          const workspaceId = argWorkspaceId || ctxWorkspaceId;
+
           // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent)
           const unmatchedTransactions = await Transaction.find({
             workspaceId,
