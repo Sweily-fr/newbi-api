@@ -42,6 +42,12 @@ const calculateInvoiceTotals = (
   items.forEach((item) => {
     let itemHT = item.quantity * item.unitPrice;
 
+    // Appliquer le pourcentage d'avancement pour les factures de situation
+    const progressPercentage = item.progressPercentage !== undefined && item.progressPercentage !== null 
+      ? item.progressPercentage 
+      : 100;
+    itemHT = itemHT * (progressPercentage / 100);
+
     // Appliquer la remise au niveau de l'item si elle existe
     if (item.discount) {
       if (item.discountType === "PERCENTAGE" || item.discountType === "percentage") {
@@ -317,7 +323,8 @@ const invoiceResolvers = {
               _id: '$purchaseOrderNumber',
               count: { $sum: 1 },
               lastInvoiceDate: { $max: '$issueDate' },
-              totalTTC: { $sum: '$finalTotalTTC' },
+              // Garder toutes les factures pour recalculer le total avec progressPercentage
+              invoices: { $push: '$$ROOT' },
               // Garder la première facture pour calculer le montant du contrat
               firstInvoice: { $first: '$$ROOT' }
             }
@@ -326,9 +333,46 @@ const invoiceResolvers = {
           { $limit: 20 }
         ]);
 
-        // Pour chaque référence, calculer le montant du contrat
+        // Pour chaque référence, calculer le montant du contrat et le total facturé
         const referencesWithContract = await Promise.all(references.map(async (ref) => {
           let contractTotal = 0;
+          
+          // Calculer le total TTC réel en tenant compte du progressPercentage
+          let totalTTC = 0;
+          if (ref.invoices && ref.invoices.length > 0) {
+            ref.invoices.forEach(inv => {
+              if (inv.items && inv.items.length > 0) {
+                inv.items.forEach(item => {
+                  const quantity = item.quantity || 1;
+                  const unitPrice = item.unitPrice || 0;
+                  const progressPercentage = item.progressPercentage !== undefined && item.progressPercentage !== null 
+                    ? item.progressPercentage 
+                    : 100;
+                  const vatRate = item.vatRate || 0;
+                  const discount = item.discount || 0;
+                  const discountType = item.discountType || 'PERCENTAGE';
+                  
+                  let itemHT = quantity * unitPrice * (progressPercentage / 100);
+                  
+                  // Appliquer la remise
+                  if (discount > 0) {
+                    if (discountType === 'PERCENTAGE') {
+                      itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
+                    } else {
+                      itemHT = Math.max(0, itemHT - discount);
+                    }
+                  }
+                  
+                  // Ajouter la TVA
+                  const itemTTC = itemHT * (1 + vatRate / 100);
+                  totalTTC += itemTTC;
+                });
+              } else {
+                // Fallback sur finalTotalTTC si pas d'items
+                totalTTC += inv.finalTotalTTC || 0;
+              }
+            });
+          }
           
           // Essayer de trouver le devis associé
           const purchaseOrderNumber = ref._id;
@@ -386,7 +430,7 @@ const invoiceResolvers = {
             reference: ref._id,
             count: ref.count,
             lastInvoiceDate: ref.lastInvoiceDate,
-            totalTTC: ref.totalTTC,
+            totalTTC: totalTTC,
             contractTotal: contractTotal
           };
         }));
@@ -432,6 +476,96 @@ const invoiceResolvers = {
                 "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
             }
           );
+        }
+
+        // Validation pour les factures de situation : vérifier que le total ne dépasse pas le contrat
+        if (input.invoiceType === 'situation' && input.purchaseOrderNumber) {
+          // Calculer le montant du contrat (depuis le devis ou la première facture de situation)
+          let contractTotal = 0;
+          const purchaseOrderNumber = input.purchaseOrderNumber;
+          
+          // Chercher le devis associé
+          if (purchaseOrderNumber.includes('-')) {
+            const lastDashIndex = purchaseOrderNumber.lastIndexOf('-');
+            const possiblePrefix = purchaseOrderNumber.substring(0, lastDashIndex);
+            const possibleNumber = purchaseOrderNumber.substring(lastDashIndex + 1);
+            
+            const quote = await Quote.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              prefix: possiblePrefix,
+              number: possibleNumber
+            });
+            
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
+            }
+          }
+          
+          if (contractTotal === 0) {
+            const quote = await Quote.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              number: purchaseOrderNumber
+            });
+            
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
+            }
+          }
+          
+          // Si pas de devis, calculer depuis la première facture de situation
+          if (contractTotal === 0) {
+            const firstSituationInvoice = await Invoice.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              invoiceType: 'situation',
+              purchaseOrderNumber: purchaseOrderNumber
+            }).sort({ issueDate: 1, createdAt: 1 });
+            
+            if (firstSituationInvoice && firstSituationInvoice.items) {
+              contractTotal = firstSituationInvoice.items.reduce((sum, item) => {
+                const quantity = item.quantity || 1;
+                const unitPrice = item.unitPrice || 0;
+                const vatRate = item.vatRate || 0;
+                const discount = item.discount || 0;
+                const discountType = item.discountType || 'PERCENTAGE';
+                
+                let lineTotal = quantity * unitPrice;
+                if (discountType === 'PERCENTAGE') {
+                  lineTotal = lineTotal * (1 - discount / 100);
+                } else {
+                  lineTotal = lineTotal - discount;
+                }
+                lineTotal = lineTotal * (1 + vatRate / 100);
+                
+                return sum + lineTotal;
+              }, 0);
+            }
+          }
+          
+          // Calculer le total déjà facturé pour cette référence
+          const existingSituationInvoices = await Invoice.find({
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            invoiceType: 'situation',
+            purchaseOrderNumber: purchaseOrderNumber
+          });
+          
+          const alreadyInvoicedTotal = existingSituationInvoices.reduce(
+            (sum, inv) => sum + (inv.finalTotalTTC || 0), 
+            0
+          );
+          
+          // Calculer le total de la nouvelle facture
+          const newInvoiceTotal = input.finalTotalTTC || 0;
+          
+          // Vérifier si le total dépasserait le contrat
+          if (contractTotal > 0 && (alreadyInvoicedTotal + newInvoiceTotal) > contractTotal) {
+            const remaining = contractTotal - alreadyInvoicedTotal;
+            throw createValidationError(
+              `Le montant total des factures de situation dépasserait le montant du contrat`,
+              {
+                situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`
+              }
+            );
+          }
         }
 
         if (!prefix) {
@@ -815,6 +949,99 @@ const invoiceResolvers = {
                 "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
             }
           );
+        }
+
+        // Validation pour les factures de situation : vérifier que le total ne dépasse pas le contrat
+        const invoiceType = updatedInput.invoiceType || invoiceData.invoiceType;
+        const purchaseOrderNumber = updatedInput.purchaseOrderNumber || invoiceData.purchaseOrderNumber;
+        
+        if (invoiceType === 'situation' && purchaseOrderNumber) {
+          // Calculer le montant du contrat (depuis le devis ou la première facture de situation)
+          let contractTotal = 0;
+          
+          // Chercher le devis associé
+          if (purchaseOrderNumber.includes('-')) {
+            const lastDashIndex = purchaseOrderNumber.lastIndexOf('-');
+            const possiblePrefix = purchaseOrderNumber.substring(0, lastDashIndex);
+            const possibleNumber = purchaseOrderNumber.substring(lastDashIndex + 1);
+            
+            const quote = await Quote.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              prefix: possiblePrefix,
+              number: possibleNumber
+            });
+            
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
+            }
+          }
+          
+          if (contractTotal === 0) {
+            const quote = await Quote.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              number: purchaseOrderNumber
+            });
+            
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
+            }
+          }
+          
+          // Si pas de devis, calculer depuis la première facture de situation
+          if (contractTotal === 0) {
+            const firstSituationInvoice = await Invoice.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              invoiceType: 'situation',
+              purchaseOrderNumber: purchaseOrderNumber
+            }).sort({ issueDate: 1, createdAt: 1 });
+            
+            if (firstSituationInvoice && firstSituationInvoice.items) {
+              contractTotal = firstSituationInvoice.items.reduce((sum, item) => {
+                const quantity = item.quantity || 1;
+                const unitPrice = item.unitPrice || 0;
+                const vatRate = item.vatRate || 0;
+                const discount = item.discount || 0;
+                const discountType = item.discountType || 'PERCENTAGE';
+                
+                let lineTotal = quantity * unitPrice;
+                if (discountType === 'PERCENTAGE') {
+                  lineTotal = lineTotal * (1 - discount / 100);
+                } else {
+                  lineTotal = lineTotal - discount;
+                }
+                lineTotal = lineTotal * (1 + vatRate / 100);
+                
+                return sum + lineTotal;
+              }, 0);
+            }
+          }
+          
+          // Calculer le total déjà facturé pour cette référence (excluant la facture actuelle)
+          const existingSituationInvoices = await Invoice.find({
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            invoiceType: 'situation',
+            purchaseOrderNumber: purchaseOrderNumber,
+            _id: { $ne: id } // Exclure la facture actuelle
+          });
+          
+          const alreadyInvoicedTotal = existingSituationInvoices.reduce(
+            (sum, inv) => sum + (inv.finalTotalTTC || 0), 
+            0
+          );
+          
+          // Calculer le total de la facture mise à jour
+          const newInvoiceTotal = updatedInput.finalTotalTTC || invoiceData.finalTotalTTC || 0;
+          
+          // Vérifier si le total dépasserait le contrat
+          if (contractTotal > 0 && (alreadyInvoicedTotal + newInvoiceTotal) > contractTotal) {
+            const remaining = contractTotal - alreadyInvoicedTotal;
+            throw createValidationError(
+              `Le montant total des factures de situation dépasserait le montant du contrat`,
+              {
+                situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`
+              }
+            );
+          }
         }
 
         // Si les items sont modifiés, recalculer les totaux

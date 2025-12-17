@@ -116,6 +116,59 @@ const quoteResolvers = {
 
       return [];
     },
+    // Calculer le total des factures de situation liées à ce devis
+    situationInvoicedTotal: async (quote) => {
+      // Construire la référence complète du devis
+      const quoteRef = quote.prefix ? `${quote.prefix}-${quote.number}` : quote.number;
+      
+      // Chercher toutes les factures de situation avec cette référence
+      const situationInvoices = await Invoice.find({
+        workspaceId: quote.workspaceId,
+        invoiceType: 'situation',
+        purchaseOrderNumber: quoteRef
+      });
+      
+      // Calculer le total en tenant compte du progressPercentage
+      // (recalcul à la volée pour les factures existantes qui n'ont pas le bon finalTotalTTC)
+      const total = situationInvoices.reduce((sum, inv) => {
+        // Calculer le total TTC réel en tenant compte du progressPercentage
+        let invoiceTotal = 0;
+        if (inv.items && inv.items.length > 0) {
+          inv.items.forEach(item => {
+            const quantity = item.quantity || 1;
+            const unitPrice = item.unitPrice || 0;
+            const progressPercentage = item.progressPercentage !== undefined && item.progressPercentage !== null 
+              ? item.progressPercentage 
+              : 100;
+            const vatRate = item.vatRate || 0;
+            const discount = item.discount || 0;
+            const discountType = item.discountType || 'PERCENTAGE';
+            
+            let itemHT = quantity * unitPrice * (progressPercentage / 100);
+            
+            // Appliquer la remise
+            if (discount > 0) {
+              if (discountType === 'PERCENTAGE') {
+                itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
+              } else {
+                itemHT = Math.max(0, itemHT - discount);
+              }
+            }
+            
+            // Ajouter la TVA
+            const itemTTC = itemHT * (1 + vatRate / 100);
+            invoiceTotal += itemTTC;
+          });
+        } else {
+          // Fallback sur finalTotalTTC si pas d'items
+          invoiceTotal = inv.finalTotalTTC || 0;
+        }
+        
+        return sum + invoiceTotal;
+      }, 0);
+      
+      return total;
+    },
   },
   Query: {
     quote: requireRead("quotes")(async (_, { workspaceId, id }, context) => {

@@ -39,6 +39,7 @@ type Quote {
   updatedAt: String!
   convertedToInvoice: Invoice
   linkedInvoices: [Invoice]
+  situationInvoicedTotal: Float
 }
 
 type QuotePagination {
