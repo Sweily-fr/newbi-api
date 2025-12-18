@@ -16,6 +16,44 @@ const tagSchema = new mongoose.Schema({
   border: String
 }, { _id: false });
 
+// Schéma pour les entrées de temps
+const timeEntrySchema = new mongoose.Schema({
+  startTime: {
+    type: Date,
+    required: true
+  },
+  endTime: Date,
+  duration: {
+    type: Number, // en secondes
+    required: true,
+    default: 0
+  }
+}, { _id: true });
+
+// Schéma pour le suivi du temps
+const timeTrackingSchema = new mongoose.Schema({
+  totalSeconds: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  isRunning: {
+    type: Boolean,
+    default: false
+  },
+  currentStartTime: Date,
+  entries: [timeEntrySchema],
+  hourlyRate: {
+    type: Number,
+    min: 0
+  },
+  roundingOption: {
+    type: String,
+    enum: ['none', 'up', 'down'],
+    default: 'none'
+  }
+}, { _id: false });
+
 // Schéma pour les commentaires
 const commentSchema = new mongoose.Schema({
   userId: {
@@ -177,6 +215,8 @@ const taskSchema = new mongoose.Schema({
   comments: [commentSchema],
   // Historique d'activité
   activity: [activitySchema],
+  // Suivi du temps et facturation
+  timeTracking: timeTrackingSchema,
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
