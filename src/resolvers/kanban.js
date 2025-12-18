@@ -1370,6 +1370,180 @@ const resolvers = {
         }
       }
     ),
+
+    // Démarrer le timer
+    startTimer: withWorkspace(
+      async (
+        _,
+        { taskId, workspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+        try {
+          const task = await Task.findOne({
+            _id: taskId,
+            workspaceId: finalWorkspaceId,
+          });
+          if (!task) throw new Error("Task not found");
+
+          // Vérifier si un timer est déjà en cours
+          if (task.timeTracking?.isRunning) {
+            throw new Error("Timer is already running");
+          }
+
+          // Initialiser timeTracking si nécessaire
+          if (!task.timeTracking) {
+            task.timeTracking = {
+              totalSeconds: 0,
+              isRunning: false,
+              entries: [],
+            };
+          }
+
+          // Démarrer le timer
+          task.timeTracking.isRunning = true;
+          task.timeTracking.currentStartTime = new Date();
+
+          await task.save();
+
+          // Publier l'événement
+          safePublish(
+            `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+            {
+              type: "TIMER_STARTED",
+              task: task,
+              taskId: task._id,
+              boardId: task.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Timer démarré"
+          );
+
+          return task;
+        } catch (error) {
+          logger.error("Error starting timer:", error);
+          throw new Error(error.message || "Failed to start timer");
+        }
+      }
+    ),
+
+    // Arrêter le timer
+    stopTimer: withWorkspace(
+      async (
+        _,
+        { taskId, workspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+        try {
+          const task = await Task.findOne({
+            _id: taskId,
+            workspaceId: finalWorkspaceId,
+          });
+          if (!task) throw new Error("Task not found");
+
+          // Vérifier si un timer est en cours
+          if (!task.timeTracking?.isRunning) {
+            throw new Error("No timer is running");
+          }
+
+          const now = new Date();
+          const startTime = task.timeTracking.currentStartTime;
+          const duration = Math.floor((now - startTime) / 1000); // en secondes
+
+          // Créer une nouvelle entrée de temps
+          const newEntry = {
+            startTime: startTime,
+            endTime: now,
+            duration: duration,
+          };
+
+          // Mettre à jour le timeTracking
+          task.timeTracking.isRunning = false;
+          task.timeTracking.currentStartTime = null;
+          task.timeTracking.totalSeconds += duration;
+          task.timeTracking.entries.push(newEntry);
+
+          await task.save();
+
+          // Publier l'événement
+          safePublish(
+            `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+            {
+              type: "TIMER_STOPPED",
+              task: task,
+              taskId: task._id,
+              boardId: task.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Timer arrêté"
+          );
+
+          return task;
+        } catch (error) {
+          logger.error("Error stopping timer:", error);
+          throw new Error(error.message || "Failed to stop timer");
+        }
+      }
+    ),
+
+    // Mettre à jour les paramètres du timer
+    updateTimerSettings: withWorkspace(
+      async (
+        _,
+        { taskId, hourlyRate, roundingOption, workspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+        try {
+          const task = await Task.findOne({
+            _id: taskId,
+            workspaceId: finalWorkspaceId,
+          });
+          if (!task) throw new Error("Task not found");
+
+          // Initialiser timeTracking si nécessaire
+          if (!task.timeTracking) {
+            task.timeTracking = {
+              totalSeconds: 0,
+              isRunning: false,
+              entries: [],
+            };
+          }
+
+          // Mettre à jour les paramètres
+          if (hourlyRate !== undefined) {
+            task.timeTracking.hourlyRate = hourlyRate;
+          }
+          if (roundingOption !== undefined) {
+            task.timeTracking.roundingOption = roundingOption;
+          }
+
+          await task.save();
+
+          // Publier l'événement
+          safePublish(
+            `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+            {
+              type: "TIMER_SETTINGS_UPDATED",
+              task: task,
+              taskId: task._id,
+              boardId: task.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Paramètres du timer mis à jour"
+          );
+
+          return task;
+        } catch (error) {
+          logger.error("Error updating timer settings:", error);
+          throw new Error(error.message || "Failed to update timer settings");
+        }
+      }
+    ),
   },
 
   Board: {

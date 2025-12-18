@@ -23,6 +23,22 @@ type Column {
 }
 
 
+type TimeEntry {
+  id: ID!
+  startTime: DateTime!
+  endTime: DateTime
+  duration: Int!
+}
+
+type TimeTracking {
+  totalSeconds: Int!
+  isRunning: Boolean!
+  currentStartTime: DateTime
+  entries: [TimeEntry!]!
+  hourlyRate: Float
+  roundingOption: String
+}
+
 type Comment {
   id: ID!
   userId: String!
@@ -62,6 +78,7 @@ type Task {
   assignedMembers: [String!]
   comments: [Comment!]
   activity: [Activity!]
+  timeTracking: TimeTracking
   userId: ID!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -107,6 +124,11 @@ input UpdateColumnInput {
 }
 
 
+input TimeTrackingInput {
+  hourlyRate: Float
+  roundingOption: String
+}
+
 input CreateTaskInput {
   title: String!
   description: String
@@ -120,6 +142,7 @@ input CreateTaskInput {
   position: Int
   checklist: [ChecklistItemInput!]
   assignedMembers: [String!]
+  timeTracking: TimeTrackingInput
 }
 
 input UpdateTaskInput {
@@ -135,6 +158,7 @@ input UpdateTaskInput {
   position: Int
   checklist: [ChecklistItemInput!]
   assignedMembers: [String!]
+  timeTracking: TimeTrackingInput
 }
 
 input TagInput {
@@ -200,6 +224,10 @@ type Mutation {
   addComment(taskId: ID!, input: CommentInput!, workspaceId: ID): Task!
   updateComment(taskId: ID!, commentId: ID!, content: String!, workspaceId: ID): Task!
   deleteComment(taskId: ID!, commentId: ID!, workspaceId: ID): Task!
+  
+  startTimer(taskId: ID!, workspaceId: ID): Task!
+  stopTimer(taskId: ID!, workspaceId: ID): Task!
+  updateTimerSettings(taskId: ID!, hourlyRate: Float, roundingOption: String, workspaceId: ID): Task!
 }
 
 type Subscription {
