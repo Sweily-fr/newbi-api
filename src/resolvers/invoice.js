@@ -4,7 +4,12 @@ import Quote from "../models/Quote.js";
 import Event from "../models/Event.js";
 import Client from "../models/Client.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { withRBAC, requireWrite, requireRead, requireDelete } from "../middlewares/rbac.js";
+import {
+  withRBAC,
+  requireWrite,
+  requireRead,
+  requireDelete,
+} from "../middlewares/rbac.js";
 import { requireCompanyInfo } from "../middlewares/company-info-guard.js";
 import { generateInvoiceNumber } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
@@ -43,14 +48,18 @@ const calculateInvoiceTotals = (
     let itemHT = item.quantity * item.unitPrice;
 
     // Appliquer le pourcentage d'avancement pour les factures de situation
-    const progressPercentage = item.progressPercentage !== undefined && item.progressPercentage !== null 
-      ? item.progressPercentage 
-      : 100;
+    const progressPercentage =
+      item.progressPercentage !== undefined && item.progressPercentage !== null
+        ? item.progressPercentage
+        : 100;
     itemHT = itemHT * (progressPercentage / 100);
 
     // Appliquer la remise au niveau de l'item si elle existe
     if (item.discount) {
-      if (item.discountType === "PERCENTAGE" || item.discountType === "percentage") {
+      if (
+        item.discountType === "PERCENTAGE" ||
+        item.discountType === "percentage"
+      ) {
         // Limiter la remise à 100% maximum
         const discountPercent = Math.min(item.discount, 100);
         itemHT = itemHT * (1 - discountPercent / 100);
@@ -69,7 +78,9 @@ const calculateInvoiceTotals = (
   if (shipping && shipping.billShipping) {
     const shippingHT = shipping.shippingAmountHT || 0;
     // Auto-liquidation : TVA = 0 si isReverseCharge = true
-    const shippingVAT = isReverseCharge ? 0 : shippingHT * (shipping.shippingVatRate / 100);
+    const shippingVAT = isReverseCharge
+      ? 0
+      : shippingHT * (shipping.shippingVatRate / 100);
 
     totalHT += shippingHT;
     totalVAT += shippingVAT;
@@ -90,7 +101,7 @@ const calculateInvoiceTotals = (
   }
 
   const finalTotalHT = totalHT - discountAmount;
-  
+
   // Recalculer la TVA après application de la remise globale
   // La TVA doit être proportionnelle au montant final HT
   // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
@@ -114,14 +125,16 @@ const calculateInvoiceTotals = (
 
 const invoiceResolvers = {
   Query: {
-    invoice: requireRead("invoices")(async (_, { id, workspaceId }, context) => {
-      const invoice = await Invoice.findOne({
-        _id: id,
-        workspaceId: workspaceId, // ✅ Filtrage par workspace au lieu de createdBy
-      }).populate("createdBy");
-      if (!invoice) throw createNotFoundError("Facture");
-      return invoice;
-    }),
+    invoice: requireRead("invoices")(
+      async (_, { id, workspaceId }, context) => {
+        const invoice = await Invoice.findOne({
+          _id: id,
+          workspaceId: workspaceId, // ✅ Filtrage par workspace au lieu de createdBy
+        }).populate("createdBy");
+        if (!invoice) throw createNotFoundError("Facture");
+        return invoice;
+      }
+    ),
 
     invoices: requireRead("invoices")(
       async (
@@ -190,64 +203,66 @@ const invoiceResolvers = {
       }
     ),
 
-    invoiceStats: requireRead("invoices")(async (_, { workspaceId }, context) => {
-      const { user, workspaceId: contextWorkspaceId, userRole } = context;
+    invoiceStats: requireRead("invoices")(
+      async (_, { workspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
-      // Base match avec workspaceId
-      let matchQuery = {
-        workspaceId: new mongoose.Types.ObjectId(workspaceId),
-      };
+        // Base match avec workspaceId
+        let matchQuery = {
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        };
 
-      // Filtrage par rôle si nécessaire (viewer voit seulement ses propres factures)
-      if (userRole === "viewer") {
-        matchQuery.createdBy = new mongoose.Types.ObjectId(user._id);
-      }
-
-      const [stats] = await Invoice.aggregate([
-        { $match: matchQuery },
-        {
-          $group: {
-            _id: null,
-            totalCount: { $sum: 1 },
-            draftCount: {
-              $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] },
-            },
-            pendingCount: {
-              $sum: { $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0] },
-            },
-            completedCount: {
-              $sum: {
-                $cond: [
-                  {
-                    $or: [
-                      { $eq: ["$status", "COMPLETED"] },
-                      { $eq: ["$status", "CANCELED"] },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-            canceledCount: {
-              $sum: { $cond: [{ $eq: ["$status", "CANCELED"] }, 1, 0] },
-            },
-            totalAmount: { $sum: "$totalTTC" },
-          },
-        },
-      ]);
-
-      return (
-        stats || {
-          totalCount: 0,
-          draftCount: 0,
-          pendingCount: 0,
-          completedCount: 0,
-          canceledCount: 0,
-          totalAmount: 0,
+        // Filtrage par rôle si nécessaire (viewer voit seulement ses propres factures)
+        if (userRole === "viewer") {
+          matchQuery.createdBy = new mongoose.Types.ObjectId(user._id);
         }
-      );
-    }),
+
+        const [stats] = await Invoice.aggregate([
+          { $match: matchQuery },
+          {
+            $group: {
+              _id: null,
+              totalCount: { $sum: 1 },
+              draftCount: {
+                $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] },
+              },
+              pendingCount: {
+                $sum: { $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0] },
+              },
+              completedCount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $eq: ["$status", "COMPLETED"] },
+                        { $eq: ["$status", "CANCELED"] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              canceledCount: {
+                $sum: { $cond: [{ $eq: ["$status", "CANCELED"] }, 1, 0] },
+              },
+              totalAmount: { $sum: "$totalTTC" },
+            },
+          },
+        ]);
+
+        return (
+          stats || {
+            totalCount: 0,
+            draftCount: 0,
+            pendingCount: 0,
+            completedCount: 0,
+            canceledCount: 0,
+            totalAmount: 0,
+          }
+        );
+      }
+    ),
 
     nextInvoiceNumber: requireRead("invoices")(
       async (_, { workspaceId, prefix, isDraft }, context) => {
@@ -277,40 +292,58 @@ const invoiceResolvers = {
       }
     ),
 
-    // Rechercher les factures de situation par référence devis
-    situationInvoicesByQuoteRef: requireRead('invoices')(
+    // Rechercher les factures de situation par référence de situation
+    situationInvoicesByQuoteRef: requireRead("invoices")(
       async (_, { workspaceId, purchaseOrderNumber }, context) => {
-        if (!purchaseOrderNumber || purchaseOrderNumber.trim() === '') {
+        if (!purchaseOrderNumber || purchaseOrderNumber.trim() === "") {
+          console.log(
+            "⚠️ Aucune référence fournie pour la recherche de factures de situation"
+          );
           return [];
         }
 
+        const reference = purchaseOrderNumber.trim();
+        console.log(`🔍 Recherche des factures de situation:`, {
+          workspaceId,
+          situationReference: reference,
+        });
+
+        // Chercher uniquement dans situationReference (nouveau système)
         const invoices = await Invoice.find({
           workspaceId: workspaceId,
-          purchaseOrderNumber: purchaseOrderNumber.trim(),
-          invoiceType: 'situation',
+          invoiceType: "situation",
+          situationReference: reference,
         })
-          .populate('createdBy')
+          .populate("createdBy")
           .sort({ createdAt: 1 }); // Trier par date de création croissante
+
+        console.log(
+          `✅ ${invoices.length} facture(s) de situation trouvée(s) avec situationReference="${reference}"`
+        );
 
         return invoices;
       }
     ),
 
     // Récupérer les références de situation uniques (pour la recherche)
-    situationReferences: requireRead('invoices')(
+    situationReferences: requireRead("invoices")(
       async (_, { workspaceId, search }, context) => {
+        console.log(
+          `🔍 Recherche des références de situation pour workspace: ${workspaceId}`
+        );
+
         // Construire le filtre de recherche
         const matchFilter = {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
-          invoiceType: 'situation',
-          purchaseOrderNumber: { $exists: true, $nin: [null, ''] }
+          invoiceType: "situation",
+          situationReference: { $exists: true, $nin: [null, ""] },
         };
 
         // Ajouter le filtre de recherche si fourni
-        if (search && search.trim() !== '') {
-          matchFilter.purchaseOrderNumber = { 
-            $regex: search.trim(), 
-            $options: 'i' 
+        if (search && search.trim() !== "") {
+          matchFilter.situationReference = {
+            $regex: search.trim(),
+            $options: "i",
           };
         }
 
@@ -320,120 +353,152 @@ const invoiceResolvers = {
           { $sort: { issueDate: 1, createdAt: 1 } }, // Trier par date pour avoir la première
           {
             $group: {
-              _id: '$purchaseOrderNumber',
+              _id: "$situationReference",
               count: { $sum: 1 },
-              lastInvoiceDate: { $max: '$issueDate' },
+              lastInvoiceDate: { $max: "$issueDate" },
               // Garder toutes les factures pour recalculer le total avec progressPercentage
-              invoices: { $push: '$$ROOT' },
+              invoices: { $push: "$$ROOT" },
               // Garder la première facture pour calculer le montant du contrat
-              firstInvoice: { $first: '$$ROOT' }
-            }
+              firstInvoice: { $first: "$$ROOT" },
+            },
           },
           { $sort: { lastInvoiceDate: -1 } },
-          { $limit: 20 }
+          { $limit: 20 },
         ]);
 
         // Pour chaque référence, calculer le montant du contrat et le total facturé
-        const referencesWithContract = await Promise.all(references.map(async (ref) => {
-          let contractTotal = 0;
-          
-          // Calculer le total TTC réel en tenant compte du progressPercentage
-          let totalTTC = 0;
-          if (ref.invoices && ref.invoices.length > 0) {
-            ref.invoices.forEach(inv => {
-              if (inv.items && inv.items.length > 0) {
-                inv.items.forEach(item => {
-                  const quantity = item.quantity || 1;
-                  const unitPrice = item.unitPrice || 0;
-                  const progressPercentage = item.progressPercentage !== undefined && item.progressPercentage !== null 
-                    ? item.progressPercentage 
-                    : 100;
-                  const vatRate = item.vatRate || 0;
-                  const discount = item.discount || 0;
-                  const discountType = item.discountType || 'PERCENTAGE';
-                  
-                  let itemHT = quantity * unitPrice * (progressPercentage / 100);
-                  
-                  // Appliquer la remise
-                  if (discount > 0) {
-                    if (discountType === 'PERCENTAGE') {
-                      itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
-                    } else {
-                      itemHT = Math.max(0, itemHT - discount);
+        const referencesWithContract = await Promise.all(
+          references.map(async (ref) => {
+            let contractTotal = 0;
+
+            // Calculer le total TTC réel en tenant compte du progressPercentage
+            let totalTTC = 0;
+            if (ref.invoices && ref.invoices.length > 0) {
+              ref.invoices.forEach((inv) => {
+                if (inv.items && inv.items.length > 0) {
+                  inv.items.forEach((item) => {
+                    const quantity = item.quantity || 1;
+                    const unitPrice = item.unitPrice || 0;
+                    const progressPercentage =
+                      item.progressPercentage !== undefined &&
+                      item.progressPercentage !== null
+                        ? item.progressPercentage
+                        : 100;
+                    const vatRate = item.vatRate || 0;
+                    const discount = item.discount || 0;
+                    const discountType = item.discountType || "PERCENTAGE";
+
+                    let itemHT =
+                      quantity * unitPrice * (progressPercentage / 100);
+
+                    // Appliquer la remise
+                    if (discount > 0) {
+                      if (discountType === "PERCENTAGE") {
+                        itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
+                      } else {
+                        itemHT = Math.max(0, itemHT - discount);
+                      }
                     }
-                  }
-                  
-                  // Ajouter la TVA
-                  const itemTTC = itemHT * (1 + vatRate / 100);
-                  totalTTC += itemTTC;
+
+                    // Ajouter la TVA
+                    const itemTTC = itemHT * (1 + vatRate / 100);
+                    totalTTC += itemTTC;
+                  });
+                } else {
+                  // Fallback sur finalTotalTTC si pas d'items
+                  totalTTC += inv.finalTotalTTC || 0;
+                }
+              });
+            }
+
+            // Essayer de trouver le devis associé via purchaseOrderNumber de la première facture
+            const firstInvoicePurchaseOrder =
+              ref.firstInvoice?.purchaseOrderNumber;
+            if (firstInvoicePurchaseOrder) {
+              // Chercher le devis par son numéro complet
+              let quote = null;
+
+              if (firstInvoicePurchaseOrder.includes("-")) {
+                const lastDashIndex =
+                  firstInvoicePurchaseOrder.lastIndexOf("-");
+                const possiblePrefix = firstInvoicePurchaseOrder.substring(
+                  0,
+                  lastDashIndex
+                );
+                const possibleNumber = firstInvoicePurchaseOrder.substring(
+                  lastDashIndex + 1
+                );
+
+                quote = await Quote.findOne({
+                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                  prefix: possiblePrefix,
+                  number: possibleNumber,
                 });
-              } else {
-                // Fallback sur finalTotalTTC si pas d'items
-                totalTTC += inv.finalTotalTTC || 0;
               }
-            });
-          }
-          
-          // Essayer de trouver le devis associé
-          const purchaseOrderNumber = ref._id;
-          if (purchaseOrderNumber) {
-            // Chercher le devis par son numéro complet
-            let quote = null;
-            
-            if (purchaseOrderNumber.includes('-')) {
-              const lastDashIndex = purchaseOrderNumber.lastIndexOf('-');
-              const possiblePrefix = purchaseOrderNumber.substring(0, lastDashIndex);
-              const possibleNumber = purchaseOrderNumber.substring(lastDashIndex + 1);
-              
-              quote = await Quote.findOne({
-                workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                prefix: possiblePrefix,
-                number: possibleNumber
-              });
-            }
-            
-            if (!quote) {
-              quote = await Quote.findOne({
-                workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                number: purchaseOrderNumber
-              });
-            }
-            
-            if (quote) {
-              contractTotal = quote.finalTotalTTC || 0;
-            }
-          }
-          
-          // Si pas de devis, calculer depuis la première facture (sans les %)
-          if (contractTotal === 0 && ref.firstInvoice?.items) {
-            contractTotal = ref.firstInvoice.items.reduce((sum, item) => {
-              const quantity = item.quantity || 1;
-              const unitPrice = item.unitPrice || 0;
-              const vatRate = item.vatRate || 0;
-              const discount = item.discount || 0;
-              const discountType = item.discountType || 'PERCENTAGE';
-              
-              let lineTotal = quantity * unitPrice;
-              if (discountType === 'PERCENTAGE') {
-                lineTotal = lineTotal * (1 - discount / 100);
-              } else {
-                lineTotal = lineTotal - discount;
+
+              if (!quote) {
+                quote = await Quote.findOne({
+                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                  number: firstInvoicePurchaseOrder,
+                });
               }
-              // Ajouter la TVA
-              lineTotal = lineTotal * (1 + vatRate / 100);
-              
-              return sum + lineTotal;
-            }, 0);
-          }
-          
-          return {
-            reference: ref._id,
-            count: ref.count,
-            lastInvoiceDate: ref.lastInvoiceDate,
-            totalTTC: totalTTC,
-            contractTotal: contractTotal
-          };
-        }));
+
+              if (quote) {
+                contractTotal = quote.finalTotalTTC || 0;
+              }
+            }
+
+            // Si pas de devis, utiliser contractTotal de la première facture
+            if (contractTotal === 0 && ref.firstInvoice?.contractTotal) {
+              contractTotal = ref.firstInvoice.contractTotal;
+            }
+
+            // Si toujours pas de contrat, calculer depuis la première facture (sans les %)
+            if (contractTotal === 0 && ref.firstInvoice?.items) {
+              contractTotal = ref.firstInvoice.items.reduce((sum, item) => {
+                const quantity = item.quantity || 1;
+                const unitPrice = item.unitPrice || 0;
+                const vatRate = item.vatRate || 0;
+                const discount = item.discount || 0;
+                const discountType = item.discountType || "PERCENTAGE";
+
+                let lineTotal = quantity * unitPrice;
+                if (discountType === "PERCENTAGE") {
+                  lineTotal = lineTotal * (1 - discount / 100);
+                } else {
+                  lineTotal = lineTotal - discount;
+                }
+                // Ajouter la TVA
+                lineTotal = lineTotal * (1 + vatRate / 100);
+
+                return sum + lineTotal;
+              }, 0);
+            }
+
+            return {
+              reference: ref._id,
+              count: ref.count,
+              lastInvoiceDate: ref.lastInvoiceDate,
+              totalTTC: totalTTC,
+              contractTotal: contractTotal,
+            };
+          })
+        );
+
+        console.log(
+          `✅ ${referencesWithContract.length} référence(s) de situation trouvée(s)`
+        );
+        if (referencesWithContract.length > 0) {
+          console.log(
+            `📋 Références:`,
+            referencesWithContract.map((r) => ({
+              ref: r.reference,
+              count: r.count,
+              totalTTC: r.totalTTC,
+              contractTotal: r.contractTotal,
+            }))
+          );
+        }
 
         return referencesWithContract;
       }
@@ -468,7 +533,10 @@ const invoiceResolvers = {
         }
 
         // Validation du format de la référence devis si fournie
-        if (input.purchaseOrderNumber && !/^[A-Za-z0-9-]*$/.test(input.purchaseOrderNumber)) {
+        if (
+          input.purchaseOrderNumber &&
+          !/^[A-Za-z0-9-]*$/.test(input.purchaseOrderNumber)
+        ) {
           throw createValidationError(
             "La référence devis contient des caractères non autorisés",
             {
@@ -479,117 +547,126 @@ const invoiceResolvers = {
         }
 
         // Validation pour les factures de situation : vérifier que le total ne dépasse pas le contrat
-        if (input.invoiceType === 'situation' && input.purchaseOrderNumber) {
+        if (input.invoiceType === "situation" && input.purchaseOrderNumber) {
           // Calculer le montant du contrat (depuis le devis ou la première facture de situation)
           let contractTotal = 0;
           const purchaseOrderNumber = input.purchaseOrderNumber;
-          
+
           // Chercher le devis associé
-          if (purchaseOrderNumber.includes('-')) {
-            const lastDashIndex = purchaseOrderNumber.lastIndexOf('-');
-            const possiblePrefix = purchaseOrderNumber.substring(0, lastDashIndex);
-            const possibleNumber = purchaseOrderNumber.substring(lastDashIndex + 1);
-            
+          if (purchaseOrderNumber.includes("-")) {
+            const lastDashIndex = purchaseOrderNumber.lastIndexOf("-");
+            const possiblePrefix = purchaseOrderNumber.substring(
+              0,
+              lastDashIndex
+            );
+            const possibleNumber = purchaseOrderNumber.substring(
+              lastDashIndex + 1
+            );
+
             const quote = await Quote.findOne({
               workspaceId: new mongoose.Types.ObjectId(workspaceId),
               prefix: possiblePrefix,
-              number: possibleNumber
+              number: possibleNumber,
             });
-            
+
             if (quote) {
               contractTotal = quote.finalTotalTTC || 0;
             }
           }
-          
+
           if (contractTotal === 0) {
             const quote = await Quote.findOne({
               workspaceId: new mongoose.Types.ObjectId(workspaceId),
-              number: purchaseOrderNumber
+              number: purchaseOrderNumber,
             });
-            
+
             if (quote) {
               contractTotal = quote.finalTotalTTC || 0;
             }
           }
-          
+
           // Si pas de devis, calculer depuis la première facture de situation
           if (contractTotal === 0) {
             const firstSituationInvoice = await Invoice.findOne({
               workspaceId: new mongoose.Types.ObjectId(workspaceId),
-              invoiceType: 'situation',
-              purchaseOrderNumber: purchaseOrderNumber
+              invoiceType: "situation",
+              purchaseOrderNumber: purchaseOrderNumber,
             }).sort({ issueDate: 1, createdAt: 1 });
-            
+
             if (firstSituationInvoice && firstSituationInvoice.items) {
-              contractTotal = firstSituationInvoice.items.reduce((sum, item) => {
-                const quantity = item.quantity || 1;
-                const unitPrice = item.unitPrice || 0;
-                const vatRate = item.vatRate || 0;
-                const discount = item.discount || 0;
-                const discountType = item.discountType || 'PERCENTAGE';
-                
-                let lineTotal = quantity * unitPrice;
-                if (discountType === 'PERCENTAGE') {
-                  lineTotal = lineTotal * (1 - discount / 100);
-                } else {
-                  lineTotal = lineTotal - discount;
-                }
-                lineTotal = lineTotal * (1 + vatRate / 100);
-                
-                return sum + lineTotal;
-              }, 0);
+              contractTotal = firstSituationInvoice.items.reduce(
+                (sum, item) => {
+                  const quantity = item.quantity || 1;
+                  const unitPrice = item.unitPrice || 0;
+                  const vatRate = item.vatRate || 0;
+                  const discount = item.discount || 0;
+                  const discountType = item.discountType || "PERCENTAGE";
+
+                  let lineTotal = quantity * unitPrice;
+                  if (discountType === "PERCENTAGE") {
+                    lineTotal = lineTotal * (1 - discount / 100);
+                  } else {
+                    lineTotal = lineTotal - discount;
+                  }
+                  lineTotal = lineTotal * (1 + vatRate / 100);
+
+                  return sum + lineTotal;
+                },
+                0
+              );
             }
           }
-          
+
           // Calculer le total déjà facturé pour cette référence
           const existingSituationInvoices = await Invoice.find({
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            invoiceType: 'situation',
-            purchaseOrderNumber: purchaseOrderNumber
+            invoiceType: "situation",
+            purchaseOrderNumber: purchaseOrderNumber,
           });
-          
+
           const alreadyInvoicedTotal = existingSituationInvoices.reduce(
-            (sum, inv) => sum + (inv.finalTotalTTC || 0), 
+            (sum, inv) => sum + (inv.finalTotalTTC || 0),
             0
           );
-          
+
           // Calculer le total de la nouvelle facture à partir des items (car finalTotalTTC n'est pas envoyé dans l'input)
           let newInvoiceTotal = 0;
           if (input.items && input.items.length > 0) {
             // Appliquer la remise globale si présente
             const globalDiscount = input.discount || 0;
-            const globalDiscountType = input.discountType || 'PERCENTAGE';
-            
+            const globalDiscountType = input.discountType || "PERCENTAGE";
+
             let totalHT = 0;
             let totalVAT = 0;
-            
-            input.items.forEach(item => {
+
+            input.items.forEach((item) => {
               const quantity = parseFloat(item.quantity) || 1;
               const unitPrice = parseFloat(item.unitPrice) || 0;
               const vatRate = parseFloat(item.vatRate) || 0;
               const discount = parseFloat(item.discount) || 0;
-              const discountType = item.discountType || 'PERCENTAGE';
-              const progressPercentage = parseFloat(item.progressPercentage) || 100;
-              
+              const discountType = item.discountType || "PERCENTAGE";
+              const progressPercentage =
+                parseFloat(item.progressPercentage) || 100;
+
               // Calculer le total HT de la ligne avec avancement
               let lineHT = quantity * unitPrice * (progressPercentage / 100);
-              
+
               // Appliquer la remise de ligne
               if (discount > 0) {
-                if (discountType === 'PERCENTAGE') {
+                if (discountType === "PERCENTAGE") {
                   lineHT = lineHT * (1 - discount / 100);
                 } else {
                   lineHT = Math.max(0, lineHT - discount);
                 }
               }
-              
+
               totalHT += lineHT;
               totalVAT += lineHT * (vatRate / 100);
             });
-            
+
             // Appliquer la remise globale
             if (globalDiscount > 0) {
-              if (globalDiscountType === 'PERCENTAGE') {
+              if (globalDiscountType === "PERCENTAGE") {
                 const discountMultiplier = 1 - globalDiscount / 100;
                 totalHT = totalHT * discountMultiplier;
                 totalVAT = totalVAT * discountMultiplier;
@@ -597,23 +674,29 @@ const invoiceResolvers = {
                 // Remise fixe : répartir proportionnellement sur HT et TVA
                 const totalBeforeDiscount = totalHT + totalVAT;
                 if (totalBeforeDiscount > 0) {
-                  const discountRatio = Math.min(1, globalDiscount / totalBeforeDiscount);
+                  const discountRatio = Math.min(
+                    1,
+                    globalDiscount / totalBeforeDiscount
+                  );
                   totalHT = totalHT * (1 - discountRatio);
                   totalVAT = totalVAT * (1 - discountRatio);
                 }
               }
             }
-            
+
             newInvoiceTotal = totalHT + totalVAT;
           }
-          
+
           // Vérifier si le total dépasserait le contrat
-          if (contractTotal > 0 && (alreadyInvoicedTotal + newInvoiceTotal) > contractTotal) {
+          if (
+            contractTotal > 0 &&
+            alreadyInvoicedTotal + newInvoiceTotal > contractTotal
+          ) {
             const remaining = contractTotal - alreadyInvoicedTotal;
             throw createValidationError(
               `Le montant total des factures de situation dépasserait le montant du contrat`,
               {
-                situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`
+                situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`,
               }
             );
           }
@@ -623,9 +706,9 @@ const invoiceResolvers = {
           // Chercher la dernière facture créée pour récupérer son préfixe
           const lastInvoice = await Invoice.findOne({ workspaceId })
             .sort({ createdAt: -1 })
-            .select('prefix')
+            .select("prefix")
             .lean();
-          
+
           if (lastInvoice && lastInvoice.prefix) {
             prefix = lastInvoice.prefix;
           } else {
@@ -651,8 +734,8 @@ const invoiceResolvers = {
           for (const draft of conflictingDrafts) {
             const timestamp = Date.now() + Math.floor(Math.random() * 1000);
             // Extraire le numéro de base sans le préfixe DRAFT- s'il existe
-            const baseNumber = newNumber.startsWith('DRAFT-') 
-              ? newNumber.replace('DRAFT-', '') 
+            const baseNumber = newNumber.startsWith("DRAFT-")
+              ? newNumber.replace("DRAFT-", "")
               : newNumber;
             const finalDraftNumber = `DRAFT-${baseNumber}-${timestamp}`;
 
@@ -674,7 +757,7 @@ const invoiceResolvers = {
             // Si un numéro manuel est fourni, gérer les conflits d'abord
             await handleDraftConflicts(`DRAFT-${input.number}`);
           }
-          
+
           // Puis utiliser generateInvoiceNumber avec isDraft: true
           const currentUser = await mongoose
             .model("User")
@@ -772,6 +855,16 @@ const invoiceResolvers = {
             );
           }
 
+          // Log pour vérifier les champs de situation
+          if (input.invoiceType === "situation") {
+            console.log(`📝 Création facture de situation:`, {
+              invoiceType: input.invoiceType,
+              situationReference: input.situationReference,
+              contractTotal: input.contractTotal,
+              purchaseOrderNumber: input.purchaseOrderNumber,
+            });
+          }
+
           // Create invoice with company info from user's profile if not provided
           const invoice = new Invoice({
             ...input,
@@ -797,6 +890,19 @@ const invoiceResolvers = {
 
           try {
             await invoice.save();
+            console.log(
+              `✅ Facture sauvegardée avec succès: ${prefix}${number}`
+            );
+
+            // Log pour les factures de situation
+            if (invoice.invoiceType === "situation") {
+              console.log(`📊 Facture de situation sauvegardée:`, {
+                id: invoice._id,
+                situationReference: invoice.situationReference,
+                contractTotal: invoice.contractTotal,
+                purchaseOrderNumber: invoice.purchaseOrderNumber,
+              });
+            }
           } catch (saveError) {
             // Gestion spécifique des erreurs de clé dupliquée MongoDB
             if (saveError.code === 11000 && saveError.keyPattern?.number) {
@@ -815,23 +921,26 @@ const invoiceResolvers = {
                 $push: {
                   activity: {
                     id: new mongoose.Types.ObjectId().toString(),
-                    type: 'invoice_created',
+                    type: "invoice_created",
                     description: `a créé la facture ${prefix}${number}`,
                     userId: user._id,
                     userName: user.name || user.email,
                     userImage: user.image || null,
                     metadata: {
-                      documentType: 'invoice',
+                      documentType: "invoice",
                       documentId: invoice._id.toString(),
                       documentNumber: `${prefix}${number}`,
-                      status: invoice.status
+                      status: invoice.status,
                     },
-                    createdAt: new Date()
-                  }
-                }
+                    createdAt: new Date(),
+                  },
+                },
               });
             } catch (activityError) {
-              console.error('Erreur lors de l\'enregistrement de l\'activité:', activityError);
+              console.error(
+                "Erreur lors de l'enregistrement de l'activité:",
+                activityError
+              );
               // Ne pas faire échouer la création de facture si l'activité échoue
             }
           }
@@ -919,534 +1028,583 @@ const invoiceResolvers = {
     ),
 
     updateInvoice: requireCompanyInfo(
-      requireWrite("invoices")(async (_, { id, workspaceId, input }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
+      requireWrite("invoices")(
+        async (_, { id, workspaceId, input }, context) => {
+          const { user, workspaceId: contextWorkspaceId } = context;
 
-        // Rechercher la facture sans utiliser Mongoose pour éviter les validations automatiques
-        const invoiceData = await Invoice.findOne({
-          _id: id,
-          workspaceId: workspaceId, // ✅ Vérification workspace
-        }).lean();
+          // Rechercher la facture sans utiliser Mongoose pour éviter les validations automatiques
+          const invoiceData = await Invoice.findOne({
+            _id: id,
+            workspaceId: workspaceId, // ✅ Vérification workspace
+          }).lean();
 
-        if (!invoiceData) {
-          throw createNotFoundError("Facture");
-        }
-
-        // ✅ Vérifications de permissions granulaires
-        const { userRole } = context;
-        if (
-          userRole === "viewer" &&
-          invoiceData.createdBy.toString() !== user._id.toString()
-        ) {
-          throw new AppError(
-            "Permission refusée",
-            ERROR_CODES.FORBIDDEN
-          );
-        }
-
-        // ✅ Les permissions d'écriture sont déjà vérifiées par requireWrite("invoices")
-
-        // Vérifier si la facture peut être modifiée (statut)
-        if (invoiceData.status === "COMPLETED" && userRole !== "admin" && userRole !== "owner") {
-          throw createResourceLockedError("Cette facture est verrouillée");
-        }
-
-        if (invoiceData.status === "CANCELED") {
-          throw createResourceLockedError(
-            "Facture",
-            "une facture annulée ne peut pas être modifiée"
-          );
-        }
-
-        // Vérifier si l'utilisateur tente de modifier le numéro de facture
-        if (input.number && input.number !== invoiceData.number) {
-          // Vérifier si des factures avec le statut PENDING ou COMPLETED existent déjà
-          const pendingInvoicesCount = await Invoice.countDocuments({
-            workspaceId: workspaceId,
-            status: { $in: ["PENDING", "COMPLETED"] },
-            number: input.number,
-            prefix: invoiceData.prefix,
-            _id: { $ne: id },
-          });
-
-          if (pendingInvoicesCount > 0) {
-            throw new AppError(
-              `Le numéro de facture ${invoiceData.prefix}${input.number} existe déjà`,
-              ERROR_CODES.DUPLICATE_ERROR
-            );
-          }
-        }
-
-        // Créer une copie des données d'entrée pour éviter de modifier l'original
-        let updatedInput = { ...input };
-
-        // Validation du format du préfixe si fourni
-        if (updatedInput.prefix && !/^[A-Za-z0-9-]*$/.test(updatedInput.prefix)) {
-          throw createValidationError(
-            "Le préfixe de facture contient des caractères non autorisés",
-            {
-              prefix:
-                "Le préfixe ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
-            }
-          );
-        }
-
-        // Validation du format de la référence devis si fournie
-        if (updatedInput.purchaseOrderNumber && !/^[A-Za-z0-9-]*$/.test(updatedInput.purchaseOrderNumber)) {
-          throw createValidationError(
-            "La référence devis contient des caractères non autorisés",
-            {
-              purchaseOrderNumber:
-                "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
-            }
-          );
-        }
-
-        // Validation pour les factures de situation : vérifier que le total ne dépasse pas le contrat
-        const invoiceType = updatedInput.invoiceType || invoiceData.invoiceType;
-        const purchaseOrderNumber = updatedInput.purchaseOrderNumber || invoiceData.purchaseOrderNumber;
-        
-        if (invoiceType === 'situation' && purchaseOrderNumber) {
-          // Calculer le montant du contrat (depuis le devis ou la première facture de situation)
-          let contractTotal = 0;
-          
-          // Chercher le devis associé
-          if (purchaseOrderNumber.includes('-')) {
-            const lastDashIndex = purchaseOrderNumber.lastIndexOf('-');
-            const possiblePrefix = purchaseOrderNumber.substring(0, lastDashIndex);
-            const possibleNumber = purchaseOrderNumber.substring(lastDashIndex + 1);
-            
-            const quote = await Quote.findOne({
-              workspaceId: new mongoose.Types.ObjectId(workspaceId),
-              prefix: possiblePrefix,
-              number: possibleNumber
-            });
-            
-            if (quote) {
-              contractTotal = quote.finalTotalTTC || 0;
-            }
-          }
-          
-          if (contractTotal === 0) {
-            const quote = await Quote.findOne({
-              workspaceId: new mongoose.Types.ObjectId(workspaceId),
-              number: purchaseOrderNumber
-            });
-            
-            if (quote) {
-              contractTotal = quote.finalTotalTTC || 0;
-            }
-          }
-          
-          // Si pas de devis, calculer depuis la première facture de situation
-          if (contractTotal === 0) {
-            const firstSituationInvoice = await Invoice.findOne({
-              workspaceId: new mongoose.Types.ObjectId(workspaceId),
-              invoiceType: 'situation',
-              purchaseOrderNumber: purchaseOrderNumber
-            }).sort({ issueDate: 1, createdAt: 1 });
-            
-            if (firstSituationInvoice && firstSituationInvoice.items) {
-              contractTotal = firstSituationInvoice.items.reduce((sum, item) => {
-                const quantity = item.quantity || 1;
-                const unitPrice = item.unitPrice || 0;
-                const vatRate = item.vatRate || 0;
-                const discount = item.discount || 0;
-                const discountType = item.discountType || 'PERCENTAGE';
-                
-                let lineTotal = quantity * unitPrice;
-                if (discountType === 'PERCENTAGE') {
-                  lineTotal = lineTotal * (1 - discount / 100);
-                } else {
-                  lineTotal = lineTotal - discount;
-                }
-                lineTotal = lineTotal * (1 + vatRate / 100);
-                
-                return sum + lineTotal;
-              }, 0);
-            }
-          }
-          
-          // Calculer le total déjà facturé pour cette référence (excluant la facture actuelle)
-          const existingSituationInvoices = await Invoice.find({
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            invoiceType: 'situation',
-            purchaseOrderNumber: purchaseOrderNumber,
-            _id: { $ne: id } // Exclure la facture actuelle
-          });
-          
-          const alreadyInvoicedTotal = existingSituationInvoices.reduce(
-            (sum, inv) => sum + (inv.finalTotalTTC || 0), 
-            0
-          );
-          
-          // Calculer le total de la facture mise à jour à partir des items (car finalTotalTTC n'est pas envoyé dans l'input)
-          let newInvoiceTotal = 0;
-          const itemsToUse = updatedInput.items || invoiceData.items;
-          
-          if (itemsToUse && itemsToUse.length > 0) {
-            // Appliquer la remise globale si présente
-            const globalDiscount = updatedInput.discount !== undefined ? updatedInput.discount : (invoiceData.discount || 0);
-            const globalDiscountType = updatedInput.discountType || invoiceData.discountType || 'PERCENTAGE';
-            
-            let totalHT = 0;
-            let totalVAT = 0;
-            
-            itemsToUse.forEach(item => {
-              const quantity = parseFloat(item.quantity) || 1;
-              const unitPrice = parseFloat(item.unitPrice) || 0;
-              const vatRate = parseFloat(item.vatRate) || 0;
-              const discount = parseFloat(item.discount) || 0;
-              const discountType = item.discountType || 'PERCENTAGE';
-              const progressPercentage = parseFloat(item.progressPercentage) || 100;
-              
-              // Calculer le total HT de la ligne avec avancement
-              let lineHT = quantity * unitPrice * (progressPercentage / 100);
-              
-              // Appliquer la remise de ligne
-              if (discount > 0) {
-                if (discountType === 'PERCENTAGE') {
-                  lineHT = lineHT * (1 - discount / 100);
-                } else {
-                  lineHT = Math.max(0, lineHT - discount);
-                }
-              }
-              
-              totalHT += lineHT;
-              totalVAT += lineHT * (vatRate / 100);
-            });
-            
-            // Appliquer la remise globale
-            if (globalDiscount > 0) {
-              if (globalDiscountType === 'PERCENTAGE') {
-                const discountMultiplier = 1 - globalDiscount / 100;
-                totalHT = totalHT * discountMultiplier;
-                totalVAT = totalVAT * discountMultiplier;
-              } else {
-                // Remise fixe : répartir proportionnellement sur HT et TVA
-                const totalBeforeDiscount = totalHT + totalVAT;
-                if (totalBeforeDiscount > 0) {
-                  const discountRatio = Math.min(1, globalDiscount / totalBeforeDiscount);
-                  totalHT = totalHT * (1 - discountRatio);
-                  totalVAT = totalVAT * (1 - discountRatio);
-                }
-              }
-            }
-            
-            newInvoiceTotal = totalHT + totalVAT;
-          }
-          
-          // Vérifier si le total dépasserait le contrat
-          if (contractTotal > 0 && (alreadyInvoicedTotal + newInvoiceTotal) > contractTotal) {
-            const remaining = contractTotal - alreadyInvoicedTotal;
-            throw createValidationError(
-              `Le montant total des factures de situation dépasserait le montant du contrat`,
-              {
-                situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`
-              }
-            );
-          }
-        }
-
-        // Si les items sont modifiés, recalculer les totaux
-        if (updatedInput.items) {
-          const totals = calculateInvoiceTotals(
-            updatedInput.items,
-            updatedInput.discount || invoiceData.discount,
-            updatedInput.discountType || invoiceData.discountType,
-            updatedInput.shipping || invoiceData.shipping,
-            updatedInput.isReverseCharge !== undefined ? updatedInput.isReverseCharge : invoiceData.isReverseCharge
-          );
-          updatedInput = { ...updatedInput, ...totals };
-        }
-
-        // Préparer les données à mettre à jour - SEULEMENT les champs modifiés
-        const updateData = {};
-
-        // Mettre à jour les informations de l'entreprise si fournies
-        if (updatedInput.companyInfo) {
-          // Créer une copie des données de l'entreprise pour la mise à jour
-          updateData.companyInfo = {
-            ...invoiceData.companyInfo,
-            ...updatedInput.companyInfo,
-          };
-
-          // Gestion spéciale des coordonnées bancaires
-          if (updatedInput.companyInfo.bankDetails === null) {
-            // Si bankDetails est explicitement null, le supprimer complètement
-            delete updateData.companyInfo.bankDetails;
-          } else if (updatedInput.companyInfo.bankDetails) {
-            // Si bankDetails est fourni, vérifier que tous les champs requis sont présents
-            const { iban, bic, bankName } =
-              updatedInput.companyInfo.bankDetails;
-
-            // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
-            if (!iban || !bic || !bankName) {
-              delete updateData.companyInfo.bankDetails;
-            }
-          }
-        }
-
-        // Mettre à jour le client si fourni
-        if (updatedInput.client) {
-          // Vérifier si le client a une adresse de livraison différente
-          if (
-            updatedInput.client.hasDifferentShippingAddress === true &&
-            !updatedInput.client.shippingAddress
-          ) {
-            throw createValidationError(
-              "L'adresse de livraison est requise lorsque l'option \"Adresse de livraison différente\" est activée",
-              { "client.shippingAddress": "L'adresse de livraison est requise" }
-            );
-          }
-
-          updateData.client = {
-            ...invoiceData.client,
-            ...updatedInput.client,
-          };
-
-          // Mettre à jour l'adresse du client si fournie
-          if (updatedInput.client.address) {
-            updateData.client.address = {
-              ...(invoiceData.client.address || {}),
-              ...updatedInput.client.address,
-            };
-          }
-
-          // Mettre à jour l'adresse de livraison du client si fournie
-          if (updatedInput.client.shippingAddress) {
-            updateData.client.shippingAddress = {
-              ...(invoiceData.client.shippingAddress || {}),
-              ...updatedInput.client.shippingAddress,
-            };
-          }
-        }
-
-        // Gérer le lien des conditions générales
-        if (updatedInput.termsAndConditionsLink !== undefined) {
-          if (updatedInput.termsAndConditionsLink === "") {
-            // Si une chaîne vide est fournie, supprimer le lien
-            updateData.termsAndConditionsLink = null;
-          } else {
-            updateData.termsAndConditionsLink =
-              updatedInput.termsAndConditionsLink;
-          }
-        }
-
-        // Gestion spéciale de la transition DRAFT vers PENDING/COMPLETED
-        if (
-          invoiceData.status === "DRAFT" &&
-          updatedInput.status &&
-          updatedInput.status !== "DRAFT"
-        ) {
-          // La facture passe de brouillon à finalisée : générer un nouveau numéro séquentiel
-          const now = new Date();
-          const year = now.getFullYear();
-          const month = String(now.getMonth() + 1).padStart(2, "0");
-          const prefix = invoiceData.prefix || `F-${month}${year}`;
-
-          // Utiliser generateInvoiceNumber pour générer le prochain numéro séquentiel
-          // Cela garantit que le numéro est unique et suit la séquence correcte
-          const newNumber = await generateInvoiceNumber(prefix, {
-            workspaceId: workspaceId,
-            userId: context.user._id,
-            isPending: true,
-            year: year,
-          });
-
-          // Mettre à jour le numéro et le préfixe
-          updateData.number = newNumber;
-          updateData.prefix = prefix;
-        }
-
-        // Fusionner toutes les autres mises à jour
-        Object.keys(updatedInput).forEach((key) => {
-          if (
-            key !== "client" &&
-            key !== "companyInfo" &&
-            key !== "termsAndConditionsLink"
-          ) {
-            // Éviter de mettre à jour le numéro s'il n'a pas changé pour éviter l'erreur de clé dupliquée
-            if (key === "number" && updatedInput[key] === invoiceData.number) {
-              return; // Skip this field
-            }
-            // Ne JAMAIS écraser le numéro si on vient de le générer pour la transition DRAFT->PENDING
-            if (
-              key === "number" &&
-              invoiceData.status === "DRAFT" &&
-              updatedInput.status &&
-              updatedInput.status !== "DRAFT"
-            ) {
-              return; // Skip this field car déjà géré ci-dessus avec un numéro séquentiel
-            }
-            // Préserver le numéro existant pour les brouillons qui restent en DRAFT
-            if (
-              key === "number" &&
-              invoiceData.status === "DRAFT" &&
-              (!updatedInput.status || updatedInput.status === "DRAFT")
-            ) {
-              return; // Skip this field - garder le numéro existant pour les brouillons
-            }
-            updateData[key] = updatedInput[key];
-          }
-        });
-
-        try {
-          // Désactiver temporairement les validations pour les coordonnées bancaires
-          // car elles sont gérées manuellement dans le code ci-dessus
-          const originalValidate = Invoice.schema.path(
-            "companyInfo.bankDetails.iban"
-          )?.validators;
-          const originalValidateBic = Invoice.schema.path(
-            "companyInfo.bankDetails.bic"
-          )?.validators;
-          const originalValidateBankName = Invoice.schema.path(
-            "companyInfo.bankDetails.bankName"
-          )?.validators;
-
-          // Supprimer temporairement les validateurs
-          if (originalValidate) {
-            Invoice.schema.path("companyInfo.bankDetails.iban").validators = [];
-          }
-          if (originalValidateBic) {
-            Invoice.schema.path("companyInfo.bankDetails.bic").validators = [];
-          }
-          if (originalValidateBankName) {
-            Invoice.schema.path("companyInfo.bankDetails.bankName").validators =
-              [];
-          }
-
-          // Mettre à jour la facture
-          const updatedInvoice = await Invoice.findOneAndUpdate(
-            { _id: id, workspaceId: workspaceId },
-            { $set: updateData },
-            { new: true, runValidators: true }
-          ).populate("createdBy");
-
-          // Rétablir les validateurs
-          if (originalValidate) {
-            Invoice.schema.path("companyInfo.bankDetails.iban").validators =
-              originalValidate;
-          }
-          if (originalValidateBic) {
-            Invoice.schema.path("companyInfo.bankDetails.bic").validators =
-              originalValidateBic;
-          }
-          if (originalValidateBankName) {
-            Invoice.schema.path("companyInfo.bankDetails.bankName").validators =
-              originalValidateBankName;
-          }
-
-          if (!updatedInvoice) {
+          if (!invoiceData) {
             throw createNotFoundError("Facture");
           }
 
-          // Mettre à jour l'événement de calendrier si la date d'échéance a changé
-          if (updatedInvoice.dueDate) {
-            try {
-              await Event.updateInvoiceEvent(updatedInvoice, user.id);
-            } catch (eventError) {
-              console.error(
-                "Erreur lors de la mise à jour de l'événement de calendrier:",
-                eventError
-              );
-              // Ne pas faire échouer la mise à jour de facture si l'événement échoue
-            }
+          // ✅ Vérifications de permissions granulaires
+          const { userRole } = context;
+          if (
+            userRole === "viewer" &&
+            invoiceData.createdBy.toString() !== user._id.toString()
+          ) {
+            throw new AppError("Permission refusée", ERROR_CODES.FORBIDDEN);
           }
 
-          return updatedInvoice;
-        } catch (error) {
-          // Intercepter les erreurs de validation Mongoose
-          console.error("Erreur lors de la mise à jour de la facture:", error);
+          // ✅ Les permissions d'écriture sont déjà vérifiées par requireWrite("invoices")
 
-          // Si c'est une erreur de validation Mongoose
-          if (error.name === "ValidationError") {
-            const validationErrors = {};
+          // Vérifier si la facture peut être modifiée (statut)
+          if (
+            invoiceData.status === "COMPLETED" &&
+            userRole !== "admin" &&
+            userRole !== "owner"
+          ) {
+            throw createResourceLockedError("Cette facture est verrouillée");
+          }
 
-            // Transformer les erreurs Mongoose en format plus lisible
-            Object.keys(error.errors).forEach((key) => {
-              validationErrors[key] = error.errors[key].message;
-            });
-
-            throw createValidationError(
-              "La facture contient des erreurs de validation",
-              validationErrors
+          if (invoiceData.status === "CANCELED") {
+            throw createResourceLockedError(
+              "Facture",
+              "une facture annulée ne peut pas être modifiée"
             );
           }
 
-          // Si c'est une autre erreur, la propager
-          throw new AppError(
-            `Erreur de mise à jour: ${error.message}`,
-            ERROR_CODES.VALIDATION_ERROR
-          );
+          // Vérifier si l'utilisateur tente de modifier le numéro de facture
+          if (input.number && input.number !== invoiceData.number) {
+            // Vérifier si des factures avec le statut PENDING ou COMPLETED existent déjà
+            const pendingInvoicesCount = await Invoice.countDocuments({
+              workspaceId: workspaceId,
+              status: { $in: ["PENDING", "COMPLETED"] },
+              number: input.number,
+              prefix: invoiceData.prefix,
+              _id: { $ne: id },
+            });
+
+            if (pendingInvoicesCount > 0) {
+              throw new AppError(
+                `Le numéro de facture ${invoiceData.prefix}${input.number} existe déjà`,
+                ERROR_CODES.DUPLICATE_ERROR
+              );
+            }
+          }
+
+          // Créer une copie des données d'entrée pour éviter de modifier l'original
+          let updatedInput = { ...input };
+
+          // Validation du format du préfixe si fourni
+          if (
+            updatedInput.prefix &&
+            !/^[A-Za-z0-9-]*$/.test(updatedInput.prefix)
+          ) {
+            throw createValidationError(
+              "Le préfixe de facture contient des caractères non autorisés",
+              {
+                prefix:
+                  "Le préfixe ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+              }
+            );
+          }
+
+          // Validation du format de la référence devis si fournie
+          if (
+            updatedInput.purchaseOrderNumber &&
+            !/^[A-Za-z0-9-]*$/.test(updatedInput.purchaseOrderNumber)
+          ) {
+            throw createValidationError(
+              "La référence devis contient des caractères non autorisés",
+              {
+                purchaseOrderNumber:
+                  "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+              }
+            );
+          }
+
+          // Validation pour les factures de situation : vérifier que le total ne dépasse pas le contrat
+          const invoiceType =
+            updatedInput.invoiceType || invoiceData.invoiceType;
+          const purchaseOrderNumber =
+            updatedInput.purchaseOrderNumber || invoiceData.purchaseOrderNumber;
+
+          if (invoiceType === "situation" && purchaseOrderNumber) {
+            // Calculer le montant du contrat (depuis le devis ou la première facture de situation)
+            let contractTotal = 0;
+
+            // Chercher le devis associé
+            if (purchaseOrderNumber.includes("-")) {
+              const lastDashIndex = purchaseOrderNumber.lastIndexOf("-");
+              const possiblePrefix = purchaseOrderNumber.substring(
+                0,
+                lastDashIndex
+              );
+              const possibleNumber = purchaseOrderNumber.substring(
+                lastDashIndex + 1
+              );
+
+              const quote = await Quote.findOne({
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                prefix: possiblePrefix,
+                number: possibleNumber,
+              });
+
+              if (quote) {
+                contractTotal = quote.finalTotalTTC || 0;
+              }
+            }
+
+            if (contractTotal === 0) {
+              const quote = await Quote.findOne({
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                number: purchaseOrderNumber,
+              });
+
+              if (quote) {
+                contractTotal = quote.finalTotalTTC || 0;
+              }
+            }
+
+            // Si pas de devis, calculer depuis la première facture de situation
+            if (contractTotal === 0) {
+              const firstSituationInvoice = await Invoice.findOne({
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                invoiceType: "situation",
+                purchaseOrderNumber: purchaseOrderNumber,
+              }).sort({ issueDate: 1, createdAt: 1 });
+
+              if (firstSituationInvoice && firstSituationInvoice.items) {
+                contractTotal = firstSituationInvoice.items.reduce(
+                  (sum, item) => {
+                    const quantity = item.quantity || 1;
+                    const unitPrice = item.unitPrice || 0;
+                    const vatRate = item.vatRate || 0;
+                    const discount = item.discount || 0;
+                    const discountType = item.discountType || "PERCENTAGE";
+
+                    let lineTotal = quantity * unitPrice;
+                    if (discountType === "PERCENTAGE") {
+                      lineTotal = lineTotal * (1 - discount / 100);
+                    } else {
+                      lineTotal = lineTotal - discount;
+                    }
+                    lineTotal = lineTotal * (1 + vatRate / 100);
+
+                    return sum + lineTotal;
+                  },
+                  0
+                );
+              }
+            }
+
+            // Calculer le total déjà facturé pour cette référence (excluant la facture actuelle)
+            const existingSituationInvoices = await Invoice.find({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              invoiceType: "situation",
+              purchaseOrderNumber: purchaseOrderNumber,
+              _id: { $ne: id }, // Exclure la facture actuelle
+            });
+
+            const alreadyInvoicedTotal = existingSituationInvoices.reduce(
+              (sum, inv) => sum + (inv.finalTotalTTC || 0),
+              0
+            );
+
+            // Calculer le total de la facture mise à jour à partir des items (car finalTotalTTC n'est pas envoyé dans l'input)
+            let newInvoiceTotal = 0;
+            const itemsToUse = updatedInput.items || invoiceData.items;
+
+            if (itemsToUse && itemsToUse.length > 0) {
+              // Appliquer la remise globale si présente
+              const globalDiscount =
+                updatedInput.discount !== undefined
+                  ? updatedInput.discount
+                  : invoiceData.discount || 0;
+              const globalDiscountType =
+                updatedInput.discountType ||
+                invoiceData.discountType ||
+                "PERCENTAGE";
+
+              let totalHT = 0;
+              let totalVAT = 0;
+
+              itemsToUse.forEach((item) => {
+                const quantity = parseFloat(item.quantity) || 1;
+                const unitPrice = parseFloat(item.unitPrice) || 0;
+                const vatRate = parseFloat(item.vatRate) || 0;
+                const discount = parseFloat(item.discount) || 0;
+                const discountType = item.discountType || "PERCENTAGE";
+                const progressPercentage =
+                  parseFloat(item.progressPercentage) || 100;
+
+                // Calculer le total HT de la ligne avec avancement
+                let lineHT = quantity * unitPrice * (progressPercentage / 100);
+
+                // Appliquer la remise de ligne
+                if (discount > 0) {
+                  if (discountType === "PERCENTAGE") {
+                    lineHT = lineHT * (1 - discount / 100);
+                  } else {
+                    lineHT = Math.max(0, lineHT - discount);
+                  }
+                }
+
+                totalHT += lineHT;
+                totalVAT += lineHT * (vatRate / 100);
+              });
+
+              // Appliquer la remise globale
+              if (globalDiscount > 0) {
+                if (globalDiscountType === "PERCENTAGE") {
+                  const discountMultiplier = 1 - globalDiscount / 100;
+                  totalHT = totalHT * discountMultiplier;
+                  totalVAT = totalVAT * discountMultiplier;
+                } else {
+                  // Remise fixe : répartir proportionnellement sur HT et TVA
+                  const totalBeforeDiscount = totalHT + totalVAT;
+                  if (totalBeforeDiscount > 0) {
+                    const discountRatio = Math.min(
+                      1,
+                      globalDiscount / totalBeforeDiscount
+                    );
+                    totalHT = totalHT * (1 - discountRatio);
+                    totalVAT = totalVAT * (1 - discountRatio);
+                  }
+                }
+              }
+
+              newInvoiceTotal = totalHT + totalVAT;
+            }
+
+            // Vérifier si le total dépasserait le contrat
+            if (
+              contractTotal > 0 &&
+              alreadyInvoicedTotal + newInvoiceTotal > contractTotal
+            ) {
+              const remaining = contractTotal - alreadyInvoicedTotal;
+              throw createValidationError(
+                `Le montant total des factures de situation dépasserait le montant du contrat`,
+                {
+                  situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`,
+                }
+              );
+            }
+          }
+
+          // Si les items sont modifiés, recalculer les totaux
+          if (updatedInput.items) {
+            const totals = calculateInvoiceTotals(
+              updatedInput.items,
+              updatedInput.discount || invoiceData.discount,
+              updatedInput.discountType || invoiceData.discountType,
+              updatedInput.shipping || invoiceData.shipping,
+              updatedInput.isReverseCharge !== undefined
+                ? updatedInput.isReverseCharge
+                : invoiceData.isReverseCharge
+            );
+            updatedInput = { ...updatedInput, ...totals };
+          }
+
+          // Préparer les données à mettre à jour - SEULEMENT les champs modifiés
+          const updateData = {};
+
+          // Mettre à jour les informations de l'entreprise si fournies
+          if (updatedInput.companyInfo) {
+            // Créer une copie des données de l'entreprise pour la mise à jour
+            updateData.companyInfo = {
+              ...invoiceData.companyInfo,
+              ...updatedInput.companyInfo,
+            };
+
+            // Gestion spéciale des coordonnées bancaires
+            if (updatedInput.companyInfo.bankDetails === null) {
+              // Si bankDetails est explicitement null, le supprimer complètement
+              delete updateData.companyInfo.bankDetails;
+            } else if (updatedInput.companyInfo.bankDetails) {
+              // Si bankDetails est fourni, vérifier que tous les champs requis sont présents
+              const { iban, bic, bankName } =
+                updatedInput.companyInfo.bankDetails;
+
+              // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
+              if (!iban || !bic || !bankName) {
+                delete updateData.companyInfo.bankDetails;
+              }
+            }
+          }
+
+          // Mettre à jour le client si fourni
+          if (updatedInput.client) {
+            // Vérifier si le client a une adresse de livraison différente
+            if (
+              updatedInput.client.hasDifferentShippingAddress === true &&
+              !updatedInput.client.shippingAddress
+            ) {
+              throw createValidationError(
+                "L'adresse de livraison est requise lorsque l'option \"Adresse de livraison différente\" est activée",
+                {
+                  "client.shippingAddress":
+                    "L'adresse de livraison est requise",
+                }
+              );
+            }
+
+            updateData.client = {
+              ...invoiceData.client,
+              ...updatedInput.client,
+            };
+
+            // Mettre à jour l'adresse du client si fournie
+            if (updatedInput.client.address) {
+              updateData.client.address = {
+                ...(invoiceData.client.address || {}),
+                ...updatedInput.client.address,
+              };
+            }
+
+            // Mettre à jour l'adresse de livraison du client si fournie
+            if (updatedInput.client.shippingAddress) {
+              updateData.client.shippingAddress = {
+                ...(invoiceData.client.shippingAddress || {}),
+                ...updatedInput.client.shippingAddress,
+              };
+            }
+          }
+
+          // Gérer le lien des conditions générales
+          if (updatedInput.termsAndConditionsLink !== undefined) {
+            if (updatedInput.termsAndConditionsLink === "") {
+              // Si une chaîne vide est fournie, supprimer le lien
+              updateData.termsAndConditionsLink = null;
+            } else {
+              updateData.termsAndConditionsLink =
+                updatedInput.termsAndConditionsLink;
+            }
+          }
+
+          // Gestion spéciale de la transition DRAFT vers PENDING/COMPLETED
+          if (
+            invoiceData.status === "DRAFT" &&
+            updatedInput.status &&
+            updatedInput.status !== "DRAFT"
+          ) {
+            // La facture passe de brouillon à finalisée : générer un nouveau numéro séquentiel
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            const prefix = invoiceData.prefix || `F-${month}${year}`;
+
+            // Utiliser generateInvoiceNumber pour générer le prochain numéro séquentiel
+            // Cela garantit que le numéro est unique et suit la séquence correcte
+            const newNumber = await generateInvoiceNumber(prefix, {
+              workspaceId: workspaceId,
+              userId: context.user._id,
+              isPending: true,
+              year: year,
+            });
+
+            // Mettre à jour le numéro et le préfixe
+            updateData.number = newNumber;
+            updateData.prefix = prefix;
+          }
+
+          // Fusionner toutes les autres mises à jour
+          Object.keys(updatedInput).forEach((key) => {
+            if (
+              key !== "client" &&
+              key !== "companyInfo" &&
+              key !== "termsAndConditionsLink"
+            ) {
+              // Éviter de mettre à jour le numéro s'il n'a pas changé pour éviter l'erreur de clé dupliquée
+              if (
+                key === "number" &&
+                updatedInput[key] === invoiceData.number
+              ) {
+                return; // Skip this field
+              }
+              // Ne JAMAIS écraser le numéro si on vient de le générer pour la transition DRAFT->PENDING
+              if (
+                key === "number" &&
+                invoiceData.status === "DRAFT" &&
+                updatedInput.status &&
+                updatedInput.status !== "DRAFT"
+              ) {
+                return; // Skip this field car déjà géré ci-dessus avec un numéro séquentiel
+              }
+              // Préserver le numéro existant pour les brouillons qui restent en DRAFT
+              if (
+                key === "number" &&
+                invoiceData.status === "DRAFT" &&
+                (!updatedInput.status || updatedInput.status === "DRAFT")
+              ) {
+                return; // Skip this field - garder le numéro existant pour les brouillons
+              }
+              updateData[key] = updatedInput[key];
+            }
+          });
+
+          try {
+            // Désactiver temporairement les validations pour les coordonnées bancaires
+            // car elles sont gérées manuellement dans le code ci-dessus
+            const originalValidate = Invoice.schema.path(
+              "companyInfo.bankDetails.iban"
+            )?.validators;
+            const originalValidateBic = Invoice.schema.path(
+              "companyInfo.bankDetails.bic"
+            )?.validators;
+            const originalValidateBankName = Invoice.schema.path(
+              "companyInfo.bankDetails.bankName"
+            )?.validators;
+
+            // Supprimer temporairement les validateurs
+            if (originalValidate) {
+              Invoice.schema.path("companyInfo.bankDetails.iban").validators =
+                [];
+            }
+            if (originalValidateBic) {
+              Invoice.schema.path("companyInfo.bankDetails.bic").validators =
+                [];
+            }
+            if (originalValidateBankName) {
+              Invoice.schema.path(
+                "companyInfo.bankDetails.bankName"
+              ).validators = [];
+            }
+
+            // Mettre à jour la facture
+            const updatedInvoice = await Invoice.findOneAndUpdate(
+              { _id: id, workspaceId: workspaceId },
+              { $set: updateData },
+              { new: true, runValidators: true }
+            ).populate("createdBy");
+
+            // Rétablir les validateurs
+            if (originalValidate) {
+              Invoice.schema.path("companyInfo.bankDetails.iban").validators =
+                originalValidate;
+            }
+            if (originalValidateBic) {
+              Invoice.schema.path("companyInfo.bankDetails.bic").validators =
+                originalValidateBic;
+            }
+            if (originalValidateBankName) {
+              Invoice.schema.path(
+                "companyInfo.bankDetails.bankName"
+              ).validators = originalValidateBankName;
+            }
+
+            if (!updatedInvoice) {
+              throw createNotFoundError("Facture");
+            }
+
+            // Mettre à jour l'événement de calendrier si la date d'échéance a changé
+            if (updatedInvoice.dueDate) {
+              try {
+                await Event.updateInvoiceEvent(updatedInvoice, user.id);
+              } catch (eventError) {
+                console.error(
+                  "Erreur lors de la mise à jour de l'événement de calendrier:",
+                  eventError
+                );
+                // Ne pas faire échouer la mise à jour de facture si l'événement échoue
+              }
+            }
+
+            return updatedInvoice;
+          } catch (error) {
+            // Intercepter les erreurs de validation Mongoose
+            console.error(
+              "Erreur lors de la mise à jour de la facture:",
+              error
+            );
+
+            // Si c'est une erreur de validation Mongoose
+            if (error.name === "ValidationError") {
+              const validationErrors = {};
+
+              // Transformer les erreurs Mongoose en format plus lisible
+              Object.keys(error.errors).forEach((key) => {
+                validationErrors[key] = error.errors[key].message;
+              });
+
+              throw createValidationError(
+                "La facture contient des erreurs de validation",
+                validationErrors
+              );
+            }
+
+            // Si c'est une autre erreur, la propager
+            throw new AppError(
+              `Erreur de mise à jour: ${error.message}`,
+              ERROR_CODES.VALIDATION_ERROR
+            );
+          }
         }
-      })
+      )
     ),
 
-    deleteInvoice: requireDelete("invoices")(async (_, { id, workspaceId }, context) => {
-      const { user, workspaceId: contextWorkspaceId } = context;
+    deleteInvoice: requireDelete("invoices")(
+      async (_, { id, workspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
 
-      // ✅ Les permissions de suppression sont déjà vérifiées par requireDelete("invoices")
+        // ✅ Les permissions de suppression sont déjà vérifiées par requireDelete("invoices")
 
-      const invoice = await Invoice.findOne({
-        _id: id,
-        workspaceId: workspaceId,
-      });
+        const invoice = await Invoice.findOne({
+          _id: id,
+          workspaceId: workspaceId,
+        });
 
-      if (!invoice) {
-        throw createNotFoundError("Facture");
-      }
-
-      if (invoice.status === "COMPLETED") {
-        throw createResourceLockedError(
-          "Impossible de supprimer une facture finalisée"
-        );
-      }
-
-      // Si la facture est liée à un devis, retirer le lien du devis
-
-      let sourceQuoteId = invoice.sourceQuote;
-
-      // Si sourceQuote n'existe pas, chercher le devis qui contient cette facture
-      if (!sourceQuoteId) {
-        const quote = await Quote.findOne({ linkedInvoices: invoice._id });
-        if (quote) {
-          sourceQuoteId = quote._id;
-          // Mettre à jour la facture avec le sourceQuote manquant
-          invoice.sourceQuote = sourceQuoteId;
-          await invoice.save();
+        if (!invoice) {
+          throw createNotFoundError("Facture");
         }
+
+        if (invoice.status === "COMPLETED") {
+          throw createResourceLockedError(
+            "Impossible de supprimer une facture finalisée"
+          );
+        }
+
+        // Si la facture est liée à un devis, retirer le lien du devis
+
+        let sourceQuoteId = invoice.sourceQuote;
+
+        // Si sourceQuote n'existe pas, chercher le devis qui contient cette facture
+        if (!sourceQuoteId) {
+          const quote = await Quote.findOne({ linkedInvoices: invoice._id });
+          if (quote) {
+            sourceQuoteId = quote._id;
+            // Mettre à jour la facture avec le sourceQuote manquant
+            invoice.sourceQuote = sourceQuoteId;
+            await invoice.save();
+          }
+        }
+
+        // Supprimer le lien du devis si un devis source a été trouvé
+        if (sourceQuoteId) {
+          await Quote.updateOne(
+            { _id: sourceQuoteId },
+            { $pull: { linkedInvoices: invoice._id } }
+          );
+        }
+
+        // Supprimer l'événement de calendrier associé à la facture
+        try {
+          await Event.deleteInvoiceEvent(invoice._id, context.user._id);
+        } catch (eventError) {
+          console.error(
+            "Erreur lors de la suppression de l'événement de calendrier:",
+            eventError
+          );
+          // Ne pas faire échouer la suppression de facture si l'événement échoue
+        }
+
+        await Invoice.deleteOne({ _id: id, workspaceId: workspaceId });
+
+        // Supprimer les événements liés
+        await Event.deleteMany({
+          invoiceId: id,
+          workspaceId: workspaceId,
+        });
+
+        return true;
       }
-
-      // Supprimer le lien du devis si un devis source a été trouvé
-      if (sourceQuoteId) {
-        await Quote.updateOne(
-          { _id: sourceQuoteId },
-          { $pull: { linkedInvoices: invoice._id } }
-        );
-      }
-
-      // Supprimer l'événement de calendrier associé à la facture
-      try {
-        await Event.deleteInvoiceEvent(invoice._id, context.user._id);
-      } catch (eventError) {
-        console.error(
-          "Erreur lors de la suppression de l'événement de calendrier:",
-          eventError
-        );
-        // Ne pas faire échouer la suppression de facture si l'événement échoue
-      }
-
-      await Invoice.deleteOne({ _id: id, workspaceId: workspaceId });
-
-      // Supprimer les événements liés
-      await Event.deleteMany({
-        invoiceId: id,
-        workspaceId: workspaceId,
-      });
-
-      return true;
-    }),
+    ),
 
     changeInvoiceStatus: requireWrite("invoices")(
       async (_, { id, workspaceId, status }, context) => {
@@ -1522,17 +1680,17 @@ const invoiceResolvers = {
           // Récupérer le préfixe de la dernière facture créée (non-DRAFT)
           const lastInvoice = await Invoice.findOne({
             workspaceId: workspaceId,
-            status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
+            status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
           })
             .sort({ createdAt: -1 })
-            .select('prefix')
+            .select("prefix")
             .lean();
-          
+
           // Définir l'année et la date pour les fonctions de génération de numéro
           const now = new Date();
           const year = now.getFullYear();
-          const month = String(now.getMonth() + 1).padStart(2, '0');
-          
+          const month = String(now.getMonth() + 1).padStart(2, "0");
+
           let prefix;
           if (lastInvoice && lastInvoice.prefix) {
             // Utiliser le préfixe de la dernière facture
@@ -1541,8 +1699,11 @@ const invoiceResolvers = {
             // Aucune facture existante, utiliser le préfixe par défaut
             prefix = `F-${month}${year}`;
           }
-          
-          console.log('🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:', prefix);
+
+          console.log(
+            "🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:",
+            prefix
+          );
 
           // Utiliser la fonction handleDraftValidation pour respecter la séquence
           const newNumber = await generateInvoiceNumber(prefix, {
@@ -1567,33 +1728,36 @@ const invoiceResolvers = {
         if (invoice.client && invoice.client.id) {
           try {
             const statusLabels = {
-              'DRAFT': 'Brouillon',
-              'PENDING': 'En attente',
-              'COMPLETED': 'Payée',
-              'CANCELED': 'Annulée'
+              DRAFT: "Brouillon",
+              PENDING: "En attente",
+              COMPLETED: "Payée",
+              CANCELED: "Annulée",
             };
-            
+
             await Client.findByIdAndUpdate(invoice.client.id, {
               $push: {
                 activity: {
                   id: new mongoose.Types.ObjectId().toString(),
-                  type: 'invoice_status_changed',
+                  type: "invoice_status_changed",
                   description: `a changé le statut de la facture ${invoice.prefix}${invoice.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
                   userId: user._id,
                   userName: user.name || user.email,
                   userImage: user.image || null,
                   metadata: {
-                    documentType: 'invoice',
+                    documentType: "invoice",
                     documentId: invoice._id.toString(),
                     documentNumber: `${invoice.prefix}${invoice.number}`,
-                    status: status
+                    status: status,
                   },
-                  createdAt: new Date()
-                }
-              }
+                  createdAt: new Date(),
+                },
+              },
             });
           } catch (activityError) {
-            console.error('Erreur lors de l\'enregistrement de l\'activité:', activityError);
+            console.error(
+              "Erreur lors de l'enregistrement de l'activité:",
+              activityError
+            );
             // Ne pas faire échouer le changement de statut si l'activité échoue
           }
         }
@@ -1668,27 +1832,25 @@ const invoiceResolvers = {
       }
     ),
 
-    sendInvoice: requireWrite("invoices")(async (_, { id, workspaceId }, context) => {
-      const { user } = context;
-      const invoice = await Invoice.findOne({ _id: id, workspaceId });
+    sendInvoice: requireWrite("invoices")(
+      async (_, { id, workspaceId }, context) => {
+        const { user } = context;
+        const invoice = await Invoice.findOne({ _id: id, workspaceId });
 
-      if (!invoice) {
-        throw createNotFoundError("Facture");
+        if (!invoice) {
+          throw createNotFoundError("Facture");
+        }
+
+        // Ici, vous pourriez implémenter la logique d'envoi d'email
+        // Pour l'instant, nous simulons un succès
+        // TODO: Implémenter l'envoi réel de la facture par email
+
+        return true;
       }
-
-      // Ici, vous pourriez implémenter la logique d'envoi d'email
-      // Pour l'instant, nous simulons un succès
-      // TODO: Implémenter l'envoi réel de la facture par email
-
-      return true;
-    }),
+    ),
 
     createLinkedInvoice: requireWrite("invoices")(
-      async (
-        _,
-        { quoteId, amount, isDeposit, workspaceId },
-        context
-      ) => {
+      async (_, { quoteId, amount, isDeposit, workspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
         // Validation et conversion explicite du montant
         const numericAmount = parseFloat(amount);

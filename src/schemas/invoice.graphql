@@ -10,6 +10,7 @@ type Invoice {
   isDeposit: Boolean!
   invoiceType: String
   situationNumber: Int
+  situationReference: String
   client: EmbeddedClient!
   companyInfo: Company!
   items: [Item!]!
@@ -79,6 +80,8 @@ input CreateInvoiceInput {
   number: String
   prefix: String
   purchaseOrderNumber: String
+  situationReference: String
+  contractTotal: Float
   showBankDetails: Boolean
   bankDetails: BankDetailsInput
   appearance: AppearanceInput
@@ -110,6 +113,8 @@ input UpdateInvoiceInput {
   number: String
   prefix: String
   purchaseOrderNumber: String
+  situationReference: String
+  contractTotal: Float
   showBankDetails: Boolean
   bankDetails: BankDetailsInput
   appearance: AppearanceInput
@@ -131,7 +136,10 @@ extend type Query {
   ): InvoicePagination!
   invoiceStats(workspaceId: ID!): InvoiceStats!
   nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
-  situationInvoicesByQuoteRef(workspaceId: ID!, purchaseOrderNumber: String!): [Invoice!]!
+  situationInvoicesByQuoteRef(
+    workspaceId: ID!
+    purchaseOrderNumber: String!
+  ): [Invoice!]!
   situationReferences(workspaceId: ID!, search: String): [SituationReference!]!
 }
 

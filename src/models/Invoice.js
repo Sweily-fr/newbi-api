@@ -77,8 +77,8 @@ const invoiceSchema = new mongoose.Schema(
     },
     invoiceType: {
       type: String,
-      enum: ['standard', 'deposit', 'situation'],
-      default: 'standard',
+      enum: ["standard", "deposit", "situation"],
+      default: "standard",
     },
     situationNumber: {
       type: Number,
@@ -187,6 +187,26 @@ const invoiceSchema = new mongoose.Schema(
         },
         message:
           "Le numéro de bon de commande doit contenir uniquement des lettres, chiffres, tirets ou slashs (max 50 caractères)",
+      },
+    },
+    situationReference: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: function (value) {
+          return !value || /^[A-Za-z0-9-_\s]{1,100}$/.test(value);
+        },
+        message:
+          "La référence de situation doit contenir uniquement des lettres, chiffres, tirets, underscores ou espaces (max 100 caractères)",
+      },
+    },
+    contractTotal: {
+      type: Number,
+      min: 0,
+      default: 0,
+      validate: {
+        validator: isPositiveAmount,
+        message: "Le montant total du contrat doit être un nombre positif",
       },
     },
     discount: {
