@@ -60,6 +60,10 @@ type EmailSignature {
   detailedSpacing: Boolean!
   paddings: DetailedPaddings
   
+  # Ordre des éléments (drag & drop)
+  elementsOrder: [String!]
+  horizontalLayout: HorizontalLayout
+  
   # Typographie
   fontFamily: String!
   fontSize: FontSizes!
@@ -110,6 +114,12 @@ type CustomSocialIcons {
 type ColumnWidths {
   photo: Int!
   content: Int!
+}
+
+type HorizontalLayout {
+  leftColumn: [String!]
+  rightColumn: [String!]
+  bottomRow: [String!]
 }
 
 type SignatureSpacings {
@@ -264,6 +274,10 @@ input EmailSignatureInput {
   detailedSpacing: Boolean
   paddings: DetailedPaddingsInput
   
+  # Ordre des éléments (drag & drop)
+  elementsOrder: [String!]
+  horizontalLayout: HorizontalLayoutInput
+  
   # Typographie
   fontFamily: String
   fontSize: FontSizesInput
@@ -309,6 +323,12 @@ input CustomSocialIconsInput {
 input ColumnWidthsInput {
   photo: Int
   content: Int
+}
+
+input HorizontalLayoutInput {
+  leftColumn: [String!]
+  rightColumn: [String!]
+  bottomRow: [String!]
 }
 
 input SignatureSpacingsInput {
@@ -417,6 +437,10 @@ input UpdateEmailSignatureInput {
   spacings: SignatureSpacingsInput
   detailedSpacing: Boolean
   paddings: DetailedPaddingsInput
+  
+  # Ordre des éléments (drag & drop)
+  elementsOrder: [String!]
+  horizontalLayout: HorizontalLayoutInput
   
   # Typographie
   fontFamily: String
