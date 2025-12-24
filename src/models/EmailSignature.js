@@ -486,6 +486,28 @@ const emailSignatureSchema = new mongoose.Schema(
       },
     },
 
+    // Ordre des éléments (drag & drop)
+    elementsOrder: {
+      type: [String],
+      default: ['photo', 'fullName', 'position', 'company', 'separator', 'contact', 'logo', 'social'],
+    },
+
+    // Layout horizontal (3 zones)
+    horizontalLayout: {
+      leftColumn: {
+        type: [String],
+        default: ['photo', 'fullName', 'position', 'company'],
+      },
+      rightColumn: {
+        type: [String],
+        default: ['contact'],
+      },
+      bottomRow: {
+        type: [String],
+        default: ['separator', 'logo', 'social'],
+      },
+    },
+
     // Typographie générale
     fontFamily: {
       type: String,
