@@ -202,6 +202,7 @@ type Query {
   column(id: ID!, workspaceId: ID): Column
   tasks(boardId: ID!, columnId: ID, workspaceId: ID): [Task!]!
   task(id: ID!, workspaceId: ID): Task
+  activeTimers(workspaceId: ID): [Task!]!
   organizationMembers(workspaceId: ID!): [OrganizationMember!]!
   usersInfo(userIds: [String!]!): [UserInfo!]!
 }

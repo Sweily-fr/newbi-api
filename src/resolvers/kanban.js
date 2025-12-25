@@ -297,6 +297,17 @@ const resolvers = {
         return await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
       }
     ),
+
+    activeTimers: withWorkspace(
+      async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        // Récupérer toutes les tâches avec un timer actif
+        return await Task.find({
+          workspaceId: finalWorkspaceId,
+          "timeTracking.isRunning": true,
+        }).sort({ updatedAt: -1 });
+      }
+    ),
   },
 
   Mutation: {
