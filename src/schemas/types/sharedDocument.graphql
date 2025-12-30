@@ -1,0 +1,213 @@
+# Types pour les documents partagés
+
+type SharedDocument {
+  id: ID!
+  name: String!
+  originalName: String!
+  description: String
+  fileUrl: String!
+  fileKey: String!
+  mimeType: String!
+  fileSize: Int!
+  fileExtension: String
+  workspaceId: ID!
+  folderId: ID
+  folder: SharedFolder
+  uploadedBy: ID!
+  uploadedByName: String
+  status: SharedDocumentStatus!
+  isSharedWithAccountant: Boolean!
+  tags: [String]
+  comments: [DocumentComment]
+  createdAt: String!
+  updatedAt: String!
+  archivedAt: String
+}
+
+type SharedFolder {
+  id: ID!
+  name: String!
+  description: String
+  workspaceId: ID!
+  parentId: ID
+  parent: SharedFolder
+  color: String!
+  icon: String!
+  createdBy: ID!
+  isSharedWithAccountant: Boolean!
+  order: Int!
+  isSystem: Boolean!
+  documentsCount: Int
+  createdAt: String!
+  updatedAt: String!
+}
+
+type DocumentComment {
+  text: String!
+  authorId: ID!
+  authorName: String
+  createdAt: String!
+}
+
+enum SharedDocumentStatus {
+  pending
+  classified
+  archived
+}
+
+# Réponses
+type SharedDocumentResponse {
+  success: Boolean!
+  message: String
+  document: SharedDocument
+}
+
+type SharedDocumentsResponse {
+  success: Boolean!
+  message: String
+  documents: [SharedDocument]
+  total: Int
+  hasMore: Boolean
+}
+
+type SharedFolderResponse {
+  success: Boolean!
+  message: String
+  folder: SharedFolder
+}
+
+type SharedFoldersResponse {
+  success: Boolean!
+  message: String
+  folders: [SharedFolder]
+}
+
+type DeleteResponse {
+  success: Boolean!
+  message: String
+}
+
+type MoveDocumentsResponse {
+  success: Boolean!
+  message: String
+  movedCount: Int
+}
+
+# Inputs
+input CreateSharedFolderInput {
+  name: String!
+  description: String
+  parentId: ID
+  color: String
+  icon: String
+  isSharedWithAccountant: Boolean
+}
+
+input UpdateSharedFolderInput {
+  name: String
+  description: String
+  parentId: ID
+  color: String
+  icon: String
+  isSharedWithAccountant: Boolean
+  order: Int
+}
+
+input UpdateSharedDocumentInput {
+  name: String
+  description: String
+  folderId: ID
+  status: SharedDocumentStatus
+  isSharedWithAccountant: Boolean
+  tags: [String]
+}
+
+input AddDocumentCommentInput {
+  documentId: ID!
+  text: String!
+}
+
+input SharedDocumentsFilterInput {
+  folderId: ID
+  status: SharedDocumentStatus
+  search: String
+  tags: [String]
+}
+
+# Queries
+extend type Query {
+  # Documents
+  sharedDocuments(
+    workspaceId: ID!
+    filter: SharedDocumentsFilterInput
+    limit: Int
+    offset: Int
+  ): SharedDocumentsResponse!
+
+  sharedDocument(id: ID!, workspaceId: ID!): SharedDocumentResponse!
+
+  # Dossiers
+  sharedFolders(workspaceId: ID!): SharedFoldersResponse!
+  sharedFolder(id: ID!, workspaceId: ID!): SharedFolderResponse!
+
+  # Stats
+  sharedDocumentsStats(workspaceId: ID!): SharedDocumentsStatsResponse!
+}
+
+type SharedDocumentsStatsResponse {
+  success: Boolean!
+  totalDocuments: Int!
+  pendingDocuments: Int!
+  classifiedDocuments: Int!
+  archivedDocuments: Int!
+  totalFolders: Int!
+  totalSize: Float!
+}
+
+# Mutations
+extend type Mutation {
+  # Documents
+  uploadSharedDocument(
+    workspaceId: ID!
+    file: Upload!
+    folderId: ID
+    name: String
+    description: String
+    tags: [String]
+  ): SharedDocumentResponse!
+
+  updateSharedDocument(
+    id: ID!
+    workspaceId: ID!
+    input: UpdateSharedDocumentInput!
+  ): SharedDocumentResponse!
+
+  deleteSharedDocument(id: ID!, workspaceId: ID!): DeleteResponse!
+
+  deleteSharedDocuments(ids: [ID!]!, workspaceId: ID!): DeleteResponse!
+
+  moveSharedDocuments(
+    ids: [ID!]!
+    workspaceId: ID!
+    targetFolderId: ID
+  ): MoveDocumentsResponse!
+
+  addDocumentComment(
+    workspaceId: ID!
+    input: AddDocumentCommentInput!
+  ): SharedDocumentResponse!
+
+  # Dossiers
+  createSharedFolder(
+    workspaceId: ID!
+    input: CreateSharedFolderInput!
+  ): SharedFolderResponse!
+
+  updateSharedFolder(
+    id: ID!
+    workspaceId: ID!
+    input: UpdateSharedFolderInput!
+  ): SharedFolderResponse!
+
+  deleteSharedFolder(id: ID!, workspaceId: ID!): DeleteResponse!
+}

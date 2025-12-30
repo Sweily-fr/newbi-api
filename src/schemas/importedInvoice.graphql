@@ -1,8 +1,6 @@
 """
 Types GraphQL pour les factures importées via OCR
-"""
-
-# Statuts des factures importées
+""" # Statuts des factures importées
 enum ImportedInvoiceStatus {
   PENDING_REVIEW
   VALIDATED
@@ -132,6 +130,21 @@ type ImportedInvoiceStats {
   totalAmount: Float!
 }
 
+# Usage OCR par provider
+type OcrProviderUsage {
+  used: Int!
+  limit: Int!
+  available: Int!
+}
+
+# Statistiques d'usage OCR
+type OcrUsageStats {
+  mindee: OcrProviderUsage!
+  googleDocumentAi: OcrProviderUsage!
+  mistral: OcrProviderUsage!
+  currentProvider: String!
+}
+
 # Pagination
 type ImportedInvoicePagination {
   invoices: [ImportedInvoice!]!
@@ -195,6 +208,11 @@ extend type Query {
   Statistiques des factures importées
   """
   importedInvoiceStats(workspaceId: ID!): ImportedInvoiceStats!
+
+  """
+  Statistiques d'usage OCR (quotas Mindee, Google, Mistral)
+  """
+  ocrUsageStats(workspaceId: ID!): OcrUsageStats!
 }
 
 # Mutations
