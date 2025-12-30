@@ -33,6 +33,7 @@ import invoiceReminderSettingsResolvers from "./invoiceReminderSettings.js";
 import documentEmailResolvers from "./documentEmail.js";
 import importedInvoiceResolvers from "./importedInvoice.js";
 import reconciliationResolvers from "./reconciliationResolvers.js";
+import sharedDocumentResolvers from "./sharedDocument.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -69,6 +70,7 @@ const resolvers = mergeResolvers([
   documentEmailResolvers,
   importedInvoiceResolvers,
   reconciliationResolvers,
+  sharedDocumentResolvers,
 ]);
 
 export default resolvers;

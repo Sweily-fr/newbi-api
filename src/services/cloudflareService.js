@@ -69,6 +69,12 @@ class CloudflareService {
     this.receiptsPublicUrl =
       process.env.RECEIPTS_URL || "https://pub-receipts.r2.dev";
 
+    // Configuration spécifique pour les documents partagés
+    this.sharedDocumentsBucketName =
+      process.env.SHARED_DOCUMENTS_BUCKET || "shared-documents-staging";
+    this.sharedDocumentsPublicUrl =
+      process.env.SHARED_DOCUMENTS_URL || "https://pub-shared-docs.r2.dev";
+
     if (!this.bucketName) {
       throw new Error("Configuration manquante: USER_IMAGE_BUCKET");
     }
@@ -107,6 +113,12 @@ class CloudflareService {
       this.receiptsBucketName,
       "→",
       this.receiptsPublicUrl
+    );
+    console.log(
+      "  - Shared Documents:",
+      this.sharedDocumentsBucketName,
+      "→",
+      this.sharedDocumentsPublicUrl
     );
   }
 
@@ -219,6 +231,15 @@ class CloudflareService {
           key = `${organizationId}/${uniqueId}-receipt${fileExtension}`;
           break;
         }
+        case "sharedDocuments": {
+          // Pour les documents partagés, organiser par workspace
+          // Structure: shared-documents/{workspaceId}/{uniqueId}.ext
+          if (!organizationId) {
+            throw new Error("Workspace ID requis pour les documents partagés");
+          }
+          key = `shared-documents/${organizationId}/${uniqueId}${fileExtension}`;
+          break;
+        }
         case "profile": {
           // Pour les images de profil - sans préfixe signatures/
           key = `${userId}/image/${uniqueId}${fileExtension}`;
@@ -263,6 +284,13 @@ class CloudflareService {
         console.log("🧾 [RECEIPT] Upload vers bucket:", targetBucket);
         console.log("🌐 [RECEIPT] URL publique:", targetPublicUrl);
         console.log("🔑 [RECEIPT] Clé:", key);
+      } else if (imageType === "sharedDocuments") {
+        // Bucket dédié aux documents partagés
+        targetBucket = this.sharedDocumentsBucketName || this.bucketName;
+        targetPublicUrl = this.sharedDocumentsPublicUrl || this.publicUrl;
+        console.log("📁 [SHARED_DOCS] Upload vers bucket:", targetBucket);
+        console.log("🌐 [SHARED_DOCS] URL publique:", targetPublicUrl);
+        console.log("🔑 [SHARED_DOCS] Clé:", key);
       } else {
         targetBucket = this.bucketName;
         targetPublicUrl = this.publicUrl;
