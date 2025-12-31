@@ -49,6 +49,7 @@ import { initializeRedis, closeRedis } from "./config/redis.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
 import webhookRoutes from "./routes/webhook.js";
+import superPdpWebhookRoutes from "./routes/superPdpWebhook.js";
 import fileTransferAuthRoutes from "./routes/fileTransferAuth.js";
 import fileDownloadRoutes from "./routes/fileDownload.js";
 import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
@@ -57,6 +58,7 @@ import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
 import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
+import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -158,6 +160,9 @@ async function startServer() {
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
 
+  // Webhook SuperPDP pour la facturation électronique
+  app.use("/webhook/superpdp", superPdpWebhookRoutes);
+
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
@@ -177,6 +182,9 @@ async function startServer() {
   app.use("/banking-sync", bankingSyncRoutes); // Auth via betterAuthMiddleware dans chaque route
   app.use("/banking-cache", bankingCacheRoutes); // Gestion du cache bancaire
   app.use("/reconciliation", reconciliationRoutes); // Rapprochement factures/transactions
+
+  // Routes OAuth SuperPDP (facturation électronique)
+  app.use("/api/superpdp", superpdpOAuthRoutes);
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 

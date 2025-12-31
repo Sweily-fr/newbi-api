@@ -42,8 +42,21 @@ type Invoice {
   createdBy: User!
   stripeInvoiceId: String
   linkedTransactionId: ID
+  # E-Invoicing SuperPDP
+  superPdpInvoiceId: String
+  eInvoiceStatus: String
+  eInvoiceSentAt: String
+  archivedPdfUrl: String
+  eInvoiceError: String
+  facturXData: FacturXData
   createdAt: String!
   updatedAt: String!
+}
+
+type FacturXData {
+  xmlGenerated: Boolean
+  profile: String
+  generatedAt: String
 }
 
 type InvoicePagination {

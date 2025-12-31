@@ -362,6 +362,54 @@ const invoiceSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+
+    // === E-INVOICING SUPERPDP ===
+
+    // ID de la facture chez SuperPDP
+    superPdpInvoiceId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+
+    // Statut e-invoicing
+    eInvoiceStatus: {
+      type: String,
+      enum: [
+        "NOT_SENT", // Pas encore envoyée à SuperPDP
+        "PENDING_VALIDATION", // En cours de validation chez SuperPDP
+        "VALIDATED", // Validée par SuperPDP
+        "SENT_TO_RECIPIENT", // Envoyée au destinataire
+        "RECEIVED", // Reçue par le destinataire
+        "ACCEPTED", // Acceptée par le destinataire
+        "REJECTED", // Rejetée par le destinataire
+        "PAID", // Marquée comme payée
+        "ERROR", // Erreur lors de l'envoi
+      ],
+      default: "NOT_SENT",
+    },
+
+    // Date d'envoi à SuperPDP
+    eInvoiceSentAt: {
+      type: Date,
+    },
+
+    // URL du PDF Factur-X archivé (Cloudflare R2 ou SuperPDP)
+    archivedPdfUrl: {
+      type: String,
+    },
+
+    // Erreur e-invoicing (si applicable)
+    eInvoiceError: {
+      type: String,
+    },
+
+    // Données XML Factur-X (pour référence)
+    facturXData: {
+      xmlGenerated: { type: Boolean, default: false },
+      profile: { type: String, default: "EN16931" }, // Profil Factur-X utilisé
+      generatedAt: { type: Date },
+    },
   },
   {
     timestamps: true,

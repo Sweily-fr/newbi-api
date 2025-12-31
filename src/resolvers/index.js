@@ -34,6 +34,7 @@ import documentEmailResolvers from "./documentEmail.js";
 import importedInvoiceResolvers from "./importedInvoice.js";
 import reconciliationResolvers from "./reconciliationResolvers.js";
 import sharedDocumentResolvers from "./sharedDocument.js";
+import eInvoicingResolvers from "./eInvoicing.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -71,6 +72,7 @@ const resolvers = mergeResolvers([
   importedInvoiceResolvers,
   reconciliationResolvers,
   sharedDocumentResolvers,
+  eInvoicingResolvers,
 ]);
 
 export default resolvers;

@@ -21,6 +21,8 @@ import {
   AppError,
   ERROR_CODES,
 } from "../utils/errors.js";
+import superPdpService from "../services/superPdpService.js";
+import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -903,6 +905,82 @@ const invoiceResolvers = {
                 purchaseOrderNumber: invoice.purchaseOrderNumber,
               });
             }
+
+            // === ENVOI AUTOMATIQUE À SUPERPDP (E-INVOICING) ===
+            // Envoyer à SuperPDP uniquement si :
+            // 1. La facture n'est pas un brouillon (PENDING ou COMPLETED)
+            // 2. L'e-invoicing est activé pour l'organisation
+            if (invoice.status !== "DRAFT") {
+              try {
+                const isEInvoicingEnabled =
+                  await EInvoicingSettingsService.isEInvoicingEnabled(
+                    workspaceId
+                  );
+
+                if (isEInvoicingEnabled) {
+                  console.log(
+                    `📤 E-invoicing activé, envoi de la facture ${prefix}${number} à SuperPDP...`
+                  );
+
+                  // Envoyer la facture à SuperPDP
+                  const superPdpResult = await superPdpService.sendInvoice(
+                    workspaceId,
+                    invoice
+                  );
+
+                  if (superPdpResult.success) {
+                    // Mettre à jour la facture avec les informations SuperPDP
+                    invoice.superPdpInvoiceId =
+                      superPdpResult.superPdpInvoiceId;
+                    invoice.eInvoiceStatus = superPdpService.mapStatusToNewbi(
+                      superPdpResult.status
+                    );
+                    invoice.eInvoiceSentAt = new Date();
+                    invoice.facturXData = {
+                      xmlGenerated: true,
+                      profile: "EN16931",
+                      generatedAt: new Date(),
+                    };
+
+                    await invoice.save();
+                    console.log(
+                      `✅ Facture envoyée à SuperPDP: ${superPdpResult.superPdpInvoiceId}`
+                    );
+                  } else {
+                    // Enregistrer l'erreur mais ne pas faire échouer la création
+                    invoice.eInvoiceStatus = "ERROR";
+                    invoice.eInvoiceError = superPdpResult.error;
+                    await invoice.save();
+                    console.error(
+                      `❌ Erreur envoi SuperPDP: ${superPdpResult.error}`
+                    );
+                  }
+                } else {
+                  console.log(
+                    `ℹ️ E-invoicing non activé pour le workspace ${workspaceId}`
+                  );
+                }
+              } catch (eInvoicingError) {
+                // Ne pas faire échouer la création de facture si l'envoi e-invoicing échoue
+                console.error(
+                  "❌ Erreur lors de l'envoi e-invoicing:",
+                  eInvoicingError
+                );
+
+                // Mettre à jour le statut d'erreur
+                try {
+                  invoice.eInvoiceStatus = "ERROR";
+                  invoice.eInvoiceError = eInvoicingError.message;
+                  await invoice.save();
+                } catch (updateError) {
+                  console.error(
+                    "Erreur lors de la mise à jour du statut e-invoicing:",
+                    updateError
+                  );
+                }
+              }
+            }
+            // === FIN ENVOI SUPERPDP ===
           } catch (saveError) {
             // Gestion spécifique des erreurs de clé dupliquée MongoDB
             if (saveError.code === 11000 && saveError.keyPattern?.number) {
