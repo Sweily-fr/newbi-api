@@ -1,0 +1,217 @@
+# schemas/publicBoardShare.graphql
+
+# Type pour les visiteurs externes
+type ExternalVisitor {
+  id: ID!
+  email: String!
+  firstName: String
+  lastName: String
+  name: String
+  image: String
+  firstVisitAt: DateTime!
+  lastVisitAt: DateTime!
+  visitCount: Int!
+}
+
+# Permissions pour le partage public
+type PublicSharePermissions {
+  canViewTasks: Boolean!
+  canComment: Boolean!
+  canViewComments: Boolean!
+  canViewAssignees: Boolean!
+  canViewDueDates: Boolean!
+  canViewAttachments: Boolean!
+}
+
+# Statistiques d'accès
+type PublicShareStats {
+  totalViews: Int!
+  uniqueVisitors: Int!
+  totalComments: Int!
+}
+
+# Type principal pour le partage public
+type PublicBoardShare {
+  id: ID!
+  token: String!
+  boardId: ID!
+  workspaceId: ID!
+  createdBy: ID!
+  name: String
+  permissions: PublicSharePermissions!
+  isActive: Boolean!
+  expiresAt: DateTime
+  hasPassword: Boolean!
+  visitors: [ExternalVisitor!]!
+  stats: PublicShareStats!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  # URL complète pour le partage
+  shareUrl: String!
+}
+
+# Données du tableau pour les visiteurs externes (version simplifiée)
+type PublicBoard {
+  id: ID!
+  title: String!
+  description: String
+  columns: [PublicColumn!]!
+  tasks: [PublicTask!]!
+  members: [PublicAssignedMember!]!
+}
+
+type PublicColumn {
+  id: ID!
+  title: String!
+  color: String!
+  order: Int!
+}
+
+type PublicTask {
+  id: ID!
+  title: String!
+  description: String
+  status: String!
+  priority: String
+  tags: [Tag!]
+  startDate: DateTime
+  dueDate: DateTime
+  columnId: String!
+  position: Int
+  checklist: [ChecklistItem!]
+  assignedMembers: [PublicAssignedMember!]
+  comments: [PublicComment!]
+  timeTracking: PublicTimeTracking
+  userId: ID
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+type PublicTimeTracking {
+  totalSeconds: Int
+  isRunning: Boolean
+  hourlyRate: Float
+}
+
+type PublicAssignedMember {
+  id: String!
+  name: String!
+  image: String
+}
+
+type PublicComment {
+  id: ID!
+  userName: String!
+  userEmail: String
+  userImage: String
+  content: String!
+  isExternal: Boolean!
+  createdAt: DateTime!
+}
+
+# Input pour créer un lien de partage
+input CreatePublicShareInput {
+  boardId: ID!
+  name: String
+  permissions: PublicSharePermissionsInput
+  expiresAt: DateTime
+  password: String
+}
+
+input PublicSharePermissionsInput {
+  canViewTasks: Boolean
+  canComment: Boolean
+  canViewComments: Boolean
+  canViewAssignees: Boolean
+  canViewDueDates: Boolean
+  canViewAttachments: Boolean
+}
+
+# Input pour mettre à jour un lien de partage
+input UpdatePublicShareInput {
+  id: ID!
+  name: String
+  permissions: PublicSharePermissionsInput
+  isActive: Boolean
+  expiresAt: DateTime
+  password: String
+}
+
+# Résultat de l'accès public
+type PublicAccessResult {
+  success: Boolean!
+  message: String
+  board: PublicBoard
+  share: PublicBoardShare
+  visitorEmail: String
+}
+
+# Résultat de l'ajout de commentaire externe
+type ExternalCommentResult {
+  success: Boolean!
+  message: String
+  task: PublicTask
+}
+
+# Input pour mettre à jour le profil d'un visiteur externe
+input UpdateVisitorProfileInput {
+  firstName: String
+  lastName: String
+  image: String
+}
+
+# Résultat de la mise à jour du profil
+type UpdateVisitorProfileResult {
+  success: Boolean!
+  message: String
+  visitor: ExternalVisitor
+}
+
+# Queries pour le partage public
+extend type Query {
+  # Pour les utilisateurs connectés - récupérer les liens de partage d'un tableau
+  getPublicShares(boardId: ID!, workspaceId: ID): [PublicBoardShare!]!
+  
+  # Pour les visiteurs externes - accéder au tableau via le token
+  getPublicBoard(token: String!, email: String!, password: String): PublicAccessResult!
+  
+  # Vérifier si un token est valide (sans email)
+  validatePublicToken(token: String!): Boolean!
+}
+
+# Mutations pour le partage public
+extend type Mutation {
+  # Pour les utilisateurs connectés
+  createPublicShare(input: CreatePublicShareInput!, workspaceId: ID): PublicBoardShare!
+  updatePublicShare(input: UpdatePublicShareInput!, workspaceId: ID): PublicBoardShare!
+  deletePublicShare(id: ID!, workspaceId: ID): Boolean!
+  revokePublicShare(id: ID!, workspaceId: ID): Boolean!
+  
+  # Pour les visiteurs externes - ajouter un commentaire
+  addExternalComment(
+    token: String!
+    taskId: ID!
+    content: String!
+    visitorEmail: String!
+  ): ExternalCommentResult!
+  
+  # Pour les visiteurs externes - mettre à jour leur profil
+  updateVisitorProfile(
+    token: String!
+    email: String!
+    input: UpdateVisitorProfileInput!
+  ): UpdateVisitorProfileResult!
+}
+
+# Payload pour la subscription de mise à jour de tâche publique
+type PublicTaskUpdatePayload {
+  type: String!
+  task: PublicTask
+  taskId: ID
+  boardId: ID
+}
+
+extend type Subscription {
+  # Subscription pour les mises à jour de tâches sur un board public
+  publicTaskUpdated(token: String!, boardId: ID!): PublicTaskUpdatePayload
+}

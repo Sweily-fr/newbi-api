@@ -286,7 +286,15 @@ async function startServer() {
           }
         }
 
-        throw new Error("No authentication token provided");
+        // Permettre les connexions sans authentification pour les subscriptions publiques
+        // Le resolver de la subscription publique vérifiera le token de partage
+        logger.info("ℹ️ [WebSocket] Connexion sans authentification (page publique)");
+        return {
+          user: null,
+          workspaceId: null,
+          isPublic: true,
+          db: mongoose.connection.db,
+        };
       },
       onDisconnect: (webSocket, context) => {
         logger.info("🔌 [WebSocket] Client déconnecté");
