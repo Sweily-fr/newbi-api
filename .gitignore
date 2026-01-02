@@ -30,5 +30,8 @@ public/uploads/*
 
 # Fichiers de couverture de tests
 coverage/
+<<<<<<< HEAD
 
+=======
+>>>>>>> main
 newbi-462812-e2c47097b174.json

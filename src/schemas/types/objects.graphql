@@ -24,6 +24,8 @@ type Client {
   # Champs spécifiques aux entreprises
   siret: String
   vatNumber: String
+  # Indique si l'entreprise est hors France
+  isInternational: Boolean
   # Champs spécifiques aux particuliers
   firstName: String
   lastName: String

@@ -104,13 +104,23 @@ const clientResolvers = {
         let clientData = { ...input };
 
         if (input.type === "COMPANY") {
-          // Pour une entreprise, le SIREN/SIRET est obligatoire
+          // Pour une entreprise, le numéro d'identification est obligatoire
           if (!input.siret || input.siret.trim() === "") {
-            throw new Error("Le SIREN/SIRET est obligatoire pour une entreprise");
+            throw new Error(
+              input.isInternational
+                ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
+                : "Le SIREN/SIRET est obligatoire pour une entreprise française"
+            );
           }
-          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
-          if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
-            throw new Error("Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres");
+          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
+          if (
+            !input.isInternational &&
+            !/^\d{9}$/.test(input.siret) &&
+            !/^\d{14}$/.test(input.siret)
+          ) {
+            throw new Error(
+              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres"
+            );
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
@@ -183,13 +193,23 @@ const clientResolvers = {
         let updateData = { ...input };
 
         if (input.type === "COMPANY") {
-          // Pour une entreprise, le SIREN/SIRET est obligatoire
+          // Pour une entreprise, le numéro d'identification est obligatoire
           if (!input.siret || input.siret.trim() === "") {
-            throw new Error("Le SIREN/SIRET est obligatoire pour une entreprise");
+            throw new Error(
+              input.isInternational
+                ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
+                : "Le SIREN/SIRET est obligatoire pour une entreprise française"
+            );
           }
-          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
-          if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
-            throw new Error("Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres");
+          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
+          if (
+            !input.isInternational &&
+            !/^\d{9}$/.test(input.siret) &&
+            !/^\d{14}$/.test(input.siret)
+          ) {
+            throw new Error(
+              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres"
+            );
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
@@ -214,11 +234,11 @@ const clientResolvers = {
         // Fonction pour comparer deux valeurs en profondeur
         const hasChanged = (oldVal, newVal) => {
           // Si les deux sont null/undefined, pas de changement
-          if ((oldVal == null) && (newVal == null)) return false;
+          if (oldVal == null && newVal == null) return false;
           // Si l'un est null/undefined et pas l'autre, changement
           if ((oldVal == null) !== (newVal == null)) return true;
           // Pour les objets, comparer en JSON (trié pour éviter les faux positifs)
-          if (typeof oldVal === 'object' && typeof newVal === 'object') {
+          if (typeof oldVal === "object" && typeof newVal === "object") {
             return JSON.stringify(oldVal) !== JSON.stringify(newVal);
           }
           // Pour les valeurs primitives, comparaison directe
@@ -228,44 +248,47 @@ const clientResolvers = {
         // Tracker les changements
         const changes = [];
         Object.keys(updateData).forEach((key) => {
-          if (key !== 'notes' && key !== 'activity') {
+          if (key !== "notes" && key !== "activity") {
             const oldValue = client[key];
-            const newValue = key === "email" ? updateData[key].toLowerCase() : updateData[key];
-            
+            const newValue =
+              key === "email" ? updateData[key].toLowerCase() : updateData[key];
+
             // Vérifier si la valeur a réellement changé
             if (hasChanged(oldValue, newValue)) {
               const fieldNames = {
-                name: 'le nom',
-                firstName: 'le prénom',
-                lastName: 'le nom de famille',
-                email: 'l\'email',
-                phone: 'le téléphone',
-                address: 'l\'adresse de facturation',
-                hasDifferentShippingAddress: 'l\'option adresse de livraison différente',
-                shippingAddress: 'l\'adresse de livraison',
-                siret: 'le SIRET',
-                vatNumber: 'le numéro de TVA',
-                type: 'le type',
+                name: "le nom",
+                firstName: "le prénom",
+                lastName: "le nom de famille",
+                email: "l'email",
+                phone: "le téléphone",
+                address: "l'adresse de facturation",
+                hasDifferentShippingAddress:
+                  "l'option adresse de livraison différente",
+                shippingAddress: "l'adresse de livraison",
+                siret: "le SIRET",
+                vatNumber: "le numéro de TVA",
+                type: "le type",
               };
               changes.push(fieldNames[key] || key);
             }
-            
+
             client[key] = newValue;
           }
         });
 
         // Ajouter une activité si des changements ont été effectués
         if (changes.length > 0) {
-          const description = changes.length === 1
-            ? `a modifié ${changes[0]}`
-            : `a modifié ${changes.slice(0, -1).join(', ')} et ${changes[changes.length - 1]}`;
-          
+          const description =
+            changes.length === 1
+              ? `a modifié ${changes[0]}`
+              : `a modifié ${changes.slice(0, -1).join(", ")} et ${changes[changes.length - 1]}`;
+
           client.activity.push({
             id: new mongoose.Types.ObjectId().toString(),
             userId: user.id,
             userName: user.name || user.email,
             userImage: user.image || null,
-            type: 'updated',
+            type: "updated",
             description: description,
             createdAt: new Date(),
           });
@@ -455,20 +478,25 @@ const clientResolvers = {
       }
     ),
   },
-  
+
   // Resolvers de champs pour convertir les dates en strings ISO
   Client: {
-    createdAt: (parent) => parent.createdAt?.toISOString?.() || parent.createdAt,
-    updatedAt: (parent) => parent.updatedAt?.toISOString?.() || parent.updatedAt,
+    createdAt: (parent) =>
+      parent.createdAt?.toISOString?.() || parent.createdAt,
+    updatedAt: (parent) =>
+      parent.updatedAt?.toISOString?.() || parent.updatedAt,
   },
-  
+
   ClientNote: {
-    createdAt: (parent) => parent.createdAt?.toISOString?.() || parent.createdAt,
-    updatedAt: (parent) => parent.updatedAt?.toISOString?.() || parent.updatedAt,
+    createdAt: (parent) =>
+      parent.createdAt?.toISOString?.() || parent.createdAt,
+    updatedAt: (parent) =>
+      parent.updatedAt?.toISOString?.() || parent.updatedAt,
   },
-  
+
   ClientActivity: {
-    createdAt: (parent) => parent.createdAt?.toISOString?.() || parent.createdAt,
+    createdAt: (parent) =>
+      parent.createdAt?.toISOString?.() || parent.createdAt,
   },
 };
 
