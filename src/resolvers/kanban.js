@@ -1387,7 +1387,7 @@ const resolvers = {
       async (
         _,
         { taskId, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId, db }
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -1412,9 +1412,25 @@ const resolvers = {
             };
           }
 
-          // Démarrer le timer
+          // Récupérer les infos complètes de l'utilisateur depuis la base de données
+          const userFromDb = await db.collection("user").findOne({
+            _id: new ObjectId(user.id),
+          });
+
+          // Utiliser avatar au lieu de image
+          const avatarUrl =
+            userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+              ? userFromDb.avatar
+              : null;
+
+          // Démarrer le timer avec les infos de l'utilisateur
           task.timeTracking.isRunning = true;
           task.timeTracking.currentStartTime = new Date();
+          task.timeTracking.startedBy = {
+            userId: user.id,
+            userName: userFromDb?.name || user.email,
+            userImage: avatarUrl,
+          };
 
           await task.save();
 
@@ -1474,6 +1490,7 @@ const resolvers = {
           // Mettre à jour le timeTracking
           task.timeTracking.isRunning = false;
           task.timeTracking.currentStartTime = null;
+          task.timeTracking.startedBy = null;
           task.timeTracking.totalSeconds += duration;
           task.timeTracking.entries.push(newEntry);
 

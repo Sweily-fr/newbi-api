@@ -30,10 +30,17 @@ type TimeEntry {
   duration: Int!
 }
 
+type TimerStartedBy {
+  userId: String
+  userName: String
+  userImage: String
+}
+
 type TimeTracking {
   totalSeconds: Int!
   isRunning: Boolean!
   currentStartTime: DateTime
+  startedBy: TimerStartedBy
   entries: [TimeEntry!]!
   hourlyRate: Float
   roundingOption: String
