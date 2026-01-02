@@ -30,6 +30,13 @@ const timeEntrySchema = new mongoose.Schema({
   }
 }, { _id: true });
 
+// Schéma pour l'utilisateur qui a lancé le timer
+const timerStartedBySchema = new mongoose.Schema({
+  userId: String,
+  userName: String,
+  userImage: String
+}, { _id: false });
+
 // Schéma pour le suivi du temps
 const timeTrackingSchema = new mongoose.Schema({
   totalSeconds: {
@@ -42,6 +49,11 @@ const timeTrackingSchema = new mongoose.Schema({
     default: false
   },
   currentStartTime: Date,
+  // Utilisateur qui a lancé le timer actuel
+  startedBy: {
+    type: timerStartedBySchema,
+    default: null
+  },
   entries: [timeEntrySchema],
   hourlyRate: {
     type: Number,
