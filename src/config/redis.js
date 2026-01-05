@@ -2,7 +2,8 @@ import { createClient } from 'redis';
 import { RedisPubSub } from 'graphql-redis-subscriptions';
 import logger from '../utils/logger.js';
 
-// Configuration Redis
+// Configuration Redis - supporte REDIS_URL (staging/production) ou REDIS_HOST/PORT (local)
+const redisUrl = process.env.REDIS_URL;
 const redisConfig = {
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT) || 6379,
@@ -17,18 +18,32 @@ const initializeRedis = async () => {
   try {
     logger.info('🔄 [Redis] Initialisation en cours...');
     
-    // Configuration des options Redis
-    const redisOptions = {
-      socket: {
-        host: redisConfig.host,
-        port: redisConfig.port,
-        reconnectStrategy: (retries) => Math.min(retries * 50, 500),
-      },
-      database: redisConfig.db,
-    };
+    let redisOptions;
+    
+    // Si REDIS_URL est défini, l'utiliser directement (staging/production)
+    if (redisUrl) {
+      logger.info(`🔗 [Redis] Utilisation de REDIS_URL: ${redisUrl.replace(/\/\/.*@/, '//***@')}`);
+      redisOptions = {
+        url: redisUrl,
+        socket: {
+          reconnectStrategy: (retries) => Math.min(retries * 50, 500),
+        },
+      };
+    } else {
+      // Sinon, utiliser la configuration host/port (local)
+      logger.info(`🔗 [Redis] Utilisation de REDIS_HOST: ${redisConfig.host}:${redisConfig.port}`);
+      redisOptions = {
+        socket: {
+          host: redisConfig.host,
+          port: redisConfig.port,
+          reconnectStrategy: (retries) => Math.min(retries * 50, 500),
+        },
+        database: redisConfig.db,
+      };
 
-    if (redisConfig.password) {
-      redisOptions.password = redisConfig.password;
+      if (redisConfig.password) {
+        redisOptions.password = redisConfig.password;
+      }
     }
 
     // Créer l'instance RedisPubSub directement avec les options

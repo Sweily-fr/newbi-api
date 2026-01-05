@@ -72,13 +72,20 @@ const commentSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  userName: String, // Optionnel - récupéré dynamiquement au frontend
-  userImage: String, // Optionnel - récupéré dynamiquement au frontend
+  // userName et userImage sont récupérés dynamiquement via les resolvers GraphQL
+  // Ne PAS les stocker en base de données
   content: {
     type: String,
     required: true,
     trim: true
   },
+  isExternal: {
+    type: Boolean,
+    default: false
+  },
+  userEmail: String, // Pour les commentaires externes
+  userName: String, // Uniquement pour les commentaires externes
+  userImage: String, // Uniquement pour les commentaires externes
   createdAt: {
     type: Date,
     default: Date.now
@@ -95,8 +102,8 @@ const activitySchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  userName: String, // Optionnel - récupéré dynamiquement au frontend
-  userImage: String, // Optionnel - récupéré dynamiquement au frontend
+  // userName et userImage sont récupérés dynamiquement via les resolvers GraphQL
+  // Ne PAS les stocker en base de données
   type: {
     type: String,
     required: true,

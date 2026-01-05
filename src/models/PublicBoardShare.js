@@ -134,6 +134,51 @@ const publicBoardShareSchema = new mongoose.Schema({
   // Liste des visiteurs externes qui ont accédé au tableau
   visitors: [externalVisitorSchema],
   
+  // Liste des emails bannis (accès révoqué)
+  bannedEmails: [{
+    email: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true
+    },
+    bannedAt: {
+      type: Date,
+      default: Date.now
+    },
+    reason: {
+      type: String,
+      trim: true
+    }
+  }],
+  
+  // Demandes d'accès en attente
+  accessRequests: [{
+    email: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true
+    },
+    name: {
+      type: String,
+      trim: true
+    },
+    message: {
+      type: String,
+      trim: true
+    },
+    requestedAt: {
+      type: Date,
+      default: Date.now
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending'
+    }
+  }],
+  
   // Statistiques d'accès
   stats: {
     totalViews: {

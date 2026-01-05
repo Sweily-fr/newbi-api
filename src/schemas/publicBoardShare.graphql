@@ -13,6 +13,23 @@ type ExternalVisitor {
   visitCount: Int!
 }
 
+# Type pour les emails bannis
+type BannedEmail {
+  email: String!
+  bannedAt: DateTime!
+  reason: String
+}
+
+# Type pour les demandes d'accès
+type AccessRequest {
+  id: ID!
+  email: String!
+  name: String
+  message: String
+  requestedAt: DateTime!
+  status: String!
+}
+
 # Permissions pour le partage public
 type PublicSharePermissions {
   canViewTasks: Boolean!
@@ -43,6 +60,8 @@ type PublicBoardShare {
   expiresAt: DateTime
   hasPassword: Boolean!
   visitors: [ExternalVisitor!]!
+  bannedEmails: [BannedEmail!]!
+  accessRequests: [AccessRequest!]!
   stats: PublicShareStats!
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -144,6 +163,7 @@ type PublicAccessResult {
   board: PublicBoard
   share: PublicBoardShare
   visitorEmail: String
+  isBanned: Boolean
 }
 
 # Résultat de l'ajout de commentaire externe
@@ -167,6 +187,13 @@ type UpdateVisitorProfileResult {
   visitor: ExternalVisitor
 }
 
+# Résultat de la demande d'accès
+type RequestAccessResult {
+  success: Boolean!
+  message: String
+  alreadyRequested: Boolean
+}
+
 # Queries pour le partage public
 extend type Query {
   # Pour les utilisateurs connectés - récupérer les liens de partage d'un tableau
@@ -186,6 +213,21 @@ extend type Mutation {
   updatePublicShare(input: UpdatePublicShareInput!, workspaceId: ID): PublicBoardShare!
   deletePublicShare(id: ID!, workspaceId: ID): Boolean!
   revokePublicShare(id: ID!, workspaceId: ID): Boolean!
+  
+  # Révoquer l'accès d'un visiteur spécifique (le bannit)
+  revokeVisitorAccess(shareId: ID!, visitorEmail: String!, reason: String, workspaceId: ID): PublicBoardShare!
+  
+  # Débannir un visiteur
+  unbanVisitor(shareId: ID!, visitorEmail: String!, workspaceId: ID): PublicBoardShare!
+  
+  # Demander l'accès (pour les visiteurs bannis)
+  requestAccess(token: String!, email: String!, name: String, message: String): RequestAccessResult!
+  
+  # Approuver une demande d'accès
+  approveAccessRequest(shareId: ID!, requestId: ID!, workspaceId: ID): PublicBoardShare!
+  
+  # Rejeter une demande d'accès
+  rejectAccessRequest(shareId: ID!, requestId: ID!, workspaceId: ID): PublicBoardShare!
   
   # Pour les visiteurs externes - ajouter un commentaire
   addExternalComment(
@@ -211,7 +253,52 @@ type PublicTaskUpdatePayload {
   boardId: ID
 }
 
+# Payload pour la subscription d'accès approuvé
+type AccessApprovedPayload {
+  email: String!
+  token: String!
+  approved: Boolean!
+}
+
+# Payload pour la subscription d'accès révoqué
+type AccessRevokedPayload {
+  email: String!
+  token: String!
+  reason: String
+}
+
+# Payload pour la subscription de nouvelle demande d'accès
+type AccessRequestPayload {
+  id: ID!
+  email: String!
+  name: String
+  message: String
+  requestedAt: DateTime!
+  boardId: ID!
+}
+
+# Payload pour la subscription de visiteur connecté/déconnecté
+type VisitorPresencePayload {
+  email: String!
+  name: String
+  image: String
+  boardId: ID!
+  isConnected: Boolean!
+}
+
 extend type Subscription {
   # Subscription pour les mises à jour de tâches sur un board public
   publicTaskUpdated(token: String!, boardId: ID!): PublicTaskUpdatePayload
+  
+  # Subscription pour notifier quand un accès est approuvé (pour les visiteurs en attente)
+  accessApproved(token: String!, email: String!): AccessApprovedPayload
+  
+  # Subscription pour notifier quand un accès est révoqué (déconnexion en temps réel)
+  accessRevoked(token: String!, email: String!): AccessRevokedPayload
+  
+  # Subscription pour notifier le propriétaire d'une nouvelle demande d'accès
+  accessRequested(boardId: ID!): AccessRequestPayload
+  
+  # Subscription pour voir les visiteurs connectés en temps réel
+  visitorPresence(boardId: ID!): VisitorPresencePayload
 }

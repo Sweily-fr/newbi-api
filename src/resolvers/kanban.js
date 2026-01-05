@@ -26,6 +26,103 @@ const safePublish = (channel, payload, context = "") => {
   }
 };
 
+// Fonction utilitaire pour enrichir une tâche avec les infos utilisateur dynamiques
+const enrichTaskWithUserInfo = async (task) => {
+  if (!task) return null;
+  
+  const db = mongoose.connection.db;
+  const taskObj = task.toObject ? task.toObject() : task;
+  
+  // Collecter tous les userIds des commentaires et activités
+  const allUserIds = new Set();
+  (taskObj.comments || []).forEach(c => {
+    if (c.userId && !c.userId.startsWith('external_')) allUserIds.add(c.userId);
+  });
+  (taskObj.activity || []).forEach(a => {
+    if (a.userId) allUserIds.add(a.userId);
+  });
+  
+  // Récupérer les infos des utilisateurs
+  let usersMap = {};
+  if (allUserIds.size > 0) {
+    try {
+      const userObjectIds = Array.from(allUserIds).map(uid => {
+        try { return new mongoose.Types.ObjectId(uid); } catch { return uid; }
+      });
+      const users = await db.collection('user').find({ _id: { $in: userObjectIds } }).toArray();
+      users.forEach(u => {
+        usersMap[u._id.toString()] = { name: u.name || u.email?.split('@')[0] || 'Utilisateur', image: u.image || null };
+      });
+    } catch (error) {
+      logger.error('❌ [enrichTaskWithUserInfo] Erreur récupération utilisateurs:', error);
+    }
+  }
+  
+  // Enrichir les commentaires
+  const enrichedComments = (taskObj.comments || []).map(c => {
+    if (c.userId?.startsWith('external_')) return { ...c, id: c._id?.toString() || c.id };
+    const userInfo = usersMap[c.userId];
+    return { ...c, id: c._id?.toString() || c.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+  });
+  
+  // Enrichir l'activité
+  const enrichedActivity = (taskObj.activity || []).map(a => {
+    const userInfo = usersMap[a.userId];
+    return { ...a, id: a._id?.toString() || a.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+  });
+  
+  return { ...taskObj, id: taskObj._id?.toString() || taskObj.id, comments: enrichedComments, activity: enrichedActivity };
+};
+
+// Fonction utilitaire pour enrichir plusieurs tâches
+const enrichTasksWithUserInfo = async (tasks) => {
+  if (!tasks || tasks.length === 0) return [];
+  
+  const db = mongoose.connection.db;
+  
+  // Collecter tous les userIds
+  const allUserIds = new Set();
+  tasks.forEach(task => {
+    (task.comments || []).forEach(c => {
+      if (c.userId && !c.userId.startsWith('external_')) allUserIds.add(c.userId);
+    });
+    (task.activity || []).forEach(a => {
+      if (a.userId) allUserIds.add(a.userId);
+    });
+  });
+  
+  // Récupérer les infos des utilisateurs
+  let usersMap = {};
+  if (allUserIds.size > 0) {
+    try {
+      const userObjectIds = Array.from(allUserIds).map(uid => {
+        try { return new mongoose.Types.ObjectId(uid); } catch { return uid; }
+      });
+      const users = await db.collection('user').find({ _id: { $in: userObjectIds } }).toArray();
+      users.forEach(u => {
+        usersMap[u._id.toString()] = { name: u.name || u.email?.split('@')[0] || 'Utilisateur', image: u.image || null };
+      });
+    } catch (error) {
+      logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération utilisateurs:', error);
+    }
+  }
+  
+  // Enrichir chaque tâche
+  return tasks.map(task => {
+    const taskObj = task.toObject ? task.toObject() : task;
+    const enrichedComments = (taskObj.comments || []).map(c => {
+      if (c.userId?.startsWith('external_')) return { ...c, id: c._id?.toString() || c.id };
+      const userInfo = usersMap[c.userId];
+      return { ...c, id: c._id?.toString() || c.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+    });
+    const enrichedActivity = (taskObj.activity || []).map(a => {
+      const userInfo = usersMap[a.userId];
+      return { ...a, id: a._id?.toString() || a.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+    });
+    return { ...taskObj, id: taskObj._id?.toString() || taskObj.id, comments: enrichedComments, activity: enrichedActivity };
+  });
+};
+
 const resolvers = {
   Query: {
     boards: withWorkspace(
@@ -287,14 +384,16 @@ const resolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const query = { boardId, workspaceId: finalWorkspaceId };
         if (columnId) query.columnId = columnId;
-        return await Task.find(query).sort("position");
+        const tasks = await Task.find(query).sort("position");
+        return await enrichTasksWithUserInfo(tasks);
       }
     ),
 
     task: withWorkspace(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        return await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
+        const task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
+        return await enrichTaskWithUserInfo(task);
       }
     ),
 
@@ -1263,12 +1362,15 @@ const resolvers = {
 
           await task.save();
 
-          // Publier l'événement
+          // Enrichir la tâche avec les infos utilisateur
+          const enrichedTask = await enrichTaskWithUserInfo(task);
+
+          // Publier l'événement avec la tâche enrichie
           safePublish(
             `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
             {
               type: "COMMENT_ADDED",
-              task: task,
+              task: enrichedTask,
               taskId: task._id,
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
@@ -1276,7 +1378,7 @@ const resolvers = {
             "Commentaire ajouté"
           );
 
-          return task;
+          return enrichedTask;
         } catch (error) {
           logger.error("Error adding comment:", error);
           throw new Error("Failed to add comment");
@@ -1312,12 +1414,15 @@ const resolvers = {
           comment.updatedAt = new Date();
           await task.save();
 
+          // Enrichir la tâche
+          const enrichedTask = await enrichTaskWithUserInfo(task);
+
           // Publier l'événement
           safePublish(
             `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
             {
               type: "COMMENT_UPDATED",
-              task: task,
+              task: enrichedTask,
               taskId: task._id,
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
@@ -1325,7 +1430,7 @@ const resolvers = {
             "Commentaire modifié"
           );
 
-          return task;
+          return enrichedTask;
         } catch (error) {
           logger.error("Error updating comment:", error);
           throw new Error("Failed to update comment");
@@ -1361,9 +1466,12 @@ const resolvers = {
           task.comments.pull(commentId);
           await task.save();
 
+          // Enrichir la tâche
+          const enrichedTask = await enrichTaskWithUserInfo(task);
+
           // Publier l'événement
           safePublish(
-            `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+            `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
             {
               type: "COMMENT_DELETED",
               task: task,
@@ -1374,7 +1482,7 @@ const resolvers = {
             "Commentaire supprimé"
           );
 
-          return task;
+          return enrichedTask;
         } catch (error) {
           logger.error("Error deleting comment:", error);
           throw new Error("Failed to delete comment");
@@ -1584,10 +1692,11 @@ const resolvers = {
     },
     tasks: async (parent, _, { user }) => {
       if (!user) return [];
-      return await Task.find({
+      const tasks = await Task.find({
         boardId: parent.id,
         workspaceId: parent.workspaceId,
       }).sort("position");
+      return await enrichTasksWithUserInfo(tasks);
     },
     members: async (board) => {
       try {
@@ -1720,6 +1829,134 @@ const resolvers = {
     tasks: async (parent) => {
       return await Task.find({ columnId: parent.id }).sort("position");
     },
+  },
+
+  Task: {
+    // Enrichir les commentaires avec les infos utilisateur dynamiquement
+    comments: async (task) => {
+      logger.info(`🔄 [Task.comments] Enrichissement des commentaires pour la tâche ${task._id || task.id}`);
+      if (!task.comments || task.comments.length === 0) return [];
+      
+      const db = mongoose.connection.db;
+      
+      // Collecter tous les userIds des commentaires (sauf externes)
+      const userIds = new Set();
+      task.comments.forEach(c => {
+        if (c.userId && !c.userId.startsWith('external_')) {
+          userIds.add(c.userId);
+        }
+      });
+      
+      // Récupérer les infos des utilisateurs
+      let usersMap = {};
+      if (userIds.size > 0) {
+        try {
+          const userObjectIds = Array.from(userIds).map(id => {
+            try {
+              return new mongoose.Types.ObjectId(id);
+            } catch {
+              return id;
+            }
+          });
+          
+          const users = await db.collection('user').find({
+            _id: { $in: userObjectIds }
+          }).toArray();
+          
+          users.forEach(u => {
+            usersMap[u._id.toString()] = {
+              name: u.name || u.email?.split('@')[0] || 'Utilisateur',
+              image: u.image || null
+            };
+          });
+        } catch (error) {
+          logger.error('❌ [Task.comments] Erreur récupération utilisateurs:', error);
+        }
+      }
+      
+      // Enrichir les commentaires
+      return task.comments.map(c => {
+        const comment = c.toObject ? c.toObject() : c;
+        
+        // Pour les commentaires externes, garder les infos stockées
+        if (comment.userId?.startsWith('external_')) {
+          return {
+            ...comment,
+            id: comment._id?.toString() || comment.id,
+            userName: comment.userName || 'Invité',
+            userImage: comment.userImage || null
+          };
+        }
+        
+        // Pour les utilisateurs normaux, TOUJOURS utiliser les infos dynamiques
+        const userInfo = usersMap[comment.userId];
+        
+        // Log pour déboguer
+        if (!userInfo) {
+          logger.warn(`⚠️ [Task.comments] Utilisateur non trouvé: ${comment.userId}`);
+        }
+        
+        return {
+          ...comment,
+          id: comment._id?.toString() || comment.id,
+          // IMPORTANT: Toujours utiliser userInfo en priorité, ignorer comment.userName stocké
+          userName: userInfo?.name || 'Utilisateur',
+          userImage: userInfo?.image || null
+        };
+      });
+    },
+    
+    // Enrichir l'activité avec les infos utilisateur dynamiquement
+    activity: async (task) => {
+      if (!task.activity || task.activity.length === 0) return [];
+      
+      const db = mongoose.connection.db;
+      
+      // Collecter tous les userIds de l'activité
+      const userIds = new Set();
+      task.activity.forEach(a => {
+        if (a.userId) userIds.add(a.userId);
+      });
+      
+      // Récupérer les infos des utilisateurs
+      let usersMap = {};
+      if (userIds.size > 0) {
+        try {
+          const userObjectIds = Array.from(userIds).map(id => {
+            try {
+              return new mongoose.Types.ObjectId(id);
+            } catch {
+              return id;
+            }
+          });
+          
+          const users = await db.collection('user').find({
+            _id: { $in: userObjectIds }
+          }).toArray();
+          
+          users.forEach(u => {
+            usersMap[u._id.toString()] = {
+              name: u.name || u.email?.split('@')[0] || 'Utilisateur',
+              image: u.image || null
+            };
+          });
+        } catch (error) {
+          logger.error('❌ [Task.activity] Erreur récupération utilisateurs:', error);
+        }
+      }
+      
+      // Enrichir l'activité
+      return task.activity.map(a => {
+        const activity = a.toObject ? a.toObject() : a;
+        const userInfo = usersMap[activity.userId];
+        return {
+          ...activity,
+          id: activity._id?.toString() || activity.id,
+          userName: userInfo?.name || activity.userName || 'Utilisateur',
+          userImage: userInfo?.image || activity.userImage || null
+        };
+      });
+    }
   },
 
   Comment: {

@@ -37,12 +37,30 @@ const resolvers = {
           workspaceId: finalWorkspaceId
         }).sort({ createdAt: -1 });
         
-        return shares.map(share => ({
-          ...share.toObject(),
-          id: share._id.toString(),
-          hasPassword: !!share.password,
-          shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`
-        }));
+        return shares.map(share => {
+          const shareObj = share.toObject();
+          return {
+            ...shareObj,
+            id: share._id.toString(),
+            hasPassword: !!share.password,
+            shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
+            // S'assurer que chaque visiteur a un id
+            visitors: (shareObj.visitors || []).map(v => ({
+              ...v,
+              id: v._id?.toString() || v.email || 'unknown',
+              firstVisitAt: v.firstVisitAt || new Date(),
+              lastVisitAt: v.lastVisitAt || new Date(),
+              visitCount: v.visitCount || 1
+            })),
+            // Inclure les emails bannis
+            bannedEmails: shareObj.bannedEmails || [],
+            // Inclure les demandes d'accès avec id
+            accessRequests: (shareObj.accessRequests || []).map(r => ({
+              ...r,
+              id: r._id?.toString() || r.id
+            }))
+          };
+        });
       }
     ),
     
@@ -74,6 +92,17 @@ const resolvers = {
           return {
             success: false,
             message: "Mot de passe incorrect"
+          };
+        }
+        
+        // Vérifier si l'email est banni
+        const emailLower = email.toLowerCase();
+        const isBanned = (share.bannedEmails || []).some(b => b.email === emailLower);
+        if (isBanned) {
+          return {
+            success: false,
+            message: "BANNED",
+            isBanned: true
           };
         }
         
@@ -195,6 +224,18 @@ const resolvers = {
         
         // Formater les membres pour le board
         const publicMembers = Object.values(membersMap);
+        
+        // Publier la présence du visiteur (connecté)
+        const visitorInfo = share.visitors?.find(v => v.email === emailLower);
+        safePublish('VISITOR_PRESENCE', {
+          visitorPresence: {
+            email: emailLower,
+            name: visitorInfo?.name || visitorInfo?.firstName || email.split('@')[0],
+            image: visitorInfo?.image || null,
+            boardId: board._id.toString(),
+            isConnected: true
+          }
+        }, `Visiteur ${emailLower} connecté`);
         
         return {
           success: true,
@@ -344,6 +385,297 @@ const resolvers = {
         );
         
         return !!share;
+      }
+    ),
+    
+    // Révoquer l'accès d'un visiteur spécifique (le bannit)
+    revokeVisitorAccess: withWorkspace(
+      async (_, { shareId, visitorEmail, reason, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        
+        const share = await PublicBoardShare.findOne({
+          _id: shareId,
+          workspaceId: finalWorkspaceId
+        });
+        
+        if (!share) {
+          throw new Error('Lien de partage non trouvé');
+        }
+        
+        const emailLower = visitorEmail.toLowerCase();
+        
+        // Retirer le visiteur de la liste
+        share.visitors = share.visitors.filter(v => 
+          v.email?.toLowerCase() !== emailLower
+        );
+        
+        // Ajouter l'email à la liste des bannis
+        if (!share.bannedEmails) {
+          share.bannedEmails = [];
+        }
+        
+        // Vérifier si l'email n'est pas déjà banni
+        const alreadyBanned = share.bannedEmails.some(b => b.email === emailLower);
+        if (!alreadyBanned) {
+          share.bannedEmails.push({
+            email: emailLower,
+            bannedAt: new Date(),
+            reason: reason || 'Accès révoqué par le propriétaire'
+          });
+        }
+        
+        share.updatedAt = new Date();
+        
+        await share.save();
+        
+        logger.info(`✅ [PublicShare] Accès révoqué et banni pour ${visitorEmail}`);
+        
+        // Publier l'événement pour déconnecter le visiteur en temps réel
+        safePublish('ACCESS_REVOKED', {
+          accessRevoked: {
+            email: emailLower,
+            token: share.token,
+            reason: reason || 'Accès révoqué par le propriétaire'
+          }
+        }, `Accès révoqué pour ${emailLower}`);
+        
+        return {
+          ...share.toObject(),
+          id: share._id.toString(),
+          hasPassword: !!share.password,
+          bannedEmails: share.bannedEmails || [],
+          accessRequests: (share.accessRequests || []).map(r => ({
+            ...r.toObject ? r.toObject() : r,
+            id: r._id?.toString() || r.id
+          })),
+          shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`
+        };
+      }
+    ),
+    
+    // Débannir un visiteur
+    unbanVisitor: withWorkspace(
+      async (_, { shareId, visitorEmail, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        
+        const share = await PublicBoardShare.findOne({
+          _id: shareId,
+          workspaceId: finalWorkspaceId
+        });
+        
+        if (!share) {
+          throw new Error('Lien de partage non trouvé');
+        }
+        
+        const emailLower = visitorEmail.toLowerCase();
+        
+        // Retirer l'email de la liste des bannis
+        share.bannedEmails = (share.bannedEmails || []).filter(b => 
+          b.email !== emailLower
+        );
+        
+        share.updatedAt = new Date();
+        await share.save();
+        
+        logger.info(`✅ [PublicShare] Visiteur débanni: ${visitorEmail}`);
+        
+        return {
+          ...share.toObject(),
+          id: share._id.toString(),
+          hasPassword: !!share.password,
+          bannedEmails: share.bannedEmails || [],
+          accessRequests: (share.accessRequests || []).map(r => ({
+            ...r.toObject ? r.toObject() : r,
+            id: r._id?.toString() || r.id
+          })),
+          shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`
+        };
+      }
+    ),
+    
+    // Demander l'accès (pour les visiteurs bannis)
+    requestAccess: async (_, { token, email, name, message }) => {
+      try {
+        const share = await PublicBoardShare.findOne({ token });
+        
+        if (!share) {
+          return {
+            success: false,
+            message: 'Lien de partage non trouvé',
+            alreadyRequested: false
+          };
+        }
+        
+        const emailLower = email.toLowerCase();
+        
+        // Vérifier si l'email est bien banni
+        const isBanned = (share.bannedEmails || []).some(b => b.email === emailLower);
+        if (!isBanned) {
+          return {
+            success: false,
+            message: 'Vous n\'êtes pas dans la liste des accès révoqués',
+            alreadyRequested: false
+          };
+        }
+        
+        // Vérifier si une demande est déjà en attente
+        if (!share.accessRequests) {
+          share.accessRequests = [];
+        }
+        
+        const existingRequest = share.accessRequests.find(r => 
+          r.email === emailLower && r.status === 'pending'
+        );
+        
+        if (existingRequest) {
+          return {
+            success: true,
+            message: 'Votre demande d\'accès est déjà en attente de validation',
+            alreadyRequested: true
+          };
+        }
+        
+        // Ajouter la demande d'accès
+        const newRequest = {
+          email: emailLower,
+          name: name || email.split('@')[0],
+          message: message || '',
+          requestedAt: new Date(),
+          status: 'pending'
+        };
+        share.accessRequests.push(newRequest);
+        
+        await share.save();
+        
+        // Récupérer l'ID de la demande créée
+        const createdRequest = share.accessRequests[share.accessRequests.length - 1];
+        
+        logger.info(`📩 [PublicShare] Nouvelle demande d'accès de ${email}`);
+        
+        // Publier l'événement pour notifier le propriétaire en temps réel
+        safePublish('ACCESS_REQUESTED', {
+          accessRequested: {
+            id: createdRequest._id?.toString() || createdRequest.id,
+            email: emailLower,
+            name: name || email.split('@')[0],
+            message: message || '',
+            requestedAt: newRequest.requestedAt,
+            boardId: share.boardId.toString()
+          }
+        }, `Nouvelle demande d'accès de ${emailLower}`);
+        
+        return {
+          success: true,
+          message: 'Votre demande d\'accès a été envoyée. Vous serez notifié une fois qu\'elle sera traitée.',
+          alreadyRequested: false
+        };
+      } catch (error) {
+        logger.error('❌ [PublicShare] Erreur demande d\'accès:', error);
+        return {
+          success: false,
+          message: 'Erreur lors de la demande d\'accès',
+          alreadyRequested: false
+        };
+      }
+    },
+    
+    // Approuver une demande d'accès
+    approveAccessRequest: withWorkspace(
+      async (_, { shareId, requestId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        
+        const share = await PublicBoardShare.findOne({
+          _id: shareId,
+          workspaceId: finalWorkspaceId
+        });
+        
+        if (!share) {
+          throw new Error('Lien de partage non trouvé');
+        }
+        
+        // Trouver la demande
+        const request = share.accessRequests?.id(requestId);
+        if (!request) {
+          throw new Error('Demande d\'accès non trouvée');
+        }
+        
+        const emailLower = request.email.toLowerCase();
+        
+        // Mettre à jour le statut de la demande
+        request.status = 'approved';
+        
+        // Retirer l'email de la liste des bannis
+        share.bannedEmails = (share.bannedEmails || []).filter(b => 
+          b.email !== emailLower
+        );
+        
+        share.updatedAt = new Date();
+        await share.save();
+        
+        logger.info(`✅ [PublicShare] Demande d'accès approuvée pour ${request.email}`);
+        
+        // Publier l'événement pour notifier le visiteur en temps réel
+        safePublish('ACCESS_APPROVED', {
+          accessApproved: {
+            email: emailLower,
+            token: share.token,
+            approved: true
+          }
+        }, `Accès approuvé pour ${emailLower}`);
+        
+        return {
+          ...share.toObject(),
+          id: share._id.toString(),
+          hasPassword: !!share.password,
+          bannedEmails: share.bannedEmails || [],
+          accessRequests: (share.accessRequests || []).map(r => ({
+            ...r.toObject ? r.toObject() : r,
+            id: r._id?.toString() || r.id
+          })),
+          shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`
+        };
+      }
+    ),
+    
+    // Rejeter une demande d'accès
+    rejectAccessRequest: withWorkspace(
+      async (_, { shareId, requestId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        
+        const share = await PublicBoardShare.findOne({
+          _id: shareId,
+          workspaceId: finalWorkspaceId
+        });
+        
+        if (!share) {
+          throw new Error('Lien de partage non trouvé');
+        }
+        
+        // Trouver la demande
+        const request = share.accessRequests?.id(requestId);
+        if (!request) {
+          throw new Error('Demande d\'accès non trouvée');
+        }
+        
+        // Mettre à jour le statut de la demande
+        request.status = 'rejected';
+        
+        share.updatedAt = new Date();
+        await share.save();
+        
+        logger.info(`❌ [PublicShare] Demande d'accès rejetée pour ${request.email}`);
+        
+        return {
+          ...share.toObject(),
+          id: share._id.toString(),
+          hasPassword: !!share.password,
+          bannedEmails: share.bannedEmails || [],
+          accessRequests: (share.accessRequests || []).map(r => ({
+            ...r.toObject ? r.toObject() : r,
+            id: r._id?.toString() || r.id
+          })),
+          shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`
+        };
       }
     ),
     
@@ -785,6 +1117,108 @@ const resolvers = {
           taskId: enrichedTask.id,
           boardId: task.boardId?.toString() || payload.boardId
         };
+      }
+    },
+    
+    // Subscription pour notifier quand un accès est approuvé
+    accessApproved: {
+      subscribe: async (_, { token, email }) => {
+        try {
+          // Vérifier que le token est valide
+          const share = await PublicBoardShare.findOne({ token, isActive: true });
+          if (!share) {
+            throw new Error('Lien de partage invalide ou expiré');
+          }
+          
+          const pubsub = getPubSub();
+          logger.debug(`📡 [PublicShare] Subscription accessApproved pour ${email} sur token ${token.substring(0, 8)}...`);
+          
+          return pubsub.asyncIterator(['ACCESS_APPROVED']);
+        } catch (error) {
+          logger.error('❌ [PublicShare] Erreur subscription accessApproved:', error);
+          throw error;
+        }
+      },
+      resolve: (payload, { token, email }) => {
+        // Filtrer pour ne retourner que si c'est le bon token et email
+        if (payload.accessApproved.token === token && 
+            payload.accessApproved.email === email.toLowerCase()) {
+          logger.info(`✅ [PublicShare] Notification accès approuvé envoyée à ${email}`);
+          return payload.accessApproved;
+        }
+        // Retourner null pour ignorer les événements qui ne correspondent pas
+        return null;
+      }
+    },
+    
+    // Subscription pour notifier quand un accès est révoqué (déconnexion temps réel)
+    accessRevoked: {
+      subscribe: async (_, { token, email }) => {
+        try {
+          const pubsub = getPubSub();
+          logger.debug(`📡 [PublicShare] Subscription accessRevoked pour ${email} sur token ${token.substring(0, 8)}...`);
+          
+          return pubsub.asyncIterator(['ACCESS_REVOKED']);
+        } catch (error) {
+          logger.error('❌ [PublicShare] Erreur subscription accessRevoked:', error);
+          throw error;
+        }
+      },
+      resolve: (payload, { token, email }) => {
+        // Filtrer pour ne retourner que si c'est le bon token et email
+        if (payload.accessRevoked.token === token && 
+            payload.accessRevoked.email === email.toLowerCase()) {
+          logger.info(`🚫 [PublicShare] Notification accès révoqué envoyée à ${email}`);
+          return payload.accessRevoked;
+        }
+        // Retourner null pour ignorer les événements qui ne correspondent pas
+        return null;
+      }
+    },
+    
+    // Subscription pour notifier le propriétaire d'une nouvelle demande d'accès
+    accessRequested: {
+      subscribe: async (_, { boardId }) => {
+        try {
+          const pubsub = getPubSub();
+          logger.debug(`📡 [PublicShare] Subscription accessRequested pour board ${boardId}`);
+          
+          return pubsub.asyncIterator(['ACCESS_REQUESTED']);
+        } catch (error) {
+          logger.error('❌ [PublicShare] Erreur subscription accessRequested:', error);
+          throw error;
+        }
+      },
+      resolve: (payload, { boardId }) => {
+        // Filtrer pour ne retourner que si c'est le bon boardId
+        if (payload.accessRequested.boardId === boardId) {
+          logger.info(`📩 [PublicShare] Notification nouvelle demande pour board ${boardId}`);
+          return payload.accessRequested;
+        }
+        return null;
+      }
+    },
+    
+    // Subscription pour voir les visiteurs connectés en temps réel
+    visitorPresence: {
+      subscribe: async (_, { boardId }) => {
+        try {
+          const pubsub = getPubSub();
+          logger.debug(`📡 [PublicShare] Subscription visitorPresence pour board ${boardId}`);
+          
+          return pubsub.asyncIterator(['VISITOR_PRESENCE']);
+        } catch (error) {
+          logger.error('❌ [PublicShare] Erreur subscription visitorPresence:', error);
+          throw error;
+        }
+      },
+      resolve: (payload, { boardId }) => {
+        // Filtrer pour ne retourner que si c'est le bon boardId
+        if (payload.visitorPresence.boardId === boardId) {
+          logger.info(`👤 [PublicShare] Présence visiteur ${payload.visitorPresence.email} - ${payload.visitorPresence.isConnected ? 'connecté' : 'déconnecté'}`);
+          return payload.visitorPresence;
+        }
+        return null;
       }
     }
   }
