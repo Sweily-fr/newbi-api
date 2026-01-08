@@ -8,8 +8,8 @@ import stripe from '../utils/stripe.js'; // Importer la configuration Stripe
 // Paliers de commission (identiques à ceux dans partner.js)
 const COMMISSION_TIERS = [
   { name: 'Bronze', percentage: 20, minRevenue: 0, maxRevenue: 1000 },
-  { name: 'Argent', percentage: 25, minRevenue: 1000, maxRevenue: 5000 },
-  { name: 'Or', percentage: 30, minRevenue: 5000, maxRevenue: 10000 },
+  { name: 'Argent', percentage: 25, minRevenue: 1001, maxRevenue: 5000 },
+  { name: 'Or', percentage: 30, minRevenue: 5001, maxRevenue: 10000 },
   { name: 'Platine', percentage: 50, minRevenue: 10000, maxRevenue: null },
 ];
 
