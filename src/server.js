@@ -123,6 +123,7 @@ async function startServer() {
     "https://newbi-v2-git-develop-sofianemtimet6-2653s-projects.vercel.app",
     "https://staging-api.newbi.fr",
     process.env.FRONTEND_URL,
+    process.env.PARTNER_FRONTEND_URL,
   ].filter(Boolean);
 
   app.use(
