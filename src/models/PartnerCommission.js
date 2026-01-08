@@ -22,7 +22,7 @@ const partnerCommissionSchema = new mongoose.Schema(
       ref: 'Subscription',
       required: true,
     },
-    // Montant du paiement du filleul (premier paiement)
+    // Montant du paiement du filleul
     paymentAmount: {
       type: Number,
       required: true,

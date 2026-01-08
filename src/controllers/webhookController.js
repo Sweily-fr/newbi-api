@@ -1,8 +1,32 @@
 import User from '../models/User.js';
 import Invoice from '../models/Invoice.js';
 import FileTransfer from '../models/FileTransfer.js';
+import PartnerCommission from '../models/PartnerCommission.js';
 import { AppError } from '../utils/errors.js';
 import stripe from '../utils/stripe.js'; // Importer la configuration Stripe
+
+// Paliers de commission (identiques à ceux dans partner.js)
+const COMMISSION_TIERS = [
+  { name: 'Bronze', percentage: 20, minRevenue: 0, maxRevenue: 1000 },
+  { name: 'Argent', percentage: 25, minRevenue: 1000, maxRevenue: 5000 },
+  { name: 'Or', percentage: 30, minRevenue: 5000, maxRevenue: 10000 },
+  { name: 'Platine', percentage: 50, minRevenue: 10000, maxRevenue: null },
+];
+
+/**
+ * Calcule le palier de commission en fonction du CA apporté
+ */
+const calculateCommissionTier = (totalRevenue) => {
+  for (let i = COMMISSION_TIERS.length - 1; i >= 0; i--) {
+    const tier = COMMISSION_TIERS[i];
+    if (totalRevenue >= tier.minRevenue) {
+      if (tier.maxRevenue === null || totalRevenue < tier.maxRevenue) {
+        return tier;
+      }
+    }
+  }
+  return COMMISSION_TIERS[0]; // Bronze par défaut
+};
 
 /**
  * Gère les événements webhook de Stripe
@@ -41,6 +65,9 @@ async function handleStripeWebhook(event) {
     
     case 'checkout.session.completed':
       return await handleCheckoutSessionCompleted(event.data.object);
+    
+    case 'invoice.payment_succeeded':
+      return await handleInvoicePaymentSucceeded(event.data.object);
     
     default:
       return { status: 'ignored', message: `Événement non géré: ${event.type}` };
@@ -382,6 +409,128 @@ async function handleCheckoutSessionCompleted(session) {
   } catch (error) {
     console.error('Erreur lors du traitement du paiement:', error);
     throw new AppError('Erreur lors du traitement du paiement', 'PAYMENT_PROCESSING_ERROR', error.message);
+  }
+}
+
+/**
+ * Gère le paiement réussi d'une facture (invoice.payment_succeeded)
+ * Crée une commission pour le partenaire à chaque paiement d'abonnement
+ * @param {Object} invoice - L'objet invoice de Stripe
+ * @returns {Promise<Object>} - Résultat du traitement
+ */
+async function handleInvoicePaymentSucceeded(invoice) {
+  try {
+    console.log('Traitement de invoice.payment_succeeded pour le client:', invoice.customer);
+    
+    // Vérifier que c'est bien un paiement d'abonnement
+    if (!invoice.subscription) {
+      console.log('Pas un paiement d\'abonnement, ignoré');
+      return { status: 'ignored', message: 'Pas un paiement d\'abonnement' };
+    }
+    
+    // Récupérer le montant payé (en centimes -> euros)
+    const paymentAmount = invoice.amount_paid / 100;
+    
+    if (paymentAmount <= 0) {
+      console.log('Montant nul ou négatif, ignoré');
+      return { status: 'ignored', message: 'Montant nul ou négatif' };
+    }
+    
+    // Trouver l'utilisateur par son Stripe Customer ID
+    const user = await findUserByCustomerId(invoice.customer);
+    if (!user) {
+      console.log('Utilisateur non trouvé pour le customer:', invoice.customer);
+      return { status: 'error', message: 'Utilisateur non trouvé' };
+    }
+    
+    console.log(`Utilisateur trouvé: ${user.email}`);
+    
+    // Vérifier si l'utilisateur a été référé par un partenaire
+    if (!user.referredBy) {
+      console.log('Utilisateur non référé par un partenaire, pas de commission');
+      return { status: 'ignored', message: 'Utilisateur non référé par un partenaire' };
+    }
+    
+    console.log(`Utilisateur référé par le code: ${user.referredBy}`);
+    
+    // Trouver le partenaire qui a référé cet utilisateur
+    const partner = await User.findOne({ 
+      referralCode: user.referredBy,
+      isPartner: true 
+    });
+    
+    if (!partner) {
+      console.log('Partenaire non trouvé pour le code:', user.referredBy);
+      return { status: 'error', message: 'Partenaire non trouvé' };
+    }
+    
+    console.log(`Partenaire trouvé: ${partner.email}`);
+    
+    // Calculer le CA total apporté par ce partenaire pour déterminer son palier
+    const confirmedCommissions = await PartnerCommission.find({
+      partnerId: partner._id,
+      status: { $in: ['confirmed', 'paid'] },
+    });
+    
+    const totalRevenue = confirmedCommissions.reduce(
+      (sum, comm) => sum + comm.paymentAmount,
+      0
+    );
+    
+    // Déterminer le palier de commission
+    const tier = calculateCommissionTier(totalRevenue);
+    const commissionRate = tier.percentage;
+    const commissionAmount = (paymentAmount * commissionRate) / 100;
+    
+    console.log(`Palier: ${tier.name}, Taux: ${commissionRate}%, Commission: ${commissionAmount}€`);
+    
+    // Déterminer le type d'abonnement (mensuel ou annuel)
+    let subscriptionType = 'monthly';
+    try {
+      const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+      if (subscription && subscription.items && subscription.items.data[0]) {
+        const interval = subscription.items.data[0].price.recurring?.interval;
+        if (interval === 'year') {
+          subscriptionType = 'annual';
+        }
+      }
+    } catch (subError) {
+      console.log('Impossible de récupérer les détails de l\'abonnement:', subError.message);
+    }
+    
+    // Créer la commission
+    const commission = new PartnerCommission({
+      partnerId: partner._id,
+      referralId: user._id,
+      subscriptionId: invoice.subscription,
+      paymentAmount,
+      commissionRate,
+      commissionAmount,
+      subscriptionType,
+      status: 'confirmed', // Commission confirmée immédiatement après paiement réussi
+      generatedAt: new Date(),
+      confirmedAt: new Date(),
+      notes: `Paiement Stripe: ${invoice.id}`,
+    });
+    
+    await commission.save();
+    
+    console.log(`Commission créée: ${commission._id} - ${commissionAmount}€ pour ${partner.email}`);
+    
+    return {
+      status: 'success',
+      message: 'Commission créée avec succès',
+      commissionId: commission._id.toString(),
+      partnerId: partner._id.toString(),
+      amount: commissionAmount,
+    };
+    
+  } catch (error) {
+    console.error('Erreur lors de la création de la commission:', error);
+    return {
+      status: 'error',
+      message: `Erreur lors de la création de la commission: ${error.message}`,
+    };
   }
 }
 
