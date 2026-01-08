@@ -319,6 +319,12 @@ const userSchema = new mongoose.Schema(
       index: true,
     },
     
+    // Code de parrainage utilisé lors de l'inscription (lien vers le partenaire)
+    referredBy: {
+      type: String,
+      index: true,
+    },
+    
     // Statut partenaire (apporteur d'affaires)
     isPartner: {
       type: Boolean,
