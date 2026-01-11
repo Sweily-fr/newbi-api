@@ -1205,6 +1205,248 @@ class CloudflareService {
       throw error;
     }
   }
+
+  // ==========================================
+  // MÉTHODES POUR LES IMAGES DES TÂCHES KANBAN
+  // ==========================================
+
+  /**
+   * Configuration spécifique pour les images Kanban
+   */
+  get kanbanBucketName() {
+    const bucket = process.env.KANBAN_BUCKET || "kanban-staging";
+    return bucket;
+  }
+
+  get kanbanPublicUrl() {
+    const url = process.env.KANBAN_URL;
+    if (!url) {
+      console.warn("⚠️ [KANBAN] KANBAN_URL non défini dans .env, utilisation de l'URL par défaut");
+    }
+    return url || "https://pub-kanban.r2.dev";
+  }
+
+  /**
+   * Upload une image pour une tâche Kanban
+   * Structure: kanban/{taskId}/{userId}/{uniqueId}.{ext}
+   * @param {Buffer} fileBuffer - Buffer de l'image
+   * @param {string} fileName - Nom original du fichier
+   * @param {string} taskId - ID de la tâche
+   * @param {string} userId - ID de l'utilisateur qui upload
+   * @param {string} imageType - Type d'image ('description' ou 'comment')
+   * @param {string} commentId - ID du commentaire (optionnel, si imageType === 'comment')
+   * @returns {Promise<{key: string, url: string, contentType: string}>}
+   */
+  async uploadTaskImage(fileBuffer, fileName, taskId, userId, imageType = 'description', commentId = null) {
+    try {
+      console.log(`🚀 [KANBAN] Upload image - taskId: ${taskId}, userId: ${userId}, type: ${imageType}`);
+
+      // Validation des paramètres
+      if (!taskId || !userId) {
+        throw new Error("taskId et userId sont requis pour l'upload d'images de tâche");
+      }
+
+      if (!['description', 'comment'].includes(imageType)) {
+        throw new Error("Type d'image invalide. Doit être 'description' ou 'comment'");
+      }
+
+      // Générer une clé unique pour l'image
+      const uniqueId = crypto.randomUUID();
+      const fileExtension = path.extname(fileName).toLowerCase();
+
+      // Structure de la clé selon le type
+      let key;
+      if (imageType === 'comment' && commentId) {
+        // Structure: {taskId}/{userId}/comments/{commentId}/{uniqueId}.{ext}
+        key = `${taskId}/${userId}/comments/${commentId}/${uniqueId}${fileExtension}`;
+      } else {
+        // Structure: {taskId}/{userId}/description/{uniqueId}.{ext}
+        key = `${taskId}/${userId}/description/${uniqueId}${fileExtension}`;
+      }
+
+      // Déterminer le content-type
+      const contentType = this.getContentType(fileExtension);
+
+      // Nettoyer le nom de fichier pour les headers HTTP
+      const sanitizedFileName = this.sanitizeFileName(fileName);
+
+      console.log(`📤 [KANBAN] Upload vers bucket: ${this.kanbanBucketName}, clé: ${key}`);
+
+      // Commande d'upload
+      const command = new PutObjectCommand({
+        Bucket: this.kanbanBucketName,
+        Key: key,
+        Body: fileBuffer,
+        ContentType: contentType,
+        Metadata: {
+          taskId: taskId,
+          userId: userId,
+          imageType: imageType,
+          originalName: sanitizedFileName,
+          uploadedAt: new Date().toISOString(),
+          ...(commentId && { commentId: commentId }),
+        },
+      });
+
+      await this.client.send(command);
+
+      // Générer l'URL publique
+      let imageUrl;
+      if (this.kanbanPublicUrl) {
+        const cleanUrl = this.kanbanPublicUrl.endsWith("/")
+          ? this.kanbanPublicUrl.slice(0, -1)
+          : this.kanbanPublicUrl;
+        imageUrl = `${cleanUrl}/${key}`;
+      } else {
+        // Fallback sur URL signée si pas d'URL publique configurée
+        imageUrl = await this.getSignedUrlForBucket(key, this.kanbanBucketName, 86400 * 7); // 7 jours
+      }
+
+      console.log(`✅ [KANBAN] Image uploadée: ${imageUrl}`);
+
+      return {
+        key,
+        url: imageUrl,
+        contentType,
+        fileName: sanitizedFileName,
+        fileSize: fileBuffer.length,
+      };
+    } catch (error) {
+      console.error(`❌ [KANBAN] Erreur upload image:`, error);
+      throw new Error(`Échec de l'upload de l'image de tâche: ${error.message}`);
+    }
+  }
+
+  /**
+   * Supprime une image d'une tâche Kanban
+   * @param {string} key - Clé de l'image à supprimer
+   * @returns {Promise<boolean>}
+   */
+  async deleteTaskImage(key) {
+    try {
+      console.log(`🗑️ [KANBAN] Suppression image: ${key}`);
+
+      const command = new DeleteObjectCommand({
+        Bucket: this.kanbanBucketName,
+        Key: key,
+      });
+
+      await this.client.send(command);
+      console.log(`✅ [KANBAN] Image supprimée: ${key}`);
+      return true;
+    } catch (error) {
+      if (error.name === "NoSuchKey") {
+        console.log(`⚠️ [KANBAN] Image déjà supprimée ou inexistante: ${key}`);
+        return true;
+      }
+      console.error(`❌ [KANBAN] Erreur suppression image:`, error);
+      throw new Error(`Échec de la suppression de l'image: ${error.message}`);
+    }
+  }
+
+  /**
+   * Supprime toutes les images d'une tâche Kanban
+   * @param {string} taskId - ID de la tâche
+   * @returns {Promise<boolean>}
+   */
+  async deleteAllTaskImages(taskId) {
+    try {
+      console.log(`🗑️ [KANBAN] Suppression de toutes les images de la tâche: ${taskId}`);
+
+      // Lister tous les objets avec le préfixe de la tâche
+      const listCommand = new ListObjectsV2Command({
+        Bucket: this.kanbanBucketName,
+        Prefix: `${taskId}/`,
+      });
+
+      const listResponse = await this.client.send(listCommand);
+
+      if (!listResponse.Contents || listResponse.Contents.length === 0) {
+        console.log(`📋 [KANBAN] Aucune image à supprimer pour la tâche: ${taskId}`);
+        return true;
+      }
+
+      console.log(`🗑️ [KANBAN] Suppression de ${listResponse.Contents.length} image(s)`);
+
+      // Supprimer chaque fichier
+      const deletePromises = listResponse.Contents.map((object) => {
+        return this.deleteTaskImage(object.Key);
+      });
+
+      await Promise.all(deletePromises);
+      console.log(`✅ [KANBAN] Toutes les images de la tâche ${taskId} supprimées`);
+      return true;
+    } catch (error) {
+      console.error(`❌ [KANBAN] Erreur suppression images tâche:`, error);
+      throw new Error(`Échec de la suppression des images de la tâche: ${error.message}`);
+    }
+  }
+
+  /**
+   * Supprime toutes les images d'un commentaire
+   * @param {string} taskId - ID de la tâche
+   * @param {string} commentId - ID du commentaire
+   * @returns {Promise<boolean>}
+   */
+  async deleteCommentImages(taskId, commentId) {
+    try {
+      console.log(`🗑️ [KANBAN] Suppression images du commentaire: ${commentId}`);
+
+      // Lister tous les objets avec le préfixe du commentaire
+      const listCommand = new ListObjectsV2Command({
+        Bucket: this.kanbanBucketName,
+        Prefix: `${taskId}/`,
+      });
+
+      const listResponse = await this.client.send(listCommand);
+
+      if (!listResponse.Contents || listResponse.Contents.length === 0) {
+        return true;
+      }
+
+      // Filtrer les fichiers du commentaire spécifique
+      const commentFiles = listResponse.Contents.filter((obj) =>
+        obj.Key.includes(`/comments/${commentId}/`)
+      );
+
+      if (commentFiles.length === 0) {
+        console.log(`📋 [KANBAN] Aucune image à supprimer pour le commentaire: ${commentId}`);
+        return true;
+      }
+
+      console.log(`🗑️ [KANBAN] Suppression de ${commentFiles.length} image(s) du commentaire`);
+
+      const deletePromises = commentFiles.map((object) => {
+        return this.deleteTaskImage(object.Key);
+      });
+
+      await Promise.all(deletePromises);
+      console.log(`✅ [KANBAN] Images du commentaire ${commentId} supprimées`);
+      return true;
+    } catch (error) {
+      console.error(`❌ [KANBAN] Erreur suppression images commentaire:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Récupère l'URL publique d'une image Kanban
+   * @param {string} key - Clé de l'image
+   * @returns {string}
+   */
+  getTaskImageUrl(key) {
+    if (!key) return null;
+
+    if (this.kanbanPublicUrl) {
+      const cleanUrl = this.kanbanPublicUrl.endsWith("/")
+        ? this.kanbanPublicUrl.slice(0, -1)
+        : this.kanbanPublicUrl;
+      return `${cleanUrl}/${key}`;
+    }
+
+    // Fallback - retourner la clé pour générer une URL signée plus tard
+    return key;
+  }
 }
 
 // Instance singleton

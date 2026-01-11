@@ -66,6 +66,38 @@ const timeTrackingSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+// Schéma pour les images attachées
+const taskImageSchema = new mongoose.Schema({
+  key: {
+    type: String,
+    required: true
+  },
+  url: {
+    type: String,
+    required: true
+  },
+  fileName: {
+    type: String,
+    required: true
+  },
+  fileSize: {
+    type: Number,
+    default: 0
+  },
+  contentType: {
+    type: String,
+    default: 'image/jpeg'
+  },
+  uploadedBy: {
+    type: String,
+    required: true
+  },
+  uploadedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: true });
+
 // Schéma pour les commentaires
 const commentSchema = new mongoose.Schema({
   userId: {
@@ -79,6 +111,8 @@ const commentSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  // Images attachées au commentaire
+  images: [taskImageSchema],
   isExternal: {
     type: Boolean,
     default: false
@@ -230,6 +264,8 @@ const taskSchema = new mongoose.Schema({
   checklist: [checklistItemSchema],
   // Membres assignés à la tâche (seulement les userId, les infos sont récupérées depuis la collection user)
   assignedMembers: [String],
+  // Images attachées à la description de la tâche
+  images: [taskImageSchema],
   // Commentaires
   comments: [commentSchema],
   // Historique d'activité

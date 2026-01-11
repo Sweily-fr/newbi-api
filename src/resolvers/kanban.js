@@ -110,6 +110,12 @@ const enrichTasksWithUserInfo = async (tasks) => {
   // Enrichir chaque tâche
   return tasks.map(task => {
     const taskObj = task.toObject ? task.toObject() : task;
+    
+    // Log pour débuguer les images
+    if (taskObj.images && taskObj.images.length > 0) {
+      logger.info(`📸 [enrichTasksWithUserInfo] Tâche ${taskObj._id} a ${taskObj.images.length} image(s)`);
+    }
+    
     const enrichedComments = (taskObj.comments || []).map(c => {
       if (c.userId?.startsWith('external_')) return { ...c, id: c._id?.toString() || c.id };
       const userInfo = usersMap[c.userId];
@@ -1832,6 +1838,18 @@ const resolvers = {
   },
 
   Task: {
+    // Transformer les images de la tâche pour avoir des IDs corrects
+    images: (task) => {
+      if (!task.images || task.images.length === 0) return [];
+      return task.images.map(img => {
+        const image = img.toObject ? img.toObject() : img;
+        return {
+          ...image,
+          id: image._id?.toString() || image.id
+        };
+      });
+    },
+
     // Enrichir les commentaires avec les infos utilisateur dynamiquement
     comments: async (task) => {
       logger.info(`🔄 [Task.comments] Enrichissement des commentaires pour la tâche ${task._id || task.id}`);
@@ -1884,7 +1902,12 @@ const resolvers = {
             ...comment,
             id: comment._id?.toString() || comment.id,
             userName: comment.userName || 'Invité',
-            userImage: comment.userImage || null
+            userImage: comment.userImage || null,
+            // Préserver les images du commentaire externe aussi
+            images: (comment.images || []).map(img => ({
+              ...img,
+              id: img._id?.toString() || img.id
+            }))
           };
         }
         
@@ -1901,7 +1924,15 @@ const resolvers = {
           id: comment._id?.toString() || comment.id,
           // IMPORTANT: Toujours utiliser userInfo en priorité, ignorer comment.userName stocké
           userName: userInfo?.name || 'Utilisateur',
-          userImage: userInfo?.image || null
+          userImage: userInfo?.image || null,
+          // Préserver les images du commentaire
+          images: (comment.images || []).map(img => {
+            const imgObj = img.toObject ? img.toObject() : img;
+            return {
+              ...imgObj,
+              id: imgObj._id?.toString() || imgObj.id
+            };
+          })
         };
       });
     },
@@ -1965,6 +1996,11 @@ const resolvers = {
 
   Activity: {
     id: (parent) => parent._id || parent.id,
+  },
+
+  // Resolver pour transformer _id en id pour les images
+  TaskImage: {
+    id: (image) => image._id?.toString() || image.id,
   },
 
   Subscription: {
