@@ -1250,11 +1250,12 @@ const resolvers = {
         
         // Publier l'événement Redis pour synchroniser en temps réel
         safePublish(
-          `${TASK_UPDATED}_${share.boardId}`,
+          `${TASK_UPDATED}_${share.workspaceId}_${share.boardId}`,
           {
             type: 'VISITOR_PROFILE_UPDATED',
             task: null,
             boardId: share.boardId.toString(),
+            workspaceId: share.workspaceId.toString(),
             visitor: {
               id: visitorId,
               email: visitor.email,
@@ -1269,10 +1270,11 @@ const resolvers = {
         
         // Publier aussi sur le canal public
         safePublish(
-          `${PUBLIC_VISITOR_UPDATED}_${share.boardId}`,
+          `${PUBLIC_VISITOR_UPDATED}_${share.workspaceId}_${share.boardId}`,
           {
             type: 'VISITOR_PROFILE_UPDATED',
             boardId: share.boardId.toString(),
+            workspaceId: share.workspaceId.toString(),
             visitor: {
               id: visitorId,
               email: visitor.email,
@@ -1434,7 +1436,7 @@ const resolvers = {
           const visitorChannel = `${PUBLIC_VISITOR_UPDATED}_${share.workspaceId}_${share.boardId}`;
           logger.debug(`📡 [PublicShare] Subscription aux canaux: ${taskChannel}, ${visitorChannel}`);
           
-          return pubsub.asyncIterator([taskChannel, visitorChannel]);
+          return pubsub.asyncIterableIterator([taskChannel, visitorChannel]);
         } catch (error) {
           logger.error('❌ [PublicShare] Erreur subscription publicTaskUpdated:', error);
           throw error;

@@ -65,7 +65,18 @@ const enrichTaskWithUserInfo = async (task) => {
       });
       const users = await db.collection('user').find({ _id: { $in: userObjectIds } }).toArray();
       users.forEach(u => {
-        usersMap[u._id.toString()] = { name: u.name || u.email?.split('@')[0] || 'Utilisateur', image: u.image || null };
+        // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
+        let displayName = '';
+        if (u.name && u.lastName) {
+          displayName = `${u.name} ${u.lastName}`;
+        } else if (u.name) {
+          displayName = u.name;
+        } else if (u.lastName) {
+          displayName = u.lastName;
+        } else {
+          displayName = u.email?.split('@')[0] || 'Utilisateur';
+        }
+        usersMap[u._id.toString()] = { name: displayName, image: u.avatar || u.image || null };
       });
     } catch (error) {
       logger.error('❌ [enrichTaskWithUserInfo] Erreur récupération utilisateurs:', error);
@@ -191,7 +202,18 @@ const enrichTasksWithUserInfo = async (tasks) => {
       });
       const users = await db.collection('user').find({ _id: { $in: userObjectIds } }).toArray();
       users.forEach(u => {
-        usersMap[u._id.toString()] = { name: u.name || u.email?.split('@')[0] || 'Utilisateur', image: u.image || null };
+        // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
+        let displayName = '';
+        if (u.name && u.lastName) {
+          displayName = `${u.name} ${u.lastName}`;
+        } else if (u.name) {
+          displayName = u.name;
+        } else if (u.lastName) {
+          displayName = u.lastName;
+        } else {
+          displayName = u.email?.split('@')[0] || 'Utilisateur';
+        }
+        usersMap[u._id.toString()] = { name: displayName, image: u.avatar || u.image || null };
       });
     } catch (error) {
       logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération utilisateurs:', error);
@@ -388,9 +410,21 @@ const resolvers = {
                   ? user.image || user.avatar
                   : null;
 
+              // Construire le nom complet
+              let displayName = '';
+              if (user.name && user.lastName) {
+                displayName = `${user.name} ${user.lastName}`;
+              } else if (user.name) {
+                displayName = user.name;
+              } else if (user.lastName) {
+                displayName = user.lastName;
+              } else {
+                displayName = user.email || 'Utilisateur inconnu';
+              }
+
               return {
                 id: memberUserId,
-                name: user.name || user.email || "Utilisateur inconnu",
+                name: displayName,
                 email: user.email || "",
                 image: cleanImage,
                 role: member.role || "member",
@@ -460,9 +494,21 @@ const resolvers = {
               ? user.avatar
               : null;
 
+          // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
+          let displayName = '';
+          if (user.name && user.lastName) {
+            displayName = `${user.name} ${user.lastName}`;
+          } else if (user.name) {
+            displayName = user.name;
+          } else if (user.lastName) {
+            displayName = user.lastName;
+          } else {
+            displayName = user.email || 'Utilisateur inconnu';
+          }
+
           return {
             id: user._id.toString(),
-            name: user.name || user.email || "Utilisateur inconnu",
+            name: displayName,
             email: user.email || "",
             image: avatarUrl,
           };
@@ -1935,10 +1981,22 @@ const resolvers = {
               }
             );
 
+            // Construire le nom complet
+            let displayName = '';
+            if (user.name && user.lastName) {
+              displayName = `${user.name} ${user.lastName}`;
+            } else if (user.name) {
+              displayName = user.name;
+            } else if (user.lastName) {
+              displayName = user.lastName;
+            } else {
+              displayName = user.email || 'Utilisateur inconnu';
+            }
+
             return {
               id: memberUserId,
               userId: memberUserId,
-              name: user.name || user.email || "Utilisateur inconnu",
+              name: displayName,
               email: user.email || "",
               image: userImage,
               role: member.role || "member",
@@ -2010,9 +2068,20 @@ const resolvers = {
           }).toArray();
           
           users.forEach(u => {
+            // Construire le nom complet
+            let displayName = '';
+            if (u.name && u.lastName) {
+              displayName = `${u.name} ${u.lastName}`;
+            } else if (u.name) {
+              displayName = u.name;
+            } else if (u.lastName) {
+              displayName = u.lastName;
+            } else {
+              displayName = u.email?.split('@')[0] || 'Utilisateur';
+            }
             usersMap[u._id.toString()] = {
-              name: u.name || u.email?.split('@')[0] || 'Utilisateur',
-              image: u.image || null
+              name: displayName,
+              image: u.avatar || u.image || null
             };
           });
         } catch (error) {
@@ -2094,9 +2163,20 @@ const resolvers = {
           }).toArray();
           
           users.forEach(u => {
+            // Construire le nom complet
+            let displayName = '';
+            if (u.name && u.lastName) {
+              displayName = `${u.name} ${u.lastName}`;
+            } else if (u.name) {
+              displayName = u.name;
+            } else if (u.lastName) {
+              displayName = u.lastName;
+            } else {
+              displayName = u.email?.split('@')[0] || 'Utilisateur';
+            }
             usersMap[u._id.toString()] = {
-              name: u.name || u.email?.split('@')[0] || 'Utilisateur',
-              image: u.image || null
+              name: displayName,
+              image: u.avatar || u.image || null
             };
           });
         } catch (error) {
