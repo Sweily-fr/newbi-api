@@ -276,7 +276,7 @@ type Mutation {
 
 type Subscription {
   boardUpdated(workspaceId: ID!): BoardUpdatePayload!
-  taskUpdated(boardId: ID!, workspaceId: ID!): TaskUpdatePayload!
+  taskUpdated(boardId: ID!, workspaceId: ID!): TaskUpdatePayload
   columnUpdated(boardId: ID!, workspaceId: ID!): ColumnUpdatePayload!
 }
 
@@ -289,10 +289,20 @@ type BoardUpdatePayload {
 
 type TaskUpdatePayload {
   type: String!
-  task: Task!
+  task: Task
   taskId: ID
   boardId: ID!
   workspaceId: ID!
+  visitor: VisitorInfo
+}
+
+type VisitorInfo {
+  id: String
+  email: String
+  firstName: String
+  lastName: String
+  name: String
+  image: String
 }
 
 type ColumnUpdatePayload {

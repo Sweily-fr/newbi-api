@@ -5,9 +5,11 @@ import { withWorkspace } from '../middlewares/better-auth-jwt.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
 import { getPubSub } from '../config/redis.js';
+import cloudflareService from '../services/cloudflareService.js';
 
 // Événements de subscription (même que kanban.js)
 const TASK_UPDATED = 'TASK_UPDATED';
+const PUBLIC_VISITOR_UPDATED = 'PUBLIC_VISITOR_UPDATED';
 
 // Fonction utilitaire pour publier en toute sécurité
 const safePublish = (channel, payload, context = '') => {
@@ -126,6 +128,7 @@ const resolvers = {
         
         // Récupérer les infos des membres assignés ET des auteurs de commentaires
         let membersMap = {};
+        let emailToUserMap = {};
         const db = mongoose.connection.db;
         const allMemberIds = [...new Set(tasks.flatMap(t => t.assignedMembers || []))];
         
@@ -137,10 +140,18 @@ const resolvers = {
           )
         )];
         
+        // Collecter les emails des commentaires non-externes sans userId
+        const commentEmails = [...new Set(
+          tasks.flatMap(t => (t.comments || [])
+            .filter(c => !c.isExternal && !c.userId && c.userEmail)
+            .map(c => c.userEmail.toLowerCase())
+          )
+        )];
+        
         // Combiner tous les IDs à récupérer
         const allUserIds = [...new Set([...allMemberIds, ...commentUserIds])];
         
-        if (allUserIds.length > 0) {
+        if (allUserIds.length > 0 || commentEmails.length > 0) {
           const objectIds = allUserIds.map(id => {
             try {
               return new mongoose.Types.ObjectId(id);
@@ -149,17 +160,34 @@ const resolvers = {
             }
           }).filter(Boolean);
           
-          const users = await db.collection('user').find({
-            _id: { $in: objectIds }
-          }).toArray();
+          // Construire la requête pour récupérer par ID ou par email
+          const query = { $or: [] };
+          if (objectIds.length > 0) {
+            query.$or.push({ _id: { $in: objectIds } });
+          }
+          if (commentEmails.length > 0) {
+            query.$or.push({ email: { $in: commentEmails } });
+          }
           
-          users.forEach(user => {
-            membersMap[user._id.toString()] = {
-              id: user._id.toString(),
-              name: user.name || user.email || 'Utilisateur',
-              image: user.image || user.avatar || null
-            };
-          });
+          if (query.$or.length > 0) {
+            const users = await db.collection('user').find(query).toArray();
+            
+            users.forEach(user => {
+              membersMap[user._id.toString()] = {
+                id: user._id.toString(),
+                name: user.name || user.email || 'Utilisateur',
+                image: user.image || user.avatar || null
+              };
+              // Aussi mapper par email pour les commentaires sans userId
+              if (user.email) {
+                emailToUserMap[user.email.toLowerCase()] = {
+                  id: user._id.toString(),
+                  name: user.name || user.email || 'Utilisateur',
+                  image: user.image || user.avatar || null
+                };
+              }
+            });
+          }
         }
         
         // Formater les tâches - les invités voient tout (lecture seule)
@@ -175,10 +203,32 @@ const resolvers = {
           columnId: task.columnId,
           position: task.position,
           checklist: task.checklist,
+          images: (task.images || []).map(img => ({
+            id: img._id?.toString() || img.id,
+            key: img.key,
+            url: img.url,
+            fileName: img.fileName,
+            fileSize: img.fileSize,
+            contentType: img.contentType,
+            uploadedBy: img.uploadedBy,
+            uploadedAt: img.uploadedAt
+          })),
           assignedMembers: (task.assignedMembers || []).map(memberId => 
             membersMap[memberId] || { id: memberId, name: 'Membre', image: null }
           ),
           comments: (task.comments || []).map(comment => {
+            // Formater les images du commentaire
+            const commentImages = (comment.images || []).map(img => ({
+              id: img._id?.toString() || img.id,
+              key: img.key,
+              url: img.url,
+              fileName: img.fileName,
+              fileSize: img.fileSize,
+              contentType: img.contentType,
+              uploadedBy: img.uploadedBy,
+              uploadedAt: img.uploadedAt
+            }));
+            
             // Pour les commentaires externes, récupérer les infos du visiteur depuis share.visitors
             if (comment.isExternal && comment.userEmail) {
               const visitor = share.visitors?.find(v => v.email?.toLowerCase() === comment.userEmail.toLowerCase());
@@ -189,25 +239,37 @@ const resolvers = {
                 userImage: visitor?.image || comment.userImage || null,
                 content: comment.content,
                 isExternal: true,
+                images: commentImages,
                 createdAt: comment.createdAt
               };
             }
-            // Pour les commentaires non-externes, récupérer l'image depuis membersMap
-            const userInfo = comment.userId ? membersMap[comment.userId.toString()] : null;
+            // Pour les commentaires non-externes, récupérer l'info depuis membersMap ou emailToUserMap
+            let userInfo = comment.userId ? membersMap[comment.userId.toString()] : null;
+            // Si pas trouvé par userId, essayer par email
+            if (!userInfo && comment.userEmail) {
+              userInfo = emailToUserMap[comment.userEmail.toLowerCase()];
+            }
             return {
               id: comment._id?.toString(),
-              userName: comment.userName || userInfo?.name || 'Utilisateur',
+              userName: userInfo?.name || comment.userName || (comment.userEmail ? comment.userEmail.split('@')[0] : 'Utilisateur'),
               userEmail: comment.userEmail || null,
-              userImage: comment.userImage || userInfo?.image || null,
+              userImage: userInfo?.image || comment.userImage || null,
               content: comment.content,
               isExternal: comment.isExternal || false,
+              images: commentImages,
               createdAt: comment.createdAt
             };
           }),
           timeTracking: task.timeTracking ? {
             totalSeconds: task.timeTracking.totalSeconds || 0,
             isRunning: task.timeTracking.isRunning || false,
-            hourlyRate: task.timeTracking.hourlyRate
+            currentStartTime: task.timeTracking.currentStartTime,
+            hourlyRate: task.timeTracking.hourlyRate,
+            startedBy: task.timeTracking.startedBy ? {
+              userId: task.timeTracking.startedBy.userId,
+              userName: task.timeTracking.startedBy.userName,
+              userImage: task.timeTracking.startedBy.userImage
+            } : null
           } : null,
           userId: task.userId,
           createdAt: task.createdAt,
@@ -714,15 +776,17 @@ const resolvers = {
         
         // Récupérer les infos du visiteur depuis le share
         const visitor = share.visitors?.find(v => v.email?.toLowerCase() === visitorEmail.toLowerCase());
+        const visitorId = visitor?._id?.toString();
         const userName = visitor?.name || visitor?.firstName || visitorEmail.split("@")[0];
-        const userImage = visitor?.image || null;
         
-        // Ajouter le commentaire avec l'image du visiteur
+        // Ajouter le commentaire avec le visitorId pour pouvoir récupérer les infos à jour
+        // NE PAS stocker userImage ici car elle peut être en base64 et dépasser la limite MongoDB
+        // L'image sera récupérée dynamiquement via enrichTaskWithUserInfo
         const newComment = {
+          visitorId: visitorId, // ID du visiteur pour récupérer les infos à jour
           userId: `external_${visitorEmail}`,
-          userName: userName,
+          userName: userName, // Stocké pour fallback si le visiteur est supprimé
           userEmail: visitorEmail,
-          userImage: userImage,
           content: content.trim(),
           isExternal: true,
           createdAt: new Date(),
@@ -766,6 +830,16 @@ const resolvers = {
           position: task.position,
           checklist: task.checklist || [],
           assignedMembers: task.assignedMembers || [],
+          images: (task.images || []).map(img => ({
+            id: img._id?.toString() || img.id,
+            key: img.key,
+            url: img.url,
+            fileName: img.fileName,
+            fileSize: img.fileSize,
+            contentType: img.contentType,
+            uploadedBy: img.uploadedBy,
+            uploadedAt: img.uploadedAt
+          })),
           comments: task.comments.map(c => ({
             id: c._id?.toString(),
             _id: c._id,
@@ -775,6 +849,16 @@ const resolvers = {
             userImage: c.userImage || null,
             content: c.content,
             isExternal: c.isExternal || false,
+            images: (c.images || []).map(img => ({
+              id: img._id?.toString() || img.id,
+              key: img.key,
+              url: img.url,
+              fileName: img.fileName,
+              fileSize: img.fileSize,
+              contentType: img.contentType,
+              uploadedBy: img.uploadedBy,
+              uploadedAt: img.uploadedAt
+            })),
             createdAt: c.createdAt,
             updatedAt: c.updatedAt
           })),
@@ -806,7 +890,7 @@ const resolvers = {
         safePublish(
           channel,
           {
-            type: 'UPDATED',
+            type: 'COMMENT_ADDED',
             task: taskPayload,
             taskId: task._id.toString(),
             boardId: share.boardId.toString(),
@@ -817,7 +901,58 @@ const resolvers = {
         
         logger.info(`✅ [PublicShare] Événement UPDATED publié pour tâche ${task._id}`);
         
-        // Retourner la tâche mise à jour
+        // Récupérer les infos des membres assignés et des auteurs de commentaires
+        const db = mongoose.connection.db;
+        let membersMap = {};
+        let emailToUserMap = {};
+        
+        const allMemberIds = task.assignedMembers || [];
+        const commentUserIds = (task.comments || [])
+          .filter(c => !c.isExternal && c.userId && !c.userId.toString().startsWith('external_'))
+          .map(c => c.userId.toString());
+        const commentEmails = (task.comments || [])
+          .filter(c => !c.isExternal && c.userEmail)
+          .map(c => c.userEmail.toLowerCase());
+        
+        const allUserIds = [...new Set([...allMemberIds, ...commentUserIds])];
+        
+        if (allUserIds.length > 0 || commentEmails.length > 0) {
+          const objectIds = allUserIds.map(id => {
+            try {
+              return new mongoose.Types.ObjectId(id);
+            } catch {
+              return null;
+            }
+          }).filter(Boolean);
+          
+          const query = { $or: [] };
+          if (objectIds.length > 0) {
+            query.$or.push({ _id: { $in: objectIds } });
+          }
+          if (commentEmails.length > 0) {
+            query.$or.push({ email: { $in: commentEmails } });
+          }
+          
+          if (query.$or.length > 0) {
+            const users = await db.collection('user').find(query).toArray();
+            users.forEach(user => {
+              membersMap[user._id.toString()] = {
+                id: user._id.toString(),
+                name: user.name || user.email || 'Utilisateur',
+                image: user.image || user.avatar || null
+              };
+              if (user.email) {
+                emailToUserMap[user.email.toLowerCase()] = {
+                  id: user._id.toString(),
+                  name: user.name || user.email || 'Utilisateur',
+                  image: user.image || user.avatar || null
+                };
+              }
+            });
+          }
+        }
+        
+        // Retourner la tâche mise à jour avec TOUTES les données
         return {
           success: true,
           task: {
@@ -827,19 +962,78 @@ const resolvers = {
             status: task.status,
             priority: task.priority,
             tags: task.tags,
+            startDate: task.startDate,
             dueDate: task.dueDate,
             columnId: task.columnId,
             position: task.position,
             checklist: task.checklist,
-            assignedMembers: [],
-            comments: task.comments.map(c => ({
-              id: c._id?.toString(),
-              userName: c.userName || "Utilisateur",
-              userEmail: c.userEmail || null,
-              content: c.content,
-              isExternal: c.isExternal || false,
-              createdAt: c.createdAt
-            }))
+            images: (task.images || []).map(img => ({
+              id: img._id?.toString() || img.id,
+              key: img.key,
+              url: img.url,
+              fileName: img.fileName,
+              contentType: img.contentType
+            })),
+            assignedMembers: (task.assignedMembers || []).map(memberId => 
+              membersMap[memberId] || { id: memberId, name: 'Membre', image: null }
+            ),
+            timeTracking: task.timeTracking ? {
+              totalSeconds: task.timeTracking.totalSeconds || 0,
+              isRunning: task.timeTracking.isRunning || false,
+              currentStartTime: task.timeTracking.currentStartTime,
+              hourlyRate: task.timeTracking.hourlyRate,
+              startedBy: task.timeTracking.startedBy ? {
+                userId: task.timeTracking.startedBy.userId,
+                userName: task.timeTracking.startedBy.userName,
+                userImage: task.timeTracking.startedBy.userImage
+              } : null
+            } : null,
+            comments: task.comments.map(c => {
+              // Pour les commentaires externes, récupérer les infos du visiteur
+              if (c.isExternal && c.userEmail) {
+                const visitorInfo = share.visitors?.find(v => v.email?.toLowerCase() === c.userEmail.toLowerCase());
+                return {
+                  id: c._id?.toString(),
+                  userName: visitorInfo?.name || visitorInfo?.firstName || c.userName || c.userEmail.split('@')[0],
+                  userEmail: c.userEmail,
+                  userImage: visitorInfo?.image || c.userImage || null,
+                  content: c.content,
+                  isExternal: true,
+                  images: (c.images || []).map(img => ({
+                    id: img._id?.toString() || img.id,
+                    key: img.key,
+                    url: img.url,
+                    fileName: img.fileName,
+                    contentType: img.contentType
+                  })),
+                  createdAt: c.createdAt
+                };
+              }
+              // Pour les commentaires non-externes
+              let userInfo = c.userId && !c.userId.toString().startsWith('external_') ? membersMap[c.userId.toString()] : null;
+              if (!userInfo && c.userEmail) {
+                userInfo = emailToUserMap[c.userEmail.toLowerCase()];
+              }
+              return {
+                id: c._id?.toString(),
+                userName: userInfo?.name || c.userName || (c.userEmail ? c.userEmail.split('@')[0] : 'Utilisateur'),
+                userEmail: c.userEmail || null,
+                userImage: userInfo?.image || c.userImage || null,
+                content: c.content,
+                isExternal: c.isExternal || false,
+                images: (c.images || []).map(img => ({
+                  id: img._id?.toString() || img.id,
+                  key: img.key,
+                  url: img.url,
+                  fileName: img.fileName,
+                  contentType: img.contentType
+                })),
+                createdAt: c.createdAt
+              };
+            }),
+            userId: task.userId,
+            createdAt: task.createdAt,
+            updatedAt: task.updatedAt
           }
         };
       } catch (error) {
@@ -875,6 +1069,7 @@ const resolvers = {
         
         // Mettre à jour le profil
         const visitor = share.visitors[visitorIndex];
+        const visitorId = visitor._id.toString();
         
         if (input.firstName !== undefined) {
           visitor.firstName = input.firstName;
@@ -882,8 +1077,19 @@ const resolvers = {
         if (input.lastName !== undefined) {
           visitor.lastName = input.lastName;
         }
+        
+        // L'image est maintenant uploadée via uploadVisitorImage (pas de base64)
+        // On accepte uniquement les URLs Cloudflare ou null
         if (input.image !== undefined) {
-          visitor.image = input.image;
+          if (input.image === null || input.image === '') {
+            // Supprimer l'image
+            await cloudflareService.deleteVisitorImages(visitorId);
+            visitor.image = null;
+          } else if (input.image.startsWith('http')) {
+            // C'est une URL Cloudflare, la garder
+            visitor.image = input.image;
+          }
+          // Ignorer les base64 - ils ne devraient plus être envoyés
         }
         
         // Mettre à jour le nom complet
@@ -894,6 +1100,58 @@ const resolvers = {
         await share.save();
         
         logger.info(`👤 [PublicShare] Profil visiteur mis à jour: ${email}`);
+        
+        // NE PLUS mettre à jour les commentaires existants car :
+        // 1. L'image peut être en base64 et dépasser la limite MongoDB de 16MB
+        // 2. On récupère maintenant les infos du visiteur dynamiquement via enrichTaskWithUserInfo
+        // Les commentaires sont enrichis à la volée avec les infos à jour du visiteur
+        try {
+          // Optionnel: mettre à jour uniquement le userName (pas l'image) pour les anciens commentaires sans visitorId
+          const updateResult = await Task.updateMany(
+            { 
+              boardId: share.boardId,
+              'comments.userEmail': { $regex: new RegExp(`^${email}$`, 'i') },
+              'comments.visitorId': { $exists: false } // Seulement les anciens commentaires
+            },
+            {
+              $set: {
+                'comments.$[elem].userName': visitor.name
+                // NE PAS mettre à jour userImage ici
+              }
+            },
+            {
+              arrayFilters: [{ 'elem.userEmail': { $regex: new RegExp(`^${email}$`, 'i') } }]
+            }
+          );
+          logger.info(`📝 [PublicShare] ${updateResult.modifiedCount} tâche(s) mise(s) à jour avec le nouveau profil visiteur`);
+        } catch (updateError) {
+          logger.error('❌ [PublicShare] Erreur mise à jour commentaires:', updateError);
+        }
+        
+        // Payload commun pour les deux canaux
+        const visitorPayload = {
+          type: 'VISITOR_PROFILE_UPDATED',
+          visitor: {
+            id: visitor._id.toString(),
+            email: visitor.email,
+            firstName: visitor.firstName,
+            lastName: visitor.lastName,
+            name: visitor.name,
+            image: visitor.image
+          },
+          boardId: share.boardId.toString(),
+          workspaceId: share.workspaceId.toString()
+        };
+        
+        // Publier sur le canal séparé pour les visiteurs (subscription publique)
+        const visitorChannel = `${PUBLIC_VISITOR_UPDATED}_${share.workspaceId}_${share.boardId}`;
+        safePublish(visitorChannel, visitorPayload, 'Profil visiteur (public)');
+        
+        // Publier aussi sur le canal TASK_UPDATED pour les utilisateurs connectés
+        const taskChannel = `${TASK_UPDATED}_${share.workspaceId}_${share.boardId}`;
+        safePublish(taskChannel, visitorPayload, 'Profil visiteur (connecté)');
+        
+        logger.info(`📡 [PublicShare] Événement VISITOR_PROFILE_UPDATED publié sur les deux canaux pour ${email}`);
         
         return {
           success: true,
@@ -915,6 +1173,233 @@ const resolvers = {
         return {
           success: false,
           message: "Une erreur est survenue"
+        };
+      }
+    },
+
+    // Upload une image de profil visiteur sur Cloudflare
+    uploadVisitorImage: async (_, { token, email, file }) => {
+      try {
+        const share = await PublicBoardShare.findOne({ token, isActive: true });
+        
+        if (!share || !share.isValid()) {
+          return {
+            success: false,
+            message: 'Lien de partage invalide ou expiré',
+            imageUrl: null
+          };
+        }
+        
+        // Trouver le visiteur
+        const visitorIndex = share.visitors.findIndex(v => v.email === email.toLowerCase());
+        if (visitorIndex === -1) {
+          return {
+            success: false,
+            message: 'Visiteur non trouvé',
+            imageUrl: null
+          };
+        }
+        
+        const visitor = share.visitors[visitorIndex];
+        const visitorId = visitor._id.toString();
+        
+        // Traiter le fichier uploadé
+        const { createReadStream, filename, mimetype } = await file;
+        
+        if (!mimetype.startsWith('image/')) {
+          return {
+            success: false,
+            message: 'Le fichier doit être une image',
+            imageUrl: null
+          };
+        }
+        
+        // Lire le fichier en buffer
+        const stream = createReadStream();
+        const chunks = [];
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        
+        // Vérifier la taille (max 2MB)
+        if (buffer.length > 2 * 1024 * 1024) {
+          return {
+            success: false,
+            message: 'L\'image ne doit pas dépasser 2MB',
+            imageUrl: null
+          };
+        }
+        
+        // Uploader sur Cloudflare
+        const uploadResult = await cloudflareService.uploadVisitorImage(buffer, filename, visitorId);
+        
+        if (!uploadResult.success) {
+          return {
+            success: false,
+            message: 'Erreur lors de l\'upload de l\'image',
+            imageUrl: null
+          };
+        }
+        
+        // Mettre à jour l'image du visiteur
+        visitor.image = uploadResult.url;
+        await share.save();
+        
+        logger.info(`📸 [PublicShare] Image visiteur uploadée: ${uploadResult.url}`);
+        
+        // Publier l'événement Redis pour synchroniser en temps réel
+        safePublish(
+          `${TASK_UPDATED}_${share.boardId}`,
+          {
+            type: 'VISITOR_PROFILE_UPDATED',
+            task: null,
+            boardId: share.boardId.toString(),
+            visitor: {
+              id: visitorId,
+              email: visitor.email,
+              firstName: visitor.firstName,
+              lastName: visitor.lastName,
+              name: visitor.name,
+              image: visitor.image
+            }
+          },
+          'Image visiteur uploadée'
+        );
+        
+        // Publier aussi sur le canal public
+        safePublish(
+          `${PUBLIC_VISITOR_UPDATED}_${share.boardId}`,
+          {
+            type: 'VISITOR_PROFILE_UPDATED',
+            boardId: share.boardId.toString(),
+            visitor: {
+              id: visitorId,
+              email: visitor.email,
+              firstName: visitor.firstName,
+              lastName: visitor.lastName,
+              name: visitor.name,
+              image: visitor.image
+            }
+          },
+          'Image visiteur uploadée (public)'
+        );
+        
+        return {
+          success: true,
+          message: 'Image uploadée avec succès',
+          imageUrl: uploadResult.url
+        };
+      } catch (error) {
+        logger.error('❌ [PublicShare] Erreur upload image visiteur:', error);
+        return {
+          success: false,
+          message: 'Une erreur est survenue',
+          imageUrl: null
+        };
+      }
+    },
+
+    // Upload une image pour un commentaire externe (visiteur)
+    uploadExternalCommentImage: async (_, { token, taskId, file, visitorEmail }) => {
+      try {
+        // Vérifier le lien de partage
+        const share = await PublicBoardShare.findOne({ token, isActive: true });
+        
+        if (!share || !share.isValid()) {
+          return {
+            success: false,
+            image: null,
+            message: 'Lien de partage invalide ou expiré'
+          };
+        }
+        
+        if (!share.permissions.canComment) {
+          return {
+            success: false,
+            image: null,
+            message: 'Les commentaires ne sont pas autorisés sur ce tableau'
+          };
+        }
+        
+        // Vérifier que la tâche appartient au tableau partagé
+        const task = await Task.findOne({
+          _id: taskId,
+          boardId: share.boardId
+        });
+        
+        if (!task) {
+          return {
+            success: false,
+            image: null,
+            message: 'Tâche non trouvée'
+          };
+        }
+
+        // Traiter le fichier uploadé
+        const { createReadStream, filename, mimetype } = await file;
+        const stream = createReadStream();
+        const chunks = [];
+        
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+        const fileBuffer = Buffer.concat(chunks);
+
+        // Valider le type de fichier
+        const validMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!validMimeTypes.includes(mimetype)) {
+          return {
+            success: false,
+            image: null,
+            message: 'Type de fichier non supporté. Utilisez JPEG, PNG, GIF ou WebP.'
+          };
+        }
+
+        // Valider la taille (max 5MB pour les visiteurs)
+        const maxSize = 5 * 1024 * 1024;
+        if (fileBuffer.length > maxSize) {
+          return {
+            success: false,
+            image: null,
+            message: 'Fichier trop volumineux. Maximum 5MB.'
+          };
+        }
+
+        // Upload vers Cloudflare R2
+        const uploadResult = await cloudflareService.uploadTaskImage(
+          fileBuffer,
+          filename,
+          taskId,
+          `visitor_${visitorEmail.replace('@', '_at_')}`,
+          'comments'
+        );
+
+        // Créer l'objet image
+        const newImage = {
+          id: new mongoose.Types.ObjectId().toString(),
+          key: uploadResult.key,
+          url: uploadResult.url,
+          fileName: uploadResult.fileName,
+          fileSize: uploadResult.fileSize,
+          contentType: uploadResult.contentType,
+          uploadedBy: `external_${visitorEmail}`,
+          uploadedAt: new Date()
+        };
+
+        logger.info(`✅ [PublicShare] Image uploadée par visiteur ${visitorEmail}: ${newImage.url}`);
+
+        return {
+          success: true,
+          image: newImage,
+          message: 'Image uploadée avec succès'
+        };
+      } catch (error) {
+        logger.error('❌ [PublicShare] Erreur upload image externe:', error);
+        return {
+          success: false,
+          image: null,
+          message: `Erreur lors de l'upload: ${error.message}`
         };
       }
     }
@@ -944,12 +1429,12 @@ const resolvers = {
           }
           
           const pubsub = getPubSub();
-          // S'abonner au canal du workspace+board pour recevoir les mises à jour
-          // Le canal doit être le même que celui utilisé par le kanban: TASK_UPDATED_workspaceId_boardId
-          const channel = `${TASK_UPDATED}_${share.workspaceId}_${share.boardId}`;
-          logger.debug(`📡 [PublicShare] Subscription au canal: ${channel}`);
+          // S'abonner aux canaux du workspace+board pour recevoir les mises à jour
+          const taskChannel = `${TASK_UPDATED}_${share.workspaceId}_${share.boardId}`;
+          const visitorChannel = `${PUBLIC_VISITOR_UPDATED}_${share.workspaceId}_${share.boardId}`;
+          logger.debug(`📡 [PublicShare] Subscription aux canaux: ${taskChannel}, ${visitorChannel}`);
           
-          return pubsub.asyncIterator([channel]);
+          return pubsub.asyncIterator([taskChannel, visitorChannel]);
         } catch (error) {
           logger.error('❌ [PublicShare] Erreur subscription publicTaskUpdated:', error);
           throw error;
@@ -961,12 +1446,14 @@ const resolvers = {
         
         const task = payload.task;
         if (!task) {
-          logger.warn('⚠️ [PublicShare] Subscription resolve - task is null');
+          // Pour les événements sans task (ex: VISITOR_PROFILE_UPDATED), retourner le payload tel quel
+          logger.info(`📡 [PublicShare] Subscription resolve - événement sans task: ${payload.type}`);
           return {
             type: payload.type,
             task: null,
             taskId: payload.taskId,
-            boardId: payload.boardId
+            boardId: payload.boardId,
+            visitor: payload.visitor || null
           };
         }
         
@@ -1071,15 +1558,35 @@ const resolvers = {
           }
           
           // Sinon, enrichir avec les infos de l'utilisateur
-          const userInfo = c.userId ? usersMap[c.userId.toString()] : null;
+          const userIdStr = c.userId?.toString();
+          const userInfo = userIdStr ? usersMap[userIdStr] : null;
+          // Priorité: userInfo (récupéré de la DB) > c.userName (déjà enrichi) > fallback
+          const finalUserName = userInfo?.name || (c.userName && c.userName !== 'Utilisateur' ? c.userName : null) || 'Utilisateur';
+          const finalUserImage = userInfo?.image || c.userImage || null;
+          
           return {
             id: c._id?.toString() || c.id,
-            userName: c.userName || userInfo?.name || 'Utilisateur',
+            userName: finalUserName,
             userEmail: c.userEmail || null,
-            userImage: c.userImage || userInfo?.image || null,
+            userImage: finalUserImage,
             content: c.content,
             isExternal: false,
             createdAt: c.createdAt
+          };
+        });
+        
+        // Enrichir les images des commentaires
+        const enrichedCommentsWithImages = enrichedComments.map(c => {
+          const originalComment = comments.find(oc => (oc._id?.toString() || oc.id) === c.id);
+          return {
+            ...c,
+            images: (originalComment?.images || []).map(img => ({
+              id: img._id?.toString() || img.id,
+              key: img.key,
+              url: img.url,
+              fileName: img.fileName,
+              contentType: img.contentType
+            }))
           };
         });
         
@@ -1096,12 +1603,25 @@ const resolvers = {
           columnId: task.columnId?.toString() || task.columnId,
           position: task.position,
           checklist: task.checklist || [],
+          images: (task.images || []).map(img => ({
+            id: img._id?.toString() || img.id,
+            key: img.key,
+            url: img.url,
+            fileName: img.fileName,
+            contentType: img.contentType
+          })),
           assignedMembers: enrichedMembers,
-          comments: enrichedComments,
+          comments: enrichedCommentsWithImages,
           timeTracking: task.timeTracking ? {
             totalSeconds: task.timeTracking.totalSeconds || 0,
             isRunning: task.timeTracking.isRunning || false,
-            hourlyRate: task.timeTracking.hourlyRate
+            currentStartTime: task.timeTracking.currentStartTime,
+            hourlyRate: task.timeTracking.hourlyRate,
+            startedBy: task.timeTracking.startedBy ? {
+              userId: task.timeTracking.startedBy.userId,
+              userName: task.timeTracking.startedBy.userName,
+              userImage: task.timeTracking.startedBy.userImage
+            } : null
           } : null,
           userId: task.userId,
           createdAt: task.createdAt,

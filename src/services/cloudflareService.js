@@ -245,6 +245,17 @@ class CloudflareService {
           key = `${userId}/image/${uniqueId}${fileExtension}`;
           break;
         }
+        case "visitorImage": {
+          // Pour les images des visiteurs externes (Kanban public)
+          // Structure: userVisitor/{visitorId}/{uniqueId}.ext
+          // Le visitorId est passé via signatureId pour réutiliser le paramètre existant
+          const visitorId = signatureId;
+          if (!visitorId) {
+            throw new Error("Visitor ID requis pour les images de visiteur");
+          }
+          key = `userVisitor/${visitorId}/${uniqueId}${fileExtension}`;
+          break;
+        }
         default: {
           // Pour les signatures et autres (comportement par défaut)
           key = `signatures/${userId}/${imageType}/${uniqueId}${fileExtension}`;
@@ -291,6 +302,10 @@ class CloudflareService {
         console.log("📁 [SHARED_DOCS] Upload vers bucket:", targetBucket);
         console.log("🌐 [SHARED_DOCS] URL publique:", targetPublicUrl);
         console.log("🔑 [SHARED_DOCS] Clé:", key);
+      } else if (imageType === "visitorImage") {
+        // Bucket USER_IMAGE pour les images des visiteurs externes
+        targetBucket = this.bucketName;
+        targetPublicUrl = this.publicUrl;
       } else {
         targetBucket = this.bucketName;
         targetPublicUrl = this.publicUrl;
@@ -1446,6 +1461,76 @@ class CloudflareService {
 
     // Fallback - retourner la clé pour générer une URL signée plus tard
     return key;
+  }
+
+  /**
+   * Supprime toutes les images d'un visiteur
+   * @param {string} visitorId - ID du visiteur
+   * @returns {Promise<boolean>}
+   */
+  async deleteVisitorImages(visitorId) {
+    try {
+      const prefix = `userVisitor/${visitorId}/`;
+
+      const listCommand = new ListObjectsV2Command({
+        Bucket: this.bucketName,
+        Prefix: prefix,
+      });
+
+      const listResponse = await this.client.send(listCommand);
+
+      if (!listResponse.Contents || listResponse.Contents.length === 0) {
+        return true;
+      }
+
+      const deletePromises = listResponse.Contents.map((object) => {
+        return this.deleteImage(object.Key, this.bucketName);
+      });
+
+      await Promise.all(deletePromises);
+      return true;
+    } catch (error) {
+      console.error('❌ [VISITOR] Erreur suppression images visiteur:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Upload une image de visiteur sur Cloudflare
+   * Supprime les anciennes images avant d'uploader la nouvelle
+   * @param {Buffer} fileBuffer - Buffer de l'image
+   * @param {string} fileName - Nom du fichier
+   * @param {string} visitorId - ID du visiteur
+   * @returns {Promise<{success: boolean, url: string}>}
+   */
+  async uploadVisitorImage(fileBuffer, fileName, visitorId) {
+    try {
+      // Supprimer les anciennes images du visiteur
+      await this.deleteVisitorImages(visitorId);
+
+      // Uploader la nouvelle image
+      const result = await this.uploadImage(
+        fileBuffer,
+        fileName,
+        'visitor', // userId placeholder
+        'visitorImage',
+        null, // organizationId
+        visitorId // signatureId utilisé pour passer le visitorId
+      );
+
+      return {
+        success: true,
+        url: result.url,
+        key: result.key
+      };
+    } catch (error) {
+      console.error('❌ [VISITOR] Erreur upload image visiteur:', error);
+      return {
+        success: false,
+        url: null,
+        error: error.message
+      };
+    }
   }
 }
 

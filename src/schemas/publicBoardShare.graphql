@@ -99,6 +99,7 @@ type PublicTask {
   position: Int
   checklist: [ChecklistItem!]
   assignedMembers: [PublicAssignedMember!]
+  images: [PublicTaskImage!]
   comments: [PublicComment!]
   timeTracking: PublicTimeTracking
   userId: ID
@@ -106,10 +107,26 @@ type PublicTask {
   updatedAt: DateTime
 }
 
+type PublicTaskImage {
+  id: ID!
+  key: String
+  url: String!
+  fileName: String
+  contentType: String
+}
+
 type PublicTimeTracking {
   totalSeconds: Int
   isRunning: Boolean
+  currentStartTime: DateTime
   hourlyRate: Float
+  startedBy: PublicTimerStartedBy
+}
+
+type PublicTimerStartedBy {
+  userId: String
+  userName: String
+  userImage: String
 }
 
 type PublicAssignedMember {
@@ -125,6 +142,7 @@ type PublicComment {
   userImage: String
   content: String!
   isExternal: Boolean!
+  images: [PublicTaskImage!]
   createdAt: DateTime!
 }
 
@@ -187,6 +205,20 @@ type UpdateVisitorProfileResult {
   visitor: ExternalVisitor
 }
 
+# Résultat de l'upload d'image visiteur
+type VisitorImageUploadResult {
+  success: Boolean!
+  message: String
+  imageUrl: String
+}
+
+# Résultat de l'upload d'image externe
+type ExternalImageUploadResult {
+  success: Boolean!
+  message: String
+  image: PublicTaskImage
+}
+
 # Résultat de la demande d'accès
 type RequestAccessResult {
   success: Boolean!
@@ -243,6 +275,21 @@ extend type Mutation {
     email: String!
     input: UpdateVisitorProfileInput!
   ): UpdateVisitorProfileResult!
+  
+  # Pour les visiteurs externes - uploader leur photo de profil sur Cloudflare
+  uploadVisitorImage(
+    token: String!
+    email: String!
+    file: Upload!
+  ): VisitorImageUploadResult!
+  
+  # Pour les visiteurs externes - uploader une image pour un commentaire
+  uploadExternalCommentImage(
+    token: String!
+    taskId: ID!
+    file: Upload!
+    visitorEmail: String!
+  ): ExternalImageUploadResult!
 }
 
 # Payload pour la subscription de mise à jour de tâche publique
@@ -251,6 +298,16 @@ type PublicTaskUpdatePayload {
   task: PublicTask
   taskId: ID
   boardId: ID
+  visitor: PublicVisitorInfo
+}
+
+type PublicVisitorInfo {
+  id: String
+  email: String
+  firstName: String
+  lastName: String
+  name: String
+  image: String
 }
 
 # Payload pour la subscription d'accès approuvé

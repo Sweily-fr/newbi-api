@@ -35,8 +35,22 @@ const enrichTaskWithUserInfo = async (task) => {
   
   // Collecter tous les userIds des commentaires et activités
   const allUserIds = new Set();
+  const externalEmails = new Set();
+  
   (taskObj.comments || []).forEach(c => {
-    if (c.userId && !c.userId.startsWith('external_')) allUserIds.add(c.userId);
+    // Si le commentaire a un userEmail, c'est un commentaire externe (visiteur)
+    if (c.userEmail) {
+      externalEmails.add(c.userEmail.toLowerCase());
+    } else if (c.userId && !c.userId.startsWith('external_')) {
+      // Sinon, c'est un commentaire d'utilisateur connecté
+      allUserIds.add(c.userId);
+    } else if (c.userId?.startsWith('external_')) {
+      // Commentaire externe sans userEmail - extraire l'email du userId
+      const emailFromUserId = c.userId.replace('external_', '');
+      if (emailFromUserId && emailFromUserId.includes('@')) {
+        externalEmails.add(emailFromUserId.toLowerCase());
+      }
+    }
   });
   (taskObj.activity || []).forEach(a => {
     if (a.userId) allUserIds.add(a.userId);
@@ -58,9 +72,73 @@ const enrichTaskWithUserInfo = async (task) => {
     }
   }
   
+  // Collecter les visitorIds des commentaires
+  const visitorIds = new Set();
+  (taskObj.comments || []).forEach(c => {
+    if (c.visitorId) {
+      visitorIds.add(c.visitorId);
+    }
+  });
+  
+  // Récupérer les infos des visiteurs externes depuis PublicBoardShare
+  let visitorsMap = {};
+  logger.info(`🔍 [enrichTask] externalEmails: ${externalEmails.size}, visitorIds: ${visitorIds.size}, boardId: ${taskObj.boardId}`);
+  if ((externalEmails.size > 0 || visitorIds.size > 0) && taskObj.boardId) {
+    try {
+      const PublicBoardShare = mongoose.model('PublicBoardShare');
+      const share = await PublicBoardShare.findOne({ boardId: taskObj.boardId, isActive: true });
+      logger.info(`🔍 [enrichTask] Share trouvé: ${!!share}, visiteurs: ${share?.visitors?.length || 0}`);
+      if (share?.visitors) {
+        share.visitors.forEach(v => {
+          // Indexer par ID et par email pour supporter les deux méthodes
+          const visitorData = {
+            name: v.name || v.firstName || (v.email ? v.email.split('@')[0] : 'Visiteur'),
+            image: v.image || null
+          };
+          if (v._id) {
+            visitorsMap[v._id.toString()] = visitorData;
+            logger.debug(`📋 [enrichTask] Visiteur indexé par ID: ${v._id.toString()} -> ${visitorData.name}, image: ${visitorData.image ? 'oui' : 'non'}`);
+          }
+          if (v.email) {
+            visitorsMap[v.email.toLowerCase()] = visitorData;
+          }
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [enrichTaskWithUserInfo] Erreur récupération visiteurs:', error);
+    }
+  }
+  
   // Enrichir les commentaires
   const enrichedComments = (taskObj.comments || []).map(c => {
-    if (c.userId?.startsWith('external_')) return { ...c, id: c._id?.toString() || c.id };
+    // Commentaires externes (visiteurs) - TOUJOURS utiliser les infos du visiteur depuis PublicBoardShare
+    if (c.visitorId || c.userId?.startsWith('external_') || c.isExternal || c.userEmail) {
+      // Chercher le visiteur par visitorId en priorité, sinon par email
+      let visitorInfo = null;
+      if (c.visitorId && visitorsMap[c.visitorId]) {
+        visitorInfo = visitorsMap[c.visitorId];
+      } else {
+        // Fallback: chercher par email
+        let visitorEmail = c.userEmail;
+        if (!visitorEmail && c.userId?.startsWith('external_')) {
+          visitorEmail = c.userId.replace('external_', '');
+        }
+        if (visitorEmail) {
+          visitorInfo = visitorsMap[visitorEmail.toLowerCase()];
+        }
+      }
+      
+      // Prioriser les infos du visiteur depuis PublicBoardShare (toujours à jour)
+      const enrichedComment = {
+        ...c,
+        id: c._id?.toString() || c.id,
+        userName: visitorInfo?.name || c.userName || 'Visiteur',
+        userImage: visitorInfo?.image !== undefined ? visitorInfo.image : (c.userImage || null)
+      };
+      
+      return enrichedComment;
+    }
+    // Commentaires utilisateurs connectés
     const userInfo = usersMap[c.userId];
     return { ...c, id: c._id?.toString() || c.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
   });
@@ -80,11 +158,24 @@ const enrichTasksWithUserInfo = async (tasks) => {
   
   const db = mongoose.connection.db;
   
-  // Collecter tous les userIds
+  // Collecter tous les userIds et emails externes
   const allUserIds = new Set();
+  const externalEmails = new Set();
+  const visitorIds = new Set();
+  let boardId = null;
+  
   tasks.forEach(task => {
+    if (!boardId && task.boardId) boardId = task.boardId;
     (task.comments || []).forEach(c => {
-      if (c.userId && !c.userId.startsWith('external_')) allUserIds.add(c.userId);
+      if (c.visitorId) visitorIds.add(c.visitorId);
+      if (c.userEmail) {
+        externalEmails.add(c.userEmail.toLowerCase());
+      } else if (c.userId?.startsWith('external_')) {
+        const email = c.userId.replace('external_', '');
+        if (email.includes('@')) externalEmails.add(email.toLowerCase());
+      } else if (c.userId) {
+        allUserIds.add(c.userId);
+      }
     });
     (task.activity || []).forEach(a => {
       if (a.userId) allUserIds.add(a.userId);
@@ -107,24 +198,61 @@ const enrichTasksWithUserInfo = async (tasks) => {
     }
   }
   
+  // Récupérer les infos des visiteurs depuis PublicBoardShare
+  let visitorsMap = {};
+  if ((externalEmails.size > 0 || visitorIds.size > 0) && boardId) {
+    try {
+      const PublicBoardShare = mongoose.model('PublicBoardShare');
+      const share = await PublicBoardShare.findOne({ boardId, isActive: true });
+      if (share?.visitors) {
+        share.visitors.forEach(v => {
+          const visitorData = {
+            name: v.name || v.firstName || (v.email ? v.email.split('@')[0] : 'Visiteur'),
+            image: v.image || null
+          };
+          if (v._id) visitorsMap[v._id.toString()] = visitorData;
+          if (v.email) visitorsMap[v.email.toLowerCase()] = visitorData;
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération visiteurs:', error);
+    }
+  }
+  
   // Enrichir chaque tâche
   return tasks.map(task => {
     const taskObj = task.toObject ? task.toObject() : task;
     
-    // Log pour débuguer les images
-    if (taskObj.images && taskObj.images.length > 0) {
-      logger.info(`📸 [enrichTasksWithUserInfo] Tâche ${taskObj._id} a ${taskObj.images.length} image(s)`);
-    }
-    
     const enrichedComments = (taskObj.comments || []).map(c => {
-      if (c.userId?.startsWith('external_')) return { ...c, id: c._id?.toString() || c.id };
+      // Commentaires externes (visiteurs)
+      if (c.visitorId || c.userId?.startsWith('external_') || c.isExternal || c.userEmail) {
+        let visitorInfo = null;
+        if (c.visitorId && visitorsMap[c.visitorId]) {
+          visitorInfo = visitorsMap[c.visitorId];
+        } else {
+          let email = c.userEmail;
+          if (!email && c.userId?.startsWith('external_')) {
+            email = c.userId.replace('external_', '');
+          }
+          if (email) visitorInfo = visitorsMap[email.toLowerCase()];
+        }
+        return {
+          ...c,
+          id: c._id?.toString() || c.id,
+          userName: visitorInfo?.name || c.userName || 'Visiteur',
+          userImage: visitorInfo?.image !== undefined ? visitorInfo.image : (c.userImage || null)
+        };
+      }
+      // Commentaires utilisateurs connectés
       const userInfo = usersMap[c.userId];
       return { ...c, id: c._id?.toString() || c.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
     });
+    
     const enrichedActivity = (taskObj.activity || []).map(a => {
       const userInfo = usersMap[a.userId];
       return { ...a, id: a._id?.toString() || a.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
     });
+    
     return { ...taskObj, id: taskObj._id?.toString() || taskObj.id, comments: enrichedComments, activity: enrichedActivity };
   });
 };
@@ -2054,6 +2182,21 @@ const resolvers = {
         }
       ),
       resolve: (payload) => {
+        // Pour les événements VISITOR_PROFILE_UPDATED, retourner le payload avec visitor
+        if (payload.type === 'VISITOR_PROFILE_UPDATED' && payload.visitor) {
+          return {
+            type: payload.type,
+            task: null,
+            taskId: null,
+            boardId: payload.boardId,
+            workspaceId: payload.workspaceId,
+            visitor: payload.visitor
+          };
+        }
+        // Ignorer les autres événements qui n'ont pas de task
+        if (!payload.task) {
+          return null;
+        }
         // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique
         // Toujours retourner le payload car il vient du bon canal
         return payload;
