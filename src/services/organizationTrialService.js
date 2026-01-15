@@ -1,5 +1,5 @@
-import mongoose from 'mongoose';
-import logger from '../utils/logger.js';
+import mongoose from "mongoose";
+import logger from "../utils/logger.js";
 
 /**
  * Service pour gérer les périodes d'essai au niveau organisation
@@ -11,14 +11,14 @@ class OrganizationTrialService {
    * Obtenir la collection organization de MongoDB
    */
   static getOrganizationCollection() {
-    return mongoose.connection.db.collection('organization');
+    return mongoose.connection.db.collection("organization");
   }
 
   /**
    * Obtenir la collection member de MongoDB
    */
   static getMemberCollection() {
-    return mongoose.connection.db.collection('member');
+    return mongoose.connection.db.collection("member");
   }
 
   /**
@@ -30,12 +30,17 @@ class OrganizationTrialService {
     try {
       const memberCollection = this.getMemberCollection();
       const organizationCollection = this.getOrganizationCollection();
-      
+
       // Convertir userId en ObjectId si c'est une string
-      const userObjectId = typeof userId === 'string' ? new mongoose.Types.ObjectId(userId) : userId;
-      
+      const userObjectId =
+        typeof userId === "string"
+          ? new mongoose.Types.ObjectId(userId)
+          : userId;
+
       // Trouver le membership de l'utilisateur
-      const membership = await memberCollection.findOne({ userId: userObjectId });
+      const membership = await memberCollection.findOne({
+        userId: userObjectId,
+      });
 
       if (!membership) {
         logger.debug(`Aucun membership trouvé pour l'utilisateur ${userId}`);
@@ -43,13 +48,13 @@ class OrganizationTrialService {
       }
 
       // Récupérer l'organisation (organizationId est aussi un ObjectId)
-      const organization = await organizationCollection.findOne({ 
-        _id: membership.organizationId 
+      const organization = await organizationCollection.findOne({
+        _id: membership.organizationId,
       });
 
       return organization;
     } catch (error) {
-      logger.error('Erreur lors de la récupération de l\'organisation:', error);
+      logger.error("Erreur lors de la récupération de l'organisation:", error);
       return null;
     }
   }
@@ -62,11 +67,13 @@ class OrganizationTrialService {
   static async createTrialFields(organizationId) {
     try {
       const organizationCollection = this.getOrganizationCollection();
-      
+
       // Convertir en ObjectId si nécessaire
-      const orgObjectId = typeof organizationId === 'string' ? 
-        new mongoose.Types.ObjectId(organizationId) : organizationId;
-      
+      const orgObjectId =
+        typeof organizationId === "string"
+          ? new mongoose.Types.ObjectId(organizationId)
+          : organizationId;
+
       const updateResult = await organizationCollection.updateOne(
         { _id: orgObjectId },
         {
@@ -75,14 +82,16 @@ class OrganizationTrialService {
             hasUsedTrial: false,
             trialStartDate: null,
             trialEndDate: null,
-            updatedAt: new Date()
-          }
+            updatedAt: new Date(),
+          },
         }
       );
-      
-      logger.info(`Champs trial créés pour l'organisation ${organizationId}: ${updateResult.modifiedCount} document(s) modifié(s)`);
+
+      logger.info(
+        `Champs trial créés pour l'organisation ${organizationId}: ${updateResult.modifiedCount} document(s) modifié(s)`
+      );
     } catch (error) {
-      logger.error('Erreur lors de la création des champs trial:', error);
+      logger.error("Erreur lors de la création des champs trial:", error);
       throw error;
     }
   }
@@ -95,31 +104,37 @@ class OrganizationTrialService {
   static async checkAndUpdateTrialStatus(userId) {
     try {
       const organization = await this.getUserOrganization(userId);
-      
+
       if (!organization) {
-        throw new Error('Organisation non trouvée pour cet utilisateur');
+        throw new Error("Organisation non trouvée pour cet utilisateur");
       }
 
       const now = new Date();
-      const isTrialExpired = organization.trialEndDate && now > new Date(organization.trialEndDate);
+      const isTrialExpired =
+        organization.trialEndDate && now > new Date(organization.trialEndDate);
 
       // Si la période d'essai est expirée mais toujours active, la terminer
       if (isTrialExpired && organization.isTrialActive) {
         await this.endTrial(organization.id);
-        logger.info(`Période d'essai expirée pour l'organisation ${organization.id}`);
-        
+        logger.info(
+          `Période d'essai expirée pour l'organisation ${organization.id}`
+        );
+
         // Récupérer les données mises à jour
         const organizationCollection = this.getOrganizationCollection();
-        const updatedOrganization = await organizationCollection.findOne({ 
-          id: organization.id 
+        const updatedOrganization = await organizationCollection.findOne({
+          id: organization.id,
         });
-        
+
         return this.formatTrialStatus(updatedOrganization);
       }
 
       return this.formatTrialStatus(organization);
     } catch (error) {
-      logger.error('Erreur lors de la vérification du statut de la période d\'essai:', error);
+      logger.error(
+        "Erreur lors de la vérification du statut de la période d'essai:",
+        error
+      );
       throw error;
     }
   }
@@ -141,8 +156,10 @@ class OrganizationTrialService {
     }
 
     const now = new Date();
-    const trialEndDate = organization.trialEndDate ? new Date(organization.trialEndDate) : null;
-    
+    const trialEndDate = organization.trialEndDate
+      ? new Date(organization.trialEndDate)
+      : null;
+
     let daysRemaining = 0;
     if (organization.isTrialActive && trialEndDate) {
       const diffTime = trialEndDate - now;
@@ -170,17 +187,17 @@ class OrganizationTrialService {
   static async startTrial(userId) {
     try {
       const organization = await this.getUserOrganization(userId);
-      
+
       if (!organization) {
-        throw new Error('Organisation non trouvée pour cet utilisateur');
+        throw new Error("Organisation non trouvée pour cet utilisateur");
       }
 
       if (organization.hasUsedTrial) {
-        throw new Error('Cette organisation a déjà utilisé sa période d\'essai');
+        throw new Error("Cette organisation a déjà utilisé sa période d'essai");
       }
 
       const now = new Date();
-      const trialEnd = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000); // 6 mois (180 jours)
+      const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 14 jours
 
       const organizationCollection = this.getOrganizationCollection();
       await organizationCollection.updateOne(
@@ -191,21 +208,23 @@ class OrganizationTrialService {
             trialEndDate: trialEnd,
             isTrialActive: true,
             hasUsedTrial: true,
-            updatedAt: now
-          }
+            updatedAt: now,
+          },
         }
       );
 
-      logger.info(`Période d'essai démarrée pour l'organisation ${organization.id}`);
+      logger.info(
+        `Période d'essai démarrée pour l'organisation ${organization.id}`
+      );
 
       // Récupérer les données mises à jour
-      const updatedOrganization = await organizationCollection.findOne({ 
-        id: organization.id 
+      const updatedOrganization = await organizationCollection.findOne({
+        id: organization.id,
       });
 
       return this.formatTrialStatus(updatedOrganization);
     } catch (error) {
-      logger.error('Erreur lors du démarrage de la période d\'essai:', error);
+      logger.error("Erreur lors du démarrage de la période d'essai:", error);
       throw error;
     }
   }
@@ -223,14 +242,16 @@ class OrganizationTrialService {
         {
           $set: {
             isTrialActive: false,
-            updatedAt: new Date()
-          }
+            updatedAt: new Date(),
+          },
         }
       );
 
-      logger.info(`Période d'essai terminée pour l'organisation ${organizationId}`);
+      logger.info(
+        `Période d'essai terminée pour l'organisation ${organizationId}`
+      );
     } catch (error) {
-      logger.error('Erreur lors de la fin de la période d\'essai:', error);
+      logger.error("Erreur lors de la fin de la période d'essai:", error);
       throw error;
     }
   }
@@ -246,17 +267,22 @@ class OrganizationTrialService {
       targetDate.setDate(targetDate.getDate() + daysBeforeExpiration);
 
       const organizationCollection = this.getOrganizationCollection();
-      const organizations = await organizationCollection.find({
-        isTrialActive: true,
-        trialEndDate: {
-          $lte: targetDate,
-          $gte: new Date(),
-        },
-      }).toArray();
+      const organizations = await organizationCollection
+        .find({
+          isTrialActive: true,
+          trialEndDate: {
+            $lte: targetDate,
+            $gte: new Date(),
+          },
+        })
+        .toArray();
 
       return organizations || [];
     } catch (error) {
-      logger.error('Erreur lors de la récupération des organisations avec période d\'essai expirante:', error);
+      logger.error(
+        "Erreur lors de la récupération des organisations avec période d'essai expirante:",
+        error
+      );
       throw error;
     }
   }
@@ -269,11 +295,13 @@ class OrganizationTrialService {
     try {
       const now = new Date();
       const organizationCollection = this.getOrganizationCollection();
-      
-      const expiredOrganizations = await organizationCollection.find({
-        isTrialActive: true,
-        trialEndDate: { $lt: now },
-      }).toArray();
+
+      const expiredOrganizations = await organizationCollection
+        .find({
+          isTrialActive: true,
+          trialEndDate: { $lt: now },
+        })
+        .toArray();
 
       let updatedCount = 0;
       for (const org of expiredOrganizations || []) {
@@ -284,7 +312,10 @@ class OrganizationTrialService {
       logger.info(`${updatedCount} périodes d'essai expirées nettoyées`);
       return updatedCount;
     } catch (error) {
-      logger.error('Erreur lors du nettoyage des périodes d\'essai expirées:', error);
+      logger.error(
+        "Erreur lors du nettoyage des périodes d'essai expirées:",
+        error
+      );
       throw error;
     }
   }
@@ -296,17 +327,17 @@ class OrganizationTrialService {
   static async getTrialStats() {
     try {
       const organizationCollection = this.getOrganizationCollection();
-      
+
       const [activeTrials, expiredTrials, totalTrialsUsed] = await Promise.all([
         organizationCollection.countDocuments({
-          isTrialActive: true
+          isTrialActive: true,
         }),
         organizationCollection.countDocuments({
           hasUsedTrial: true,
           isTrialActive: false,
         }),
         organizationCollection.countDocuments({
-          hasUsedTrial: true
+          hasUsedTrial: true,
         }),
       ]);
 
@@ -314,10 +345,19 @@ class OrganizationTrialService {
         activeTrials: activeTrials || 0,
         expiredTrials: expiredTrials || 0,
         totalTrialsUsed: totalTrialsUsed || 0,
-        conversionRate: totalTrialsUsed > 0 ? ((totalTrialsUsed - expiredTrials) / totalTrialsUsed * 100).toFixed(2) : 0,
+        conversionRate:
+          totalTrialsUsed > 0
+            ? (
+                ((totalTrialsUsed - expiredTrials) / totalTrialsUsed) *
+                100
+              ).toFixed(2)
+            : 0,
       };
     } catch (error) {
-      logger.error('Erreur lors de la récupération des statistiques de période d\'essai:', error);
+      logger.error(
+        "Erreur lors de la récupération des statistiques de période d'essai:",
+        error
+      );
       throw error;
     }
   }
