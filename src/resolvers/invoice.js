@@ -23,6 +23,7 @@ import {
 } from "../utils/errors.js";
 import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
+import notificationService from "../services/notificationService.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1905,6 +1906,21 @@ const invoiceResolvers = {
         invoice.status = "COMPLETED";
         invoice.paymentDate = new Date(paymentDate);
         await invoice.save();
+
+        // Envoyer la notification "Paiement reçu" si activée
+        try {
+          await notificationService.sendPaymentReceivedNotification({
+            userId: user._id,
+            invoice: invoice.toObject(),
+            paymentDate: new Date(paymentDate),
+          });
+        } catch (notifError) {
+          console.error(
+            "Erreur lors de l'envoi de la notification:",
+            notifError
+          );
+          // Ne pas faire échouer la mutation si la notification échoue
+        }
 
         return await invoice.populate("createdBy");
       }

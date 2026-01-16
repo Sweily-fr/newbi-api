@@ -37,6 +37,7 @@ import sharedDocumentResolvers from "./sharedDocument.js";
 import eInvoicingResolvers from "./eInvoicing.js";
 import publicBoardShareResolvers from "./publicBoardShare.js";
 import taskImageResolvers from "./taskImage.js";
+import notificationPreferencesResolvers from "./notificationPreferences.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -77,6 +78,7 @@ const resolvers = mergeResolvers([
   eInvoicingResolvers,
   publicBoardShareResolvers,
   taskImageResolvers,
+  notificationPreferencesResolvers,
 ]);
 
 export default resolvers;

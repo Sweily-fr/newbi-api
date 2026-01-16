@@ -1,0 +1,58 @@
+# Types pour les préférences de notifications
+
+type NotificationPreference {
+  email: Boolean!
+  push: Boolean!
+}
+
+type NotificationPreferences {
+  # Facturation
+  invoice_overdue: NotificationPreference
+  payment_received: NotificationPreference
+  quote_response: NotificationPreference
+  invoice_due_soon: NotificationPreference
+  # Abonnement
+  payment_failed: NotificationPreference
+  trial_ending: NotificationPreference
+  subscription_renewed: NotificationPreference
+  # Équipe
+  invitation_received: NotificationPreference
+  member_joined: NotificationPreference
+  document_shared: NotificationPreference
+}
+
+input NotificationPreferenceInput {
+  email: Boolean
+  push: Boolean
+}
+
+input NotificationPreferencesInput {
+  # Facturation
+  invoice_overdue: NotificationPreferenceInput
+  payment_received: NotificationPreferenceInput
+  quote_response: NotificationPreferenceInput
+  invoice_due_soon: NotificationPreferenceInput
+  # Abonnement
+  payment_failed: NotificationPreferenceInput
+  trial_ending: NotificationPreferenceInput
+  subscription_renewed: NotificationPreferenceInput
+  # Équipe
+  invitation_received: NotificationPreferenceInput
+  member_joined: NotificationPreferenceInput
+  document_shared: NotificationPreferenceInput
+}
+
+type NotificationPreferencesResponse {
+  success: Boolean!
+  message: String
+}
+
+extend type Query {
+  getNotificationPreferences: NotificationPreferences
+}
+
+extend type Mutation {
+  updateNotificationPreferences(
+    input: NotificationPreferencesInput!
+  ): NotificationPreferencesResponse
+}

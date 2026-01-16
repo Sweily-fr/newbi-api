@@ -312,60 +312,107 @@ const userSchema = new mongoose.Schema(
     },
     resetPasswordToken: String,
     resetPasswordExpires: Date,
-    
+
     // Code partenaire (apporteur d'affaires)
     referralCode: {
       type: String,
       index: true,
     },
-    
+
     // Code de parrainage utilisé lors de l'inscription (lien vers le partenaire)
     referredBy: {
       type: String,
       index: true,
     },
-    
+
     // Statut partenaire (apporteur d'affaires)
     isPartner: {
       type: Boolean,
       default: false,
       index: true,
     },
-    
+
     // Préférences email pour les rappels
     emailPreferences: {
       reminders: {
         enabled: {
           type: Boolean,
-          default: false
+          default: false,
         },
         types: {
           type: [String],
-          default: ['due', 'anticipated']
+          default: ["due", "anticipated"],
         },
         doNotDisturb: {
           weekday: {
             start: {
               type: String,
-              default: '22:00'
+              default: "22:00",
             },
             end: {
               type: String,
-              default: '08:00'
-            }
+              default: "08:00",
+            },
           },
           weekend: {
             start: {
               type: String,
-              default: '22:00'
+              default: "22:00",
             },
             end: {
               type: String,
-              default: '10:00'
-            }
-          }
-        }
-      }
+              default: "10:00",
+            },
+          },
+        },
+      },
+    },
+
+    // Préférences de notifications (Phase 1)
+    notificationPreferences: {
+      // Facturation
+      invoice_overdue: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
+      payment_received: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
+      quote_response: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
+      invoice_due_soon: {
+        email: { type: Boolean, default: false },
+        push: { type: Boolean, default: true },
+      },
+      // Abonnement
+      payment_failed: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
+      trial_ending: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
+      subscription_renewed: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: false },
+      },
+      // Équipe
+      invitation_received: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
+      member_joined: {
+        email: { type: Boolean, default: false },
+        push: { type: Boolean, default: true },
+      },
+      document_shared: {
+        email: { type: Boolean, default: false },
+        push: { type: Boolean, default: true },
+      },
     },
   },
   {
