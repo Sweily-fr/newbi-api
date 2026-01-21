@@ -101,6 +101,7 @@ input CreateSharedFolderInput {
   color: String
   icon: String
   isSharedWithAccountant: Boolean
+  isSystem: Boolean
 }
 
 input UpdateSharedFolderInput {
