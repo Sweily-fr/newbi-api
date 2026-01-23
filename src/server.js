@@ -59,6 +59,7 @@ import bankingSyncRoutes from "./routes/banking-sync.js";
 import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
+import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -186,6 +187,9 @@ async function startServer() {
 
   // Routes OAuth SuperPDP (facturation électronique)
   app.use("/api/superpdp", superpdpOAuthRoutes);
+
+  // Routes téléchargement documents partagés (ZIP dossiers)
+  app.use("/api/shared-documents", sharedDocumentDownloadRoutes);
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 

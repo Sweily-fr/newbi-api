@@ -1,0 +1,251 @@
+/**
+ * Service pour la génération de ZIP des dossiers partagés
+ * Permet de télécharger un dossier complet avec ses sous-dossiers et fichiers
+ */
+
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import archiver from "archiver";
+import SharedDocument from "../models/SharedDocument.js";
+import SharedFolder from "../models/SharedFolder.js";
+import logger from "../utils/logger.js";
+
+// Configuration R2
+const s3Client = new S3Client({
+  region: "auto",
+  endpoint: process.env.R2_API_URL,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  },
+});
+
+const SHARED_DOCUMENTS_BUCKET =
+  process.env.SHARED_DOCUMENTS_BUCKET || "shared-documents-staging";
+
+/**
+ * Récupère récursivement tous les sous-dossiers d'un dossier
+ * @param {string} folderId - ID du dossier parent
+ * @param {string} workspaceId - ID du workspace
+ * @returns {Promise<Array>} Liste des dossiers (incluant le parent et tous les enfants)
+ */
+async function getAllSubfolders(folderId, workspaceId) {
+  const folders = [];
+
+  async function fetchChildren(parentId) {
+    const children = await SharedFolder.find({
+      workspaceId,
+      parentId,
+    });
+
+    for (const child of children) {
+      folders.push(child);
+      await fetchChildren(child._id);
+    }
+  }
+
+  // Ajouter le dossier principal
+  const mainFolder = await SharedFolder.findOne({
+    _id: folderId,
+    workspaceId,
+  });
+
+  if (mainFolder) {
+    folders.push(mainFolder);
+    await fetchChildren(folderId);
+  }
+
+  return folders;
+}
+
+/**
+ * Construit le chemin complet d'un dossier dans la hiérarchie
+ * @param {Object} folder - Le dossier
+ * @param {Map} folderMap - Map des dossiers par ID
+ * @param {string} rootFolderId - ID du dossier racine
+ * @returns {string} Chemin du dossier
+ */
+function buildFolderPath(folder, folderMap, rootFolderId) {
+  const pathParts = [];
+  let currentFolder = folder;
+
+  while (currentFolder && currentFolder._id.toString() !== rootFolderId) {
+    pathParts.unshift(sanitizeFileName(currentFolder.name));
+    currentFolder = folderMap.get(currentFolder.parentId?.toString());
+  }
+
+  return pathParts.join("/");
+}
+
+/**
+ * Nettoie un nom de fichier pour éviter les problèmes dans le ZIP
+ * @param {string} name - Nom du fichier
+ * @returns {string} Nom nettoyé
+ */
+function sanitizeFileName(name) {
+  if (!name) return "unnamed";
+  // Remplacer les caractères problématiques
+  return name
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Récupère tous les documents d'un dossier et ses sous-dossiers
+ * @param {string} folderId - ID du dossier
+ * @param {string} workspaceId - ID du workspace
+ * @returns {Promise<Object>} Documents organisés par dossier avec chemins
+ */
+async function getDocumentsWithPaths(folderId, workspaceId) {
+  // Récupérer tous les sous-dossiers
+  const folders = await getAllSubfolders(folderId, workspaceId);
+  const folderIds = folders.map((f) => f._id);
+
+  // Créer une map pour accès rapide
+  const folderMap = new Map();
+  folders.forEach((f) => folderMap.set(f._id.toString(), f));
+
+  // Récupérer tous les documents dans ces dossiers
+  const documents = await SharedDocument.find({
+    workspaceId,
+    folderId: { $in: folderIds },
+  });
+
+  // Organiser les documents avec leurs chemins
+  const documentsWithPaths = documents.map((doc) => {
+    const folder = folderMap.get(doc.folderId?.toString());
+    const folderPath = folder
+      ? buildFolderPath(folder, folderMap, folderId)
+      : "";
+
+    return {
+      document: doc,
+      path: folderPath,
+      fileName: sanitizeFileName(doc.originalName || doc.name),
+    };
+  });
+
+  // Récupérer le nom du dossier racine
+  const rootFolder = folderMap.get(folderId);
+  const rootFolderName = rootFolder ? sanitizeFileName(rootFolder.name) : "documents";
+
+  return {
+    documents: documentsWithPaths,
+    rootFolderName,
+    totalSize: documents.reduce((sum, doc) => sum + (doc.fileSize || 0), 0),
+    totalFiles: documents.length,
+  };
+}
+
+/**
+ * Génère et stream un ZIP contenant tous les fichiers d'un dossier
+ * @param {string} folderId - ID du dossier
+ * @param {string} workspaceId - ID du workspace
+ * @param {Object} res - Response Express pour le streaming
+ */
+async function streamFolderAsZip(folderId, workspaceId, res) {
+  // Récupérer les documents avec leurs chemins
+  const { documents, rootFolderName, totalFiles } = await getDocumentsWithPaths(
+    folderId,
+    workspaceId
+  );
+
+  if (totalFiles === 0) {
+    throw new Error("Aucun document dans ce dossier");
+  }
+
+  logger.info(`📦 Création ZIP pour dossier ${folderId}`, {
+    totalFiles,
+    rootFolderName,
+  });
+
+  // Configurer les headers de réponse
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${encodeURIComponent(rootFolderName)}.zip"`
+  );
+
+  // Créer l'archive
+  const archive = archiver("zip", {
+    zlib: { level: 6 }, // Compression équilibrée
+  });
+
+  // Gérer les erreurs d'archive
+  archive.on("error", (err) => {
+    logger.error("❌ Erreur création ZIP:", err);
+    throw err;
+  });
+
+  archive.on("warning", (err) => {
+    if (err.code === "ENOENT") {
+      logger.warn("⚠️ Fichier manquant dans ZIP:", err);
+    } else {
+      throw err;
+    }
+  });
+
+  // Pipe vers la réponse
+  archive.pipe(res);
+
+  // Ajouter chaque fichier à l'archive
+  let addedFiles = 0;
+  const errors = [];
+
+  for (const { document, path, fileName } of documents) {
+    try {
+      // Récupérer le fichier depuis R2
+      const command = new GetObjectCommand({
+        Bucket: SHARED_DOCUMENTS_BUCKET,
+        Key: document.fileKey,
+      });
+
+      const response = await s3Client.send(command);
+
+      // Construire le chemin complet dans le ZIP
+      const zipPath = path ? `${path}/${fileName}` : fileName;
+
+      // Ajouter le stream au ZIP
+      archive.append(response.Body, { name: zipPath });
+      addedFiles++;
+
+      logger.debug(`✅ Ajouté au ZIP: ${zipPath}`);
+    } catch (error) {
+      logger.error(`❌ Erreur ajout fichier ${document.name}:`, error.message);
+      errors.push({ file: document.name, error: error.message });
+    }
+  }
+
+  // Finaliser l'archive
+  await archive.finalize();
+
+  logger.info(`📦 ZIP créé avec succès`, {
+    folderId,
+    addedFiles,
+    errors: errors.length,
+  });
+
+  return { addedFiles, errors };
+}
+
+/**
+ * Vérifie si un utilisateur a accès à un dossier
+ * @param {string} folderId - ID du dossier
+ * @param {string} workspaceId - ID du workspace
+ * @returns {Promise<Object|null>} Le dossier si accès autorisé, null sinon
+ */
+async function verifyFolderAccess(folderId, workspaceId) {
+  const folder = await SharedFolder.findOne({
+    _id: folderId,
+    workspaceId,
+  });
+
+  return folder;
+}
+
+export {
+  streamFolderAsZip,
+  getDocumentsWithPaths,
+  verifyFolderAccess,
+  getAllSubfolders,
+};
