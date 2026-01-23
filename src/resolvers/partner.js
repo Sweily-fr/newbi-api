@@ -462,15 +462,42 @@ const partnerResolvers = {
      */
     updateOrganizationBankDetails: async (_, { organizationId, bankName, bankIban, bankBic }) => {
       try {
+        // Validation de l'IBAN (format international, pas uniquement FR)
+        // Format: 2 lettres pays + 2 chiffres clé + jusqu'à 30 caractères alphanumériques
+        const ibanRegex = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/;
+        if (!ibanRegex.test(bankIban)) {
+          return {
+            success: false,
+            message: 'IBAN invalide. Format attendu: 2 lettres pays + 2 chiffres + 10-30 caractères alphanumériques (ex: FR7630006000011234567890189)',
+          };
+        }
+
+        // Validation du BIC (8 ou 11 caractères)
+        const bicRegex = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
+        if (!bicRegex.test(bankBic)) {
+          return {
+            success: false,
+            message: 'BIC invalide. Format attendu: 8 ou 11 caractères (ex: BNPAFRPP ou BNPAFRPPXXX)',
+          };
+        }
+
+        // Validation du nom de banque
+        if (!bankName || bankName.trim().length < 2) {
+          return {
+            success: false,
+            message: 'Le nom de la banque doit contenir au moins 2 caractères',
+          };
+        }
+
         const db = mongoose.connection.db;
 
         await db.collection('organization').updateOne(
           { _id: new mongoose.Types.ObjectId(organizationId) },
           {
             $set: {
-              bankName,
-              bankIban,
-              bankBic,
+              bankName: bankName.trim(),
+              bankIban: bankIban.toUpperCase(),
+              bankBic: bankBic.toUpperCase(),
             }
           }
         );
