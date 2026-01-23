@@ -1,5 +1,6 @@
 // resolvers/publicBoardShare.js
 import PublicBoardShare from '../models/PublicBoardShare.js';
+import UserInvited from '../models/UserInvited.js';
 import { Board, Column, Task } from '../models/kanban.js';
 import { withWorkspace } from '../middlewares/better-auth-jwt.js';
 import logger from '../utils/logger.js';
@@ -129,6 +130,7 @@ const resolvers = {
         // Récupérer les infos des membres assignés ET des auteurs de commentaires
         let membersMap = {};
         let emailToUserMap = {};
+        let visitorsMap = {}; // Map pour les visiteurs (email -> infos)
         const db = mongoose.connection.db;
         const allMemberIds = [...new Set(tasks.flatMap(t => t.assignedMembers || []))];
         
@@ -147,6 +149,72 @@ const resolvers = {
             .map(c => c.userEmail.toLowerCase())
           )
         )];
+        
+        // Collecter les emails des commentaires EXTERNES (visiteurs)
+        const externalEmails = [...new Set(
+          tasks.flatMap(t => (t.comments || [])
+            .filter(c => c.isExternal || c.visitorId || c.userId?.startsWith('external_'))
+            .map(c => {
+              if (c.userEmail) return c.userEmail.toLowerCase();
+              if (c.userId?.startsWith('external_')) {
+                const email = c.userId.replace('external_', '');
+                if (email.includes('@')) return email.toLowerCase();
+              }
+              return null;
+            })
+            .filter(Boolean)
+          )
+        )];
+        
+        // Remplir visitorsMap depuis share.visitors
+        if (share.visitors) {
+          share.visitors.forEach(v => {
+            if (v.email) {
+              visitorsMap[v.email.toLowerCase()] = {
+                name: v.name || v.firstName || (v.email ? v.email.split('@')[0] : 'Visiteur'),
+                image: v.image || null
+              };
+            }
+            if (v._id) {
+              visitorsMap[v._id.toString()] = {
+                name: v.name || v.firstName || 'Visiteur',
+                image: v.image || null
+              };
+            }
+          });
+        }
+        
+        // Enrichir visitorsMap depuis UserInvited (nouveau système - prioritaire)
+        if (externalEmails.length > 0) {
+          try {
+            const invitedUsers = await UserInvited.find({ 
+              email: { $in: externalEmails } 
+            }).lean();
+            
+            logger.info(`🔍 [getPublicBoard] ${invitedUsers.length} utilisateurs invités trouvés pour ${externalEmails.length} emails externes`);
+            
+            invitedUsers.forEach(u => {
+              let displayName = '';
+              if (u.firstName && u.lastName) {
+                displayName = `${u.firstName} ${u.lastName}`;
+              } else if (u.name) {
+                displayName = u.name;
+              } else if (u.firstName) {
+                displayName = u.firstName;
+              } else {
+                displayName = u.email.split('@')[0];
+              }
+              
+              // UserInvited est prioritaire sur share.visitors
+              visitorsMap[u.email.toLowerCase()] = {
+                name: displayName,
+                image: u.image || null
+              };
+            });
+          } catch (error) {
+            logger.error('❌ [getPublicBoard] Erreur récupération UserInvited:', error);
+          }
+        }
         
         // Combiner tous les IDs à récupérer
         const allUserIds = [...new Set([...allMemberIds, ...commentUserIds])];
@@ -229,14 +297,28 @@ const resolvers = {
               uploadedAt: img.uploadedAt
             }));
             
-            // Pour les commentaires externes, récupérer les infos du visiteur depuis share.visitors
-            if (comment.isExternal && comment.userEmail) {
-              const visitor = share.visitors?.find(v => v.email?.toLowerCase() === comment.userEmail.toLowerCase());
+            // Pour les commentaires externes, récupérer les infos du visiteur depuis visitorsMap (enrichi avec UserInvited)
+            if (comment.isExternal || comment.visitorId || comment.userId?.startsWith('external_')) {
+              // Chercher le visiteur par visitorId en priorité, sinon par email
+              let visitorInfo = null;
+              if (comment.visitorId && visitorsMap[comment.visitorId]) {
+                visitorInfo = visitorsMap[comment.visitorId];
+              } else {
+                // Fallback: chercher par email
+                let visitorEmail = comment.userEmail;
+                if (!visitorEmail && comment.userId?.startsWith('external_')) {
+                  visitorEmail = comment.userId.replace('external_', '');
+                }
+                if (visitorEmail) {
+                  visitorInfo = visitorsMap[visitorEmail.toLowerCase()];
+                }
+              }
+              
               return {
                 id: comment._id?.toString(),
-                userName: visitor?.name || visitor?.firstName || comment.userName || comment.userEmail.split('@')[0],
+                userName: visitorInfo?.name || comment.userName || (comment.userEmail ? comment.userEmail.split('@')[0] : 'Visiteur'),
                 userEmail: comment.userEmail,
-                userImage: visitor?.image || comment.userImage || null,
+                userImage: visitorInfo?.image !== undefined ? visitorInfo.image : (comment.userImage || null),
                 content: comment.content,
                 isExternal: true,
                 images: commentImages,
@@ -1104,6 +1186,22 @@ const resolvers = {
         
         await share.save();
         
+        // IMPORTANT: Mettre à jour aussi dans UserInvited pour que l'enrichissement fonctionne
+        try {
+          const userInvited = await UserInvited.findOne({ email: email.toLowerCase() });
+          if (userInvited) {
+            if (input.firstName !== undefined) userInvited.firstName = input.firstName;
+            if (input.lastName !== undefined) userInvited.lastName = input.lastName;
+            if (input.firstName || input.lastName) {
+              userInvited.name = [input.firstName || userInvited.firstName, input.lastName || userInvited.lastName].filter(Boolean).join(' ');
+            }
+            await userInvited.save();
+            logger.info(`👤 [PublicShare] UserInvited également mis à jour: ${email}`);
+          }
+        } catch (userInvitedError) {
+          logger.error('❌ [PublicShare] Erreur mise à jour UserInvited:', userInvitedError);
+        }
+        
         logger.info(`👤 [PublicShare] Profil visiteur mis à jour: ${email}`);
         
         // NE PLUS mettre à jour les commentaires existants car :
@@ -1195,17 +1293,45 @@ const resolvers = {
           };
         }
         
-        // Trouver le visiteur
-        const visitorIndex = share.visitors.findIndex(v => v.email === email.toLowerCase());
+        // Trouver le visiteur dans share.visitors
+        let visitorIndex = share.visitors.findIndex(v => v.email === email.toLowerCase());
+        let visitor;
+        
         if (visitorIndex === -1) {
-          return {
-            success: false,
-            message: 'Visiteur non trouvé',
-            imageUrl: null
+          // Le visiteur n'existe pas dans share.visitors, vérifier dans UserInvited
+          const userInvited = await UserInvited.findOne({ email: email.toLowerCase() });
+          
+          if (!userInvited) {
+            return {
+              success: false,
+              message: 'Visiteur non trouvé',
+              imageUrl: null
+            };
+          }
+          
+          // Créer le visiteur dans share.visitors pour compatibilité
+          const newVisitor = {
+            email: userInvited.email,
+            firstName: userInvited.firstName,
+            lastName: userInvited.lastName,
+            name: userInvited.name,
+            image: userInvited.image,
+            firstVisitAt: new Date(),
+            lastVisitAt: new Date(),
+            visitCount: 1
           };
+          
+          share.visitors.push(newVisitor);
+          await share.save();
+          
+          // Récupérer le visiteur nouvellement créé
+          visitorIndex = share.visitors.length - 1;
+          visitor = share.visitors[visitorIndex];
+          logger.info(`📸 [PublicShare] Visiteur créé dans share.visitors: ${email}`);
+        } else {
+          visitor = share.visitors[visitorIndex];
         }
         
-        const visitor = share.visitors[visitorIndex];
         const visitorId = visitor._id.toString();
         
         // Traiter le fichier uploadé
@@ -1247,9 +1373,17 @@ const resolvers = {
           };
         }
         
-        // Mettre à jour l'image du visiteur
+        // Mettre à jour l'image du visiteur dans PublicBoardShare
         visitor.image = uploadResult.url;
         await share.save();
+        
+        // Mettre à jour aussi dans UserInvited pour persistance
+        const userInvited = await UserInvited.findOne({ email: email.toLowerCase() });
+        if (userInvited) {
+          userInvited.image = uploadResult.url;
+          await userInvited.save();
+          logger.info(`📸 [PublicShare] Image mise à jour dans UserInvited: ${userInvited._id}`);
+        }
         
         logger.info(`📸 [PublicShare] Image visiteur uploadée: ${uploadResult.url}`);
         
