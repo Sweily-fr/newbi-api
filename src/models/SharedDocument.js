@@ -103,6 +103,18 @@ const SharedDocumentSchema = new mongoose.Schema(
     archivedAt: {
       type: Date,
     },
+
+    // Corbeille - soft delete
+    trashedAt: {
+      type: Date,
+      default: null,
+    },
+    // Stocker le folderId original avant mise en corbeille (pour restauration)
+    originalFolderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SharedFolder",
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -114,6 +126,8 @@ SharedDocumentSchema.index({ workspaceId: 1, folderId: 1 });
 SharedDocumentSchema.index({ workspaceId: 1, status: 1 });
 SharedDocumentSchema.index({ workspaceId: 1, createdAt: -1 });
 SharedDocumentSchema.index({ name: "text", description: "text", tags: "text" });
+// Index pour la corbeille
+SharedDocumentSchema.index({ workspaceId: 1, trashedAt: 1 });
 
 const SharedDocument = mongoose.model("SharedDocument", SharedDocumentSchema);
 

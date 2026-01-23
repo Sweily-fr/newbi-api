@@ -22,6 +22,10 @@ type SharedDocument {
   createdAt: String!
   updatedAt: String!
   archivedAt: String
+  # Corbeille
+  trashedAt: String
+  originalFolderId: ID
+  daysUntilPermanentDeletion: Int
 }
 
 type SharedFolder {
@@ -40,6 +44,10 @@ type SharedFolder {
   documentsCount: Int
   createdAt: String!
   updatedAt: String!
+  # Corbeille
+  trashedAt: String
+  originalParentId: ID
+  daysUntilPermanentDeletion: Int
 }
 
 type DocumentComment {
@@ -93,6 +101,12 @@ type MoveDocumentsResponse {
   movedCount: Int
 }
 
+type BulkTagsResponse {
+  success: Boolean!
+  message: String
+  updatedCount: Int
+}
+
 # Inputs
 input CreateSharedFolderInput {
   name: String!
@@ -133,6 +147,12 @@ input SharedDocumentsFilterInput {
   status: SharedDocumentStatus
   search: String
   tags: [String]
+  # Filtres avancés
+  fileType: String # "image", "pdf", "document", "spreadsheet", "other"
+  dateFrom: String # ISO date string
+  dateTo: String # ISO date string
+  minSize: Int # en bytes
+  maxSize: Int # en bytes
 }
 
 # Queries
@@ -143,6 +163,8 @@ extend type Query {
     filter: SharedDocumentsFilterInput
     limit: Int
     offset: Int
+    sortBy: String
+    sortOrder: String
   ): SharedDocumentsResponse!
 
   sharedDocument(id: ID!, workspaceId: ID!): SharedDocumentResponse!
@@ -153,6 +175,9 @@ extend type Query {
 
   # Stats
   sharedDocumentsStats(workspaceId: ID!): SharedDocumentsStatsResponse!
+
+  # Corbeille
+  trashItems(workspaceId: ID!): TrashItemsResponse!
 }
 
 type SharedDocumentsStatsResponse {
@@ -163,6 +188,28 @@ type SharedDocumentsStatsResponse {
   archivedDocuments: Int!
   totalFolders: Int!
   totalSize: Float!
+  # Stats corbeille
+  trashedDocuments: Int!
+  trashedFolders: Int!
+  trashedSize: Float!
+}
+
+# Réponse pour les éléments de la corbeille
+type TrashItemsResponse {
+  success: Boolean!
+  message: String
+  documents: [SharedDocument]
+  folders: [SharedFolder]
+  totalDocuments: Int
+  totalFolders: Int
+  totalSize: Float
+}
+
+type RestoreResponse {
+  success: Boolean!
+  message: String
+  restoredDocuments: Int
+  restoredFolders: Int
 }
 
 # Mutations
@@ -211,4 +258,24 @@ extend type Mutation {
   ): SharedFolderResponse!
 
   deleteSharedFolder(id: ID!, workspaceId: ID!): DeleteResponse!
+
+  # Tags en masse
+  bulkUpdateTags(
+    ids: [ID!]!
+    workspaceId: ID!
+    addTags: [String]
+    removeTags: [String]
+  ): BulkTagsResponse!
+
+  # Corbeille
+  restoreFromTrash(
+    workspaceId: ID!
+    documentIds: [ID]
+    folderIds: [ID]
+  ): RestoreResponse!
+
+  emptyTrash(workspaceId: ID!): DeleteResponse!
+
+  permanentlyDeleteDocuments(ids: [ID!]!, workspaceId: ID!): DeleteResponse!
+  permanentlyDeleteFolders(ids: [ID!]!, workspaceId: ID!): DeleteResponse!
 }

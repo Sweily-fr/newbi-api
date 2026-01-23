@@ -64,11 +64,26 @@ const SharedFolderSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+
+    // Corbeille - soft delete
+    trashedAt: {
+      type: Date,
+      default: null,
+    },
+    // Stocker le parentId original avant mise en corbeille (pour restauration)
+    originalParentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SharedFolder",
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
+
+// Index pour la corbeille
+SharedFolderSchema.index({ workspaceId: 1, trashedAt: 1 });
 
 // Index composés
 SharedFolderSchema.index({ workspaceId: 1, parentId: 1 });
