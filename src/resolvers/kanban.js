@@ -64,6 +64,7 @@ const enrichTaskWithUserInfo = async (task) => {
         try { return new mongoose.Types.ObjectId(uid); } catch { return uid; }
       });
       const users = await db.collection('user').find({ _id: { $in: userObjectIds } }).toArray();
+      logger.info(`🔍 [enrichTask] ${users.length} utilisateurs trouvés pour ${userObjectIds.length} IDs demandés`);
       users.forEach(u => {
         // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
         let displayName = '';
@@ -76,7 +77,10 @@ const enrichTaskWithUserInfo = async (task) => {
         } else {
           displayName = u.email?.split('@')[0] || 'Utilisateur';
         }
-        usersMap[u._id.toString()] = { name: displayName, image: u.avatar || u.image || null };
+        // Prioriser u.image (Better Auth) avant u.avatar (ancien système)
+        const userImage = u.image || u.avatar || null;
+        logger.info(`📋 [enrichTask] User ${u._id.toString()}: name=${displayName}, image=${userImage ? 'oui' : 'non'}, u.image=${u.image ? 'oui' : 'non'}, u.avatar=${u.avatar ? 'oui' : 'non'}`);
+        usersMap[u._id.toString()] = { name: displayName, image: userImage };
       });
     } catch (error) {
       logger.error('❌ [enrichTaskWithUserInfo] Erreur récupération utilisateurs:', error);
@@ -91,11 +95,12 @@ const enrichTaskWithUserInfo = async (task) => {
     }
   });
   
-  // Récupérer les infos des visiteurs externes depuis PublicBoardShare
+  // Récupérer les infos des visiteurs externes depuis PublicBoardShare et UserInvited
   let visitorsMap = {};
   logger.info(`🔍 [enrichTask] externalEmails: ${externalEmails.size}, visitorIds: ${visitorIds.size}, boardId: ${taskObj.boardId}`);
   if ((externalEmails.size > 0 || visitorIds.size > 0) && taskObj.boardId) {
     try {
+      // 1. Récupérer depuis PublicBoardShare (ancien système)
       const PublicBoardShare = mongoose.model('PublicBoardShare');
       const share = await PublicBoardShare.findOne({ boardId: taskObj.boardId, isActive: true });
       logger.info(`🔍 [enrichTask] Share trouvé: ${!!share}, visiteurs: ${share?.visitors?.length || 0}`);
@@ -114,6 +119,45 @@ const enrichTaskWithUserInfo = async (task) => {
             visitorsMap[v.email.toLowerCase()] = visitorData;
           }
         });
+      }
+      
+      // 2. Récupérer depuis UserInvited (nouveau système) pour enrichir/remplacer les données
+      if (externalEmails.size > 0) {
+        try {
+          const UserInvited = mongoose.model('UserInvited');
+          const invitedUsers = await UserInvited.find({ 
+            email: { $in: Array.from(externalEmails) } 
+          }).lean();
+          
+          logger.info(`🔍 [enrichTask] ${invitedUsers.length} utilisateurs invités trouvés pour ${externalEmails.size} emails`);
+          
+          invitedUsers.forEach(u => {
+            // Construire le nom complet
+            let displayName = '';
+            if (u.firstName && u.lastName) {
+              displayName = `${u.firstName} ${u.lastName}`;
+            } else if (u.name) {
+              displayName = u.name;
+            } else if (u.firstName) {
+              displayName = u.firstName;
+            } else if (u.lastName) {
+              displayName = u.lastName;
+            } else {
+              displayName = u.email.split('@')[0];
+            }
+            
+            const visitorData = {
+              name: displayName,
+              image: u.image || null
+            };
+            
+            // Indexer par email (clé primaire dans UserInvited)
+            visitorsMap[u.email.toLowerCase()] = visitorData;
+            logger.info(`📋 [enrichTask] UserInvited indexé: ${u.email} -> ${displayName}, image: ${u.image ? 'oui' : 'non'}`);
+          });
+        } catch (error) {
+          logger.error('❌ [enrichTask] Erreur récupération UserInvited:', error);
+        }
       }
     } catch (error) {
       logger.error('❌ [enrichTaskWithUserInfo] Erreur récupération visiteurs:', error);
@@ -213,17 +257,19 @@ const enrichTasksWithUserInfo = async (tasks) => {
         } else {
           displayName = u.email?.split('@')[0] || 'Utilisateur';
         }
-        usersMap[u._id.toString()] = { name: displayName, image: u.avatar || u.image || null };
+        // Prioriser u.image (Better Auth) avant u.avatar (ancien système)
+        usersMap[u._id.toString()] = { name: displayName, image: u.image || u.avatar || null };
       });
     } catch (error) {
       logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération utilisateurs:', error);
     }
   }
   
-  // Récupérer les infos des visiteurs depuis PublicBoardShare
+  // Récupérer les infos des visiteurs depuis PublicBoardShare et UserInvited
   let visitorsMap = {};
   if ((externalEmails.size > 0 || visitorIds.size > 0) && boardId) {
     try {
+      // 1. Récupérer depuis PublicBoardShare (ancien système)
       const PublicBoardShare = mongoose.model('PublicBoardShare');
       const share = await PublicBoardShare.findOne({ boardId, isActive: true });
       if (share?.visitors) {
@@ -235,6 +281,42 @@ const enrichTasksWithUserInfo = async (tasks) => {
           if (v._id) visitorsMap[v._id.toString()] = visitorData;
           if (v.email) visitorsMap[v.email.toLowerCase()] = visitorData;
         });
+      }
+      
+      // 2. Récupérer depuis UserInvited (nouveau système) pour enrichir/remplacer les données
+      if (externalEmails.size > 0) {
+        try {
+          const UserInvited = mongoose.model('UserInvited');
+          const invitedUsers = await UserInvited.find({ 
+            email: { $in: Array.from(externalEmails) } 
+          }).lean();
+          
+          invitedUsers.forEach(u => {
+            // Construire le nom complet
+            let displayName = '';
+            if (u.firstName && u.lastName) {
+              displayName = `${u.firstName} ${u.lastName}`;
+            } else if (u.name) {
+              displayName = u.name;
+            } else if (u.firstName) {
+              displayName = u.firstName;
+            } else if (u.lastName) {
+              displayName = u.lastName;
+            } else {
+              displayName = u.email.split('@')[0];
+            }
+            
+            const visitorData = {
+              name: displayName,
+              image: u.image || null
+            };
+            
+            // Indexer par email (clé primaire dans UserInvited)
+            visitorsMap[u.email.toLowerCase()] = visitorData;
+          });
+        } catch (error) {
+          logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération UserInvited:', error);
+        }
       }
     } catch (error) {
       logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération visiteurs:', error);
@@ -488,10 +570,10 @@ const resolvers = {
 
         // Mapper les résultats
         return users.map((user) => {
-          // Utiliser avatar au lieu de image
+          // Utiliser image OU avatar (Better Auth stocke dans 'image', ancien système dans 'avatar')
           const avatarUrl =
-            user.avatar && user.avatar !== "null" && user.avatar !== ""
-              ? user.avatar
+            (user.image || user.avatar) && (user.image || user.avatar) !== "null" && (user.image || user.avatar) !== ""
+              ? (user.image || user.avatar)
               : null;
 
           // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
@@ -932,13 +1014,16 @@ const resolvers = {
         });
         const savedTask = await task.save();
 
-        // Publier l'événement de création de tâche
+        // Enrichir la tâche avec les infos utilisateur AVANT de publier
+        const enrichedTask = await enrichTaskWithUserInfo(savedTask);
+
+        // Publier l'événement de création de tâche avec la tâche enrichie
         safePublish(
-          `${TASK_UPDATED}_${finalWorkspaceId}_${savedTask.boardId}`,
+          `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
           {
             type: "CREATED",
-            task: savedTask,
-            boardId: savedTask.boardId,
+            task: enrichedTask,
+            boardId: enrichedTask.boardId,
             workspaceId: finalWorkspaceId,
           },
           "Tâche créée"
@@ -1244,13 +1329,17 @@ const resolvers = {
           dueDateISO: task.dueDate ? task.dueDate.toISOString() : null,
         });
 
-        // Publier l'événement de mise à jour de tâche
+        // Enrichir la tâche avec les infos utilisateur AVANT de publier
+        // Cela garantit que les photos des visiteurs et commentaires sont incluses
+        const enrichedTask = await enrichTaskWithUserInfo(task);
+
+        // Publier l'événement de mise à jour de tâche avec la tâche enrichie
         safePublish(
-          `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+          `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
           {
             type: "UPDATED",
-            task: task,
-            boardId: task.boardId,
+            task: enrichedTask,
+            boardId: enrichedTask.boardId,
             workspaceId: finalWorkspaceId,
           },
           "Tâche mise à jour"
@@ -1277,14 +1366,17 @@ const resolvers = {
         });
 
         if (result.deletedCount > 0) {
+          // Enrichir la tâche avant suppression pour inclure les commentaires avec photos
+          const enrichedTask = await enrichTaskWithUserInfo(task);
+          
           // Publier l'événement de suppression de tâche
           safePublish(
-            `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+            `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
             {
               type: "DELETED",
-              task: task,
+              task: enrichedTask,
               taskId: id,
-              boardId: task.boardId,
+              boardId: enrichedTask.boardId,
               workspaceId: finalWorkspaceId,
             },
             "Tâche supprimée"
@@ -1469,11 +1561,14 @@ const resolvers = {
             }
           );
 
+          // Enrichir la tâche déplacée pour inclure les commentaires avec photos
+          const enrichedTask = await enrichTaskWithUserInfo(updatedTask);
+
           safePublish(
             `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
             {
               type: "MOVED",
-              task: updatedTask,
+              task: enrichedTask,
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
@@ -2311,4 +2406,5 @@ const resolvers = {
   },
 };
 
+export { enrichTaskWithUserInfo };
 export default resolvers;
