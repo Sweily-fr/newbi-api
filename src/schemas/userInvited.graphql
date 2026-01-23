@@ -1,0 +1,178 @@
+# Schema GraphQL pour les utilisateurs invités (visiteurs externes)
+
+# Type principal pour un utilisateur invité
+type UserInvited {
+  id: ID!
+  email: String!
+  firstName: String
+  lastName: String
+  name: String
+  image: String
+  requiresPassword: Boolean!
+  linkedUserId: ID
+  linkedUser: LinkedUserInfo
+  boardsAccess: [BoardAccess!]!
+  stats: UserInvitedStats!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  lastLoginAt: DateTime
+}
+
+# Informations du compte Newbi lié (si applicable)
+type LinkedUserInfo {
+  id: ID!
+  email: String!
+  name: String
+  firstName: String
+  lastName: String
+  image: String
+}
+
+# Accès à un board spécifique
+type BoardAccess {
+  id: ID!
+  boardId: ID!
+  shareId: ID!
+  workspaceId: ID!
+  grantedAt: DateTime!
+  lastVisitAt: DateTime!
+  visitCount: Int!
+  status: BoardAccessStatus!
+  banReason: String
+  bannedAt: DateTime
+}
+
+# Statut d'accès à un board
+enum BoardAccessStatus {
+  active
+  banned
+  pending
+}
+
+# Statistiques de l'utilisateur invité
+type UserInvitedStats {
+  totalVisits: Int!
+  totalComments: Int!
+  totalBoardsAccessed: Int!
+}
+
+# Résultat de l'authentification d'un utilisateur invité
+type AuthInvitedResult {
+  success: Boolean!
+  message: String
+  userInvited: UserInvited
+  sessionToken: String
+  isNewUser: Boolean
+  requiresPassword: Boolean
+  linkedUser: LinkedUserInfo
+  isBanned: Boolean
+  banReason: String
+}
+
+# Résultat de la vérification d'un email
+type CheckEmailResult {
+  exists: Boolean!
+  requiresPassword: Boolean!
+  hasLinkedNewbiAccount: Boolean!
+  linkedUser: LinkedUserInfo
+  userInvited: UserInvited
+}
+
+# Input pour l'authentification
+input AuthInvitedInput {
+  token: String!
+  email: String!
+  password: String
+  skipPassword: Boolean
+  firstName: String
+  lastName: String
+}
+
+# Input pour la mise à jour du profil
+input UpdateInvitedProfileInput {
+  firstName: String
+  lastName: String
+  image: String
+}
+
+# Input pour définir un mot de passe
+input SetPasswordInput {
+  email: String!
+  currentPassword: String
+  newPassword: String!
+}
+
+# Queries
+type Query {
+  # Vérifier si un email existe et ses caractéristiques
+  checkInvitedEmail(email: String!, token: String!): CheckEmailResult!
+  
+  # Récupérer un utilisateur invité par son ID
+  getInvitedUser(id: ID!): UserInvited
+  
+  # Récupérer un utilisateur invité par son email
+  getInvitedUserByEmail(email: String!): UserInvited
+  
+  # Récupérer tous les utilisateurs invités ayant accès à un board
+  getInvitedUsersForBoard(boardId: ID!, workspaceId: ID): [UserInvited!]!
+  
+  # Valider un token de session d'utilisateur invité
+  validateInvitedSession(sessionToken: String!): UserInvited
+}
+
+# Mutations
+type Mutation {
+  # Authentifier ou créer un utilisateur invité
+  authenticateInvitedUser(input: AuthInvitedInput!): AuthInvitedResult!
+  
+  # Définir ou modifier le mot de passe d'un utilisateur invité
+  setInvitedUserPassword(input: SetPasswordInput!): AuthInvitedResult!
+  
+  # Supprimer le mot de passe (passer en mode sans mot de passe)
+  removeInvitedUserPassword(email: String!, currentPassword: String!): AuthInvitedResult!
+  
+  # Mettre à jour le profil d'un utilisateur invité
+  updateInvitedUserProfile(
+    email: String!
+    input: UpdateInvitedProfileInput!
+  ): UserInvited!
+  
+  # Uploader une image de profil pour un utilisateur invité
+  uploadInvitedUserImage(
+    email: String!
+    file: Upload!
+  ): UserInvited!
+  
+  # Bannir un utilisateur invité d'un board
+  banInvitedUserFromBoard(
+    userInvitedId: ID!
+    boardId: ID!
+    reason: String
+    workspaceId: ID
+  ): UserInvited!
+  
+  # Débannir un utilisateur invité d'un board
+  unbanInvitedUserFromBoard(
+    userInvitedId: ID!
+    boardId: ID!
+    workspaceId: ID
+  ): UserInvited!
+  
+  # Déconnecter un utilisateur invité (invalider la session)
+  logoutInvitedUser(sessionToken: String!): Boolean!
+  
+  # Lier manuellement un compte Newbi à un utilisateur invité
+  linkInvitedUserToNewbi(
+    userInvitedId: ID!
+    newbiUserId: ID!
+  ): UserInvited!
+}
+
+# Subscriptions
+type Subscription {
+  # Notification quand un utilisateur invité se connecte à un board
+  invitedUserConnected(boardId: ID!): UserInvited!
+  
+  # Notification quand un utilisateur invité est banni
+  invitedUserBanned(boardId: ID!): UserInvited!
+}

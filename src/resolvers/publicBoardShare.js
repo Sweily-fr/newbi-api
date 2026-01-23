@@ -813,24 +813,28 @@ const resolvers = {
         
         logger.info(`💬 [PublicShare] Commentaire externe ajouté par ${visitorEmail}`);
         
-        // Publier la mise à jour en temps réel via Redis
-        // IMPORTANT: Inclure TOUS les champs requis par le type Task pour la subscription kanban
+        // IMPORTANT: Enrichir la tâche avec les infos utilisateur AVANT de publier via Redis
+        // Cela garantit que les photos des visiteurs sont incluses dans la subscription WebSocket
+        const kanbanModule = await import('./kanban.js');
+        const enrichedTask = await kanbanModule.enrichTaskWithUserInfo(task);
+        
+        // Convertir la tâche enrichie en payload pour la publication
         const taskPayload = {
-          id: task._id.toString(),
-          _id: task._id,
-          title: task.title,
-          description: task.description,
-          status: task.status,
-          priority: task.priority,
-          tags: task.tags || [],
-          startDate: task.startDate,
-          dueDate: task.dueDate,
-          boardId: share.boardId.toString(),
-          columnId: task.columnId.toString(),
-          position: task.position,
-          checklist: task.checklist || [],
-          assignedMembers: task.assignedMembers || [],
-          images: (task.images || []).map(img => ({
+          id: enrichedTask.id,
+          _id: enrichedTask._id,
+          title: enrichedTask.title,
+          description: enrichedTask.description,
+          status: enrichedTask.status,
+          priority: enrichedTask.priority,
+          tags: enrichedTask.tags || [],
+          startDate: enrichedTask.startDate,
+          dueDate: enrichedTask.dueDate,
+          boardId: enrichedTask.boardId,
+          columnId: enrichedTask.columnId,
+          position: enrichedTask.position,
+          checklist: enrichedTask.checklist || [],
+          assignedMembers: enrichedTask.assignedMembers || [],
+          images: (enrichedTask.images || []).map(img => ({
             id: img._id?.toString() || img.id,
             key: img.key,
             url: img.url,
@@ -840,13 +844,14 @@ const resolvers = {
             uploadedBy: img.uploadedBy,
             uploadedAt: img.uploadedAt
           })),
-          comments: task.comments.map(c => ({
-            id: c._id?.toString(),
+          comments: (enrichedTask.comments || []).map(c => ({
+            id: c.id || c._id?.toString(),
             _id: c._id,
             userId: c.userId || 'unknown',
             userName: c.userName || 'Utilisateur',
             userEmail: c.userEmail || null,
             userImage: c.userImage || null,
+            visitorId: c.visitorId || null,
             content: c.content,
             isExternal: c.isExternal || false,
             images: (c.images || []).map(img => ({
@@ -862,24 +867,24 @@ const resolvers = {
             createdAt: c.createdAt,
             updatedAt: c.updatedAt
           })),
-          activity: task.activity || [],
-          timeTracking: task.timeTracking ? {
-            totalSeconds: task.timeTracking.totalSeconds || 0,
-            isRunning: task.timeTracking.isRunning || false,
-            currentStartTime: task.timeTracking.currentStartTime,
-            startedBy: task.timeTracking.startedBy,
-            entries: (task.timeTracking.entries || []).map(e => ({
+          activity: enrichedTask.activity || [],
+          timeTracking: enrichedTask.timeTracking ? {
+            totalSeconds: enrichedTask.timeTracking.totalSeconds || 0,
+            isRunning: enrichedTask.timeTracking.isRunning || false,
+            currentStartTime: enrichedTask.timeTracking.currentStartTime,
+            startedBy: enrichedTask.timeTracking.startedBy,
+            entries: (enrichedTask.timeTracking.entries || []).map(e => ({
               id: e._id?.toString() || e.id,
               startTime: e.startTime,
               endTime: e.endTime,
               duration: e.duration || 0
             })),
-            hourlyRate: task.timeTracking.hourlyRate,
-            roundingOption: task.timeTracking.roundingOption
+            hourlyRate: enrichedTask.timeTracking.hourlyRate,
+            roundingOption: enrichedTask.timeTracking.roundingOption
           } : null,
-          userId: task.userId,
-          createdAt: task.createdAt,
-          updatedAt: task.updatedAt
+          userId: enrichedTask.userId,
+          createdAt: enrichedTask.createdAt,
+          updatedAt: enrichedTask.updatedAt
         };
         
         // Publier sur le canal du workspace+board pour que tous les clients reçoivent la mise à jour
