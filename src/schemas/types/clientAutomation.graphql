@@ -1,0 +1,80 @@
+enum AutomationTriggerType {
+  FIRST_INVOICE_PAID
+  INVOICE_PAID
+  QUOTE_ACCEPTED
+  CLIENT_CREATED
+  INVOICE_OVERDUE
+}
+
+enum AutomationActionType {
+  MOVE_TO_LIST
+  ADD_TO_LIST
+  REMOVE_FROM_LIST
+}
+
+type AutomationTriggerConfig {
+  minAmount: Float
+  daysOverdue: Int
+}
+
+type AutomationStats {
+  totalExecutions: Int
+  lastExecutedAt: DateTime
+  lastClientId: ID
+}
+
+type ClientAutomation {
+  id: ID!
+  name: String!
+  description: String
+  workspaceId: ID!
+  createdBy: User
+  triggerType: AutomationTriggerType!
+  triggerConfig: AutomationTriggerConfig
+  actionType: AutomationActionType!
+  sourceList: ClientList
+  targetList: ClientList!
+  isActive: Boolean!
+  stats: AutomationStats
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+input AutomationTriggerConfigInput {
+  minAmount: Float
+  daysOverdue: Int
+}
+
+input CreateClientAutomationInput {
+  name: String!
+  description: String
+  triggerType: AutomationTriggerType!
+  triggerConfig: AutomationTriggerConfigInput
+  actionType: AutomationActionType!
+  sourceListId: ID
+  targetListId: ID!
+  isActive: Boolean
+}
+
+input UpdateClientAutomationInput {
+  name: String
+  description: String
+  triggerType: AutomationTriggerType
+  triggerConfig: AutomationTriggerConfigInput
+  actionType: AutomationActionType
+  sourceListId: ID
+  targetListId: ID
+  isActive: Boolean
+}
+
+extend type Query {
+  clientAutomations(workspaceId: ID!): [ClientAutomation!]!
+  clientAutomation(workspaceId: ID!, id: ID!): ClientAutomation
+}
+
+extend type Mutation {
+  createClientAutomation(workspaceId: ID!, input: CreateClientAutomationInput!): ClientAutomation!
+  updateClientAutomation(workspaceId: ID!, id: ID!, input: UpdateClientAutomationInput!): ClientAutomation!
+  deleteClientAutomation(workspaceId: ID!, id: ID!): Boolean!
+  toggleClientAutomation(workspaceId: ID!, id: ID!): ClientAutomation!
+}

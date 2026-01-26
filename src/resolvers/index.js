@@ -40,6 +40,7 @@ import publicBoardShareResolvers from "./publicBoardShare.js";
 import taskImageResolvers from "./taskImage.js";
 import notificationPreferencesResolvers from "./notificationPreferences.js";
 import userInvitedResolvers from "./userInvited.js";
+import clientAutomationResolvers from "./clientAutomation.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -83,6 +84,7 @@ const resolvers = mergeResolvers([
   taskImageResolvers,
   notificationPreferencesResolvers,
   userInvitedResolvers,
+  clientAutomationResolvers,
 ]);
 
 export default resolvers;

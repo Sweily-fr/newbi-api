@@ -24,6 +24,7 @@ import {
 import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import notificationService from "../services/notificationService.js";
+import { automationService } from "./clientAutomation.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1920,6 +1921,52 @@ const invoiceResolvers = {
             notifError
           );
           // Ne pas faire échouer la mutation si la notification échoue
+        }
+
+        // Exécuter les automatisations CRM si le client est lié
+        if (invoice.client && invoice.client.id) {
+          try {
+            const clientId = invoice.client.id;
+            
+            // Vérifier si c'est la première facture payée
+            const isFirstInvoice = await automationService.isFirstPaidInvoice(
+              clientId,
+              workspaceId,
+              invoice._id
+            );
+
+            // Exécuter les automatisations FIRST_INVOICE_PAID
+            if (isFirstInvoice) {
+              await automationService.executeAutomations(
+                "FIRST_INVOICE_PAID",
+                workspaceId,
+                clientId,
+                {
+                  isFirstInvoice: true,
+                  amount: invoice.finalTotalTTC,
+                  invoiceId: invoice._id.toString(),
+                }
+              );
+            }
+
+            // Exécuter les automatisations INVOICE_PAID (pour toutes les factures)
+            await automationService.executeAutomations(
+              "INVOICE_PAID",
+              workspaceId,
+              clientId,
+              {
+                isFirstInvoice,
+                amount: invoice.finalTotalTTC,
+                invoiceId: invoice._id.toString(),
+              }
+            );
+          } catch (automationError) {
+            console.error(
+              "Erreur lors de l'exécution des automatisations CRM:",
+              automationError
+            );
+            // Ne pas faire échouer la mutation si les automatisations échouent
+          }
         }
 
         return await invoice.populate("createdBy");
