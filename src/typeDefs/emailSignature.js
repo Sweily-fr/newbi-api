@@ -55,10 +55,24 @@ const emailSignatureTypeDefs = gql`
     # Séparateurs
     separatorVerticalWidth: Int!
     separatorHorizontalWidth: Int!
-    
+    separatorVerticalEnabled: Boolean
+    separatorHorizontalEnabled: Boolean
+
+    # Template ID (pour restaurer la disposition lors de l'édition)
+    templateId: String
+
+    # Ordre des éléments
+    elementsOrder: [String!]
+    horizontalLayout: HorizontalLayout
+
     # Espacements
     spacings: SignatureSpacings!
     detailedSpacing: Boolean!
+    paddings: SignaturePaddings
+
+    # Social global settings
+    socialGlobalColor: String
+    socialSize: Int
     
     # Typographie
     fontFamily: String!
@@ -109,6 +123,8 @@ const emailSignatureTypeDefs = gql`
     instagram: String
     linkedin: String
     x: String
+    github: String
+    youtube: String
   }
 
   type SocialColors {
@@ -116,6 +132,8 @@ const emailSignatureTypeDefs = gql`
     instagram: String
     linkedin: String
     x: String
+    github: String
+    youtube: String
   }
 
   type CustomSocialIcons {
@@ -123,6 +141,8 @@ const emailSignatureTypeDefs = gql`
     instagram: String
     linkedin: String
     x: String
+    github: String
+    youtube: String
   }
 
   type TypographyField {
@@ -149,6 +169,35 @@ const emailSignatureTypeDefs = gql`
     name: Int!
     position: Int!
     contact: Int!
+  }
+
+  type HorizontalLayout {
+    leftColumn: [String!]
+    rightColumn: [String!]
+    bottomRow: [String!]
+  }
+
+  type PaddingValues {
+    top: Int
+    right: Int
+    bottom: Int
+    left: Int
+  }
+
+  type SignaturePaddings {
+    photo: PaddingValues
+    name: PaddingValues
+    position: PaddingValues
+    company: PaddingValues
+    phone: PaddingValues
+    mobile: PaddingValues
+    email: PaddingValues
+    website: PaddingValues
+    address: PaddingValues
+    separatorHorizontal: PaddingValues
+    separatorVertical: PaddingValues
+    logo: PaddingValues
+    social: PaddingValues
   }
 
   input EmailSignatureInput {
@@ -204,11 +253,25 @@ const emailSignatureTypeDefs = gql`
     # Séparateurs
     separatorVerticalWidth: Int
     separatorHorizontalWidth: Int
-    
+    separatorVerticalEnabled: Boolean
+    separatorHorizontalEnabled: Boolean
+
+    # Template ID
+    templateId: String
+
+    # Ordre des éléments
+    elementsOrder: [String!]
+    horizontalLayout: HorizontalLayoutInput
+
     # Espacements
     spacings: SignatureSpacingsInput
     detailedSpacing: Boolean
-    
+    paddings: SignaturePaddingsInput
+
+    # Social global settings
+    socialGlobalColor: String
+    socialSize: Int
+
     # Typographie
     fontFamily: String
     fontSize: FontSizesInput
@@ -259,6 +322,8 @@ const emailSignatureTypeDefs = gql`
     instagram: String
     linkedin: String
     x: String
+    github: String
+    youtube: String
   }
 
   input SocialColorsInput {
@@ -266,6 +331,8 @@ const emailSignatureTypeDefs = gql`
     instagram: String
     linkedin: String
     x: String
+    github: String
+    youtube: String
   }
 
   input CustomSocialIconsInput {
@@ -273,6 +340,37 @@ const emailSignatureTypeDefs = gql`
     instagram: String
     linkedin: String
     x: String
+    github: String
+    youtube: String
+  }
+
+  input HorizontalLayoutInput {
+    leftColumn: [String!]
+    rightColumn: [String!]
+    bottomRow: [String!]
+  }
+
+  input PaddingValuesInput {
+    top: Int
+    right: Int
+    bottom: Int
+    left: Int
+  }
+
+  input SignaturePaddingsInput {
+    photo: PaddingValuesInput
+    name: PaddingValuesInput
+    position: PaddingValuesInput
+    company: PaddingValuesInput
+    phone: PaddingValuesInput
+    mobile: PaddingValuesInput
+    email: PaddingValuesInput
+    website: PaddingValuesInput
+    address: PaddingValuesInput
+    separatorHorizontal: PaddingValuesInput
+    separatorVertical: PaddingValuesInput
+    logo: PaddingValuesInput
+    social: PaddingValuesInput
   }
 
   input TypographyFieldInput {
@@ -349,11 +447,25 @@ const emailSignatureTypeDefs = gql`
     # Séparateurs
     separatorVerticalWidth: Int
     separatorHorizontalWidth: Int
-    
+    separatorVerticalEnabled: Boolean
+    separatorHorizontalEnabled: Boolean
+
+    # Template ID
+    templateId: String
+
+    # Ordre des éléments
+    elementsOrder: [String!]
+    horizontalLayout: HorizontalLayoutInput
+
     # Espacements
     spacings: SignatureSpacingsInput
     detailedSpacing: Boolean
-    
+    paddings: SignaturePaddingsInput
+
+    # Social global settings
+    socialGlobalColor: String
+    socialSize: Int
+
     # Typographie
     fontFamily: String
     fontSize: FontSizesInput

@@ -253,7 +253,7 @@ class JWKSValidator {
         const { payload: verifiedPayload } = await jwtVerify(token, publicKey, {
           algorithms: ["EdDSA"],
           issuer: expectedIssuer,
-          clockTolerance: "30s",
+          clockTolerance: "60s", // Augmenté pour s'adapter à l'expiration de session d'1 heure
         });
 
         logger.info(

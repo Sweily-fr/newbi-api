@@ -49,7 +49,8 @@ import { initializeRedis, closeRedis } from "./config/redis.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
 import webhookRoutes from "./routes/webhook.js";
-import superPdpWebhookRoutes from "./routes/superPdpWebhook.js";
+// DÉSACTIVÉ: SuperPDP API pas encore active
+// import superPdpWebhookRoutes from "./routes/superPdpWebhook.js";
 import fileTransferAuthRoutes from "./routes/fileTransferAuth.js";
 import fileDownloadRoutes from "./routes/fileDownload.js";
 import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
@@ -58,7 +59,8 @@ import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
 import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
-import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
+// DÉSACTIVÉ: SuperPDP API pas encore active
+// import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
@@ -162,8 +164,9 @@ async function startServer() {
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
 
+  // DÉSACTIVÉ: SuperPDP API pas encore active
   // Webhook SuperPDP pour la facturation électronique
-  app.use("/webhook/superpdp", superPdpWebhookRoutes);
+  // app.use("/webhook/superpdp", superPdpWebhookRoutes);
 
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
@@ -185,8 +188,9 @@ async function startServer() {
   app.use("/banking-cache", bankingCacheRoutes); // Gestion du cache bancaire
   app.use("/reconciliation", reconciliationRoutes); // Rapprochement factures/transactions
 
+  // DÉSACTIVÉ: SuperPDP API pas encore active
   // Routes OAuth SuperPDP (facturation électronique)
-  app.use("/api/superpdp", superpdpOAuthRoutes);
+  // app.use("/api/superpdp", superpdpOAuthRoutes);
 
   // Routes téléchargement documents partagés (ZIP dossiers)
   app.use("/api/shared-documents", sharedDocumentDownloadRoutes);
