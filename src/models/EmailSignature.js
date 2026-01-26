@@ -222,6 +222,30 @@ const emailSignatureSchema = new mongoose.Schema(
       default: "vertical",
     },
 
+    // ID du template utilisé (pour restaurer la disposition lors de l'édition)
+    templateId: {
+      type: String,
+      trim: true,
+      default: "template1",
+    },
+
+    // Structure des conteneurs (stockée en JSON pour sauvegarder la disposition personnalisée)
+    // Contient : id, type, label, layout, alignment, padding, gap, elements, children
+    containerStructure: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    // Activation des séparateurs (pour restaurer la configuration lors de l'édition)
+    separatorVerticalEnabled: {
+      type: Boolean,
+      default: true,
+    },
+    separatorHorizontalEnabled: {
+      type: Boolean,
+      default: false,
+    },
+
     // Largeurs des colonnes (en pourcentage)
     columnWidths: {
       photo: {
