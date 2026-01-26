@@ -11,6 +11,7 @@ import {
   createResourceInUseError,
 } from "../utils/errors.js";
 import mongoose from "mongoose";
+import { automationService } from "./clientAutomation.js";
 
 const clientResolvers = {
   Query: {
@@ -156,6 +157,22 @@ const clientResolvers = {
         });
 
         await client.save();
+
+        // Exécuter les automatisations CLIENT_CREATED
+        try {
+          await automationService.executeAutomations(
+            "CLIENT_CREATED",
+            finalWorkspaceId,
+            client._id.toString(),
+            {}
+          );
+        } catch (automationError) {
+          console.error(
+            "Erreur lors de l'exécution des automatisations CLIENT_CREATED:",
+            automationError
+          );
+        }
+
         return client;
       }
     ),
