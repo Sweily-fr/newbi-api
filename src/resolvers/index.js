@@ -23,7 +23,6 @@ import ocrResolvers from "./ocr.js";
 import eventResolvers from "./event.js";
 import emailReminderResolvers from "./emailReminder.js";
 import bankingResolvers from "./banking.js";
-import trialResolvers from "./trialResolvers.js";
 import communitySuggestionResolvers from "./communitySuggestion.js";
 import blogResolvers from "./blog.js";
 import { clientListResolvers } from "./clientList.js";
@@ -68,7 +67,6 @@ const resolvers = mergeResolvers([
   eventResolvers,
   emailReminderResolvers,
   bankingResolvers,
-  trialResolvers,
   communitySuggestionResolvers,
   blogResolvers,
   partnerResolvers,

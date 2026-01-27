@@ -1,8 +1,8 @@
 import express from "express";
 import {
   cleanupExpiredFiles,
-  markExpiredTransfers,
-  deleteExpiredFiles,
+  markExpiredTransfersAndDeleteR2,
+  deleteExpiredLocalFiles,
 } from "../jobs/cleanupExpiredFiles.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
@@ -50,7 +50,8 @@ router.post("/cleanup/mark-expired", async (req, res) => {
   try {
     logger.info("🏷️ Marquage des transferts expirés");
 
-    const markedCount = await markExpiredTransfers();
+    const result = await markExpiredTransfersAndDeleteR2();
+    const markedCount = result.markedCount;
 
     res.json({
       success: true,
@@ -74,17 +75,15 @@ router.post("/cleanup/delete-files", async (req, res) => {
   try {
     logger.info("🗑️ Suppression des fichiers expirés");
 
-    const result = await deleteExpiredFiles();
+    const result = await deleteExpiredLocalFiles();
 
     res.json({
       success: true,
       message: "Fichiers supprimés avec succès",
       result: {
-        local: result.localFiles,
-        r2: result.r2Files,
-        failed: result.failed,
-        total: result.total,
-        spaceFreed: `${result.totalSizeMB} MB`,
+        deletedFiles: result.deletedFiles,
+        failed: result.failedDeletions,
+        spaceFreed: `${(result.freedBytes / 1024 / 1024).toFixed(2)} MB`,
       },
     });
   } catch (error) {

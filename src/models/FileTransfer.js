@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
+
 const { Schema } = mongoose;
 
 const fileSchema = new Schema({
@@ -158,6 +160,27 @@ const FileTransferSchema = new Schema(
     timestamps: true,
   }
 );
+
+// Middleware pre-save pour hasher le mot de passe
+FileTransferSchema.pre("save", async function (next) {
+  // Ne hasher que si le mot de passe a été modifié et qu'il n'est pas déjà hashé
+  if (this.isModified("password") && this.password) {
+    // Vérifier si le mot de passe est déjà hashé (commence par $2a$ ou $2b$)
+    if (!this.password.startsWith("$2a$") && !this.password.startsWith("$2b$")) {
+      const salt = await bcrypt.genSalt(10);
+      this.password = await bcrypt.hash(this.password, salt);
+    }
+  }
+  next();
+});
+
+// Méthode pour vérifier le mot de passe
+FileTransferSchema.methods.verifyPassword = async function (candidatePassword) {
+  if (!this.password || !candidatePassword) {
+    return false;
+  }
+  return bcrypt.compare(candidatePassword, this.password);
+};
 
 // Méthode pour vérifier si le transfert est expiré
 FileTransferSchema.methods.isExpired = function () {
