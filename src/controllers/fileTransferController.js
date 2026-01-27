@@ -2,7 +2,11 @@ import path from "path";
 import fs from "fs";
 import FileTransfer from "../models/FileTransfer.js";
 import { createZipArchive } from "../utils/fileTransferUtils.js";
+import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import Stripe from "stripe";
+import archiver from "archiver";
+import { Readable } from "stream";
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const logger = console; // Utilisation de console comme logger de base
 
@@ -166,7 +170,6 @@ const downloadFile = async (req, res) => {
         success: false,
         message: "Transfert non trouvé ou expiré",
       });
-      return res.status(404).send("Transfert de fichiers non trouvé ou expiré");
     }
 
     logger.info(
@@ -192,14 +195,6 @@ const downloadFile = async (req, res) => {
       logger.error(
         `[FileTransfer] Fichier non trouvé dans le transfert - fileId: ${fileId}`
       );
-      logger.debug(
-        `[FileTransfer] Fichiers disponibles: ${JSON.stringify(
-          fileTransfer.files.map((f) => ({
-            id: f._id.toString(),
-            name: f.originalName,
-          }))
-        )}`
-      );
       return res.status(404).json({
         success: false,
         message: "Fichier non trouvé dans le transfert",
@@ -207,31 +202,8 @@ const downloadFile = async (req, res) => {
     }
 
     console.log(
-      `[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}`
+      `[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}, Storage: ${file.storageType}`
     );
-
-    // Construire le chemin du fichier
-    const filePath = path.join(process.cwd(), "public", file.filePath);
-    console.log(`[DEBUG] Chemin du fichier: ${filePath}`);
-
-    // Vérifier si le fichier existe
-    if (!fs.existsSync(filePath)) {
-      console.log(
-        `[ERROR] Fichier physique non trouvé sur le serveur: ${filePath}`
-      );
-      return res.status(404).send("Fichier non trouvé sur le serveur");
-    }
-
-    // Vérifier la taille du fichier
-    const fileStats = fs.statSync(filePath);
-    console.log(
-      `[DEBUG] Taille du fichier sur disque: ${fileStats.size} octets`
-    );
-
-    if (fileStats.size === 0) {
-      console.log(`[ERROR] Fichier vide sur le serveur: ${filePath}`);
-      return res.status(500).send("Fichier vide sur le serveur");
-    }
 
     // Incrémenter le compteur de téléchargements
     await fileTransfer.incrementDownloadCount();
@@ -240,36 +212,79 @@ const downloadFile = async (req, res) => {
     const contentType = file.mimeType || "application/octet-stream";
     const fileName = encodeURIComponent(file.originalName);
 
-    console.log(
-      `[DEBUG] En-têtes de réponse - Content-Type: ${contentType}, fileName: ${fileName}, Content-Length: ${fileStats.size}`
-    );
+    // Gérer selon le type de stockage
+    if (file.storageType === "r2" && file.r2Key) {
+      // Fichier stocké sur Cloudflare R2
+      console.log(`[DEBUG] Téléchargement depuis R2: ${file.r2Key}`);
 
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    res.setHeader("Content-Length", fileStats.size);
-    res.setHeader("Cache-Control", "no-cache");
+      try {
+        // Générer une URL signée pour le téléchargement (5 minutes)
+        const signedUrl = await cloudflareTransferService.getSignedUrl(file.r2Key, 300);
 
-    // Utiliser un stream pour envoyer le fichier au lieu de res.download
-    // Cela évite les problèmes potentiels de mémoire tampon et de corruption
-    const fileStream = fs.createReadStream(filePath);
-
-    // Gérer les erreurs de stream
-    fileStream.on("error", (err) => {
-      console.error("[ERROR] Erreur de stream lors du téléchargement:", err);
-      if (!res.headersSent) {
-        res.status(500).send("Erreur lors de la lecture du fichier");
+        // Rediriger vers l'URL signée
+        console.log(`[DEBUG] Redirection vers URL signée R2`);
+        return res.redirect(signedUrl);
+      } catch (r2Error) {
+        console.error("[ERROR] Erreur R2:", r2Error);
+        return res.status(500).json({
+          success: false,
+          message: "Erreur lors de la récupération du fichier",
+        });
       }
-    });
+    } else {
+      // Fichier stocké localement
+      const filePath = path.join(process.cwd(), "public", file.filePath);
+      console.log(`[DEBUG] Chemin du fichier local: ${filePath}`);
 
-    // Gérer la fin du stream
-    fileStream.on("end", () => {
+      // Vérifier si le fichier existe
+      if (!fs.existsSync(filePath)) {
+        console.log(
+          `[ERROR] Fichier physique non trouvé sur le serveur: ${filePath}`
+        );
+        return res.status(404).send("Fichier non trouvé sur le serveur");
+      }
+
+      // Vérifier la taille du fichier
+      const fileStats = fs.statSync(filePath);
       console.log(
-        `[DEBUG] Téléchargement terminé avec succès - ${file.originalName}`
+        `[DEBUG] Taille du fichier sur disque: ${fileStats.size} octets`
       );
-    });
 
-    // Pipe le stream vers la réponse
-    fileStream.pipe(res);
+      if (fileStats.size === 0) {
+        console.log(`[ERROR] Fichier vide sur le serveur: ${filePath}`);
+        return res.status(500).send("Fichier vide sur le serveur");
+      }
+
+      console.log(
+        `[DEBUG] En-têtes de réponse - Content-Type: ${contentType}, fileName: ${fileName}, Content-Length: ${fileStats.size}`
+      );
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      res.setHeader("Content-Length", fileStats.size);
+      res.setHeader("Cache-Control", "no-cache");
+
+      // Utiliser un stream pour envoyer le fichier
+      const fileStream = fs.createReadStream(filePath);
+
+      // Gérer les erreurs de stream
+      fileStream.on("error", (err) => {
+        console.error("[ERROR] Erreur de stream lors du téléchargement:", err);
+        if (!res.headersSent) {
+          res.status(500).send("Erreur lors de la lecture du fichier");
+        }
+      });
+
+      // Gérer la fin du stream
+      fileStream.on("end", () => {
+        console.log(
+          `[DEBUG] Téléchargement terminé avec succès - ${file.originalName}`
+        );
+      });
+
+      // Pipe le stream vers la réponse
+      fileStream.pipe(res);
+    }
   } catch (error) {
     console.error("[ERROR] Erreur lors du téléchargement du fichier:", error);
     if (!res.headersSent) {
@@ -337,124 +352,111 @@ const downloadAllFiles = async (req, res) => {
 
     // Vérifier si des fichiers existent
     if (!fileTransfer.files || fileTransfer.files.length === 0) {
-      if (global.logger) {
-        global.logger.error(
-          `Aucun fichier à télécharger - ID: ${fileTransfer._id}`
-        );
-      }
+      logger.error(`Aucun fichier à télécharger - ID: ${fileTransfer._id}`);
       return res.status(404).send("Aucun fichier disponible pour ce transfert");
     }
 
-    // Vérifier que tous les fichiers existent physiquement
-    const missingFiles = [];
-    for (const file of fileTransfer.files) {
+    // Séparer les fichiers locaux et R2
+    const localFiles = fileTransfer.files.filter((f) => f.storageType !== "r2");
+    const r2Files = fileTransfer.files.filter((f) => f.storageType === "r2" && f.r2Key);
+
+    console.log(`[DEBUG] Fichiers locaux: ${localFiles.length}, Fichiers R2: ${r2Files.length}`);
+
+    // Vérifier que tous les fichiers locaux existent physiquement
+    const missingLocalFiles = [];
+    for (const file of localFiles) {
       const filePath = path.join(process.cwd(), "public", file.filePath);
       if (!fs.existsSync(filePath)) {
-        missingFiles.push(file.originalName);
+        missingLocalFiles.push(file.originalName);
       }
     }
 
-    if (missingFiles.length > 0) {
-      if (global.logger) {
-        global.logger.error(`Fichiers manquants: ${missingFiles.join(", ")}`);
-      }
+    if (missingLocalFiles.length > 0) {
+      logger.error(`Fichiers locaux manquants: ${missingLocalFiles.join(", ")}`);
       return res
         .status(404)
-        .send(`Certains fichiers sont manquants: ${missingFiles.join(", ")}`);
+        .send(`Certains fichiers sont manquants: ${missingLocalFiles.join(", ")}`);
     }
 
     try {
-      // Créer une archive ZIP des fichiers
-      const archivePath = await createZipArchive(
-        fileTransfer.files,
-        fileTransfer.userId
-      );
-
-      // Construire le chemin de l'archive
-      const fullArchivePath = path.join(process.cwd(), "public", archivePath);
-
-      // Vérifier si l'archive existe
-      if (!fs.existsSync(fullArchivePath)) {
-        if (global.logger) {
-          global.logger.error(`Archive non créée: ${fullArchivePath}`);
-        }
-        return res.status(500).send("Erreur lors de la création de l'archive");
-      }
-
-      // Obtenir la taille de l'archive
-      const archiveStats = fs.statSync(fullArchivePath);
-      const archiveSize = archiveStats.size;
-
-      if (archiveSize === 0) {
-        if (global.logger) {
-          global.logger.error(`Archive vide: ${fullArchivePath}`);
-        }
-        return res.status(500).send("L'archive créée est vide");
-      }
-
-      const archiveFileName = `newbi-files-${Date.now()}.zip`;
-
-      if (global.logger) {
-        global.logger.info(
-          `Archive prête - Chemin: ${fullArchivePath}, Taille: ${archiveSize} octets`
-        );
-      }
-
       // Incrémenter le compteur de téléchargements
       await fileTransfer.incrementDownloadCount();
 
-      // Définir les en-têtes appropriés pour le téléchargement
+      const archiveFileName = `newbi-files-${Date.now()}.zip`;
+
+      // Définir les en-têtes pour le streaming
       res.setHeader("Content-Type", "application/zip");
       res.setHeader(
         "Content-Disposition",
         `attachment; filename="${encodeURIComponent(archiveFileName)}"`
       );
-      res.setHeader("Content-Length", archiveSize);
       res.setHeader("Cache-Control", "no-cache");
 
-      // Utiliser un stream pour envoyer l'archive
-      const archiveStream = fs.createReadStream(fullArchivePath);
+      // Créer l'archive en streaming directement vers la réponse
+      const archive = archiver("zip", {
+        zlib: { level: 6 },
+      });
 
-      // Gérer les erreurs de stream
-      archiveStream.on("error", (err) => {
-        if (global.logger) {
-          global.logger.error(
-            "Erreur de stream lors du téléchargement de l'archive:",
-            err
-          );
-        }
+      // Gérer les erreurs d'archivage
+      archive.on("error", (err) => {
+        logger.error("Erreur lors de la création de l'archive ZIP:", err);
         if (!res.headersSent) {
-          res.status(500).send("Erreur lors de la lecture de l'archive");
+          res.status(500).send(`Erreur lors de la création de l'archive: ${err.message}`);
         }
       });
 
-      // Gérer la fin du téléchargement
-      res.on("finish", () => {
-        if (global.logger) {
-          global.logger.info(`Téléchargement terminé: ${archiveFileName}`);
-        }
-        // Supprimer l'archive après le téléchargement
-        setTimeout(() => {
-          fs.unlink(fullArchivePath, (err) => {
-            if (err && global.logger) {
-              global.logger.error(
-                "Erreur lors de la suppression de l'archive temporaire:",
-                err
-              );
-            }
-          });
-        }, 60000); // Attendre 1 minute avant de supprimer
+      archive.on("end", () => {
+        logger.info(`Archive ZIP terminée: ${archiveFileName}`);
       });
 
-      // Pipe le stream vers la réponse
-      archiveStream.pipe(res);
-    } catch (zipError) {
-      if (global.logger) {
-        global.logger.error(
-          "Erreur lors de la création de l'archive ZIP:",
-          zipError
-        );
+      // Pipe l'archive vers la réponse
+      archive.pipe(res);
+
+      // Ajouter les fichiers locaux
+      for (const file of localFiles) {
+        const filePath = path.join(process.cwd(), "public", file.filePath);
+        archive.file(filePath, { name: file.originalName });
+        console.log(`[ZIP] Ajout fichier local: ${file.originalName}`);
       }
+
+      // Ajouter les fichiers R2 en les streamant
+      for (const file of r2Files) {
+        try {
+          console.log(`[ZIP] Ajout fichier R2: ${file.originalName} (${file.r2Key})`);
+
+          // Récupérer le fichier depuis R2
+          const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+          const { S3Client } = await import("@aws-sdk/client-s3");
+
+          const s3Client = new S3Client({
+            region: "auto",
+            endpoint: process.env.R2_API_URL,
+            credentials: {
+              accessKeyId: process.env.R2_ACCESS_KEY_ID,
+              secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+            },
+          });
+
+          const command = new GetObjectCommand({
+            Bucket: process.env.TRANSFER_BUCKET || "app-transfers-prod",
+            Key: file.r2Key,
+          });
+
+          const response = await s3Client.send(command);
+
+          // Ajouter le stream au ZIP
+          archive.append(response.Body, { name: file.originalName });
+        } catch (r2Error) {
+          console.error(`[ZIP] Erreur récupération R2 pour ${file.originalName}:`, r2Error);
+          // Continuer avec les autres fichiers
+        }
+      }
+
+      // Finaliser l'archive
+      await archive.finalize();
+
+    } catch (zipError) {
+      logger.error("Erreur lors de la création de l'archive ZIP:", zipError);
       if (!res.headersSent) {
         res
           .status(500)
@@ -462,9 +464,7 @@ const downloadAllFiles = async (req, res) => {
       }
     }
   } catch (error) {
-    if (global.logger) {
-      global.logger.error("Erreur lors du téléchargement des fichiers:", error);
-    }
+    logger.error("Erreur lors du téléchargement des fichiers:", error);
     if (!res.headersSent) {
       res
         .status(500)
@@ -544,9 +544,10 @@ const verifyTransferPassword = async (req, res) => {
       });
     }
 
-    // Vérifier le mot de passe (comparaison simple pour l'instant)
-    // TODO: Utiliser bcrypt pour une comparaison sécurisée
-    if (fileTransfer.password === password) {
+    // Vérifier le mot de passe avec bcrypt
+    const isPasswordValid = await fileTransfer.verifyPassword(password);
+
+    if (isPasswordValid) {
       return res.json({
         success: true,
         message: "Mot de passe correct",
@@ -602,15 +603,10 @@ const previewFile = async (req, res) => {
 
     // Si le fichier est sur R2, générer une URL signée pour la prévisualisation
     if (file.storageType === "r2" && file.r2Key) {
-      const { cloudflareTransferService } = await import(
-        "../services/cloudflareTransferService.js"
+      const presignedUrl = await cloudflareTransferService.getSignedUrl(
+        file.r2Key,
+        3600 // 1 heure
       );
-
-      const presignedUrl =
-        await cloudflareTransferService.getPresignedDownloadUrl(
-          file.r2Key,
-          3600 // 1 heure
-        );
 
       // Rediriger vers l'URL signée
       return res.redirect(presignedUrl);

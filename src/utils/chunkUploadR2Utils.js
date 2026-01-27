@@ -79,6 +79,7 @@ export const saveChunkToR2 = async (
 
 /**
  * Vérifie si tous les chunks d'un fichier ont été uploadés sur R2
+ * Utilise listObjects pour trouver les chunks quel que soit leur date d'upload
  * @param {String} transferId - ID du transfert
  * @param {String} fileId - Identifiant unique du fichier
  * @param {Number} totalChunks - Nombre total de chunks attendus
@@ -90,17 +91,33 @@ export const areAllChunksReceivedOnR2 = async (
   totalChunks
 ) => {
   try {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
+    // Utiliser listObjects pour trouver tous les chunks
+    const prefix = "temp/";
+    const objects = await cloudflareTransferService.listObjects(prefix);
 
-    // Vérifier si tous les chunks existent sur R2
+    // Filtrer les chunks correspondant au transferId et fileId
+    const pattern = new RegExp(`t_${transferId}/f_${fileId}/chunk_(\\d+)`);
+    const matchingChunks = objects.filter((obj) => pattern.test(obj.key));
+
+    // Vérifier si on a tous les chunks
+    if (matchingChunks.length < totalChunks) {
+      console.log(
+        `❌ Chunks manquants pour fichier ${fileId}: ${matchingChunks.length}/${totalChunks}`
+      );
+      return false;
+    }
+
+    // Vérifier que tous les indices de 0 à totalChunks-1 sont présents
+    const foundIndices = new Set();
+    for (const obj of matchingChunks) {
+      const match = obj.key.match(pattern);
+      if (match) {
+        foundIndices.add(parseInt(match[1], 10));
+      }
+    }
+
     for (let i = 0; i < totalChunks; i++) {
-      const chunkKey = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${i}`;
-      const exists = await cloudflareTransferService.fileExists(chunkKey);
-
-      if (!exists) {
+      if (!foundIndices.has(i)) {
         console.log(`❌ Chunk ${i} manquant pour fichier ${fileId}`);
         return false;
       }
