@@ -50,6 +50,7 @@ type FileTransfer {
   message: String
   expiryReminderEnabled: Boolean
   expiryReminderSent: Boolean
+  hasWatermark: Boolean
   createdAt: Date
   updatedAt: Date
   zipDownloadUrl: String
@@ -100,6 +101,7 @@ input FileTransferInput {
   password: String
   allowPreview: Boolean = true
   expiryReminderEnabled: Boolean = false
+  hasWatermark: Boolean = false
 }
 
 # Étendre le type Query

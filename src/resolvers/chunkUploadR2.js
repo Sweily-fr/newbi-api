@@ -592,6 +592,7 @@ export default {
           const password = input?.password || null;
           const allowPreview = input?.allowPreview !== false; // true par défaut
           const expiryReminderEnabled = input?.expiryReminderEnabled || false;
+          const hasWatermark = input?.hasWatermark || false;
 
           // Créer un nouveau transfert de fichier
           const fileTransfer = new FileTransfer({
@@ -613,6 +614,7 @@ export default {
             password: passwordProtected ? password : null,
             allowPreview,
             expiryReminderEnabled,
+            hasWatermark,
           });
 
           // Générer les liens de partage et clé d'accès

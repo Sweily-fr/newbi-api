@@ -36,6 +36,13 @@ module.exports = gql`
     notificationSent: Boolean
     createdAt: DateTime
     updatedAt: DateTime
+    # Nouvelles options
+    message: String
+    notifyOnDownload: Boolean
+    passwordProtected: Boolean
+    allowPreview: Boolean
+    expiryReminderEnabled: Boolean
+    hasWatermark: Boolean
   }
 
   enum FileTransferStatus {
@@ -88,6 +95,13 @@ module.exports = gql`
     paymentAmount: Float = 0
     paymentCurrency: String = "EUR"
     recipientEmail: String
+    message: String
+    notifyOnDownload: Boolean = false
+    passwordProtected: Boolean = false
+    password: String
+    allowPreview: Boolean = true
+    expiryReminderEnabled: Boolean = false
+    hasWatermark: Boolean = false
   }
 
   # Type pour la réponse paginée des transferts de fichiers

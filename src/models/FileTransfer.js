@@ -155,6 +155,16 @@ const FileTransferSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    // Message personnalisé
+    message: {
+      type: String,
+      trim: true,
+    },
+    // Filigrane appliqué sur les images
+    hasWatermark: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
