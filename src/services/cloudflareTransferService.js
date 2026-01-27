@@ -14,6 +14,8 @@ import {
   UploadPartCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
@@ -595,34 +597,74 @@ class CloudflareTransferService {
 
   /**
    * Nettoie les chunks temporaires après reconstruction
+   * Utilise listObjects pour trouver les chunks quel que soit leur date d'upload
    * @param {string} transferId - ID du transfert
    * @param {string} fileId - ID du fichier
-   * @param {number} totalChunks - Nombre total de chunks
-   * @returns {Promise<void>}
+   * @param {number} totalChunks - Nombre total de chunks (optionnel, utilisé pour fallback)
+   * @returns {Promise<{deleted: number, errors: number}>}
    */
-  async cleanupChunks(transferId, fileId, totalChunks) {
+  async cleanupChunks(transferId, fileId, totalChunks = 0) {
     try {
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, "0");
-      const day = String(now.getDate()).padStart(2, "0");
+      console.log(`🧹 Nettoyage des chunks pour transfert ${transferId}, fichier ${fileId}`);
 
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkKey = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${i}`;
+      // Approche 1: Lister tous les objets correspondant au pattern
+      // Cela fonctionne quel que soit le jour d'upload
+      const prefix = `temp/`;
+      const objects = await this.listObjects(prefix);
 
-        try {
-          const deleteCommand = new DeleteObjectCommand({
-            Bucket: this.bucketName,
-            Key: chunkKey,
-          });
+      // Filtrer les chunks correspondant au transferId et fileId
+      const pattern = new RegExp(`t_${transferId}/f_${fileId}/chunk_`);
+      const matchingChunks = objects.filter((obj) => pattern.test(obj.key));
 
-          await this.client.send(deleteCommand);
-        } catch (error) {
-          console.warn(`⚠️ Erreur suppression chunk ${i}:`, error.message);
-        }
+      if (matchingChunks.length === 0) {
+        console.log(`ℹ️ Aucun chunk trouvé pour fichier ${fileId}`);
+        return { deleted: 0, errors: 0 };
       }
+
+      console.log(`🗑️ ${matchingChunks.length} chunks à supprimer`);
+
+      // Supprimer les chunks
+      const keysToDelete = matchingChunks.map((obj) => obj.key);
+      const result = await this.deleteFiles(keysToDelete);
+
+      console.log(`✅ Chunks supprimés: ${result.deleted}/${keysToDelete.length}`);
+
+      return result;
     } catch (error) {
       console.error("Erreur nettoyage chunks:", error);
+
+      // Fallback: essayer avec la date actuelle si listObjects échoue
+      if (totalChunks > 0) {
+        console.log("⚠️ Fallback vers suppression par date actuelle");
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+
+        let deleted = 0;
+        let errors = 0;
+
+        for (let i = 0; i < totalChunks; i++) {
+          const chunkKey = `temp/${year}/${month}/${day}/t_${transferId}/f_${fileId}/chunk_${i}`;
+
+          try {
+            const deleteCommand = new DeleteObjectCommand({
+              Bucket: this.bucketName,
+              Key: chunkKey,
+            });
+
+            await this.client.send(deleteCommand);
+            deleted++;
+          } catch (deleteError) {
+            errors++;
+            console.warn(`⚠️ Erreur suppression chunk ${i}:`, deleteError.message);
+          }
+        }
+
+        return { deleted, errors };
+      }
+
+      return { deleted: 0, errors: 1 };
     }
   }
 
@@ -771,6 +813,143 @@ class CloudflareTransferService {
     const maxSize = 10 * 1024 * 1024 * 1024; // 10GB
     const size = typeof fileData === "number" ? fileData : fileData.length;
     return size <= maxSize;
+  }
+
+  /**
+   * Liste les objets dans un préfixe donné
+   * @param {string} prefix - Préfixe pour filtrer les objets
+   * @param {number} maxKeys - Nombre maximum d'objets à retourner
+   * @returns {Promise<Array<{key: string, lastModified: Date, size: number}>>}
+   */
+  async listObjects(prefix, maxKeys = 1000) {
+    try {
+      const objects = [];
+      let continuationToken = undefined;
+
+      do {
+        const command = new ListObjectsV2Command({
+          Bucket: this.bucketName,
+          Prefix: prefix,
+          MaxKeys: maxKeys,
+          ContinuationToken: continuationToken,
+        });
+
+        const response = await this.client.send(command);
+
+        if (response.Contents) {
+          objects.push(
+            ...response.Contents.map((obj) => ({
+              key: obj.Key,
+              lastModified: obj.LastModified,
+              size: obj.Size,
+            }))
+          );
+        }
+
+        continuationToken = response.NextContinuationToken;
+      } while (continuationToken);
+
+      return objects;
+    } catch (error) {
+      console.error("Erreur listage objets R2:", error);
+      throw new Error(`Échec du listage des objets: ${error.message}`);
+    }
+  }
+
+  /**
+   * Supprime plusieurs fichiers en une seule requête
+   * @param {string[]} keys - Liste des clés à supprimer
+   * @returns {Promise<{deleted: number, errors: number}>}
+   */
+  async deleteFiles(keys) {
+    if (!keys || keys.length === 0) {
+      return { deleted: 0, errors: 0 };
+    }
+
+    try {
+      // S3 limite à 1000 objets par requête
+      const BATCH_SIZE = 1000;
+      let totalDeleted = 0;
+      let totalErrors = 0;
+
+      for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+        const batch = keys.slice(i, i + BATCH_SIZE);
+
+        const command = new DeleteObjectsCommand({
+          Bucket: this.bucketName,
+          Delete: {
+            Objects: batch.map((key) => ({ Key: key })),
+            Quiet: false,
+          },
+        });
+
+        const response = await this.client.send(command);
+
+        totalDeleted += response.Deleted?.length || 0;
+        totalErrors += response.Errors?.length || 0;
+
+        if (response.Errors && response.Errors.length > 0) {
+          console.warn("⚠️ Erreurs lors de la suppression batch:", response.Errors);
+        }
+      }
+
+      return { deleted: totalDeleted, errors: totalErrors };
+    } catch (error) {
+      console.error("Erreur suppression batch R2:", error);
+      throw new Error(`Échec de la suppression batch: ${error.message}`);
+    }
+  }
+
+  /**
+   * Nettoie les chunks orphelins (temp/) plus vieux que maxAgeHours
+   * @param {number} maxAgeHours - Âge maximum en heures (défaut: 24h)
+   * @returns {Promise<{deleted: number, errors: number, freedBytes: number}>}
+   */
+  async cleanupOrphanChunks(maxAgeHours = 24) {
+    try {
+      console.log(`🧹 Recherche des chunks orphelins (> ${maxAgeHours}h)...`);
+
+      // Lister tous les objets dans temp/
+      const objects = await this.listObjects("temp/");
+
+      if (objects.length === 0) {
+        console.log("✅ Aucun chunk temporaire trouvé");
+        return { deleted: 0, errors: 0, freedBytes: 0 };
+      }
+
+      console.log(`📦 ${objects.length} objets temporaires trouvés`);
+
+      // Filtrer les objets plus vieux que maxAgeHours
+      const cutoffDate = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000);
+      const oldChunks = objects.filter((obj) => obj.lastModified < cutoffDate);
+
+      if (oldChunks.length === 0) {
+        console.log(`✅ Aucun chunk orphelin (> ${maxAgeHours}h)`);
+        return { deleted: 0, errors: 0, freedBytes: 0 };
+      }
+
+      console.log(`🗑️ ${oldChunks.length} chunks orphelins à supprimer`);
+
+      // Calculer l'espace à libérer
+      const freedBytes = oldChunks.reduce((acc, obj) => acc + (obj.size || 0), 0);
+
+      // Supprimer les chunks
+      const keysToDelete = oldChunks.map((obj) => obj.key);
+      const result = await this.deleteFiles(keysToDelete);
+
+      console.log(
+        `✅ Nettoyage terminé: ${result.deleted} chunks supprimés, ${(freedBytes / 1024 / 1024).toFixed(2)} MB libérés`
+      );
+
+      return {
+        deleted: result.deleted,
+        errors: result.errors,
+        freedBytes,
+      };
+    } catch (error) {
+      console.error("❌ Erreur nettoyage chunks orphelins:", error);
+      throw error;
+    }
   }
 }
 

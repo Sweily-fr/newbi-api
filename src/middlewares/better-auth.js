@@ -1,7 +1,6 @@
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
-import OrganizationTrialService from "../services/organizationTrialService.js";
 
 /**
  * Extrait le token de session depuis les cookies
@@ -108,108 +107,7 @@ const betterAuthMiddleware = async (req) => {
     }
 
     logger.debug(`Authentification réussie pour: ${user.email}`);
-    
-    // Enrichir l'utilisateur avec les données d'organisation et trial
-    try {
-      let organization = await OrganizationTrialService.getUserOrganization(user._id.toString());
-      
-      if (organization) {
-        // Vérifier si les champs trial existent, sinon les créer
-        const hasTrialFields = Object.prototype.hasOwnProperty.call(organization, 'isTrialActive') && 
-                              Object.prototype.hasOwnProperty.call(organization, 'hasUsedTrial');
-        
-        if (!hasTrialFields) {
-          logger.info(`🔧 Création des champs trial manquants pour l'organisation: ${organization.name} (utilisateur: ${user.email})`);
-          
-          try {
-            // Créer les champs trial manquants
-            await OrganizationTrialService.createTrialFields(organization._id);
-            
-            // Récupérer l'organisation mise à jour
-            const updatedOrganization = await OrganizationTrialService.getUserOrganization(user._id.toString());
-            organization = updatedOrganization;
-            
-            logger.info(`✅ Champs trial créés avec succès pour ${organization.name}`);
-          } catch (createError) {
-            logger.error(`❌ Erreur lors de la création des champs trial pour ${user.email}:`, createError.message);
-            
-            // Fallback : ajouter les champs par défaut en mémoire
-            organization.isTrialActive = false;
-            organization.hasUsedTrial = false;
-            organization.trialStartDate = null;
-            organization.trialEndDate = null;
-          }
-        }
-        
-        // Vérifier si on peut auto-démarrer le trial
-        const canAutoStartTrial = !organization.hasUsedTrial && !organization.isTrialActive;
-        
-        if (canAutoStartTrial) {
-          logger.info(`🚀 Auto-démarrage du trial pour l'organisation: ${organization.name} (utilisateur: ${user.email})`);
-          
-          try {
-            // Démarrer automatiquement le trial
-            const trialStatus = await OrganizationTrialService.startTrial(user._id.toString());
-            
-            // Récupérer l'organisation mise à jour
-            const updatedOrganization = await OrganizationTrialService.getUserOrganization(user._id.toString());
-            
-            user.organization = {
-              id: updatedOrganization.id,
-              name: updatedOrganization.name,
-              // Données trial mises à jour
-              isTrialActive: updatedOrganization.isTrialActive || false,
-              trialEndDate: updatedOrganization.trialEndDate || null,
-              trialStartDate: updatedOrganization.trialStartDate || null,
-              hasUsedTrial: updatedOrganization.hasUsedTrial || false,
-              // Autres données d'organisation
-              ...updatedOrganization
-            };
-            
-            logger.info(`✅ Trial auto-démarré avec succès pour ${user.email} - ${trialStatus.daysRemaining} jours restants`);
-          } catch (trialError) {
-            logger.error(`❌ Erreur lors de l'auto-démarrage du trial pour ${user.email}:`, trialError.message);
-            
-            // Fallback : utiliser les données d'organisation actuelles
-            user.organization = {
-              id: organization.id,
-              name: organization.name,
-              isTrialActive: organization.isTrialActive || false,
-              trialEndDate: organization.trialEndDate || null,
-              trialStartDate: organization.trialStartDate || null,
-              hasUsedTrial: organization.hasUsedTrial || false,
-              // Structure moderne (subscription)
-              subscription: organization.subscription || null,
-              ...organization
-            };
-          }
-        } else {
-          // Pas d'auto-start, utiliser les données existantes
-          user.organization = {
-            id: organization.id,
-            name: organization.name,
-            // Données trial (structure ancienne)
-            isTrialActive: organization.isTrialActive || false,
-            trialEndDate: organization.trialEndDate || null,
-            trialStartDate: organization.trialStartDate || null,
-            hasUsedTrial: organization.hasUsedTrial || false,
-            // Structure moderne (subscription)
-            subscription: organization.subscription || null,
-            // Autres données d'organisation si nécessaires
-            ...organization
-          };
-        }
-        
-        logger.debug(`Organisation trouvée pour ${user.email}: ${organization.name} (trial actif: ${user.organization.isTrialActive})`);
-      } else {
-        logger.debug(`Aucune organisation trouvée pour ${user.email}`);
-        user.organization = null;
-      }
-    } catch (error) {
-      logger.warn(`Erreur lors de la récupération de l'organisation pour ${user.email}:`, error.message);
-      user.organization = null;
-    }
-    
+
     return user;
   } catch (error) {
     logger.error("Erreur dans le middleware better-auth:", error.message);
