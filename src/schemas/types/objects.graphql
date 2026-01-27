@@ -11,25 +11,7 @@ type BankDetails {
   bankName: String!
 }
 
-type Client {
-  id: ID!
-  name: String!
-  email: String!
-  address: Address!
-  type: ClientType!
-  # Indique si l'adresse de livraison est différente de l'adresse de facturation
-  hasDifferentShippingAddress: Boolean
-  # Adresse de livraison (présente uniquement si hasDifferentShippingAddress est true)
-  shippingAddress: Address
-  # Champs spécifiques aux entreprises
-  siret: String
-  vatNumber: String
-  # Indique si l'entreprise est hors France
-  isInternational: Boolean
-  # Champs spécifiques aux particuliers
-  firstName: String
-  lastName: String
-}
+# Le type Client est défini dans common.graphql
 
 type Item {
   description: String!

@@ -1,0 +1,89 @@
+# Types de champs personnalisés
+enum CustomFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  SELECT
+  MULTISELECT
+  CHECKBOX
+  URL
+  EMAIL
+  PHONE
+}
+
+# Option pour les champs SELECT et MULTISELECT
+type CustomFieldOption {
+  label: String!
+  value: String!
+  color: String
+}
+
+input CustomFieldOptionInput {
+  label: String!
+  value: String!
+  color: String
+}
+
+# Définition d'un champ personnalisé (au niveau workspace)
+type ClientCustomField {
+  id: ID!
+  name: String!
+  fieldType: CustomFieldType!
+  description: String
+  options: [CustomFieldOption!]
+  placeholder: String
+  isRequired: Boolean!
+  order: Int!
+  isActive: Boolean!
+  workspaceId: ID!
+  createdBy: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Valeur d'un champ personnalisé pour un client
+type ClientCustomFieldValue {
+  fieldId: ID!
+  field: ClientCustomField
+  value: JSON
+}
+
+input ClientCustomFieldValueInput {
+  fieldId: ID!
+  value: JSON!
+}
+
+# Input pour créer/modifier un champ personnalisé
+input ClientCustomFieldInput {
+  name: String!
+  fieldType: CustomFieldType!
+  description: String
+  options: [CustomFieldOptionInput!]
+  placeholder: String
+  isRequired: Boolean
+  order: Int
+  isActive: Boolean
+}
+
+extend type Query {
+  # Récupérer tous les champs personnalisés d'un workspace
+  clientCustomFields(workspaceId: ID!): [ClientCustomField!]!
+  
+  # Récupérer un champ personnalisé par ID
+  clientCustomField(workspaceId: ID!, id: ID!): ClientCustomField
+}
+
+extend type Mutation {
+  # Créer un nouveau champ personnalisé
+  createClientCustomField(workspaceId: ID!, input: ClientCustomFieldInput!): ClientCustomField!
+  
+  # Modifier un champ personnalisé
+  updateClientCustomField(workspaceId: ID!, id: ID!, input: ClientCustomFieldInput!): ClientCustomField!
+  
+  # Supprimer un champ personnalisé
+  deleteClientCustomField(workspaceId: ID!, id: ID!): Boolean!
+  
+  # Réordonner les champs personnalisés
+  reorderClientCustomFields(workspaceId: ID!, fieldIds: [ID!]!): [ClientCustomField!]!
+}
