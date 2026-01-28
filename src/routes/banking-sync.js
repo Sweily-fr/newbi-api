@@ -57,6 +57,12 @@ router.post("/accounts", async (req, res) => {
 
 /**
  * Synchronise les transactions
+ *
+ * Body params:
+ * - accountId (optional): ID du compte spécifique à synchroniser
+ * - since (optional): Date de début au format YYYY-MM-DD (défaut: 90 jours en arrière)
+ * - until (optional): Date de fin au format YYYY-MM-DD (défaut: aujourd'hui)
+ * - fullSync (optional): true pour forcer une sync complète sans limite de pages
  */
 router.post("/transactions", async (req, res) => {
   try {
@@ -66,10 +72,22 @@ router.post("/transactions", async (req, res) => {
     }
 
     const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    const { accountId, limit = 50, since, until } = req.body;
+    const { accountId, since, until, fullSync = false } = req.body;
 
     if (!workspaceId) {
       return res.status(400).json({ error: "WorkspaceId requis" });
+    }
+
+    // Validation des dates si fournies
+    if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
+      return res.status(400).json({
+        error: "Format de date 'since' invalide. Utilisez YYYY-MM-DD",
+      });
+    }
+    if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) {
+      return res.status(400).json({
+        error: "Format de date 'until' invalide. Utilisez YYYY-MM-DD",
+      });
     }
 
     // Initialiser le service banking avec Bridge
@@ -84,15 +102,22 @@ router.post("/transactions", async (req, res) => {
         accountId,
         "webhook-sync",
         workspaceId,
-        { limit, since, until }
+        { since, until, fullSync }
       );
-      result = { accounts: 1, transactions: transactions.length };
+      result = {
+        accounts: 1,
+        transactions: transactions.length,
+        period: {
+          since: since || provider._getDefaultDateRange().since,
+          until: until || provider._getDefaultDateRange().until,
+        },
+      };
     } else {
       // Synchroniser toutes les transactions pour tous les comptes
       result = await provider.syncAllTransactions("webhook-sync", workspaceId, {
-        limit,
         since,
         until,
+        fullSync,
       });
     }
 
@@ -120,6 +145,11 @@ router.post("/transactions", async (req, res) => {
 
 /**
  * Synchronisation complète (comptes + transactions)
+ *
+ * Body params:
+ * - since (optional): Date de début au format YYYY-MM-DD (défaut: 90 jours en arrière)
+ * - until (optional): Date de fin au format YYYY-MM-DD (défaut: aujourd'hui)
+ * - fullSync (optional): true pour forcer une sync complète sans limite de pages
  */
 router.post("/full", async (req, res) => {
   try {
@@ -129,10 +159,22 @@ router.post("/full", async (req, res) => {
     }
 
     const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    const { limit = 50, since, until } = req.body;
+    const { since, until, fullSync = false } = req.body;
 
     if (!workspaceId) {
       return res.status(400).json({ error: "WorkspaceId requis" });
+    }
+
+    // Validation des dates si fournies
+    if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
+      return res.status(400).json({
+        error: "Format de date 'since' invalide. Utilisez YYYY-MM-DD",
+      });
+    }
+    if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) {
+      return res.status(400).json({
+        error: "Format de date 'until' invalide. Utilisez YYYY-MM-DD",
+      });
     }
 
     // Initialiser le service banking avec Bridge
@@ -143,7 +185,7 @@ router.post("/full", async (req, res) => {
     const result = await provider.syncAllTransactions(
       "webhook-sync",
       workspaceId,
-      { limit, since, until }
+      { since, until, fullSync }
     );
 
     // Invalider tout le cache après synchronisation complète
