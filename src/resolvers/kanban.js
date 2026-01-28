@@ -7,6 +7,7 @@ import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import { ObjectId } from "mongodb";
+import { sendTaskAssignmentEmail } from "../utils/mailer.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -1190,6 +1191,7 @@ const resolvers = {
         }
 
         // Membres assignés modifiés
+        logger.info(`📧 [UpdateTask] updates.assignedMembers reçu: ${JSON.stringify(updates.assignedMembers)}`);
         if (updates.assignedMembers !== undefined) {
           // Normaliser les IDs en strings et trier
           const normalizeMembers = (members) => {
@@ -1212,15 +1214,20 @@ const resolvers = {
           const oldMembers = normalizeMembers(oldTask.assignedMembers);
           const newMembers = normalizeMembers(updates.assignedMembers);
 
+          logger.info(`📧 [UpdateTask] oldMembers: ${JSON.stringify(oldMembers)}, newMembers: ${JSON.stringify(newMembers)}`);
+
           // Comparer les tableaux triés
           const hasChanged =
             oldMembers.length !== newMembers.length ||
             oldMembers.some((m, i) => m !== newMembers[i]);
 
+          logger.info(`📧 [UpdateTask] hasChanged: ${hasChanged}`);
+
           if (hasChanged) {
             const addedMembers = newMembers.filter(
               (m) => !oldMembers.includes(m)
             );
+            logger.info(`📧 [UpdateTask] addedMembers: ${JSON.stringify(addedMembers)}`);
             const removedMembers = oldMembers.filter(
               (m) => !newMembers.includes(m)
             );
@@ -1246,6 +1253,52 @@ const resolvers = {
                   createdAt: new Date(),
                 },
               ];
+
+              // Envoyer des emails de notification aux membres assignés
+              logger.info(`📧 [UpdateTask] Début envoi emails pour ${addedMembers.length} membres assignés: ${addedMembers.join(", ")}`);
+              (async () => {
+                try {
+                  // Récupérer les infos du board et de la colonne
+                  const board = await Board.findById(oldTask.boardId);
+                  logger.info(`📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`);
+                  const column = await Column.findById(oldTask.columnId);
+                  logger.info(`📧 [UpdateTask] Column trouvée: ${JSON.stringify(column)}`);
+                  const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
+                  // Note: Le schéma Column utilise 'title' et non 'name'
+                  logger.info(`📧 [UpdateTask] Board: ${board?.name}, Column: ${column?.title}, Assigner: ${assignerName}`);
+
+                  // Récupérer les emails des membres assignés
+                  for (const memberId of addedMembers) {
+                    try {
+                      const memberData = await db.collection("user").findOne({
+                        _id: new mongoose.Types.ObjectId(memberId),
+                      });
+
+                      if (memberData?.email) {
+                        const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${oldTask.boardId}?task=${id}`;
+                        
+                        await sendTaskAssignmentEmail(memberData.email, {
+                          taskTitle: oldTask.title || "Sans titre",
+                          taskDescription: oldTask.description || "",
+                          boardName: board?.name || "Tableau",
+                          columnName: column?.title || "Colonne",
+                          assignerName: assignerName,
+                          assignerImage: userImage || userData?.image || null,
+                          dueDate: oldTask.dueDate || updates.dueDate,
+                          priority: oldTask.priority || updates.priority || "medium",
+                          taskUrl: taskUrl,
+                        });
+
+                        logger.info(`📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`);
+                      }
+                    } catch (emailError) {
+                      logger.error(`❌ [UpdateTask] Erreur envoi email à membre ${memberId}:`, emailError);
+                    }
+                  }
+                } catch (error) {
+                  logger.error("❌ [UpdateTask] Erreur lors de l'envoi des emails d'assignation:", error);
+                }
+              })();
             }
             if (removedMembers.length > 0) {
               changes.push(

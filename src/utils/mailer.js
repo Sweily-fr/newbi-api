@@ -1229,6 +1229,215 @@ const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
   }
 };
 
+/**
+ * Envoyer une notification d'assignation de tâche Kanban
+ */
+const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
+  const {
+    taskTitle,
+    taskDescription,
+    boardName,
+    columnName,
+    assignerName,
+    assignerImage,
+    dueDate,
+    priority,
+    taskUrl,
+  } = assignmentData;
+
+  const priorityLabels = {
+    low: { label: "Basse", color: "#22c55e", bg: "#dcfce7" },
+    medium: { label: "Moyenne", color: "#f59e0b", bg: "#fef3c7" },
+    high: { label: "Haute", color: "#ef4444", bg: "#fee2e2" },
+  };
+
+  const priorityInfo = priorityLabels[priority] || priorityLabels.medium;
+
+  const dueDateFormatted = dueDate
+    ? new Date(dueDate).toLocaleDateString("fr-FR", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })
+    : null;
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: assigneeEmail,
+    subject: `📋 Nouvelle tâche assignée : ${taskTitle}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Nouvelle tâche assignée</title>
+        <style>
+          body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f0eeff;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+          }
+          .header {
+            text-align: left;
+            padding: 20px;
+            border-bottom: 1px solid #e5e7eb;
+          }
+          .content {
+            padding: 30px 20px;
+          }
+          h1 {
+            color: #1f2937;
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 20px;
+          }
+          p {
+            margin-bottom: 16px;
+            color: #4b5563;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #5b50ff;
+            color: white;
+            font-weight: 600;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            margin: 20px 0;
+            text-align: center;
+          }
+          .btn:hover {
+            background-color: #4a41e0;
+          }
+          .task-card {
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+          }
+          .task-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1f2937;
+            margin-bottom: 10px;
+          }
+          .task-description {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+          }
+          .task-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 15px;
+          }
+          .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #6b7280;
+          }
+          .priority-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+          }
+          .footer {
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+            font-size: 14px;
+            border-top: 1px solid #e5e7eb;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo%2Btexte.png" alt="Newbi" style="width: 120px; height: auto;">
+          </div>
+          
+          <div class="content">
+            <h1>📋 Nouvelle tâche assignée</h1>
+            <p>Bonjour,</p>
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+              ${assignerImage ? `<img src="${assignerImage}" alt="${assignerName}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;">` : `<div style="width: 48px; height: 48px; border-radius: 50%; background-color: #5b50ff; color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 18px;">${assignerName ? assignerName.charAt(0).toUpperCase() : "?"}</div>`}
+              <p style="margin: 0;"><strong>${assignerName}</strong> vous a assigné une nouvelle tâche sur le tableau <strong>${boardName}</strong>.</p>
+            </div>
+            
+            <div class="task-card">
+              <div class="task-title">${taskTitle}</div>
+              ${taskDescription ? `<div class="task-description">${taskDescription.substring(0, 200)}${taskDescription.length > 200 ? "..." : ""}</div>` : ""}
+              
+              <div class="task-meta">
+                <div class="meta-item">
+                  <span>📁</span>
+                  <span>Colonne : <strong>${columnName || "Non spécifiée"}</strong></span>
+                </div>
+                ${dueDateFormatted ? `
+                <div class="meta-item">
+                  <span>📅</span>
+                  <span>Échéance : <strong>${dueDateFormatted}</strong></span>
+                </div>
+                ` : ""}
+                <div class="meta-item">
+                  <span>🎯</span>
+                  <span style="background-color: ${priorityInfo.bg}; color: ${priorityInfo.color}; padding: 2px 8px; border-radius: 4px; font-weight: 600;">
+                    Priorité ${priorityInfo.label}
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            <div style="text-align: center;">
+              <a href="${taskUrl}" class="btn">Voir la tâche</a>
+            </div>
+            
+            <p style="font-size: 14px; color: #6b7280;">
+              Si le bouton ne fonctionne pas, vous pouvez copier et coller le lien suivant dans votre navigateur :
+            </p>
+            <p style="word-break: break-all; color: #5b50ff; font-size: 14px;">${taskUrl}</p>
+          </div>
+          
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
+            <p>Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ Email d'assignation envoyé à ${assigneeEmail} pour la tâche "${taskTitle}"`);
+    return true;
+  } catch (error) {
+    console.error("Erreur lors de l'envoi de l'email d'assignation de tâche:", error);
+    return false;
+  }
+};
+
 export {
   sendPasswordResetEmail,
   sendVerificationEmail,
@@ -1238,4 +1447,5 @@ export {
   sendFileTransferPaymentNotification,
   sendDownloadNotificationEmail,
   sendExpiryReminderEmail,
+  sendTaskAssignmentEmail,
 };
