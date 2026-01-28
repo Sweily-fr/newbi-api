@@ -36,6 +36,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./clientList.graphql"), // Chargement explicite du schéma ClientList
   path.join(__dirname, "./types/clientAutomation.graphql"), // Chargement explicite du schéma Client Automation
   path.join(__dirname, "./types/clientCustomField.graphql"), // Chargement explicite du schéma Client Custom Fields
+  path.join(__dirname, "./types/crmEmailAutomation.graphql"), // Chargement explicite du schéma CRM Email Automation
   path.join(__dirname, "./*.graphql"),
 ]);
 

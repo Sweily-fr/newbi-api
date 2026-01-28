@@ -65,6 +65,7 @@ import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
+import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 
 // Connexion à MongoDB
@@ -350,6 +351,10 @@ async function startServer() {
     // Démarrer le cron de relance automatique des factures
     startInvoiceReminderCron();
     logger.info("✅ Cron de relance automatique des factures démarré");
+
+    // Démarrer le cron d'automatisation email CRM
+    startCrmEmailAutomationCron();
+    logger.info("✅ Cron d'automatisation email CRM démarré");
 
     // Démarrer le service de rappel d'expiration des transferts
     fileTransferReminderService.start();

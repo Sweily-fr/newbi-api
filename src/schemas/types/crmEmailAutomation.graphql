@@ -1,0 +1,103 @@
+enum CrmEmailTimingType {
+  ON_DATE
+  BEFORE_DATE
+  AFTER_DATE
+}
+
+type CrmEmailTiming {
+  type: CrmEmailTimingType!
+  daysOffset: Int!
+  sendHour: Int!
+}
+
+type CrmEmailConfig {
+  fromName: String
+  fromEmail: String
+  replyTo: String
+  subject: String!
+  body: String!
+}
+
+type CrmEmailAutomationStats {
+  totalSent: Int
+  lastSentAt: DateTime
+  lastClientId: ID
+}
+
+type CrmEmailAutomation {
+  id: ID!
+  name: String!
+  description: String
+  workspaceId: ID!
+  createdBy: User
+  customFieldId: ID!
+  customField: ClientCustomField
+  timing: CrmEmailTiming!
+  email: CrmEmailConfig!
+  isActive: Boolean!
+  stats: CrmEmailAutomationStats
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+input CrmEmailTimingInput {
+  type: CrmEmailTimingType!
+  daysOffset: Int
+  sendHour: Int
+}
+
+input CrmEmailConfigInput {
+  fromName: String
+  fromEmail: String
+  replyTo: String
+  subject: String!
+  body: String!
+}
+
+input CreateCrmEmailAutomationInput {
+  name: String!
+  description: String
+  customFieldId: ID!
+  timing: CrmEmailTimingInput!
+  email: CrmEmailConfigInput!
+  isActive: Boolean
+}
+
+input UpdateCrmEmailAutomationInput {
+  name: String
+  description: String
+  customFieldId: ID
+  timing: CrmEmailTimingInput
+  email: CrmEmailConfigInput
+  isActive: Boolean
+}
+
+type CrmEmailAutomationLog {
+  id: ID!
+  automationId: ID!
+  clientId: ID!
+  client: Client
+  workspaceId: ID!
+  triggerDate: DateTime!
+  recipientEmail: String!
+  emailSubject: String!
+  emailBody: String!
+  status: String!
+  error: String
+  sentAt: DateTime!
+  createdAt: DateTime!
+}
+
+extend type Query {
+  crmEmailAutomations(workspaceId: ID!): [CrmEmailAutomation!]!
+  crmEmailAutomation(workspaceId: ID!, id: ID!): CrmEmailAutomation
+  crmEmailAutomationLogs(workspaceId: ID!, automationId: ID, limit: Int): [CrmEmailAutomationLog!]!
+}
+
+extend type Mutation {
+  createCrmEmailAutomation(workspaceId: ID!, input: CreateCrmEmailAutomationInput!): CrmEmailAutomation!
+  updateCrmEmailAutomation(workspaceId: ID!, id: ID!, input: UpdateCrmEmailAutomationInput!): CrmEmailAutomation!
+  deleteCrmEmailAutomation(workspaceId: ID!, id: ID!): Boolean!
+  toggleCrmEmailAutomation(workspaceId: ID!, id: ID!): CrmEmailAutomation!
+  testCrmEmailAutomation(workspaceId: ID!, id: ID!, testEmail: String!): Boolean!
+}
