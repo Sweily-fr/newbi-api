@@ -91,6 +91,51 @@ const accountBankingSchema = new mongoose.Schema(
       default: Date.now,
     },
 
+    // Tracking de synchronisation des transactions
+    transactionSync: {
+      // Date de la dernière sync réussie des transactions
+      lastSyncAt: {
+        type: Date,
+        default: null,
+      },
+      // Statut de la dernière sync
+      status: {
+        type: String,
+        enum: ["pending", "in_progress", "complete", "partial", "failed"],
+        default: "pending",
+      },
+      // Nombre total de transactions synchronisées
+      totalTransactions: {
+        type: Number,
+        default: 0,
+      },
+      // Date de la transaction la plus ancienne récupérée
+      oldestTransactionDate: {
+        type: Date,
+        default: null,
+      },
+      // Date de la transaction la plus récente récupérée
+      newestTransactionDate: {
+        type: Date,
+        default: null,
+      },
+      // Message d'erreur si échec
+      lastError: {
+        type: String,
+        default: null,
+      },
+      // Historique des syncs (dernières 10)
+      history: [
+        {
+          date: Date,
+          status: String,
+          transactionsCount: Number,
+          duration: Number, // en ms
+          error: String,
+        },
+      ],
+    },
+
     // Données brutes du provider
     raw: {
       type: mongoose.Schema.Types.Mixed,
@@ -142,6 +187,47 @@ accountBankingSchema.statics.findByProvider = function (provider, externalId) {
 
 accountBankingSchema.statics.findActiveAccounts = function (userId) {
   return this.find({ userId, status: "active" });
+};
+
+// Met à jour le statut de sync des transactions pour un compte
+accountBankingSchema.statics.updateTransactionSyncStatus = async function (
+  accountId,
+  workspaceId,
+  provider,
+  syncData
+) {
+  const historyEntry = {
+    date: new Date(),
+    status: syncData.status,
+    transactionsCount: syncData.transactionsCount || 0,
+    duration: syncData.duration || 0,
+    error: syncData.error || null,
+  };
+
+  return this.findOneAndUpdate(
+    {
+      externalId: accountId,
+      workspaceId: workspaceId.toString(),
+      provider,
+    },
+    {
+      $set: {
+        "transactionSync.lastSyncAt": new Date(),
+        "transactionSync.status": syncData.status,
+        "transactionSync.totalTransactions": syncData.totalTransactions || 0,
+        "transactionSync.oldestTransactionDate": syncData.oldestTransactionDate,
+        "transactionSync.newestTransactionDate": syncData.newestTransactionDate,
+        "transactionSync.lastError": syncData.error || null,
+      },
+      $push: {
+        "transactionSync.history": {
+          $each: [historyEntry],
+          $slice: -10, // Garder seulement les 10 derniers
+        },
+      },
+    },
+    { new: true }
+  );
 };
 
 const AccountBanking = mongoose.model("AccountBanking", accountBankingSchema);

@@ -456,6 +456,69 @@ const bankingResolvers = {
         }
       }
     ),
+
+    /**
+     * Synchronisation complète des transactions avec options avancées
+     * @param {Object} input - Options de synchronisation
+     * @param {string} input.accountId - ID du compte (optionnel, tous les comptes si non spécifié)
+     * @param {string} input.since - Date de début YYYY-MM-DD (optionnel, défaut 90 jours)
+     * @param {string} input.until - Date de fin YYYY-MM-DD (optionnel, défaut aujourd'hui)
+     * @param {boolean} input.fullSync - Force sync complète sans limite de pages
+     */
+    syncAllTransactions: withWorkspace(
+      async (parent, { input = {} }, { user, workspaceId }) => {
+        try {
+          await bankingService.initialize("bridge");
+          const provider = bankingService.currentProvider;
+
+          let result;
+          if (input.accountId) {
+            // Sync d'un compte spécifique
+            const transactions = await provider.getTransactions(
+              input.accountId,
+              user._id.toString(),
+              workspaceId,
+              {
+                since: input.since,
+                until: input.until,
+                fullSync: input.fullSync,
+              }
+            );
+            result = {
+              success: true,
+              accounts: 1,
+              transactions: transactions.length,
+              successfulAccounts: 1,
+              failedAccounts: 0,
+              failedAccountNames: [],
+              period: {
+                since: input.since || provider._getDefaultDateRange().since,
+                until: input.until || provider._getDefaultDateRange().until,
+              },
+            };
+          } else {
+            // Sync de tous les comptes
+            result = await provider.syncAllTransactions(
+              user._id.toString(),
+              workspaceId,
+              {
+                since: input.since,
+                until: input.until,
+                fullSync: input.fullSync,
+              }
+            );
+            result.success = true;
+          }
+
+          return result;
+        } catch (error) {
+          throw new AppError(
+            `Erreur lors de la synchronisation: ${error.message}`,
+            ERROR_CODES.EXTERNAL_API_ERROR
+          );
+        }
+      }
+    ),
   },
 
   // Résolveurs de types
@@ -498,6 +561,25 @@ const bankingResolvers = {
     lastSyncAt: (parent) => parent.lastSyncAt || parent.updatedAt || new Date(),
     createdAt: (parent) => parent.createdAt || new Date(),
     updatedAt: (parent) => parent.updatedAt || new Date(),
+    // Nouveau: statut de synchronisation des transactions
+    transactionSync: (parent) => {
+      const sync = parent.transactionSync || {};
+      return {
+        lastSyncAt: sync.lastSyncAt || null,
+        status: (sync.status || "pending").toUpperCase(),
+        totalTransactions: sync.totalTransactions || 0,
+        oldestTransactionDate: sync.oldestTransactionDate || null,
+        newestTransactionDate: sync.newestTransactionDate || null,
+        lastError: sync.lastError || null,
+        history: (sync.history || []).map((h) => ({
+          date: h.date,
+          status: h.status,
+          transactionsCount: h.transactionsCount || 0,
+          duration: h.duration || 0,
+          error: h.error || null,
+        })),
+      };
+    },
   },
 
   // Résolveurs d'enums

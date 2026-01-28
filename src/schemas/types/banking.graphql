@@ -56,8 +56,45 @@ type AccountBanking {
   lastSyncAt: DateTime!
   notifications: AccountNotifications
   limits: AccountLimits
+  transactionSync: TransactionSyncStatus
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+"""
+Statut de synchronisation des transactions d'un compte
+"""
+type TransactionSyncStatus {
+  """Date de la dernière synchronisation réussie"""
+  lastSyncAt: DateTime
+  """Statut de la synchronisation: pending, in_progress, complete, partial, failed"""
+  status: TransactionSyncStatusEnum!
+  """Nombre total de transactions synchronisées pour ce compte"""
+  totalTransactions: Int!
+  """Date de la transaction la plus ancienne récupérée"""
+  oldestTransactionDate: DateTime
+  """Date de la transaction la plus récente récupérée"""
+  newestTransactionDate: DateTime
+  """Message d'erreur si la dernière sync a échoué"""
+  lastError: String
+  """Historique des 10 dernières synchronisations"""
+  history: [SyncHistoryEntry!]!
+}
+
+type SyncHistoryEntry {
+  date: DateTime!
+  status: String!
+  transactionsCount: Int!
+  duration: Int!
+  error: String
+}
+
+enum TransactionSyncStatusEnum {
+  PENDING
+  IN_PROGRESS
+  COMPLETE
+  PARTIAL
+  FAILED
 }
 
 type AccountBalance {
@@ -264,6 +301,58 @@ input MetricsFiltersInput {
   endDate: DateTime!
 }
 
+"""
+Input pour la synchronisation complète des transactions
+Permet de spécifier une période et des options avancées
+"""
+input SyncAllTransactionsInput {
+  """ID du compte spécifique à synchroniser (optionnel, tous les comptes si non spécifié)"""
+  accountId: String
+  """Date de début au format YYYY-MM-DD (défaut: 90 jours en arrière)"""
+  since: String
+  """Date de fin au format YYYY-MM-DD (défaut: aujourd'hui)"""
+  until: String
+  """Force une synchronisation complète sans limite de pages"""
+  fullSync: Boolean
+}
+
+"""
+Résultat détaillé d'une synchronisation de transactions
+"""
+type SyncAllTransactionsResult {
+  success: Boolean!
+  """Nombre total de comptes traités"""
+  accounts: Int!
+  """Nombre total de transactions synchronisées"""
+  transactions: Int!
+  """Nombre de comptes synchronisés avec succès"""
+  successfulAccounts: Int!
+  """Nombre de comptes en échec"""
+  failedAccounts: Int!
+  """Noms des comptes en échec"""
+  failedAccountNames: [String!]!
+  """Durée totale de la synchronisation en ms"""
+  duration: Int
+  """Période de synchronisation utilisée"""
+  period: SyncPeriod
+  """Détails par compte"""
+  details: [AccountSyncDetail!]
+}
+
+type SyncPeriod {
+  since: String!
+  until: String!
+}
+
+type AccountSyncDetail {
+  accountId: String!
+  accountName: String!
+  status: String!
+  transactionsCount: Int!
+  duration: Int!
+  error: String
+}
+
 # Queries
 
 extend type Query {
@@ -348,6 +437,12 @@ extend type Mutation {
   # Administration
   switchBankingProvider(provider: BankingProvider!): Boolean!
   syncTransactionHistory(accountId: String!): [Transaction!]!
+
+  """
+  Synchronisation complète des transactions avec pagination et période configurable.
+  Récupère TOUTES les transactions disponibles pour la période spécifiée.
+  """
+  syncAllTransactions(input: SyncAllTransactionsInput): SyncAllTransactionsResult!
 }
 
 # Subscriptions
