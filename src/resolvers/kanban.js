@@ -8,6 +8,8 @@ import mongoose from "mongoose";
 import User from "../models/User.js";
 import { ObjectId } from "mongodb";
 import { sendTaskAssignmentEmail } from "../utils/mailer.js";
+import Notification from "../models/Notification.js";
+import { publishNotification } from "./notification.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -1260,12 +1262,14 @@ const resolvers = {
                 try {
                   // Récupérer les infos du board et de la colonne
                   const board = await Board.findById(oldTask.boardId);
+                  logger.info(`📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? 'OUI' : 'NON'}, Board name: ${board?.name}`);
                   logger.info(`📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`);
                   const column = await Column.findById(oldTask.columnId);
-                  logger.info(`📧 [UpdateTask] Column trouvée: ${JSON.stringify(column)}`);
+                  logger.info(`📧 [UpdateTask] Column trouvée: ${column ? 'OUI' : 'NON'}, Column title: ${column?.title}`);
                   const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
-                  // Note: Le schéma Column utilise 'title' et non 'name'
-                  logger.info(`📧 [UpdateTask] Board: ${board?.name}, Column: ${column?.title}, Assigner: ${assignerName}`);
+                  const boardName = board?.name || "Tableau sans nom";
+                  const columnName = column?.title || "Colonne";
+                  logger.info(`📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
 
                   // Récupérer les emails des membres assignés
                   for (const memberId of addedMembers) {
@@ -1280,14 +1284,37 @@ const resolvers = {
                         await sendTaskAssignmentEmail(memberData.email, {
                           taskTitle: oldTask.title || "Sans titre",
                           taskDescription: oldTask.description || "",
-                          boardName: board?.name || "Tableau",
-                          columnName: column?.title || "Colonne",
+                          boardName: boardName,
+                          columnName: columnName,
                           assignerName: assignerName,
                           assignerImage: userImage || userData?.image || null,
                           dueDate: oldTask.dueDate || updates.dueDate,
                           priority: oldTask.priority || updates.priority || "medium",
                           taskUrl: taskUrl,
                         });
+
+                        // Créer une notification dans la boîte de réception
+                        try {
+                          const notification = await Notification.createTaskAssignedNotification({
+                            userId: memberId,
+                            workspaceId: finalWorkspaceId,
+                            taskId: oldTask._id,
+                            taskTitle: oldTask.title || "Sans titre",
+                            boardId: oldTask.boardId,
+                            boardName: boardName,
+                            columnName: columnName,
+                            actorId: user?.id || user?._id,
+                            actorName: assignerName,
+                            actorImage: userImage || userData?.image || null,
+                            url: taskUrl,
+                          });
+                          
+                          // Publier la notification en temps réel
+                          await publishNotification(notification);
+                          logger.info(`🔔 [UpdateTask] Notification créée pour ${memberData.email}`);
+                        } catch (notifError) {
+                          logger.error(`❌ [UpdateTask] Erreur création notification:`, notifError);
+                        }
 
                         logger.info(`📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`);
                       }
