@@ -70,6 +70,14 @@ type Activity {
   createdAt: DateTime!
 }
 
+type AssignedMemberInfo {
+  id: ID!
+  userId: ID!
+  name: String
+  email: String
+  image: String
+}
+
 type Task {
   id: ID!
   title: String!
@@ -84,6 +92,7 @@ type Task {
   position: Int
   checklist: [ChecklistItem!]
   assignedMembers: [String!]
+  assignedMembersInfo: [AssignedMemberInfo!]
   images: [TaskImage!]
   comments: [Comment!]
   activity: [Activity!]

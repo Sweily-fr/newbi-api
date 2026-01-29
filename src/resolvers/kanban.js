@@ -663,13 +663,69 @@ const resolvers = {
     ),
 
     activeTimers: withWorkspace(
-      async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const db = mongoose.connection.db;
+        
         // Récupérer toutes les tâches avec un timer actif
-        return await Task.find({
+        // Filtrer pour n'afficher que les tâches où l'utilisateur est membre assigné
+        const tasks = await Task.find({
           workspaceId: finalWorkspaceId,
           "timeTracking.isRunning": true,
         }).sort({ updatedAt: -1 });
+
+        // Filtrer les tâches où l'utilisateur connecté est membre assigné
+        let filteredTasks = tasks;
+        if (user?.id) {
+          filteredTasks = tasks.filter((task) => {
+            const assignedMembers = task.assignedMembers || [];
+            // Vérifier si l'utilisateur est dans les membres assignés
+            return assignedMembers.some((member) => {
+              const memberId = member?.userId || member?._id || member;
+              return memberId?.toString() === user.id.toString();
+            });
+          });
+        }
+
+        // Enrichir les tâches avec les infos des membres assignés
+        const enrichedTasks = await Promise.all(
+          filteredTasks.map(async (task) => {
+            const taskObj = task.toObject ? task.toObject() : task;
+            const assignedMemberIds = taskObj.assignedMembers || [];
+            
+            // Récupérer les infos des membres assignés
+            const enrichedMembers = await Promise.all(
+              assignedMemberIds.map(async (memberId) => {
+                try {
+                  const memberIdStr = memberId?.toString() || memberId;
+                  const userData = await db.collection('user').findOne({
+                    _id: new mongoose.Types.ObjectId(memberIdStr),
+                  });
+                  
+                  if (userData) {
+                    return {
+                      id: memberIdStr,
+                      userId: memberIdStr,
+                      name: userData.name || userData.email,
+                      email: userData.email,
+                      image: userData.image || userData.avatar || userData.profile?.profilePicture || null,
+                    };
+                  }
+                  return { id: memberIdStr, userId: memberIdStr, name: memberIdStr, email: null, image: null };
+                } catch (e) {
+                  return { id: memberId, userId: memberId, name: memberId, email: null, image: null };
+                }
+              })
+            );
+            
+            return {
+              ...taskObj,
+              assignedMembersInfo: enrichedMembers,
+            };
+          })
+        );
+
+        return enrichedTasks;
       }
     ),
   },
@@ -1031,6 +1087,100 @@ const resolvers = {
           },
           "Tâche créée"
         );
+
+        // Envoyer des notifications aux membres assignés lors de la création
+        if (cleanedInput.assignedMembers && cleanedInput.assignedMembers.length > 0) {
+          logger.info(`📧 [CreateTask] Envoi notifications pour ${cleanedInput.assignedMembers.length} membres assignés`);
+          
+          (async () => {
+            try {
+              const db = mongoose.connection.db;
+              
+              // Récupérer les données de l'utilisateur créateur
+              const userData = user
+                ? await db.collection("user").findOne({
+                    _id: new mongoose.Types.ObjectId(user.id),
+                  })
+                : null;
+              const userImage =
+                userData?.image ||
+                userData?.avatar ||
+                userData?.profile?.profilePicture ||
+                userData?.profile?.profilePictureUrl ||
+                null;
+              
+              // Récupérer les infos du board et de la colonne
+              const board = await Board.findById(savedTask.boardId);
+              const column = await Column.findById(savedTask.columnId);
+              const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
+              const boardName = board?.name || "Tableau sans nom";
+              const columnName = column?.title || "Colonne";
+              
+              logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
+
+              // Envoyer les emails et notifications pour chaque membre assigné
+              for (const memberId of cleanedInput.assignedMembers) {
+                // Ne pas notifier le créateur s'il s'assigne lui-même
+                if (memberId === user.id) {
+                  logger.info(`📧 [CreateTask] Skip notification pour le créateur ${memberId}`);
+                  continue;
+                }
+                
+                try {
+                  const memberData = await db.collection("user").findOne({
+                    _id: new mongoose.Types.ObjectId(memberId),
+                  });
+
+                  if (memberData?.email) {
+                    const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${savedTask.boardId}?task=${savedTask._id}`;
+                    
+                    // Envoyer l'email d'assignation
+                    await sendTaskAssignmentEmail(memberData.email, {
+                      taskTitle: savedTask.title || "Sans titre",
+                      taskDescription: savedTask.description || "",
+                      boardName: boardName,
+                      columnName: columnName,
+                      assignerName: assignerName,
+                      assignerImage: userImage,
+                      dueDate: savedTask.dueDate,
+                      priority: savedTask.priority || "medium",
+                      taskUrl: taskUrl,
+                    });
+
+                    // Créer une notification dans la boîte de réception
+                    try {
+                      const notification = await Notification.createTaskAssignedNotification({
+                        userId: memberId,
+                        workspaceId: finalWorkspaceId,
+                        taskId: savedTask._id,
+                        taskTitle: savedTask.title || "Sans titre",
+                        boardId: savedTask.boardId,
+                        boardName: boardName,
+                        columnName: columnName,
+                        actorId: user?.id || user?._id,
+                        actorName: assignerName,
+                        actorImage: userImage,
+                        url: taskUrl,
+                      });
+                      
+                      // Publier la notification en temps réel
+                      await publishNotification(notification);
+                      logger.info(`🔔 [CreateTask] Notification créée pour ${memberData.email}`);
+                    } catch (notifError) {
+                      logger.error(`❌ [CreateTask] Erreur création notification:`, notifError);
+                    }
+
+                    logger.info(`📧 [CreateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${savedTask.title}"`);
+                  }
+                } catch (emailError) {
+                  logger.error(`❌ [CreateTask] Erreur envoi email à membre ${memberId}:`, emailError);
+                }
+              }
+            } catch (error) {
+              logger.error("❌ [CreateTask] Erreur lors de l'envoi des notifications d'assignation:", error);
+            }
+          })();
+        }
 
         return savedTask;
       }
