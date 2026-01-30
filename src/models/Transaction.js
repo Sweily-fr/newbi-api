@@ -9,7 +9,7 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Provider utilisé (manual pour les transactions manuelles)
+    // Provider utilisé
     provider: {
       type: String,
       required: true,
@@ -21,15 +21,7 @@ const transactionSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: [
-        "payment",
-        "refund",
-        "transfer",
-        "withdrawal",
-        "deposit",
-        "credit",
-        "debit",
-      ],
+      enum: ["payment", "refund", "transfer", "withdrawal", "deposit", "credit", "debit"],
       index: true,
     },
 
@@ -139,7 +131,14 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Catégorie de dépense (pour les sorties d'argent)
+    // Catégorie générale (texte libre ou mappée depuis Bridge)
+    category: {
+      type: String,
+      default: null,
+      index: true,
+    },
+
+    // Catégorie de dépense (pour les sorties d'argent) - enum interne
     expenseCategory: {
       type: String,
       enum: [

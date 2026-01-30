@@ -2,15 +2,22 @@
  * Hybrid OCR Service
  * Utilise le meilleur OCR disponible avec fallback automatique
  *
- * Ordre de priorité:
+ * Ordre de priorité (configurable via OCR_PROVIDER):
+ * 0. Claude Vision (par défaut) - API Anthropic, excellent pour factures FR
  * 1. Mindee OCR (si configuré et quota disponible) - Gratuit 250/mois, très précis
  * 2. Google Document AI (si configuré) - Gratuit 1000/mois, précis pour les factures
  * 3. Mistral OCR (fallback) - Bon pour le texte général
+ *
+ * Variables d'environnement:
+ * - OCR_PROVIDER: Provider par défaut ("claude-vision", "mindee", "google-document-ai", "mistral-ocr")
+ * - OCR_DISABLE_CLAUDE: "true" pour désactiver Claude Vision
  */
 
+import claudeVisionOcrService from "./claudeVisionOcrService.js";
 import mindeeOcrService from "./mindeeOcrService.js";
 import googleDocumentAI from "./googleDocumentAIService.js";
 import mistralOcrService from "./mistralOcrService.js";
+import ocrCacheService from "./ocrCacheService.js";
 import OcrUsage from "../models/OcrUsage.js";
 
 class HybridOcrService {
@@ -18,6 +25,8 @@ class HybridOcrService {
     this.providers = [];
     this.initialized = false;
     this.lastWorkspaceId = null;
+    // Provider par défaut configurable via variable d'environnement
+    this.defaultProvider = process.env.OCR_PROVIDER || "claude-vision";
   }
 
   /**
@@ -33,7 +42,34 @@ class HybridOcrService {
     this.providers = [];
     this.lastWorkspaceId = workspaceId;
 
-    // Mindee OCR (priorité 1) - Gratuit 250/mois, très précis pour les factures françaises
+    // Déterminer les priorités selon le provider par défaut configuré
+    const getPriority = (providerName) => {
+      if (providerName === this.defaultProvider) return 0;
+      const basePriorities = {
+        "claude-vision": 1,
+        "mindee": 2,
+        "google-document-ai": 3,
+        "mistral-ocr": 4,
+      };
+      return basePriorities[providerName] || 5;
+    };
+
+    // Claude Vision (priorité 0 par défaut) - API Anthropic
+    const claudeDisabled = process.env.OCR_DISABLE_CLAUDE === "true";
+    if (!claudeDisabled && claudeVisionOcrService.isAvailable()) {
+      this.providers.push({
+        name: "claude-vision",
+        service: claudeVisionOcrService,
+        priority: getPriority("claude-vision"),
+      });
+      console.log(
+        `✅ Claude Vision OCR disponible (priorité ${getPriority("claude-vision")}) - Provider Anthropic`
+      );
+    } else if (claudeDisabled) {
+      console.log("ℹ️ Claude Vision OCR désactivé via OCR_DISABLE_CLAUDE");
+    }
+
+    // Mindee OCR - Gratuit 250/mois, très précis pour les factures françaises
     if (mindeeOcrService.isAvailable()) {
       let mindeeAvailable = true;
       let mindeeUsage = 0;
@@ -53,10 +89,10 @@ class HybridOcrService {
         this.providers.push({
           name: "mindee",
           service: mindeeOcrService,
-          priority: 1,
+          priority: getPriority("mindee"),
         });
         console.log(
-          `✅ Mindee OCR disponible (priorité 1) - ${mindeeUsage}/250 utilisés ce mois`
+          `✅ Mindee OCR disponible (priorité ${getPriority("mindee")}) - ${mindeeUsage}/250 utilisés ce mois`
         );
       } else {
         console.log(
@@ -65,31 +101,31 @@ class HybridOcrService {
       }
     }
 
-    // Google Document AI (priorité 2) - Le plus précis pour les factures
+    // Google Document AI - Gratuit 1000/mois
     if (googleDocumentAI.isAvailable()) {
       this.providers.push({
         name: "google-document-ai",
         service: googleDocumentAI,
-        priority: 2,
+        priority: getPriority("google-document-ai"),
       });
-      console.log("✅ Google Document AI disponible (priorité 2)");
+      console.log(`✅ Google Document AI disponible (priorité ${getPriority("google-document-ai")})`);
     }
 
-    // Mistral OCR (priorité 3) - Fallback
+    // Mistral OCR - Fallback
     if (process.env.MISTRAL_API_KEY) {
       this.providers.push({
         name: "mistral-ocr",
         service: mistralOcrService,
-        priority: 3,
+        priority: getPriority("mistral-ocr"),
       });
-      console.log("✅ Mistral OCR disponible (priorité 3)");
+      console.log(`✅ Mistral OCR disponible (priorité ${getPriority("mistral-ocr")})`);
     }
 
     // Trier par priorité
     this.providers.sort((a, b) => a.priority - b.priority);
 
     console.log(
-      `🔧 OCR Hybride: ${this.providers.length} provider(s) - Ordre: ${this.providers.map((p) => p.name).join(" → ")}`
+      `🔧 OCR Hybride: ${this.providers.length} provider(s) - Ordre: ${this.providers.map((p) => p.name).join(" → ")} (défaut: ${this.defaultProvider})`
     );
 
     this.initialized = true;
@@ -120,8 +156,34 @@ class HybridOcrService {
 
         let result;
 
-        if (provider.name === "mindee") {
-          // Mindee OCR - Priorité 1
+        if (provider.name === "claude-vision") {
+          // Claude Vision OCR - Provider par défaut (Anthropic API)
+          const rawResult = await provider.service.processDocument(
+            documentUrl,
+            mimeType
+          );
+          result = provider.service.toInvoiceFormat(rawResult);
+
+          // Incrémenter le compteur d'usage Claude Vision
+          if (workspaceId) {
+            try {
+              await OcrUsage.incrementUsage(workspaceId, "claude-vision", {
+                fileName,
+                success: true,
+                tokensUsed: rawResult.usage?.inputTokens + rawResult.usage?.outputTokens,
+              });
+              console.log(
+                `📊 Claude Vision: Usage incrémenté pour workspace ${workspaceId}`
+              );
+            } catch (usageError) {
+              console.warn(
+                "⚠️ Erreur incrémentation usage Claude Vision:",
+                usageError.message
+              );
+            }
+          }
+        } else if (provider.name === "mindee") {
+          // Mindee OCR - Fallback 1
           const rawResult = await provider.service.processDocument(
             documentUrl,
             mimeType
@@ -223,6 +285,110 @@ class HybridOcrService {
       error: `Tous les OCR ont échoué: ${errors.map((e) => `${e.provider}: ${e.error}`).join(", ")}`,
       provider: "none",
     };
+  }
+
+  /**
+   * NOUVELLE MÉTHODE: Traitement batch optimisé
+   * Utilise le pré-téléchargement en masse et le cache Redis
+   * @param {Array<{cloudflareUrl: string, fileName: string, mimeType: string}>} files
+   * @param {string} workspaceId
+   * @returns {Promise<Array>}
+   */
+  async batchProcessDocuments(files, workspaceId = null) {
+    await this.initProviders(workspaceId);
+
+    // Vérifier si Claude Vision est le provider principal
+    const primaryProvider = this.providers[0];
+
+    if (primaryProvider?.name === "claude-vision") {
+      console.log(`🚀 Batch OCR avec Claude Vision (${files.length} fichiers)...`);
+
+      // Utiliser le batch processing optimisé de Claude Vision
+      const documents = files.map((f) => ({
+        url: f.cloudflareUrl,
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+      }));
+
+      const results = await claudeVisionOcrService.batchProcessDocuments(
+        documents,
+        ocrCacheService
+      );
+
+      // Incrémenter l'usage pour chaque succès
+      const successResults = results.filter((r) => r.success);
+      if (workspaceId && successResults.length > 0) {
+        try {
+          for (const r of successResults) {
+            await OcrUsage.incrementUsage(workspaceId, "claude-vision", {
+              fileName: r.fileName,
+              success: true,
+              tokensUsed: r.result?.usage?.inputTokens + r.result?.usage?.outputTokens,
+            });
+          }
+          console.log(`📊 Claude Vision: ${successResults.length} usages enregistrés`);
+        } catch (usageError) {
+          console.warn("⚠️ Erreur enregistrement usage:", usageError.message);
+        }
+      }
+
+      // Convertir au format attendu par le resolver
+      return results.map((r) => {
+        if (r.success) {
+          return {
+            success: true,
+            fileName: r.fileName,
+            url: r.url,
+            fromCache: r.fromCache,
+            result: r.result,
+          };
+        } else {
+          return {
+            success: false,
+            fileName: r.fileName,
+            url: r.url,
+            error: r.error,
+          };
+        }
+      });
+    }
+
+    // Fallback: traitement séquentiel avec les autres providers
+    console.log(`🔄 Batch OCR séquentiel avec ${primaryProvider?.name || "fallback"}...`);
+
+    const results = [];
+    for (const file of files) {
+      try {
+        const result = await this.processDocumentFromUrl(
+          file.cloudflareUrl,
+          file.fileName,
+          file.mimeType,
+          workspaceId
+        );
+        results.push({
+          success: true,
+          fileName: file.fileName,
+          url: file.cloudflareUrl,
+          result,
+        });
+      } catch (error) {
+        results.push({
+          success: false,
+          fileName: file.fileName,
+          url: file.cloudflareUrl,
+          error: error.message,
+        });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Retourne les statistiques du cache
+   */
+  getCacheStats() {
+    return ocrCacheService.getStats();
   }
 
   /**

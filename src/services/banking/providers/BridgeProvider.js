@@ -4,6 +4,13 @@ import axios from "axios";
 /**
  * Provider Bridge API pour les services bancaires
  * Implémente l'interface BankingProvider pour Bridge
+ *
+ * AMÉLIORATIONS v2:
+ * - Pagination complète pour récupérer TOUTES les transactions
+ * - Période par défaut configurable (90 jours)
+ * - Tracking du statut de synchronisation
+ * - Meilleure gestion des erreurs
+ * - Rate limiting basique
  */
 export class BridgeProvider extends BankingProvider {
   constructor() {
@@ -15,13 +22,120 @@ export class BridgeProvider extends BankingProvider {
       baseUrl: process.env.BRIDGE_BASE_URL || "https://api.bridgeapi.io",
       version: process.env.BRIDGE_API_VERSION || "v3",
       timeout: 30000,
-      environment: process.env.BRIDGE_ENVIRONMENT || "sandbox", // sandbox ou production
+      environment: process.env.BRIDGE_ENVIRONMENT || "sandbox",
       redirectUri:
         process.env.BRIDGE_REDIRECT_URI ||
         "http://localhost:3000/banking/callback",
+      // Configuration de la synchronisation des transactions
+      sync: {
+        // Nombre de jours par défaut pour la récupération des transactions
+        defaultDaysBack: parseInt(process.env.BRIDGE_DEFAULT_DAYS_BACK) || 90,
+        // Limite de transactions par requête API (max Bridge = 500)
+        transactionsPerPage: parseInt(process.env.BRIDGE_TRANSACTIONS_PER_PAGE) || 500,
+        // Nombre maximum de pages à récupérer par compte (sécurité)
+        maxPagesPerAccount: parseInt(process.env.BRIDGE_MAX_PAGES) || 50,
+        // Délai entre les requêtes API (ms) pour éviter le rate limiting
+        requestDelayMs: parseInt(process.env.BRIDGE_REQUEST_DELAY_MS) || 100,
+      },
     };
     this.accessToken = null;
     this.client = null;
+
+    // Mapping des catégories Bridge vers nos catégories internes
+    // Bridge utilise des IDs numériques, on mappe vers expenseCategory
+    this.bridgeCategoryMapping = {
+      // Alimentation & Restauration
+      270: "MEALS",         // Restaurants
+      271: "MEALS",         // Fast-food
+      272: "MEALS",         // Café / Bar
+      273: "MEALS",         // Alimentation
+      274: "MEALS",         // Supermarché
+
+      // Transport & Voyages
+      280: "TRAVEL",        // Transport
+      281: "TRAVEL",        // Carburant
+      282: "TRAVEL",        // Parking
+      283: "TRAVEL",        // Péages
+      284: "TRAVEL",        // Train
+      285: "TRAVEL",        // Avion
+      286: "TRAVEL",        // Location véhicule
+      287: "TRAVEL",        // Taxi / VTC
+      288: "TRAVEL",        // Transport en commun
+
+      // Hébergement
+      290: "ACCOMMODATION", // Hôtel
+      291: "ACCOMMODATION", // Location vacances
+
+      // Achats & Shopping
+      300: "OFFICE_SUPPLIES", // Achats divers
+      301: "HARDWARE",        // Électronique
+      302: "OFFICE_SUPPLIES", // Vêtements
+      303: "OFFICE_SUPPLIES", // Maison / Déco
+
+      // Services & Abonnements
+      310: "SUBSCRIPTIONS",   // Abonnements
+      311: "SOFTWARE",        // Services en ligne
+      312: "SUBSCRIPTIONS",   // Téléphonie
+      313: "SUBSCRIPTIONS",   // Internet
+      314: "SUBSCRIPTIONS",   // TV / Streaming
+
+      // Santé & Bien-être
+      320: "SERVICES",        // Santé
+      321: "SERVICES",        // Pharmacie
+      322: "SERVICES",        // Médecin
+
+      // Logement & Charges
+      330: "RENT",            // Loyer
+      331: "UTILITIES",       // Électricité
+      332: "UTILITIES",       // Gaz
+      333: "UTILITIES",       // Eau
+      334: "UTILITIES",       // Charges copropriété
+      335: "MAINTENANCE",     // Travaux / Entretien
+
+      // Banque & Assurances
+      340: "SERVICES",        // Frais bancaires
+      341: "INSURANCE",       // Assurance habitation
+      342: "INSURANCE",       // Assurance auto
+      343: "INSURANCE",       // Assurance santé
+      344: "INSURANCE",       // Autres assurances
+
+      // Impôts & Taxes
+      350: "TAXES",           // Impôts sur le revenu
+      351: "TAXES",           // Taxe foncière
+      352: "TAXES",           // Taxe habitation
+      353: "TAXES",           // TVA
+      354: "TAXES",           // Autres taxes
+
+      // Loisirs & Sorties
+      360: "OTHER",           // Loisirs
+      361: "OTHER",           // Sport
+      362: "OTHER",           // Culture
+      363: "OTHER",           // Sorties
+
+      // Éducation & Formation
+      370: "TRAINING",        // Formation
+      371: "TRAINING",        // Études
+      372: "TRAINING",        // Livres / Documentation
+
+      // Professionnels
+      380: "SERVICES",        // Services professionnels
+      381: "MARKETING",       // Publicité / Marketing
+      382: "SERVICES",        // Comptabilité / Juridique
+      383: "SALARIES",        // Salaires
+      384: "SERVICES",        // Sous-traitance
+
+      // Catégories génériques Bridge (IDs communs)
+      1: "OTHER",             // Non catégorisé
+      2: "OTHER",             // Autre dépense
+      3: "OTHER",             // Autre revenu
+    };
+  }
+
+  /**
+   * Pause pour éviter le rate limiting
+   */
+  async _delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
@@ -275,11 +389,13 @@ export class BridgeProvider extends BankingProvider {
         );
       });
 
-      // Déduplication simplifiée par nom uniquement
+      // Déduplication améliorée par externalId + provider_id
+      // Évite de fusionner des comptes différents avec le même nom
       const uniqueAccounts = new Map();
       enabledAccounts.forEach((account) => {
-        const key = account.name; // Utiliser seulement le nom pour déduplication
-        // Garder seulement le plus récent (ID le plus élevé)
+        // Clé unique: combinaison de l'ID externe et du provider
+        const key = `${account.provider_id}_${account.id}`;
+        // Garder seulement le plus récent (ID le plus élevé en cas de doublon)
         if (
           !uniqueAccounts.has(key) ||
           account.id > uniqueAccounts.get(key).id
@@ -289,7 +405,7 @@ export class BridgeProvider extends BankingProvider {
       });
 
       console.log(
-        `🔧 Après déduplication par nom: ${uniqueAccounts.size} comptes uniques`
+        `🔧 Après déduplication par provider+id: ${uniqueAccounts.size} comptes uniques`
       );
 
       // Récupérer les informations des providers (banques) pour enrichir les comptes
@@ -446,9 +562,38 @@ export class BridgeProvider extends BankingProvider {
   }
 
   /**
-   * Récupère l'historique des transactions
+   * Calcule la période par défaut pour la récupération des transactions
+   * @returns {{ since: string, until: string }}
+   */
+  _getDefaultDateRange() {
+    const until = new Date();
+    const since = new Date();
+    since.setDate(since.getDate() - this.config.sync.defaultDaysBack);
+
+    return {
+      since: since.toISOString().split("T")[0], // Format YYYY-MM-DD
+      until: until.toISOString().split("T")[0],
+    };
+  }
+
+  /**
+   * Récupère l'historique des transactions AVEC PAGINATION COMPLÈTE
+   * Cette méthode récupère TOUTES les transactions disponibles pour la période spécifiée
+   *
+   * @param {string} accountId - ID du compte Bridge
+   * @param {string} userId - ID utilisateur ou "webhook-sync"
+   * @param {string} workspaceId - ID du workspace
+   * @param {Object} options - Options de récupération
+   * @param {string} options.since - Date de début (YYYY-MM-DD), défaut: 90 jours en arrière
+   * @param {string} options.until - Date de fin (YYYY-MM-DD), défaut: aujourd'hui
+   * @param {boolean} options.fullSync - Force la récupération complète sans limite de pages
+   * @returns {Promise<Array>} Liste de toutes les transactions
    */
   async getTransactions(accountId, userId, workspaceId, options = {}) {
+    const startTime = Date.now();
+    let syncStatus = "complete";
+    let lastError = null;
+
     try {
       // Pour les webhooks, créer un nouveau token directement
       let accessToken;
@@ -462,76 +607,217 @@ export class BridgeProvider extends BankingProvider {
         accessToken = tokens.accessToken;
       }
 
-      const params = {
-        account_id: accountId,
-        limit: options.limit || 200,
-        ...(options.since && { since: options.since }),
-        ...(options.until && { until: options.until }),
-      };
-
-      const response = await this.client.get("/v3/aggregation/transactions", {
-        params,
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
-
-      const transactions = response.data.resources.map((transaction) => {
-        const transactionData = {
-          externalId: transaction.id.toString(),
-          amount: transaction.amount,
-          currency: transaction.currency_code || "EUR",
-          description:
-            transaction.clean_description || transaction.provider_description,
-          date: new Date(transaction.date),
-          type: transaction.amount > 0 ? "credit" : "debit",
-          status: transaction.deleted ? "cancelled" : "completed",
-          category: transaction.category_id
-            ? `Category ${transaction.category_id}`
-            : null,
-          fromAccount: transaction.account_id.toString(),
-          toAccount: null,
-          workspaceId,
-          processedAt: new Date(transaction.booking_date || transaction.date),
-          metadata: {
-            bridgeAccountId: transaction.account_id,
-            bridgeTransactionId: transaction.id,
-            bridgeCategoryId: transaction.category_id,
-            bridgeOperationType: transaction.operation_type,
-            bridgeCleanDescription: transaction.clean_description,
-            bridgeProviderDescription: transaction.provider_description,
-            bridgeBookingDate: transaction.booking_date,
-            bridgeTransactionDate: transaction.transaction_date,
-            bridgeValueDate: transaction.value_date,
-            bridgeDeleted: transaction.deleted,
-            bridgeFuture: transaction.future,
-          },
-          fees: {
-            amount: 0,
-            currency: transaction.currency_code || "EUR",
-            provider: "bridge",
-          },
-          raw: transaction,
-        };
-
-        // N'inclure userId que si ce n'est pas un webhook
-        if (userId !== "webhook-sync") {
-          transactionData.userId = userId;
-        }
-
-        return transactionData;
-      });
-
-      // Sauvegarder en base de données
-      await this._saveTransactionsToDatabase(transactions, workspaceId);
+      // Appliquer la période par défaut si non spécifiée
+      const defaultRange = this._getDefaultDateRange();
+      const since = options.since || defaultRange.since;
+      const until = options.until || defaultRange.until;
 
       console.log(
-        `✅ ${transactions.length} transactions synchronisées pour compte ${accountId}`
+        `📅 Récupération transactions compte ${accountId}: ${since} → ${until}`
       );
-      return transactions;
+
+      // Récupérer TOUTES les transactions avec pagination
+      const allTransactions = [];
+      let cursor = null;
+      let pageCount = 0;
+      const maxPages = options.fullSync
+        ? Infinity
+        : this.config.sync.maxPagesPerAccount;
+
+      do {
+        // Construire les paramètres de requête
+        const params = {
+          account_id: accountId,
+          limit: this.config.sync.transactionsPerPage,
+          since,
+          until,
+        };
+
+        // Ajouter le curseur pour la pagination
+        if (cursor) {
+          params.after = cursor;
+        }
+
+        // Appel API Bridge
+        const response = await this.client.get("/v3/aggregation/transactions", {
+          params,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+
+        const resources = response.data.resources || [];
+        pageCount++;
+
+        console.log(
+          `📄 Page ${pageCount}: ${resources.length} transactions récupérées`
+        );
+
+        // Mapper les transactions
+        for (const transaction of resources) {
+          const transactionData = this._mapTransaction(
+            transaction,
+            workspaceId,
+            userId
+          );
+          allTransactions.push(transactionData);
+        }
+
+        // Vérifier s'il y a une page suivante
+        // Bridge utilise le champ "pagination.next_uri" ou le dernier ID
+        const pagination = response.data.pagination;
+        if (
+          pagination?.next_uri ||
+          (resources.length === this.config.sync.transactionsPerPage &&
+            resources.length > 0)
+        ) {
+          // Utiliser l'ID de la dernière transaction comme curseur
+          cursor = resources[resources.length - 1]?.id?.toString();
+        } else {
+          cursor = null;
+        }
+
+        // Vérifier si on a atteint la limite de pages
+        if (pageCount >= maxPages) {
+          console.warn(
+            `⚠️ Limite de ${maxPages} pages atteinte pour compte ${accountId}`
+          );
+          syncStatus = "partial";
+          break;
+        }
+
+        // Délai anti rate-limiting entre les requêtes
+        if (cursor) {
+          await this._delay(this.config.sync.requestDelayMs);
+        }
+      } while (cursor);
+
+      // Sauvegarder en base de données
+      if (allTransactions.length > 0) {
+        await this._saveTransactionsToDatabase(allTransactions, workspaceId);
+      }
+
+      // Calculer les statistiques
+      const transactionDates = allTransactions.map((t) => new Date(t.date));
+      const oldestDate =
+        transactionDates.length > 0
+          ? new Date(Math.min(...transactionDates))
+          : null;
+      const newestDate =
+        transactionDates.length > 0
+          ? new Date(Math.max(...transactionDates))
+          : null;
+
+      // Mettre à jour le statut de sync du compte
+      await this._updateAccountSyncStatus(accountId, workspaceId, {
+        status: syncStatus,
+        transactionsCount: allTransactions.length,
+        totalTransactions: allTransactions.length,
+        oldestTransactionDate: oldestDate,
+        newestTransactionDate: newestDate,
+        duration: Date.now() - startTime,
+        error: null,
+      });
+
+      console.log(
+        `✅ ${allTransactions.length} transactions synchronisées pour compte ${accountId} (${pageCount} pages, ${Date.now() - startTime}ms)`
+      );
+
+      return allTransactions;
     } catch (error) {
-      console.error("❌ Erreur synchronisation transactions:", error.message);
+      lastError = error.message;
+      syncStatus = "failed";
+
+      // Mettre à jour le statut d'erreur
+      await this._updateAccountSyncStatus(accountId, workspaceId, {
+        status: syncStatus,
+        transactionsCount: 0,
+        duration: Date.now() - startTime,
+        error: lastError,
+      });
+
+      console.error(
+        `❌ Erreur synchronisation transactions compte ${accountId}:`,
+        error.message
+      );
       throw new Error(`Erreur récupération transactions: ${error.message}`);
+    }
+  }
+
+  /**
+   * Mappe une transaction Bridge vers notre format standard
+   */
+  _mapTransaction(transaction, workspaceId, userId) {
+    // Mapper la catégorie Bridge vers notre catégorie interne
+    // Si pas de category_id ou si non mappé, utiliser "OTHER" par défaut
+    const mappedCategory = this._mapBridgeCategory(transaction.category_id) || "OTHER";
+
+    const transactionData = {
+      externalId: transaction.id.toString(),
+      amount: transaction.amount,
+      currency: transaction.currency_code || "EUR",
+      description:
+        transaction.clean_description || transaction.provider_description || "Transaction",
+      date: new Date(transaction.date),
+      type: transaction.amount > 0 ? "credit" : "debit",
+      status: transaction.deleted ? "cancelled" : "completed",
+      // Catégorie mappée depuis Bridge (toujours définie avec fallback "OTHER")
+      category: mappedCategory,
+      // Catégorie interne pour le reporting (pour toutes les transactions, pas seulement les dépenses)
+      expenseCategory: mappedCategory,
+      fromAccount: transaction.account_id.toString(),
+      toAccount: null,
+      workspaceId,
+      processedAt: new Date(transaction.booking_date || transaction.date),
+      metadata: {
+        bridgeAccountId: transaction.account_id,
+        bridgeTransactionId: transaction.id,
+        bridgeCategoryId: transaction.category_id,           // ID original Bridge (peut être null)
+        bridgeCategoryMapped: mappedCategory,                 // Catégorie mappée (jamais null, fallback "OTHER")
+        bridgeOperationType: transaction.operation_type,
+        bridgeCleanDescription: transaction.clean_description,
+        bridgeProviderDescription: transaction.provider_description,
+        bridgeBookingDate: transaction.booking_date,
+        bridgeTransactionDate: transaction.transaction_date,
+        bridgeValueDate: transaction.value_date,
+        bridgeDeleted: transaction.deleted,
+        bridgeFuture: transaction.future,
+      },
+      fees: {
+        amount: 0,
+        currency: transaction.currency_code || "EUR",
+        provider: "bridge",
+      },
+      raw: transaction,
+    };
+
+    // N'inclure userId que si ce n'est pas un webhook
+    if (userId !== "webhook-sync") {
+      transactionData.userId = userId;
+    }
+
+    return transactionData;
+  }
+
+  /**
+   * Met à jour le statut de synchronisation d'un compte
+   */
+  async _updateAccountSyncStatus(accountId, workspaceId, syncData) {
+    try {
+      const { default: AccountBanking } = await import(
+        "../../../models/AccountBanking.js"
+      );
+      await AccountBanking.updateTransactionSyncStatus(
+        accountId,
+        workspaceId,
+        this.name,
+        syncData
+      );
+    } catch (error) {
+      console.warn(
+        `⚠️ Impossible de mettre à jour le statut de sync:`,
+        error.message
+      );
     }
   }
 
@@ -577,37 +863,100 @@ export class BridgeProvider extends BankingProvider {
 
   /**
    * Synchronise toutes les transactions pour tous les comptes
+   * Avec rapport détaillé par compte
+   *
+   * @param {string} userId - ID utilisateur ou "webhook-sync"
+   * @param {string} workspaceId - ID du workspace
+   * @param {Object} options - Options de synchronisation
+   * @param {string} options.since - Date de début (YYYY-MM-DD)
+   * @param {string} options.until - Date de fin (YYYY-MM-DD)
+   * @param {boolean} options.fullSync - Force la récupération complète
+   * @returns {Promise<Object>} Rapport de synchronisation détaillé
    */
   async syncAllTransactions(userId, workspaceId, options = {}) {
+    const startTime = Date.now();
+
     try {
       // D'abord récupérer tous les comptes
       const accounts = await this.syncUserAccounts(userId, workspaceId);
 
       let totalTransactions = 0;
+      const accountsReport = [];
+      const failedAccounts = [];
+
+      console.log(
+        `🔄 Démarrage sync de ${accounts.length} comptes pour workspace ${workspaceId}`
+      );
 
       // Synchroniser les transactions pour chaque compte
       for (const account of accounts) {
+        const accountStartTime = Date.now();
         try {
           const transactions = await this.getTransactions(
             account.externalId,
             userId,
             workspaceId,
-            { ...options, limit: options.limit || 200 } // Augmenter la limite par défaut
+            {
+              since: options.since,
+              until: options.until,
+              fullSync: options.fullSync,
+            }
           );
+
+          const accountReport = {
+            accountId: account.externalId,
+            accountName: account.name,
+            status: "success",
+            transactionsCount: transactions.length,
+            duration: Date.now() - accountStartTime,
+          };
+
+          accountsReport.push(accountReport);
           totalTransactions += transactions.length;
+
+          console.log(
+            `  ✓ ${account.name}: ${transactions.length} transactions (${accountReport.duration}ms)`
+          );
         } catch (error) {
+          const accountReport = {
+            accountId: account.externalId,
+            accountName: account.name,
+            status: "failed",
+            transactionsCount: 0,
+            error: error.message,
+            duration: Date.now() - accountStartTime,
+          };
+
+          accountsReport.push(accountReport);
+          failedAccounts.push(account.name);
+
           console.error(
-            `❌ Erreur sync transactions compte ${account.name}:`,
-            error.message
+            `  ✗ ${account.name}: ${error.message} (${accountReport.duration}ms)`
           );
           // Continuer avec les autres comptes même si un échoue
         }
       }
 
+      const totalDuration = Date.now() - startTime;
+      const syncResult = {
+        accounts: accounts.length,
+        transactions: totalTransactions,
+        successfulAccounts: accounts.length - failedAccounts.length,
+        failedAccounts: failedAccounts.length,
+        failedAccountNames: failedAccounts,
+        duration: totalDuration,
+        period: {
+          since: options.since || this._getDefaultDateRange().since,
+          until: options.until || this._getDefaultDateRange().until,
+        },
+        details: accountsReport,
+      };
+
       console.log(
-        `✅ Synchronisation terminée: ${totalTransactions} transactions pour ${accounts.length} comptes`
+        `✅ Synchronisation terminée: ${totalTransactions} transactions pour ${accounts.length} comptes (${failedAccounts.length} échecs) en ${totalDuration}ms`
       );
-      return { accounts: accounts.length, transactions: totalTransactions };
+
+      return syncResult;
     } catch (error) {
       console.error("❌ Erreur synchronisation complète:", error.message);
       throw new Error(`Erreur synchronisation complète: ${error.message}`);
@@ -788,13 +1137,33 @@ export class BridgeProvider extends BankingProvider {
    */
   _mapAccountType(bridgeType) {
     const typeMapping = {
+      // Types standard Bridge -> valeurs internes (lowercase)
       checking: "checking",
       savings: "savings",
       credit_card: "credit",
       loan: "loan",
       investment: "investment",
+      // Types additionnels Bridge
+      brokerage: "investment",
+      card: "credit",
+      life_insurance: "investment",
+      pea: "investment",          // Plan d'Épargne en Actions
+      market: "investment",
+      special: "savings",
+      unknown: "other",
+      business: "business",
     };
-    return typeMapping[bridgeType] || "other";
+    return typeMapping[bridgeType?.toLowerCase()] || "other";
+  }
+
+  /**
+   * Mappe les catégories Bridge vers nos catégories internes
+   * @param {number} bridgeCategoryId - ID de catégorie Bridge
+   * @returns {string} - Catégorie interne (jamais null, fallback "OTHER")
+   */
+  _mapBridgeCategory(bridgeCategoryId) {
+    if (!bridgeCategoryId) return "OTHER";
+    return this.bridgeCategoryMapping[bridgeCategoryId] || "OTHER";
   }
 
   /**
@@ -913,27 +1282,6 @@ export class BridgeProvider extends BankingProvider {
     };
 
     return mapping[bridgeCategory] || "payment";
-  }
-
-  _mapTransactionStatus(bridgeStatus) {
-    const mapping = {
-      pending: "pending",
-      processed: "completed",
-      failed: "failed",
-      cancelled: "cancelled",
-    };
-
-    return mapping[bridgeStatus] || "pending";
-  }
-
-  _mapAccountType(bridgeType) {
-    const mapping = {
-      checking: "checking",
-      savings: "savings",
-      credit: "credit",
-    };
-
-    return mapping[bridgeType] || "checking";
   }
 }
 

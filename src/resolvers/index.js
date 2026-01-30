@@ -40,6 +40,9 @@ import taskImageResolvers from "./taskImage.js";
 import notificationPreferencesResolvers from "./notificationPreferences.js";
 import userInvitedResolvers from "./userInvited.js";
 import clientAutomationResolvers from "./clientAutomation.js";
+import { clientCustomFieldResolvers } from "./clientCustomField.js";
+import crmEmailAutomationResolvers from "./crmEmailAutomation.js";
+import notificationResolvers from "./notification.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -83,6 +86,9 @@ const resolvers = mergeResolvers([
   notificationPreferencesResolvers,
   userInvitedResolvers,
   clientAutomationResolvers,
+  clientCustomFieldResolvers,
+  crmEmailAutomationResolvers,
+  notificationResolvers,
 ]);
 
 export default resolvers;

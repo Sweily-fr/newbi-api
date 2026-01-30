@@ -366,6 +366,13 @@ router.get("/status", async (req, res) => {
 /**
  * Déconnexion bancaire (multi-provider)
  * POST /banking-connect/disconnect
+ *
+ * Paramètres body:
+ * - provider: (optionnel) provider spécifique à déconnecter
+ * - itemId: (optionnel) ID de l'item/connexion bancaire spécifique à déconnecter
+ * - accountId: (optionnel) ID du compte spécifique à déconnecter
+ *
+ * Priorité: accountId > itemId > provider > tous
  */
 router.post("/disconnect", async (req, res) => {
   try {
@@ -376,6 +383,8 @@ router.post("/disconnect", async (req, res) => {
 
     const workspaceId = req.headers["x-workspace-id"] || req.body.workspaceId;
     const provider = req.body.provider; // Optionnel: spécifier le provider à déconnecter
+    const itemId = req.body.itemId; // Optionnel: ID de l'item Bridge spécifique
+    const accountId = req.body.accountId; // Optionnel: ID du compte spécifique
 
     if (!workspaceId) {
       return res.status(400).json({ error: "WorkspaceId requis" });
@@ -385,8 +394,102 @@ router.post("/disconnect", async (req, res) => {
     const { default: AccountBanking } =
       await import("../models/AccountBanking.js");
 
-    // Si un provider spécifique est demandé, ne déconnecter que celui-là
-    // Sinon, déconnecter tous les providers
+    let disconnectedAccounts = [];
+    let disconnectedItems = [];
+
+    // Cas 1: Déconnexion d'un compte spécifique par son ID
+    if (accountId) {
+      const account = await AccountBanking.findOne({
+        _id: accountId,
+        workspaceId,
+      });
+
+      if (!account) {
+        return res.status(404).json({ error: "Compte non trouvé" });
+      }
+
+      // Récupérer l'itemId du compte pour déconnecter tous les comptes du même item
+      const accountItemId = account.raw?.item_id || account.raw?.provider_id;
+
+      if (accountItemId) {
+        // Déconnecter tous les comptes du même item
+        const result = await AccountBanking.updateMany(
+          {
+            workspaceId,
+            $or: [
+              { "raw.item_id": accountItemId },
+              { "raw.provider_id": accountItemId }
+            ]
+          },
+          { $set: { status: "disconnected" } }
+        );
+        disconnectedAccounts = await AccountBanking.find({
+          workspaceId,
+          $or: [
+            { "raw.item_id": accountItemId },
+            { "raw.provider_id": accountItemId }
+          ]
+        }).select('_id');
+        disconnectedItems.push(accountItemId);
+
+        logger.info(
+          `Déconnexion de l'item ${accountItemId} (${result.modifiedCount} comptes) pour workspace ${workspaceId}`
+        );
+      } else {
+        // Pas d'itemId, déconnecter uniquement ce compte
+        await AccountBanking.findByIdAndUpdate(accountId, {
+          $set: { status: "disconnected" },
+        });
+        disconnectedAccounts.push({ _id: accountId });
+
+        logger.info(
+          `Déconnexion du compte ${accountId} pour workspace ${workspaceId}`
+        );
+      }
+
+      return res.json({
+        success: true,
+        disconnectedAccountIds: disconnectedAccounts.map(a => a._id.toString()),
+        disconnectedItems,
+        mode: "account",
+      });
+    }
+
+    // Cas 2: Déconnexion par itemId (tous les comptes d'un même item)
+    if (itemId) {
+      const result = await AccountBanking.updateMany(
+        {
+          workspaceId,
+          $or: [
+            { "raw.item_id": itemId },
+            { "raw.provider_id": itemId }
+          ]
+        },
+        { $set: { status: "disconnected" } }
+      );
+
+      disconnectedAccounts = await AccountBanking.find({
+        workspaceId,
+        status: "disconnected",
+        $or: [
+          { "raw.item_id": itemId },
+          { "raw.provider_id": itemId }
+        ]
+      }).select('_id');
+
+      logger.info(
+        `Déconnexion de l'item ${itemId} (${result.modifiedCount} comptes) pour workspace ${workspaceId}`
+      );
+
+      return res.json({
+        success: true,
+        disconnectedAccountIds: disconnectedAccounts.map(a => a._id.toString()),
+        disconnectedItems: [itemId],
+        mode: "item",
+      });
+    }
+
+    // Cas 3: Déconnexion par provider ou tous les providers (comportement legacy)
     const providersToDisconnect = provider
       ? [provider]
       : ["gocardless", "bridge"];
@@ -412,10 +515,14 @@ router.post("/disconnect", async (req, res) => {
     }
 
     logger.info(
-      `Déconnexion bancaire pour user ${user._id}, workspace ${workspaceId}, providers: ${providersToDisconnect.join(", ")}`
+      `Déconnexion bancaire complète pour user ${user._id}, workspace ${workspaceId}, providers: ${providersToDisconnect.join(", ")}`
     );
 
-    res.json({ success: true, disconnectedProviders: providersToDisconnect });
+    res.json({
+      success: true,
+      disconnectedProviders: providersToDisconnect,
+      mode: "provider",
+    });
   } catch (error) {
     logger.error("Erreur déconnexion:", error);
     res.status(500).json({

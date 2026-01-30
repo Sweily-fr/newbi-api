@@ -135,8 +135,25 @@ const withWorkspace = (resolver) => {
       );
     }
 
-    let workspaceId =
-      args.workspaceId || context.req?.headers["x-workspace-id"];
+    // Récupérer le workspaceId depuis les headers (source de confiance)
+    const headerWorkspaceId =
+      context.req?.headers["x-workspace-id"] ||
+      context.req?.headers["x-organization-id"];
+
+    // Récupérer le workspaceId depuis les arguments (fourni par le client)
+    const argsWorkspaceId = args.workspaceId;
+
+    // ✅ FIX: Valider que le workspaceId des arguments correspond au header
+    // Évite qu'un utilisateur puisse accéder aux données d'une autre organisation
+    if (argsWorkspaceId && headerWorkspaceId && argsWorkspaceId !== headerWorkspaceId) {
+      throw new AppError(
+        "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+        ERROR_CODES.FORBIDDEN
+      );
+    }
+
+    // Utiliser le workspaceId des arguments ou du header, ou l'ID utilisateur en fallback
+    let workspaceId = argsWorkspaceId || headerWorkspaceId;
 
     // Si aucun workspaceId n'est fourni, utiliser l'ID utilisateur comme workspace
     if (!workspaceId) {

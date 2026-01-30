@@ -46,6 +46,22 @@ type ClientActivityMetadata {
   originalInvoiceNumber: String
 }
 
+type ClientCustomFieldValueType {
+  fieldId: ID!
+  value: JSON
+}
+
+type ClientContact {
+  id: ID!
+  position: String
+  firstName: String
+  lastName: String
+  email: String
+  phone: String
+  isPrimary: Boolean
+  createdAt: String
+}
+
 type Client {
   id: ID!
   name: String!
@@ -63,6 +79,10 @@ type Client {
   # Adresse de livraison différente
   hasDifferentShippingAddress: Boolean
   shippingAddress: Address
+  # Contacts additionnels
+  contacts: [ClientContact!]
+  # Champs personnalisés
+  customFields: [ClientCustomFieldValueType!]
   # Timeline d'activité
   notes: [ClientNote!]
   activity: [ClientActivity!]
@@ -93,6 +113,16 @@ type EmbeddedClient {
   shippingAddress: Address
 }
 
+input ClientContactInput {
+  id: ID
+  position: String
+  firstName: String
+  lastName: String
+  email: String
+  phone: String
+  isPrimary: Boolean
+}
+
 input ClientInput {
   id: ID
   name: String!
@@ -107,6 +137,8 @@ input ClientInput {
   # Champs spécifiques aux particuliers
   firstName: String
   lastName: String
+  # Contacts additionnels
+  contacts: [ClientContactInput!]
 }
 
 enum ClientType {

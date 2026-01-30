@@ -11,6 +11,11 @@ input BankDetailsInput {
   bankName: String
 }
 
+input ClientCustomFieldValueInput {
+  fieldId: ID!
+  value: JSON!
+}
+
 input ClientInput {
   id: ID
   name: String!
@@ -29,6 +34,8 @@ input ClientInput {
   # Champs spécifiques aux particuliers
   firstName: String
   lastName: String
+  # Champs personnalisés
+  customFields: [ClientCustomFieldValueInput!]
 }
 
 input ItemInput {

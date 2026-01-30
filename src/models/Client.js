@@ -209,6 +209,92 @@ const clientSchema = new mongoose.Schema(
         },
       },
     ],
+    // Contacts additionnels (pour les entreprises principalement)
+    contacts: [
+      {
+        id: {
+          type: String,
+          required: true,
+          default: () => new mongoose.Types.ObjectId().toString(),
+        },
+        position: {
+          type: String,
+          trim: true,
+          maxlength: [100, "Le poste ne peut pas dépasser 100 caractères"],
+        },
+        firstName: {
+          type: String,
+          trim: true,
+          validate: {
+            validator: function (v) {
+              return (
+                !v ||
+                (v.length >= 2 &&
+                  v.length <= 50 &&
+                  /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
+              );
+            },
+            message: "Le prénom doit contenir entre 2 et 50 caractères",
+          },
+        },
+        lastName: {
+          type: String,
+          trim: true,
+          validate: {
+            validator: function (v) {
+              return (
+                !v ||
+                (v.length >= 2 &&
+                  v.length <= 50 &&
+                  /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
+              );
+            },
+            message: "Le nom doit contenir entre 2 et 50 caractères",
+          },
+        },
+        email: {
+          type: String,
+          trim: true,
+          lowercase: true,
+          validate: {
+            validator: function (v) {
+              return !v || isValidEmail(v);
+            },
+            message: "Veuillez fournir une adresse email valide",
+          },
+        },
+        phone: {
+          type: String,
+          trim: true,
+          validate: {
+            validator: function (v) {
+              return !v || PHONE_REGEX.test(v);
+            },
+            message: "Veuillez fournir un numéro de téléphone valide",
+          },
+        },
+        isPrimary: {
+          type: Boolean,
+          default: false,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+    // Champs personnalisés (valeurs)
+    customFields: [{
+      fieldId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ClientCustomField',
+        required: true
+      },
+      value: {
+        type: mongoose.Schema.Types.Mixed,
+        required: true
+      }
+    }],
     // Historique d'activité du client
     activity: [
       {

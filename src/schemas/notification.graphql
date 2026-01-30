@@ -1,0 +1,65 @@
+type NotificationData {
+  taskId: ID
+  taskTitle: String
+  boardId: ID
+  boardName: String
+  columnName: String
+  actorId: ID
+  actorName: String
+  actorImage: String
+  url: String
+}
+
+type Notification {
+  id: ID!
+  userId: ID!
+  workspaceId: ID!
+  type: String!
+  title: String!
+  message: String!
+  data: NotificationData
+  read: Boolean!
+  readAt: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+type NotificationsResult {
+  notifications: [Notification!]!
+  totalCount: Int!
+  unreadCount: Int!
+}
+
+type MarkNotificationReadResult {
+  success: Boolean!
+  message: String
+}
+
+type Query {
+  # Récupérer les notifications de l'utilisateur
+  getNotifications(
+    workspaceId: ID!
+    limit: Int
+    offset: Int
+    unreadOnly: Boolean
+  ): NotificationsResult!
+
+  # Compter les notifications non lues
+  getUnreadNotificationsCount(workspaceId: ID!): Int!
+}
+
+type Mutation {
+  # Marquer une notification comme lue
+  markNotificationAsRead(id: ID!): MarkNotificationReadResult!
+
+  # Marquer toutes les notifications comme lues
+  markAllNotificationsAsRead(workspaceId: ID!): MarkNotificationReadResult!
+
+  # Supprimer une notification
+  deleteNotification(id: ID!): MarkNotificationReadResult!
+}
+
+type Subscription {
+  # Écouter les nouvelles notifications
+  notificationReceived(workspaceId: ID!): Notification!
+}

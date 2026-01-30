@@ -1,46 +1,6 @@
-# Types pour les transactions
-type Transaction {
-  id: ID!
-  amount: Float!
-  currency: String!
-  description: String!
-  date: String!
-  type: TransactionType!
-  category: TransactionCategory!
-  status: TransactionStatus!
-  formattedAmount: String!
-  formattedDate: String!
-  bridgeTransactionId: String
-  bridgeAccountId: String
-}
+# Types de réponse pour les transactions (legacy queries)
+# NOTE: Le type Transaction principal est défini dans types/banking.graphql
 
-# Énumérations
-enum TransactionType {
-  debit
-  credit
-}
-
-enum TransactionCategory {
-  alimentation
-  transport
-  logement
-  sante
-  loisirs
-  shopping
-  services
-  salaire
-  virement
-  autre
-}
-
-enum TransactionStatus {
-  pending
-  completed
-  failed
-  cancelled
-}
-
-# Types de réponse
 type TransactionResponse {
   success: Boolean!
   message: String
@@ -82,7 +42,7 @@ type CategoryBreakdown {
 extend type Query {
   # Récupère les transactions récentes de l'utilisateur
   getRecentTransactions(limit: Int): TransactionResponse!
-  
+
   # Récupère les statistiques des transactions
   getTransactionStats: TransactionStatsResponse!
 }
