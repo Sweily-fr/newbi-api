@@ -40,6 +40,95 @@ export class BridgeProvider extends BankingProvider {
     };
     this.accessToken = null;
     this.client = null;
+
+    // Mapping des catégories Bridge vers nos catégories internes
+    // Bridge utilise des IDs numériques, on mappe vers expenseCategory
+    this.bridgeCategoryMapping = {
+      // Alimentation & Restauration
+      270: "MEALS",         // Restaurants
+      271: "MEALS",         // Fast-food
+      272: "MEALS",         // Café / Bar
+      273: "MEALS",         // Alimentation
+      274: "MEALS",         // Supermarché
+
+      // Transport & Voyages
+      280: "TRAVEL",        // Transport
+      281: "TRAVEL",        // Carburant
+      282: "TRAVEL",        // Parking
+      283: "TRAVEL",        // Péages
+      284: "TRAVEL",        // Train
+      285: "TRAVEL",        // Avion
+      286: "TRAVEL",        // Location véhicule
+      287: "TRAVEL",        // Taxi / VTC
+      288: "TRAVEL",        // Transport en commun
+
+      // Hébergement
+      290: "ACCOMMODATION", // Hôtel
+      291: "ACCOMMODATION", // Location vacances
+
+      // Achats & Shopping
+      300: "OFFICE_SUPPLIES", // Achats divers
+      301: "HARDWARE",        // Électronique
+      302: "OFFICE_SUPPLIES", // Vêtements
+      303: "OFFICE_SUPPLIES", // Maison / Déco
+
+      // Services & Abonnements
+      310: "SUBSCRIPTIONS",   // Abonnements
+      311: "SOFTWARE",        // Services en ligne
+      312: "SUBSCRIPTIONS",   // Téléphonie
+      313: "SUBSCRIPTIONS",   // Internet
+      314: "SUBSCRIPTIONS",   // TV / Streaming
+
+      // Santé & Bien-être
+      320: "SERVICES",        // Santé
+      321: "SERVICES",        // Pharmacie
+      322: "SERVICES",        // Médecin
+
+      // Logement & Charges
+      330: "RENT",            // Loyer
+      331: "UTILITIES",       // Électricité
+      332: "UTILITIES",       // Gaz
+      333: "UTILITIES",       // Eau
+      334: "UTILITIES",       // Charges copropriété
+      335: "MAINTENANCE",     // Travaux / Entretien
+
+      // Banque & Assurances
+      340: "SERVICES",        // Frais bancaires
+      341: "INSURANCE",       // Assurance habitation
+      342: "INSURANCE",       // Assurance auto
+      343: "INSURANCE",       // Assurance santé
+      344: "INSURANCE",       // Autres assurances
+
+      // Impôts & Taxes
+      350: "TAXES",           // Impôts sur le revenu
+      351: "TAXES",           // Taxe foncière
+      352: "TAXES",           // Taxe habitation
+      353: "TAXES",           // TVA
+      354: "TAXES",           // Autres taxes
+
+      // Loisirs & Sorties
+      360: "OTHER",           // Loisirs
+      361: "OTHER",           // Sport
+      362: "OTHER",           // Culture
+      363: "OTHER",           // Sorties
+
+      // Éducation & Formation
+      370: "TRAINING",        // Formation
+      371: "TRAINING",        // Études
+      372: "TRAINING",        // Livres / Documentation
+
+      // Professionnels
+      380: "SERVICES",        // Services professionnels
+      381: "MARKETING",       // Publicité / Marketing
+      382: "SERVICES",        // Comptabilité / Juridique
+      383: "SALARIES",        // Salaires
+      384: "SERVICES",        // Sous-traitance
+
+      // Catégories génériques Bridge (IDs communs)
+      1: "OTHER",             // Non catégorisé
+      2: "OTHER",             // Autre dépense
+      3: "OTHER",             // Autre revenu
+    };
   }
 
   /**
@@ -659,6 +748,10 @@ export class BridgeProvider extends BankingProvider {
    * Mappe une transaction Bridge vers notre format standard
    */
   _mapTransaction(transaction, workspaceId, userId) {
+    // Mapper la catégorie Bridge vers notre catégorie interne
+    // Si pas de category_id ou si non mappé, utiliser "OTHER" par défaut
+    const mappedCategory = this._mapBridgeCategory(transaction.category_id) || "OTHER";
+
     const transactionData = {
       externalId: transaction.id.toString(),
       amount: transaction.amount,
@@ -668,9 +761,10 @@ export class BridgeProvider extends BankingProvider {
       date: new Date(transaction.date),
       type: transaction.amount > 0 ? "credit" : "debit",
       status: transaction.deleted ? "cancelled" : "completed",
-      category: transaction.category_id
-        ? `Category ${transaction.category_id}`
-        : null,
+      // Catégorie mappée depuis Bridge (toujours définie avec fallback "OTHER")
+      category: mappedCategory,
+      // Catégorie interne pour le reporting (pour toutes les transactions, pas seulement les dépenses)
+      expenseCategory: mappedCategory,
       fromAccount: transaction.account_id.toString(),
       toAccount: null,
       workspaceId,
@@ -678,7 +772,8 @@ export class BridgeProvider extends BankingProvider {
       metadata: {
         bridgeAccountId: transaction.account_id,
         bridgeTransactionId: transaction.id,
-        bridgeCategoryId: transaction.category_id,
+        bridgeCategoryId: transaction.category_id,           // ID original Bridge (peut être null)
+        bridgeCategoryMapped: mappedCategory,                 // Catégorie mappée (jamais null, fallback "OTHER")
         bridgeOperationType: transaction.operation_type,
         bridgeCleanDescription: transaction.clean_description,
         bridgeProviderDescription: transaction.provider_description,
@@ -1042,13 +1137,33 @@ export class BridgeProvider extends BankingProvider {
    */
   _mapAccountType(bridgeType) {
     const typeMapping = {
+      // Types standard Bridge -> valeurs internes (lowercase)
       checking: "checking",
       savings: "savings",
       credit_card: "credit",
       loan: "loan",
       investment: "investment",
+      // Types additionnels Bridge
+      brokerage: "investment",
+      card: "credit",
+      life_insurance: "investment",
+      pea: "investment",          // Plan d'Épargne en Actions
+      market: "investment",
+      special: "savings",
+      unknown: "other",
+      business: "business",
     };
-    return typeMapping[bridgeType] || "other";
+    return typeMapping[bridgeType?.toLowerCase()] || "other";
+  }
+
+  /**
+   * Mappe les catégories Bridge vers nos catégories internes
+   * @param {number} bridgeCategoryId - ID de catégorie Bridge
+   * @returns {string} - Catégorie interne (jamais null, fallback "OTHER")
+   */
+  _mapBridgeCategory(bridgeCategoryId) {
+    if (!bridgeCategoryId) return "OTHER";
+    return this.bridgeCategoryMapping[bridgeCategoryId] || "OTHER";
   }
 
   /**

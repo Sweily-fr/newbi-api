@@ -22,7 +22,18 @@ import {
 const withWorkspace = (resolver) => {
   return isAuthenticated(async (parent, args, context, info) => {
     try {
-      const workspaceId = args.workspaceId || context.workspaceId;
+      const inputWorkspaceId = args.workspaceId;
+      const contextWorkspaceId = context.workspaceId;
+
+      // ✅ FIX: Valider que le workspaceId correspond au contexte
+      if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        throw new AppError(
+          "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+          ERROR_CODES.FORBIDDEN
+        );
+      }
+
+      const workspaceId = inputWorkspaceId || contextWorkspaceId;
       if (!workspaceId)
         throw new AppError('workspaceId requis', ERROR_CODES.BAD_REQUEST);
 

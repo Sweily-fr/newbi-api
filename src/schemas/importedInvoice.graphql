@@ -139,10 +139,46 @@ type OcrProviderUsage {
 
 # Statistiques d'usage OCR
 type OcrUsageStats {
+  claudeVision: OcrProviderUsage!
   mindee: OcrProviderUsage!
   googleDocumentAi: OcrProviderUsage!
   mistral: OcrProviderUsage!
   currentProvider: String!
+}
+
+# Historique d'import OCR
+type OcrImportHistoryEntry {
+  timestamp: String!
+  fileName: String
+  provider: String
+  success: Boolean!
+  isExtra: Boolean!
+}
+
+# Quota OCR utilisateur
+type UserOcrQuota {
+  plan: String!
+  monthlyQuota: Int!
+  usedQuota: Int!
+  remainingQuota: Int!
+  extraImportsPurchased: Int!
+  extraImportsUsed: Int!
+  extraImportsAvailable: Int!
+  extraImportPrice: Float!
+  totalUsedThisMonth: Int!
+  totalAvailable: Int!
+  month: String!
+  resetDate: String
+  lastImports: [OcrImportHistoryEntry!]!
+}
+
+# Résultat d'achat d'imports supplémentaires
+type PurchaseExtraImportsResult {
+  success: Boolean!
+  quantity: Int!
+  extraImportsAvailable: Int!
+  totalSpent: Float!
+  message: String
 }
 
 # Pagination
@@ -210,9 +246,14 @@ extend type Query {
   importedInvoiceStats(workspaceId: ID!): ImportedInvoiceStats!
 
   """
-  Statistiques d'usage OCR (quotas Mindee, Google, Mistral)
+  Statistiques d'usage OCR (quotas Claude Vision, Mindee, Google, Mistral)
   """
   ocrUsageStats(workspaceId: ID!): OcrUsageStats!
+
+  """
+  Quota OCR de l'utilisateur courant
+  """
+  userOcrQuota(workspaceId: ID!): UserOcrQuota!
 }
 
 # Mutations
@@ -269,6 +310,15 @@ extend type Mutation {
   Supprime plusieurs factures importées
   """
   deleteImportedInvoices(ids: [ID!]!): Int!
+
+  """
+  Achète des imports OCR supplémentaires
+  """
+  purchaseExtraOcrImports(
+    workspaceId: ID!
+    quantity: Int!
+    paymentId: String
+  ): PurchaseExtraImportsResult!
 }
 
 # Input pour l'import en lot

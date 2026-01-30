@@ -9,18 +9,67 @@ type Transaction {
   amount: Float!
   currency: String!
   description: String!
+  category: String
+  expenseCategory: ExpenseCategory
   fromAccount: String
   toAccount: String
   workspaceId: String!
   userId: ID!
+  date: DateTime
   processedAt: DateTime
   failureReason: String
   fees: TransactionFees
   metadata: JSON
   receiptRequired: Boolean
   receiptFile: ReceiptFile
+  # Champs de rapprochement bancaire
+  linkedInvoiceId: ID
+  linkedInvoice: LinkedInvoiceSummary
+  linkedExpenseId: ID
+  reconciliationStatus: ReconciliationStatusEnum
+  reconciliationDate: DateTime
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+"""
+Résumé d'une facture liée à une transaction (évite les dépendances circulaires)
+"""
+type LinkedInvoiceSummary {
+  id: ID!
+  number: String
+  status: String
+  clientName: String
+  totalTTC: Float
+  issueDate: DateTime
+  dueDate: DateTime
+}
+
+enum ReconciliationStatusEnum {
+  UNMATCHED
+  SUGGESTED
+  MATCHED
+  IGNORED
+}
+
+enum ExpenseCategory {
+  OFFICE_SUPPLIES
+  TRAVEL
+  MEALS
+  ACCOMMODATION
+  SOFTWARE
+  HARDWARE
+  SERVICES
+  MARKETING
+  TAXES
+  RENT
+  UTILITIES
+  SALARIES
+  INSURANCE
+  MAINTENANCE
+  TRAINING
+  SUBSCRIPTIONS
+  OTHER
 }
 
 type ReceiptFile {
@@ -199,6 +248,7 @@ enum BankingProvider {
   STRIPE
   PAYPAL
   MOCK
+  MANUAL
 }
 
 enum TransactionType {
@@ -207,6 +257,8 @@ enum TransactionType {
   TRANSFER
   WITHDRAWAL
   DEPOSIT
+  CREDIT
+  DEBIT
 }
 
 enum TransactionStatus {
@@ -221,8 +273,10 @@ enum AccountType {
   CHECKING
   SAVINGS
   CREDIT
+  LOAN
   BUSINESS
   INVESTMENT
+  OTHER
 }
 
 enum AccountStatus {

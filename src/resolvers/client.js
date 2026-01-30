@@ -1,45 +1,63 @@
 import Client from "../models/Client.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
+// ✅ Import des wrappers RBAC
 import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
+  requireRead,
+  requireWrite,
+  requireDelete,
+} from "../middlewares/rbac.js";
 import {
   createNotFoundError,
   createAlreadyExistsError,
   createResourceInUseError,
+  AppError,
+  ERROR_CODES,
 } from "../utils/errors.js";
 import mongoose from "mongoose";
 import { automationService } from "./clientAutomation.js";
 
 const clientResolvers = {
   Query: {
-    client: withWorkspace(
-      async (
-        _,
-        { id, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "view" sur "clients"
+    client: requireRead("clients")(
+      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+        const { workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const client = await Client.findOne({
           _id: id,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
         if (!client) throw createNotFoundError("Client");
         return client;
       }
     ),
 
-    clients: withWorkspace(
-      async (
-        _,
-        { page = 1, limit = 10, search, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "view" sur "clients"
+    clients: requireRead("clients")(
+      async (_, { page = 1, limit = 10, search, workspaceId: inputWorkspaceId }, context) => {
+        const { workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const query = {
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         };
 
         if (search) {
@@ -84,17 +102,23 @@ const clientResolvers = {
   },
 
   Mutation: {
-    createClient: withWorkspace(
-      async (
-        _,
-        { input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "create" sur "clients"
+    createClient: requireWrite("clients")(
+      async (_, { input, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
         const existingClient = await Client.findOne({
           email: input.email.toLowerCase(),
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (existingClient) {
@@ -142,7 +166,7 @@ const clientResolvers = {
           ...clientData,
           email: input.email.toLowerCase(),
           createdBy: user.id,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
           activity: [
             {
               id: new mongoose.Types.ObjectId().toString(),
@@ -162,7 +186,7 @@ const clientResolvers = {
         try {
           await automationService.executeAutomations(
             "CLIENT_CREATED",
-            finalWorkspaceId,
+            workspaceId,
             client._id.toString(),
             {}
           );
@@ -177,16 +201,23 @@ const clientResolvers = {
       }
     ),
 
-    updateClient: withWorkspace(
-      async (
-        _,
-        { id, input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
+    updateClient: requireWrite("clients")(
+      async (_, { id, input, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const client = await Client.findOne({
           _id: id,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (!client) {
@@ -197,7 +228,7 @@ const clientResolvers = {
         if (input.email && input.email !== client.email) {
           const existingClient = await Client.findOne({
             email: input.email.toLowerCase(),
-            workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
             _id: { $ne: id },
           });
 
@@ -316,16 +347,23 @@ const clientResolvers = {
       }
     ),
 
-    deleteClient: withWorkspace(
-      async (
-        _,
-        { id, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "delete" sur "clients"
+    deleteClient: requireDelete("clients")(
+      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+        const { workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const client = await Client.findOne({
           _id: id,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (!client) {
@@ -334,8 +372,8 @@ const clientResolvers = {
 
         // Vérifier si le client est utilisé dans des factures
         const invoiceCount = await Invoice.countDocuments({
-          "client.id": id, // Utiliser l'ID du client plutôt que l'email
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          "client.id": id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (invoiceCount > 0) {
@@ -344,8 +382,8 @@ const clientResolvers = {
 
         // Vérifier si le client est utilisé dans des devis
         const quoteCount = await Quote.countDocuments({
-          "client.id": id, // Utiliser l'ID du client plutôt que l'email
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          "client.id": id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (quoteCount > 0) {
@@ -354,22 +392,29 @@ const clientResolvers = {
 
         await Client.deleteOne({
           _id: id,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
         return true;
       }
     ),
 
-    addClientNote: withWorkspace(
-      async (
-        _,
-        { clientId, input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
+    addClientNote: requireWrite("clients")(
+      async (_, { clientId, input, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const client = await Client.findOne({
           _id: clientId,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (!client) {
@@ -406,16 +451,23 @@ const clientResolvers = {
       }
     ),
 
-    updateClientNote: withWorkspace(
-      async (
-        _,
-        { clientId, noteId, content, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
+    updateClientNote: requireWrite("clients")(
+      async (_, { clientId, noteId, content, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const client = await Client.findOne({
           _id: clientId,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (!client) {
@@ -451,16 +503,23 @@ const clientResolvers = {
       }
     ),
 
-    deleteClientNote: withWorkspace(
-      async (
-        _,
-        { clientId, noteId, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
-      ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    // ✅ Protégé par RBAC - nécessite la permission "delete" sur "clients"
+    deleteClientNote: requireDelete("clients")(
+      async (_, { clientId, noteId, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const client = await Client.findOne({
           _id: clientId,
-          workspaceId: new mongoose.Types.ObjectId(finalWorkspaceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
         if (!client) {
