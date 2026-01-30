@@ -31,8 +31,10 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
       return res.status(404).json({ error: "Transfert non trouvé" });
     }
 
-    // Trouver le fichier spécifique
-    const file = fileTransfer.files.find((f) => f._id.toString() === fileId);
+    // Trouver le fichier spécifique (vérifie _id ou fileId)
+    const file = fileTransfer.files.find(
+      (f) => f._id.toString() === fileId || f.fileId === fileId
+    );
     if (!file) {
       return res.status(404).json({ error: "Fichier non trouvé" });
     }

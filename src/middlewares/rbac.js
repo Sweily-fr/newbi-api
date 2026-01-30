@@ -97,6 +97,26 @@ const ROLE_PERMISSIONS = {
     team: ["view"],
     auditLog: ["view"],
   },
+
+  viewer: {
+    // Viewer a un accès en lecture seule à toutes les ressources
+    // Idéal pour les consultants, auditeurs, ou parties prenantes externes
+    quotes: ["view"],
+    invoices: ["view"],
+    creditNotes: ["view"],
+    expenses: ["view"],
+    payments: ["view"],
+    clients: ["view"],
+    products: ["view"],
+    suppliers: ["view"],
+    fileTransfers: ["view", "download"],
+    kanban: ["view"],
+    signatures: ["view"],
+    calendar: ["view"],
+    reports: ["view"],
+    analytics: ["view"],
+    team: ["view"],
+  },
 };
 
 /**
@@ -112,42 +132,78 @@ const PERMISSION_MAPPING = {
 /**
  * Récupère l'organisation active de l'utilisateur depuis Better Auth
  * @param {string} userId - ID de l'utilisateur
+ * @param {string} [requestedOrgId] - ID de l'organisation demandée (depuis le header x-organization-id)
  * @returns {Object|null} - Organisation ou null
  */
-async function getActiveOrganization(userId) {
+async function getActiveOrganization(userId, requestedOrgId = null) {
   try {
     const db = mongoose.connection.db;
     const memberCollection = db.collection("member");
     const { ObjectId } = mongoose.Types;
-    
+
     // Convertir userId en ObjectId si c'est une string
     const userObjectId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    
-    // Récupérer le membre avec son organisation
-    const member = await memberCollection.findOne({
-      userId: userObjectId,
-    });
-    
+
+    let member;
+
+    // ✅ FIX: Si une organisation spécifique est demandée, vérifier que l'utilisateur en est membre
+    if (requestedOrgId) {
+      const requestedOrgObjectId = typeof requestedOrgId === 'string'
+        ? new ObjectId(requestedOrgId)
+        : requestedOrgId;
+
+      member = await memberCollection.findOne({
+        userId: userObjectId,
+        organizationId: requestedOrgObjectId,
+      });
+
+      if (!member) {
+        logger.warn(`Utilisateur ${userId} n'est pas membre de l'organisation demandée: ${requestedOrgId}`);
+        return null;
+      }
+
+      logger.debug(`✅ Utilisateur ${userId} est membre de l'organisation ${requestedOrgId} avec le rôle ${member.role}`);
+    } else {
+      // Fallback: récupérer la première organisation (priorité: owner, puis admin, puis autres)
+      member = await memberCollection.findOne({
+        userId: userObjectId,
+        role: "owner",
+      });
+
+      if (!member) {
+        member = await memberCollection.findOne({
+          userId: userObjectId,
+          role: "admin",
+        });
+      }
+
+      if (!member) {
+        member = await memberCollection.findOne({
+          userId: userObjectId,
+        });
+      }
+    }
+
     if (!member) {
       logger.debug(`Aucune organisation trouvée pour l'utilisateur: ${userId}`);
       return null;
     }
-    
+
     // Récupérer les détails de l'organisation
     const organizationCollection = db.collection("organization");
-    const orgObjectId = typeof member.organizationId === 'string' 
-      ? new ObjectId(member.organizationId) 
+    const orgObjectId = typeof member.organizationId === 'string'
+      ? new ObjectId(member.organizationId)
       : member.organizationId;
-    
+
     const organization = await organizationCollection.findOne({
-      _id: orgObjectId, // ✅ Utiliser _id au lieu de id
+      _id: orgObjectId,
     });
-    
+
     if (!organization) {
       logger.warn(`Organisation ${member.organizationId} non trouvée pour le membre`);
       return null;
     }
-    
+
     // Retourner l'ID comme string pour compatibilité
     return {
       id: organization._id.toString(),
@@ -187,9 +243,13 @@ async function getMemberRole(organizationId, userId) {
       logger.debug(`Membre non trouvé pour org: ${organizationId}, user: ${userId}`);
       return null;
     }
-    
+
+    // ✅ FIX: Normaliser la casse du rôle en minuscules
+    // La BDD peut stocker "Owner" ou "Admin" avec majuscule
+    const normalizedRole = (member.role || "member").toLowerCase();
+
     return {
-      role: member.role || "member", // Par défaut "member"
+      role: normalizedRole,
       userId: member.userId,
       organizationId: member.organizationId,
       createdAt: member.createdAt,
@@ -208,20 +268,29 @@ async function getMemberRole(organizationId, userId) {
  * @returns {boolean} - True si autorisé
  */
 function hasPermission(role, resource, action) {
-  const rolePermissions = ROLE_PERMISSIONS[role];
-  
-  if (!rolePermissions) {
-    logger.warn(`Rôle inconnu: ${role}`);
+  // ✅ FIX: Normaliser la casse du rôle en minuscules pour éviter les erreurs
+  // La BDD peut stocker "Owner" mais ROLE_PERMISSIONS utilise "owner"
+  const normalizedRole = role?.toLowerCase();
+
+  if (!normalizedRole) {
+    logger.warn(`Rôle non défini ou null`);
     return false;
   }
-  
+
+  const rolePermissions = ROLE_PERMISSIONS[normalizedRole];
+
+  if (!rolePermissions) {
+    logger.warn(`Rôle inconnu: ${role} (normalisé: ${normalizedRole})`);
+    return false;
+  }
+
   const resourcePermissions = rolePermissions[resource];
-  
+
   if (!resourcePermissions) {
     // Si la ressource n'est pas définie, pas d'accès
     return false;
   }
-  
+
   return resourcePermissions.includes(action);
 }
 
@@ -256,30 +325,49 @@ export const withRBAC = (resolver, options = {}) => {
     try {
       // L'authentification a déjà été vérifiée par isAuthenticated
       // context.user existe et est valide
-      
+
       const userId = context.user._id.toString();
-      
-      // 2. Récupérer l'organisation active
-      const organization = await getActiveOrganization(userId);
-      
+
+      // ✅ FIX: Récupérer l'organisation demandée depuis le header
+      // Le frontend envoie x-organization-id pour indiquer quelle organisation est active
+      const requestedOrgId =
+        context.req?.headers?.["x-organization-id"] ||
+        context.req?.headers?.["x-workspace-id"] ||
+        args.workspaceId ||
+        args.organizationId;
+
+      // 2. Récupérer l'organisation active (en vérifiant que l'utilisateur en est membre)
+      const organization = await getActiveOrganization(userId, requestedOrgId);
+
       if (!organization) {
+        // Message d'erreur plus précis selon le cas
+        if (requestedOrgId) {
+          throw new AppError(
+            "Vous n'êtes pas membre de cette organisation ou elle n'existe pas.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
         throw new AppError(
           "Aucune organisation active trouvée. Veuillez rejoindre ou créer une organisation.",
           ERROR_CODES.FORBIDDEN
         );
       }
-      
+
       // 3. Récupérer le rôle de l'utilisateur dans l'organisation
       const member = await getMemberRole(organization.id, userId);
-      
+
       if (!member) {
         throw new AppError(
           "Vous n'êtes pas membre de cette organisation",
           ERROR_CODES.FORBIDDEN
         );
       }
-      
+
       const userRole = member.role;
+
+      logger.debug(
+        `🔐 RBAC: User ${userId} accède à org ${organization.id} avec rôle ${userRole}`
+      );
       
       // 4. Vérifier les permissions si spécifiées
       if (options.resource && (options.action || options.level)) {

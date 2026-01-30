@@ -27,7 +27,7 @@ const accountBankingSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ["checking", "savings", "credit", "loan", "investment"],
+      enum: ["checking", "savings", "credit", "loan", "business", "investment", "other"],
       default: "checking",
     },
 
@@ -154,7 +154,7 @@ accountBankingSchema.index({ provider: 1, externalId: 1 }, { unique: true });
 
 // Méthodes d'instance
 accountBankingSchema.methods.isActive = function () {
-  return this.status === "active";
+  return this.status?.toLowerCase() === "active";
 };
 
 accountBankingSchema.methods.hasLowBalance = function () {
@@ -178,7 +178,8 @@ accountBankingSchema.methods.updateBalance = function (newBalance) {
 
 // Méthodes statiques
 accountBankingSchema.statics.findByWorkspace = function (workspaceId) {
-  return this.find({ workspaceId, status: "active" });
+  // Accepte "active" et "ACTIVE" pour compatibilité
+  return this.find({ workspaceId, status: { $in: ["active", "ACTIVE"] } });
 };
 
 accountBankingSchema.statics.findByProvider = function (provider, externalId) {
@@ -186,7 +187,8 @@ accountBankingSchema.statics.findByProvider = function (provider, externalId) {
 };
 
 accountBankingSchema.statics.findActiveAccounts = function (userId) {
-  return this.find({ userId, status: "active" });
+  // Accepte "active" et "ACTIVE" pour compatibilité
+  return this.find({ userId, status: { $in: ["active", "ACTIVE"] } });
 };
 
 // Met à jour le statut de sync des transactions pour un compte

@@ -15,10 +15,10 @@ const ocrUsageSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Provider OCR (mindee, google-document-ai, mistral)
+    // Provider OCR (claude-vision, mindee, google-document-ai, mistral)
     provider: {
       type: String,
-      enum: ["mindee", "google-document-ai", "mistral"],
+      enum: ["claude-vision", "mindee", "google-document-ai", "mistral"],
       required: true,
     },
 
@@ -119,6 +119,7 @@ ocrUsageSchema.statics.incrementUsage = async function (
 
   // Définir les limites par provider
   const limits = {
+    "claude-vision": 999999, // Pas de limite, géré par UserOcrQuota
     mindee: 250,
     "google-document-ai": 1000,
     mistral: 999999, // Pas de limite réelle pour Mistral (payant)
@@ -170,6 +171,7 @@ ocrUsageSchema.statics.getUsageStats = async function (workspaceId) {
   });
 
   const result = {
+    "claude-vision": { used: 0, limit: 999999, available: 999999 },
     mindee: { used: 0, limit: 250, available: 250 },
     "google-document-ai": { used: 0, limit: 1000, available: 1000 },
     mistral: { used: 0, limit: 999999, available: 999999 },

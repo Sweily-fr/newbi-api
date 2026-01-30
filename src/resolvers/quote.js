@@ -375,8 +375,25 @@ const quoteResolvers = {
   Mutation: {
     createQuote: requireCompanyInfo(
       requireWrite("quotes")(
-        async (_, { workspaceId, input }, context) => {
-        const { user } = context;
+        async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
+        if (!workspaceId) {
+          throw new AppError(
+            "Aucune organisation spécifiée.",
+            ERROR_CODES.BAD_REQUEST
+          );
+        }
+
         console.log('🔍 [createQuote] Input received:', { prefix: input.prefix, number: input.number, status: input.status });
         
         // Utiliser le préfixe fourni, ou celui du dernier devis, ou 'D' par défaut
@@ -725,7 +742,8 @@ const quoteResolvers = {
     updateQuote: requireCompanyInfo(
       requireWrite("quotes")(async (_, { id, input }, context) => {
       const { user, workspaceId } = context;
-      const quote = await Quote.findOne({ _id: id, createdBy: user.id });
+      // ✅ FIX: Utiliser workspaceId au lieu de createdBy pour permettre aux membres de l'org de voir/modifier
+      const quote = await Quote.findOne({ _id: id, workspaceId: workspaceId });
 
       if (!quote) {
         throw createNotFoundError("Devis");
@@ -861,7 +879,8 @@ const quoteResolvers = {
     deleteQuote: requireCompanyInfo(
       requireDelete("quotes")(async (_, { id }, context) => {
       const { user, workspaceId } = context;
-      const quote = await Quote.findOne({ _id: id, createdBy: user.id });
+      // ✅ FIX: Utiliser workspaceId au lieu de createdBy
+      const quote = await Quote.findOne({ _id: id, workspaceId: workspaceId });
 
       if (!quote) {
         throw createNotFoundError("Devis");
@@ -881,15 +900,16 @@ const quoteResolvers = {
         );
       }
 
-      await Quote.deleteOne({ _id: id, createdBy: user.id });
+      await Quote.deleteOne({ _id: id, workspaceId: workspaceId });
       return true;
       })
     ),
 
     changeQuoteStatus: requireCompanyInfo(
       requireWrite("quotes")(async (_, { id, status }, context) => {
-      const { user } = context;
-      const quote = await Quote.findOne({ _id: id, createdBy: user.id });
+      const { user, workspaceId } = context;
+      // ✅ FIX: Utiliser workspaceId au lieu de createdBy
+      const quote = await Quote.findOne({ _id: id, workspaceId: workspaceId });
 
       if (!quote) {
         throw createNotFoundError("Devis");
@@ -1068,8 +1088,9 @@ const quoteResolvers = {
 
     convertQuoteToInvoice: requireWrite("quotes")(
       async (_, { id, distribution, isDeposit, skipValidation }, context) => {
-        const { user } = context;
-        const quote = await Quote.findOne({ _id: id, createdBy: user.id });
+        const { user, workspaceId } = context;
+        // ✅ FIX: Utiliser workspaceId au lieu de createdBy
+        const quote = await Quote.findOne({ _id: id, workspaceId: workspaceId });
 
         if (!quote) {
           throw createNotFoundError("Devis");
@@ -1484,8 +1505,9 @@ const quoteResolvers = {
     ),
 
     sendQuote: requireWrite("quotes")(async (_, { id /* email */ }, context) => {
-      const { user } = context;
-      const quote = await Quote.findOne({ _id: id, createdBy: user.id });
+      const { user, workspaceId } = context;
+      // ✅ FIX: Utiliser workspaceId au lieu de createdBy
+      const quote = await Quote.findOne({ _id: id, workspaceId: workspaceId });
 
       if (!quote) {
         throw createNotFoundError("Devis");

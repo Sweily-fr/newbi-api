@@ -182,13 +182,9 @@ const invoiceResolvers = {
           ];
         }
 
-        // ✅ Filtrage par rôle utilisateur dans le workspace
-        const { userRole } = context;
-        if (userRole === "viewer") {
-          // Les viewers ne voient que leurs propres factures
-          query.createdBy = user._id;
-        }
-        // Les membres et admins voient toutes les factures du workspace
+        // ✅ Tous les utilisateurs avec permission "view" voient les factures du workspace
+        // Les viewers ont accès en lecture seule à TOUTES les ressources de l'organisation
+        // (pas de filtre par createdBy pour les viewers)
 
         const skip = (page - 1) * limit;
         const totalCount = await Invoice.countDocuments(query);
@@ -216,10 +212,8 @@ const invoiceResolvers = {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
         };
 
-        // Filtrage par rôle si nécessaire (viewer voit seulement ses propres factures)
-        if (userRole === "viewer") {
-          matchQuery.createdBy = new mongoose.Types.ObjectId(user._id);
-        }
+        // ✅ Tous les utilisateurs avec permission "view" voient les stats du workspace
+        // (pas de filtre par createdBy pour les viewers)
 
         const [stats] = await Invoice.aggregate([
           { $match: matchQuery },
@@ -511,8 +505,27 @@ const invoiceResolvers = {
 
   Mutation: {
     createInvoice: requireCompanyInfo(
-      requireWrite("invoices")(async (_, { workspaceId, input }, context) => {
+      requireWrite("invoices")(async (_, { workspaceId: inputWorkspaceId, input }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        // Évite qu'un utilisateur puisse créer une facture dans une autre organisation
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+
+        // Utiliser le workspaceId du contexte par défaut, ou celui fourni s'il est valide
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
+        if (!workspaceId) {
+          throw new AppError(
+            "Aucune organisation spécifiée.",
+            ERROR_CODES.BAD_REQUEST
+          );
+        }
 
         // ✅ Les permissions sont déjà vérifiées par requireWrite("invoices")
 
@@ -1109,8 +1122,17 @@ const invoiceResolvers = {
 
     updateInvoice: requireCompanyInfo(
       requireWrite("invoices")(
-        async (_, { id, workspaceId, input }, context) => {
+        async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
           const { user, workspaceId: contextWorkspaceId } = context;
+
+          // ✅ FIX: Valider que le workspaceId correspond au contexte
+          if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+            throw new AppError(
+              "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+              ERROR_CODES.FORBIDDEN
+            );
+          }
+          const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
           // Rechercher la facture sans utiliser Mongoose pour éviter les validations automatiques
           const invoiceData = await Invoice.findOne({
@@ -1620,8 +1642,17 @@ const invoiceResolvers = {
     ),
 
     deleteInvoice: requireDelete("invoices")(
-      async (_, { id, workspaceId }, context) => {
+      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
         // ✅ Les permissions de suppression sont déjà vérifiées par requireDelete("invoices")
 
@@ -1687,8 +1718,17 @@ const invoiceResolvers = {
     ),
 
     changeInvoiceStatus: requireWrite("invoices")(
-      async (_, { id, workspaceId, status }, context) => {
+      async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
         const invoice = await Invoice.findOne({
           _id: id,
@@ -1847,8 +1887,17 @@ const invoiceResolvers = {
     ),
 
     markInvoiceAsPaid: requireWrite("invoices")(
-      async (_, { id, workspaceId, paymentDate }, context) => {
+      async (_, { id, workspaceId: inputWorkspaceId, paymentDate }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
         const invoice = await Invoice.findOne({
           _id: id,
@@ -1974,8 +2023,18 @@ const invoiceResolvers = {
     ),
 
     sendInvoice: requireWrite("invoices")(
-      async (_, { id, workspaceId }, context) => {
-        const { user } = context;
+      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const invoice = await Invoice.findOne({ _id: id, workspaceId });
 
         if (!invoice) {
@@ -1991,8 +2050,18 @@ const invoiceResolvers = {
     ),
 
     createLinkedInvoice: requireWrite("invoices")(
-      async (_, { quoteId, amount, isDeposit, workspaceId }, context) => {
+      async (_, { quoteId, amount, isDeposit, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         // Validation et conversion explicite du montant
         const numericAmount = parseFloat(amount);
         if (isNaN(numericAmount) || numericAmount <= 0) {
@@ -2235,8 +2304,18 @@ const invoiceResolvers = {
     ),
 
     deleteLinkedInvoice: requireDelete("invoices")(
-      async (_, { id, workspaceId }, context) => {
-        const { user } = context;
+      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // ✅ FIX: Valider que le workspaceId correspond au contexte
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
         const invoice = await Invoice.findOne({ _id: id, workspaceId });
 
         if (!invoice) {

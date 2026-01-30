@@ -1,99 +1,13 @@
 import { gql } from "apollo-server-express";
 
+// NOTE: Ce fichier est DEPRECATED. Les types sont maintenant définis dans:
+// - src/schemas/types/banking.graphql (Transaction type et enums)
+// - src/schemas/transaction.graphql (Response types et queries legacy)
+// Ce fichier n'est plus chargé par le serveur GraphQL.
+
 const transactionTypeDefs = gql`
-  # Types pour les transactions
-  type Transaction {
-    id: ID!
-    amount: Float!
-    currency: String!
-    description: String!
-    date: String!
-    type: TransactionType!
-    category: TransactionCategory!
-    status: TransactionStatus!
-    formattedAmount: String!
-    formattedDate: String!
-    bridgeTransactionId: String
-    bridgeAccountId: String
-  }
-
-  # Énumérations
-  enum TransactionType {
-    debit
-    credit
-  }
-
-  enum TransactionCategory {
-    alimentation
-    transport
-    logement
-    sante
-    loisirs
-    shopping
-    services
-    salaire
-    virement
-    autre
-  }
-
-  enum TransactionStatus {
-    pending
-    completed
-    failed
-    cancelled
-  }
-
-  # Types de réponse
-  type TransactionResponse {
-    success: Boolean!
-    message: String
-    transactions: [Transaction!]
-  }
-
-  type SyncTransactionResponse {
-    success: Boolean!
-    message: String
-    stats: SyncStats
-  }
-
-  type SyncStats {
-    created: Int!
-    updated: Int!
-    errors: Int!
-  }
-
-  type TransactionStatsResponse {
-    success: Boolean!
-    stats: TransactionStats
-  }
-
-  type TransactionStats {
-    totalIncome: Float!
-    totalExpenses: Float!
-    balance: Float!
-    transactionCount: Int!
-    categoryBreakdown: [CategoryBreakdown!]!
-  }
-
-  type CategoryBreakdown {
-    category: String!
-    amount: Float!
-    percentage: Float!
-  }
-
-  # Extensions des types existants
-  extend type Query {
-    # Récupère les transactions récentes de l'utilisateur
-    getRecentTransactions(limit: Int): TransactionResponse!
-
-    # Récupère les statistiques des transactions
-    getTransactionStats: TransactionStatsResponse!
-  }
-
-  extend type Mutation {
-    # Synchronise les transactions Bridge avec la base de données locale
-    syncBridgeTransactions: SyncTransactionResponse!
-  }
+  # DEPRECATED - See src/schemas/types/banking.graphql
+  # Ce fichier n'est plus utilisé, conservé pour référence historique
 `;
 
 export default transactionTypeDefs;

@@ -175,6 +175,9 @@ const bankingResolvers = {
     createTransaction: withWorkspace(async (parent, { input }, { user }) => {
       const { v4: uuidv4 } = await import("uuid");
 
+      // Normaliser la catégorie (fallback "OTHER" si non spécifiée)
+      const category = input.category || "OTHER";
+
       const transaction = new Transaction({
         externalId: `manual-${uuidv4()}`,
         provider: "manual",
@@ -186,7 +189,8 @@ const bankingResolvers = {
         workspaceId: input.workspaceId,
         userId: user._id,
         date: input.date || new Date(),
-        expenseCategory: input.category,
+        category: category,          // Catégorie pour l'affichage
+        expenseCategory: category,   // Catégorie pour le reporting
         metadata: {
           vendor: input.vendor,
           notes: input.notes,
@@ -209,7 +213,10 @@ const bankingResolvers = {
         if (input.description) updateData.description = input.description;
         if (input.type) updateData.type = input.type.toLowerCase();
         if (input.date) updateData.date = input.date;
-        if (input.category) updateData.expenseCategory = input.category;
+        if (input.category) {
+          updateData.category = input.category;         // Catégorie pour l'affichage
+          updateData.expenseCategory = input.category;  // Catégorie pour le reporting
+        }
         if (input.vendor) updateData["metadata.vendor"] = input.vendor;
         if (input.notes) updateData["metadata.notes"] = input.notes;
         if (input.tags) updateData["metadata.tags"] = input.tags;
@@ -524,6 +531,43 @@ const bankingResolvers = {
   // Résolveurs de types
   Transaction: {
     id: (parent) => parent._id?.toString() || parent.id,
+    // Les enum resolvers gèrent la conversion - garder en minuscules
+    status: (parent) => (parent.status || "pending").toLowerCase(),
+    type: (parent) => (parent.type || "debit").toLowerCase(),
+    provider: (parent) => (parent.provider || "bridge").toLowerCase(),
+    // Champ date pour le tri et l'affichage
+    date: (parent) => parent.date || parent.createdAt,
+    // Champs de rapprochement
+    linkedInvoiceId: (parent) => parent.linkedInvoiceId?.toString() || null,
+    linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
+    reconciliationStatus: (parent) => {
+      const status = parent.reconciliationStatus || "unmatched";
+      return status.toUpperCase();
+    },
+    reconciliationDate: (parent) => parent.reconciliationDate || null,
+    // Resolver pour la facture liée (charge les détails de la facture)
+    linkedInvoice: async (parent) => {
+      if (!parent.linkedInvoiceId) return null;
+      try {
+        const Invoice = (await import("../models/Invoice.js")).default;
+        const invoice = await Invoice.findById(parent.linkedInvoiceId).lean();
+        if (!invoice) return null;
+        return {
+          id: invoice._id.toString(),
+          number: invoice.number,
+          status: invoice.status,
+          clientName: invoice.client?.name ||
+            `${invoice.client?.firstName || ""} ${invoice.client?.lastName || ""}`.trim() ||
+            "Client inconnu",
+          totalTTC: invoice.finalTotalTTC || invoice.totalTTC || 0,
+          issueDate: invoice.issueDate,
+          dueDate: invoice.dueDate,
+        };
+      } catch (error) {
+        console.error("[BANKING] Erreur chargement facture liée:", error);
+        return null;
+      }
+    },
     userId: async (transaction) => {
       if (transaction.userId && typeof transaction.userId === "object") {
         return transaction.userId; // Déjà populé
@@ -537,9 +581,10 @@ const bankingResolvers = {
   AccountBanking: {
     id: (parent) => parent._id?.toString() || parent.id,
     externalId: (parent) => parent.externalId || "",
-    provider: (parent) => parent.provider?.toLowerCase() || "bridge",
-    type: (parent) => parent.type?.toLowerCase() || "checking",
-    status: (parent) => parent.status?.toLowerCase() || "active",
+    // Les enum resolvers gèrent la conversion - garder en minuscules
+    provider: (parent) => (parent.provider || "bridge").toLowerCase(),
+    type: (parent) => (parent.type || "checking").toLowerCase(),
+    status: (parent) => (parent.status || "active").toLowerCase(),
     balance: (parent) => ({
       available:
         typeof parent.balance === "number"
@@ -564,9 +609,18 @@ const bankingResolvers = {
     // Nouveau: statut de synchronisation des transactions
     transactionSync: (parent) => {
       const sync = parent.transactionSync || {};
+      // Mapping des valeurs DB vers GraphQL enum
+      const statusMap = {
+        pending: "PENDING",
+        in_progress: "IN_PROGRESS",
+        complete: "COMPLETE",
+        partial: "PARTIAL",
+        failed: "FAILED",
+      };
+      const rawStatus = (sync.status || "pending").toLowerCase();
       return {
         lastSyncAt: sync.lastSyncAt || null,
-        status: (sync.status || "pending").toUpperCase(),
+        status: statusMap[rawStatus] || "PENDING",
         totalTransactions: sync.totalTransactions || 0,
         oldestTransactionDate: sync.oldestTransactionDate || null,
         newestTransactionDate: sync.newestTransactionDate || null,
@@ -588,6 +642,7 @@ const bankingResolvers = {
     STRIPE: "stripe",
     PAYPAL: "paypal",
     MOCK: "mock",
+    MANUAL: "manual",
   },
 
   TransactionType: {
@@ -596,6 +651,8 @@ const bankingResolvers = {
     TRANSFER: "transfer",
     WITHDRAWAL: "withdrawal",
     DEPOSIT: "deposit",
+    CREDIT: "credit",
+    DEBIT: "debit",
   },
 
   TransactionStatus: {
@@ -610,8 +667,10 @@ const bankingResolvers = {
     CHECKING: "checking",
     SAVINGS: "savings",
     CREDIT: "credit",
+    LOAN: "loan",
     BUSINESS: "business",
     INVESTMENT: "investment",
+    OTHER: "other",
   },
 
   AccountStatus: {
