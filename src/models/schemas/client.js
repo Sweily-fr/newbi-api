@@ -115,15 +115,17 @@ const clientSchema = new mongoose.Schema({
   vatNumber: {
     type: String,
     trim: true,
-    match: [VAT_FR_REGEX, 'Veuillez fournir un numéro de TVA valide (format FR)'],
-    // Requis uniquement pour les entreprises
+    // Validation du format uniquement si une valeur est fournie
     validate: {
       validator: function(v) {
-        // Si ce n'est pas une entreprise, pas besoin de numéro de TVA
-        // Si c'est une entreprise, le numéro de TVA est obligatoire
-        return this.type !== CLIENT_TYPES.COMPANY || (v && v.trim().length > 0);
+        // Si le champ est vide ou undefined, c'est valide (optionnel)
+        if (!v || v.trim() === '') {
+          return true;
+        }
+        // Si une valeur est fournie, elle doit respecter le format FR
+        return VAT_FR_REGEX.test(v);
       },
-      message: 'Le numéro de TVA est requis pour une entreprise'
+      message: 'Veuillez fournir un numéro de TVA valide (format FR, ex: FR12345678901)'
     }
   }
 });
