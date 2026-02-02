@@ -97,31 +97,36 @@ const clientSchema = new mongoose.Schema({
       message: 'L\'adresse de livraison est requise lorsque l\'option "Adresse de livraison différente" est activée'
     }
   },
-  // Champs spécifiques aux entreprises
+  // Indique si l'entreprise est hors France (pas de validation SIRET/TVA stricte)
+  isInternational: {
+    type: Boolean,
+    default: false
+  },
+  // Champs spécifiques aux entreprises (SIRET/SIREN pour FR, autre identifiant pour international)
   siret: {
     type: String,
     trim: true,
-    match: [SIRET_REGEX, 'Veuillez fournir un numéro SIRET valide (14 chiffres)'],
-    // Requis uniquement pour les entreprises
+    // Obligatoire pour les entreprises, mais pas de validation de format strict
     validate: {
       validator: function(v) {
         // Si ce n'est pas une entreprise, pas besoin de SIRET
-        // Si c'est une entreprise, le SIRET est obligatoire
-        return this.type !== CLIENT_TYPES.COMPANY || (v && v.trim().length > 0);
+        if (this.type !== CLIENT_TYPES.COMPANY) return true;
+        // Pour les entreprises, un identifiant est obligatoire
+        return v && v.trim().length > 0;
       },
-      message: 'Le numéro SIRET est requis pour une entreprise'
+      message: 'Un numéro d\'identification (SIRET/SIREN ou équivalent) est requis pour une entreprise'
     }
   },
   vatNumber: {
     type: String,
     trim: true,
-    // Validation du format uniquement si une valeur est fournie
+    // Validation du format uniquement si une valeur est fournie et client non international
     validate: {
       validator: function(v) {
+        // Pour les entreprises internationales, pas de validation stricte
+        if (this.isInternational) return true;
         // Si le champ est vide ou undefined, c'est valide (optionnel)
-        if (!v || v.trim() === '') {
-          return true;
-        }
+        if (!v || v.trim() === '') return true;
         // Si une valeur est fournie, elle doit respecter le format FR
         return VAT_FR_REGEX.test(v);
       },
