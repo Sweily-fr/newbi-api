@@ -127,6 +127,52 @@ const calculateInvoiceTotals = (
   };
 };
 
+/**
+ * Valide que la date d'émission d'une facture n'est pas antérieure
+ * à la date d'émission de la dernière facture existante (non-brouillon)
+ * @param {Date|String} issueDate - Date d'émission de la nouvelle facture
+ * @param {String} workspaceId - ID du workspace
+ * @param {String} excludeInvoiceId - ID de la facture à exclure (pour les mises à jour)
+ */
+const validateInvoiceIssueDate = async (
+  issueDate,
+  workspaceId,
+  excludeInvoiceId = null
+) => {
+  const query = {
+    workspaceId,
+    status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+  };
+
+  // Exclure la facture en cours de modification si applicable
+  if (excludeInvoiceId) {
+    query._id = { $ne: excludeInvoiceId };
+  }
+
+  // Trouver la facture avec la date d'émission la plus récente
+  const latestInvoice = await Invoice.findOne(query)
+    .sort({ issueDate: -1 })
+    .select("issueDate number prefix")
+    .lean();
+
+  if (latestInvoice) {
+    const newIssueDate = new Date(issueDate);
+    newIssueDate.setHours(0, 0, 0, 0);
+
+    const latestIssueDate = new Date(latestInvoice.issueDate);
+    latestIssueDate.setHours(0, 0, 0, 0);
+
+    if (newIssueDate < latestIssueDate) {
+      throw createValidationError(
+        "La date d'émission ne peut pas être antérieure à celle de la dernière facture existante",
+        {
+          issueDate: `Une facture (${latestInvoice.prefix}${latestInvoice.number}) existe déjà avec la date du ${latestIssueDate.toLocaleDateString("fr-FR")}. La nouvelle facture doit avoir une date égale ou postérieure.`,
+        }
+      );
+    }
+  }
+};
+
 const invoiceResolvers = {
   Query: {
     invoice: requireRead("invoices")(
@@ -821,6 +867,11 @@ const invoiceResolvers = {
 
             number = sequentialNumber;
           }
+        }
+
+        // Valider la date d'émission pour les factures non-brouillons
+        if (input.status !== "DRAFT") {
+          await validateInvoiceIssueDate(input.issueDate, workspaceId);
         }
 
         // Calculer les totaux avec la remise et la livraison
@@ -1768,23 +1819,13 @@ const invoiceResolvers = {
           throw createStatusTransitionError("Facture", invoice.status, status);
         }
 
-        // Vérifier que la date d'émission n'est pas inférieure à la date actuelle lors du passage de DRAFT à PENDING
+        // Vérifier que la date d'émission n'est pas antérieure à celle de la dernière facture existante
         if (invoice.status === "DRAFT" && status === "PENDING") {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0); // Réinitialiser l'heure pour comparer uniquement les dates
-
-          const issueDate = new Date(invoice.issueDate);
-          issueDate.setHours(0, 0, 0, 0);
-
-          if (issueDate < today) {
-            throw createValidationError(
-              "La date d'émission ne peut pas être antérieure à la date actuelle pour une facture en statut 'PENDING'",
-              {
-                issueDate:
-                  "La date d'émission doit être égale ou postérieure à la date actuelle",
-              }
-            );
-          }
+          await validateInvoiceIssueDate(
+            invoice.issueDate,
+            workspaceId,
+            invoice._id
+          );
         }
 
         // Si la facture passe de DRAFT à PENDING, générer un nouveau numéro séquentiel
