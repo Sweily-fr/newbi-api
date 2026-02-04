@@ -111,65 +111,103 @@ function generatePaymentReceivedHtml({
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Paiement reçu - Newbi</title>
+  <title>Confirmation de paiement</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       line-height: 1.6;
-      color: #333;
+      color: #1f2937;
       margin: 0;
-      padding: 20px;
-      background-color: #f8f9fa;
+      padding: 0;
+      background-color: #f3f4f6;
     }
-    .container {
-      max-width: 500px;
+    .email-wrapper {
+      max-width: 600px;
       margin: 0 auto;
       background-color: #ffffff;
-      border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
     }
     .header {
       text-align: center;
-      padding: 30px 20px;
-      border-bottom: 1px solid #e5e7eb;
+      padding: 40px 20px 20px;
+      background-color: #ffffff;
     }
     .logo {
-      width: 120px;
-      height: auto;
+      font-size: 32px;
+      font-weight: 700;
+      color: #000000;
+      letter-spacing: -1px;
+    }
+    .header-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #1f2937;
+      margin: 30px 0 10px;
+    }
+    .header-date {
+      font-size: 16px;
+      color: #9ca3af;
+      margin: 0;
     }
     .content {
-      padding: 30px 20px;
-      text-align: center;
+      background-color: #ffffff;
+      padding: 40px 20px;
     }
-    .amount {
-      font-size: 32px;
-      font-weight: 800;
-      color: #10b981;
-      margin: 20px 0;
+    .card {
+      background-color: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 30px;
+      margin: 0 auto;
+      max-width: 500px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background-color: #f3f4f6;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #1f2937;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 24px;
+    }
+    .title {
+      font-size: 28px;
+      font-weight: 700;
+      color: #1f2937;
+      margin: 0 0 24px 0;
+      line-height: 1.3;
+    }
+    .greeting {
+      font-size: 16px;
+      color: #1f2937;
+      margin: 0 0 16px 0;
     }
     .message {
-      font-size: 18px;
-      color: #4b5563;
-      margin-bottom: 30px;
+      font-size: 16px;
+      color: #6b7280;
+      margin: 0 0 32px 0;
+      line-height: 1.5;
     }
-    .details {
-      background-color: #f8fafc;
+    .details-table {
+      width: 100%;
+      background-color: #f9fafb;
       border-radius: 8px;
       padding: 20px;
-      margin: 20px 0;
-      text-align: left;
+      margin: 24px 0;
     }
     .detail-row {
       display: flex;
       justify-content: space-between;
-      margin-bottom: 10px;
-      padding-bottom: 10px;
+      padding: 12px 0;
       border-bottom: 1px solid #e5e7eb;
     }
     .detail-row:last-child {
-      margin-bottom: 0;
-      padding-bottom: 0;
       border-bottom: none;
     }
     .detail-label {
@@ -177,87 +215,147 @@ function generatePaymentReceivedHtml({
       font-size: 14px;
     }
     .detail-value {
-      font-weight: 600;
       color: #1f2937;
       font-size: 14px;
+      font-weight: 600;
+      text-align: right;
+    }
+    .amount-value {
+      color: #10b981;
+      font-size: 18px;
+      font-weight: 700;
     }
     .btn {
-      display: inline-block;
+      display: block;
+      width: 100%;
       background-color: #1f2937;
-      color: white;
-      font-weight: 600;
+      color: #ffffff;
+      text-align: center;
       text-decoration: none;
-      padding: 12px 24px;
+      padding: 16px 24px;
       border-radius: 8px;
-      margin: 20px 0;
+      font-size: 16px;
+      font-weight: 600;
+      margin: 32px 0 0 0;
     }
     .footer {
       text-align: center;
-      padding: 20px;
-      color: #6b7280;
-      font-size: 12px;
-      background-color: #f8f9fa;
+      padding: 40px 20px;
+      background-color: #ffffff;
+    }
+    .footer-logo {
+      font-size: 48px;
+      color: #5b50ff;
+      margin-bottom: 16px;
+    }
+    .footer-tagline {
+      font-size: 20px;
+      font-weight: 600;
+      color: #1f2937;
+      margin: 0 0 24px 0;
+    }
+    .footer-text {
+      font-size: 14px;
+      color: #9ca3af;
+      margin: 0 0 8px 0;
+    }
+    .footer-link {
+      color: #9ca3af;
+      text-decoration: underline;
+    }
+    .footer-company {
+      font-size: 14px;
+      color: #9ca3af;
+      margin: 24px 0 8px 0;
+    }
+    .footer-address {
+      font-size: 14px;
+      color: #5b50ff;
+      text-decoration: none;
     }
 
-    /* Mobile responsive */
     @media (max-width: 600px) {
-      body {
-        padding: 10px;
-      }
-      .container {
-        margin: 0;
+      .header {
+        padding: 30px 15px 15px;
       }
       .content {
-        padding: 20px 15px;
+        padding: 30px 15px;
       }
-      .amount {
-        font-size: 28px;
+      .card {
+        padding: 20px;
       }
-      .message {
-        font-size: 16px;
-      }
-      .details {
-        padding: 15px;
+      .title {
+        font-size: 24px;
       }
       .detail-row {
         flex-direction: column;
-        gap: 5px;
+        gap: 4px;
+        padding: 10px 0;
+      }
+      .detail-value {
+        text-align: left;
       }
     }
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="email-wrapper">
+    <!-- Header -->
     <div class="header">
-      <img src="${process.env.AWS_S3_API_URL || "https://via.placeholder.com/120x40/000000/FFFFFF?text=NEWBI"}/logobewbi/Logo_Texte_Black.png" alt="Newbi" class="logo">
+      <div class="logo">newbi.</div>
+      <p class="header-title">Confirmation de paiement</p>
+      <p class="header-date">${paymentDate}</p>
     </div>
 
+    <!-- Content -->
     <div class="content">
-      <div class="amount">+${totalAmount}</div>
+      <div class="card">
+        <div class="badge">
+          <span>📧</span>
+          <span>PAIEMENT</span>
+        </div>
 
-      <p class="message">Le paiement de votre facture a été reçu !</p>
+        <h1 class="title">Votre paiement a été confirmé</h1>
 
-      <div class="details">
-        <div class="detail-row">
-          <span class="detail-label">Numéro de facture</span>
-          <span class="detail-value">${invoiceNumber}</span>
+        <p class="greeting">Bonjour ${userName},</p>
+
+        <p class="message">Merci pour votre paiement ! La facture <strong>${invoiceNumber}</strong> a été automatiquement marquée comme payée.</p>
+
+        <div class="details-table">
+          <div class="detail-row">
+            <span class="detail-label">N° de facture</span>
+            <span class="detail-value">${invoiceNumber}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Client</span>
+            <span class="detail-value">${clientName}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Date de paiement</span>
+            <span class="detail-value">${paymentDate}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Montant payé</span>
+            <span class="amount-value">${totalAmount}</span>
+          </div>
         </div>
-        <div class="detail-row">
-          <span class="detail-label">Client</span>
-          <span class="detail-value">${clientName}</span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">Date</span>
-          <span class="detail-value">${paymentDate}</span>
-        </div>
+
+        <a href="${process.env.FRONTEND_URL}/dashboard/factures" class="btn">Accéder à mon espace</a>
       </div>
-
-      <a href="${process.env.FRONTEND_URL}/dashboard/factures" class="btn">Voir mes factures</a>
     </div>
 
+    <!-- Footer -->
     <div class="footer">
-      <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
-      <p>Questions ? <a href="mailto:contact@newbi.fr" style="color: #5b50ff;">contact@newbi.fr</a></p>
+      <div class="footer-logo">ni</div>
+      <p class="footer-tagline">Votre gestion, simplifiée.</p>
+      <p class="footer-text">
+        Vous recevez cet email suite à votre paiement sur Newbi. •
+        <a href="${process.env.FRONTEND_URL}/faq" class="footer-link">FAQ</a>
+      </p>
+      <p class="footer-company">SWEILY (SAS),</p>
+      <a href="https://www.google.com/maps/place/229+Rue+Saint-Honor%C3%A9,+75001+Paris" class="footer-address">
+        229 rue Saint-Honoré, 75001 Paris, FRANCE
+      </a>
     </div>
   </div>
 </body>
