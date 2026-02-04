@@ -109,101 +109,157 @@ function generatePaymentReceivedHtml({
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Paiement reçu</title>
+  <title>Paiement reçu - Newbi</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+      background-color: #f8f9fa;
+    }
+    .container {
+      max-width: 500px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    .header {
+      text-align: center;
+      padding: 30px 20px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .logo {
+      width: 120px;
+      height: auto;
+    }
+    .content {
+      padding: 30px 20px;
+      text-align: center;
+    }
+    .amount {
+      font-size: 32px;
+      font-weight: 800;
+      color: #10b981;
+      margin: 20px 0;
+    }
+    .message {
+      font-size: 18px;
+      color: #4b5563;
+      margin-bottom: 30px;
+    }
+    .details {
+      background-color: #f8fafc;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      text-align: left;
+    }
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .detail-row:last-child {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+    .detail-label {
+      color: #6b7280;
+      font-size: 14px;
+    }
+    .detail-value {
+      font-weight: 600;
+      color: #1f2937;
+      font-size: 14px;
+    }
+    .btn {
+      display: inline-block;
+      background-color: #1f2937;
+      color: white;
+      font-weight: 600;
+      text-decoration: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+    .footer {
+      text-align: center;
+      padding: 20px;
+      color: #6b7280;
+      font-size: 12px;
+      background-color: #f8f9fa;
+    }
+
+    /* Mobile responsive */
+    @media (max-width: 600px) {
+      body {
+        padding: 10px;
+      }
+      .container {
+        margin: 0;
+      }
+      .content {
+        padding: 20px 15px;
+      }
+      .amount {
+        font-size: 28px;
+      }
+      .message {
+        font-size: 16px;
+      }
+      .details {
+        padding: 15px;
+      }
+      .detail-row {
+        flex-direction: column;
+        gap: 5px;
+      }
+    }
+  </style>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f6f9fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Ubuntu, sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f6f9fc; padding: 40px 0;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-          <!-- Header -->
-          <tr>
-            <td style="padding: 32px 48px; border-bottom: 1px solid #e6ebf1; text-align: center;">
-              <h1 style="margin: 0; font-size: 24px; font-weight: bold; color: #1a1a1a;">${companyName}</h1>
-            </td>
-          </tr>
-          
-          <!-- Badge -->
-          <tr>
-            <td style="padding: 24px 0; text-align: center;">
-              <span style="display: inline-block; padding: 8px 20px; background-color: #10b981; color: #ffffff; border-radius: 20px; font-size: 12px; font-weight: bold; text-transform: uppercase;">
-                ✓ Paiement reçu
-              </span>
-            </td>
-          </tr>
-          
-          <!-- Content -->
-          <tr>
-            <td style="padding: 0 48px 32px;">
-              <h2 style="color: #1a1a1a; font-size: 24px; font-weight: bold; margin: 0 0 24px; text-align: center;">
-                Bonne nouvelle ! 🎉
-              </h2>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 0 0 16px;">
-                Bonjour ${userName},
-              </p>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 0 0 24px;">
-                Nous avons le plaisir de vous informer que le paiement de la facture <strong>${invoiceNumber}</strong> a été reçu.
-              </p>
-              
-              <!-- Details Box -->
-              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; margin: 24px 0;">
-                <tr>
-                  <td style="padding: 24px;">
-                    <p style="font-size: 14px; font-weight: bold; color: #1a1a1a; margin: 0 0 16px; text-transform: uppercase; letter-spacing: 0.5px;">
-                      Détails du paiement
-                    </p>
-                    <table width="100%" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Numéro de facture</td>
-                        <td style="color: #1a1a1a; font-size: 14px; padding: 8px 0; text-align: right; font-weight: 500;">${invoiceNumber}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Client</td>
-                        <td style="color: #1a1a1a; font-size: 14px; padding: 8px 0; text-align: right; font-weight: 500;">${clientName}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Montant reçu</td>
-                        <td style="color: #10b981; font-size: 16px; padding: 8px 0; text-align: right; font-weight: bold;">${totalAmount}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Date de paiement</td>
-                        <td style="color: #1a1a1a; font-size: 14px; padding: 8px 0; text-align: right; font-weight: 500;">${paymentDate}</td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 0 0 16px;">
-                La facture a été automatiquement marquée comme payée dans votre espace Newbi.
-              </p>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 32px 0 0;">
-                Cordialement,<br>
-                L'équipe Newbi
-              </p>
-            </td>
-          </tr>
-          
-          <!-- Footer -->
-          <tr>
-            <td style="padding: 24px 48px; border-top: 1px solid #e6ebf1; background-color: #fafafa;">
-              <p style="color: #8898aa; font-size: 12px; line-height: 16px; margin: 0; text-align: center;">
-                Cet email a été envoyé automatiquement par Newbi.
-              </p>
-              <p style="color: #8898aa; font-size: 12px; line-height: 16px; margin: 4px 0 0; text-align: center;">
-                Vous recevez cet email car vous avez activé les notifications de paiement.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="${process.env.AWS_S3_API_URL || "https://via.placeholder.com/120x40/000000/FFFFFF?text=NEWBI"}/logobewbi/Logo_Texte_Black.png" alt="Newbi" class="logo">
+    </div>
+
+    <div class="content">
+      <div class="amount">+${totalAmount}</div>
+
+      <p class="message">Le paiement de votre facture a été reçu !</p>
+
+      <div class="details">
+        <div class="detail-row">
+          <span class="detail-label">Numéro de facture</span>
+          <span class="detail-value">${invoiceNumber}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Client</span>
+          <span class="detail-value">${clientName}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Date</span>
+          <span class="detail-value">${paymentDate}</span>
+        </div>
+      </div>
+
+      <a href="${process.env.FRONTEND_URL}/dashboard/factures" class="btn">Voir mes factures</a>
+    </div>
+
+    <div class="footer">
+      <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
+      <p>Questions ? <a href="mailto:contact@newbi.fr" style="color: #5b50ff;">contact@newbi.fr</a></p>
+    </div>
+  </div>
 </body>
 </html>
   `.trim();
