@@ -95,7 +95,7 @@ function formatDate(date) {
 }
 
 /**
- * Génère le HTML pour l'email "Paiement reçu"
+ * Génère le HTML pour l'email "Paiement reçu" - Style Qonto
  */
 function generatePaymentReceivedHtml({
   invoiceNumber,
@@ -107,103 +107,106 @@ function generatePaymentReceivedHtml({
 }) {
   return `
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Paiement reçu</title>
+  <title>Paiement confirmé</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f6f9fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Ubuntu, sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f6f9fc; padding: 40px 0;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-          <!-- Header -->
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
+  <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
+
+    <!-- Logo -->
+    <div style="text-align: center; padding: 40px 0 24px 0;">
+      <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
+    </div>
+
+    <!-- Type de notification -->
+    <div style="text-align: center; margin-bottom: 8px;">
+      <span style="font-size: 11px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.5px; text-transform: uppercase;">
+        CONFIRMATION DE PAIEMENT
+      </span>
+    </div>
+
+    <!-- Date -->
+    <div style="text-align: center; margin-bottom: 32px;">
+      <span style="font-size: 12px; color: #6b7280;">
+        ${paymentDate}
+      </span>
+    </div>
+
+    <!-- Carte principale -->
+    <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
+
+      <!-- Icône -->
+      <div style="margin-bottom: 20px;">
+        <div style="display: inline-flex; align-items: center; background-color: #f3f4f6; border-radius: 6px; padding: 8px 12px;">
+          <img src="https://pub-f5ac1d55852142ab931dc75bdc939d68.r2.dev/mail.png" alt="Mail" style="height: 16px; width: 16px; margin-right: 8px;">
+          <span style="font-size: 11px; font-weight: 500; color: #374151; letter-spacing: 0.3px; text-transform: uppercase;">PAIEMENT</span>
+        </div>
+      </div>
+
+      <!-- Titre -->
+      <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
+        Votre paiement a été confirmé
+      </h1>
+
+      <!-- Salutation -->
+      <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">
+        Bonjour${userName ? ` ${userName}` : ""},
+      </p>
+
+      <!-- Message -->
+      <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
+        Merci pour votre paiement ! La facture <strong style="color: #1a1a1a;">${invoiceNumber}</strong> a été automatiquement marquée comme payée.
+      </p>
+
+      <!-- Détails -->
+      <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+        <table style="width: 100%; border-collapse: collapse;">
           <tr>
-            <td style="padding: 32px 48px; border-bottom: 1px solid #e6ebf1; text-align: center;">
-              <h1 style="margin: 0; font-size: 24px; font-weight: bold; color: #1a1a1a;">${companyName}</h1>
-            </td>
+            <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">N° de facture</td>
+            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${invoiceNumber}</td>
           </tr>
-          
-          <!-- Badge -->
           <tr>
-            <td style="padding: 24px 0; text-align: center;">
-              <span style="display: inline-block; padding: 8px 20px; background-color: #10b981; color: #ffffff; border-radius: 20px; font-size: 12px; font-weight: bold; text-transform: uppercase;">
-                ✓ Paiement reçu
-              </span>
-            </td>
+            <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Client</td>
+            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${clientName}</td>
           </tr>
-          
-          <!-- Content -->
           <tr>
-            <td style="padding: 0 48px 32px;">
-              <h2 style="color: #1a1a1a; font-size: 24px; font-weight: bold; margin: 0 0 24px; text-align: center;">
-                Bonne nouvelle ! 🎉
-              </h2>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 0 0 16px;">
-                Bonjour ${userName},
-              </p>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 0 0 24px;">
-                Nous avons le plaisir de vous informer que le paiement de la facture <strong>${invoiceNumber}</strong> a été reçu.
-              </p>
-              
-              <!-- Details Box -->
-              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; margin: 24px 0;">
-                <tr>
-                  <td style="padding: 24px;">
-                    <p style="font-size: 14px; font-weight: bold; color: #1a1a1a; margin: 0 0 16px; text-transform: uppercase; letter-spacing: 0.5px;">
-                      Détails du paiement
-                    </p>
-                    <table width="100%" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Numéro de facture</td>
-                        <td style="color: #1a1a1a; font-size: 14px; padding: 8px 0; text-align: right; font-weight: 500;">${invoiceNumber}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Client</td>
-                        <td style="color: #1a1a1a; font-size: 14px; padding: 8px 0; text-align: right; font-weight: 500;">${clientName}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Montant reçu</td>
-                        <td style="color: #10b981; font-size: 16px; padding: 8px 0; text-align: right; font-weight: bold;">${totalAmount}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #6b7280; font-size: 14px; padding: 8px 0;">Date de paiement</td>
-                        <td style="color: #1a1a1a; font-size: 14px; padding: 8px 0; text-align: right; font-weight: 500;">${paymentDate}</td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 0 0 16px;">
-                La facture a été automatiquement marquée comme payée dans votre espace Newbi.
-              </p>
-              
-              <p style="color: #525f7f; font-size: 16px; line-height: 24px; margin: 32px 0 0;">
-                Cordialement,<br>
-                L'équipe Newbi
-              </p>
-            </td>
+            <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date de paiement</td>
+            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right;">${paymentDate}</td>
           </tr>
-          
-          <!-- Footer -->
-          <tr>
-            <td style="padding: 24px 48px; border-top: 1px solid #e6ebf1; background-color: #fafafa;">
-              <p style="color: #8898aa; font-size: 12px; line-height: 16px; margin: 0; text-align: center;">
-                Cet email a été envoyé automatiquement par Newbi.
-              </p>
-              <p style="color: #8898aa; font-size: 12px; line-height: 16px; margin: 4px 0 0; text-align: center;">
-                Vous recevez cet email car vous avez activé les notifications de paiement.
-              </p>
-            </td>
+          <tr style="border-top: 1px solid #e5e7eb;">
+            <td style="padding: 12px 0 6px 0; font-size: 14px; color: #6b7280; font-weight: 500;">Montant payé</td>
+            <td style="padding: 12px 0 6px 0; font-size: 16px; color: #10b981; font-weight: 600; text-align: right;">${totalAmount}</td>
           </tr>
         </table>
-      </td>
-    </tr>
-  </table>
+      </div>
+
+      <!-- Bouton CTA -->
+      <a href="${process.env.FRONTEND_URL}/dashboard/factures" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
+        Accéder à mon espace
+      </a>
+    </div>
+
+    <!-- Footer -->
+    <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center; padding-bottom: 40px;">
+      <div style="margin-bottom: 16px;">
+        <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height: 28px; width: auto;">
+      </div>
+      <p style="font-size: 13px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0;">
+        Votre gestion, simplifiée.
+      </p>
+      <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
+        Vous recevez cet email suite à votre paiement sur Newbi. • <a href="https://newbi.fr/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+      </p>
+      <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+        <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
+        <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+      </div>
+    </div>
+
+  </div>
 </body>
 </html>
   `.trim();

@@ -286,10 +286,10 @@ class SuperPdpService {
     const lines = (invoice.items || []).map((item, index) => {
       const quantity = parseFloat(item.quantity) || 1;
       const unitPrice = parseFloat(item.unitPrice) || 0;
-      const vatRate = parseFloat(item.vatRate) || 20;
+      const vatRate = item.vatRate != null ? parseFloat(item.vatRate) : 20;
       const discount = parseFloat(item.discount) || 0;
       const discountType = item.discountType || "PERCENTAGE";
-      const progressPercentage = parseFloat(item.progressPercentage) || 100;
+      const progressPercentage = item.progressPercentage != null ? parseFloat(item.progressPercentage) : 100;
 
       // Calculer le montant HT de la ligne
       let lineAmount = quantity * unitPrice * (progressPercentage / 100);
@@ -332,7 +332,7 @@ class SuperPdpService {
     const vatGroups = {};
 
     (invoice.items || []).forEach((item) => {
-      const vatRate = parseFloat(item.vatRate) || 20;
+      const vatRate = item.vatRate != null ? parseFloat(item.vatRate) : 20;
       const quantity = parseFloat(item.quantity) || 1;
       const unitPrice = parseFloat(item.unitPrice) || 0;
       let lineAmount = quantity * unitPrice;

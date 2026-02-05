@@ -148,7 +148,7 @@ function transformOcrToInvoiceData(ocrResult, financialAnalysis) {
     quantity: parseFloat(item.quantity) || 1,
     unitPrice: parseFloat(item.unit_price) || 0,
     totalPrice: parseFloat(item.total) || 0,
-    vatRate: parseFloat(item.vat_rate) || 20,
+    vatRate: item.vat_rate != null ? parseFloat(item.vat_rate) : 20,
     productCode: item.product_code || null,
   }));
 
@@ -301,7 +301,7 @@ function transformOcrToInvoiceDataV2(ocrResult, extractionResult) {
     unitPrice:
       parseFloat(item.unit_price_ht) || parseFloat(item.unit_price_ttc) || 0,
     totalPrice: parseFloat(item.total_ttc) || parseFloat(item.total_ht) || 0,
-    vatRate: parseFloat(item.vat_rate) || 20,
+    vatRate: item.vat_rate != null ? parseFloat(item.vat_rate) : 20,
     productCode: item.code || null,
     unit: item.unit || "unité",
   }));
