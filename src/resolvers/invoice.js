@@ -709,7 +709,7 @@ const invoiceResolvers = {
               const discount = parseFloat(item.discount) || 0;
               const discountType = item.discountType || "PERCENTAGE";
               const progressPercentage =
-                parseFloat(item.progressPercentage) || 100;
+                item.progressPercentage != null ? parseFloat(item.progressPercentage) : 100;
 
               // Calculer le total HT de la ligne avec avancement
               let lineHT = quantity * unitPrice * (progressPercentage / 100);
@@ -1385,7 +1385,7 @@ const invoiceResolvers = {
                 const discount = parseFloat(item.discount) || 0;
                 const discountType = item.discountType || "PERCENTAGE";
                 const progressPercentage =
-                  parseFloat(item.progressPercentage) || 100;
+                  item.progressPercentage != null ? parseFloat(item.progressPercentage) : 100;
 
                 // Calculer le total HT de la ligne avec avancement
                 let lineHT = quantity * unitPrice * (progressPercentage / 100);

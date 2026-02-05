@@ -962,7 +962,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
         unit: item.unit || "unité",
         unit_price_ht: this.validateAmount(item.unitPriceHT),
         unit_price_ttc: this.validateAmount(item.unitPriceTTC),
-        vat_rate: this.validateAmount(item.vatRate) || 20,
+        vat_rate: this.validateAmount(item.vatRate) ?? 20,
         total_ht: this.validateAmount(item.totalHT),
         total_ttc: this.validateAmount(item.totalTTC),
       }));
