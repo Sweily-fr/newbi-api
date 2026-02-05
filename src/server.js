@@ -417,8 +417,10 @@ function formatError(error) {
   if (originalError?.name === "AppError") {
     return {
       message: originalError.message,
-      code: originalError.code,
-      details: originalError.details,
+      extensions: {
+        code: originalError.code,
+        details: originalError.details,
+      },
       path: error.path,
     };
   }
@@ -426,15 +428,19 @@ function formatError(error) {
   if (error.extensions?.code === "BAD_USER_INPUT") {
     return {
       message: "Données d'entrée invalides",
-      code: "VALIDATION_ERROR",
-      details: error.extensions.exception?.validationErrors,
+      extensions: {
+        code: "VALIDATION_ERROR",
+        details: error.extensions.exception?.validationErrors,
+      },
       path: error.path,
     };
   }
 
   return {
     message: error.message,
-    code: error.extensions?.code || "INTERNAL_ERROR",
+    extensions: {
+      code: error.extensions?.code || "INTERNAL_ERROR",
+    },
     path: error.path,
   };
 }
