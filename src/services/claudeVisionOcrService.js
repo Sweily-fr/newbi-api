@@ -549,7 +549,7 @@ class ClaudeVisionOcrService {
           unit: item.unit,
           unit_price_ht: item.unit_price_ht,
           unit_price_ttc: item.unit_price_ht
-            ? item.unit_price_ht * (1 + (item.vat_rate || 20) / 100)
+            ? item.unit_price_ht * (1 + (item.vat_rate ?? 20) / 100)
             : null,
           vat_rate: item.vat_rate,
           total_ht: item.total_ht,
