@@ -31,7 +31,7 @@ type ClientActivity {
   field: String
   oldValue: String
   newValue: String
-  userId: ID!
+  userId: ID
   userName: String
   userImage: String
   createdAt: String!
