@@ -13,7 +13,10 @@ async function processCrmEmailAutomations() {
   console.log('📧 [CrmEmailAutomation] Démarrage du processus d\'envoi automatique...');
   
   try {
-    const currentHour = new Date().getHours();
+    // Utiliser explicitement le fuseau horaire Europe/Paris pour correspondre au cron
+    const currentHour = parseInt(
+      new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris', hour: 'numeric', hour12: false })
+    );
     
     // Récupérer toutes les automatisations actives pour cette heure
     const activeAutomations = await CrmEmailAutomation.find({ 
@@ -129,11 +132,17 @@ async function findClientsWithDateField(workspaceId, customFieldId, targetDate) 
   
   // Format de date stocké: YYYY-MM-DD
   const dateString = targetDate.toISOString().split('T')[0];
-  
+
   // Rechercher les clients avec ce champ personnalisé à cette date
+  // customFields est un tableau de {fieldId, value} — utiliser $elemMatch
   const clients = await Client.find({
     workspaceId,
-    [`customFields.${customFieldId}`]: dateString,
+    customFields: {
+      $elemMatch: {
+        fieldId: customFieldId,
+        value: dateString
+      }
+    },
     email: { $exists: true, $ne: '' }
   });
   
@@ -146,12 +155,18 @@ async function findClientsWithDateField(workspaceId, customFieldId, targetDate) 
 async function sendEmailToClient(automation, customField, client, triggerDate) {
   try {
     // Vérifier si un email a déjà été envoyé pour cette combinaison
+    // Ne pas muter triggerDate — créer des copies pour les bornes de la journée
+    const dayStart = new Date(triggerDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(triggerDate);
+    dayEnd.setHours(23, 59, 59, 999);
+
     const existingLog = await CrmEmailAutomationLog.findOne({
       automationId: automation._id,
       clientId: client._id,
       triggerDate: {
-        $gte: new Date(triggerDate.setHours(0, 0, 0, 0)),
-        $lte: new Date(triggerDate.setHours(23, 59, 59, 999))
+        $gte: dayStart,
+        $lte: dayEnd
       }
     });
     
@@ -166,9 +181,11 @@ async function sendEmailToClient(automation, customField, client, triggerDate) {
       return false;
     }
     
-    // Récupérer la valeur du champ personnalisé
-    const customFieldValue = client.customFields?.get(customField.id.toString()) || 
-                            client.customFields?.[customField.id.toString()] || '';
+    // Récupérer la valeur du champ personnalisé (customFields est un tableau de {fieldId, value})
+    const customFieldEntry = client.customFields?.find(
+      cf => cf.fieldId?.toString() === customField.id.toString()
+    );
+    const customFieldValue = customFieldEntry?.value || '';
     
     // Préparer les variables
     const variables = {
