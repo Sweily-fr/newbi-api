@@ -2130,6 +2130,56 @@ const resolvers = {
       }
     ),
 
+    // Réinitialiser le timer
+    resetTimer: withWorkspace(
+      async (
+        _,
+        { taskId, workspaceId },
+        { user, workspaceId: contextWorkspaceId }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+        try {
+          const task = await Task.findOne({
+            _id: taskId,
+            workspaceId: finalWorkspaceId,
+          });
+          if (!task) throw new Error("Task not found");
+
+          // Arrêter le timer s'il est en cours
+          if (task.timeTracking?.isRunning) {
+            task.timeTracking.isRunning = false;
+            task.timeTracking.currentStartTime = null;
+            task.timeTracking.startedBy = null;
+          }
+
+          // Réinitialiser le temps et les entrées
+          task.timeTracking.totalSeconds = 0;
+          task.timeTracking.entries = [];
+
+          await task.save();
+
+          // Publier l'événement
+          safePublish(
+            `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+            {
+              type: "TIMER_RESET",
+              task: task,
+              taskId: task._id,
+              boardId: task.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Timer réinitialisé"
+          );
+
+          return task;
+        } catch (error) {
+          logger.error("Error resetting timer:", error);
+          throw new Error(error.message || "Failed to reset timer");
+        }
+      }
+    ),
+
     // Mettre à jour les paramètres du timer
     updateTimerSettings: withWorkspace(
       async (

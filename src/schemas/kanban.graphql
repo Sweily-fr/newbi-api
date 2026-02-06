@@ -271,6 +271,7 @@ type Mutation {
   
   startTimer(taskId: ID!, workspaceId: ID): Task!
   stopTimer(taskId: ID!, workspaceId: ID): Task!
+  resetTimer(taskId: ID!, workspaceId: ID): Task!
   updateTimerSettings(taskId: ID!, hourlyRate: Float, roundingOption: String, workspaceId: ID): Task!
   
   # Mutations pour les images de tâches
