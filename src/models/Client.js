@@ -339,6 +339,11 @@ const clientSchema = new mongoose.Schema(
           documentNumber: String,
           status: String,
           originalInvoiceNumber: String, // Pour les avoirs
+          // Champs pour les automatisations email CRM
+          automationId: String,
+          automationName: String,
+          customFieldName: String,
+          customFieldValue: String,
         },
         createdAt: {
           type: Date,
