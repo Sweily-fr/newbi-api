@@ -35,34 +35,64 @@ class OcrCacheService {
    * Initialise la connexion Redis
    */
   async init() {
-    const redisUrl = process.env.REDIS_URL || process.env.REDIS_HOST
-      ? `redis://${process.env.REDIS_HOST || "localhost"}:${process.env.REDIS_PORT || 6379}`
-      : null;
+    const redisUrl = process.env.REDIS_URL;
+    const redisHost = process.env.REDIS_HOST;
 
-    if (!redisUrl) {
+    if (!redisUrl && !redisHost) {
       console.log("ℹ️ OCR Cache: Redis non configuré, cache désactivé");
       return;
     }
 
     try {
-      this.client = createClient({
-        url: redisUrl,
-        password: process.env.REDIS_PASSWORD || undefined,
-        database: parseInt(process.env.REDIS_DB || "0"),
-      });
+      let redisOptions;
+
+      if (redisUrl) {
+        // REDIS_URL (staging/production) — l'URL peut contenir l'auth
+        redisOptions = {
+          url: redisUrl,
+          socket: {
+            reconnectStrategy: (retries) => {
+              if (retries > 5) return false; // Stop après 5 tentatives
+              return Math.min(retries * 100, 500);
+            },
+          },
+        };
+      } else {
+        // REDIS_HOST/PORT (local)
+        redisOptions = {
+          socket: {
+            host: redisHost || "localhost",
+            port: parseInt(process.env.REDIS_PORT || "6379"),
+            reconnectStrategy: (retries) => {
+              if (retries > 5) return false;
+              return Math.min(retries * 100, 500);
+            },
+          },
+          database: parseInt(process.env.REDIS_DB || "0"),
+        };
+
+        if (process.env.REDIS_PASSWORD) {
+          redisOptions.password = process.env.REDIS_PASSWORD;
+        }
+      }
+
+      this.client = createClient(redisOptions);
 
       this.client.on("error", (err) => {
-        console.warn("⚠️ OCR Cache Redis error:", err.message);
+        if (!this._errorLogged) {
+          console.warn("⚠️ OCR Cache Redis error:", err.message);
+          this._errorLogged = true;
+        }
         this.isConnected = false;
       });
 
       this.client.on("connect", () => {
         console.log("✅ OCR Cache: Connecté à Redis");
         this.isConnected = true;
+        this._errorLogged = false;
       });
 
       this.client.on("disconnect", () => {
-        console.log("ℹ️ OCR Cache: Déconnecté de Redis");
         this.isConnected = false;
       });
 
