@@ -106,7 +106,7 @@ Règles:
 // Configuration des modèles
 const MODELS = {
   SONNET: process.env.CLAUDE_VISION_MODEL || "claude-sonnet-4-20250514",
-  HAIKU: process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-20250514",
+  HAIKU: process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-20251001",
 };
 
 // Seuils de complexité
