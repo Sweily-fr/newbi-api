@@ -2,6 +2,7 @@
  * Resolvers GraphQL pour les factures importées
  */
 
+import mongoose from "mongoose";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
@@ -17,22 +18,87 @@ import {
 // Limite maximale d'import en lot
 const MAX_BATCH_IMPORT = 100;
 
+// Cache mémoire pour les plans utilisateurs (évite une requête MongoDB par import dans un batch)
+const planCache = new Map();
+const PLAN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Mapping des noms de plan Better Auth/Stripe → clés PLAN_QUOTAS
+const PLAN_NAME_MAP = {
+  freelance: "FREELANCE",
+  pme: "TPE",
+  entreprise: "ENTREPRISE",
+};
+
 /**
- * Récupère le plan de l'utilisateur depuis son organisation
- * TODO: À adapter selon votre logique de plans/subscriptions
+ * Récupère le plan de l'utilisateur depuis sa subscription Stripe/Better Auth
  */
 async function getUserPlan(userId, workspaceId) {
-  // Par défaut, retourner FREE
-  // Vous pouvez adapter cette fonction pour récupérer le plan
-  // depuis votre système de subscriptions (Stripe, etc.)
+  const defaultPlan = process.env.DEFAULT_USER_PLAN || "FREE";
+
+  if (!workspaceId) {
+    return defaultPlan;
+  }
+
+  // Vérifier le cache
+  const cacheKey = String(workspaceId);
+  const cached = planCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < PLAN_CACHE_TTL) {
+    return cached.plan;
+  }
+
   try {
-    // Exemple: chercher dans une collection Organization ou Subscription
-    // const org = await Organization.findById(workspaceId);
-    // return org?.subscription?.plan || "FREE";
-    return process.env.DEFAULT_USER_PLAN || "FREE";
+    const db = mongoose.connection.db;
+    if (!db) {
+      console.warn("⚠️ getUserPlan: connexion MongoDB non disponible");
+      return defaultPlan;
+    }
+
+    // Chercher la subscription active avec les deux formats d'ID (string et ObjectId)
+    let subscription = null;
+    try {
+      const { ObjectId } = mongoose.Types;
+      const orgObjectId = new ObjectId(workspaceId);
+      subscription = await db.collection("subscription").findOne({
+        $and: [
+          {
+            $or: [
+              { referenceId: cacheKey },
+              { referenceId: orgObjectId },
+              { organizationId: cacheKey },
+              { organizationId: orgObjectId },
+            ],
+          },
+          { status: { $in: ["active", "trialing"] } },
+        ],
+      });
+    } catch {
+      // Si workspaceId n'est pas un ObjectId valide, chercher uniquement en string
+      subscription = await db.collection("subscription").findOne({
+        $and: [
+          {
+            $or: [
+              { referenceId: cacheKey },
+              { organizationId: cacheKey },
+            ],
+          },
+          { status: { $in: ["active", "trialing"] } },
+        ],
+      });
+    }
+
+    const plan = subscription?.plan
+      ? PLAN_NAME_MAP[subscription.plan] || defaultPlan
+      : defaultPlan;
+
+    console.log(`📋 getUserPlan: workspace=${cacheKey}, subscription=${subscription?.plan || "none"}, plan=${plan}`);
+
+    // Mettre en cache
+    planCache.set(cacheKey, { plan, timestamp: Date.now() });
+
+    return plan;
   } catch (error) {
     console.warn("⚠️ Erreur récupération plan utilisateur:", error.message);
-    return "FREE";
+    return defaultPlan;
   }
 }
 
