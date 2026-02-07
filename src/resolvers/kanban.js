@@ -2253,6 +2253,28 @@ const resolvers = {
       }).sort("position");
       return await enrichTasksWithUserInfo(tasks);
     },
+    totalBillableAmount: async (board) => {
+      const tasks = await Task.find({
+        boardId: board.id,
+        workspaceId: board.workspaceId,
+      });
+      let total = 0;
+      for (const task of tasks) {
+        const tt = task.timeTracking;
+        if (!tt || !tt.hourlyRate || tt.hourlyRate <= 0) continue;
+        let totalSeconds = tt.totalSeconds || 0;
+        if (tt.isRunning && tt.currentStartTime) {
+          totalSeconds += Math.floor((Date.now() - new Date(tt.currentStartTime).getTime()) / 1000);
+        }
+        if (totalSeconds <= 0) continue;
+        const hours = totalSeconds / 3600;
+        let billableHours = hours;
+        if (tt.roundingOption === 'up') billableHours = Math.ceil(hours);
+        else if (tt.roundingOption === 'down') billableHours = Math.floor(hours);
+        total += billableHours * tt.hourlyRate;
+      }
+      return total > 0 ? total : null;
+    },
     members: async (board) => {
       try {
         const db = mongoose.connection.db;
