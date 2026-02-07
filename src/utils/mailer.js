@@ -1261,167 +1261,124 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
       })
     : null;
 
+  const todayFormatted = new Date().toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
   const mailOptions = {
     from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: assigneeEmail,
-    subject: `📋 Nouvelle tâche assignée : ${taskTitle}`,
+    subject: `Nouvelle tâche assignée : ${taskTitle}`,
     html: `
       <!DOCTYPE html>
-      <html>
+      <html lang="fr">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Nouvelle tâche assignée</title>
-        <style>
-          body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            margin: 0;
-            padding: 0;
-            background-color: #f0eeff;
-          }
-          .container {
-            max-width: 600px;
-            margin: 40px auto;
-            padding: 20px;
-            background-color: #ffffff;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-          }
-          .header {
-            text-align: left;
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
-          }
-          .content {
-            padding: 30px 20px;
-          }
-          h1 {
-            color: #1f2937;
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 20px;
-          }
-          p {
-            margin-bottom: 16px;
-            color: #4b5563;
-          }
-          .btn {
-            display: inline-block;
-            background-color: #5b50ff;
-            color: white;
-            font-weight: 600;
-            text-decoration: none;
-            padding: 12px 24px;
-            border-radius: 6px;
-            margin: 20px 0;
-            text-align: center;
-          }
-          .btn:hover {
-            background-color: #4a41e0;
-          }
-          .task-card {
-            background-color: #f9fafb;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 20px 0;
-          }
-          .task-title {
-            font-size: 18px;
-            font-weight: 700;
-            color: #1f2937;
-            margin-bottom: 10px;
-          }
-          .task-description {
-            color: #6b7280;
-            font-size: 14px;
-            margin-bottom: 15px;
-            white-space: pre-wrap;
-          }
-          .task-meta {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-            margin-top: 15px;
-          }
-          .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 13px;
-            color: #6b7280;
-          }
-          .priority-badge {
-            display: inline-block;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 600;
-          }
-          .footer {
-            text-align: center;
-            padding: 20px;
-            color: #6b7280;
-            font-size: 14px;
-            border-top: 1px solid #e5e7eb;
-          }
-        </style>
       </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo%2Btexte.png" alt="Newbi" style="width: 120px; height: auto;">
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
+
+          <!-- Logo -->
+          <div style="text-align: center; padding: 40px 0 24px 0;">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
           </div>
-          
-          <div class="content">
-            <h1>📋 Nouvelle tâche assignée</h1>
-            <p>Bonjour,</p>
-            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
-              ${assignerImage ? `<img src="${assignerImage}" alt="${assignerName}" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;">` : `<div style="width: 48px; height: 48px; border-radius: 50%; background-color: #5b50ff; color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 18px;">${assignerName ? assignerName.charAt(0).toUpperCase() : "?"}</div>`}
-              <p style="margin: 0;"><strong>${assignerName}</strong> vous a assigné une nouvelle tâche sur le tableau <strong>${boardName}</strong>.</p>
-            </div>
-            
-            <div class="task-card">
-              <div class="task-title">${taskTitle}</div>
-              ${taskDescription ? `<div class="task-description">${taskDescription.substring(0, 200)}${taskDescription.length > 200 ? "..." : ""}</div>` : ""}
-              
-              <div class="task-meta">
-                <div class="meta-item">
-                  <span>📁</span>
-                  <span>Colonne : <strong>${columnName || "Non spécifiée"}</strong></span>
-                </div>
-                ${dueDateFormatted ? `
-                <div class="meta-item">
-                  <span>📅</span>
-                  <span>Échéance : <strong>${dueDateFormatted}</strong></span>
-                </div>
-                ` : ""}
-                <div class="meta-item">
-                  <span>🎯</span>
-                  <span style="background-color: ${priorityInfo.bg}; color: ${priorityInfo.color}; padding: 2px 8px; border-radius: 4px; font-weight: 600;">
-                    Priorité ${priorityInfo.label}
-                  </span>
-                </div>
+
+          <!-- Type de notification -->
+          <div style="text-align: center; margin-bottom: 8px;">
+            <span style="font-size: 11px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.5px; text-transform: uppercase;">
+              NOUVELLE TÂCHE ASSIGNÉE
+            </span>
+          </div>
+
+          <!-- Date -->
+          <div style="text-align: center; margin-bottom: 32px;">
+            <span style="font-size: 12px; color: #6b7280;">
+              ${todayFormatted}
+            </span>
+          </div>
+
+          <!-- Carte principale -->
+          <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
+
+            <!-- Icône -->
+            <div style="margin-bottom: 20px;">
+              <div style="display: inline-block; background-color: #f3f4f6; border-radius: 6px; padding: 8px 12px;">
+                <span style="font-size: 11px; font-weight: 500; color: #374151; letter-spacing: 0.3px; text-transform: uppercase;">TÂCHE</span>
               </div>
             </div>
-            
-            <div style="text-align: center;">
-              <a href="${taskUrl}" class="btn">Voir la tâche</a>
-            </div>
-            
-            <p style="font-size: 14px; color: #6b7280;">
-              Si le bouton ne fonctionne pas, vous pouvez copier et coller le lien suivant dans votre navigateur :
+
+            <!-- Titre -->
+            <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
+              ${taskTitle}
+            </h1>
+
+            <!-- Salutation -->
+            <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">
+              Bonjour,
             </p>
-            <p style="word-break: break-all; color: #5b50ff; font-size: 14px;">${taskUrl}</p>
+
+            <!-- Message -->
+            <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
+              <strong style="color: #1a1a1a;">${assignerName}</strong> vous a assigné une nouvelle tâche sur le tableau <strong style="color: #1a1a1a;">${boardName}</strong>.
+            </p>
+
+            ${taskDescription ? `
+            <!-- Description -->
+            <p style="font-size: 14px; color: #6b7280; margin: 0 0 24px 0; line-height: 1.6; white-space: pre-wrap;">${taskDescription.substring(0, 200)}${taskDescription.length > 200 ? "..." : ""}</p>
+            ` : ""}
+
+            <!-- Détails -->
+            <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Tableau</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${boardName}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Colonne</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${columnName || "Non spécifiée"}</td>
+                </tr>
+                ${dueDateFormatted ? `
+                <tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Échéance</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right;">${dueDateFormatted}</td>
+                </tr>
+                ` : ""}
+                <tr style="border-top: 1px solid #e5e7eb;">
+                  <td style="padding: 12px 0 6px 0; font-size: 14px; color: #6b7280; font-weight: 500;">Priorité</td>
+                  <td style="padding: 12px 0 6px 0; font-size: 14px; font-weight: 600; text-align: right; color: ${priorityInfo.color};">${priorityInfo.label}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- Bouton CTA -->
+            <a href="${taskUrl}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
+              Voir la tâche
+            </a>
           </div>
-          
-          <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
-            <p>Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
+
+          <!-- Footer -->
+          <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center; padding-bottom: 40px;">
+            <div style="margin-bottom: 16px;">
+              <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height: 28px; width: auto;">
+            </div>
+            <p style="font-size: 13px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0;">
+              Votre gestion, simplifiée.
+            </p>
+            <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
+              Vous recevez cet email car une tâche vous a été assignée sur Newbi. • <a href="https://newbi.fr/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+            </p>
+            <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+              <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
+              <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+            </div>
           </div>
+
         </div>
       </body>
       </html>
