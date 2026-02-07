@@ -322,6 +322,76 @@ Upload image → hybridOcrService.js
 
 ---
 
+## Système de Relances Automatiques de Factures
+
+### Architecture
+
+```
+Cron (toutes les heures)
+    ↓
+invoiceReminderCron.js → Trouve les workspaces avec relances activées
+    ↓
+reminderQueue.js (BullMQ) → Queue les jobs de relance
+    ↓
+invoiceReminderService.js → Détermine quelles factures relancer
+    ↓
+emailReminderService.js → Envoie via SMTP (Nodemailer)
+    ↓
+InvoiceReminderLog → Audit trail
+```
+
+### Fichiers Clés
+
+| Fichier | Rôle |
+|---------|------|
+| `src/cron/invoiceReminderCron.js` | Cron job (`0 * * * *` = chaque heure) |
+| `src/queues/reminderQueue.js` | Queue BullMQ (5 workers, rate limit 10/s) |
+| `src/services/invoiceReminderService.js` | Logique métier (1ère/2ème relance) |
+| `src/services/emailReminderService.js` | Envoi SMTP + génération PDF |
+| `src/emails/invoice-reminder.jsx` | Template React Email |
+| `src/models/InvoiceReminderSettings.js` | Configuration par workspace |
+| `src/models/InvoiceReminderLog.js` | Historique des relances |
+
+### Configuration Workspace
+
+| Paramètre | Description | Défaut |
+|-----------|-------------|--------|
+| `enabled` | Activer/désactiver les relances | `false` |
+| `firstReminderDays` | Jours après échéance pour 1ère relance | `7` |
+| `secondReminderDays` | Jours après échéance pour 2ème relance | `14` |
+| `reminderHour` | Heure d'envoi (0-23) | `9` |
+| `excludedClientIds` | Liste des clients exclus | `[]` |
+| `firstReminderSubject` | Sujet email 1ère relance | Template par défaut |
+| `secondReminderSubject` | Sujet email 2ème relance | Template par défaut |
+| `firstReminderBody` | Corps email 1ère relance | Template par défaut |
+| `secondReminderBody` | Corps email 2ème relance | Template par défaut |
+
+### Variables de Template
+
+Les templates de relance supportent les variables suivantes :
+
+- `{invoiceNumber}` — Numéro de la facture
+- `{clientName}` — Nom du client
+- `{totalAmount}` — Montant total TTC
+- `{dueDate}` — Date d'échéance
+- `{companyName}` — Nom de l'entreprise émettrice
+
+### Flux de Relance
+
+```
+Facture impayée + date échéance dépassée
+    ↓
+Vérification : workspace.enabled && !client.excluded
+    ↓
+Si aucune relance → 1ère relance après firstReminderDays
+    ↓
+Si 1 relance → 2ème relance après secondReminderDays
+    ↓
+Email envoyé + InvoiceReminderLog créé
+```
+
+---
+
 ## Logging & Monitoring
 
 **Framework** : Winston avec rotation quotidienne
