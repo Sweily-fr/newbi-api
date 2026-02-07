@@ -34,7 +34,7 @@ extend type Mutation {
   """
   Effectue l'OCR sur un document avec l'API Mistral
   """
-  processDocumentOcr(file: Upload!, options: OcrOptions): OcrResult!
+  processDocumentOcr(file: Upload!, workspaceId: String!, options: OcrOptions): OcrResult!
 
   """
   Effectue l'OCR sur un document déjà uploadé sur Cloudflare
