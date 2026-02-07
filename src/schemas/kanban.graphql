@@ -7,6 +7,7 @@ type Board {
   columns: [Column!]!
   tasks: [Task!]!
   members: [OrganizationMember!]!
+  totalBillableAmount: Float
   createdAt: DateTime!
   updatedAt: DateTime!
 }

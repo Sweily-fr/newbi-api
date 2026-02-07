@@ -31,7 +31,6 @@ import { graphqlUploadExpress } from "graphql-upload";
 import fs from "fs";
 import cors from "cors";
 import stripe from "./utils/stripe.js";
-import { handleStripeWebhook } from "./controllers/webhookController.js";
 import {
   handleStripeWebhook as handleFileTransferStripeWebhook,
   downloadFile,
