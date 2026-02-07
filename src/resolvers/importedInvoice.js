@@ -113,14 +113,14 @@ async function checkUserOcrQuota(userId, workspaceId, filesCount = 1) {
   if (!quotaInfo.hasQuota) {
     throw createValidationError(
       `Quota OCR épuisé (${quotaInfo.usedThisMonth}/${quotaInfo.monthlyQuota} utilisés ce mois). ` +
-      `Passez à un plan supérieur ou achetez des imports supplémentaires (${quotaInfo.extraImportPrice}€/import).`
+      `Passez à un plan supérieur pour augmenter votre quota.`
     );
   }
 
   if (quotaInfo.remaining < filesCount) {
     throw createValidationError(
       `Quota OCR insuffisant. Vous avez ${quotaInfo.remaining} import(s) disponible(s) mais vous essayez d'en importer ${filesCount}. ` +
-      `Achetez des imports supplémentaires (${quotaInfo.extraImportPrice}€/import) ou réduisez le nombre de fichiers.`
+      `Réduisez le nombre de fichiers ou passez à un plan supérieur.`
     );
   }
 
