@@ -1,14 +1,16 @@
 /**
- * Resolvers GraphQL pour l'OCR avec Mistral
+ * Resolvers GraphQL pour l'OCR (Hybrid: Claude Vision + fallbacks)
  */
 
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import mongoose from "mongoose";
 import mistralOcrService from "../services/mistralOcrService.js";
-import cloudflareService from "../services/cloudflareService.js";
-import financialAnalysisService from "../services/financialAnalysisService.js";
+import hybridOcrService from "../services/hybridOcrService.js";
+import ocrCacheService from "../services/ocrCacheService.js";
 import mistralIntelligentAnalysisService from "../services/mistralIntelligentAnalysisService.js";
 import OcrDocument from "../models/OcrDocument.js";
+import crypto from "crypto";
 import {
   createValidationError,
   createInternalServerError,
@@ -173,6 +175,7 @@ const ocrResolvers = {
 
     /**
      * Effectue l'OCR sur un document déjà uploadé sur Cloudflare
+     * Utilise hybridOcrService (Claude Vision par défaut) avec cache Redis
      */
     processDocumentOcrFromUrl: isAuthenticated(
       async (
@@ -188,13 +191,6 @@ const ocrResolvers = {
         { user }
       ) => {
         try {
-          // Vérifier si le service Mistral est configuré
-          if (!mistralOcrService.isConfigured()) {
-            throw createValidationError(
-              "Service OCR non configuré. Veuillez contacter l'administrateur."
-            );
-          }
-
           // Validation des paramètres
           if (!cloudflareUrl) {
             throw createValidationError("URL Cloudflare requise");
@@ -226,31 +222,69 @@ const ocrResolvers = {
             );
           }
 
-          // Étape 1: Appel de l'API Mistral OCR avec l'URL Cloudflare
-          const ocrResult = await mistralOcrService.processDocumentFromUrl(
+          // Étape 0: Vérifier le cache Redis basé sur l'URL
+          const urlHash = crypto
+            .createHash("sha256")
+            .update(cloudflareUrl)
+            .digest("hex");
+          const cached = await ocrCacheService.get(urlHash);
+
+          if (cached) {
+            console.log(`💾 OCR Cache HIT pour ${fileName} — retour immédiat`);
+            return cached;
+          }
+
+          // Étape 1: OCR avec le service hybride (Claude Vision par défaut)
+          const ocrResult = await hybridOcrService.processDocumentFromUrl(
             cloudflareUrl,
             fileName,
             mimeType,
-            options
+            workspaceId
           );
 
           if (!ocrResult.success) {
-            throw createInternalServerError(`Erreur OCR: ${ocrResult.message}`);
+            throw createInternalServerError(
+              `Erreur OCR: ${ocrResult.error || ocrResult.message}`
+            );
           }
 
-          // Étape 2: Analyse financière intelligente avec Mistral AI
-          console.log('🤖 Démarrage de l\'analyse intelligente avec Mistral AI...');
-          const financialAnalysis =
-            await mistralIntelligentAnalysisService.analyzeDocument(ocrResult);
-          console.log('✅ Analyse intelligente terminée:', financialAnalysis.transaction_data?.vendor_name);
+          // Étape 2: Analyse financière
+          // Si Claude Vision a fourni les données structurées, on les utilise directement
+          // Sinon (fallback Mistral), on appelle l'analyse Mistral
+          let financialAnalysis;
 
-          // Étape 3: Sauvegarder le résultat en base de données
+          if (ocrResult.provider === "claude-vision") {
+            // Claude Vision fournit déjà transaction_data, extracted_fields, document_analysis
+            console.log(
+              "⚡ Claude Vision: données structurées disponibles, skip analyse Mistral"
+            );
+            financialAnalysis = {
+              transaction_data: ocrResult.transaction_data,
+              extracted_fields: ocrResult.extracted_fields,
+              document_analysis: ocrResult.document_analysis,
+            };
+          } else {
+            // Fallback: analyse avec Mistral AI
+            console.log(
+              "🤖 Démarrage de l'analyse intelligente avec Mistral AI..."
+            );
+            financialAnalysis =
+              await mistralIntelligentAnalysisService.analyzeDocument(ocrResult);
+            console.log(
+              "✅ Analyse intelligente terminée:",
+              financialAnalysis.transaction_data?.vendor_name
+            );
+          }
+
+          // Étape 3: Sauvegarder le résultat en base de données (fire & forget)
+          // Générer l'ID avant le save pour l'inclure dans la réponse
+          const documentId = new mongoose.Types.ObjectId();
 
           // Extraire la clé Cloudflare depuis l'URL si possible
           let cloudflareKey = "unknown";
           try {
             const url = new URL(cloudflareUrl);
-            cloudflareKey = url.pathname.substring(1); // Enlever le '/' du début
+            cloudflareKey = url.pathname.substring(1);
           } catch (error) {
             console.warn(
               "⚠️ Impossible d'extraire la clé Cloudflare depuis l'URL:",
@@ -259,52 +293,63 @@ const ocrResolvers = {
           }
 
           const ocrDocument = new OcrDocument({
+            _id: documentId,
             userId: user.id,
             workspaceId: workspaceId,
             originalFileName: fileName,
             mimeType: mimeType,
-            fileSize: fileSize || 0, // Utiliser la taille fournie ou 0 par défaut
+            fileSize: fileSize || 0,
             documentUrl: cloudflareUrl,
             cloudflareKey: cloudflareKey,
-            extractedText: ocrResult.extractedText || "Aucun texte extrait", // S'assurer qu'il n'est pas undefined ou vide
-            rawOcrData: ocrResult.data || {}, // Données brutes de Mistral
-            structuredData: ocrResult.structuredData || {}, // Données structurées parsées
-            financialAnalysis: financialAnalysis || {}, // Analyse financière
+            extractedText: ocrResult.extractedText || ocrResult.text || "Aucun texte extrait",
+            rawOcrData: ocrResult.data || {},
+            structuredData: ocrResult.structuredData || {},
+            financialAnalysis: financialAnalysis || {},
             metadata: {
-              model:
-                ocrResult.metadata?.model || options.model || "mistral-ocr",
+              model: ocrResult.model || options.model || ocrResult.provider || "hybrid",
               processedAt: new Date().toISOString(),
               pagesProcessed: ocrResult.metadata?.pagesProcessed || 0,
               docSizeBytes: ocrResult.metadata?.docSizeBytes || 0,
               options: options,
+              provider: ocrResult.provider,
             },
             createdAt: new Date(),
             updatedAt: new Date(),
           });
 
-          const savedDocument = await ocrDocument.save();
+          // Fire & forget — ne pas bloquer la réponse
+          ocrDocument.save().catch((err) => {
+            console.error("❌ Erreur sauvegarde OcrDocument:", err.message);
+          });
 
-          // Retourner le résultat structuré avec analyse financière
-          return {
-            success: ocrResult.success,
-            extractedText: ocrResult.extractedText,
-            financialAnalysis: JSON.stringify(financialAnalysis), // Analyse financière sérialisée
+          // Construire la réponse
+          const response = {
+            success: true,
+            extractedText: ocrResult.extractedText || ocrResult.text,
+            financialAnalysis: JSON.stringify(financialAnalysis),
             data: JSON.stringify({
-              raw: ocrResult.data, // Données brutes de Mistral
-              structured: ocrResult.structuredData, // Données structurées si disponibles
-              financial: financialAnalysis, // Analyse financière incluse
+              raw: ocrResult.data,
+              structured: ocrResult.structuredData || {},
+              financial: financialAnalysis,
             }),
             metadata: {
               fileName: fileName,
               mimeType: mimeType,
-              fileSize: null, // Pas de taille car on n'a pas le fichier
+              fileSize: null,
               processedAt: new Date().toISOString(),
               documentUrl: cloudflareUrl,
               cloudflareKey: null,
-              documentId: savedDocument._id.toString(),
+              documentId: documentId.toString(),
             },
-            message: "Document traité avec succès",
+            message: `Document traité avec succès via ${ocrResult.provider || "hybrid"}`,
           };
+
+          // Étape 4: Sauvegarder dans le cache Redis (fire & forget)
+          ocrCacheService.set(urlHash, response).catch((err) => {
+            console.warn("⚠️ Erreur sauvegarde cache OCR:", err.message);
+          });
+
+          return response;
         } catch (error) {
           console.error("Erreur OCR depuis URL:", error);
 
