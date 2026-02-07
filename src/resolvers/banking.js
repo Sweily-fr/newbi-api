@@ -596,7 +596,10 @@ const bankingResolvers = {
           : (parent.balance?.current ?? 0),
       currency: parent.currency || parent.balance?.currency || "EUR",
     }),
-    bankName: (parent) => parent.bankName || parent.name || "Banque",
+    name: (parent) => parent.name || parent.institutionName || "Compte",
+    bankName: (parent) => parent.bankName || parent.institutionName || parent.name || "Banque",
+    institutionName: (parent) => parent.institutionName || null,
+    institutionLogo: (parent) => parent.institutionLogo || null,
     accountHolder: (parent) => ({
       name: parent.accountHolder?.name || parent.name || "",
       email: parent.accountHolder?.email || "",

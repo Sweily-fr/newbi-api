@@ -28,8 +28,8 @@ export class BridgeProvider extends BankingProvider {
         "http://localhost:3000/banking/callback",
       // Configuration de la synchronisation des transactions
       sync: {
-        // Nombre de jours par défaut pour la récupération des transactions
-        defaultDaysBack: parseInt(process.env.BRIDGE_DEFAULT_DAYS_BACK) || 90,
+        // Nombre de jours par défaut pour la récupération des transactions (24 mois)
+        defaultDaysBack: parseInt(process.env.BRIDGE_DEFAULT_DAYS_BACK) || 730,
         // Limite de transactions par requête API (max Bridge = 500)
         transactionsPerPage: parseInt(process.env.BRIDGE_TRANSACTIONS_PER_PAGE) || 500,
         // Nombre maximum de pages à récupérer par compte (sécurité)
