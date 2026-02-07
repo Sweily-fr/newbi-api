@@ -91,6 +91,7 @@ type AccountBanking {
   id: ID!
   externalId: String!
   provider: BankingProvider!
+  name: String!
   type: AccountType!
   status: AccountStatus!
   balance: AccountBalance!
@@ -99,6 +100,8 @@ type AccountBanking {
   iban: String
   bic: String
   bankName: String!
+  institutionName: String
+  institutionLogo: String
   accountHolder: AccountHolder!
   workspaceId: String!
   userId: ID
