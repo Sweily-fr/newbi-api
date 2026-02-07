@@ -259,6 +259,14 @@ extend type Query {
 # Mutations
 extend type Mutation {
   """
+  Importe une facture PDF avec OCR — upload direct (pas de pré-upload Cloudflare)
+  """
+  importInvoiceDirect(
+    file: Upload!
+    workspaceId: ID!
+  ): ImportedInvoiceResult!
+
+  """
   Importe une facture PDF avec OCR
   """
   importInvoice(

@@ -3,10 +3,13 @@
  */
 
 import mongoose from "mongoose";
+import crypto from "crypto";
+import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
 import hybridOcrService from "../services/hybridOcrService.js";
+import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import invoiceExtractionService from "../services/invoiceExtractionService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
@@ -432,6 +435,8 @@ function transformOcrToInvoiceDataV2(ocrResult, extractionResult) {
 }
 
 const importedInvoiceResolvers = {
+  Upload: GraphQLUpload,
+
   Query: {
     /**
      * Récupère une facture importée par ID
@@ -659,6 +664,158 @@ const importedInvoiceResolvers = {
           };
         } catch (error) {
           console.error("Erreur import facture:", error);
+          return {
+            success: false,
+            invoice: null,
+            error: error.message,
+            isDuplicate: false,
+          };
+        }
+      }
+    ),
+
+    /**
+     * Importe une facture PDF avec OCR — upload direct (pas de pré-upload Cloudflare)
+     * Le fichier est envoyé directement au backend, OCR via Claude Vision en base64,
+     * puis upload serveur-à-serveur vers Cloudflare (attendu car besoin de l'URL).
+     */
+    importInvoiceDirect: isAuthenticated(
+      async (_, { file, workspaceId }, { user }) => {
+        try {
+          // Vérifier le quota utilisateur avant l'import
+          const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
+
+          const { createReadStream, filename, mimetype } = await file;
+
+          if (!filename) {
+            throw createValidationError("Nom de fichier requis");
+          }
+
+          // Lecture du fichier en mémoire
+          const stream = createReadStream();
+          const chunks = [];
+          for await (const chunk of stream) {
+            chunks.push(chunk);
+          }
+          const fileBuffer = Buffer.concat(chunks);
+
+          // Validation de la taille (max 10MB)
+          const maxSize = 10 * 1024 * 1024;
+          if (fileBuffer.length > maxSize) {
+            throw createValidationError("Fichier trop volumineux (max 10MB)");
+          }
+
+          // Convertir en base64 pour Claude Vision
+          const base64Data = fileBuffer.toString("base64");
+          const contentHash = crypto
+            .createHash("sha256")
+            .update(fileBuffer)
+            .digest("hex");
+
+          // OCR direct via Claude Vision
+          console.log(`🔍 importInvoiceDirect: OCR direct pour ${filename}`);
+          const rawResult = await claudeVisionOcrService.processFromBase64(
+            base64Data,
+            mimetype,
+            filename,
+            contentHash
+          );
+
+          if (!rawResult.success) {
+            throw createInternalServerError(
+              `Erreur OCR: ${rawResult.error || rawResult.message}`
+            );
+          }
+
+          // Formater et extraire les données de facture
+          const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+          let invoiceData;
+          if (structuredResult.transaction_data) {
+            invoiceData = transformOcrToInvoiceDataV2(structuredResult, structuredResult);
+          } else {
+            const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
+            invoiceData = transformOcrToInvoiceDataV2(structuredResult, extractionResult);
+          }
+
+          // Récupérer organizationId pour l'upload Cloudflare
+          let organizationId = null;
+          const rawOrgId =
+            user.organizationId ||
+            user.organization?.id ||
+            user.organization?._id ||
+            user.currentOrganizationId;
+
+          if (rawOrgId) {
+            organizationId = typeof rawOrgId === "object"
+              ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
+              : rawOrgId.toString();
+          } else {
+            try {
+              const memberRecord = await mongoose.connection.db
+                .collection("member")
+                .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
+              if (memberRecord?.organizationId) {
+                organizationId = memberRecord.organizationId.toString();
+              }
+            } catch (err) {
+              console.warn("⚠️ Impossible de récupérer organizationId:", err.message);
+            }
+          }
+
+          // Upload serveur-à-serveur vers Cloudflare (attendu car besoin de l'URL)
+          console.log(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
+          const uploadResult = await cloudflareService.uploadImage(
+            fileBuffer,
+            filename,
+            user.id,
+            "importedInvoice",
+            organizationId
+          );
+
+          // Enregistrer l'utilisation OCR
+          await recordOcrUsage(user.id, workspaceId, plan, {
+            fileName: filename,
+            provider: rawResult.provider || "claude-vision",
+            success: true,
+          });
+
+          // Vérifier les doublons potentiels
+          const duplicates = await ImportedInvoice.findPotentialDuplicates(
+            workspaceId,
+            invoiceData.originalInvoiceNumber,
+            invoiceData.vendor?.name,
+            invoiceData.totalTTC
+          );
+
+          const isDuplicate = duplicates.length > 0;
+
+          // Créer la facture importée
+          const importedInvoice = new ImportedInvoice({
+            workspaceId,
+            importedBy: user.id,
+            ...invoiceData,
+            file: {
+              url: uploadResult.url,
+              cloudflareKey: uploadResult.key,
+              originalFileName: filename,
+              mimeType: mimetype,
+              fileSize: fileBuffer.length,
+            },
+            isDuplicate,
+            duplicateOf: isDuplicate ? duplicates[0]._id : null,
+          });
+
+          await importedInvoice.save();
+
+          return {
+            success: true,
+            invoice: importedInvoice,
+            error: null,
+            isDuplicate,
+          };
+        } catch (error) {
+          console.error("Erreur importInvoiceDirect:", error);
           return {
             success: false,
             invoice: null,

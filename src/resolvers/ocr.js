@@ -7,6 +7,8 @@ import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import mongoose from "mongoose";
 import mistralOcrService from "../services/mistralOcrService.js";
 import hybridOcrService from "../services/hybridOcrService.js";
+import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
+import cloudflareService from "../services/cloudflareService.js";
 import ocrCacheService from "../services/ocrCacheService.js";
 import mistralIntelligentAnalysisService from "../services/mistralIntelligentAnalysisService.js";
 import OcrDocument from "../models/OcrDocument.js";
@@ -21,18 +23,13 @@ const ocrResolvers = {
 
   Mutation: {
     /**
-     * Effectue l'OCR sur un document avec l'API Mistral
+     * Effectue l'OCR sur un document — OCR direct sans aller-retour Cloudflare
+     * Le fichier est lu en mémoire, envoyé directement à Claude Vision en base64,
+     * puis uploadé sur Cloudflare en tâche de fond (fire & forget).
      */
     processDocumentOcr: isAuthenticated(
-      async (_, { file, options = {} }, { user }) => {
+      async (_, { file, workspaceId, options = {} }, { user }) => {
         try {
-          // Vérifier si le service Mistral est configuré
-          if (!mistralOcrService.isConfigured()) {
-            throw createValidationError(
-              "Service OCR non configuré. Veuillez contacter l'administrateur."
-            );
-          }
-
           const { createReadStream, filename, mimetype } = await file;
 
           // Validation du nom de fichier
@@ -60,7 +57,7 @@ const ocrResolvers = {
             );
           }
 
-          // Lecture du fichier
+          // Lecture du fichier en mémoire
           const stream = createReadStream();
           const chunks = [];
 
@@ -76,88 +73,146 @@ const ocrResolvers = {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
           }
 
-          if (!uploadResult.url) {
+          // Hash du contenu pour le cache
+          const contentHash = crypto
+            .createHash("sha256")
+            .update(fileBuffer)
+            .digest("hex");
+
+          // Vérifier le cache Redis
+          const cached = await ocrCacheService.get(contentHash);
+          if (cached) {
+            console.log(`💾 OCR Cache HIT pour ${filename} — retour immédiat`);
+            return cached;
+          }
+
+          // Convertir en base64 pour Claude Vision
+          const base64Data = fileBuffer.toString("base64");
+
+          // OCR direct via Claude Vision (pas de téléchargement Cloudflare)
+          console.log(`🔍 OCR direct (processFromBase64) pour ${filename}`);
+          const rawResult = await claudeVisionOcrService.processFromBase64(
+            base64Data,
+            mimetype,
+            filename,
+            contentHash
+          );
+
+          if (!rawResult.success) {
             throw createInternalServerError(
-              "Impossible d'obtenir l'URL publique du document"
+              `Erreur OCR: ${rawResult.error || rawResult.message}`
             );
           }
 
-          // Étape 2: Validation et nettoyage des options OCR
-          const validatedOptions = mistralOcrService.validateOptions(options);
+          // Formater les données structurées
+          const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
 
-          // Étape 3: Traitement OCR avec Mistral en utilisant l'URL publique
-          const ocrResult = await mistralOcrService.processDocumentFromUrl(
-            uploadResult.url,
-            filename,
-            mimetype,
-            validatedOptions
-          );
+          // Construire financialAnalysis depuis les données structurées
+          const financialAnalysis = {
+            transaction_data: structuredResult.transaction_data,
+            extracted_fields: structuredResult.extracted_fields,
+            document_analysis: structuredResult.document_analysis,
+          };
 
-          // Étape 4: Extraction des données structurées pour les reçus
-          const structuredData =
-            mistralOcrService.extractReceiptData(ocrResult);
+          // Générer un ID de document
+          const documentId = new mongoose.Types.ObjectId();
 
-          // Étape 5: Sauvegarde du document OCR en base de données
-          const ocrDocument = new OcrDocument({
-            userId: user.id,
-            originalFileName: filename,
-            mimeType: mimetype,
-            fileSize: fileBuffer.length,
-            documentUrl: uploadResult.url,
-            cloudflareKey: uploadResult.key,
-            extractedText: ocrResult.extractedText,
-            rawOcrData: ocrResult.data,
-            structuredData: {
-              amount: structuredData.amount,
-              date: structuredData.date,
-              merchant: structuredData.merchant,
-              description: structuredData.description,
-              category: structuredData.category,
-              paymentMethod: structuredData.paymentMethod,
-              confidence: structuredData.confidence,
-            },
-            documentType: "receipt",
-            status: "completed",
-            processingMetadata: {
-              processedAt: new Date(),
-              ocrProvider: "mistral",
-            },
-          });
-
-          const savedDocument = await ocrDocument.save();
-
-          // Étape 5: Optionnel - Supprimer le fichier temporaire de Cloudflare
-          // (commenté pour permettre la consultation ultérieure)
-          // try {
-          //   await cloudflareService.deleteImage(uploadResult.key);
-          //   console.log('🗑️ Fichier temporaire supprimé de Cloudflare');
-          // } catch (error) {
-          //   console.warn('Impossible de supprimer le fichier temporaire:', error.message);
-          // }
-
-          return {
-            success: ocrResult.success,
-            extractedText: ocrResult.extractedText,
+          // Construire la réponse
+          const response = {
+            success: true,
+            extractedText: rawResult.extractedText,
+            financialAnalysis: JSON.stringify(financialAnalysis),
             data: JSON.stringify({
-              raw: ocrResult.data, // Données brutes de Mistral
-              structured: structuredData, // Données structurées pour le frontend
-              documentId: savedDocument._id.toString(), // ID du document sauvegardé
+              raw: rawResult.data,
+              structured: structuredResult.extracted_fields || {},
+              financial: financialAnalysis,
             }),
             metadata: {
-              fileName: ocrResult.metadata.fileName,
-              mimeType: ocrResult.metadata.mimeType,
-              fileSize: fileBuffer.length, // Garder la taille originale
-              processedAt: ocrResult.metadata.processedAt,
-              documentUrl: uploadResult.url, // URL Cloudflare
-              cloudflareKey: uploadResult.key, // Pour suppression ultérieure si nécessaire
-              documentId: savedDocument._id.toString(), // ID du document en BDD
+              fileName: filename,
+              mimeType: mimetype,
+              fileSize: fileBuffer.length,
+              processedAt: new Date().toISOString(),
+              documentUrl: null,
+              cloudflareKey: null,
+              documentId: documentId.toString(),
             },
-            message: "OCR effectué avec succès - Données structurées extraites",
+            message: `Document traité avec succès via ${rawResult.provider || "claude-vision"}`,
           };
+
+          // Fire & forget: récupérer organizationId puis upload Cloudflare + save MongoDB + cache Redis
+          (async () => {
+            try {
+              // Récupérer organizationId
+              let organizationId = null;
+              const rawOrgId =
+                user.organizationId ||
+                user.organization?.id ||
+                user.organization?._id ||
+                user.currentOrganizationId;
+
+              if (rawOrgId) {
+                organizationId = typeof rawOrgId === "object"
+                  ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
+                  : rawOrgId.toString();
+              } else {
+                try {
+                  const memberRecord = await mongoose.connection.db
+                    .collection("member")
+                    .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
+                  if (memberRecord?.organizationId) {
+                    organizationId = memberRecord.organizationId.toString();
+                  }
+                } catch (err) {
+                  console.warn("⚠️ Impossible de récupérer organizationId:", err.message);
+                }
+              }
+
+              // Upload vers Cloudflare (background)
+              const uploadResult = await cloudflareService.uploadImage(
+                fileBuffer,
+                filename,
+                user.id,
+                "ocr",
+                organizationId
+              );
+
+              // Sauvegarder en MongoDB
+              const ocrDocument = new OcrDocument({
+                _id: documentId,
+                userId: user.id,
+                workspaceId: workspaceId,
+                originalFileName: filename,
+                mimeType: mimetype,
+                fileSize: fileBuffer.length,
+                documentUrl: uploadResult.url,
+                cloudflareKey: uploadResult.key,
+                extractedText: rawResult.extractedText,
+                rawOcrData: rawResult.data || {},
+                structuredData: structuredResult.extracted_fields || {},
+                financialAnalysis: financialAnalysis,
+                metadata: {
+                  model: rawResult.model || rawResult.provider || "claude-vision",
+                  processedAt: new Date().toISOString(),
+                  provider: rawResult.provider,
+                },
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              });
+
+              await ocrDocument.save();
+              console.log(`✅ OCR document sauvegardé (background): ${documentId}`);
+
+              // Cache Redis
+              await ocrCacheService.set(contentHash, response);
+            } catch (err) {
+              console.error("❌ Erreur background (upload/save/cache):", err.message);
+            }
+          })();
+
+          return response;
         } catch (error) {
           console.error("Erreur OCR:", error);
 
-          // Si c'est une erreur de validation, la relancer telle quelle
           if (
             error.message.includes("Validation") ||
             error.name === "AppError"
@@ -165,7 +220,6 @@ const ocrResolvers = {
             throw error;
           }
 
-          // Sinon, créer une erreur interne
           throw createInternalServerError(
             `Erreur lors du traitement OCR: ${error.message}`
           );
