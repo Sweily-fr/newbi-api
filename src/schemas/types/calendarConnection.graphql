@@ -1,0 +1,115 @@
+enum CalendarProvider {
+  google
+  microsoft
+  apple
+}
+
+enum CalendarConnectionStatus {
+  active
+  expired
+  error
+  disconnected
+}
+
+type SelectedCalendar {
+  calendarId: String!
+  name: String!
+  color: String
+  enabled: Boolean!
+}
+
+type CalendarConnection {
+  id: ID!
+  userId: ID!
+  provider: CalendarProvider!
+  status: CalendarConnectionStatus!
+  accountEmail: String
+  accountName: String
+  selectedCalendars: [SelectedCalendar!]
+  lastSyncAt: DateTime
+  lastSyncError: String
+  autoSync: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type AvailableCalendar {
+  calendarId: String!
+  name: String!
+  color: String
+  isPrimary: Boolean
+}
+
+type CalendarConnectionResponse {
+  success: Boolean!
+  message: String
+  connection: CalendarConnection
+}
+
+type CalendarConnectionsResponse {
+  success: Boolean!
+  message: String
+  connections: [CalendarConnection!]
+}
+
+type AvailableCalendarsResponse {
+  success: Boolean!
+  message: String
+  calendars: [AvailableCalendar!]
+}
+
+type CalendarSyncResponse {
+  success: Boolean!
+  message: String
+  syncedCount: Int
+  connection: CalendarConnection
+}
+
+type ExternalCalendarLink {
+  provider: CalendarProvider!
+  externalEventId: String!
+  calendarConnectionId: ID!
+}
+
+input ConnectAppleCalendarInput {
+  username: String!
+  appPassword: String!
+  calDavUrl: String
+}
+
+input UpdateSelectedCalendarsInput {
+  connectionId: ID!
+  selectedCalendars: [SelectedCalendarInput!]!
+}
+
+input SelectedCalendarInput {
+  calendarId: String!
+  name: String!
+  color: String
+  enabled: Boolean!
+}
+
+input PushEventToCalendarInput {
+  eventId: ID!
+  connectionId: ID!
+}
+
+input UpdateAutoSyncInput {
+  connectionId: ID!
+  enabled: Boolean!
+}
+
+extend type Query {
+  getCalendarConnections: CalendarConnectionsResponse!
+  getAvailableCalendars(connectionId: ID!): AvailableCalendarsResponse!
+}
+
+extend type Mutation {
+  connectAppleCalendar(input: ConnectAppleCalendarInput!): CalendarConnectionResponse!
+  disconnectCalendar(connectionId: ID!): CalendarConnectionResponse!
+  updateSelectedCalendars(input: UpdateSelectedCalendarsInput!): CalendarConnectionResponse!
+  syncCalendar(connectionId: ID!): CalendarSyncResponse!
+  syncAllCalendars: CalendarSyncResponse!
+  pushEventToCalendar(input: PushEventToCalendarInput!): CalendarConnectionResponse!
+  updateAutoSync(input: UpdateAutoSyncInput!): CalendarConnectionResponse!
+}
