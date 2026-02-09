@@ -57,7 +57,7 @@ router.get("/authorize", async (req, res) => {
     }
 
     // Construire l'URL de redirection (callback)
-    const redirectUri = `${process.env.API_URL || "http://localhost:4000"}/api/superpdp/callback`;
+    const redirectUri = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"}/api/superpdp/callback`;
 
     // Construire l'URL d'autorisation OAuth2
     const authUrl = new URL(SUPERPDP_OAUTH_CONFIG.authorizationEndpoint);
@@ -137,7 +137,7 @@ router.get("/callback", async (req, res) => {
     }
 
     // Construire l'URL de redirection (doit être identique à celle utilisée pour l'autorisation)
-    const redirectUri = `${process.env.API_URL || "http://localhost:4000"}/api/superpdp/callback`;
+    const redirectUri = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"}/api/superpdp/callback`;
 
     // Échanger le code contre des tokens
     logger.info(
