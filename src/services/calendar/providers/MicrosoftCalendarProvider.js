@@ -36,7 +36,7 @@ export default class MicrosoftCalendarProvider {
         authority: 'https://login.microsoftonline.com/common'
       }
     };
-    this.redirectUri = `${process.env.API_URL || 'http://localhost:4000'}/calendar-connect/microsoft/callback`;
+    this.redirectUri = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/calendar-connect/microsoft/callback`;
   }
 
   /**
