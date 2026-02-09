@@ -355,7 +355,7 @@ class CloudflareService {
           const imageType = keyParts[2];
           const filename = keyParts.slice(3).join("/");
 
-          const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
+          const baseUrl = process.env.API_URL || "http://localhost:4000";
           imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
         } else {
           // Dernier fallback sur URL signée avec le bon bucket
