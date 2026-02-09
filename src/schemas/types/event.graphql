@@ -12,6 +12,11 @@ type Event {
   invoice: Invoice
   userId: ID!
   emailReminder: EmailReminder
+  source: EventSource
+  visibility: EventVisibility
+  isReadOnly: Boolean
+  externalEventId: String
+  externalCalendarLinks: [ExternalCalendarLink]
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -38,6 +43,19 @@ enum EventType {
   DEADLINE
   REMINDER
   CREDIT_NOTE_CREATED
+  EXTERNAL
+}
+
+enum EventSource {
+  newbi
+  google
+  microsoft
+  apple
+}
+
+enum EventVisibility {
+  workspace
+  private
 }
 
 input CreateEventInput {
@@ -83,11 +101,13 @@ extend type Query {
     startDate: DateTime
     endDate: DateTime
     type: EventType
-    limit: Int = 100
+    limit: Int = 500
     offset: Int = 0
     workspaceId: ID
+    includeExternalCalendars: Boolean = false
+    sources: [EventSource]
   ): EventsResponse!
-  
+
   getEvent(id: ID!, workspaceId: ID): EventResponse!
 }
 
@@ -95,7 +115,7 @@ extend type Mutation {
   createEvent(input: CreateEventInput!, workspaceId: ID): EventResponse!
   updateEvent(input: UpdateEventInput!, workspaceId: ID): EventResponse!
   deleteEvent(id: ID!, workspaceId: ID): EventResponse!
-  
+
   # Synchroniser les événements avec les factures
   syncInvoiceEvents(workspaceId: ID): EventsResponse!
 }

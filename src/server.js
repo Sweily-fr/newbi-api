@@ -61,11 +61,14 @@ import reconciliationRoutes from "./routes/reconciliation.js";
 // DÉSACTIVÉ: SuperPDP API pas encore active
 // import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
+import calendarConnectRoutes from "./routes/calendar-connect.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
 import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
+import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
+import Event from "./models/Event.js";
 
 // Connexion à MongoDB
 mongoose
@@ -194,6 +197,9 @@ async function startServer() {
 
   // Routes téléchargement documents partagés (ZIP dossiers)
   app.use("/api/shared-documents", sharedDocumentDownloadRoutes);
+
+  // Routes connexion calendriers externes (OAuth Google/Microsoft)
+  app.use("/calendar-connect", calendarConnectRoutes);
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 
@@ -333,6 +339,32 @@ async function startServer() {
     logger.warn("⚠️ Système banking non disponible:", error.message);
   }
 
+  // Migration one-shot: corriger les événements sans champ source (leur donner 'newbi')
+  try {
+    const fixSource = await Event.updateMany(
+      { source: { $exists: false } },
+      { $set: { source: 'newbi' } }
+    );
+    const fixSourceNull = await Event.updateMany(
+      { source: null },
+      { $set: { source: 'newbi' } }
+    );
+    const totalSource = (fixSource.modifiedCount || 0) + (fixSourceNull.modifiedCount || 0);
+    if (totalSource > 0) {
+      logger.info(`Migration calendrier: ${totalSource} evenement(s) corrige(s) (source -> newbi)`);
+    }
+    // Corriger les événements externes sans visibility correcte
+    const fixVis = await Event.updateMany(
+      { source: { $in: ['google', 'microsoft', 'apple'] }, visibility: { $nin: ['private', 'workspace'] } },
+      { $set: { visibility: 'private' } }
+    );
+    if (fixVis.modifiedCount > 0) {
+      logger.info(`Migration calendrier: ${fixVis.modifiedCount} evenement(s) externe(s) corrige(s) (visibility -> private)`);
+    }
+  } catch (migrationError) {
+    logger.warn('Migration calendrier echouee (non bloquant):', migrationError.message);
+  }
+
   // Démarrer le serveur HTTP avec WebSocket
   const PORT = process.env.PORT || 4000;
   httpServer.listen(PORT, () => {
@@ -358,6 +390,10 @@ async function startServer() {
     // Démarrer le service de rappel d'expiration des transferts
     fileTransferReminderService.start();
     logger.info("✅ Service de rappel d'expiration des transferts démarré");
+
+    // Démarrer le cron de synchronisation des calendriers externes
+    startCalendarSyncCron();
+    logger.info("✅ Cron de synchronisation des calendriers démarré");
   });
 
   // Nettoyage propre à l'arrêt

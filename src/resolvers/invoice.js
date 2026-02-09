@@ -1747,7 +1747,7 @@ const invoiceResolvers = {
 
         // Supprimer l'événement de calendrier associé à la facture
         try {
-          await Event.deleteInvoiceEvent(invoice._id, context.user._id);
+          await Event.deleteInvoiceEvent(invoice._id, context.user._id, workspaceId);
         } catch (eventError) {
           console.error(
             "Erreur lors de la suppression de l'événement de calendrier:",
