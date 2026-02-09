@@ -1,7 +1,10 @@
 import Event from '../models/Event.js';
 import Invoice from '../models/Invoice.js';
+import CalendarConnection from '../models/CalendarConnection.js';
 import { isAuthenticated, withWorkspace } from '../middlewares/better-auth-jwt.js';
 import emailReminderService from '../services/emailReminderService.js';
+import { deleteEventFromExternalCalendars, updateEventInExternalCalendars, pushEventToCalendar } from '../services/calendar/CalendarSyncService.js';
+import logger from '../utils/logger.js';
 
 const eventResolvers = {
   Event: {
@@ -23,18 +26,37 @@ const eventResolvers = {
   },
   
   Query: {
-    getEvents: withWorkspace(async (_, { startDate, endDate, type, limit = 100, offset = 0, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    getEvents: withWorkspace(async (_, { startDate, endDate, type, limit = 500, offset = 0, workspaceId, includeExternalCalendars = false, sources }, { user, workspaceId: contextWorkspaceId }) => {
       try {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        
+        const userId = user?.id || user?._id;
 
-        // Construire le filtre
-        const filter = { workspaceId: finalWorkspaceId };
-        
+        // Construire le filtre avec le modèle de confidentialité multi-membres
+        // Événements workspace (visibles par tous) + événements privés (seulement le propriétaire)
+        const filter = {};
+
+        if (includeExternalCalendars && userId) {
+          // Inclure les événements workspace ET les événements privés/externes du user courant
+          // Note: les événements externes peuvent avoir visibility=undefined (migration)
+          filter.$or = [
+            { visibility: { $in: ['workspace', null, undefined] }, workspaceId: finalWorkspaceId },
+            { visibility: 'private', userId: userId },
+            { source: { $in: ['google', 'microsoft', 'apple'] }, userId: userId }
+          ];
+        } else {
+          // Comportement par défaut : seulement les événements workspace
+          filter.workspaceId = finalWorkspaceId;
+          filter.visibility = { $in: ['workspace', null, undefined] };
+        }
+
         if (type) {
           filter.type = type;
         }
-        
+
+        if (sources && sources.length > 0) {
+          filter.source = { $in: sources };
+        }
+
         if (startDate || endDate) {
           filter.start = {};
           if (startDate) {
@@ -60,7 +82,6 @@ const eventResolvers = {
 
         const totalCount = await Event.countDocuments(filter);
 
-
         // S'assurer que tous les champs sont correctement sérialisés
         const serializedEvents = events.map(event => {
           const baseEvent = {
@@ -68,7 +89,16 @@ const eventResolvers = {
             id: event._id.toString(),
             start: event.start.toISOString(),
             end: event.end.toISOString(),
-            invoiceId: event.invoiceId ? event.invoiceId._id?.toString() || event.invoiceId.toString() : null
+            invoiceId: event.invoiceId ? event.invoiceId._id?.toString() || event.invoiceId.toString() : null,
+            source: event.source || 'newbi',
+            visibility: event.visibility || 'workspace',
+            isReadOnly: event.isReadOnly || false,
+            externalEventId: event.externalEventId || null,
+            externalCalendarLinks: (event.externalCalendarLinks || []).map(link => ({
+              provider: link.provider,
+              externalEventId: link.externalEventId,
+              calendarConnectionId: link.calendarConnectionId?.toString()
+            }))
           };
 
           // Seulement inclure invoice si invoiceId existe et est populé
@@ -99,7 +129,7 @@ const eventResolvers = {
           message: `${events.length} événement(s) récupéré(s)`
         };
       } catch (error) {
-        console.error('Erreur lors de la récupération des événements:', error);
+        logger.error('Erreur lors de la récupération des événements:', error);
         return {
           success: false,
           events: [],
@@ -113,8 +143,16 @@ const eventResolvers = {
       try {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const event = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId })
-          .populate('invoiceId');
+        const userId = user?.id || user?._id;
+
+        // Chercher dans les événements workspace OU les événements privés du user
+        const event = await Event.findOne({
+          _id: id,
+          $or: [
+            { workspaceId: finalWorkspaceId, visibility: { $in: ['workspace', null, undefined] } },
+            { visibility: 'private', userId: userId }
+          ]
+        }).populate('invoiceId');
 
         if (!event) {
           return {
@@ -130,7 +168,7 @@ const eventResolvers = {
           message: 'Événement récupéré avec succès'
         };
       } catch (error) {
-        console.error('Erreur lors de la récupération de l\'événement:', error);
+        logger.error('Erreur lors de la récupération de l\'événement:', error);
         return {
           success: false,
           event: null,
@@ -168,13 +206,31 @@ const eventResolvers = {
 
         await event.save();
 
+        // Auto-push to external calendars with autoSync enabled (fire-and-forget)
+        CalendarConnection.find({
+          userId: user.id || user._id,
+          autoSync: true,
+          status: 'active'
+        }).then(async (autoSyncConnections) => {
+          for (const conn of autoSyncConnections) {
+            try {
+              await pushEventToCalendar(event._id, conn._id);
+              logger.info(`[createEvent] Auto-push vers ${conn.provider} (${conn._id}) réussi pour event ${event._id}`);
+            } catch (err) {
+              logger.error(`[createEvent] Auto-push vers ${conn.provider} (${conn._id}) échoué pour event ${event._id}:`, err.message);
+            }
+          }
+        }).catch(err => {
+          logger.error('[createEvent] Erreur recherche connexions autoSync:', err.message);
+        });
+
         return {
           success: true,
           event,
           message: 'Événement créé avec succès'
         };
       } catch (error) {
-        console.error('Erreur lors de la création de l\'événement:', error);
+        logger.error('Erreur lors de la création de l\'événement:', error);
         return {
           success: false,
           event: null,
@@ -188,6 +244,16 @@ const eventResolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         const { id, ...updateData } = input;
+
+        // Vérifier si l'événement est en lecture seule (événement externe)
+        const existingEvent = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId });
+        if (existingEvent?.isReadOnly) {
+          return {
+            success: false,
+            event: null,
+            message: 'Les événements externes ne peuvent pas être modifiés'
+          };
+        }
 
         // Si la date ou le rappel email change, recalculer la date d'envoi
         if (updateData.emailReminder || updateData.start) {
@@ -247,13 +313,20 @@ const eventResolvers = {
           };
         }
 
+        // Propagate changes to external calendars (fire-and-forget)
+        if (event.externalCalendarLinks?.length > 0) {
+          updateEventInExternalCalendars(event).catch(err =>
+            logger.error('[updateEvent] Erreur propagation update calendriers externes:', err.message)
+          );
+        }
+
         return {
           success: true,
           event,
           message: 'Événement mis à jour avec succès'
         };
       } catch (error) {
-        console.error('Erreur lors de la mise à jour de l\'événement:', error);
+        logger.error('Erreur lors de la mise à jour de l\'événement:', error);
         return {
           success: false,
           event: null,
@@ -265,6 +338,23 @@ const eventResolvers = {
     deleteEvent: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+        // Vérifier si l'événement est en lecture seule (événement externe)
+        const existingEvent = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId });
+        if (existingEvent?.isReadOnly) {
+          return {
+            success: false,
+            event: null,
+            message: 'Les événements externes ne peuvent pas être supprimés'
+          };
+        }
+
+        // Propagate deletion to external calendars before removing (fire-and-forget)
+        if (existingEvent?.externalCalendarLinks?.length > 0) {
+          deleteEventFromExternalCalendars(existingEvent).catch(err =>
+            logger.error('[deleteEvent] Erreur propagation suppression calendriers externes:', err.message)
+          );
+        }
 
         const event = await Event.findOneAndDelete({ _id: id, workspaceId: finalWorkspaceId });
 
@@ -282,7 +372,7 @@ const eventResolvers = {
           message: 'Événement supprimé avec succès'
         };
       } catch (error) {
-        console.error('Erreur lors de la suppression de l\'événement:', error);
+        logger.error('Erreur lors de la suppression de l\'événement:', error);
         return {
           success: false,
           event: null,
@@ -306,7 +396,7 @@ const eventResolvers = {
               const event = await Event.createInvoiceDueEvent(invoice, user.id, finalWorkspaceId);
               events.push(event);
             } catch (error) {
-              console.error(`Erreur lors de la création de l'événement pour la facture ${invoice._id}:`, error);
+              logger.error(`Erreur lors de la création de l'événement pour la facture ${invoice._id}:`, error);
             }
           }
         }
@@ -318,7 +408,7 @@ const eventResolvers = {
           message: `${events.length} événement(s) de facture synchronisé(s)`
         };
       } catch (error) {
-        console.error('Erreur lors de la synchronisation des événements de factures:', error);
+        logger.error('Erreur lors de la synchronisation des événements de factures:', error);
         return {
           success: false,
           events: [],
