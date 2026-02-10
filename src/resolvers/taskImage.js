@@ -48,12 +48,20 @@ const taskImageResolvers = {
           const fileBuffer = Buffer.concat(chunks);
 
           // Valider le type de fichier
-          const validMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          const validMimeTypes = [
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/plain', 'text/csv'
+          ];
           if (!validMimeTypes.includes(mimetype)) {
             return {
               success: false,
               image: null,
-              message: 'Type de fichier non supporté. Utilisez JPEG, PNG, GIF ou WebP.'
+              message: 'Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).'
             };
           }
 
@@ -64,6 +72,16 @@ const taskImageResolvers = {
               success: false,
               image: null,
               message: 'Fichier trop volumineux. Maximum 10MB.'
+            };
+          }
+
+          // Valider la taille totale par tâche (max 50MB)
+          const currentTotalSize = (task.images || []).reduce((sum, img) => sum + (img.fileSize || 0), 0);
+          if (currentTotalSize + fileBuffer.length > 50 * 1024 * 1024) {
+            return {
+              success: false,
+              image: null,
+              message: 'Limite de stockage atteinte. Maximum 50MB par tâche.'
             };
           }
 
@@ -252,12 +270,20 @@ const taskImageResolvers = {
           const fileBuffer = Buffer.concat(chunks);
 
           // Valider le type de fichier
-          const validMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          const validMimeTypes = [
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/plain', 'text/csv'
+          ];
           if (!validMimeTypes.includes(mimetype)) {
             return {
               success: false,
               image: null,
-              message: 'Type de fichier non supporté. Utilisez JPEG, PNG, GIF ou WebP.'
+              message: 'Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).'
             };
           }
 
