@@ -13,6 +13,7 @@ import {
   AppError,
   ERROR_CODES,
 } from '../utils/errors.js';
+import documentAutomationService from '../services/documentAutomationService.js';
 
 // const requiredPermission = 'MANAGE_INVOICES'; // TODO: Implement permission system
 
@@ -376,6 +377,19 @@ const creditNoteResolvers = {
           } catch (clientError) {
             console.error('Erreur lors de l\'ajout de l\'activité au client:', clientError);
             // Ne pas bloquer la création de l'avoir si l'ajout de l'activité échoue
+          }
+
+          // Automatisations documents partagés
+          try {
+            await documentAutomationService.executeAutomations('CREDIT_NOTE_CREATED', workspaceId, {
+              documentId: creditNote._id.toString(),
+              documentType: 'creditNote',
+              documentNumber: creditNote.number,
+              prefix: creditNote.prefix || '',
+              clientName: creditNote.client?.name || '',
+            }, context.user._id.toString());
+          } catch (docAutoError) {
+            console.error('Erreur automatisation documents (avoir):', docAutoError);
           }
 
           return await CreditNote.findById(creditNote._id).populate('originalInvoice');

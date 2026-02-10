@@ -25,6 +25,7 @@ import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1923,6 +1924,23 @@ const invoiceResolvers = {
           }
         }
 
+        // Automatisations documents partagés
+        try {
+          const triggerMap = { PENDING: 'INVOICE_SENT', CANCELED: 'INVOICE_CANCELED' };
+          const trigger = triggerMap[status];
+          if (trigger) {
+            await documentAutomationService.executeAutomations(trigger, workspaceId, {
+              documentId: invoice._id.toString(),
+              documentType: 'invoice',
+              documentNumber: invoice.number,
+              prefix: invoice.prefix || '',
+              clientName: invoice.client?.name || '',
+            }, user._id.toString());
+          }
+        } catch (docAutoError) {
+          console.error('Erreur automatisation documents:', docAutoError);
+        }
+
         return await invoice.populate("createdBy");
       }
     ),
@@ -2057,6 +2075,19 @@ const invoiceResolvers = {
             );
             // Ne pas faire échouer la mutation si les automatisations échouent
           }
+        }
+
+        // Automatisations documents partagés
+        try {
+          await documentAutomationService.executeAutomations('INVOICE_PAID', workspaceId, {
+            documentId: invoice._id.toString(),
+            documentType: 'invoice',
+            documentNumber: invoice.number,
+            prefix: invoice.prefix || '',
+            clientName: invoice.client?.name || '',
+          }, user._id.toString());
+        } catch (docAutoError) {
+          console.error('Erreur automatisation documents (paid):', docAutoError);
         }
 
         return await invoice.populate("createdBy");
