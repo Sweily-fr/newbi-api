@@ -1,0 +1,103 @@
+enum DocumentAutomationTriggerType {
+  INVOICE_SENT
+  INVOICE_PAID
+  INVOICE_CANCELED
+  QUOTE_SENT
+  QUOTE_ACCEPTED
+  QUOTE_CANCELED
+  CREDIT_NOTE_CREATED
+  INVOICE_IMPORTED
+}
+
+enum DocumentAutomationLogStatus {
+  SUCCESS
+  FAILED
+  DUPLICATE_SKIPPED
+}
+
+type DocumentAutomationActionConfig {
+  targetFolderId: ID!
+  targetFolder: SharedFolder
+  createSubfolder: Boolean
+  subfolderPattern: String
+  documentNaming: String
+  tags: [String]
+  documentStatus: String
+}
+
+type DocumentAutomationStats {
+  totalExecutions: Int
+  lastExecutedAt: DateTime
+  lastDocumentId: ID
+  failedExecutions: Int
+}
+
+type DocumentAutomation {
+  id: ID!
+  name: String!
+  description: String
+  workspaceId: ID!
+  createdBy: User
+  triggerType: DocumentAutomationTriggerType!
+  actionConfig: DocumentAutomationActionConfig!
+  isActive: Boolean!
+  stats: DocumentAutomationStats
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type DocumentAutomationLog {
+  id: ID!
+  automationId: ID!
+  workspaceId: ID!
+  sourceDocumentType: String!
+  sourceDocumentId: ID!
+  sourceDocumentNumber: String
+  sharedDocumentId: ID
+  targetFolderId: ID
+  targetFolderName: String
+  status: DocumentAutomationLogStatus!
+  error: String
+  fileName: String
+  fileSize: Int
+  createdAt: DateTime!
+}
+
+input DocumentAutomationActionConfigInput {
+  targetFolderId: ID!
+  createSubfolder: Boolean
+  subfolderPattern: String
+  documentNaming: String
+  tags: [String]
+  documentStatus: String
+}
+
+input CreateDocumentAutomationInput {
+  name: String!
+  description: String
+  triggerType: DocumentAutomationTriggerType!
+  actionConfig: DocumentAutomationActionConfigInput!
+  isActive: Boolean
+}
+
+input UpdateDocumentAutomationInput {
+  name: String
+  description: String
+  triggerType: DocumentAutomationTriggerType
+  actionConfig: DocumentAutomationActionConfigInput
+  isActive: Boolean
+}
+
+extend type Query {
+  documentAutomations(workspaceId: ID!): [DocumentAutomation!]!
+  documentAutomation(workspaceId: ID!, id: ID!): DocumentAutomation
+  documentAutomationLogs(workspaceId: ID!, automationId: ID, limit: Int): [DocumentAutomationLog!]!
+}
+
+extend type Mutation {
+  createDocumentAutomation(workspaceId: ID!, input: CreateDocumentAutomationInput!): DocumentAutomation!
+  updateDocumentAutomation(workspaceId: ID!, id: ID!, input: UpdateDocumentAutomationInput!): DocumentAutomation!
+  deleteDocumentAutomation(workspaceId: ID!, id: ID!): Boolean!
+  toggleDocumentAutomation(workspaceId: ID!, id: ID!): DocumentAutomation!
+  testDocumentAutomation(workspaceId: ID!, id: ID!): Boolean!
+}

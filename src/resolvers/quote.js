@@ -18,6 +18,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import { requireCompanyInfo, getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 const calculateQuoteTotals = (
@@ -1081,7 +1082,24 @@ const quoteResolvers = {
           // Ne pas faire échouer le changement de statut si l'activité échoue
         }
       }
-      
+
+      // Automatisations documents partagés
+      try {
+        const triggerMap = { PENDING: 'QUOTE_SENT', COMPLETED: 'QUOTE_ACCEPTED', CANCELED: 'QUOTE_CANCELED' };
+        const trigger = triggerMap[status];
+        if (trigger) {
+          await documentAutomationService.executeAutomations(trigger, workspaceId, {
+            documentId: quote._id.toString(),
+            documentType: 'quote',
+            documentNumber: quote.number,
+            prefix: quote.prefix || '',
+            clientName: quote.client?.name || '',
+          }, user._id.toString());
+        }
+      } catch (docAutoError) {
+        console.error('Erreur automatisation documents (devis):', docAutoError);
+      }
+
       return await quote.populate("createdBy");
       })
     ),
