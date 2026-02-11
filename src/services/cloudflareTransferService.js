@@ -951,6 +951,69 @@ class CloudflareTransferService {
       throw error;
     }
   }
+
+  /**
+   * Copie un fichier depuis un bucket externe (ex: shared-documents) vers le bucket transfers
+   * @param {string} sourceBucket - Nom du bucket source
+   * @param {string} sourceKey - Clé du fichier dans le bucket source
+   * @param {string} transferId - ID du transfert de destination
+   * @param {string} fileId - ID du fichier de destination
+   * @param {string} originalName - Nom original du fichier
+   * @param {string} mimeType - Type MIME du fichier
+   * @returns {Promise<{key: string, url: string, size: number, contentType: string}>}
+   */
+  async copyFileFromExternalBucket(sourceBucket, sourceKey, transferId, fileId, originalName, mimeType) {
+    try {
+      // 1. Récupérer le fichier depuis le bucket source
+      const getCommand = new GetObjectCommand({
+        Bucket: sourceBucket,
+        Key: sourceKey,
+      });
+
+      const response = await this.client.send(getCommand);
+      const fileBuffer = Buffer.from(await response.Body.transformToByteArray());
+      const fileSize = fileBuffer.length;
+
+      // 2. Générer le chemin de destination dans le bucket transfers
+      const destKey = this.generateR2Path(transferId, fileId, originalName);
+      const contentType = mimeType || this.getContentType(path.extname(originalName));
+
+      // 3. Upload vers le bucket transfers
+      const putCommand = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: destKey,
+        Body: fileBuffer,
+        ContentType: contentType,
+        Metadata: {
+          transferId,
+          fileId,
+          originalName: this.sanitizeFileName(originalName),
+          uploadedAt: new Date().toISOString(),
+          copiedFrom: `${sourceBucket}/${sourceKey}`,
+        },
+      });
+
+      await this.client.send(putCommand);
+
+      // 4. Générer l'URL d'accès
+      let fileUrl;
+      if (this.publicUrl && this.publicUrl !== "https://your_transfer_bucket_public_url") {
+        fileUrl = `${this.publicUrl}/${destKey}`;
+      } else {
+        fileUrl = await this.getSignedUrl(destKey, 86400);
+      }
+
+      return {
+        key: destKey,
+        url: fileUrl,
+        size: fileSize,
+        contentType,
+      };
+    } catch (error) {
+      console.error(`Erreur copie cross-bucket (${sourceBucket} → ${this.bucketName}):`, error);
+      throw new Error(`Échec de la copie cross-bucket: ${error.message}`);
+    }
+  }
 }
 
 // Instance singleton
