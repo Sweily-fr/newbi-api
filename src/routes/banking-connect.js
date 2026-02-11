@@ -394,8 +394,19 @@ router.post("/disconnect", async (req, res) => {
     const { default: AccountBanking } =
       await import("../models/AccountBanking.js");
 
-    let disconnectedAccounts = [];
-    let disconnectedItems = [];
+    let deletedAccountIds = [];
+    let deletedItems = [];
+
+    // Helper: supprimer un item Bridge côté API (best-effort)
+    const deleteBridgeItemSafe = async (bridgeItemId) => {
+      try {
+        await bankingService.initialize("bridge");
+        const bridgeProvider = bankingService.currentProvider;
+        await bridgeProvider.deleteBridgeItem(bridgeItemId, workspaceId);
+      } catch (err) {
+        logger.warn(`Impossible de supprimer l'item Bridge ${bridgeItemId}: ${err.message}`);
+      }
+    };
 
     // Cas 1: Déconnexion d'un compte spécifique par son ID
     if (accountId) {
@@ -409,87 +420,78 @@ router.post("/disconnect", async (req, res) => {
       }
 
       // Récupérer l'itemId du compte pour déconnecter tous les comptes du même item
-      const accountItemId = account.raw?.item_id || account.raw?.provider_id;
+      const accountItemId = account.raw?.item_id;
 
       if (accountItemId) {
-        // Déconnecter tous les comptes du même item
-        const result = await AccountBanking.updateMany(
-          {
-            workspaceId,
-            $or: [
-              { "raw.item_id": accountItemId },
-              { "raw.provider_id": accountItemId }
-            ]
-          },
-          { $set: { status: "disconnected" } }
-        );
-        disconnectedAccounts = await AccountBanking.find({
+        // Supprimer l'item côté Bridge API
+        await deleteBridgeItemSafe(accountItemId);
+        deletedItems.push(accountItemId);
+
+        // Récupérer les IDs avant suppression
+        const accountsToDelete = await AccountBanking.find({
           workspaceId,
-          $or: [
-            { "raw.item_id": accountItemId },
-            { "raw.provider_id": accountItemId }
-          ]
-        }).select('_id');
-        disconnectedItems.push(accountItemId);
+          "raw.item_id": accountItemId,
+        }).select("_id");
+        deletedAccountIds = accountsToDelete.map((a) => a._id.toString());
+
+        // Supprimer les comptes de la DB
+        const result = await AccountBanking.deleteMany({
+          workspaceId,
+          "raw.item_id": accountItemId,
+        });
 
         logger.info(
-          `Déconnexion de l'item ${accountItemId} (${result.modifiedCount} comptes) pour workspace ${workspaceId}`
+          `Suppression de l'item ${accountItemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`
         );
       } else {
-        // Pas d'itemId, déconnecter uniquement ce compte
-        await AccountBanking.findByIdAndUpdate(accountId, {
-          $set: { status: "disconnected" },
-        });
-        disconnectedAccounts.push({ _id: accountId });
+        // Pas d'itemId, supprimer uniquement ce compte
+        deletedAccountIds.push(accountId.toString());
+        await AccountBanking.findByIdAndDelete(accountId);
 
         logger.info(
-          `Déconnexion du compte ${accountId} pour workspace ${workspaceId}`
+          `Suppression du compte ${accountId} pour workspace ${workspaceId}`
         );
       }
 
       return res.json({
         success: true,
-        disconnectedAccountIds: disconnectedAccounts.map(a => a._id.toString()),
-        disconnectedItems,
+        deletedAccountIds,
+        deletedItems,
         mode: "account",
       });
     }
 
     // Cas 2: Déconnexion par itemId (tous les comptes d'un même item)
     if (itemId) {
-      const result = await AccountBanking.updateMany(
-        {
-          workspaceId,
-          $or: [
-            { "raw.item_id": itemId },
-            { "raw.provider_id": itemId }
-          ]
-        },
-        { $set: { status: "disconnected" } }
-      );
+      // Supprimer l'item côté Bridge API
+      await deleteBridgeItemSafe(itemId);
 
-      disconnectedAccounts = await AccountBanking.find({
+      // Récupérer les IDs avant suppression
+      const accountsToDelete = await AccountBanking.find({
         workspaceId,
-        status: "disconnected",
-        $or: [
-          { "raw.item_id": itemId },
-          { "raw.provider_id": itemId }
-        ]
-      }).select('_id');
+        "raw.item_id": itemId,
+      }).select("_id");
+      deletedAccountIds = accountsToDelete.map((a) => a._id.toString());
+
+      // Supprimer les comptes de la DB
+      const result = await AccountBanking.deleteMany({
+        workspaceId,
+        "raw.item_id": itemId,
+      });
 
       logger.info(
-        `Déconnexion de l'item ${itemId} (${result.modifiedCount} comptes) pour workspace ${workspaceId}`
+        `Suppression de l'item ${itemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`
       );
 
       return res.json({
         success: true,
-        disconnectedAccountIds: disconnectedAccounts.map(a => a._id.toString()),
-        disconnectedItems: [itemId],
+        deletedAccountIds,
+        deletedItems: [itemId],
         mode: "item",
       });
     }
 
-    // Cas 3: Déconnexion par provider ou tous les providers (comportement legacy)
+    // Cas 3: Déconnexion par provider ou tous les providers
     const providersToDisconnect = provider
       ? [provider]
       : ["gocardless", "bridge"];
@@ -505,13 +507,27 @@ router.post("/disconnect", async (req, res) => {
         await User.findByIdAndUpdate(user._id, {
           $unset: { [`bridgeTokens.${workspaceId}`]: 1 },
         });
+
+        // Récupérer tous les item_id distincts pour les supprimer côté Bridge
+        const bridgeAccounts = await AccountBanking.find({
+          workspaceId,
+          provider: "bridge",
+        }).select("raw.item_id");
+        const uniqueItemIds = [
+          ...new Set(
+            bridgeAccounts
+              .map((a) => a.raw?.item_id)
+              .filter(Boolean)
+          ),
+        ];
+        for (const bridgeItemId of uniqueItemIds) {
+          await deleteBridgeItemSafe(bridgeItemId);
+          deletedItems.push(bridgeItemId);
+        }
       }
 
-      // Marquer les comptes comme déconnectés
-      await AccountBanking.updateMany(
-        { workspaceId, provider: p },
-        { $set: { status: "disconnected" } }
-      );
+      // Supprimer les comptes de la DB
+      await AccountBanking.deleteMany({ workspaceId, provider: p });
     }
 
     logger.info(
@@ -521,6 +537,7 @@ router.post("/disconnect", async (req, res) => {
     res.json({
       success: true,
       disconnectedProviders: providersToDisconnect,
+      deletedItems,
       mode: "provider",
     });
   } catch (error) {
