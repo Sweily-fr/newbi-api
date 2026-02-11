@@ -56,6 +56,14 @@ router.get("/gocardless/connect", async (req, res) => {
       return res.status(401).json({ error: "Non authentifié" });
     }
 
+    // Vérifier que l'email est vérifié
+    if (!user.isEmailVerified && !user.emailVerified) {
+      return res.status(403).json({
+        error: "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
+        code: "EMAIL_NOT_VERIFIED",
+      });
+    }
+
     const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
     const institutionId = req.query.institutionId;
 
@@ -185,6 +193,14 @@ router.get("/bridge/connect", async (req, res) => {
     const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: "Non authentifié" });
+    }
+
+    // Vérifier que l'email est vérifié
+    if (!user.isEmailVerified && !user.emailVerified) {
+      return res.status(403).json({
+        error: "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
+        code: "EMAIL_NOT_VERIFIED",
+      });
     }
 
     const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
