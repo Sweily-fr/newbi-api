@@ -65,6 +65,16 @@ const SharedFolderSchema = new mongoose.Schema(
       default: false,
     },
 
+    // Visibilité du dossier
+    visibility: {
+      type: String,
+      enum: ["public", "private"],
+      default: "public",
+    },
+    allowedUserIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+    }],
+
     // Corbeille - soft delete
     trashedAt: {
       type: Date,
@@ -88,6 +98,7 @@ SharedFolderSchema.index({ workspaceId: 1, trashedAt: 1 });
 // Index composés
 SharedFolderSchema.index({ workspaceId: 1, parentId: 1 });
 SharedFolderSchema.index({ workspaceId: 1, order: 1 });
+SharedFolderSchema.index({ workspaceId: 1, allowedUserIds: 1 });
 
 const SharedFolder = mongoose.model("SharedFolder", SharedFolderSchema);
 

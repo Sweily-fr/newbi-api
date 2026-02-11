@@ -675,7 +675,23 @@ export class GoCardlessProvider extends BankingProvider {
         await import("../../../models/AccountBanking.js");
       const workspaceStringId = workspaceId.toString();
 
+      // Récupérer les comptes explicitement déconnectés par l'utilisateur
+      // pour ne pas les réactiver lors de la sync
+      const disconnectedAccounts = await AccountBanking.find({
+        workspaceId: workspaceStringId,
+        provider: this.name,
+        status: "disconnected",
+      }).select("externalId");
+      const disconnectedExternalIds = new Set(
+        disconnectedAccounts.map((a) => a.externalId)
+      );
+
       for (const accountData of accounts) {
+        // Ne pas réactiver les comptes que l'utilisateur a déconnectés
+        if (disconnectedExternalIds.has(accountData.externalId)) {
+          continue;
+        }
+
         await AccountBanking.findOneAndUpdate(
           {
             externalId: accountData.externalId,

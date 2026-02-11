@@ -15,7 +15,7 @@ const importedInvoiceItemSchema = new mongoose.Schema({
   productCode: { type: String, default: null },
 }, { _id: false });
 
-// Schéma pour les informations du fournisseur
+// Schéma pour les informations du fournisseur (émetteur de la facture)
 const vendorInfoSchema = new mongoose.Schema({
   name: { type: String, default: '' },
   address: { type: String, default: '' },
@@ -26,6 +26,16 @@ const vendorInfoSchema = new mongoose.Schema({
   vatNumber: { type: String, default: null },
   email: { type: String, default: null },
   phone: { type: String, default: null },
+}, { _id: false });
+
+// Schéma pour les informations du client (destinataire de la facture)
+const clientInfoSchema = new mongoose.Schema({
+  name: { type: String, default: '' },
+  address: { type: String, default: '' },
+  city: { type: String, default: '' },
+  postalCode: { type: String, default: '' },
+  siret: { type: String, default: null },
+  clientNumber: { type: String, default: null },
 }, { _id: false });
 
 const importedInvoiceSchema = new mongoose.Schema({
@@ -65,8 +75,11 @@ const importedInvoiceSchema = new mongoose.Schema({
     index: true
   },
 
-  // Informations du fournisseur
+  // Informations du fournisseur (émetteur)
   vendor: vendorInfoSchema,
+
+  // Informations du client (destinataire)
+  client: clientInfoSchema,
 
   // Dates
   invoiceDate: {

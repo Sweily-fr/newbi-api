@@ -47,8 +47,11 @@ Structure JSON attendue:
   },
 
   "client": {
-    "name": "nom du client",
-    "address": "adresse",
+    "name": "nom du client (entreprise qui REÇOIT et PAIE la facture)",
+    "address": "adresse du client",
+    "city": "ville du client",
+    "postal_code": "code postal du client",
+    "siret": "numéro SIRET du client (14 chiffres) - IMPORTANT: différent du SIRET de l'émetteur",
     "client_number": "numéro client si présent"
   },
 
@@ -98,10 +101,19 @@ Structure JSON attendue:
 Règles:
 1. Extrais TOUS les champs disponibles sur la facture
 2. Les montants doivent être des nombres (pas de symbole €)
-3. Les dates au format YYYY-MM-DD
+3. DATES - FORMAT FRANÇAIS OBLIGATOIRE:
+   - Les dates sur les factures françaises sont TOUJOURS au format JJ/MM/AAAA (jour/mois/année)
+   - JAMAIS le format américain MM/DD/YYYY
+   - "02/11/2025" = 2 NOVEMBRE 2025, convertir en "2025-11-02" (PAS "2025-02-11")
+   - "15/03/2025" = 15 MARS 2025, convertir en "2025-03-15"
+   - Toujours interpréter le PREMIER nombre comme le JOUR et le DEUXIÈME comme le MOIS
 4. Si un champ n'est pas présent, utilise null
 5. Détermine la catégorie selon le contenu (fournitures bureau, déplacement, repas, etc.)
-6. Indique ta confiance (0-1) basée sur la qualité de l'extraction`;
+6. Indique ta confiance (0-1) basée sur la qualité de l'extraction
+7. DISTINCTION ÉMETTEUR vs CLIENT:
+   - Le "vendor" est l'entreprise qui ÉMET/ENVOIE la facture (logo, en-tête, SIRET en pied de page)
+   - Le "client" est l'entreprise qui REÇOIT et PAIE la facture
+   - NE PAS confondre les deux - extraire le SIRET de chaque entité séparément`;
 
 // Configuration des modèles
 const MODELS = {
@@ -541,6 +553,9 @@ class ClaudeVisionOcrService {
 
         client_name: data.client?.name,
         client_address: data.client?.address,
+        client_city: data.client?.city,
+        client_postal_code: data.client?.postal_code,
+        client_siret: data.client?.siret,
         client_number: data.client?.client_number,
 
         items: (data.items || []).map((item) => ({

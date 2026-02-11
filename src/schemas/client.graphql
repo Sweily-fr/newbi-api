@@ -22,6 +22,18 @@ input ClientNoteInput {
   content: String!
 }
 
+input ClientActivityInput {
+  type: String!
+  description: String!
+  metadata: ClientActivityMetadataInput
+}
+
+input ClientActivityMetadataInput {
+  eventId: String
+  eventTitle: String
+  eventDate: String
+}
+
 extend type Mutation {
   # Create a new client
   createClient(workspaceId: String, input: ClientInput!): Client!
@@ -40,4 +52,7 @@ extend type Mutation {
   
   # Delete a client note
   deleteClientNote(workspaceId: String, clientId: ID!, noteId: ID!): Client!
+
+  # Add an activity entry to a client
+  addClientActivity(workspaceId: String, clientId: ID!, input: ClientActivityInput!): Client!
 }
