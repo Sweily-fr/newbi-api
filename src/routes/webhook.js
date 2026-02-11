@@ -138,7 +138,7 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
 
       case "account.disconnected":
         logger.info("🔌 Événement: account.disconnected");
-        // Pas de sync nécessaire, juste un log
+        await handleAccountDisconnected(payload);
         break;
 
       default:
@@ -307,6 +307,46 @@ async function handleTransactionEvent(payload) {
     await triggerIncrementalSync(userUuid, accountId);
   } catch (error) {
     logger.error("❌ Erreur handleTransactionEvent:", error.message);
+  }
+}
+
+/**
+ * Gère l'événement account.disconnected
+ * Marque le compte comme déconnecté en DB (ou le supprime)
+ */
+async function handleAccountDisconnected(payload) {
+  try {
+    const userUuid = payload.content?.user_uuid;
+    const accountId = payload.content?.account_id;
+
+    if (!userUuid) {
+      logger.warn("⚠️ handleAccountDisconnected: user_uuid manquant");
+      return;
+    }
+
+    const workspaceId = await findWorkspaceByBridgeUuid(userUuid);
+    if (!workspaceId) {
+      logger.error("❌ Workspace non trouvé pour user_uuid:", userUuid);
+      return;
+    }
+
+    const { default: AccountBanking } = await import("../models/AccountBanking.js");
+
+    if (accountId) {
+      // Supprimer le compte spécifique
+      const result = await AccountBanking.deleteMany({
+        externalId: accountId.toString(),
+        workspaceId,
+        provider: "bridge",
+      });
+      logger.info(
+        `🔌 Compte ${accountId} supprimé de la DB (${result.deletedCount} docs) suite à account.disconnected`
+      );
+    } else {
+      logger.warn("⚠️ handleAccountDisconnected: account_id manquant, aucune action");
+    }
+  } catch (error) {
+    logger.error("❌ Erreur handleAccountDisconnected:", error.message);
   }
 }
 
