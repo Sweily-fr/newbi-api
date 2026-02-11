@@ -35,7 +35,7 @@ const accountBankingSchema = new mongoose.Schema(
     status: {
       type: String,
       required: true,
-      enum: ["active", "inactive", "suspended", "closed"],
+      enum: ["active", "inactive", "suspended", "closed", "disconnected"],
       default: "active",
       index: true,
     },

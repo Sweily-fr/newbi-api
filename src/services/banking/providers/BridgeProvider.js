@@ -469,10 +469,21 @@ export class BridgeProvider extends BankingProvider {
       // Sauvegarder en base de données
       await this._saveAccountsToDatabase(accounts, workspaceId);
 
-      console.log(
-        `✅ ${accounts.length} comptes synchronisés pour workspace ${workspaceId}`
+      // Retourner uniquement les comptes actifs depuis la DB
+      // (exclut les comptes déconnectés qui ont été filtrés pendant la sauvegarde)
+      const { default: AccountBanking } = await import(
+        "../../../models/AccountBanking.js"
       );
-      return accounts;
+      const activeAccounts = await AccountBanking.find({
+        workspaceId: workspaceId.toString(),
+        provider: this.name,
+        status: "active",
+      });
+
+      console.log(
+        `✅ ${activeAccounts.length} comptes actifs synchronisés pour workspace ${workspaceId}`
+      );
+      return activeAccounts;
     } catch (error) {
       console.error("❌ Erreur synchronisation comptes:", error.message);
       throw new Error(`Erreur récupération comptes: ${error.message}`);
@@ -1201,6 +1212,33 @@ export class BridgeProvider extends BankingProvider {
       cancelled: "cancelled",
     };
     return statusMapping[bridgeStatus] || "completed";
+  }
+
+  /**
+   * Supprime un item (connexion bancaire) côté Bridge API
+   * @param {string|number} itemId - ID de l'item Bridge à supprimer
+   * @param {string} workspaceId - ID du workspace pour créer le token
+   * @returns {Promise<boolean>} true si supprimé, false si erreur
+   */
+  async deleteBridgeItem(itemId, workspaceId) {
+    try {
+      const accessToken = await this.createUserAuthToken(workspaceId);
+      await this.client.delete(`/v3/aggregation/items/${itemId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      console.log(`Item Bridge ${itemId} supprime avec succes`);
+      return true;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        console.log(`Item Bridge ${itemId} deja supprime ou inexistant`);
+        return true;
+      }
+      console.error(
+        `Erreur suppression item Bridge ${itemId}:`,
+        error.response?.data || error.message
+      );
+      return false;
+    }
   }
 
   /**
