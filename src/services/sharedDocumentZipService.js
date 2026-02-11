@@ -479,4 +479,6 @@ export {
   getSelectionInfo,
   verifyFolderAccess,
   getAllSubfolders,
+  s3Client as sharedDocsS3Client,
+  SHARED_DOCUMENTS_BUCKET,
 };

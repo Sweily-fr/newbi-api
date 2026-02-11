@@ -149,4 +149,12 @@ extend type Mutation {
 
   # Générer un lien de paiement pour un transfert de fichiers
   generateFileTransferPaymentLink(id: ID!): FileTransferPaymentResponse!
+
+  # Créer un transfert de fichiers à partir de documents partagés (copie cross-bucket)
+  createFileTransferFromSharedDocuments(
+    documentIds: [ID!]
+    folderIds: [ID!]
+    workspaceId: ID!
+    input: FileTransferInput
+  ): FileTransferResponse!
 }

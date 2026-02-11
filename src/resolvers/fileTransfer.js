@@ -1,5 +1,6 @@
 import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
+import SharedDocument from "../models/SharedDocument.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   saveUploadedFile,
@@ -9,6 +10,10 @@ import {
   calculateExpiryDate,
   deleteFile,
 } from "../utils/fileTransferUtils.js";
+import { getAllSubfolders, sharedDocsS3Client, SHARED_DOCUMENTS_BUCKET } from "../services/sharedDocumentZipService.js";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
+import cloudflareTransferService from "../services/cloudflareTransferService.js";
+import crypto from "crypto";
 import Stripe from "stripe";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 import constants from "../utils/constants.js";
@@ -505,5 +510,180 @@ export default {
         );
       }
     },
+
+    // Créer un transfert de fichiers à partir de documents partagés (copie cross-bucket)
+    createFileTransferFromSharedDocuments: isAuthenticated(
+      async (_, { documentIds = [], folderIds = [], workspaceId, input = {} }, { user }) => {
+        try {
+          // Valider qu'au moins un document ou dossier est sélectionné
+          if ((!documentIds || documentIds.length === 0) && (!folderIds || folderIds.length === 0)) {
+            throw new UserInputError("Veuillez sélectionner au moins un document ou dossier");
+          }
+
+          // Collecter tous les IDs de documents (incluant ceux des dossiers)
+          const allDocumentIds = new Set(documentIds || []);
+
+          // Pour chaque dossier, récupérer récursivement tous les documents
+          if (folderIds && folderIds.length > 0) {
+            for (const folderId of folderIds) {
+              const allFolders = await getAllSubfolders(folderId, workspaceId);
+              const folderIdsToQuery = allFolders.map((f) => f._id);
+
+              const docsInFolders = await SharedDocument.find({
+                workspaceId,
+                folderId: { $in: folderIdsToQuery },
+                trashedAt: null,
+              }).select("_id");
+
+              docsInFolders.forEach((doc) => allDocumentIds.add(doc._id.toString()));
+            }
+          }
+
+          if (allDocumentIds.size === 0) {
+            throw new UserInputError("Aucun document trouvé dans la sélection");
+          }
+
+          // Charger les documents
+          const documents = await SharedDocument.find({
+            _id: { $in: Array.from(allDocumentIds) },
+            workspaceId,
+            trashedAt: null,
+          });
+
+          if (documents.length === 0) {
+            throw new UserInputError("Aucun document trouvé");
+          }
+
+          // Générer un ID de transfert
+          const transferId = crypto.randomUUID();
+
+          // Copier chaque fichier du bucket shared-documents vers le bucket transfers
+          const filesInfo = [];
+          let totalSize = 0;
+
+          for (const doc of documents) {
+            const fileId = crypto.randomUUID();
+
+            // 1. Lire le fichier depuis le bucket shared-documents (avec son propre client)
+            const getCmd = new GetObjectCommand({
+              Bucket: SHARED_DOCUMENTS_BUCKET,
+              Key: doc.fileKey,
+            });
+            const srcResponse = await sharedDocsS3Client.send(getCmd);
+            const fileBuffer = Buffer.from(await srcResponse.Body.transformToByteArray());
+
+            // 2. Upload vers le bucket transfers
+            const result = await cloudflareTransferService.uploadFile(
+              fileBuffer,
+              transferId,
+              fileId,
+              doc.originalName,
+              doc.mimeType
+            );
+
+            filesInfo.push({
+              originalName: doc.originalName,
+              displayName: doc.name || doc.originalName,
+              fileName: doc.originalName,
+              filePath: result.url,
+              r2Key: result.key,
+              mimeType: doc.mimeType,
+              size: result.size,
+              storageType: "r2",
+              fileId,
+              uploadedAt: new Date(),
+            });
+
+            totalSize += result.size;
+          }
+
+          // Options du transfert
+          const expiryDays = input?.expiryDays || 7;
+          const recipientEmail = input?.recipientEmail || null;
+          const message = input?.message || null;
+          const notifyOnDownload = input?.notifyOnDownload || false;
+          const passwordProtected = input?.passwordProtected || false;
+          const password = input?.password || null;
+          const allowPreview = input?.allowPreview !== false;
+          const expiryReminderEnabled = input?.expiryReminderEnabled || false;
+          const hasWatermark = input?.hasWatermark || false;
+          const paymentAmount = input?.paymentAmount || 0;
+          const paymentCurrency = input?.paymentCurrency || input?.currency || "EUR";
+          const isPaymentRequired =
+            paymentAmount > 0 || input?.isPaymentRequired || input?.requirePayment || false;
+
+          // Créer le FileTransfer
+          const fileTransfer = new FileTransfer({
+            userId: user.id,
+            files: filesInfo,
+            totalSize,
+            status: "active",
+            createdAt: new Date(),
+            expiryDate: new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000),
+            isPaymentRequired,
+            paymentAmount,
+            paymentCurrency,
+            recipientEmail,
+            message,
+            uploadMethod: "shared-documents",
+            notifyOnDownload,
+            passwordProtected,
+            password: passwordProtected ? password : null,
+            allowPreview,
+            expiryReminderEnabled,
+            hasWatermark,
+          });
+
+          // Générer les liens de partage
+          await fileTransfer.generateShareCredentials();
+          await fileTransfer.save();
+
+          // Envoyer l'email si un destinataire est spécifié
+          if (
+            recipientEmail &&
+            process.env.SMTP_HOST &&
+            process.env.SMTP_USER &&
+            process.env.SMTP_PASS
+          ) {
+            try {
+              const { sendFileTransferEmail } = await import("../utils/mailer.js");
+
+              const transferData = {
+                shareLink: fileTransfer.shareLink,
+                accessKey: fileTransfer.accessKey,
+                senderName:
+                  user.firstName && user.lastName
+                    ? `${user.firstName} ${user.lastName}`
+                    : user.email,
+                message,
+                files: filesInfo,
+                expiryDate: fileTransfer.expiryDate,
+              };
+
+              await sendFileTransferEmail(recipientEmail, transferData);
+              console.log("📧 Email de transfert (shared docs) envoyé à:", recipientEmail);
+            } catch (emailError) {
+              console.error("❌ Erreur envoi email transfert (shared docs):", emailError);
+            }
+          }
+
+          return {
+            fileTransfer,
+            shareLink: fileTransfer.shareLink,
+            accessKey: fileTransfer.accessKey,
+          };
+        } catch (error) {
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+
+          console.error("❌ Erreur création transfert depuis documents partagés:", error);
+          throw new ApolloError(
+            "Une erreur est survenue lors de la création du transfert depuis les documents partagés.",
+            "FILE_TRANSFER_FROM_SHARED_DOCS_ERROR"
+          );
+        }
+      }
+    ),
   },
 };
