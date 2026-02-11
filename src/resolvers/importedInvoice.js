@@ -398,6 +398,9 @@ function transformOcrToInvoiceDataV2(ocrResult, extractionResult) {
     client: {
       name: extractedFields.client_name || transactionData.client_name || null,
       address: extractedFields.client_address || null,
+      city: extractedFields.client_city || null,
+      postalCode: extractedFields.client_postal_code || null,
+      siret: extractedFields.client_siret || null,
       clientNumber:
         extractedFields.client_number || transactionData.client_number || null,
     },
@@ -1010,6 +1013,23 @@ const importedInvoiceResolvers = {
           invoice.vendor.siret = input.vendorSiret;
         if (input.vendorVatNumber !== undefined)
           invoice.vendor.vatNumber = input.vendorVatNumber;
+
+        // Mettre à jour les champs du client si fournis
+        if (input.clientName !== undefined || input.clientSiret !== undefined ||
+            input.clientAddress !== undefined || input.clientCity !== undefined ||
+            input.clientPostalCode !== undefined) {
+          if (!invoice.client) invoice.client = {};
+          if (input.clientName !== undefined)
+            invoice.client.name = input.clientName;
+          if (input.clientSiret !== undefined)
+            invoice.client.siret = input.clientSiret;
+          if (input.clientAddress !== undefined)
+            invoice.client.address = input.clientAddress;
+          if (input.clientCity !== undefined)
+            invoice.client.city = input.clientCity;
+          if (input.clientPostalCode !== undefined)
+            invoice.client.postalCode = input.clientPostalCode;
+        }
 
         // Mettre à jour les autres champs
         if (input.originalInvoiceNumber !== undefined)

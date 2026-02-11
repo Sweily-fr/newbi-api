@@ -319,6 +319,7 @@ const clientSchema = new mongoose.Schema(
             "crm_email_sent",
             "invoice_reminder_sent",
             "document_email_sent",
+            "reminder_created",
           ],
           required: true,
         },
@@ -344,6 +345,10 @@ const clientSchema = new mongoose.Schema(
           automationName: String,
           customFieldName: String,
           customFieldValue: String,
+          // Champs pour les rappels calendrier
+          eventId: String,
+          eventTitle: String,
+          eventDate: String,
         },
         createdAt: {
           type: Date,

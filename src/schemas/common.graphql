@@ -44,6 +44,9 @@ type ClientActivityMetadata {
   documentNumber: String
   status: String
   originalInvoiceNumber: String
+  eventId: String
+  eventTitle: String
+  eventDate: String
 }
 
 type ClientCustomFieldValueType {

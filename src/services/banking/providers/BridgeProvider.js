@@ -496,7 +496,32 @@ export class BridgeProvider extends BankingProvider {
         `💾 Tentative sauvegarde de ${accounts.length} comptes pour workspace ${workspaceId} (String: ${workspaceStringId})`
       );
 
+      // Récupérer les comptes explicitement déconnectés par l'utilisateur
+      // pour ne pas les réactiver lors de la sync
+      const disconnectedAccounts = await AccountBanking.find({
+        workspaceId: workspaceStringId,
+        provider: this.name,
+        status: "disconnected",
+      }).select("externalId");
+      const disconnectedExternalIds = new Set(
+        disconnectedAccounts.map((a) => a.externalId)
+      );
+
+      if (disconnectedExternalIds.size > 0) {
+        console.log(
+          `⏭️ ${disconnectedExternalIds.size} compte(s) déconnecté(s) seront ignorés lors de la sync`
+        );
+      }
+
       for (const accountData of accounts) {
+        // Ne pas réactiver les comptes que l'utilisateur a déconnectés
+        if (disconnectedExternalIds.has(accountData.externalId)) {
+          console.log(
+            `⏭️ Compte ignoré (déconnecté par l'utilisateur): ${accountData.name} (${accountData.externalId})`
+          );
+          continue;
+        }
+
         console.log(
           `🔍 Sauvegarde compte: ${accountData.name} (${accountData.externalId})`
         );

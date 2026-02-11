@@ -41,6 +41,9 @@ type SharedFolder {
   isSharedWithAccountant: Boolean!
   order: Int!
   isSystem: Boolean!
+  visibility: FolderVisibility
+  allowedUserIds: [ID]
+  canManageVisibility: Boolean
   documentsCount: Int
   createdAt: String!
   updatedAt: String!
@@ -61,6 +64,11 @@ enum SharedDocumentStatus {
   pending
   classified
   archived
+}
+
+enum FolderVisibility {
+  public
+  private
 }
 
 # Réponses
@@ -116,6 +124,8 @@ input CreateSharedFolderInput {
   icon: String
   isSharedWithAccountant: Boolean
   isSystem: Boolean
+  visibility: FolderVisibility
+  allowedUserIds: [ID]
 }
 
 input UpdateSharedFolderInput {
@@ -126,6 +136,8 @@ input UpdateSharedFolderInput {
   icon: String
   isSharedWithAccountant: Boolean
   order: Int
+  visibility: FolderVisibility
+  allowedUserIds: [ID]
 }
 
 input UpdateSharedDocumentInput {
@@ -258,6 +270,13 @@ extend type Mutation {
   ): SharedFolderResponse!
 
   deleteSharedFolder(id: ID!, workspaceId: ID!): DeleteResponse!
+
+  updateFolderVisibility(
+    id: ID!
+    workspaceId: ID!
+    visibility: FolderVisibility!
+    allowedUserIds: [ID]
+  ): SharedFolderResponse!
 
   # Tags en masse
   bulkUpdateTags(

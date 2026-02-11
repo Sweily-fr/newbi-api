@@ -36,7 +36,7 @@ enum PaymentMethodType {
   UNKNOWN
 }
 
-# Informations du fournisseur
+# Informations du fournisseur (émetteur)
 type ImportedInvoiceVendor {
   name: String
   address: String
@@ -47,6 +47,16 @@ type ImportedInvoiceVendor {
   vatNumber: String
   email: String
   phone: String
+}
+
+# Informations du client (destinataire)
+type ImportedInvoiceClient {
+  name: String
+  address: String
+  city: String
+  postalCode: String
+  siret: String
+  clientNumber: String
 }
 
 # Ligne de facture
@@ -83,6 +93,7 @@ type ImportedInvoice {
   status: ImportedInvoiceStatus!
   originalInvoiceNumber: String
   vendor: ImportedInvoiceVendor
+  client: ImportedInvoiceClient
   invoiceDate: String
   dueDate: String
   paymentDate: String
@@ -200,6 +211,11 @@ input UpdateImportedInvoiceInput {
   vendorCountry: String
   vendorSiret: String
   vendorVatNumber: String
+  clientName: String
+  clientSiret: String
+  clientAddress: String
+  clientCity: String
+  clientPostalCode: String
   invoiceDate: String
   dueDate: String
   paymentDate: String
