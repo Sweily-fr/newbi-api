@@ -553,6 +553,45 @@ const clientResolvers = {
         return client;
       }
     ),
+
+    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
+    addClientActivity: requireWrite("clients")(
+      async (_, { clientId, input, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        // Validation du workspaceId
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
+        const client = await Client.findOne({
+          _id: clientId,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        });
+
+        if (!client) {
+          throw createNotFoundError("Client");
+        }
+
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          type: input.type,
+          description: input.description,
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          metadata: input.metadata || {},
+          createdAt: new Date(),
+        });
+
+        await client.save();
+        return client;
+      }
+    ),
   },
 
   // Resolvers de champs pour convertir les dates en strings ISO

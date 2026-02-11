@@ -528,7 +528,7 @@ class InvoiceExtractionService {
         messages: [
           {
             role: 'system',
-            content: 'Expert extraction factures FR. Montants: virgule→point. Dates: JJ/MM/AAAA→YYYY-MM-DD. JSON uniquement.'
+            content: 'Expert extraction factures FR. Montants: virgule→point. DATES CRITIQUES: les factures françaises utilisent TOUJOURS le format JJ/MM/AAAA (jour/mois/année). 02/11/2025 = 2 novembre 2025, PAS le 11 février. Convertir en YYYY-MM-DD. JSON uniquement.'
           },
           {
             role: 'user',
@@ -606,10 +606,14 @@ INSTRUCTIONS CRITIQUES:
    - Si escompte/RG: prendre le montant APRÈS déduction
    - Convertir virgule en point: 8 371,51 → 8371.51
 
-5. DATES:
+5. DATES - ATTENTION FORMAT FRANÇAIS OBLIGATOIRE:
+   - Les dates sur les factures françaises sont TOUJOURS au format JJ/MM/AAAA (jour/mois/année)
+   - JAMAIS le format américain MM/DD/YYYY
+   - Exemple: "02/11/2025" = 2 NOVEMBRE 2025 (pas le 11 février !)
+   - Exemple: "15/03/2025" = 15 MARS 2025
    - Date facture: cherche près du numéro de facture
    - Échéance: cherche "NET A PAYER PAR ... LE JJ/MM/AAAA" ou "Échéance"
-   - Format: JJ/MM/AAAA → YYYY-MM-DD
+   - Convertir en YYYY-MM-DD: "02/11/2025" → "2025-11-02"
 
 6. SIRET: 14 chiffres (peut avoir des espaces: 981 602 451 00024)
 7. N° TVA: FR + 11 chiffres (ex: FR79981602451)
@@ -627,10 +631,11 @@ RÉPONDS UNIQUEMENT EN JSON VALIDE:
     "phone": "Téléphone ou null"
   },
   "client": {
-    "name": "Nom du CLIENT qui paie",
+    "name": "Nom du CLIENT qui REÇOIT et PAIE la facture",
     "address": "Adresse du client",
     "city": "Ville du client",
-    "postalCode": "Code postal client"
+    "postalCode": "Code postal client",
+    "siret": "SIRET du CLIENT (14 chiffres) - DIFFÉRENT du SIRET de l'émetteur"
   },
   "invoice": {
     "number": "Numéro exact (ex: FA137)",
@@ -758,7 +763,12 @@ ${relevantText}
 5. FORMAT DES DONNÉES:
    - Montants: Convertir virgule en point (6 000,00 → 6000.00)
    - Supprimer espaces dans les nombres (6 000 → 6000)
-   - Dates: Convertir en YYYY-MM-DD (30/11/2025 → 2025-11-30)
+   - DATES CRITIQUES - FORMAT FRANÇAIS OBLIGATOIRE:
+     * Les dates françaises sont TOUJOURS JJ/MM/AAAA (jour/mois/année)
+     * JAMAIS le format américain MM/DD/YYYY
+     * "02/11/2025" = 2 NOVEMBRE → "2025-11-02" (PAS "2025-02-11" !)
+     * "30/11/2025" = 30 NOVEMBRE → "2025-11-30"
+     * "05/01/2026" = 5 JANVIER → "2026-01-05"
    - SIRET: 14 chiffres sans espaces
    - N° TVA: Format FR + 11 chiffres (FR79981602451)
 
@@ -785,10 +795,11 @@ ${relevantText}
     "phone": "Téléphone"
   },
   "client": {
-    "name": "Nom exact du client (ex: ETS LECUYER)",
+    "name": "Nom exact du CLIENT qui REÇOIT la facture (ex: ETS LECUYER)",
     "address": "Adresse client",
     "city": "Ville client",
-    "postalCode": "CP client"
+    "postalCode": "CP client",
+    "siret": "SIRET du CLIENT (14 chiffres sans espaces) - DIFFÉRENT du SIRET de l'émetteur"
   },
   "invoice": {
     "number": "Numéro facture (ex: FA129)",
@@ -901,14 +912,20 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
     merged.transaction_data.client_number = client.clientNumber;
     merged.extracted_fields.client_name = client.name;
     merged.extracted_fields.client_address = client.address;
+    merged.extracted_fields.client_city = client.city;
+    merged.extracted_fields.client_postal_code = client.postalCode;
+    merged.extracted_fields.client_siret = this.validateSiret(client.siret);
     merged.extracted_fields.client_number = client.clientNumber;
 
     // Fusionner les données facture
     const invoice = aiData.invoice || {};
     merged.transaction_data.document_number = invoice.number || regexData.invoiceNumber;
-    merged.transaction_data.transaction_date = this.validateDate(invoice.date || regexData.invoiceDate);
-    merged.transaction_data.due_date = this.validateDate(invoice.dueDate || regexData.dueDate);
-    merged.transaction_data.payment_date = this.validateDate(invoice.paymentDate);
+    // Priorité aux dates regex (toujours format français JJ/MM/AAAA) sur les dates IA (risque d'inversion)
+    merged.transaction_data.transaction_date = this.validateDate(regexData.invoiceDate, originalText)
+      || this.validateDate(invoice.date, originalText);
+    merged.transaction_data.due_date = this.validateDate(regexData.dueDate, originalText)
+      || this.validateDate(invoice.dueDate, originalText);
+    merged.transaction_data.payment_date = this.validateDate(invoice.paymentDate, originalText);
 
     // Fusionner les montants - priorité à l'IA, fallback regex
     const amounts = aiData.amounts || {};
@@ -1020,12 +1037,53 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
 
   /**
    * Valide et normalise une date
+   * @param {string} dateStr - Date à valider (YYYY-MM-DD ou JJ/MM/AAAA)
+   * @param {string} originalText - Texte OCR original pour cross-vérification
    */
-  validateDate(dateStr) {
+  validateDate(dateStr, originalText = '') {
     if (!dateStr) return null;
 
-    // Si déjà au format YYYY-MM-DD
+    // Si déjà au format YYYY-MM-DD (retourné par l'IA)
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      const [year, month, day] = dateStr.split('-').map(Number);
+
+      // Mois > 12 = l'IA a inversé jour et mois, corriger
+      if (month > 12 && day <= 12) {
+        const corrected = `${year}-${String(day).padStart(2, '0')}-${String(month).padStart(2, '0')}`;
+        const date = new Date(corrected);
+        console.log(`📅 Date corrigée (mois > 12): ${dateStr} → ${corrected}`);
+        return isNaN(date.getTime()) ? null : corrected;
+      }
+
+      // Ambiguïté possible (jour <= 12 ET mois <= 12)
+      // Vérifier dans le texte original si la date apparaît en format français
+      if (day <= 12 && month <= 12 && day !== month && originalText) {
+        const dayStr = String(day).padStart(2, '0');
+        const monthStr = String(month).padStart(2, '0');
+
+        // Chercher la version "month/day/year" dans le texte (= l'IA a lu en américain)
+        // Si on trouve month/day/year dans le texte, c'est que la date originale est month/day/year
+        // et en français ça veut dire jour=month, mois=day → il faut swapper
+        const americanReadPattern = new RegExp(
+          `${monthStr}[/\\-\\.]${dayStr}[/\\-\\.]${year}`
+        );
+        const frenchReadPattern = new RegExp(
+          `${dayStr}[/\\-\\.]${monthStr}[/\\-\\.]${year}`
+        );
+
+        const foundAmerican = americanReadPattern.test(originalText);
+        const foundFrench = frenchReadPattern.test(originalText);
+
+        if (foundAmerican && !foundFrench) {
+          // Le texte contient month/day/year → en français c'est DD=month, MM=day
+          // L'IA a lu en américain, il faut swapper
+          const corrected = `${year}-${dayStr}-${monthStr}`;
+          const date = new Date(corrected);
+          console.log(`📅 Date corrigée (inversion jour/mois détectée): ${dateStr} → ${corrected}`);
+          return isNaN(date.getTime()) ? null : corrected;
+        }
+      }
+
       const date = new Date(dateStr);
       return isNaN(date.getTime()) ? null : dateStr;
     }
@@ -1036,6 +1094,14 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
       let [, day, month, year] = frenchMatch;
       if (year.length === 2) {
         year = parseInt(year) > 50 ? `19${year}` : `20${year}`;
+      }
+      // Correction si jour > 12 (inversion évidente)
+      if (parseInt(day) > 12 && parseInt(month) <= 12) {
+        // Pas d'inversion, format correct : day est bien le jour
+      } else if (parseInt(day) <= 12 && parseInt(month) > 12) {
+        // Inversion évidente : swapper
+        console.log(`📅 Date française corrigée (inversion): ${day}/${month}/${year} → ${month}/${day}/${year}`);
+        [day, month] = [month, day];
       }
       const formatted = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
       const date = new Date(formatted);

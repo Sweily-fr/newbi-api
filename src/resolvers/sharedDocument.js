@@ -7,28 +7,81 @@ import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import cloudflareService from "../services/cloudflareService.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { withOrganization } from "../middlewares/rbac.js";
 import { GraphQLUpload } from "graphql-upload";
 import path from "path";
 
 const { ObjectId } = mongoose.Types;
+
+// === Visibility helpers ===
+
+function getEffectiveVisibility(folder, folderMap) {
+  if (folder.visibility) {
+    return {
+      visibility: folder.visibility,
+      allowedUserIds: (folder.allowedUserIds || []).map((id) => id.toString()),
+      createdBy: folder.createdBy?.toString(),
+    };
+  }
+  if (folder.parentId) {
+    const parent = folderMap.get(folder.parentId.toString());
+    if (parent) return getEffectiveVisibility(parent, folderMap);
+  }
+  return {
+    visibility: "public",
+    allowedUserIds: [],
+    createdBy: folder.createdBy?.toString(),
+  };
+}
+
+function canAccessFolder(userId, folder, effectiveVis) {
+  if (effectiveVis.visibility === "public") return true;
+  if (folder.createdBy?.toString() === userId) return true;
+  if (effectiveVis.createdBy === userId) return true;
+  return effectiveVis.allowedUserIds.includes(userId);
+}
 
 const sharedDocumentResolvers = {
   Upload: GraphQLUpload,
 
   Query: {
     /**
-     * Récupère les documents partagés d'un workspace
+     * Récupère les documents partagés d'un workspace (filtrés par visibilité des dossiers)
      */
-    sharedDocuments: isAuthenticated(
+    sharedDocuments: withOrganization(
       async (_, { workspaceId, filter, limit = 50, offset = 0, sortBy = "createdAt", sortOrder = "desc" }, { user }) => {
         try {
+          const userId = user._id?.toString() || user.id?.toString();
+
+          // Charger tous les dossiers pour vérifier la visibilité
+          const allFolders = await SharedFolder.find({ workspaceId, trashedAt: null });
+          const folderMap = new Map();
+          for (const folder of allFolders) {
+            folderMap.set(folder._id.toString(), folder);
+          }
+
+          // Calculer les dossiers inaccessibles
+          const inaccessibleFolderIds = allFolders
+            .filter((folder) => {
+              const effectiveVis = getEffectiveVisibility(folder, folderMap);
+              return !canAccessFolder(userId, folder, effectiveVis);
+            })
+            .map((f) => f._id);
+
           // Exclure les documents en corbeille
           const query = { workspaceId, trashedAt: null };
 
           // Filtres optionnels
           if (filter) {
             if (filter.folderId !== undefined) {
+              // Si le dossier demandé est inaccessible, retourner vide
+              if (filter.folderId && inaccessibleFolderIds.some((id) => id.toString() === filter.folderId)) {
+                return { success: true, documents: [], total: 0, hasMore: false };
+              }
               query.folderId = filter.folderId || null;
+            } else if (inaccessibleFolderIds.length > 0) {
+              // Exclure les documents des dossiers privés inaccessibles
+              query.folderId = { $nin: inaccessibleFolderIds };
             }
             if (filter.status) {
               query.status = filter.status;
@@ -172,19 +225,33 @@ const sharedDocumentResolvers = {
     ),
 
     /**
-     * Récupère les dossiers d'un workspace
+     * Récupère les dossiers d'un workspace (filtrés par visibilité)
      */
-    sharedFolders: isAuthenticated(async (_, { workspaceId }, { user }) => {
+    sharedFolders: withOrganization(async (_, { workspaceId }, { user }) => {
       try {
+        const userId = user._id?.toString() || user.id?.toString();
+
         // Exclure les dossiers en corbeille
         const folders = await SharedFolder.find({ workspaceId, trashedAt: null }).sort({
           order: 1,
           name: 1,
         });
 
-        // Ajouter le compte de documents pour chaque dossier (exclure docs en corbeille)
+        // Construire un folderMap pour résoudre la visibilité héritée
+        const folderMap = new Map();
+        for (const folder of folders) {
+          folderMap.set(folder._id.toString(), folder);
+        }
+
+        // Filtrer les dossiers par visibilité
+        const accessibleFolders = folders.filter((folder) => {
+          const effectiveVis = getEffectiveVisibility(folder, folderMap);
+          return canAccessFolder(userId, folder, effectiveVis);
+        });
+
+        // Ajouter le compte de documents pour chaque dossier accessible (exclure docs en corbeille)
         const foldersWithCount = await Promise.all(
-          folders.map(async (folder) => {
+          accessibleFolders.map(async (folder) => {
             const documentsCount = await SharedDocument.countDocuments({
               workspaceId,
               folderId: folder._id,
@@ -787,7 +854,7 @@ const sharedDocumentResolvers = {
     /**
      * Crée un dossier
      */
-    createSharedFolder: isAuthenticated(
+    createSharedFolder: withOrganization(
       async (_, { workspaceId, input }, { user }) => {
         try {
           // Vérifier si un dossier avec le même nom existe déjà
@@ -993,6 +1060,44 @@ const sharedDocumentResolvers = {
             success: false,
             message: error.message,
           };
+        }
+      }
+    ),
+
+    /**
+     * Met à jour la visibilité d'un dossier
+     */
+    updateFolderVisibility: withOrganization(
+      async (_, { id, workspaceId, visibility, allowedUserIds }, context) => {
+        const { user } = context;
+        try {
+          const folder = await SharedFolder.findOne({ _id: id, workspaceId });
+          if (!folder) {
+            return { success: false, message: "Dossier non trouvé", folder: null };
+          }
+
+          const userId = user._id?.toString() || user.id?.toString();
+          if (folder.isSystem) {
+            const userRole = context.userRole;
+            if (userRole !== "admin" && userRole !== "owner") {
+              return { success: false, message: "Seul un administrateur peut modifier la visibilité des dossiers système", folder: null };
+            }
+          } else if (folder.createdBy?.toString() !== userId) {
+            return { success: false, message: "Seul le créateur peut modifier la visibilité", folder: null };
+          }
+
+          folder.visibility = visibility;
+          folder.allowedUserIds = visibility === "private" ? (allowedUserIds || []) : [];
+          await folder.save();
+
+          return {
+            success: true,
+            message: "Visibilité mise à jour",
+            folder: { ...folder.toObject(), id: folder._id },
+          };
+        } catch (error) {
+          console.error("❌ Erreur mise à jour visibilité:", error);
+          return { success: false, message: error.message, folder: null };
         }
       }
     ),
@@ -1292,6 +1397,15 @@ const sharedDocumentResolvers = {
       const diffMs = deletionDate - now;
       const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
       return Math.max(0, diffDays);
+    },
+    canManageVisibility: (parent, _, context) => {
+      if (!context.user) return false;
+      // Les dossiers système : seul un admin/owner peut gérer la visibilité
+      if (parent.isSystem) {
+        return context.userRole === "admin" || context.userRole === "owner";
+      }
+      const userId = context.user._id?.toString() || context.user.id?.toString();
+      return parent.createdBy?.toString() === userId;
     },
   },
 };
