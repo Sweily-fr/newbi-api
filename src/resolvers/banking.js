@@ -319,6 +319,14 @@ const bankingResolvers = {
     // Gestion des comptes
     createBankingAccount: withWorkspace(
       async (parent, { input }, { user, workspaceId }) => {
+        // Vérifier que l'email est vérifié
+        if (!user.isEmailVerified && !user.emailVerified) {
+          throw new AppError(
+            "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
+            ERROR_CODES.EMAIL_NOT_VERIFIED
+          );
+        }
+
         try {
           await bankingService.initialize();
 

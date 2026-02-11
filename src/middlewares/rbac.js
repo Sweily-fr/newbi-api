@@ -20,7 +20,7 @@ const ROLE_PERMISSIONS = {
   owner: {
     // Owner a tous les droits
     quotes: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
-    invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid"],
+    invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid", "import"],
     creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
     expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
     payments: ["view", "create", "edit", "delete", "export"],
@@ -28,6 +28,7 @@ const ROLE_PERMISSIONS = {
     products: ["view", "create", "edit", "delete", "export", "manage-categories"],
     suppliers: ["view", "create", "edit", "delete"],
     fileTransfers: ["view", "create", "delete", "download"],
+    sharedDocuments: ["view", "create", "edit", "delete", "download"],
     kanban: ["view", "create", "edit", "delete", "assign"],
     signatures: ["view", "create", "edit", "delete", "set-default"],
     calendar: ["view", "create", "edit", "delete"],
@@ -43,7 +44,7 @@ const ROLE_PERMISSIONS = {
   admin: {
     // Admin a presque tous les droits sauf la gestion de la facturation
     quotes: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
-    invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid"],
+    invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid", "import"],
     creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
     expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
     payments: ["view", "create", "edit", "delete", "export"],
@@ -51,6 +52,7 @@ const ROLE_PERMISSIONS = {
     products: ["view", "create", "edit", "delete", "export", "manage-categories"],
     suppliers: ["view", "create", "edit", "delete"],
     fileTransfers: ["view", "create", "delete", "download"],
+    sharedDocuments: ["view", "create", "edit", "delete", "download"],
     kanban: ["view", "create", "edit", "delete", "assign"],
     signatures: ["view", "create", "edit", "delete", "set-default"],
     calendar: ["view", "create", "edit", "delete"],
@@ -66,7 +68,7 @@ const ROLE_PERMISSIONS = {
   member: {
     // Member peut créer et gérer ses propres documents + export
     quotes: ["view", "create", "send", "export"],
-    invoices: ["view", "create", "send", "export"],
+    invoices: ["view", "create", "send", "export", "import"],
     creditNotes: ["view", "create", "export"],
     expenses: ["view", "create", "ocr", "export"],
     payments: ["view", "create", "export"],
@@ -74,6 +76,7 @@ const ROLE_PERMISSIONS = {
     products: ["view", "create", "export"],
     suppliers: ["view", "create"],
     fileTransfers: ["view", "create", "download"],
+    sharedDocuments: ["view", "create", "edit", "download"],
     kanban: ["view", "create", "edit", "assign"],
     signatures: ["view", "create", "edit", "set-default"],
     calendar: ["view", "create", "edit"],
@@ -85,13 +88,14 @@ const ROLE_PERMISSIONS = {
   accountant: {
     // Accountant a accès aux documents financiers + validation + export
     quotes: ["view", "export"],
-    invoices: ["view", "export", "mark-paid"],
+    invoices: ["view", "export", "mark-paid", "import"],
     creditNotes: ["view", "export"],
     expenses: ["view", "approve", "export"],
     payments: ["view", "export"],
     clients: ["view", "export"],
     products: ["view", "export"],
     suppliers: ["view"],
+    sharedDocuments: ["view", "create", "edit", "delete", "download"],
     reports: ["view", "export"],
     analytics: ["view", "export"],
     team: ["view"],
