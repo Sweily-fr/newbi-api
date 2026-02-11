@@ -525,6 +525,7 @@ export default {
 
           // 1. Construire la liste de documents avec leurs chemins ZIP
           const allDocumentsToZip = []; // { document, zipPath }
+          const includedDocIds = new Set(); // Éviter les doublons (docs déjà inclus via dossiers)
 
           // Traiter chaque dossier sélectionné
           if (folderIds && folderIds.length > 0) {
@@ -554,11 +555,12 @@ export default {
                   : `${rootFolderName}/${fileName}`;
 
                 allDocumentsToZip.push({ document: doc, zipPath });
+                includedDocIds.add(doc._id.toString());
               }
             }
           }
 
-          // Traiter les documents individuels
+          // Traiter les documents individuels (exclure ceux déjà inclus via dossiers)
           if (documentIds && documentIds.length > 0) {
             const individualDocs = await SharedDocument.find({
               _id: { $in: documentIds },
@@ -567,6 +569,7 @@ export default {
             });
 
             for (const doc of individualDocs) {
+              if (includedDocIds.has(doc._id.toString())) continue;
               const fileName = sanitizeFileName(doc.originalName || doc.name);
               allDocumentsToZip.push({ document: doc, zipPath: fileName });
             }
