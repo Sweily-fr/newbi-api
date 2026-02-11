@@ -479,6 +479,8 @@ export {
   getSelectionInfo,
   verifyFolderAccess,
   getAllSubfolders,
+  sanitizeFileName,
+  buildFolderPath,
   s3Client as sharedDocsS3Client,
   SHARED_DOCUMENTS_BUCKET,
 };
