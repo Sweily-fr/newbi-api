@@ -1,6 +1,7 @@
 import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import SharedDocument from "../models/SharedDocument.js";
+import SharedFolder from "../models/SharedFolder.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   saveUploadedFile,
@@ -10,10 +11,12 @@ import {
   calculateExpiryDate,
   deleteFile,
 } from "../utils/fileTransferUtils.js";
-import { getAllSubfolders, sharedDocsS3Client, SHARED_DOCUMENTS_BUCKET } from "../services/sharedDocumentZipService.js";
+import { getAllSubfolders, sanitizeFileName, buildFolderPath, sharedDocsS3Client, SHARED_DOCUMENTS_BUCKET } from "../services/sharedDocumentZipService.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
+import archiver from "archiver";
+import { PassThrough } from "stream";
 import Stripe from "stripe";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 import constants from "../utils/constants.js";
@@ -511,7 +514,7 @@ export default {
       }
     },
 
-    // Créer un transfert de fichiers à partir de documents partagés (copie cross-bucket)
+    // Créer un transfert de fichiers à partir de documents partagés (ZIP unique)
     createFileTransferFromSharedDocuments: isAuthenticated(
       async (_, { documentIds = [], folderIds = [], workspaceId, input = {} }, { user }) => {
         try {
@@ -520,91 +523,149 @@ export default {
             throw new UserInputError("Veuillez sélectionner au moins un document ou dossier");
           }
 
-          // Collecter tous les IDs de documents (incluant ceux des dossiers)
-          const allDocumentIds = new Set(documentIds || []);
+          // 1. Construire la liste de documents avec leurs chemins ZIP
+          const allDocumentsToZip = []; // { document, zipPath }
 
-          // Pour chaque dossier, récupérer récursivement tous les documents
+          // Traiter chaque dossier sélectionné
           if (folderIds && folderIds.length > 0) {
             for (const folderId of folderIds) {
-              const allFolders = await getAllSubfolders(folderId, workspaceId);
-              const folderIdsToQuery = allFolders.map((f) => f._id);
+              const folders = await getAllSubfolders(folderId, workspaceId);
+              if (folders.length === 0) continue;
 
-              const docsInFolders = await SharedDocument.find({
+              const filteredFolderIds = folders.map((f) => f._id);
+              const folderMap = new Map();
+              folders.forEach((f) => folderMap.set(f._id.toString(), f));
+
+              const docs = await SharedDocument.find({
                 workspaceId,
-                folderId: { $in: folderIdsToQuery },
+                folderId: { $in: filteredFolderIds },
                 trashedAt: null,
-              }).select("_id");
+              });
 
-              docsInFolders.forEach((doc) => allDocumentIds.add(doc._id.toString()));
+              const rootFolder = folderMap.get(folderId);
+              const rootFolderName = rootFolder ? sanitizeFileName(rootFolder.name) : "dossier";
+
+              for (const doc of docs) {
+                const folder = folderMap.get(doc.folderId?.toString());
+                const folderPath = folder ? buildFolderPath(folder, folderMap, folderId) : "";
+                const fileName = sanitizeFileName(doc.originalName || doc.name);
+                const zipPath = folderPath
+                  ? `${rootFolderName}/${folderPath}/${fileName}`
+                  : `${rootFolderName}/${fileName}`;
+
+                allDocumentsToZip.push({ document: doc, zipPath });
+              }
             }
           }
 
-          if (allDocumentIds.size === 0) {
+          // Traiter les documents individuels
+          if (documentIds && documentIds.length > 0) {
+            const individualDocs = await SharedDocument.find({
+              _id: { $in: documentIds },
+              workspaceId,
+              trashedAt: null,
+            });
+
+            for (const doc of individualDocs) {
+              const fileName = sanitizeFileName(doc.originalName || doc.name);
+              allDocumentsToZip.push({ document: doc, zipPath: fileName });
+            }
+          }
+
+          if (allDocumentsToZip.length === 0) {
             throw new UserInputError("Aucun document trouvé dans la sélection");
           }
 
-          // Charger les documents
-          const documents = await SharedDocument.find({
-            _id: { $in: Array.from(allDocumentIds) },
-            workspaceId,
-            trashedAt: null,
-          });
-
-          if (documents.length === 0) {
-            throw new UserInputError("Aucun document trouvé");
+          // 2. Dédupliquer les chemins ZIP
+          const usedPaths = new Map();
+          for (const item of allDocumentsToZip) {
+            let zipPath = item.zipPath;
+            if (usedPaths.has(zipPath)) {
+              const count = usedPaths.get(zipPath) + 1;
+              usedPaths.set(zipPath, count);
+              const ext = zipPath.lastIndexOf(".");
+              if (ext > 0) {
+                zipPath = `${zipPath.substring(0, ext)} (${count})${zipPath.substring(ext)}`;
+              } else {
+                zipPath = `${zipPath} (${count})`;
+              }
+              item.zipPath = zipPath;
+            } else {
+              usedPaths.set(zipPath, 0);
+            }
           }
 
-          // Générer un ID de transfert
-          const transferId = crypto.randomUUID();
+          // 3. Créer le ZIP en mémoire
+          const archive = archiver("zip", { zlib: { level: 6 } });
+          const passThrough = new PassThrough();
+          const chunks = [];
 
-          // Copier chaque fichier du bucket shared-documents vers le bucket transfers
-          const filesInfo = [];
-          let totalSize = 0;
+          passThrough.on("data", (chunk) => chunks.push(chunk));
 
-          for (const doc of documents) {
-            const fileId = crypto.randomUUID();
+          const streamFinished = new Promise((resolve, reject) => {
+            passThrough.on("end", resolve);
+            passThrough.on("error", reject);
+            archive.on("error", reject);
+          });
 
-            // 1. Lire le fichier depuis le bucket shared-documents (avec son propre client)
+          archive.pipe(passThrough);
+
+          for (const { document: doc, zipPath } of allDocumentsToZip) {
             const getCmd = new GetObjectCommand({
               Bucket: SHARED_DOCUMENTS_BUCKET,
               Key: doc.fileKey,
             });
             const srcResponse = await sharedDocsS3Client.send(getCmd);
-            const fileBuffer = Buffer.from(await srcResponse.Body.transformToByteArray());
-
-            // 2. Upload vers le bucket transfers
-            const result = await cloudflareTransferService.uploadFile(
-              fileBuffer,
-              transferId,
-              fileId,
-              doc.originalName,
-              doc.mimeType
-            );
-
-            filesInfo.push({
-              originalName: doc.originalName,
-              displayName: doc.name || doc.originalName,
-              fileName: doc.originalName,
-              filePath: result.url,
-              r2Key: result.key,
-              mimeType: doc.mimeType,
-              size: result.size,
-              storageType: "r2",
-              fileId,
-              uploadedAt: new Date(),
-            });
-
-            totalSize += result.size;
+            archive.append(srcResponse.Body, { name: zipPath });
           }
 
-          // Options du transfert
+          await archive.finalize();
+          await streamFinished;
+
+          const zipBuffer = Buffer.concat(chunks);
+
+          // 4. Déterminer le nom du ZIP
+          let zipName;
+          if (folderIds?.length === 1 && (!documentIds || documentIds.length === 0)) {
+            // Un seul dossier sélectionné → utiliser son nom
+            const rootFolder = await SharedFolder.findById(folderIds[0]);
+            zipName = rootFolder ? `${sanitizeFileName(rootFolder.name)}.zip` : "Documents.zip";
+          } else {
+            zipName = "Documents.zip";
+          }
+
+          // 5. Upload le ZIP vers le bucket transfers
+          const transferId = crypto.randomUUID();
+          const fileId = crypto.randomUUID();
+
+          const result = await cloudflareTransferService.uploadFile(
+            zipBuffer,
+            transferId,
+            fileId,
+            zipName,
+            "application/zip"
+          );
+
+          const filesInfo = [{
+            originalName: zipName,
+            displayName: zipName,
+            fileName: zipName,
+            filePath: result.url,
+            r2Key: result.key,
+            mimeType: "application/zip",
+            size: result.size,
+            storageType: "r2",
+            fileId,
+            uploadedAt: new Date(),
+          }];
+
+          // 6. Options du transfert (allowPreview toujours false pour les ZIP depuis docs partagés)
           const expiryDays = input?.expiryDays || 7;
           const recipientEmail = input?.recipientEmail || null;
           const message = input?.message || null;
           const notifyOnDownload = input?.notifyOnDownload || false;
           const passwordProtected = input?.passwordProtected || false;
           const password = input?.password || null;
-          const allowPreview = input?.allowPreview !== false;
           const expiryReminderEnabled = input?.expiryReminderEnabled || false;
           const hasWatermark = input?.hasWatermark || false;
           const paymentAmount = input?.paymentAmount || 0;
@@ -612,11 +673,11 @@ export default {
           const isPaymentRequired =
             paymentAmount > 0 || input?.isPaymentRequired || input?.requirePayment || false;
 
-          // Créer le FileTransfer
+          // 7. Créer le FileTransfer avec un seul fichier (le ZIP)
           const fileTransfer = new FileTransfer({
             userId: user.id,
             files: filesInfo,
-            totalSize,
+            totalSize: result.size,
             status: "active",
             createdAt: new Date(),
             expiryDate: new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000),
@@ -629,7 +690,7 @@ export default {
             notifyOnDownload,
             passwordProtected,
             password: passwordProtected ? password : null,
-            allowPreview,
+            allowPreview: false, // Toujours désactivé pour les transferts ZIP depuis docs partagés
             expiryReminderEnabled,
             hasWatermark,
           });
@@ -661,7 +722,7 @@ export default {
               };
 
               await sendFileTransferEmail(recipientEmail, transferData);
-              console.log("📧 Email de transfert (shared docs) envoyé à:", recipientEmail);
+              console.log("📧 Email de transfert (shared docs ZIP) envoyé à:", recipientEmail);
             } catch (emailError) {
               console.error("❌ Erreur envoi email transfert (shared docs):", emailError);
             }
@@ -677,7 +738,7 @@ export default {
             throw error;
           }
 
-          console.error("❌ Erreur création transfert depuis documents partagés:", error);
+          console.error("❌ Erreur création transfert ZIP depuis documents partagés:", error);
           throw new ApolloError(
             "Une erreur est survenue lors de la création du transfert depuis les documents partagés.",
             "FILE_TRANSFER_FROM_SHARED_DOCS_ERROR"
