@@ -1133,44 +1133,52 @@ const resolvers = {
 
                   if (memberData?.email) {
                     const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${savedTask.boardId}?task=${savedTask._id}`;
-                    
-                    // Envoyer l'email d'assignation
-                    await sendTaskAssignmentEmail(memberData.email, {
-                      taskTitle: savedTask.title || "Sans titre",
-                      taskDescription: savedTask.description || "",
-                      boardName: boardName,
-                      columnName: columnName,
-                      assignerName: assignerName,
-                      assignerImage: userImage,
-                      dueDate: savedTask.dueDate,
-                      priority: savedTask.priority || "medium",
-                      taskUrl: taskUrl,
-                    });
+                    const memberPrefs = memberData?.notificationPreferences?.kanban_task_assigned;
 
-                    // Créer une notification dans la boîte de réception
-                    try {
-                      const notification = await Notification.createTaskAssignedNotification({
-                        userId: memberId,
-                        workspaceId: finalWorkspaceId,
-                        taskId: savedTask._id,
+                    // Envoyer l'email d'assignation (si la préférence n'est pas désactivée)
+                    if (memberPrefs?.email !== false) {
+                      await sendTaskAssignmentEmail(memberData.email, {
                         taskTitle: savedTask.title || "Sans titre",
-                        boardId: savedTask.boardId,
+                        taskDescription: savedTask.description || "",
                         boardName: boardName,
                         columnName: columnName,
-                        actorId: user?.id || user?._id,
-                        actorName: assignerName,
-                        actorImage: userImage,
-                        url: taskUrl,
+                        assignerName: assignerName,
+                        assignerImage: userImage,
+                        dueDate: savedTask.dueDate,
+                        priority: savedTask.priority || "medium",
+                        taskUrl: taskUrl,
                       });
-                      
-                      // Publier la notification en temps réel
-                      await publishNotification(notification);
-                      logger.info(`🔔 [CreateTask] Notification créée pour ${memberData.email}`);
-                    } catch (notifError) {
-                      logger.error(`❌ [CreateTask] Erreur création notification:`, notifError);
+                      logger.info(`📧 [CreateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${savedTask.title}"`);
+                    } else {
+                      logger.info(`📧 [CreateTask] Email désactivé par préférences pour ${memberData.email}`);
                     }
 
-                    logger.info(`📧 [CreateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${savedTask.title}"`);
+                    // Créer une notification dans la boîte de réception (si la préférence n'est pas désactivée)
+                    if (memberPrefs?.push !== false) {
+                      try {
+                        const notification = await Notification.createTaskAssignedNotification({
+                          userId: memberId,
+                          workspaceId: finalWorkspaceId,
+                          taskId: savedTask._id,
+                          taskTitle: savedTask.title || "Sans titre",
+                          boardId: savedTask.boardId,
+                          boardName: boardName,
+                          columnName: columnName,
+                          actorId: user?.id || user?._id,
+                          actorName: assignerName,
+                          actorImage: userImage,
+                          url: taskUrl,
+                        });
+
+                        // Publier la notification en temps réel
+                        await publishNotification(notification);
+                        logger.info(`🔔 [CreateTask] Notification créée pour ${memberData.email}`);
+                      } catch (notifError) {
+                        logger.error(`❌ [CreateTask] Erreur création notification:`, notifError);
+                      }
+                    } else {
+                      logger.info(`🔔 [CreateTask] Notification push désactivée par préférences pour ${memberData.email}`);
+                    }
                   }
                 } catch (emailError) {
                   logger.error(`❌ [CreateTask] Erreur envoi email à membre ${memberId}:`, emailError);
@@ -1430,43 +1438,52 @@ const resolvers = {
 
                       if (memberData?.email) {
                         const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${oldTask.boardId}?task=${id}`;
-                        
-                        await sendTaskAssignmentEmail(memberData.email, {
-                          taskTitle: oldTask.title || "Sans titre",
-                          taskDescription: oldTask.description || "",
-                          boardName: boardName,
-                          columnName: columnName,
-                          assignerName: assignerName,
-                          assignerImage: userImage || userData?.image || null,
-                          dueDate: oldTask.dueDate || updates.dueDate,
-                          priority: oldTask.priority || updates.priority || "medium",
-                          taskUrl: taskUrl,
-                        });
+                        const memberPrefs = memberData?.notificationPreferences?.kanban_task_assigned;
 
-                        // Créer une notification dans la boîte de réception
-                        try {
-                          const notification = await Notification.createTaskAssignedNotification({
-                            userId: memberId,
-                            workspaceId: finalWorkspaceId,
-                            taskId: oldTask._id,
+                        // Envoyer l'email d'assignation (si la préférence n'est pas désactivée)
+                        if (memberPrefs?.email !== false) {
+                          await sendTaskAssignmentEmail(memberData.email, {
                             taskTitle: oldTask.title || "Sans titre",
-                            boardId: oldTask.boardId,
+                            taskDescription: oldTask.description || "",
                             boardName: boardName,
                             columnName: columnName,
-                            actorId: user?.id || user?._id,
-                            actorName: assignerName,
-                            actorImage: userImage || userData?.image || null,
-                            url: taskUrl,
+                            assignerName: assignerName,
+                            assignerImage: userImage || userData?.image || null,
+                            dueDate: oldTask.dueDate || updates.dueDate,
+                            priority: oldTask.priority || updates.priority || "medium",
+                            taskUrl: taskUrl,
                           });
-                          
-                          // Publier la notification en temps réel
-                          await publishNotification(notification);
-                          logger.info(`🔔 [UpdateTask] Notification créée pour ${memberData.email}`);
-                        } catch (notifError) {
-                          logger.error(`❌ [UpdateTask] Erreur création notification:`, notifError);
+                          logger.info(`📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`);
+                        } else {
+                          logger.info(`📧 [UpdateTask] Email désactivé par préférences pour ${memberData.email}`);
                         }
 
-                        logger.info(`📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`);
+                        // Créer une notification dans la boîte de réception (si la préférence n'est pas désactivée)
+                        if (memberPrefs?.push !== false) {
+                          try {
+                            const notification = await Notification.createTaskAssignedNotification({
+                              userId: memberId,
+                              workspaceId: finalWorkspaceId,
+                              taskId: oldTask._id,
+                              taskTitle: oldTask.title || "Sans titre",
+                              boardId: oldTask.boardId,
+                              boardName: boardName,
+                              columnName: columnName,
+                              actorId: user?.id || user?._id,
+                              actorName: assignerName,
+                              actorImage: userImage || userData?.image || null,
+                              url: taskUrl,
+                            });
+
+                            // Publier la notification en temps réel
+                            await publishNotification(notification);
+                            logger.info(`🔔 [UpdateTask] Notification créée pour ${memberData.email}`);
+                          } catch (notifError) {
+                            logger.error(`❌ [UpdateTask] Erreur création notification:`, notifError);
+                          }
+                        } else {
+                          logger.info(`🔔 [UpdateTask] Notification push désactivée par préférences pour ${memberData.email}`);
+                        }
                       }
                     } catch (emailError) {
                       logger.error(`❌ [UpdateTask] Erreur envoi email à membre ${memberId}:`, emailError);

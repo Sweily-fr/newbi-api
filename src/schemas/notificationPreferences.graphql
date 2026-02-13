@@ -19,6 +19,8 @@ type NotificationPreferences {
   invitation_received: NotificationPreference
   member_joined: NotificationPreference
   document_shared: NotificationPreference
+  # Kanban
+  kanban_task_assigned: NotificationPreference
 }
 
 input NotificationPreferenceInput {
@@ -40,6 +42,8 @@ input NotificationPreferencesInput {
   invitation_received: NotificationPreferenceInput
   member_joined: NotificationPreferenceInput
   document_shared: NotificationPreferenceInput
+  # Kanban
+  kanban_task_assigned: NotificationPreferenceInput
 }
 
 type NotificationPreferencesResponse {
