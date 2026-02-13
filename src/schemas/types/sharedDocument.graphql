@@ -160,7 +160,7 @@ input SharedDocumentsFilterInput {
   search: String
   tags: [String]
   # Filtres avancés
-  fileType: String # "image", "pdf", "document", "spreadsheet", "other"
+  fileType: String # "image", "video", "pdf", "document", "spreadsheet", "other"
   dateFrom: String # ISO date string
   dateTo: String # ISO date string
   minSize: Int # en bytes

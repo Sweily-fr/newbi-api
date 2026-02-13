@@ -102,6 +102,7 @@ const sharedDocumentResolvers = {
             if (filter.fileType) {
               const mimeTypePatterns = {
                 image: /^image\//,
+                video: /^video\//,
                 pdf: /^application\/pdf$/,
                 document: /word|document|text\//,
                 spreadsheet: /spreadsheet|excel|csv/,
@@ -114,7 +115,7 @@ const sharedDocumentResolvers = {
                 query.$and = query.$and || [];
                 query.$and.push({
                   mimeType: {
-                    $not: { $regex: /^image\/|^application\/pdf$|word|document|text\/|spreadsheet|excel|csv/ }
+                    $not: { $regex: /^image\/|^video\/|^application\/pdf$|word|document|text\/|spreadsheet|excel|csv/ }
                   }
                 });
               }
@@ -493,8 +494,9 @@ const sharedDocumentResolvers = {
           const fileBuffer = Buffer.concat(chunks);
           const fileSize = fileBuffer.length;
 
-          // Valider la taille du fichier (50MB max pour les documents)
-          const maxSize = 50 * 1024 * 1024;
+          // Valider la taille du fichier (500MB pour les vidéos, 50MB pour le reste)
+          const isVideo = mimetype?.startsWith("video/");
+          const maxSize = isVideo ? 500 * 1024 * 1024 : 50 * 1024 * 1024;
           if (fileSize > maxSize) {
             throw new Error(
               `Fichier trop volumineux. Taille maximum: ${maxSize / 1024 / 1024}MB`
@@ -508,6 +510,11 @@ const sharedDocumentResolvers = {
             "image/png",
             "image/webp",
             "image/gif",
+            "video/mp4",
+            "video/webm",
+            "video/quicktime",
+            "video/x-msvideo",
+            "video/x-matroska",
             "application/pdf",
             "application/msword",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -520,7 +527,7 @@ const sharedDocumentResolvers = {
 
           if (!allowedTypes.includes(mimetype)) {
             throw new Error(
-              "Type de fichier non supporté. Types acceptés: Images, PDF, Word, Excel, CSV, TXT"
+              "Type de fichier non supporté. Types acceptés: Images, Vidéos, PDF, Word, Excel, CSV, TXT"
             );
           }
 
