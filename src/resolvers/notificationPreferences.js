@@ -17,6 +17,8 @@ const defaultNotificationPreferences = {
   invitation_received: { email: true, push: true },
   member_joined: { email: false, push: true },
   document_shared: { email: false, push: true },
+  // Kanban
+  kanban_task_assigned: { email: true, push: true },
 };
 
 const notificationPreferencesResolvers = {

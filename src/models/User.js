@@ -413,6 +413,11 @@ const userSchema = new mongoose.Schema(
         email: { type: Boolean, default: false },
         push: { type: Boolean, default: true },
       },
+      // Kanban
+      kanban_task_assigned: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
     },
   },
   {
