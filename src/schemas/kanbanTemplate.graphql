@@ -1,0 +1,63 @@
+# schemas/kanbanTemplate.graphql
+
+type KanbanTemplateColumn {
+  title: String!
+  color: String!
+  order: Int!
+}
+
+type KanbanTemplateTag {
+  name: String!
+  className: String!
+  bg: String!
+  text: String!
+  border: String!
+}
+
+type KanbanTemplateChecklistItem {
+  text: String!
+  completed: Boolean!
+}
+
+type KanbanTemplateTask {
+  title: String!
+  description: String
+  priority: String
+  tags: [KanbanTemplateTag!]
+  checklist: [KanbanTemplateChecklistItem!]
+  position: Int
+  columnIndex: Int!
+}
+
+type KanbanTemplate {
+  id: ID!
+  name: String!
+  description: String
+  columns: [KanbanTemplateColumn!]!
+  tasks: [KanbanTemplateTask!]!
+  sourceBoardId: ID
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+input SaveBoardAsTemplateInput {
+  boardId: ID!
+  name: String!
+  description: String
+}
+
+input CreateBoardFromTemplateInput {
+  title: String!
+  description: String
+  templateId: ID!
+}
+
+extend type Query {
+  kanbanTemplates(workspaceId: ID): [KanbanTemplate!]!
+}
+
+extend type Mutation {
+  saveBoardAsTemplate(input: SaveBoardAsTemplateInput!, workspaceId: ID): KanbanTemplate!
+  createBoardFromTemplate(input: CreateBoardFromTemplateInput!, workspaceId: ID): Board!
+  deleteKanbanTemplate(id: ID!, workspaceId: ID): Boolean!
+}
