@@ -999,6 +999,11 @@ class CloudflareService {
       ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       ".txt": "text/plain",
       ".csv": "text/csv",
+      ".mp4": "video/mp4",
+      ".webm": "video/webm",
+      ".mov": "video/quicktime",
+      ".avi": "video/x-msvideo",
+      ".mkv": "video/x-matroska",
     };
 
     return mimeTypes[extension] || "application/octet-stream";
