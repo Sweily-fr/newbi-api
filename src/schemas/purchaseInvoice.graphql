@@ -1,0 +1,342 @@
+# Schéma GraphQL pour les factures d'achat (fournisseurs)
+
+enum PurchaseInvoiceStatus {
+  TO_PROCESS
+  TO_PAY
+  PENDING
+  PAID
+  OVERDUE
+  ARCHIVED
+}
+
+enum PurchaseInvoiceCategory {
+  RENT
+  SUBSCRIPTIONS
+  OFFICE_SUPPLIES
+  SERVICES
+  TRANSPORT
+  MEALS
+  TELECOMMUNICATIONS
+  INSURANCE
+  ENERGY
+  SOFTWARE
+  HARDWARE
+  MARKETING
+  TRAINING
+  MAINTENANCE
+  TAXES
+  UTILITIES
+  OTHER
+}
+
+enum PurchaseInvoicePaymentMethod {
+  BANK_TRANSFER
+  CREDIT_CARD
+  DIRECT_DEBIT
+  CHECK
+  CASH
+  OTHER
+}
+
+enum PurchaseInvoiceSortField {
+  issueDate
+  dueDate
+  amountTTC
+  supplierName
+  status
+  createdAt
+}
+
+enum SortOrder {
+  ASC
+  DESC
+}
+
+# Type pour les fichiers associés
+type PurchaseInvoiceFile {
+  id: ID!
+  filename: String!
+  originalFilename: String!
+  mimetype: String!
+  path: String!
+  size: Float!
+  url: String!
+  ocrProcessed: Boolean!
+  ocrData: JSON
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Métadonnées OCR spécifiques aux factures d'achat
+type PurchaseInvoiceOCRMetadata {
+  supplierName: String
+  supplierAddress: String
+  supplierVatNumber: String
+  supplierSiret: String
+  invoiceNumber: String
+  invoiceDate: String
+  dueDate: String
+  amountHT: Float
+  amountTVA: Float
+  vatRate: Float
+  amountTTC: Float
+  currency: String
+  iban: String
+  bic: String
+  confidenceScore: Float
+  rawExtractedText: String
+}
+
+# Type principal facture d'achat
+type PurchaseInvoice {
+  id: ID!
+  supplierName: String!
+  supplierId: ID
+  supplier: Supplier
+  invoiceNumber: String
+  issueDate: String!
+  dueDate: String
+  amountHT: Float!
+  amountTVA: Float!
+  vatRate: Float!
+  amountTTC: Float!
+  currency: String!
+  status: PurchaseInvoiceStatus!
+  category: PurchaseInvoiceCategory!
+  tags: [String!]
+  notes: String
+  internalReference: String
+  files: [PurchaseInvoiceFile!]
+  ocrMetadata: PurchaseInvoiceOCRMetadata
+  paymentDate: String
+  paymentMethod: PurchaseInvoicePaymentMethod
+  linkedTransactionIds: [ID!]
+  isReconciled: Boolean!
+  source: String!
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Pagination
+type PurchaseInvoicePagination {
+  items: [PurchaseInvoice!]!
+  totalCount: Int!
+  currentPage: Int!
+  totalPages: Int!
+  hasNextPage: Boolean!
+}
+
+# Statistiques
+type PurchaseInvoiceStats {
+  totalToPay: Float!
+  totalToPayCount: Int!
+  totalOverdue: Float!
+  totalOverdueCount: Int!
+  paidThisMonth: Float!
+  paidThisMonthCount: Int!
+  totalThisMonth: Float!
+  totalThisMonthCount: Int!
+}
+
+# Résultats de suppression
+type DeletePurchaseInvoiceResult {
+  success: Boolean!
+  message: String!
+}
+
+type BulkActionResult {
+  success: Boolean!
+  updatedCount: Int!
+  message: String!
+}
+
+# Suggestion de rapprochement bancaire
+type PurchaseInvoiceReconciliationMatch {
+  transactionId: ID!
+  amount: Float!
+  date: String!
+  description: String
+  confidence: Float!
+}
+
+# --- SUPPLIER ---
+
+type Supplier {
+  id: ID!
+  name: String!
+  email: String
+  phone: String
+  siret: String
+  vatNumber: String
+  address: Address
+  iban: String
+  bic: String
+  defaultCategory: PurchaseInvoiceCategory
+  notes: String
+  invoiceCount: Int
+  totalAmount: Float
+  createdAt: String!
+  updatedAt: String!
+}
+
+type SupplierPagination {
+  items: [Supplier!]!
+  totalCount: Int!
+  currentPage: Int!
+  totalPages: Int!
+}
+
+type DeleteSupplierResult {
+  success: Boolean!
+  message: String!
+}
+
+# --- INPUTS ---
+
+input CreatePurchaseInvoiceInput {
+  workspaceId: ID!
+  supplierName: String!
+  supplierId: ID
+  invoiceNumber: String
+  issueDate: String!
+  dueDate: String
+  amountHT: Float
+  amountTVA: Float
+  vatRate: Float
+  amountTTC: Float!
+  currency: String = "EUR"
+  status: PurchaseInvoiceStatus = TO_PROCESS
+  category: PurchaseInvoiceCategory = OTHER
+  tags: [String!]
+  notes: String
+  internalReference: String
+  paymentMethod: PurchaseInvoicePaymentMethod
+  source: String = "MANUAL"
+}
+
+input UpdatePurchaseInvoiceInput {
+  supplierName: String
+  supplierId: ID
+  invoiceNumber: String
+  issueDate: String
+  dueDate: String
+  amountHT: Float
+  amountTVA: Float
+  vatRate: Float
+  amountTTC: Float
+  currency: String
+  status: PurchaseInvoiceStatus
+  category: PurchaseInvoiceCategory
+  tags: [String!]
+  notes: String
+  internalReference: String
+  paymentDate: String
+  paymentMethod: PurchaseInvoicePaymentMethod
+}
+
+input PurchaseInvoiceFileInput {
+  file: Upload
+  cloudflareUrl: String
+  fileName: String
+  mimeType: String
+  fileSize: Float
+  ocrData: JSON
+  processOCR: Boolean = true
+}
+
+input CreateSupplierInput {
+  workspaceId: ID!
+  name: String!
+  email: String
+  phone: String
+  siret: String
+  vatNumber: String
+  street: String
+  city: String
+  postalCode: String
+  country: String
+  iban: String
+  bic: String
+  defaultCategory: PurchaseInvoiceCategory
+  notes: String
+}
+
+input UpdateSupplierInput {
+  name: String
+  email: String
+  phone: String
+  siret: String
+  vatNumber: String
+  street: String
+  city: String
+  postalCode: String
+  country: String
+  iban: String
+  bic: String
+  defaultCategory: PurchaseInvoiceCategory
+  notes: String
+}
+
+# --- QUERIES ---
+
+extend type Query {
+  purchaseInvoice(id: ID!): PurchaseInvoice!
+
+  purchaseInvoices(
+    workspaceId: ID!
+    page: Int
+    limit: Int
+    search: String
+    status: PurchaseInvoiceStatus
+    category: PurchaseInvoiceCategory
+    supplierId: ID
+    startDate: String
+    endDate: String
+    dueDateStart: String
+    dueDateEnd: String
+    minAmount: Float
+    maxAmount: Float
+    hasFile: Boolean
+    sortField: PurchaseInvoiceSortField
+    sortOrder: SortOrder
+  ): PurchaseInvoicePagination!
+
+  purchaseInvoiceStats(workspaceId: ID!): PurchaseInvoiceStats!
+
+  purchaseInvoiceReconciliationMatches(purchaseInvoiceId: ID!): [PurchaseInvoiceReconciliationMatch!]!
+
+  supplier(id: ID!): Supplier!
+
+  suppliers(
+    workspaceId: ID!
+    page: Int
+    limit: Int
+    search: String
+  ): SupplierPagination!
+}
+
+# --- MUTATIONS ---
+
+extend type Mutation {
+  createPurchaseInvoice(input: CreatePurchaseInvoiceInput!): PurchaseInvoice!
+  updatePurchaseInvoice(id: ID!, input: UpdatePurchaseInvoiceInput!): PurchaseInvoice!
+  deletePurchaseInvoice(id: ID!): DeletePurchaseInvoiceResult!
+
+  addPurchaseInvoiceFile(purchaseInvoiceId: ID!, input: PurchaseInvoiceFileInput!): PurchaseInvoice!
+  removePurchaseInvoiceFile(purchaseInvoiceId: ID!, fileId: ID!): PurchaseInvoice!
+
+  markPurchaseInvoiceAsPaid(id: ID!, paymentDate: String, paymentMethod: PurchaseInvoicePaymentMethod): PurchaseInvoice!
+
+  bulkUpdatePurchaseInvoiceStatus(ids: [ID!]!, status: PurchaseInvoiceStatus!): BulkActionResult!
+  bulkDeletePurchaseInvoices(ids: [ID!]!): BulkActionResult!
+  bulkCategorizePurchaseInvoices(ids: [ID!]!, category: PurchaseInvoiceCategory!): BulkActionResult!
+
+  reconcilePurchaseInvoice(purchaseInvoiceId: ID!, transactionIds: [ID!]!): PurchaseInvoice!
+  unreconcilePurchaseInvoice(purchaseInvoiceId: ID!): PurchaseInvoice!
+
+  createSupplier(input: CreateSupplierInput!): Supplier!
+  updateSupplier(id: ID!, input: UpdateSupplierInput!): Supplier!
+  deleteSupplier(id: ID!): DeleteSupplierResult!
+  mergeSuppliers(targetId: ID!, sourceIds: [ID!]!): Supplier!
+}

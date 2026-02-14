@@ -281,6 +281,7 @@ class JWKSValidator {
           payload.iss.includes('newbi.fr') ||
           payload.iss.includes('localhost') ||
           payload.iss.includes('vercel.app') ||
+          payload.iss.includes('ngrok') ||
           (process.env.FRONTEND_URL && (
             process.env.FRONTEND_URL.includes('newbi.fr') ||
             process.env.FRONTEND_URL.includes('vercel.app')

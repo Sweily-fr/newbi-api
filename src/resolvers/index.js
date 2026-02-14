@@ -46,6 +46,7 @@ import crmEmailAutomationResolvers from "./crmEmailAutomation.js";
 import notificationResolvers from "./notification.js";
 import calendarConnectionResolvers from "./calendarConnection.js";
 import documentAutomationResolvers from "./documentAutomation.js";
+import purchaseInvoiceResolvers from "./purchaseInvoice.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -95,6 +96,7 @@ const resolvers = mergeResolvers([
   notificationResolvers,
   calendarConnectionResolvers,
   documentAutomationResolvers,
+  purchaseInvoiceResolvers,
 ]);
 
 export default resolvers;

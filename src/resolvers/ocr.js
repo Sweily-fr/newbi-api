@@ -28,7 +28,7 @@ const ocrResolvers = {
      * puis uploadé sur Cloudflare en tâche de fond (fire & forget).
      */
     processDocumentOcr: isAuthenticated(
-      async (_, { file, workspaceId, options = {} }, { user }) => {
+      async (_, { file, workspaceId, options = {} }, { user, organizationId: contextOrgId }) => {
         try {
           const { createReadStream, filename, mimetype } = await file;
 
@@ -89,30 +89,101 @@ const ocrResolvers = {
           // Convertir en base64 pour Claude Vision
           const base64Data = fileBuffer.toString("base64");
 
-          // OCR direct via Claude Vision (pas de téléchargement Cloudflare)
-          console.log(`🔍 OCR direct (processFromBase64) pour ${filename}`);
-          const rawResult = await claudeVisionOcrService.processFromBase64(
-            base64Data,
-            mimetype,
-            filename,
-            contentHash
-          );
+          let rawResult;
+          let structuredResult;
+          let financialAnalysis;
+          let usedFallback = false;
 
-          if (!rawResult.success) {
-            throw createInternalServerError(
-              `Erreur OCR: ${rawResult.error || rawResult.message}`
+          // Tentative 1: OCR direct via Claude Vision
+          try {
+            console.log(`🔍 OCR direct (processFromBase64) pour ${filename}`);
+            rawResult = await claudeVisionOcrService.processFromBase64(
+              base64Data,
+              mimetype,
+              filename,
+              contentHash
             );
+
+            if (!rawResult.success) {
+              throw new Error(rawResult.error || rawResult.message || "OCR échoué");
+            }
+
+            // Formater les données structurées
+            structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
+            financialAnalysis = {
+              transaction_data: structuredResult.transaction_data,
+              extracted_fields: structuredResult.extracted_fields,
+              document_analysis: structuredResult.document_analysis,
+            };
+          } catch (claudeError) {
+            // Tentative 2: Fallback — upload Cloudflare + OCR hybride (Mistral, etc.)
+            console.warn(`⚠️ Claude Vision échoué: ${claudeError.message}`);
+            console.log(`🔄 Fallback: upload Cloudflare + OCR hybride pour ${filename}`);
+
+            try {
+              // Utiliser organizationId du contexte GraphQL (header x-organization-id)
+              const fallbackOrgId = contextOrgId || null;
+
+              // Upload vers Cloudflare pour obtenir une URL publique
+              const uploadResult = await cloudflareService.uploadImage(
+                fileBuffer,
+                filename,
+                user.id,
+                "ocr",
+                fallbackOrgId
+              );
+
+              if (!uploadResult?.url) {
+                throw new Error("Échec upload Cloudflare");
+              }
+
+              console.log(`☁️ Upload Cloudflare OK: ${uploadResult.url}`);
+
+              // OCR via service hybride (Mistral, Google, etc.)
+              const hybridResult = await hybridOcrService.processDocumentFromUrl(
+                uploadResult.url,
+                filename,
+                mimetype,
+                workspaceId
+              );
+
+              if (!hybridResult.success) {
+                throw new Error(hybridResult.error || "OCR hybride échoué");
+              }
+
+              // Analyse intelligente si le provider n'est pas Claude
+              if (hybridResult.provider === "claude-vision") {
+                financialAnalysis = {
+                  transaction_data: hybridResult.transaction_data,
+                  extracted_fields: hybridResult.extracted_fields,
+                  document_analysis: hybridResult.document_analysis,
+                };
+              } else {
+                console.log("🤖 Analyse intelligente Mistral (fallback)...");
+                financialAnalysis =
+                  await mistralIntelligentAnalysisService.analyzeDocument(hybridResult);
+              }
+
+              rawResult = {
+                success: true,
+                extractedText: hybridResult.extractedText || hybridResult.text,
+                data: hybridResult.data || {},
+                provider: hybridResult.provider || "hybrid-fallback",
+                model: hybridResult.model || "fallback",
+              };
+              structuredResult = {
+                extracted_fields: financialAnalysis.extracted_fields || hybridResult.structuredData || {},
+              };
+              usedFallback = true;
+
+              console.log(`✅ Fallback OCR réussi via ${rawResult.provider}`);
+            } catch (fallbackError) {
+              console.error(`❌ Fallback OCR échoué: ${fallbackError.message}`);
+              throw createInternalServerError(
+                `Erreur OCR (Claude + fallback): Claude: ${claudeError.message} | Fallback: ${fallbackError.message}`
+              );
+            }
           }
-
-          // Formater les données structurées
-          const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
-
-          // Construire financialAnalysis depuis les données structurées
-          const financialAnalysis = {
-            transaction_data: structuredResult.transaction_data,
-            extracted_fields: structuredResult.extracted_fields,
-            document_analysis: structuredResult.document_analysis,
-          };
 
           // Générer un ID de document
           const documentId = new mongoose.Types.ObjectId();
@@ -139,42 +210,24 @@ const ocrResolvers = {
             message: `Document traité avec succès via ${rawResult.provider || "claude-vision"}`,
           };
 
-          // Fire & forget: récupérer organizationId puis upload Cloudflare + save MongoDB + cache Redis
+          // Fire & forget: upload Cloudflare (si pas déjà fait) + save MongoDB + cache Redis
           (async () => {
             try {
-              // Récupérer organizationId
-              let organizationId = null;
-              const rawOrgId =
-                user.organizationId ||
-                user.organization?.id ||
-                user.organization?._id ||
-                user.currentOrganizationId;
+              let documentUrl = null;
+              let cloudflareKey = null;
 
-              if (rawOrgId) {
-                organizationId = typeof rawOrgId === "object"
-                  ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
-                  : rawOrgId.toString();
-              } else {
-                try {
-                  const memberRecord = await mongoose.connection.db
-                    .collection("member")
-                    .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
-                  if (memberRecord?.organizationId) {
-                    organizationId = memberRecord.organizationId.toString();
-                  }
-                } catch (err) {
-                  console.warn("⚠️ Impossible de récupérer organizationId:", err.message);
-                }
+              if (!usedFallback) {
+                // Upload vers Cloudflare uniquement si pas déjà fait par le fallback
+                const uploadResult = await cloudflareService.uploadImage(
+                  fileBuffer,
+                  filename,
+                  user.id,
+                  "ocr",
+                  contextOrgId
+                );
+                documentUrl = uploadResult.url;
+                cloudflareKey = uploadResult.key;
               }
-
-              // Upload vers Cloudflare (background)
-              const uploadResult = await cloudflareService.uploadImage(
-                fileBuffer,
-                filename,
-                user.id,
-                "ocr",
-                organizationId
-              );
 
               // Sauvegarder en MongoDB
               const ocrDocument = new OcrDocument({
@@ -184,8 +237,8 @@ const ocrResolvers = {
                 originalFileName: filename,
                 mimeType: mimetype,
                 fileSize: fileBuffer.length,
-                documentUrl: uploadResult.url,
-                cloudflareKey: uploadResult.key,
+                documentUrl: documentUrl,
+                cloudflareKey: cloudflareKey,
                 extractedText: rawResult.extractedText,
                 rawOcrData: rawResult.data || {},
                 structuredData: structuredResult.extracted_fields || {},
