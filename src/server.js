@@ -132,6 +132,17 @@ async function startServer() {
     process.env.PARTNER_FRONTEND_URL,
   ].filter(Boolean);
 
+  // Dev: autoriser ngrok et cloudflare tunnels
+  if (process.env.NODE_ENV !== "production") {
+    app.use((req, res, next) => {
+      const origin = req.headers.origin;
+      if (origin && (origin.includes("ngrok") || origin.includes("trycloudflare.com"))) {
+        allowedOrigins.push(origin);
+      }
+      next();
+    });
+  }
+
   app.use(
     cors({
       origin: (origin, callback) => {
