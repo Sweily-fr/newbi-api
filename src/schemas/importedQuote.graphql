@@ -1,0 +1,220 @@
+"""
+Types GraphQL pour les devis importés via OCR
+"""
+
+# Statuts des devis importés
+enum ImportedQuoteStatus {
+  PENDING_REVIEW
+  VALIDATED
+  REJECTED
+  ARCHIVED
+}
+
+# Informations du fournisseur (émetteur)
+type ImportedQuoteVendor {
+  name: String
+  address: String
+  city: String
+  postalCode: String
+  country: String
+  siret: String
+  vatNumber: String
+  email: String
+  phone: String
+}
+
+# Informations du client (destinataire)
+type ImportedQuoteClient {
+  name: String
+  address: String
+  city: String
+  postalCode: String
+  siret: String
+  clientNumber: String
+}
+
+# Ligne de devis
+type ImportedQuoteItem {
+  description: String
+  quantity: Float
+  unitPrice: Float
+  totalPrice: Float
+  vatRate: Float
+  productCode: String
+}
+
+# Fichier associé
+type ImportedQuoteFile {
+  url: String!
+  cloudflareKey: String!
+  originalFileName: String!
+  mimeType: String
+  fileSize: Int
+}
+
+# Données OCR
+type ImportedQuoteOcrData {
+  extractedText: String
+  confidence: Float
+  processedAt: String
+}
+
+# Type principal de devis importé
+type ImportedQuote {
+  id: ID!
+  workspaceId: ID!
+  importedBy: ID!
+  status: ImportedQuoteStatus!
+  originalQuoteNumber: String
+  vendor: ImportedQuoteVendor
+  client: ImportedQuoteClient
+  quoteDate: String
+  validUntil: String
+  dueDate: String
+  totalHT: Float
+  totalVAT: Float
+  totalTTC: Float!
+  currency: String
+  items: [ImportedQuoteItem!]
+  category: ExpenseCategory
+  paymentMethod: PaymentMethodType
+  file: ImportedQuoteFile!
+  ocrData: ImportedQuoteOcrData
+  notes: String
+  linkedExpenseId: ID
+  isDuplicate: Boolean
+  duplicateOf: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Résultat d'import d'un devis
+type ImportedQuoteResult {
+  success: Boolean!
+  quote: ImportedQuote
+  error: String
+  isDuplicate: Boolean
+}
+
+# Statistiques des devis importés
+type ImportedQuoteStats {
+  pendingReview: Int!
+  validated: Int!
+  rejected: Int!
+  archived: Int!
+  totalAmount: Float!
+}
+
+# Pagination
+type ImportedQuotePagination {
+  quotes: [ImportedQuote!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+  hasMore: Boolean!
+}
+
+# Input pour la mise à jour d'un devis importé
+input UpdateImportedQuoteInput {
+  originalQuoteNumber: String
+  vendorName: String
+  vendorAddress: String
+  vendorCity: String
+  vendorPostalCode: String
+  vendorCountry: String
+  vendorSiret: String
+  vendorVatNumber: String
+  clientName: String
+  clientSiret: String
+  clientAddress: String
+  clientCity: String
+  clientPostalCode: String
+  quoteDate: String
+  validUntil: String
+  dueDate: String
+  totalHT: Float
+  totalVAT: Float
+  totalTTC: Float
+  currency: String
+  category: ExpenseCategory
+  paymentMethod: PaymentMethodType
+  notes: String
+}
+
+# Input pour les filtres de recherche
+input ImportedQuoteFilters {
+  status: ImportedQuoteStatus
+  category: ExpenseCategory
+  vendorName: String
+  dateFrom: String
+  dateTo: String
+  minAmount: Float
+  maxAmount: Float
+}
+
+# Queries
+extend type Query {
+  """
+  Récupère un devis importé par son ID
+  """
+  importedQuote(id: ID!): ImportedQuote
+
+  """
+  Liste les devis importés avec pagination et filtres
+  """
+  importedQuotes(
+    workspaceId: ID!
+    page: Int
+    limit: Int
+    filters: ImportedQuoteFilters
+  ): ImportedQuotePagination!
+
+  """
+  Statistiques des devis importés
+  """
+  importedQuoteStats(workspaceId: ID!): ImportedQuoteStats!
+}
+
+# Mutations
+extend type Mutation {
+  """
+  Importe un devis PDF avec OCR — upload direct
+  """
+  importQuoteDirect(
+    file: Upload!
+    workspaceId: ID!
+  ): ImportedQuoteResult!
+
+  """
+  Met à jour un devis importé
+  """
+  updateImportedQuote(
+    id: ID!
+    input: UpdateImportedQuoteInput!
+  ): ImportedQuote!
+
+  """
+  Valide un devis importé
+  """
+  validateImportedQuote(id: ID!): ImportedQuote!
+
+  """
+  Rejette un devis importé
+  """
+  rejectImportedQuote(id: ID!, reason: String): ImportedQuote!
+
+  """
+  Archive un devis importé
+  """
+  archiveImportedQuote(id: ID!): ImportedQuote!
+
+  """
+  Supprime un devis importé
+  """
+  deleteImportedQuote(id: ID!): Boolean!
+
+  """
+  Supprime plusieurs devis importés
+  """
+  deleteImportedQuotes(ids: [ID!]!): Int!
+}

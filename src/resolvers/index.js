@@ -32,6 +32,7 @@ import emailSettingsResolvers from "./emailSettings.js";
 import invoiceReminderSettingsResolvers from "./invoiceReminderSettings.js";
 import documentEmailResolvers from "./documentEmail.js";
 import importedInvoiceResolvers from "./importedInvoice.js";
+import importedQuoteResolvers from "./importedQuote.js";
 import reconciliationResolvers from "./reconciliationResolvers.js";
 import sharedDocumentResolvers from "./sharedDocument.js";
 // DÉSACTIVÉ: SuperPDP API pas encore active
@@ -82,6 +83,7 @@ const resolvers = mergeResolvers([
   invoiceReminderSettingsResolvers,
   documentEmailResolvers,
   importedInvoiceResolvers,
+  importedQuoteResolvers,
   reconciliationResolvers,
   sharedDocumentResolvers,
   // DÉSACTIVÉ: SuperPDP API pas encore active
