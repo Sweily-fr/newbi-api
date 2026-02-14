@@ -1,0 +1,80 @@
+import mongoose from "mongoose";
+import addressSchema from "./schemas/address.js";
+
+const supplierSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, "Le nom du fournisseur est requis"],
+      trim: true,
+      validate: {
+        validator: function (v) {
+          return v && v.length >= 2 && v.length <= 100;
+        },
+        message: "Le nom doit contenir entre 2 et 100 caractères",
+      },
+    },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
+    phone: {
+      type: String,
+      trim: true,
+    },
+    siret: {
+      type: String,
+      trim: true,
+    },
+    vatNumber: {
+      type: String,
+      trim: true,
+    },
+    address: {
+      type: addressSchema,
+    },
+    iban: {
+      type: String,
+      trim: true,
+    },
+    bic: {
+      type: String,
+      trim: true,
+    },
+    defaultCategory: {
+      type: String,
+      enum: [
+        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
+        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
+        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS",
+        "TELECOMMUNICATIONS", "TRANSPORT", "ENERGY", "OTHER",
+      ],
+      default: "OTHER",
+    },
+    notes: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+    },
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      index: true,
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+supplierSchema.index({ workspaceId: 1, name: 1 });
+supplierSchema.index({ workspaceId: 1, siret: 1 });
+supplierSchema.index({ name: "text" }, { weights: { name: 10 } });
+
+export default mongoose.model("Supplier", supplierSchema);
