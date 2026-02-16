@@ -847,6 +847,198 @@ class SuperPdpService {
     }
   }
 
+  // ============================================================
+  // RÉCEPTION DE FACTURES D'ACHAT (factures fournisseurs)
+  // ============================================================
+
+  /**
+   * Récupérer les factures reçues depuis SuperPDP
+   * @param {string} organizationId - ID de l'organisation
+   * @param {Object} options - Options de filtrage
+   * @param {number} options.page - Page (défaut: 1)
+   * @param {number} options.limit - Limite par page (défaut: 50)
+   * @param {string} options.since - Date ISO depuis laquelle récupérer
+   * @param {string} options.status - Filtrer par statut
+   * @returns {Promise<Object>} - { invoices: [], totalCount, page, totalPages }
+   */
+  async getReceivedInvoices(organizationId, options = {}) {
+    try {
+      const { page = 1, limit = 50, since, status } = options;
+
+      logger.info(
+        `📥 Récupération des factures reçues depuis SuperPDP pour ${organizationId}`
+      );
+
+      // Construire les query params
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+        direction: "received",
+      });
+
+      if (since) params.append("since", since);
+      if (status) params.append("status", status);
+
+      const response = await this.makeRequest(
+        organizationId,
+        `/invoices?${params.toString()}`
+      );
+
+      logger.info(
+        `✅ ${response.invoices?.length || 0} factures reçues récupérées depuis SuperPDP`
+      );
+
+      return {
+        invoices: response.invoices || response.data || [],
+        totalCount: response.totalCount || response.total || 0,
+        page: response.page || page,
+        totalPages: response.totalPages || 1,
+      };
+    } catch (error) {
+      logger.error(
+        "❌ Erreur récupération factures reçues SuperPDP:",
+        error
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Récupérer le détail d'une facture reçue au format EN16931
+   * @param {string} organizationId - ID de l'organisation
+   * @param {string} superPdpInvoiceId - ID SuperPDP de la facture
+   * @returns {Promise<Object>} - Détail de la facture (format EN16931)
+   */
+  async getReceivedInvoiceDetail(organizationId, superPdpInvoiceId) {
+    try {
+      const response = await this.makeRequest(
+        organizationId,
+        `/invoices/${superPdpInvoiceId}?format=en16931`
+      );
+      return response;
+    } catch (error) {
+      logger.error(
+        `❌ Erreur récupération détail facture ${superPdpInvoiceId}:`,
+        error
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Transformer une facture SuperPDP reçue en format PurchaseInvoice Newbi
+   * @param {Object} superPdpInvoice - Facture reçue au format SuperPDP/EN16931
+   * @param {string} workspaceId - ID du workspace
+   * @param {string} userId - ID de l'utilisateur
+   * @returns {Object} - Données pour créer un PurchaseInvoice
+   */
+  transformReceivedInvoiceToPurchaseInvoice(superPdpInvoice, workspaceId, userId) {
+    const invoice = superPdpInvoice.en_invoice || superPdpInvoice;
+
+    // Extraire les informations du vendeur (= fournisseur pour nous)
+    const seller = invoice.seller || {};
+    const supplierName = seller.name || "Fournisseur inconnu";
+    const supplierSiret = seller.legal_registration_identifier?.value ||
+      seller.identifiers?.[0]?.value || "";
+    const supplierVatNumber = seller.vat_identifier || "";
+
+    // Extraire les montants
+    const totals = invoice.totals || {};
+    const amountHT = parseFloat(totals.total_without_vat) || 0;
+    const amountTTC = parseFloat(totals.total_with_vat) || parseFloat(totals.amount_due_for_payment) || 0;
+    const vatAmount = typeof totals.total_vat_amount === "object"
+      ? parseFloat(totals.total_vat_amount.value) || 0
+      : parseFloat(totals.total_vat_amount) || 0;
+
+    // Calculer le taux de TVA principal
+    const vatBreakDown = invoice.vat_break_down || [];
+    let mainVatRate = 20;
+    if (vatBreakDown.length > 0) {
+      // Prendre le taux du plus gros montant imposable
+      const largest = vatBreakDown.reduce((a, b) =>
+        parseFloat(a.vat_category_taxable_amount || 0) >=
+        parseFloat(b.vat_category_taxable_amount || 0) ? a : b
+      );
+      mainVatRate = parseFloat(largest.vat_category_rate) || 20;
+    }
+
+    // Dates
+    const parseDate = (dateStr) => {
+      if (!dateStr) return null;
+      const d = new Date(dateStr);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    // Catégoriser automatiquement basé sur le nom du fournisseur
+    const category = this.guessCategoryFromSupplier(supplierName);
+
+    return {
+      supplierName,
+      invoiceNumber: invoice.number || "",
+      issueDate: parseDate(invoice.issue_date) || new Date(),
+      dueDate: parseDate(invoice.payment_due_date),
+      amountHT,
+      amountTVA: vatAmount,
+      vatRate: mainVatRate,
+      amountTTC,
+      currency: invoice.currency_code || "EUR",
+      status: "TO_PROCESS",
+      category,
+      source: "SUPERPDP",
+      superPdpInvoiceId: superPdpInvoice.id || superPdpInvoice.invoiceId || "",
+      eInvoiceStatus: "RECEIVED",
+      eInvoiceReceivedAt: new Date(),
+      eInvoiceRawData: superPdpInvoice,
+      ocrMetadata: {
+        supplierName,
+        supplierSiret,
+        supplierVatNumber,
+        invoiceNumber: invoice.number || "",
+        invoiceDate: parseDate(invoice.issue_date),
+        dueDate: parseDate(invoice.payment_due_date),
+        amountHT,
+        amountTVA: vatAmount,
+        vatRate: mainVatRate,
+        amountTTC,
+        currency: invoice.currency_code || "EUR",
+        confidenceScore: 1.0, // Donnée structurée = confiance maximale
+      },
+      workspaceId,
+      createdBy: userId,
+    };
+  }
+
+  /**
+   * Deviner la catégorie de dépense à partir du nom du fournisseur
+   * @param {string} supplierName - Nom du fournisseur
+   * @returns {string} - Catégorie PurchaseInvoice
+   */
+  guessCategoryFromSupplier(supplierName) {
+    if (!supplierName) return "OTHER";
+    const name = supplierName.toLowerCase();
+
+    const rules = [
+      { keywords: ["edf", "engie", "total energies", "direct energie"], category: "ENERGY" },
+      { keywords: ["orange", "sfr", "bouygues telecom", "free", "ovh", "ionos"], category: "TELECOMMUNICATIONS" },
+      { keywords: ["axa", "allianz", "maif", "macif", "groupama", "generali"], category: "INSURANCE" },
+      { keywords: ["sncf", "air france", "uber", "bolt", "blablacar", "hertz", "europcar"], category: "TRANSPORT" },
+      { keywords: ["amazon web services", "aws", "google cloud", "microsoft azure", "github", "gitlab", "notion", "slack", "figma", "canva", "adobe", "jetbrains"], category: "SOFTWARE" },
+      { keywords: ["apple", "dell", "lenovo", "hp", "samsung"], category: "HARDWARE" },
+      { keywords: ["loyer", "bail", "foncier", "immobilier"], category: "RENT" },
+      { keywords: ["google ads", "meta ads", "facebook ads", "linkedin ads", "mailchimp", "sendinblue", "brevo"], category: "MARKETING" },
+      { keywords: ["restaurant", "deliveroo", "uber eats", "just eat"], category: "MEALS" },
+      { keywords: ["urssaf", "impot", "taxe", "dgfip", "cfe"], category: "TAXES" },
+    ];
+
+    for (const rule of rules) {
+      if (rule.keywords.some((kw) => name.includes(kw))) {
+        return rule.category;
+      }
+    }
+
+    return "OTHER";
+  }
+
   /**
    * Mapper le statut SuperPDP vers le statut Newbi
    * @param {string} superPdpStatus - Statut SuperPDP

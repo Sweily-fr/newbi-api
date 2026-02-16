@@ -192,8 +192,38 @@ const purchaseInvoiceSchema = new mongoose.Schema(
     },
     source: {
       type: String,
-      enum: ["MANUAL", "OCR"],
+      enum: ["MANUAL", "OCR", "SUPERPDP"],
       default: "MANUAL",
+    },
+    // Champs e-invoicing (SuperPDP)
+    superPdpInvoiceId: {
+      type: String,
+      index: true,
+      sparse: true,
+    },
+    eInvoiceStatus: {
+      type: String,
+      enum: [
+        "NOT_APPLICABLE",
+        "RECEIVED",
+        "PENDING_VALIDATION",
+        "VALIDATED",
+        "ACCEPTED",
+        "REJECTED",
+        "PAID",
+        "ERROR",
+      ],
+      default: "NOT_APPLICABLE",
+    },
+    eInvoiceReceivedAt: {
+      type: Date,
+    },
+    eInvoiceRawData: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    archivedPdfUrl: {
+      type: String,
     },
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -217,6 +247,7 @@ purchaseInvoiceSchema.index({ workspaceId: 1, dueDate: 1 });
 purchaseInvoiceSchema.index({ workspaceId: 1, supplierId: 1 });
 purchaseInvoiceSchema.index({ workspaceId: 1, category: 1 });
 purchaseInvoiceSchema.index({ supplierName: "text", invoiceNumber: "text" });
+purchaseInvoiceSchema.index({ workspaceId: 1, superPdpInvoiceId: 1 }, { sparse: true });
 
 purchaseInvoiceSchema.statics.PURCHASE_INVOICE_STATUS = PURCHASE_INVOICE_STATUS;
 purchaseInvoiceSchema.statics.PURCHASE_INVOICE_CATEGORY = PURCHASE_INVOICE_CATEGORY;

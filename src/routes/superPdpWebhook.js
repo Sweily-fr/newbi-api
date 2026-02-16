@@ -1,6 +1,9 @@
 import express from "express";
 import crypto from "crypto";
+import mongoose from "mongoose";
 import Invoice from "../models/Invoice.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import Supplier from "../models/Supplier.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import superPdpService from "../services/superPdpService.js";
 import logger from "../utils/logger.js";
@@ -131,7 +134,143 @@ router.post(
         return res.status(400).json({ error: "Missing invoiceId" });
       }
 
-      // Trouver la facture Newbi correspondante
+      // ============================================================
+      // Gestion des factures REÇUES (factures d'achat fournisseurs)
+      // ============================================================
+      if (
+        event === "invoice.received" ||
+        event === "invoice.incoming" ||
+        event === "invoice.delivered_to_recipient"
+      ) {
+        logger.info(`📥 Nouvelle facture d'achat reçue via SuperPDP: ${invoiceId}`);
+
+        try {
+          // Déterminer le workspaceId depuis les métadonnées ou la signature
+          const workspaceId = metadata?.workspaceId || metadata?.organizationId;
+
+          if (!workspaceId) {
+            logger.warn("Webhook facture reçue sans workspaceId dans metadata");
+            return res.status(200).json({
+              received: true,
+              warning: "No workspaceId in metadata, cannot create purchase invoice",
+            });
+          }
+
+          // Vérifier si la facture d'achat existe déjà
+          const existingPurchase = await PurchaseInvoice.findOne({
+            superPdpInvoiceId: invoiceId,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          });
+
+          if (existingPurchase) {
+            logger.info(`Facture d'achat ${invoiceId} déjà importée, mise à jour du statut`);
+            existingPurchase.eInvoiceStatus = superPdpService.mapStatusToNewbi(status) || "RECEIVED";
+            await existingPurchase.save();
+            return res.status(200).json({
+              received: true,
+              action: "updated",
+              purchaseInvoiceId: existingPurchase._id.toString(),
+            });
+          }
+
+          // Récupérer le détail complet de la facture
+          let invoiceDetail = payload;
+          try {
+            invoiceDetail = await superPdpService.getReceivedInvoiceDetail(
+              workspaceId,
+              invoiceId
+            );
+          } catch (detailError) {
+            logger.warn(
+              `Impossible de récupérer le détail EN16931, utilisation du payload webhook: ${detailError.message}`
+            );
+          }
+
+          // Trouver un utilisateur admin pour le createdBy
+          const User = mongoose.model("User");
+          const adminUser = await User.findOne({
+            "organizations.organizationId": new mongoose.Types.ObjectId(workspaceId),
+          });
+
+          if (!adminUser) {
+            logger.error(`Aucun utilisateur trouvé pour le workspace ${workspaceId}`);
+            return res.status(200).json({
+              received: true,
+              warning: "No user found for workspace",
+            });
+          }
+
+          // Transformer et créer la facture d'achat
+          const purchaseInvoiceData = superPdpService.transformReceivedInvoiceToPurchaseInvoice(
+            invoiceDetail,
+            workspaceId,
+            adminUser._id
+          );
+
+          // Auto-créer ou trouver le fournisseur
+          let supplier = await Supplier.findOne({
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            name: { $regex: new RegExp(`^${purchaseInvoiceData.supplierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+          });
+
+          if (!supplier) {
+            supplier = await Supplier.create({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              name: purchaseInvoiceData.supplierName,
+              siret: purchaseInvoiceData.ocrMetadata?.supplierSiret || undefined,
+              vatNumber: purchaseInvoiceData.ocrMetadata?.supplierVatNumber || undefined,
+              defaultCategory: purchaseInvoiceData.category,
+            });
+          }
+
+          purchaseInvoiceData.supplierId = supplier._id;
+
+          const newPurchaseInvoice = await PurchaseInvoice.create(purchaseInvoiceData);
+
+          logger.info(
+            `✅ Facture d'achat créée depuis webhook SuperPDP: ${newPurchaseInvoice._id} (${purchaseInvoiceData.supplierName})`
+          );
+
+          return res.status(200).json({
+            received: true,
+            action: "created",
+            purchaseInvoiceId: newPurchaseInvoice._id.toString(),
+          });
+        } catch (purchaseError) {
+          logger.error("❌ Erreur création facture d'achat depuis webhook:", purchaseError);
+          return res.status(200).json({
+            received: true,
+            warning: `Error creating purchase invoice: ${purchaseError.message}`,
+          });
+        }
+      }
+
+      // ============================================================
+      // Gestion des factures ÉMISES (changement de statut)
+      // ============================================================
+
+      // Vérifier aussi si c'est un changement de statut sur une facture d'achat
+      const purchaseInvoice = await PurchaseInvoice.findOne({ superPdpInvoiceId: invoiceId });
+      if (purchaseInvoice) {
+        const newPurchaseStatus = superPdpService.mapStatusToNewbi(status);
+        logger.info(
+          `📊 Mise à jour statut facture d'achat ${purchaseInvoice._id}: ${purchaseInvoice.eInvoiceStatus} → ${newPurchaseStatus}`
+        );
+        purchaseInvoice.eInvoiceStatus = newPurchaseStatus;
+        if (newPurchaseStatus === "PAID") {
+          purchaseInvoice.status = "PAID";
+          purchaseInvoice.paymentDate = new Date();
+        }
+        await purchaseInvoice.save();
+        return res.status(200).json({
+          received: true,
+          type: "purchase_invoice",
+          purchaseInvoiceId: purchaseInvoice._id.toString(),
+          newStatus: newPurchaseStatus,
+        });
+      }
+
+      // Trouver la facture Newbi (émise) correspondante
       let invoice = await Invoice.findOne({ superPdpInvoiceId: invoiceId });
 
       // Si pas trouvée par superPdpInvoiceId, essayer avec les métadonnées
