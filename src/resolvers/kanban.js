@@ -59,15 +59,17 @@ const enrichTaskWithUserInfo = async (task) => {
     if (a.userId) allUserIds.add(a.userId);
   });
   
-  // Récupérer les infos des utilisateurs
+  // Récupérer les infos des utilisateurs (supporter les IDs string Better Auth ET ObjectId)
   let usersMap = {};
   if (allUserIds.size > 0) {
     try {
-      const userObjectIds = Array.from(allUserIds).map(uid => {
-        try { return new mongoose.Types.ObjectId(uid); } catch { return uid; }
+      const userStringIds = Array.from(allUserIds);
+      const userObjectIds = [];
+      userStringIds.forEach(uid => {
+        try { userObjectIds.push(new mongoose.Types.ObjectId(uid)); } catch {}
       });
-      const users = await db.collection('user').find({ _id: { $in: userObjectIds } }).toArray();
-      logger.info(`🔍 [enrichTask] ${users.length} utilisateurs trouvés pour ${userObjectIds.length} IDs demandés`);
+      const users = await db.collection('user').find({ _id: { $in: [...userStringIds, ...userObjectIds] } }).toArray();
+      logger.info(`🔍 [enrichTask] ${users.length} utilisateurs trouvés pour ${userStringIds.length} IDs demandés`);
       users.forEach(u => {
         // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
         let displayName = '';
@@ -201,12 +203,17 @@ const enrichTaskWithUserInfo = async (task) => {
     return { ...c, id: c._id?.toString() || c.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
   });
   
-  // Enrichir l'activité
+  // Enrichir l'activité (fallback sur les valeurs stockées si l'utilisateur n'est pas trouvé en DB)
   const enrichedActivity = (taskObj.activity || []).map(a => {
     const userInfo = usersMap[a.userId];
-    return { ...a, id: a._id?.toString() || a.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+    return {
+      ...a,
+      id: a._id?.toString() || a.id,
+      userName: userInfo?.name || a.userName || 'Utilisateur',
+      userImage: userInfo?.image !== undefined ? userInfo.image : (a.userImage || null),
+    };
   });
-  
+
   return { ...taskObj, id: taskObj._id?.toString() || taskObj.id, comments: enrichedComments, activity: enrichedActivity };
 };
 
@@ -240,14 +247,16 @@ const enrichTasksWithUserInfo = async (tasks) => {
     });
   });
   
-  // Récupérer les infos des utilisateurs
+  // Récupérer les infos des utilisateurs (supporter les IDs string Better Auth ET ObjectId)
   let usersMap = {};
   if (allUserIds.size > 0) {
     try {
-      const userObjectIds = Array.from(allUserIds).map(uid => {
-        try { return new mongoose.Types.ObjectId(uid); } catch { return uid; }
+      const userStringIds = Array.from(allUserIds);
+      const userObjectIds = [];
+      userStringIds.forEach(uid => {
+        try { userObjectIds.push(new mongoose.Types.ObjectId(uid)); } catch {}
       });
-      const users = await db.collection('user').find({ _id: { $in: userObjectIds } }).toArray();
+      const users = await db.collection('user').find({ _id: { $in: [...userStringIds, ...userObjectIds] } }).toArray();
       users.forEach(u => {
         // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
         let displayName = '';
@@ -357,7 +366,12 @@ const enrichTasksWithUserInfo = async (tasks) => {
     
     const enrichedActivity = (taskObj.activity || []).map(a => {
       const userInfo = usersMap[a.userId];
-      return { ...a, id: a._id?.toString() || a.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+      return {
+        ...a,
+        id: a._id?.toString() || a.id,
+        userName: userInfo?.name || a.userName || 'Utilisateur',
+        userImage: userInfo?.image !== undefined ? userInfo.image : (a.userImage || null),
+      };
     });
     
     return { ...taskObj, id: taskObj._id?.toString() || taskObj.id, comments: enrichedComments, activity: enrichedActivity };
@@ -1054,17 +1068,31 @@ const resolvers = {
           position = allTasks.length;
         }
 
-        // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
+        // Récupérer les infos utilisateur pour l'activité de création
+        const db = mongoose.connection.db;
+        let creatorData = null;
+        try {
+          creatorData = await db.collection("user").findOne({ _id: user.id });
+          if (!creatorData && /^[0-9a-fA-F]{24}$/.test(user.id)) {
+            creatorData = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+          }
+        } catch (e) {
+          logger.warn("Could not fetch creator data:", e.message);
+        }
+        const creatorImage = creatorData?.image || creatorData?.avatar || null;
+        const creatorName = creatorData?.name || user?.name || user?.email || "Utilisateur";
+
         const task = new Task({
           ...cleanedInput,
-          status: cleanedInput.status || cleanedInput.columnId, // Utiliser columnId comme status par défaut
+          status: cleanedInput.status || cleanedInput.columnId,
           userId: user.id,
           workspaceId: finalWorkspaceId,
           position: position,
-          // Ajouter une entrée d'activité pour la création
           activity: [
             {
               userId: user.id,
+              userName: creatorName,
+              userImage: creatorImage,
               type: "created",
               description: "a créé la tâche",
               createdAt: new Date(),
@@ -1190,7 +1218,7 @@ const resolvers = {
           })();
         }
 
-        return savedTask;
+        return enrichedTask;
       }
     ),
 
@@ -1213,6 +1241,14 @@ const resolvers = {
         });
         if (!oldTask) throw new Error("Task not found");
 
+        // Fusionner timeTracking avec les valeurs existantes pour ne pas écraser startedBy, isRunning, entries, etc.
+        if (updates.timeTracking) {
+          updates.timeTracking = {
+            ...(oldTask.timeTracking?.toObject ? oldTask.timeTracking.toObject() : oldTask.timeTracking || {}),
+            ...updates.timeTracking,
+          };
+        }
+
         // Nettoyer les IDs temporaires de la checklist
         if (updates.checklist) {
           updates.checklist = updates.checklist.map((item) => {
@@ -1227,11 +1263,19 @@ const resolvers = {
 
         // Récupérer les données utilisateur pour l'activité
         const db = mongoose.connection.db;
-        const userData = user
-          ? await db.collection("user").findOne({
-              _id: new mongoose.Types.ObjectId(user.id),
-            })
-          : null;
+        let userData = null;
+        if (user) {
+          try {
+            userData = await db.collection("user").findOne({ _id: user.id });
+            if (!userData && /^[0-9a-fA-F]{24}$/.test(user.id)) {
+              userData = await db.collection("user").findOne({
+                _id: new mongoose.Types.ObjectId(user.id),
+              });
+            }
+          } catch (e) {
+            logger.warn("Could not fetch user data for activity:", e.message);
+          }
+        }
         const userImage =
           userData?.image ||
           userData?.avatar ||
@@ -1260,22 +1304,29 @@ const resolvers = {
           }
         }
 
-        // Priorité modifiée
+        // Priorité modifiée - activité dédiée (comme les déplacements)
+        let priorityActivity = null;
         if (
           updates.priority !== undefined &&
           updates.priority !== oldTask.priority
         ) {
-          const priorityLabels = {
-            low: "Basse",
-            medium: "Moyenne",
-            high: "Haute",
+          priorityActivity = {
+            userId: user?.id,
+            userName: userData?.name || user?.name || user?.email,
+            userImage: userImage,
+            type: "priority_changed",
+            oldValue: oldTask.priority || "",
+            newValue: updates.priority || "",
+            description: "a modifié la priorité",
+            createdAt: new Date(),
           };
-          changes.push(
-            `la priorité (${
-              priorityLabels[updates.priority] || updates.priority
-            })`
-          );
         }
+
+        // Fonction utilitaire pour formater une date en français
+        const formatDateFr = (dateStr) => {
+          const d = new Date(dateStr);
+          return d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+        };
 
         // Date de début modifiée
         if (updates.startDate !== undefined) {
@@ -1286,11 +1337,11 @@ const resolvers = {
             ? new Date(updates.startDate).toISOString()
             : null;
           if (oldDate !== newDate) {
-            changes.push(
-              updates.startDate
-                ? "la date de début"
-                : "supprimé la date de début"
-            );
+            if (!updates.startDate) {
+              changes.push("supprimé la date de début");
+            } else {
+              changes.push(`la date de début → ${formatDateFr(updates.startDate)}`);
+            }
           }
         }
 
@@ -1303,11 +1354,11 @@ const resolvers = {
             ? new Date(updates.dueDate).toISOString()
             : null;
           if (oldDate !== newDate) {
-            changes.push(
-              updates.dueDate
-                ? "la date d'échéance"
-                : "supprimé la date d'échéance"
-            );
+            if (!updates.dueDate) {
+              changes.push("supprimé la date d'échéance");
+            } else {
+              changes.push(`la date d'échéance → ${formatDateFr(updates.dueDate)}`);
+            }
           }
         }
 
@@ -1319,7 +1370,8 @@ const resolvers = {
           changes.push("la colonne");
         }
 
-        // Tags modifiés
+        // Tags modifiés — traités séparément pour avoir un verbe dédié
+        let tagActivity = null;
         if (updates.tags !== undefined) {
           const oldTags = oldTask.tags || [];
           const newTags = updates.tags || [];
@@ -1327,26 +1379,38 @@ const resolvers = {
             typeof tag === "string" ? tag : tag?.name || tag;
           const oldTagNames = oldTags.map(getTagName);
           const newTagNames = newTags.map(getTagName);
-          const addedTags = newTagNames.filter(
-            (tag) => !oldTagNames.includes(tag)
+
+          // Récupérer les objets tag complets (avec couleurs) pour ajoutés/supprimés
+          const addedTagObjects = newTags.filter(
+            (tag) => !oldTagNames.includes(getTagName(tag))
           );
-          const removedTags = oldTagNames.filter(
-            (tag) => !newTagNames.includes(tag)
+          const removedTagObjects = oldTags.filter(
+            (tag) => !newTagNames.includes(getTagName(tag))
           );
 
-          if (addedTags.length > 0) {
-            changes.push(
-              `ajouté le${addedTags.length > 1 ? "s" : ""} tag${
-                addedTags.length > 1 ? "s" : ""
-              } ${addedTags.join(", ")}`
-            );
-          }
-          if (removedTags.length > 0) {
-            changes.push(
-              `supprimé le${removedTags.length > 1 ? "s" : ""} tag${
-                removedTags.length > 1 ? "s" : ""
-              } ${removedTags.join(", ")}`
-            );
+          if (addedTagObjects.length > 0 || removedTagObjects.length > 0) {
+            const addedNames = addedTagObjects.map(getTagName);
+            const removedNames = removedTagObjects.map(getTagName);
+            let tagDescription;
+            if (addedNames.length > 0 && removedNames.length === 0) {
+              tagDescription = `a ajouté ${addedNames.length > 1 ? "les tags" : "le tag"} : ${addedNames.join(", ")}`;
+            } else if (removedNames.length > 0 && addedNames.length === 0) {
+              tagDescription = `a supprimé ${removedNames.length > 1 ? "les tags" : "le tag"} : ${removedNames.join(", ")}`;
+            } else {
+              tagDescription = `a modifié les tags`;
+            }
+            tagActivity = {
+              userId: user?.id,
+              userName: userData?.name || user?.name || user?.email,
+              userImage: userImage,
+              type: "updated",
+              field: "tags",
+              description: tagDescription,
+              // Stocker les objets tag complets avec couleurs
+              newValue: addedTagObjects.length > 0 ? addedTagObjects.map(t => ({ name: t.name, bg: t.bg, text: t.text, border: t.border })) : null,
+              oldValue: removedTagObjects.length > 0 ? removedTagObjects.map(t => ({ name: t.name, bg: t.bg, text: t.text, border: t.border })) : null,
+              createdAt: new Date(),
+            };
           }
         }
 
@@ -1393,11 +1457,8 @@ const resolvers = {
             );
 
             if (addedMembers.length > 0) {
-              changes.push(
-                `assigné ${addedMembers.length} membre${
-                  addedMembers.length > 1 ? "s" : ""
-                }`
-              );
+              // Ne PAS ajouter aux changes[] car on a une activité dédiée "assigned"
+              // (sinon le bloc generic "updated" plus bas écraserait notre activité)
               // Ajouter une activité spécifique pour l'assignation avec les IDs des membres
               updates.activity = [
                 ...(oldTask.activity || []),
@@ -1495,11 +1556,8 @@ const resolvers = {
               })();
             }
             if (removedMembers.length > 0) {
-              changes.push(
-                `désassigné ${removedMembers.length} membre${
-                  removedMembers.length > 1 ? "s" : ""
-                }`
-              );
+              // Ne PAS ajouter aux changes[] car on a une activité dédiée "unassigned"
+              // (sinon le bloc generic "updated" plus bas écraserait notre activité)
               // Ajouter une activité spécifique pour la désassignation
               updates.activity = [
                 ...(updates.activity || oldTask.activity || []),
@@ -1519,29 +1577,66 @@ const resolvers = {
           }
         }
 
-        // Checklist modifiée
+        // Checklist modifiée — activité dédiée (comme les tags)
+        let checklistActivity = null;
         if (updates.checklist !== undefined) {
           const oldChecklist = oldTask.checklist || [];
           const newChecklist = updates.checklist || [];
-          if (oldChecklist.length !== newChecklist.length) {
-            changes.push("la checklist");
-          } else {
-            // Vérifier si des items ont changé
-            const hasChanges = newChecklist.some((item, index) => {
-              const oldItem = oldChecklist[index];
-              return (
-                !oldItem ||
-                item.text !== oldItem.text ||
-                item.completed !== oldItem.completed
-              );
-            });
-            if (hasChanges) {
-              changes.push("la checklist");
+
+          // Comparer par texte pour détecter ajouts/suppressions
+          const oldTexts = oldChecklist.map(i => i.text);
+          const newTexts = newChecklist.map(i => i.text);
+          const addedItems = newChecklist.filter(i => !oldTexts.includes(i.text));
+          const removedItems = oldChecklist.filter(i => !newTexts.includes(i.text));
+
+          // Détecter les changements de statut (completed/uncompleted)
+          const completedItems = [];
+          const uncompletedItems = [];
+          newChecklist.forEach(newItem => {
+            const oldItem = oldChecklist.find(o => o.text === newItem.text);
+            if (oldItem) {
+              if (!oldItem.completed && newItem.completed) {
+                completedItems.push(newItem.text);
+              } else if (oldItem.completed && !newItem.completed) {
+                uncompletedItems.push(newItem.text);
+              }
             }
+          });
+
+          const hasChanges = addedItems.length > 0 || removedItems.length > 0 || completedItems.length > 0 || uncompletedItems.length > 0;
+          if (hasChanges) {
+            let checklistDescription;
+            const parts = [];
+            if (addedItems.length > 0) {
+              parts.push(`a ajouté ${addedItems.length > 1 ? "les éléments" : "l'élément"} : ${addedItems.map(i => i.text).join(", ")}`);
+            }
+            if (removedItems.length > 0) {
+              parts.push(`a supprimé ${removedItems.length > 1 ? "les éléments" : "l'élément"} : ${removedItems.map(i => i.text).join(", ")}`);
+            }
+            if (completedItems.length > 0) {
+              parts.push(`a coché ${completedItems.length > 1 ? "les éléments" : "l'élément"} : ${completedItems.join(", ")}`);
+            }
+            if (uncompletedItems.length > 0) {
+              parts.push(`a décoché ${uncompletedItems.length > 1 ? "les éléments" : "l'élément"} : ${uncompletedItems.join(", ")}`);
+            }
+            checklistDescription = parts.join(" et ");
+
+            checklistActivity = {
+              userId: user?.id,
+              userName: userData?.name || user?.name || user?.email,
+              userImage: userImage,
+              type: "updated",
+              field: "checklist",
+              description: checklistDescription,
+              createdAt: new Date(),
+            };
           }
         }
 
-        // Créer une seule entrée d'activité groupée si des changements existent
+        // Créer les entrées d'activité
+        const newActivities = [];
+
+        // Activité groupée pour les changements non-tags
         if (changes.length > 0) {
           const description =
             changes.length === 1
@@ -1550,16 +1645,37 @@ const resolvers = {
                   changes[changes.length - 1]
                 }`;
 
+          newActivities.push({
+            userId: user?.id,
+            userName: userData?.name || user?.name || user?.email,
+            userImage: userImage,
+            type: "updated",
+            description: description,
+            createdAt: new Date(),
+          });
+        }
+
+        // Activité dédiée pour les tags
+        if (tagActivity) {
+          newActivities.push(tagActivity);
+        }
+
+        // Activité dédiée pour la checklist
+        if (checklistActivity) {
+          newActivities.push(checklistActivity);
+        }
+
+        // Activité dédiée pour la priorité
+        if (priorityActivity) {
+          newActivities.push(priorityActivity);
+        }
+
+        if (newActivities.length > 0) {
+          // Utiliser updates.activity comme base s'il existe déjà (ex: activités assigned/unassigned)
+          // sinon fallback sur oldTask.activity
           updates.activity = [
-            ...(oldTask.activity || []),
-            {
-              userId: user?.id,
-              userName: userData?.name || user?.name || user?.email,
-              userImage: userImage,
-              type: "updated",
-              description: description,
-              createdAt: new Date(),
-            },
+            ...(updates.activity || oldTask.activity || []),
+            ...newActivities,
           ];
         }
 
@@ -1592,7 +1708,7 @@ const resolvers = {
           "Tâche mise à jour"
         );
 
-        return task;
+        return enrichedTask;
       }
     ),
 
@@ -1862,7 +1978,7 @@ const resolvers = {
           // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
           const comment = {
             userId: user.id,
-            content: input.content,
+            content: input.content || '',
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -2043,24 +2159,50 @@ const resolvers = {
           }
 
           // Récupérer les infos complètes de l'utilisateur depuis la base de données
-          const userFromDb = await db.collection("user").findOne({
-            _id: new ObjectId(user.id),
-          });
+          let userFromDb;
+          try {
+            userFromDb = await db.collection("user").findOne({
+              _id: user.id,
+            });
+            // Fallback avec ObjectId si l'ID est un hex valide
+            if (!userFromDb && /^[0-9a-fA-F]{24}$/.test(user.id)) {
+              userFromDb = await db.collection("user").findOne({
+                _id: new ObjectId(user.id),
+              });
+            }
+          } catch (e) {
+            logger.warn("Could not fetch user from db for timer:", e.message);
+          }
 
-          // Utiliser avatar au lieu de image
           const avatarUrl =
-            userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
-              ? userFromDb.avatar
-              : null;
+            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+              ? userFromDb.image
+              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+                ? userFromDb.avatar
+                : null;
+
+          const userName = userFromDb?.name || user.email;
+          const userImage = avatarUrl;
 
           // Démarrer le timer avec les infos de l'utilisateur
           task.timeTracking.isRunning = true;
           task.timeTracking.currentStartTime = new Date();
           task.timeTracking.startedBy = {
             userId: user.id,
-            userName: userFromDb?.name || user.email,
-            userImage: avatarUrl,
+            userName,
+            userImage,
           };
+
+          // Ajouter l'activité du timer
+          if (!task.activity) task.activity = [];
+          task.activity.push({
+            userId: user.id,
+            userName,
+            userImage,
+            type: "timer_started",
+            description: "a démarré le timer",
+            createdAt: new Date(),
+          });
 
           await task.save();
 
@@ -2090,7 +2232,7 @@ const resolvers = {
       async (
         _,
         { taskId, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId, db }
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2117,12 +2259,52 @@ const resolvers = {
             duration: duration,
           };
 
+          // Récupérer les infos de l'utilisateur
+          let userFromDb;
+          try {
+            userFromDb = await db.collection("user").findOne({ _id: user.id });
+            if (!userFromDb && /^[0-9a-fA-F]{24}$/.test(user.id)) {
+              userFromDb = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+            }
+          } catch (e) {
+            logger.warn("Could not fetch user from db for timer stop:", e.message);
+          }
+
+          const userName = userFromDb?.name || user.email;
+          const userImage =
+            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+              ? userFromDb.image
+              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+                ? userFromDb.avatar
+                : null;
+
+          // Formater la durée pour l'activité
+          const hours = Math.floor(duration / 3600);
+          const minutes = Math.floor((duration % 3600) / 60);
+          const seconds = duration % 60;
+          const durationStr = hours > 0
+            ? `${hours}h ${minutes}m ${seconds}s`
+            : minutes > 0
+              ? `${minutes}m ${seconds}s`
+              : `${seconds}s`;
+
           // Mettre à jour le timeTracking
           task.timeTracking.isRunning = false;
           task.timeTracking.currentStartTime = null;
           task.timeTracking.startedBy = null;
           task.timeTracking.totalSeconds += duration;
           task.timeTracking.entries.push(newEntry);
+
+          // Ajouter l'activité du timer
+          if (!task.activity) task.activity = [];
+          task.activity.push({
+            userId: user.id,
+            userName,
+            userImage,
+            type: "timer_stopped",
+            description: `a arrêté le timer (${durationStr})`,
+            createdAt: new Date(),
+          });
 
           await task.save();
 
@@ -2152,7 +2334,7 @@ const resolvers = {
       async (
         _,
         { taskId, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId, db }
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2162,6 +2344,25 @@ const resolvers = {
             workspaceId: finalWorkspaceId,
           });
           if (!task) throw new Error("Task not found");
+
+          // Récupérer les infos de l'utilisateur
+          let userFromDb;
+          try {
+            userFromDb = await db.collection("user").findOne({ _id: user.id });
+            if (!userFromDb && /^[0-9a-fA-F]{24}$/.test(user.id)) {
+              userFromDb = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+            }
+          } catch (e) {
+            logger.warn("Could not fetch user from db for timer reset:", e.message);
+          }
+
+          const userName = userFromDb?.name || user.email;
+          const userImage =
+            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+              ? userFromDb.image
+              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+                ? userFromDb.avatar
+                : null;
 
           // Arrêter le timer s'il est en cours
           if (task.timeTracking?.isRunning) {
@@ -2173,6 +2374,17 @@ const resolvers = {
           // Réinitialiser le temps et les entrées
           task.timeTracking.totalSeconds = 0;
           task.timeTracking.entries = [];
+
+          // Ajouter l'activité du timer
+          if (!task.activity) task.activity = [];
+          task.activity.push({
+            userId: user.id,
+            userName,
+            userImage,
+            type: "timer_reset",
+            description: "a réinitialisé le timer",
+            createdAt: new Date(),
+          });
 
           await task.save();
 

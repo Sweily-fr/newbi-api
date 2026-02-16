@@ -65,8 +65,8 @@ type Activity {
   userImage: String
   type: String!
   field: String
-  oldValue: String
-  newValue: String
+  oldValue: JSON
+  newValue: JSON
   description: String
   createdAt: DateTime!
 }
@@ -206,7 +206,7 @@ input ChecklistItemInput {
 }
 
 input CommentInput {
-  content: String!
+  content: String
 }
 
 input TaskImageInput {

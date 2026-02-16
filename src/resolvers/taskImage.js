@@ -5,6 +5,31 @@ import { withWorkspace } from '../middlewares/better-auth-jwt.js';
 import cloudflareService from '../services/cloudflareService.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
+import { getPubSub } from '../config/redis.js';
+
+const TASK_UPDATED = "TASK_UPDATED";
+
+// Publier en toute sécurité
+const safePublish = (channel, payload, context = "") => {
+  try {
+    const pubsub = getPubSub();
+    pubsub.publish(channel, payload).catch((error) => {
+      logger.error(`❌ [TaskImage] Erreur publication ${context}:`, error);
+    });
+  } catch (error) {
+    logger.error(`❌ [TaskImage] Erreur getPubSub ${context}:`, error);
+  }
+};
+
+// Enrichir une tâche avec les infos utilisateur (import dynamique pour éviter la dépendance circulaire)
+let _enrichTaskWithUserInfo = null;
+const getEnrichFn = async () => {
+  if (!_enrichTaskWithUserInfo) {
+    const kanbanModule = await import('./kanban.js');
+    _enrichTaskWithUserInfo = kanbanModule.enrichTaskWithUserInfo;
+  }
+  return _enrichTaskWithUserInfo;
+};
 
 /**
  * Resolvers pour la gestion des images de tâches Kanban
@@ -106,10 +131,21 @@ const taskImageResolvers = {
             uploadedAt: new Date()
           };
 
+          // Activité pour l'ajout d'image
+          const imageActivity = {
+            _id: new mongoose.Types.ObjectId(),
+            userId: user.id,
+            type: 'updated',
+            field: 'images',
+            description: `a ajouté 1 image`,
+            newValue: [{ fileName: uploadResult.fileName }],
+            createdAt: new Date()
+          };
+
           // Utiliser findOneAndUpdate avec $push pour garantir la persistance
           const updatedTask = await Task.findOneAndUpdate(
             { _id: taskId, workspaceId },
-            { $push: { images: newImage } },
+            { $push: { images: newImage, activity: imageActivity } },
             { new: true }
           );
 
@@ -121,8 +157,21 @@ const taskImageResolvers = {
               message: 'Échec de la mise à jour de la tâche'
             };
           }
-          
+
           logger.info(`✅ [TaskImage] Total images dans la tâche: ${updatedTask.images?.length || 0}`);
+
+          // Publier la mise à jour en temps réel
+          try {
+            const enrichFn = await getEnrichFn();
+            const enrichedTask = await enrichFn(updatedTask);
+            safePublish(
+              `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
+              { type: "UPDATED", task: enrichedTask, boardId: enrichedTask.boardId, workspaceId },
+              "Image ajoutée"
+            );
+          } catch (e) {
+            logger.error(`❌ [TaskImage] Erreur publication:`, e);
+          }
 
           logger.info(`✅ [TaskImage] Image uploadée avec succès: ${newImage.url}`);
 
@@ -180,9 +229,34 @@ const taskImageResolvers = {
 
           // Supprimer de la base de données
           task.images.splice(imageIndex, 1);
+
+          // Ajouter l'activité de suppression
+          task.activity.push({
+            _id: new mongoose.Types.ObjectId(),
+            userId: user.id,
+            type: 'updated',
+            field: 'images',
+            description: `a supprimé 1 image`,
+            oldValue: [{ fileName: image.fileName }],
+            createdAt: new Date()
+          });
+
           await task.save();
 
           logger.info(`✅ [TaskImage] Image supprimée avec succès`);
+
+          // Publier la mise à jour en temps réel
+          try {
+            const enrichFn = await getEnrichFn();
+            const enrichedTask = await enrichFn(task);
+            safePublish(
+              `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
+              { type: "UPDATED", task: enrichedTask, boardId: enrichedTask.boardId, workspaceId },
+              "Image supprimée"
+            );
+          } catch (e) {
+            logger.error(`❌ [TaskImage] Erreur publication:`, e);
+          }
 
           return task;
         } catch (error) {
@@ -220,9 +294,34 @@ const taskImageResolvers = {
             task.images = [];
           }
           task.images.push(newImage);
+
+          // Ajouter l'activité
+          task.activity.push({
+            _id: new mongoose.Types.ObjectId(),
+            userId: user.id,
+            type: 'updated',
+            field: 'images',
+            description: `a ajouté 1 image`,
+            newValue: [{ fileName: input.fileName }],
+            createdAt: new Date()
+          });
+
           await task.save();
 
           logger.info(`✅ [TaskImage] Image ajoutée avec succès`);
+
+          // Publier la mise à jour en temps réel
+          try {
+            const enrichFn = await getEnrichFn();
+            const enrichedTask = await enrichFn(task);
+            safePublish(
+              `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
+              { type: "UPDATED", task: enrichedTask, boardId: enrichedTask.boardId, workspaceId },
+              "Image ajoutée depuis URL"
+            );
+          } catch (e) {
+            logger.error(`❌ [TaskImage] Erreur publication:`, e);
+          }
 
           return task;
         } catch (error) {
