@@ -108,7 +108,7 @@ const commentSchema = new mongoose.Schema({
   // Ne PAS les stocker en base de données
   content: {
     type: String,
-    required: true,
+    default: '',
     trim: true
   },
   // Images attachées au commentaire
@@ -141,11 +141,11 @@ const activitySchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['created', 'updated', 'moved', 'assigned', 'unassigned', 'priority_changed', 'due_date_changed', 'status_changed', 'comment_added']
+    enum: ['created', 'updated', 'moved', 'assigned', 'unassigned', 'priority_changed', 'due_date_changed', 'status_changed', 'comment_added', 'timer_started', 'timer_stopped', 'timer_reset']
   },
   field: String, // Champ modifié (ex: 'priority', 'dueDate', 'columnId')
-  oldValue: String, // Ancienne valeur
-  newValue: String, // Nouvelle valeur
+  oldValue: mongoose.Schema.Types.Mixed, // Ancienne valeur (String ou Array pour assigned/unassigned)
+  newValue: mongoose.Schema.Types.Mixed, // Nouvelle valeur (String ou Array pour assigned/unassigned)
   description: String, // Description de l'activité
   createdAt: {
     type: Date,
