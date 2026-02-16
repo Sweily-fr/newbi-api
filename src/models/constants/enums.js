@@ -28,6 +28,17 @@ const CREDIT_NOTE_STATUS = {
   CREATED: 'CREATED'
 };
 
+/**
+ * Statuts possibles pour un bon de commande
+ */
+const PURCHASE_ORDER_STATUS = {
+  DRAFT: 'DRAFT',
+  CONFIRMED: 'CONFIRMED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  DELIVERED: 'DELIVERED',
+  CANCELED: 'CANCELED'
+};
+
 
 
 /**
@@ -53,6 +64,7 @@ export {
   INVOICE_STATUS,
   QUOTE_STATUS,
   CREDIT_NOTE_STATUS,
+  PURCHASE_ORDER_STATUS,
   DISCOUNT_TYPE,
   PAYMENT_METHOD
 };

@@ -1,6 +1,7 @@
 import Quote from '../models/Quote.js';
 import Invoice from '../models/Invoice.js';
 import CreditNote from '../models/CreditNote.js';
+import PurchaseOrder from '../models/PurchaseOrder.js';
 
 /**
  * Génère un numéro séquentiel pour les factures selon les règles métier spécifiques
@@ -1118,9 +1119,89 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
   });
 };
 
+/**
+ * Génère un numéro séquentiel pour les bons de commande
+ * La numérotation est séquentielle PAR PRÉFIXE
+ */
+const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
+  const currentYear = options.year || new Date().getFullYear();
+
+  const query = {
+    status: { $in: ['CONFIRMED', 'IN_PROGRESS', 'DELIVERED', 'CANCELED'] },
+    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
+  };
+
+  if (prefix) {
+    query.prefix = prefix;
+  }
+
+  if (options.workspaceId) {
+    query.workspaceId = options.workspaceId;
+  } else if (options.userId) {
+    query.createdBy = options.userId;
+  }
+
+  const purchaseOrders = await PurchaseOrder.find(query, { number: 1 }).lean();
+
+  if (!purchaseOrders || purchaseOrders.length === 0) {
+    if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
+      return options.manualNumber;
+    }
+    return '0001';
+  }
+
+  const numericNumbers = purchaseOrders
+    .map(po => {
+      if (po.number && /^\d+$/.test(po.number)) {
+        return parseInt(po.number, 10);
+      }
+      return null;
+    })
+    .filter(num => num !== null);
+
+  if (numericNumbers.length === 0) {
+    return '0001';
+  }
+
+  const lastNumber = Math.max(...numericNumbers);
+  return String(lastNumber + 1).padStart(4, '0');
+};
+
+/**
+ * Génère un numéro de bon de commande
+ */
+const generatePurchaseOrderNumber = async (customPrefix, options = {}) => {
+  const currentYear = options.year || new Date().getFullYear();
+
+  let prefix;
+  if (customPrefix) {
+    prefix = customPrefix;
+  } else {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    prefix = `BC-${year}${month}`;
+  }
+
+  if (options.isDraft) {
+    const timestamp = Date.now();
+    return `DRAFT-${timestamp}`;
+  }
+
+  if (options.manualNumber) {
+    return options.manualNumber;
+  }
+
+  return await generatePurchaseOrderSequentialNumber(prefix, {
+    ...options,
+    year: currentYear
+  });
+};
+
 export {
   generateInvoiceNumber,
   generateQuoteNumber,
   generateCreditNoteNumber,
+  generatePurchaseOrderNumber,
   validateInvoiceNumberSequence,
 };
