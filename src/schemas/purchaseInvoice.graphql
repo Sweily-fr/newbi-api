@@ -87,6 +87,18 @@ type PurchaseInvoiceOCRMetadata {
   rawExtractedText: String
 }
 
+# Statuts e-invoicing (réception SuperPDP)
+enum PurchaseInvoiceEInvoiceStatus {
+  NOT_APPLICABLE
+  RECEIVED
+  PENDING_VALIDATION
+  VALIDATED
+  ACCEPTED
+  REJECTED
+  PAID
+  ERROR
+}
+
 # Type principal facture d'achat
 type PurchaseInvoice {
   id: ID!
@@ -113,6 +125,11 @@ type PurchaseInvoice {
   linkedTransactionIds: [ID!]
   isReconciled: Boolean!
   source: String!
+  # Champs e-invoicing (SuperPDP)
+  superPdpInvoiceId: String
+  eInvoiceStatus: PurchaseInvoiceEInvoiceStatus
+  eInvoiceReceivedAt: String
+  archivedPdfUrl: String
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -148,6 +165,15 @@ type DeletePurchaseInvoiceResult {
 type BulkActionResult {
   success: Boolean!
   updatedCount: Int!
+  message: String!
+}
+
+# Résultat de synchronisation SuperPDP
+type SyncPurchaseInvoicesResult {
+  success: Boolean!
+  imported: Int!
+  skipped: Int!
+  errors: Int!
   message: String!
 }
 
@@ -334,6 +360,10 @@ extend type Mutation {
 
   reconcilePurchaseInvoice(purchaseInvoiceId: ID!, transactionIds: [ID!]!): PurchaseInvoice!
   unreconcilePurchaseInvoice(purchaseInvoiceId: ID!): PurchaseInvoice!
+
+  # Synchronisation e-invoicing (SuperPDP)
+  syncPurchaseInvoicesFromSuperPdp(workspaceId: ID!, since: String): SyncPurchaseInvoicesResult!
+  acknowledgePurchaseInvoiceEInvoice(id: ID!): PurchaseInvoice!
 
   createSupplier(input: CreateSupplierInput!): Supplier!
   updateSupplier(id: ID!, input: UpdateSupplierInput!): Supplier!
