@@ -1,0 +1,220 @@
+"""
+Types GraphQL pour les bons de commande importés via OCR
+"""
+
+# Statuts des bons de commande importés
+enum ImportedPurchaseOrderStatus {
+  PENDING_REVIEW
+  VALIDATED
+  REJECTED
+  ARCHIVED
+}
+
+# Informations du fournisseur (émetteur)
+type ImportedPurchaseOrderVendor {
+  name: String
+  address: String
+  city: String
+  postalCode: String
+  country: String
+  siret: String
+  vatNumber: String
+  email: String
+  phone: String
+}
+
+# Informations du client (destinataire)
+type ImportedPurchaseOrderClient {
+  name: String
+  address: String
+  city: String
+  postalCode: String
+  siret: String
+  clientNumber: String
+}
+
+# Ligne de bon de commande
+type ImportedPurchaseOrderItem {
+  description: String
+  quantity: Float
+  unitPrice: Float
+  totalPrice: Float
+  vatRate: Float
+  productCode: String
+}
+
+# Fichier associé
+type ImportedPurchaseOrderFile {
+  url: String!
+  cloudflareKey: String!
+  originalFileName: String!
+  mimeType: String
+  fileSize: Int
+}
+
+# Données OCR
+type ImportedPurchaseOrderOcrData {
+  extractedText: String
+  confidence: Float
+  processedAt: String
+}
+
+# Type principal de bon de commande importé
+type ImportedPurchaseOrder {
+  id: ID!
+  workspaceId: ID!
+  importedBy: ID!
+  status: ImportedPurchaseOrderStatus!
+  originalPurchaseOrderNumber: String
+  vendor: ImportedPurchaseOrderVendor
+  client: ImportedPurchaseOrderClient
+  purchaseOrderDate: String
+  deliveryDate: String
+  dueDate: String
+  totalHT: Float
+  totalVAT: Float
+  totalTTC: Float!
+  currency: String
+  items: [ImportedPurchaseOrderItem!]
+  category: ExpenseCategory
+  paymentMethod: PaymentMethodType
+  file: ImportedPurchaseOrderFile!
+  ocrData: ImportedPurchaseOrderOcrData
+  notes: String
+  linkedExpenseId: ID
+  isDuplicate: Boolean
+  duplicateOf: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Résultat d'import d'un bon de commande
+type ImportedPurchaseOrderResult {
+  success: Boolean!
+  purchaseOrder: ImportedPurchaseOrder
+  error: String
+  isDuplicate: Boolean
+}
+
+# Statistiques des bons de commande importés
+type ImportedPurchaseOrderStats {
+  pendingReview: Int!
+  validated: Int!
+  rejected: Int!
+  archived: Int!
+  totalAmount: Float!
+}
+
+# Pagination
+type ImportedPurchaseOrderPagination {
+  purchaseOrders: [ImportedPurchaseOrder!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+  hasMore: Boolean!
+}
+
+# Input pour la mise à jour d'un bon de commande importé
+input UpdateImportedPurchaseOrderInput {
+  originalPurchaseOrderNumber: String
+  vendorName: String
+  vendorAddress: String
+  vendorCity: String
+  vendorPostalCode: String
+  vendorCountry: String
+  vendorSiret: String
+  vendorVatNumber: String
+  clientName: String
+  clientSiret: String
+  clientAddress: String
+  clientCity: String
+  clientPostalCode: String
+  purchaseOrderDate: String
+  deliveryDate: String
+  dueDate: String
+  totalHT: Float
+  totalVAT: Float
+  totalTTC: Float
+  currency: String
+  category: ExpenseCategory
+  paymentMethod: PaymentMethodType
+  notes: String
+}
+
+# Input pour les filtres de recherche
+input ImportedPurchaseOrderFilters {
+  status: ImportedPurchaseOrderStatus
+  category: ExpenseCategory
+  vendorName: String
+  dateFrom: String
+  dateTo: String
+  minAmount: Float
+  maxAmount: Float
+}
+
+# Queries
+extend type Query {
+  """
+  Récupère un bon de commande importé par son ID
+  """
+  importedPurchaseOrder(id: ID!): ImportedPurchaseOrder
+
+  """
+  Liste les bons de commande importés avec pagination et filtres
+  """
+  importedPurchaseOrders(
+    workspaceId: ID!
+    page: Int
+    limit: Int
+    filters: ImportedPurchaseOrderFilters
+  ): ImportedPurchaseOrderPagination!
+
+  """
+  Statistiques des bons de commande importés
+  """
+  importedPurchaseOrderStats(workspaceId: ID!): ImportedPurchaseOrderStats!
+}
+
+# Mutations
+extend type Mutation {
+  """
+  Importe un bon de commande PDF avec OCR — upload direct
+  """
+  importPurchaseOrderDirect(
+    file: Upload!
+    workspaceId: ID!
+  ): ImportedPurchaseOrderResult!
+
+  """
+  Met à jour un bon de commande importé
+  """
+  updateImportedPurchaseOrder(
+    id: ID!
+    input: UpdateImportedPurchaseOrderInput!
+  ): ImportedPurchaseOrder!
+
+  """
+  Valide un bon de commande importé
+  """
+  validateImportedPurchaseOrder(id: ID!): ImportedPurchaseOrder!
+
+  """
+  Rejette un bon de commande importé
+  """
+  rejectImportedPurchaseOrder(id: ID!, reason: String): ImportedPurchaseOrder!
+
+  """
+  Archive un bon de commande importé
+  """
+  archiveImportedPurchaseOrder(id: ID!): ImportedPurchaseOrder!
+
+  """
+  Supprime un bon de commande importé
+  """
+  deleteImportedPurchaseOrder(id: ID!): Boolean!
+
+  """
+  Supprime plusieurs bons de commande importés
+  """
+  deleteImportedPurchaseOrders(ids: [ID!]!): Int!
+}
