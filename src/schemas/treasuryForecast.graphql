@@ -1,0 +1,105 @@
+enum ForecastType {
+  INCOME
+  EXPENSE
+}
+
+enum ForecastCategory {
+  SALES
+  REFUNDS_RECEIVED
+  OTHER_INCOME
+  RENT
+  SUBSCRIPTIONS
+  OFFICE_SUPPLIES
+  SERVICES
+  TRANSPORT
+  MEALS
+  TELECOMMUNICATIONS
+  INSURANCE
+  ENERGY
+  SOFTWARE
+  HARDWARE
+  MARKETING
+  TRAINING
+  MAINTENANCE
+  TAXES
+  UTILITIES
+  SALARIES
+  OTHER_EXPENSE
+}
+
+type TreasuryForecast {
+  id: ID!
+  workspaceId: ID!
+  month: String!
+  category: ForecastCategory!
+  type: ForecastType!
+  forecastAmount: Float!
+  notes: String
+  createdBy: ID
+  createdAt: String
+  updatedAt: String
+}
+
+type TreasuryKPI {
+  currentBalance: Float!
+  projectedBalance3Months: Float!
+  pendingReceivables: Float!
+  pendingPayables: Float!
+}
+
+type CategoryMonthAmount {
+  category: ForecastCategory!
+  type: ForecastType!
+  actualAmount: Float!
+  forecastAmount: Float!
+}
+
+type TreasuryMonthData {
+  month: String!
+  actualIncome: Float!
+  actualExpense: Float!
+  forecastIncome: Float!
+  forecastExpense: Float!
+  openingBalance: Float!
+  closingBalance: Float!
+  categoryBreakdown: [CategoryMonthAmount!]!
+}
+
+type TreasuryForecastData {
+  kpi: TreasuryKPI!
+  months: [TreasuryMonthData!]!
+}
+
+type TreasuryDeleteResult {
+  success: Boolean!
+  message: String
+}
+
+input UpsertTreasuryForecastInput {
+  workspaceId: ID
+  month: String!
+  category: ForecastCategory!
+  type: ForecastType!
+  forecastAmount: Float!
+  notes: String
+}
+
+extend type Query {
+  treasuryForecastData(
+    workspaceId: ID
+    startDate: String!
+    endDate: String!
+    accountId: ID
+  ): TreasuryForecastData!
+
+  treasuryForecasts(
+    workspaceId: ID
+    startMonth: String!
+    endMonth: String!
+  ): [TreasuryForecast!]!
+}
+
+extend type Mutation {
+  upsertTreasuryForecast(input: UpsertTreasuryForecastInput!): TreasuryForecast!
+  deleteTreasuryForecast(id: ID!): TreasuryDeleteResult!
+}
