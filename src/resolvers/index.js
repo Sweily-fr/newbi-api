@@ -49,6 +49,8 @@ import calendarConnectionResolvers from "./calendarConnection.js";
 import documentAutomationResolvers from "./documentAutomation.js";
 import purchaseInvoiceResolvers from "./purchaseInvoice.js";
 import treasuryForecastResolvers from "./treasuryForecast.js";
+import purchaseOrderResolvers from "./purchaseOrder.js";
+import importedPurchaseOrderResolvers from "./importedPurchaseOrder.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -101,6 +103,8 @@ const resolvers = mergeResolvers([
   documentAutomationResolvers,
   purchaseInvoiceResolvers,
   treasuryForecastResolvers,
+  purchaseOrderResolvers,
+  importedPurchaseOrderResolvers,
 ]);
 
 export default resolvers;

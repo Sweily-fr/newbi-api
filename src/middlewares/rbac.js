@@ -20,6 +20,7 @@ const ROLE_PERMISSIONS = {
   owner: {
     // Owner a tous les droits
     quotes: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
+    purchaseOrders: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
     invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid", "import"],
     creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
     expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
@@ -44,6 +45,7 @@ const ROLE_PERMISSIONS = {
   admin: {
     // Admin a presque tous les droits sauf la gestion de la facturation
     quotes: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
+    purchaseOrders: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
     invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid", "import"],
     creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
     expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
@@ -68,6 +70,7 @@ const ROLE_PERMISSIONS = {
   member: {
     // Member peut créer et gérer ses propres documents + export
     quotes: ["view", "create", "send", "export"],
+    purchaseOrders: ["view", "create", "send", "export"],
     invoices: ["view", "create", "send", "export", "import"],
     creditNotes: ["view", "create", "export"],
     expenses: ["view", "create", "ocr", "export"],
@@ -88,6 +91,7 @@ const ROLE_PERMISSIONS = {
   accountant: {
     // Accountant a accès aux documents financiers + validation + export
     quotes: ["view", "export"],
+    purchaseOrders: ["view", "export"],
     invoices: ["view", "export", "mark-paid", "import"],
     creditNotes: ["view", "export"],
     expenses: ["view", "approve", "export"],
@@ -106,6 +110,7 @@ const ROLE_PERMISSIONS = {
     // Viewer a un accès en lecture seule à toutes les ressources
     // Idéal pour les consultants, auditeurs, ou parties prenantes externes
     quotes: ["view"],
+    purchaseOrders: ["view"],
     invoices: ["view"],
     creditNotes: ["view"],
     expenses: ["view"],
