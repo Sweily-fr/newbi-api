@@ -1,6 +1,7 @@
 import express from "express";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
+// import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const router = express.Router();
 
@@ -258,6 +259,15 @@ router.post("/link", async (req, res) => {
     invoice.status = "COMPLETED";
     invoice.paymentDate = transaction.date;
     await invoice.save();
+
+    // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
+    // try {
+    //   if (evaluatePaymentReporting(invoice, transaction.date)) {
+    //     await invoice.save();
+    //   }
+    // } catch (eReportingError) {
+    //   logger.error("Erreur e-reporting payment (rapprochement REST):", eReportingError);
+    // }
 
     logger.info(
       `Rapprochement effectué: Transaction ${transactionId} <-> Facture ${invoiceId}`

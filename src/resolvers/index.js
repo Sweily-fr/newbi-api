@@ -35,8 +35,7 @@ import importedInvoiceResolvers from "./importedInvoice.js";
 import importedQuoteResolvers from "./importedQuote.js";
 import reconciliationResolvers from "./reconciliationResolvers.js";
 import sharedDocumentResolvers from "./sharedDocument.js";
-// DÉSACTIVÉ: SuperPDP API pas encore active
-// import eInvoicingResolvers from "./eInvoicing.js";
+import eInvoicingResolvers from "./eInvoicing.js";
 import publicBoardShareResolvers from "./publicBoardShare.js";
 import taskImageResolvers from "./taskImage.js";
 import notificationPreferencesResolvers from "./notificationPreferences.js";
@@ -89,8 +88,7 @@ const resolvers = mergeResolvers([
   importedQuoteResolvers,
   reconciliationResolvers,
   sharedDocumentResolvers,
-  // DÉSACTIVÉ: SuperPDP API pas encore active
-  // eInvoicingResolvers,
+  eInvoicingResolvers,
   publicBoardShareResolvers,
   taskImageResolvers,
   notificationPreferencesResolvers,

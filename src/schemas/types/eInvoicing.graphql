@@ -70,6 +70,41 @@ type RecipientCheckResult {
   error: String
 }
 
+# === ROUTING E-INVOICING / E-REPORTING ===
+
+"""
+Type de flux e-invoicing déterminé par le routage
+"""
+enum EInvoiceFlowType {
+  E_INVOICING
+  E_REPORTING_TRANSACTION
+  E_REPORTING_PAYMENT
+  NONE
+}
+
+"""
+Détails du routage e-invoicing (résultat de l'évaluation)
+"""
+type EInvoiceRoutingDetails {
+  isB2B: Boolean
+  sellerInFrance: Boolean
+  clientInFrance: Boolean
+  sellerVatRegistered: Boolean
+  clientVatRegistered: Boolean
+  obligationActive: Boolean
+  companySize: String
+  evaluatedAt: String
+}
+
+"""
+Résultat du routage e-invoicing pour une facture
+"""
+type EInvoiceRoutingResult {
+  flowType: EInvoiceFlowType!
+  reason: String
+  details: EInvoiceRoutingDetails
+}
+
 # === QUERIES ===
 
 extend type Query {
@@ -114,4 +149,9 @@ extend type Mutation {
     workspaceId: ID!
     siret: String!
   ): RecipientCheckResult!
+
+  """
+  Prévisualiser le routage e-invoicing d'une facture (sans l'envoyer)
+  """
+  previewInvoiceRouting(workspaceId: ID!, invoiceId: ID!): EInvoiceRoutingResult!
 }
