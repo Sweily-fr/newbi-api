@@ -1,6 +1,7 @@
 import { requireRead, requireWrite } from "../middlewares/rbac.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import superPdpService from "../services/superPdpService.js";
+import eInvoiceRoutingService from "../services/eInvoiceRoutingService.js";
 import Invoice from "../models/Invoice.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
@@ -322,6 +323,55 @@ const eInvoicingResolvers = {
             canReceiveEInvoices: false,
             error: error.message,
           };
+        }
+      }
+    ),
+
+    /**
+     * Prévisualiser le routage e-invoicing d'une facture (sans l'envoyer)
+     * Utile pour le debug et l'affichage frontend
+     */
+    previewInvoiceRouting: requireRead("invoices")(
+      async (_, { workspaceId, invoiceId }, context) => {
+        try {
+          const invoice = await Invoice.findOne({
+            _id: invoiceId,
+            workspaceId: workspaceId,
+          });
+
+          if (!invoice) {
+            throw new AppError("Facture non trouvée", ERROR_CODES.NOT_FOUND);
+          }
+
+          const organization =
+            await EInvoicingSettingsService.getOrganizationById(workspaceId);
+
+          if (!organization) {
+            throw new AppError(
+              "Organisation non trouvée",
+              ERROR_CODES.NOT_FOUND
+            );
+          }
+
+          const result = eInvoiceRoutingService.determineFlowType(
+            invoice,
+            organization
+          );
+
+          return {
+            flowType: result.flowType,
+            reason: result.reason,
+            details: {
+              ...result.details,
+              evaluatedAt: result.details.evaluatedAt?.toISOString(),
+            },
+          };
+        } catch (error) {
+          logger.error("Erreur preview routing:", error);
+          throw new AppError(
+            error.message || "Erreur lors de la prévisualisation du routage",
+            ERROR_CODES.INTERNAL_ERROR
+          );
         }
       }
     ),

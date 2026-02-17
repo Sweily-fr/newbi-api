@@ -2,6 +2,7 @@ import { withOrganization } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
 import logger from "../utils/logger.js";
+// import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const reconciliationResolvers = {
   Query: {
@@ -222,6 +223,16 @@ const reconciliationResolvers = {
           invoice.status = "COMPLETED";
           invoice.paymentDate = transaction.date;
           await invoice.save();
+
+          // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
+          // try {
+          //   if (evaluatePaymentReporting(invoice, transaction.date)) {
+          //     await invoice.save();
+          //     logger.info(`[E-INVOICE-ROUTING] E-reporting payment (rapprochement GQL) pour ${invoice._id}`);
+          //   }
+          // } catch (eReportingError) {
+          //   logger.error("Erreur e-reporting payment (rapprochement):", eReportingError);
+          // }
 
           logger.info(
             `[RECONCILIATION-GQL] Rapprochement: Transaction ${transactionId} <-> Facture ${invoiceId}`

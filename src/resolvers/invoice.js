@@ -21,8 +21,11 @@ import {
   AppError,
   ERROR_CODES,
 } from "../utils/errors.js";
+import logger from "../utils/logger.js";
 import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
+import { evaluateAndRouteInvoice } from "../utils/eInvoiceRoutingHelper.js";
+// import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
@@ -973,74 +976,32 @@ const invoiceResolvers = {
               });
             }
 
-            // === ENVOI AUTOMATIQUE À SUPERPDP (E-INVOICING) ===
-            // Envoyer à SuperPDP uniquement si :
-            // 1. La facture n'est pas un brouillon (PENDING ou COMPLETED)
-            // 2. L'e-invoicing est activé pour l'organisation
+            // === ROUTAGE E-INVOICING / E-REPORTING ===
+            // Évaluer et router la facture si elle n'est pas un brouillon
             if (invoice.status !== "DRAFT") {
               try {
-                const isEInvoicingEnabled =
-                  await EInvoicingSettingsService.isEInvoicingEnabled(
-                    workspaceId
-                  );
-
-                if (isEInvoicingEnabled) {
-                  console.log(
-                    `📤 E-invoicing activé, envoi de la facture ${prefix}${number} à SuperPDP...`
-                  );
-
-                  // Envoyer la facture à SuperPDP
-                  const superPdpResult = await superPdpService.sendInvoice(
-                    workspaceId,
-                    invoice
-                  );
-
-                  if (superPdpResult.success) {
-                    // Mettre à jour la facture avec les informations SuperPDP
-                    invoice.superPdpInvoiceId =
-                      superPdpResult.superPdpInvoiceId;
-                    invoice.eInvoiceStatus = superPdpService.mapStatusToNewbi(
-                      superPdpResult.status
-                    );
-                    invoice.eInvoiceSentAt = new Date();
-                    invoice.facturXData = {
-                      xmlGenerated: true,
-                      profile: "EN16931",
-                      generatedAt: new Date(),
-                    };
-
-                    await invoice.save();
-                    console.log(
-                      `✅ Facture envoyée à SuperPDP: ${superPdpResult.superPdpInvoiceId}`
-                    );
-                  } else {
-                    // Enregistrer l'erreur mais ne pas faire échouer la création
-                    invoice.eInvoiceStatus = "ERROR";
-                    invoice.eInvoiceError = superPdpResult.error;
-                    await invoice.save();
-                    console.error(
-                      `❌ Erreur envoi SuperPDP: ${superPdpResult.error}`
-                    );
-                  }
-                } else {
-                  console.log(
-                    `ℹ️ E-invoicing non activé pour le workspace ${workspaceId}`
+                const routingResult = await evaluateAndRouteInvoice(
+                  invoice,
+                  workspaceId
+                );
+                if (routingResult) {
+                  await invoice.save();
+                  logger.info(
+                    `[E-INVOICE-ROUTING] Facture ${prefix}${number}: ${routingResult.flowType} - ${routingResult.reason}`
                   );
                 }
               } catch (eInvoicingError) {
-                // Ne pas faire échouer la création de facture si l'envoi e-invoicing échoue
-                console.error(
-                  "❌ Erreur lors de l'envoi e-invoicing:",
+                // Ne pas faire échouer la création de facture si le routage échoue
+                logger.error(
+                  "Erreur routing e-invoicing:",
                   eInvoicingError
                 );
-
-                // Mettre à jour le statut d'erreur
                 try {
                   invoice.eInvoiceStatus = "ERROR";
                   invoice.eInvoiceError = eInvoicingError.message;
                   await invoice.save();
                 } catch (updateError) {
-                  console.error(
+                  logger.error(
                     "Erreur lors de la mise à jour du statut e-invoicing:",
                     updateError
                   );
@@ -1886,6 +1847,28 @@ const invoiceResolvers = {
         invoice.status = status;
         await invoice.save();
 
+        // === ROUTAGE E-INVOICING (DRAFT → PENDING) ===
+        // Les factures passant de DRAFT à PENDING n'ont pas été routées à la création
+        if (oldStatus === "DRAFT" && status === "PENDING") {
+          try {
+            const routingResult = await evaluateAndRouteInvoice(
+              invoice,
+              workspaceId
+            );
+            if (routingResult) {
+              await invoice.save();
+              logger.info(
+                `[E-INVOICE-ROUTING] DRAFT→PENDING ${invoice.prefix}${invoice.number}: ${routingResult.flowType} - ${routingResult.reason}`
+              );
+            }
+          } catch (eInvoicingError) {
+            logger.error(
+              "Erreur routing e-invoicing (DRAFT→PENDING):",
+              eInvoicingError
+            );
+          }
+        }
+
         // Enregistrer l'activité dans le client si c'est un client existant
         if (invoice.client && invoice.client.id) {
           try {
@@ -2015,6 +1998,16 @@ const invoiceResolvers = {
         invoice.status = "COMPLETED";
         invoice.paymentDate = new Date(paymentDate);
         await invoice.save();
+
+        // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
+        // try {
+        //   if (evaluatePaymentReporting(invoice, new Date(paymentDate))) {
+        //     await invoice.save();
+        //     logger.info(`[E-INVOICE-ROUTING] E-reporting payment pour ${invoice.prefix}${invoice.number}`);
+        //   }
+        // } catch (eReportingError) {
+        //   logger.error("Erreur e-reporting payment:", eReportingError);
+        // }
 
         // Envoyer la notification "Paiement reçu" si activée
         try {
