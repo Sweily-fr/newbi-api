@@ -1,6 +1,7 @@
 import Client from "../models/Client.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
+import User from "../models/User.js";
 // ✅ Import des wrappers RBAC
 import {
   requireRead,
@@ -607,11 +608,55 @@ const clientResolvers = {
       parent.createdAt?.toISOString?.() || parent.createdAt,
     updatedAt: (parent) =>
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
+    userName: async (parent) => {
+      if (parent.userName && !parent.userName.includes("@")) {
+        return parent.userName;
+      }
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("name email").lean();
+          if (user?.name) return user.name;
+        } catch {}
+      }
+      return parent.userName || "Système";
+    },
+    userImage: async (parent) => {
+      if (parent.userImage) return parent.userImage;
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("avatar").lean();
+          return user?.avatar || null;
+        } catch {}
+      }
+      return null;
+    },
   },
 
   ClientActivity: {
     createdAt: (parent) =>
       parent.createdAt?.toISOString?.() || parent.createdAt,
+    userName: async (parent) => {
+      if (parent.userName && !parent.userName.includes("@")) {
+        return parent.userName;
+      }
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("name email").lean();
+          if (user?.name) return user.name;
+        } catch {}
+      }
+      return parent.userName || "Système";
+    },
+    userImage: async (parent) => {
+      if (parent.userImage) return parent.userImage;
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("avatar").lean();
+          return user?.avatar || null;
+        } catch {}
+      }
+      return null;
+    },
   },
 };
 
