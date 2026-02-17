@@ -4,6 +4,7 @@
  */
 
 import express from "express";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import {
   streamFolderAsZip,
@@ -14,6 +15,16 @@ import {
 } from "../services/sharedDocumentZipService.js";
 import SharedDocument from "../models/SharedDocument.js";
 import logger from "../utils/logger.js";
+
+// Configuration R2
+const s3Client = new S3Client({
+  region: "auto",
+  endpoint: process.env.R2_API_URL,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  },
+});
 
 const router = express.Router();
 
@@ -255,6 +266,168 @@ router.post("/selection-info", async (req, res) => {
       success: false,
       message: error.message || "Erreur lors de la récupération des informations",
     });
+  }
+});
+
+/**
+ * GET /download-file/:documentId
+ * Télécharge un fichier individuel depuis R2
+ * Query params: workspaceId
+ */
+router.get("/download-file/:documentId", async (req, res) => {
+  try {
+    const user = await betterAuthJWTMiddleware(req);
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Non authentifié",
+      });
+    }
+
+    const { documentId } = req.params;
+    const { workspaceId } = req.query;
+
+    if (!documentId || !workspaceId) {
+      return res.status(400).json({
+        success: false,
+        message: "documentId et workspaceId sont requis",
+      });
+    }
+
+    const document = await SharedDocument.findOne({
+      _id: documentId,
+      workspaceId,
+    });
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: "Document non trouvé ou accès non autorisé",
+      });
+    }
+
+    logger.info("📥 Téléchargement fichier partagé depuis R2", {
+      fileName: document.originalName,
+      fileKey: document.fileKey,
+    });
+
+    const command = new GetObjectCommand({
+      Bucket: process.env.SHARED_DOCUMENTS_BUCKET || "shared-documents-staging",
+      Key: document.fileKey,
+    });
+
+    const response = await s3Client.send(command);
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(document.originalName || document.name)}"`
+    );
+    res.setHeader("Content-Type", document.mimeType || "application/octet-stream");
+    if (document.fileSize) {
+      res.setHeader("Content-Length", document.fileSize);
+    }
+    res.setHeader("Cache-Control", "no-cache");
+
+    response.Body.pipe(res);
+
+    logger.info("✅ Fichier partagé téléchargé", {
+      fileName: document.originalName,
+      size: document.fileSize,
+    });
+  } catch (error) {
+    logger.error("❌ Erreur téléchargement fichier partagé:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors du téléchargement",
+      });
+    }
+  }
+});
+
+/**
+ * GET /preview-file/:documentId
+ * Prévisualise un fichier individuel (inline) depuis R2
+ * Query params: workspaceId, token (optionnel, pour les src d'img/video/iframe)
+ */
+router.get("/preview-file/:documentId", async (req, res) => {
+  try {
+    // Accepter le token depuis le query param pour les src d'éléments HTML
+    if (req.query.token && !req.headers.authorization) {
+      req.headers.authorization = `Bearer ${req.query.token}`;
+    }
+
+    const user = await betterAuthJWTMiddleware(req);
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Non authentifié",
+      });
+    }
+
+    const { documentId } = req.params;
+    const { workspaceId } = req.query;
+
+    if (!documentId || !workspaceId) {
+      return res.status(400).json({
+        success: false,
+        message: "documentId et workspaceId sont requis",
+      });
+    }
+
+    const document = await SharedDocument.findOne({
+      _id: documentId,
+      workspaceId,
+    });
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: "Document non trouvé ou accès non autorisé",
+      });
+    }
+
+    logger.info("👁️ Prévisualisation fichier partagé depuis R2", {
+      fileName: document.originalName,
+      fileKey: document.fileKey,
+    });
+
+    const command = new GetObjectCommand({
+      Bucket: process.env.SHARED_DOCUMENTS_BUCKET || "shared-documents-staging",
+      Key: document.fileKey,
+    });
+
+    const response = await s3Client.send(command);
+
+    const contentType = document.originalName?.toLowerCase().endsWith(".pdf")
+      ? "application/pdf"
+      : document.mimeType || "application/octet-stream";
+
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${encodeURIComponent(document.originalName || document.name)}"`
+    );
+    res.setHeader("Content-Type", contentType);
+    if (document.fileSize) {
+      res.setHeader("Content-Length", document.fileSize);
+    }
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+
+    response.Body.pipe(res);
+
+    logger.info("✅ Fichier partagé prévisualisé", {
+      fileName: document.originalName,
+    });
+  } catch (error) {
+    logger.error("❌ Erreur prévisualisation fichier partagé:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la prévisualisation",
+      });
+    }
   }
 });
 
