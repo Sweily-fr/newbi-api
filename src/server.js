@@ -20,6 +20,20 @@ dotenv.config({ path: envPath });
 console.log(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
 console.log(`📄 Fichier .env chargé: ${envFile}`);
 
+// Handlers globaux pour éviter les crashes silencieux
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("⚠️  Unhandled Promise Rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("⚠️  Uncaught Exception:", error.message);
+  // Ne pas process.exit() pour garder le serveur en vie
+  // Sauf si l'erreur est vraiment critique (ex: out of memory)
+  if (error.message?.includes("ENOMEM") || error.message?.includes("allocation failed")) {
+    process.exit(1);
+  }
+});
+
 import express from "express";
 import { ApolloServer } from "apollo-server-express";
 import { createServer } from "http";
@@ -227,32 +241,45 @@ async function startServer() {
   const server = new ApolloServer({
     schema,
     context: async ({ req }) => {
-      // Essayer d'abord better-auth (cookies), puis JWT
-      let user = await betterAuthMiddleware(req);
-      if (!user) {
-        user = await betterAuthJWTMiddleware(req);
+      try {
+        // Essayer d'abord better-auth (cookies), puis JWT
+        let user = await betterAuthMiddleware(req);
+        if (!user) {
+          user = await betterAuthJWTMiddleware(req);
+        }
+
+        // Récupérer l'organizationId depuis les headers (envoyé par le frontend)
+        const organizationId = req.headers["x-organization-id"] || null;
+
+        // Récupérer le userRole depuis les headers (envoyé par le frontend)
+        const userRole = req.headers["x-user-role"] || null;
+
+        logger.debug(
+          `GraphQL Context - User: ${
+            user ? user._id : "null"
+          }, Organization: ${organizationId}, Role: ${userRole}`
+        );
+
+        return {
+          req,
+          user,
+          workspaceId: user?.workspaceId,
+          organizationId,
+          userRole,
+          db: mongoose.connection.db,
+        };
+      } catch (error) {
+        logger.error("Erreur dans le contexte Apollo (session expirée ou invalide):", error.message);
+        // Retourner un contexte sans utilisateur plutôt que de crasher le serveur
+        return {
+          req,
+          user: null,
+          workspaceId: null,
+          organizationId: req.headers?.["x-organization-id"] || null,
+          userRole: req.headers?.["x-user-role"] || null,
+          db: mongoose.connection.db,
+        };
       }
-
-      // Récupérer l'organizationId depuis les headers (envoyé par le frontend)
-      const organizationId = req.headers["x-organization-id"] || null;
-
-      // Récupérer le userRole depuis les headers (envoyé par le frontend)
-      const userRole = req.headers["x-user-role"] || null;
-
-      logger.debug(
-        `GraphQL Context - User: ${
-          user ? user._id : "null"
-        }, Organization: ${organizationId}, Role: ${userRole}`
-      );
-
-      return {
-        req,
-        user,
-        workspaceId: user?.workspaceId,
-        organizationId, // Nouveau: ID de l'organisation active
-        userRole, // Nouveau: Rôle de l'utilisateur dans l'organisation
-        db: mongoose.connection.db, // Ajouter l'accès à la base de données MongoDB
-      };
     },
     formatError: formatError,
     cache: "bounded",
