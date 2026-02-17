@@ -46,20 +46,35 @@ const validateSession = async (headers) => {
 
     // Valider la session via l'API better-auth du frontend
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    const response = await fetch(`${frontendUrl}/api/auth/get-session`, {
-      method: "GET",
-      headers: {
-        Cookie: cookieHeader,
-        "Content-Type": "application/json",
-      },
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    let response;
+    try {
+      response = await fetch(`${frontendUrl}/api/auth/get-session`, {
+        method: "GET",
+        headers: {
+          Cookie: cookieHeader,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       logger.debug(`Validation de session échouée: ${response.status}`);
       return null;
     }
 
-    const sessionData = await response.json();
+    let sessionData;
+    try {
+      sessionData = await response.json();
+    } catch (parseError) {
+      logger.error("Réponse session non-JSON:", parseError.message);
+      return null;
+    }
 
     if (!sessionData || !sessionData.user) {
       logger.debug("Session invalide ou utilisateur non trouvé");
