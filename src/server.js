@@ -228,6 +228,20 @@ async function startServer() {
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 
+  // DEBUG: Log les requêtes GraphQL qui retournent 400
+  app.use("/graphql", (req, res, next) => {
+    const originalSend = res.send;
+    res.send = function(body) {
+      if (res.statusCode === 400) {
+        console.error("⚠️ [DEBUG 400] Requête GraphQL retournant 400:");
+        console.error("  Body reçu:", JSON.stringify(req.body)?.substring(0, 500));
+        console.error("  Réponse:", typeof body === 'string' ? body.substring(0, 500) : JSON.stringify(body)?.substring(0, 500));
+      }
+      return originalSend.call(this, body);
+    };
+    next();
+  });
+
   // Autres routes API
   setupRoutes(app);
 

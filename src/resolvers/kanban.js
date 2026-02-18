@@ -1141,7 +1141,7 @@ const resolvers = {
               const board = await Board.findById(savedTask.boardId);
               const column = await Column.findById(savedTask.columnId);
               const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
-              const boardName = board?.name || "Tableau sans nom";
+              const boardName = board?.title || "Tableau sans nom";
               const columnName = column?.title || "Colonne";
               
               logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
@@ -1481,12 +1481,12 @@ const resolvers = {
                 try {
                   // Récupérer les infos du board et de la colonne
                   const board = await Board.findById(oldTask.boardId);
-                  logger.info(`📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? 'OUI' : 'NON'}, Board name: ${board?.name}`);
+                  logger.info(`📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? 'OUI' : 'NON'}, Board name: ${board?.title}`);
                   logger.info(`📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`);
                   const column = await Column.findById(oldTask.columnId);
                   logger.info(`📧 [UpdateTask] Column trouvée: ${column ? 'OUI' : 'NON'}, Column title: ${column?.title}`);
                   const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
-                  const boardName = board?.name || "Tableau sans nom";
+                  const boardName = board?.title || "Tableau sans nom";
                   const columnName = column?.title || "Colonne";
                   logger.info(`📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
 
