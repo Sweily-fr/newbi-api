@@ -545,6 +545,20 @@ const bankingResolvers = {
     provider: (parent) => (parent.provider || "bridge").toLowerCase(),
     // Champ date pour le tri et l'affichage
     date: (parent) => parent.date || parent.createdAt,
+    // Champs avec valeurs par défaut pour éviter les erreurs non-null
+    externalId: (parent) => parent.externalId || "",
+    amount: (parent) => parent.amount ?? 0,
+    currency: (parent) => parent.currency || "EUR",
+    description: (parent) => parent.description || "",
+    // Fees avec valeurs par défaut pour éviter null sur les champs non-null
+    fees: (parent) => {
+      if (!parent.fees) return null;
+      return {
+        amount: parent.fees.amount ?? 0,
+        currency: parent.fees.currency || "EUR",
+        provider: parent.fees.provider || null,
+      };
+    },
     // Champs de rapprochement
     linkedInvoiceId: (parent) => parent.linkedInvoiceId?.toString() || null,
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,

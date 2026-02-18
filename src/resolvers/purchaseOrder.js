@@ -260,20 +260,11 @@ const purchaseOrderResolvers = {
             }
           }
 
-          // Générer le numéro
-          let number;
-          if (input.status === "DRAFT") {
-            number = await generatePurchaseOrderNumber(prefix, {
-              isDraft: true,
-              workspaceId,
-              userId: user.id,
-            });
-          } else {
-            number = await generatePurchaseOrderNumber(prefix, {
-              workspaceId,
-              userId: user.id,
-            });
-          }
+          // Générer le numéro séquentiel
+          const number = await generatePurchaseOrderNumber(prefix, {
+            workspaceId,
+            userId: user.id,
+          });
 
           // Récupérer les informations de l'organisation
           const organization = await getOrganizationInfo(workspaceId);
@@ -511,7 +502,6 @@ const purchaseOrderResolvers = {
         const prefix = `BC-${year}${month}`;
 
         const number = await generatePurchaseOrderNumber(prefix, {
-          isDraft: true,
           workspaceId,
           userId: user.id,
         });
@@ -522,7 +512,7 @@ const purchaseOrderResolvers = {
           client: quote.client,
           companyInfo: quote.companyInfo,
           items: quote.items,
-          status: "DRAFT",
+          status: "CONFIRMED",
           issueDate: new Date(),
           validUntil: quote.validUntil || null,
           headerNotes: quote.headerNotes,
