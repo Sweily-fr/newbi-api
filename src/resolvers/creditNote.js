@@ -4,7 +4,8 @@ import User from '../models/User.js';
 import Client from '../models/Client.js';
 import Event from '../models/Event.js';
 import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
-import { requireCompanyInfo } from '../middlewares/company-info-guard.js';
+import { requireCompanyInfo, getOrganizationInfo } from '../middlewares/company-info-guard.js';
+import { mapOrganizationToCompanyInfo } from '../utils/companyInfoMapper.js';
 import { generateCreditNoteNumber } from '../utils/documentNumbers.js';
 import mongoose from 'mongoose';
 import {
@@ -295,11 +296,19 @@ const creditNoteResolvers = {
             manualNumber: input.number,
           });
 
+          // Toujours snapshot companyInfo pour les avoirs (pas de statut DRAFT)
+          let creditNoteCompanyInfo = input.companyInfo || originalInvoice.companyInfo;
+          if (!creditNoteCompanyInfo || !creditNoteCompanyInfo.name) {
+            const org = await getOrganizationInfo(workspaceId);
+            creditNoteCompanyInfo = mapOrganizationToCompanyInfo(org);
+          }
+
           // Créer l'avoir
           const creditNote = new CreditNote({
             ...input,
             number,
             status: 'CREATED',
+            companyInfo: creditNoteCompanyInfo,
             originalInvoice: originalInvoice._id,
             originalInvoiceNumber: originalInvoice.number,
             // Copier l'auto-liquidation depuis la facture originale
@@ -522,6 +531,18 @@ const creditNoteResolvers = {
   },
 
   CreditNote: {
+    companyInfo: async (creditNote) => {
+      if (creditNote.companyInfo && creditNote.companyInfo.name) {
+        return creditNote.companyInfo;
+      }
+      try {
+        const organization = await getOrganizationInfo(creditNote.workspaceId.toString());
+        return mapOrganizationToCompanyInfo(organization);
+      } catch (error) {
+        console.error('[CreditNote.companyInfo] Erreur résolution dynamique:', error.message);
+        return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+      }
+    },
     createdBy: async (creditNote) => {
       return await User.findById(creditNote.createdBy);
     },

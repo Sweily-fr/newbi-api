@@ -106,7 +106,7 @@ const invoiceSchema = new mongoose.Schema(
     },
     companyInfo: {
       type: companyInfoSchema,
-      required: true,
+      required: false,
     },
     client: {
       type: clientSchema,
