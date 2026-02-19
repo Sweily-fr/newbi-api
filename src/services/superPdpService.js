@@ -538,6 +538,9 @@ class SuperPdpService {
       m3: "MTQ",
       "m³": "MTQ",
       km: "KMT",
+      "personne(s)": "C62",
+      personne: "C62",
+      personnes: "C62",
       // Codes UN/ECE déjà valides
       c62: "C62",
       hur: "HUR",

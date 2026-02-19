@@ -18,6 +18,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import { requireCompanyInfo, getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
@@ -95,6 +96,31 @@ const calculateQuoteTotals = (
 
 const quoteResolvers = {
   Quote: {
+    companyInfo: async (quote) => {
+      // Pour les brouillons, toujours résoudre depuis l'organisation (données dynamiques)
+      if (!quote.status || quote.status === 'DRAFT') {
+        try {
+          const organization = await getOrganizationInfo(quote.workspaceId.toString());
+          return mapOrganizationToCompanyInfo(organization);
+        } catch (error) {
+          console.error('[Quote.companyInfo] Erreur résolution dynamique:', error.message);
+          if (quote.companyInfo && quote.companyInfo.name) return quote.companyInfo;
+          return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+        }
+      }
+      // Pour les documents finalisés, utiliser les données embarquées (snapshot historique)
+      if (quote.companyInfo && quote.companyInfo.name) {
+        return quote.companyInfo;
+      }
+      // Fallback : résoudre depuis l'organisation
+      try {
+        const organization = await getOrganizationInfo(quote.workspaceId.toString());
+        return mapOrganizationToCompanyInfo(organization);
+      } catch (error) {
+        console.error('[Quote.companyInfo] Erreur résolution fallback:', error.message);
+        return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+      }
+    },
     createdBy: async (quote) => {
       return await User.findById(quote.createdBy);
     },
@@ -649,41 +675,16 @@ const quoteResolvers = {
           }
         }
 
-        // Créer le devis avec les informations de l'entreprise depuis l'organisation si non fournies
+        // Créer le devis - companyInfo uniquement pour les documents non-DRAFT
+        const isDraft = !input.status || input.status === 'DRAFT';
         const quote = new Quote({
           ...input,
           number, // S'assurer que le numéro est défini
           prefix,
           workspaceId, // Ajouter le workspaceId
-          companyInfo: input.companyInfo || {
-            name: organization.companyName || "",
-            email: organization.companyEmail || "",
-            phone: organization.companyPhone || "",
-            website: organization.website || "",
-            address: {
-              street: organization.addressStreet || "",
-              city: organization.addressCity || "",
-              postalCode: organization.addressZipCode || "",
-              country: organization.addressCountry || "France",
-            },
-            siret: organization.siret || "",
-            vatNumber: organization.vatNumber || "",
-            companyStatus: organization.legalForm || "AUTRE",
-            logo: organization.logo || "",
-            ...(organization.bankIban && organization.bankBic && organization.bankName
-              ? {
-                  bankDetails: {
-                    iban: organization.bankIban,
-                    bic: organization.bankBic,
-                    bankName: organization.bankName,
-                  },
-                }
-              : {}),
-            transactionCategory: organization.activityCategory,
-            vatPaymentCondition: organization.fiscalRegime,
-            capitalSocial: organization.capitalSocial,
-            rcs: organization.rcs,
-          },
+          companyInfo: isDraft
+            ? undefined
+            : mapOrganizationToCompanyInfo(organization),
           client: {
             ...input.client,
             shippingAddress: input.client.hasDifferentShippingAddress
@@ -806,13 +807,16 @@ const quoteResolvers = {
         );
       }
 
-      // Si les informations de l'entreprise ne sont pas fournies, les supprimer pour ne pas écraser les existantes
-      if (!updateData.companyInfo) {
-        delete updateData.companyInfo;
-      }
+      // Ne pas persister companyInfo pour les documents DRAFT
+      delete updateData.companyInfo;
 
       // Gérer la transition DRAFT → PENDING : générer automatiquement le numéro séquentiel
       if (quote.status === "DRAFT" && updateData.status === "PENDING") {
+        // Snapshot companyInfo à la finalisation
+        if (!quote.companyInfo || !quote.companyInfo.name) {
+          const org = await getOrganizationInfo(quote.workspaceId);
+          updateData.companyInfo = mapOrganizationToCompanyInfo(org);
+        }
         console.log('🔍 [updateQuote] DRAFT → PENDING transition detected');
         console.log('🔍 [updateQuote] Current number:', quote.number);
         console.log('🔍 [updateQuote] Input number:', input.number);
@@ -932,8 +936,13 @@ const quoteResolvers = {
         throw createStatusTransitionError("Devis", quote.status, status);
       }
 
-      // Si le devis passe de DRAFT à PENDING, générer un nouveau numéro séquentiel
+      // Si le devis passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
       if (quote.status === "DRAFT" && status === "PENDING") {
+        // Snapshot companyInfo à la finalisation
+        if (!quote.companyInfo || !quote.companyInfo.name) {
+          const org = await getOrganizationInfo(workspaceId);
+          quote.companyInfo = mapOrganizationToCompanyInfo(org);
+        }
         // Récupérer le préfixe du dernier devis créé (non-DRAFT)
         const lastQuote = await Quote.findOne({
           workspaceId: quote.workspaceId,
@@ -1352,78 +1361,16 @@ const quoteResolvers = {
           // Déterminer s'il s'agit d'une facture d'acompte
           const isInvoiceDeposit = isDeposit === true;
 
-          // Créer la facture à partir du devis
+          // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
+          const quoteObj = quote.toObject();
+
+          // Créer la facture à partir du devis (en DRAFT, pas de companyInfo embarqué)
           const invoice = new Invoice({
             number,
             prefix,
-            client: quote.client,
-            // Copier les informations d'entreprise du devis en priorité, avec fallback sur l'organisation
-            companyInfo: {
-              // Priorité aux informations du devis, fallback sur l'organisation
-              name: quote.companyInfo?.name || organization.companyName || "",
-              email:
-                quote.companyInfo?.email || organization.companyEmail || "",
-              phone:
-                quote.companyInfo?.phone || organization.companyPhone || "",
-              website: quote.companyInfo?.website || organization.website || "",
-              address: {
-                street:
-                  quote.companyInfo?.address?.street ||
-                  organization.addressStreet ||
-                  "",
-                city:
-                  quote.companyInfo?.address?.city ||
-                  organization.addressCity ||
-                  "",
-                postalCode:
-                  quote.companyInfo?.address?.postalCode ||
-                  organization.addressZipCode ||
-                  "",
-                country:
-                  quote.companyInfo?.address?.country ||
-                  organization.addressCountry ||
-                  "France",
-              },
-              // Copier les propriétés légales (priorité au devis, fallback sur l'organisation)
-              siret: quote.companyInfo?.siret || organization.siret || "",
-              vatNumber:
-                quote.companyInfo?.vatNumber || organization.vatNumber || "",
-              companyStatus:
-                quote.companyInfo?.companyStatus ||
-                organization.legalForm ||
-                "AUTRE",
-              // Autres propriétés
-              logo: quote.companyInfo?.logo || organization.logo || "",
-              // Copier les coordonnées bancaires du devis en priorité, sinon de l'organisation
-              // Ne pas inclure bankDetails si les informations sont incomplètes
-              ...(quote.companyInfo?.bankDetails?.iban &&
-              quote.companyInfo?.bankDetails?.bic &&
-              quote.companyInfo?.bankDetails?.bankName
-                ? {
-                    bankDetails: {
-                      iban: quote.companyInfo.bankDetails.iban,
-                      bic: quote.companyInfo.bankDetails.bic,
-                      bankName: quote.companyInfo.bankDetails.bankName,
-                    },
-                  }
-                : organization.bankIban &&
-                  organization.bankBic &&
-                  organization.bankName
-                ? {
-                    bankDetails: {
-                      iban: organization.bankIban,
-                      bic: organization.bankBic,
-                      bankName: organization.bankName,
-                    },
-                  }
-                : {}),
-              // Copier les autres champs du devis s'ils existent
-              transactionCategory: quote.companyInfo?.transactionCategory,
-              vatPaymentCondition: quote.companyInfo?.vatPaymentCondition,
-              capitalSocial: quote.companyInfo?.capitalSocial,
-              rcs: quote.companyInfo?.rcs,
-            },
-            items: quote.items, // Note: les items ne sont pas répartis, ils sont tous inclus dans chaque facture
+            client: quoteObj.client,
+            companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
+            items: quoteObj.items, // Note: les items ne sont pas répartis, ils sont tous inclus dans chaque facture
             status: "DRAFT", // Toujours créer en brouillon pour permettre les modifications
             issueDate: new Date(),
             dueDate: new Date(new Date().setDate(new Date().getDate() + 30)), // Date d'échéance par défaut à 30 jours
@@ -1435,7 +1382,7 @@ const quoteResolvers = {
             purchaseOrderNumber: `${quote.prefix}${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
             discount: quote.discount,
             discountType: quote.discountType,
-            customFields: quote.customFields,
+            customFields: quoteObj.customFields,
             totalHT,
             totalVAT,
             totalTTC,
@@ -1447,6 +1394,12 @@ const quoteResolvers = {
             sourceQuote: quote._id, // Référence vers le devis source
             isDeposit: isInvoiceDeposit, // Marquer comme facture d'acompte si spécifié
             isReverseCharge: quote.isReverseCharge || false, // Copier l'auto-liquidation depuis le devis
+            shipping: quoteObj.shipping, // Copier les informations de livraison depuis le devis
+            appearance: quoteObj.appearance, // Copier l'apparence du document
+            clientPositionRight: quote.clientPositionRight || false,
+            showBankDetails: quote.showBankDetails || false,
+            retenueGarantie: quote.retenueGarantie || 0,
+            escompte: quote.escompte || 0,
             // Ajouter une note appropriée selon le type de facture
             notes: isInvoiceDeposit
               ? `Facture d'acompte (${invoiceDistribution[i]}% du montant total)`

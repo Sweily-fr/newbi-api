@@ -3,7 +3,7 @@
  */
 
 // Regex pour la validation d'email
-const EMAIL_REGEX = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
+const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 
 // Regex pour la validation de numéro de téléphone (format international ou national)
 // Accepte les formats avec ou sans préfixe international
@@ -87,7 +87,7 @@ const ITEM_DESCRIPTION_REGEX =
 // Regex pour la validation des unités de mesure
 // Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)
 // Accepte 1-20 caractères OU une chaîne vide
-const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-²³]{1,20}$/;
+const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-²³()]{1,20}$/;
 
 // Regex pour la validation des notes de pied de page
 // Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne)

@@ -10,7 +10,8 @@ import {
   requireRead,
   requireDelete,
 } from "../middlewares/rbac.js";
-import { requireCompanyInfo } from "../middlewares/company-info-guard.js";
+import { requireCompanyInfo, getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { generateInvoiceNumber } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
 import {
@@ -178,6 +179,34 @@ const validateInvoiceIssueDate = async (
 };
 
 const invoiceResolvers = {
+  Invoice: {
+    companyInfo: async (invoice) => {
+      // Pour les brouillons, toujours résoudre depuis l'organisation (données dynamiques)
+      if (!invoice.status || invoice.status === 'DRAFT') {
+        try {
+          const organization = await getOrganizationInfo(invoice.workspaceId.toString());
+          return mapOrganizationToCompanyInfo(organization);
+        } catch (error) {
+          console.error('[Invoice.companyInfo] Erreur résolution dynamique:', error.message);
+          if (invoice.companyInfo && invoice.companyInfo.name) return invoice.companyInfo;
+          return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+        }
+      }
+      // Pour les documents finalisés, utiliser les données embarquées (snapshot historique)
+      if (invoice.companyInfo && invoice.companyInfo.name) {
+        return invoice.companyInfo;
+      }
+      // Fallback : résoudre depuis l'organisation
+      try {
+        const organization = await getOrganizationInfo(invoice.workspaceId.toString());
+        return mapOrganizationToCompanyInfo(organization);
+      } catch (error) {
+        console.error('[Invoice.companyInfo] Erreur résolution fallback:', error.message);
+        return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+      }
+    },
+  },
+
   Query: {
     invoice: requireRead("invoices")(
       async (_, { id, workspaceId }, context) => {
@@ -579,10 +608,13 @@ const invoiceResolvers = {
 
         // ✅ Les permissions sont déjà vérifiées par requireWrite("invoices")
 
-        // Récupérer les informations actuelles de l'entreprise de l'utilisateur
-        const userWithCompany = await User.findById(user._id);
-        if (!userWithCompany || !userWithCompany.company) {
-          throw new Error("Informations d'entreprise non configurées");
+        // Récupérer les informations de l'organisation
+        const organization = await getOrganizationInfo(workspaceId);
+        if (!organization?.companyName) {
+          throw new AppError(
+            "Les informations de votre entreprise doivent être configurées avant de créer une facture",
+            ERROR_CODES.COMPANY_INFO_REQUIRED
+          );
         }
 
         // Utiliser le préfixe fourni, ou celui de la dernière facture, ou générer un préfixe par défaut
@@ -937,12 +969,15 @@ const invoiceResolvers = {
             });
           }
 
-          // Create invoice with company info from user's profile if not provided
+          // Créer la facture - companyInfo uniquement pour les documents non-DRAFT
+          const isDraft = !input.status || input.status === 'DRAFT';
           const invoice = new Invoice({
             ...input,
             number,
             prefix,
-            companyInfo: input.companyInfo || userWithCompany.company,
+            companyInfo: isDraft
+              ? undefined
+              : mapOrganizationToCompanyInfo(organization),
             client: {
               ...input.client,
               shippingAddress: input.client.hasDifferentShippingAddress
@@ -1420,29 +1455,8 @@ const invoiceResolvers = {
           // Préparer les données à mettre à jour - SEULEMENT les champs modifiés
           const updateData = {};
 
-          // Mettre à jour les informations de l'entreprise si fournies
-          if (updatedInput.companyInfo) {
-            // Créer une copie des données de l'entreprise pour la mise à jour
-            updateData.companyInfo = {
-              ...invoiceData.companyInfo,
-              ...updatedInput.companyInfo,
-            };
-
-            // Gestion spéciale des coordonnées bancaires
-            if (updatedInput.companyInfo.bankDetails === null) {
-              // Si bankDetails est explicitement null, le supprimer complètement
-              delete updateData.companyInfo.bankDetails;
-            } else if (updatedInput.companyInfo.bankDetails) {
-              // Si bankDetails est fourni, vérifier que tous les champs requis sont présents
-              const { iban, bic, bankName } =
-                updatedInput.companyInfo.bankDetails;
-
-              // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
-              if (!iban || !bic || !bankName) {
-                delete updateData.companyInfo.bankDetails;
-              }
-            }
-          }
+          // Ne pas persister companyInfo pour les documents DRAFT
+          // (le field resolver GraphQL le résout dynamiquement depuis l'organisation)
 
           // Mettre à jour le client si fourni
           if (updatedInput.client) {
@@ -1499,6 +1513,11 @@ const invoiceResolvers = {
             updatedInput.status &&
             updatedInput.status !== "DRAFT"
           ) {
+            // Snapshot companyInfo à la finalisation
+            if (!invoiceData.companyInfo || !invoiceData.companyInfo.name) {
+              const org = await getOrganizationInfo(workspaceId);
+              updateData.companyInfo = mapOrganizationToCompanyInfo(org);
+            }
             // La facture passe de brouillon à finalisée : générer un nouveau numéro séquentiel
             const now = new Date();
             const year = now.getFullYear();
@@ -1790,8 +1809,13 @@ const invoiceResolvers = {
           );
         }
 
-        // Si la facture passe de DRAFT à PENDING, générer un nouveau numéro séquentiel
+        // Si la facture passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
         if (invoice.status === "DRAFT" && status === "PENDING") {
+          // Snapshot companyInfo à la finalisation
+          if (!invoice.companyInfo || !invoice.companyInfo.name) {
+            const org = await getOrganizationInfo(workspaceId);
+            invoice.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
           // Sauvegarder le numéro original du brouillon
           const originalDraftNumber = invoice.number;
 
@@ -2142,9 +2166,9 @@ const invoiceResolvers = {
           throw createNotFoundError("Devis");
         }
 
-        // Récupérer les informations actuelles de l'entreprise
-        const userWithCompany = await User.findById(user.id);
-        if (!userWithCompany.company) {
+        // Vérifier les informations de l'organisation
+        const linkedInvoiceOrg = await getOrganizationInfo(workspaceId);
+        if (!linkedInvoiceOrg?.companyName) {
           throw new AppError(
             "Vous devez configurer les informations de votre entreprise avant de créer une facture",
             ERROR_CODES.VALIDATION_ERROR
@@ -2234,7 +2258,7 @@ const invoiceResolvers = {
         const vatRate = 20;
         const unitPriceHT = numericAmount / (1 + vatRate / 100);
 
-        // Créer la facture avec les données du devis
+        // Créer la facture avec les données du devis (en DRAFT, pas de companyInfo embarqué)
         const invoice = new Invoice({
           number,
           prefix,
@@ -2244,45 +2268,7 @@ const invoiceResolvers = {
           issueDate: new Date(),
           dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 jours par défaut
           client: quote.client,
-          // S'assurer que les champs SIRET et numéro de TVA sont correctement copiés depuis les informations de l'utilisateur
-          companyInfo: {
-            // Copier les propriétés de base de l'entreprise
-            name: userWithCompany.company.name || "Entreprise",
-            email: userWithCompany.company.email || "",
-            phone: userWithCompany.company.phone || "",
-            website: userWithCompany.company.website || "",
-            // S'assurer que l'adresse est correctement définie avec les champs requis
-            address: {
-              street: userWithCompany.company.address?.street || "",
-              city: userWithCompany.company.address?.city || "",
-              postalCode: userWithCompany.company.address?.postalCode || "",
-              country: userWithCompany.company.address?.country || "France",
-            },
-            // Copier les propriétés légales au premier niveau comme attendu par le schéma companyInfoSchema
-            siret: userWithCompany.company.siret || "",
-            vatNumber: userWithCompany.company.vatNumber || "",
-            companyStatus: userWithCompany.company.companyStatus || "AUTRE",
-            transactionCategory:
-              userWithCompany.company.transactionCategory || "SERVICES",
-            vatPaymentCondition:
-              userWithCompany.company.vatPaymentCondition || "NONE",
-            capitalSocial: userWithCompany.company.capitalSocial || "",
-            rcs: userWithCompany.company.rcs || "",
-            // Autres propriétés si nécessaire
-            logo: userWithCompany.company.logo || "",
-            // Copier les coordonnées bancaires seulement si elles sont complètes
-            ...(userWithCompany.company.bankDetails?.iban &&
-            userWithCompany.company.bankDetails?.bic &&
-            userWithCompany.company.bankDetails?.bankName
-              ? {
-                  bankDetails: {
-                    iban: userWithCompany.company.bankDetails.iban,
-                    bic: userWithCompany.company.bankDetails.bic,
-                    bankName: userWithCompany.company.bankDetails.bankName,
-                  },
-                }
-              : {}),
-          },
+          companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
           sourceQuote: quote._id,
 
           // Créer un article unique avec le montant spécifié
@@ -2290,6 +2276,8 @@ const invoiceResolvers = {
             {
               description: isDeposit
                 ? `Acompte sur devis ${quote.prefix}${quote.number}`
+                : numericAmount >= remainingAmount - 0.01
+                ? `Facture sur devis ${quote.prefix}${quote.number}`
                 : `Facture partielle sur devis ${quote.prefix}${quote.number}`,
               quantity: 1,
               unitPrice: unitPriceHT,
