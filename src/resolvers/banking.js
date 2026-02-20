@@ -4,8 +4,12 @@ import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
 import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { GraphQLUpload } from "graphql-upload";
+import cloudflareService from "../services/cloudflareService.js";
 
 const bankingResolvers = {
+  Upload: GraphQLUpload,
+
   Query: {
     // Transactions - workspaceId passé en argument (comme les factures)
     transactions: withWorkspace(
@@ -178,6 +182,40 @@ const bankingResolvers = {
       // Normaliser la catégorie (fallback "OTHER" si non spécifiée)
       const category = input.category || "OTHER";
 
+      // Mapper vers la catégorie large pour expenseCategory (enum validé)
+      const VALID_EXPENSE_CATEGORIES = [
+        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
+        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
+        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+      ];
+
+      let expenseCategory = category;
+      if (!VALID_EXPENSE_CATEGORIES.includes(category)) {
+        const subcategoryToExpenseCategory = {
+          bureau: "OFFICE_SUPPLIES", materiel: "HARDWARE", mobilier: "OFFICE_SUPPLIES", equipement: "HARDWARE",
+          transport: "TRAVEL", carburant: "TRAVEL", parking: "TRAVEL", peage: "TRAVEL",
+          taxi: "TRAVEL", train: "TRAVEL", avion: "TRAVEL", location_vehicule: "TRAVEL",
+          repas: "MEALS", restaurant: "MEALS", hotel: "ACCOMMODATION",
+          marketing: "MARKETING", publicite: "MARKETING", communication: "MARKETING",
+          telephone: "UTILITIES", internet: "UTILITIES", site_web: "SOFTWARE", reseaux_sociaux: "MARKETING",
+          formation: "TRAINING", conference: "TRAINING", livres: "TRAINING", abonnement: "SUBSCRIPTIONS",
+          comptabilite: "SERVICES", juridique: "SERVICES", assurance: "INSURANCE",
+          banque: "SERVICES", conseil: "SERVICES", sous_traitance: "SERVICES",
+          loyer: "RENT", electricite: "UTILITIES", eau: "UTILITIES", chauffage: "UTILITIES", entretien: "MAINTENANCE",
+          logiciel: "SOFTWARE", saas: "SOFTWARE", licence: "SOFTWARE",
+          salaire: "SALARIES", charges_sociales: "SALARIES", recrutement: "SERVICES",
+          impots_taxes: "TAXES", tva: "TAXES", avoirs_remboursement: "OTHER",
+          cadeaux: "OTHER", representation: "OTHER", poste: "OFFICE_SUPPLIES", impression: "OFFICE_SUPPLIES",
+          autre: "OTHER",
+          ventes: "SERVICES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
+          consulting: "SERVICES", abonnements_revenus: "SUBSCRIPTIONS", licences_revenus: "SOFTWARE",
+          royalties: "OTHER", loyers_revenus: "RENT", interets: "OTHER", dividendes: "OTHER",
+          plus_values: "OTHER", subventions: "OTHER", remboursements_revenus: "OTHER",
+          indemnites: "OTHER", cadeaux_recus: "OTHER", autre_revenu: "OTHER",
+        };
+        expenseCategory = subcategoryToExpenseCategory[category] || "OTHER";
+      }
+
       const transaction = new Transaction({
         externalId: `manual-${uuidv4()}`,
         provider: "manual",
@@ -189,10 +227,11 @@ const bankingResolvers = {
         workspaceId: input.workspaceId,
         userId: user._id,
         date: input.date || new Date(),
-        category: category,          // Catégorie pour l'affichage
-        expenseCategory: category,   // Catégorie pour le reporting
+        category: category,              // Catégorie fine (ex: "parking")
+        expenseCategory: expenseCategory, // Catégorie large pour le reporting (ex: "TRAVEL")
         metadata: {
           vendor: input.vendor,
+          paymentMethod: input.paymentMethod || "BANK_TRANSFER",
           notes: input.notes,
           tags: input.tags,
           source: "MANUAL",
@@ -214,10 +253,48 @@ const bankingResolvers = {
         if (input.type) updateData.type = input.type.toLowerCase();
         if (input.date) updateData.date = input.date;
         if (input.category) {
-          updateData.category = input.category;         // Catégorie pour l'affichage
-          updateData.expenseCategory = input.category;  // Catégorie pour le reporting
+          updateData.category = input.category;         // Catégorie fine (ex: "parking", "carburant") ou large (ex: "TRAVEL")
+
+          // Mapper vers la catégorie large pour expenseCategory (enum validé)
+          const VALID_EXPENSE_CATEGORIES = [
+            "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
+            "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
+            "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+          ];
+
+          if (VALID_EXPENSE_CATEGORIES.includes(input.category)) {
+            // Déjà une catégorie large valide
+            updateData.expenseCategory = input.category;
+          } else {
+            // Sous-catégorie fine → mapper vers la catégorie large
+            const subcategoryToExpenseCategory = {
+              bureau: "OFFICE_SUPPLIES", materiel: "HARDWARE", mobilier: "OFFICE_SUPPLIES", equipement: "HARDWARE",
+              transport: "TRAVEL", carburant: "TRAVEL", parking: "TRAVEL", peage: "TRAVEL",
+              taxi: "TRAVEL", train: "TRAVEL", avion: "TRAVEL", location_vehicule: "TRAVEL",
+              repas: "MEALS", restaurant: "MEALS", hotel: "ACCOMMODATION",
+              marketing: "MARKETING", publicite: "MARKETING", communication: "MARKETING",
+              telephone: "UTILITIES", internet: "UTILITIES", site_web: "SOFTWARE", reseaux_sociaux: "MARKETING",
+              formation: "TRAINING", conference: "TRAINING", livres: "TRAINING", abonnement: "SUBSCRIPTIONS",
+              comptabilite: "SERVICES", juridique: "SERVICES", assurance: "INSURANCE",
+              banque: "SERVICES", conseil: "SERVICES", sous_traitance: "SERVICES",
+              loyer: "RENT", electricite: "UTILITIES", eau: "UTILITIES", chauffage: "UTILITIES", entretien: "MAINTENANCE",
+              logiciel: "SOFTWARE", saas: "SOFTWARE", licence: "SOFTWARE",
+              salaire: "SALARIES", charges_sociales: "SALARIES", recrutement: "SERVICES",
+              impots_taxes: "TAXES", tva: "TAXES", avoirs_remboursement: "OTHER",
+              cadeaux: "OTHER", representation: "OTHER", poste: "OFFICE_SUPPLIES", impression: "OFFICE_SUPPLIES",
+              autre: "OTHER",
+              // Revenus
+              ventes: "SALES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
+              consulting: "SERVICES", abonnements_revenus: "SUBSCRIPTIONS", licences_revenus: "SOFTWARE",
+              royalties: "OTHER", loyers_revenus: "RENT", interets: "OTHER", dividendes: "OTHER",
+              plus_values: "OTHER", subventions: "GRANTS", remboursements_revenus: "OTHER",
+              indemnites: "OTHER", cadeaux_recus: "OTHER", autre_revenu: "OTHER",
+            };
+            updateData.expenseCategory = subcategoryToExpenseCategory[input.category] || "OTHER";
+          }
         }
         if (input.vendor) updateData["metadata.vendor"] = input.vendor;
+        if (input.paymentMethod) updateData["metadata.paymentMethod"] = input.paymentMethod;
         if (input.notes) updateData["metadata.notes"] = input.notes;
         if (input.tags) updateData["metadata.tags"] = input.tags;
 
@@ -252,6 +329,106 @@ const bankingResolvers = {
         }
 
         return true;
+      }
+    ),
+
+    // Upload de justificatif pour une transaction
+    uploadTransactionReceipt: withWorkspace(
+      async (parent, { transactionId, workspaceId, file }, { user }) => {
+        try {
+          // Vérifier que la transaction existe
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+          });
+
+          if (!transaction) {
+            return {
+              success: false,
+              message: "Transaction non trouvée",
+              receiptFile: null,
+              transaction: null,
+            };
+          }
+
+          // Récupérer les informations du fichier uploadé
+          const { createReadStream, filename, mimetype } = await file;
+
+          // Lire le fichier en buffer
+          const stream = createReadStream();
+          const chunks = [];
+          for await (const chunk of stream) {
+            chunks.push(chunk);
+          }
+          const fileBuffer = Buffer.concat(chunks);
+          const fileSize = fileBuffer.length;
+
+          // Valider la taille (10MB max)
+          if (fileSize > 10 * 1024 * 1024) {
+            return {
+              success: false,
+              message: "Fichier trop volumineux. Maximum 10 Mo.",
+              receiptFile: null,
+              transaction: null,
+            };
+          }
+
+          // Valider le type
+          const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf"];
+          if (!allowedTypes.includes(mimetype)) {
+            return {
+              success: false,
+              message: "Type de fichier non supporté.",
+              receiptFile: null,
+              transaction: null,
+            };
+          }
+
+          // Upload vers Cloudflare R2
+          const uploadResult = await cloudflareService.uploadImage(
+            fileBuffer,
+            filename,
+            user._id || user.id,
+            "receipts",
+            workspaceId
+          );
+
+          // Mettre à jour la transaction avec le fichier
+          const receiptFile = {
+            url: uploadResult.url,
+            key: uploadResult.key,
+            filename: filename,
+            mimetype: mimetype,
+            size: fileSize,
+            uploadedAt: new Date(),
+          };
+
+          const updatedTransaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            {
+              $set: {
+                receiptFile: receiptFile,
+                receiptRequired: false,
+              },
+            },
+            { new: true }
+          );
+
+          return {
+            success: true,
+            message: "Justificatif ajouté avec succès",
+            receiptFile: receiptFile,
+            transaction: updatedTransaction,
+          };
+        } catch (error) {
+          console.error("❌ [UPLOAD RECEIPT] Error:", error);
+          return {
+            success: false,
+            message: error.message || "Erreur lors de l'upload du justificatif",
+            receiptFile: null,
+            transaction: null,
+          };
+        }
       }
     ),
 
@@ -539,12 +716,35 @@ const bankingResolvers = {
   // Résolveurs de types
   Transaction: {
     id: (parent) => parent._id?.toString() || parent.id,
+    // Sanitize expenseCategory pour éviter les valeurs invalides dans l'enum GraphQL
+    expenseCategory: (parent) => {
+      const valid = [
+        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
+        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
+        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+      ];
+      return valid.includes(parent.expenseCategory) ? parent.expenseCategory : (parent.expenseCategory ? "OTHER" : null);
+    },
     // Les enum resolvers gèrent la conversion - garder en minuscules
     status: (parent) => (parent.status || "pending").toLowerCase(),
     type: (parent) => (parent.type || "debit").toLowerCase(),
     provider: (parent) => (parent.provider || "bridge").toLowerCase(),
     // Champ date pour le tri et l'affichage
     date: (parent) => parent.date || parent.createdAt,
+    // Champs avec valeurs par défaut pour éviter les erreurs non-null
+    externalId: (parent) => parent.externalId || "",
+    amount: (parent) => parent.amount ?? 0,
+    currency: (parent) => parent.currency || "EUR",
+    description: (parent) => parent.description || "",
+    // Fees avec valeurs par défaut pour éviter null sur les champs non-null
+    fees: (parent) => {
+      if (!parent.fees) return null;
+      return {
+        amount: parent.fees.amount ?? 0,
+        currency: parent.fees.currency || "EUR",
+        provider: parent.fees.provider || null,
+      };
+    },
     // Champs de rapprochement
     linkedInvoiceId: (parent) => parent.linkedInvoiceId?.toString() || null,
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,

@@ -16,6 +16,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import { requireCompanyInfo, getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 
 // Fonction utilitaire pour calculer les totaux
 const calculatePurchaseOrderTotals = (
@@ -84,6 +85,31 @@ const calculatePurchaseOrderTotals = (
 
 const purchaseOrderResolvers = {
   PurchaseOrder: {
+    companyInfo: async (po) => {
+      // Pour les brouillons, toujours résoudre depuis l'organisation (données dynamiques)
+      if (!po.status || po.status === 'DRAFT') {
+        try {
+          const organization = await getOrganizationInfo(po.workspaceId.toString());
+          return mapOrganizationToCompanyInfo(organization);
+        } catch (error) {
+          console.error('[PurchaseOrder.companyInfo] Erreur résolution dynamique:', error.message);
+          if (po.companyInfo && po.companyInfo.name) return po.companyInfo;
+          return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+        }
+      }
+      // Pour les documents finalisés, utiliser les données embarquées (snapshot historique)
+      if (po.companyInfo && po.companyInfo.name) {
+        return po.companyInfo;
+      }
+      // Fallback : résoudre depuis l'organisation
+      try {
+        const organization = await getOrganizationInfo(po.workspaceId.toString());
+        return mapOrganizationToCompanyInfo(organization);
+      } catch (error) {
+        console.error('[PurchaseOrder.companyInfo] Erreur résolution fallback:', error.message);
+        return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+      }
+    },
     createdBy: async (po) => {
       return await User.findById(po.createdBy);
     },
@@ -260,20 +286,11 @@ const purchaseOrderResolvers = {
             }
           }
 
-          // Générer le numéro
-          let number;
-          if (input.status === "DRAFT") {
-            number = await generatePurchaseOrderNumber(prefix, {
-              isDraft: true,
-              workspaceId,
-              userId: user.id,
-            });
-          } else {
-            number = await generatePurchaseOrderNumber(prefix, {
-              workspaceId,
-              userId: user.id,
-            });
-          }
+          // Générer le numéro séquentiel
+          const number = await generatePurchaseOrderNumber(prefix, {
+            workspaceId,
+            userId: user.id,
+          });
 
           // Récupérer les informations de l'organisation
           const organization = await getOrganizationInfo(workspaceId);
@@ -307,40 +324,16 @@ const purchaseOrderResolvers = {
             }
           }
 
+          // Créer le bon de commande - companyInfo uniquement pour les documents non-DRAFT
+          const isDraft = !input.status || input.status === 'DRAFT';
           const purchaseOrder = new PurchaseOrder({
             ...input,
             number,
             prefix,
             workspaceId,
-            companyInfo: input.companyInfo || {
-              name: organization.companyName || "",
-              email: organization.companyEmail || "",
-              phone: organization.companyPhone || "",
-              website: organization.website || "",
-              address: {
-                street: organization.addressStreet || "",
-                city: organization.addressCity || "",
-                postalCode: organization.addressZipCode || "",
-                country: organization.addressCountry || "France",
-              },
-              siret: organization.siret || "",
-              vatNumber: organization.vatNumber || "",
-              companyStatus: organization.legalForm || "AUTRE",
-              logo: organization.logo || "",
-              ...(organization.bankIban && organization.bankBic && organization.bankName
-                ? {
-                    bankDetails: {
-                      iban: organization.bankIban,
-                      bic: organization.bankBic,
-                      bankName: organization.bankName,
-                    },
-                  }
-                : {}),
-              transactionCategory: organization.activityCategory,
-              vatPaymentCondition: organization.fiscalRegime,
-              capitalSocial: organization.capitalSocial,
-              rcs: organization.rcs,
-            },
+            companyInfo: isDraft
+              ? undefined
+              : mapOrganizationToCompanyInfo(organization),
             client: {
               ...input.client,
               shippingAddress: input.client.hasDifferentShippingAddress
@@ -397,9 +390,8 @@ const purchaseOrderResolvers = {
 
         let updateData = { ...input };
 
-        if (!updateData.companyInfo) {
-          delete updateData.companyInfo;
-        }
+        // Ne pas persister companyInfo pour les documents DRAFT
+        delete updateData.companyInfo;
 
         Object.assign(po, updateData);
         await po.save();
@@ -456,8 +448,13 @@ const purchaseOrderResolvers = {
           throw createStatusTransitionError("Bon de commande", po.status, status);
         }
 
-        // Si transition DRAFT → CONFIRMED, générer un numéro séquentiel
+        // Si transition DRAFT → CONFIRMED, snapshot companyInfo et générer un numéro séquentiel
         if (po.status === "DRAFT" && status === "CONFIRMED") {
+          // Snapshot companyInfo à la finalisation
+          if (!po.companyInfo || !po.companyInfo.name) {
+            const org = await getOrganizationInfo(workspaceId);
+            po.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
           let prefix = po.prefix;
           if (!prefix) {
             const now = new Date();
@@ -511,18 +508,20 @@ const purchaseOrderResolvers = {
         const prefix = `BC-${year}${month}`;
 
         const number = await generatePurchaseOrderNumber(prefix, {
-          isDraft: true,
           workspaceId,
           userId: user.id,
         });
 
+        // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
+        const quoteObj = quote.toObject();
+
         const purchaseOrder = new PurchaseOrder({
           number,
           prefix,
-          client: quote.client,
-          companyInfo: quote.companyInfo,
-          items: quote.items,
-          status: "DRAFT",
+          client: quoteObj.client,
+          companyInfo: quoteObj.companyInfo || mapOrganizationToCompanyInfo(organization),
+          items: quoteObj.items,
+          status: "CONFIRMED",
           issueDate: new Date(),
           validUntil: quote.validUntil || null,
           headerNotes: quote.headerNotes,
@@ -532,7 +531,7 @@ const purchaseOrderResolvers = {
           termsAndConditionsLink: quote.termsAndConditionsLink,
           discount: quote.discount,
           discountType: quote.discountType,
-          customFields: quote.customFields,
+          customFields: quoteObj.customFields,
           totalHT: quote.totalHT,
           totalVAT: quote.totalVAT,
           totalTTC: quote.totalTTC,
@@ -543,8 +542,8 @@ const purchaseOrderResolvers = {
           workspaceId,
           createdBy: user.id,
           sourceQuoteId: quote._id,
-          appearance: quote.appearance,
-          shipping: quote.shipping,
+          appearance: quoteObj.appearance,
+          shipping: quoteObj.shipping,
           isReverseCharge: quote.isReverseCharge || false,
           clientPositionRight: quote.clientPositionRight || false,
           showBankDetails: quote.showBankDetails || false,
@@ -586,12 +585,15 @@ const purchaseOrderResolvers = {
           userId: user.id,
         });
 
+        // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
+        const poObj = po.toObject();
+
         const invoice = new Invoice({
           number: invoiceNumber,
           prefix: invoicePrefix,
-          client: po.client,
-          companyInfo: po.companyInfo,
-          items: po.items,
+          client: poObj.client,
+          companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
+          items: poObj.items,
           status: "DRAFT",
           issueDate: new Date(),
           dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
@@ -603,7 +605,7 @@ const purchaseOrderResolvers = {
           purchaseOrderNumber: `${po.prefix}${po.number}`,
           discount: po.discount,
           discountType: po.discountType,
-          customFields: po.customFields,
+          customFields: poObj.customFields,
           totalHT: po.totalHT,
           totalVAT: po.totalVAT,
           totalTTC: po.totalTTC,
@@ -614,6 +616,12 @@ const purchaseOrderResolvers = {
           workspaceId,
           createdBy: user.id,
           isReverseCharge: po.isReverseCharge || false,
+          shipping: poObj.shipping,
+          appearance: poObj.appearance,
+          clientPositionRight: po.clientPositionRight || false,
+          showBankDetails: po.showBankDetails || false,
+          retenueGarantie: po.retenueGarantie || 0,
+          escompte: po.escompte || 0,
         });
 
         await invoice.save();

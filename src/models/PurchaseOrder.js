@@ -43,6 +43,16 @@ const purchaseOrderSchema = new mongoose.Schema({
       message: 'Le numéro de bon de commande doit contenir uniquement des lettres, chiffres ou tirets (max 20 caractères)'
     }
   },
+  purchaseOrderNumber: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(value) {
+        return !value || /^[A-Za-z0-9-/]{1,50}$/.test(value);
+      },
+      message: 'La référence doit contenir uniquement des lettres, chiffres, tirets ou slashs (max 50 caractères)'
+    }
+  },
   issueDate: {
     type: Date,
     required: true,
@@ -66,7 +76,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   companyInfo: {
     type: companyInfoSchema,
-    required: true
+    required: false
   },
   items: {
     type: [itemSchema],

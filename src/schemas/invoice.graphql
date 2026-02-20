@@ -49,6 +49,9 @@ type Invoice {
   archivedPdfUrl: String
   eInvoiceError: String
   facturXData: FacturXData
+  # Routing e-invoicing
+  eInvoiceFlowType: String
+  eInvoiceFlowReason: String
   createdAt: String!
   updatedAt: String!
 }

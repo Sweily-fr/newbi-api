@@ -76,6 +76,7 @@ import reconciliationRoutes from "./routes/reconciliation.js";
 // import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
+import guideLeadsRoutes from "./routes/guideLeads.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -129,6 +130,9 @@ directories.forEach(({ path: dirPath, name }) =>
 // Configuration du serveur
 async function startServer() {
   const app = express();
+
+  // Trust proxy (nginx) pour obtenir la vraie IP client via X-Forwarded-For
+  app.set("trust proxy", 1);
 
   // Configuration CORS
   const allowedOrigins = [
@@ -226,7 +230,24 @@ async function startServer() {
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);
 
+  // Routes leads guides (publique, sans auth)
+  app.use("/api/leads", guideLeadsRoutes);
+
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
+
+  // DEBUG: Log les requêtes GraphQL qui retournent 400
+  app.use("/graphql", (req, res, next) => {
+    const originalSend = res.send;
+    res.send = function(body) {
+      if (res.statusCode === 400) {
+        console.error("⚠️ [DEBUG 400] Requête GraphQL retournant 400:");
+        console.error("  Body reçu:", JSON.stringify(req.body)?.substring(0, 500));
+        console.error("  Réponse:", typeof body === 'string' ? body.substring(0, 500) : JSON.stringify(body)?.substring(0, 500));
+      }
+      return originalSend.call(this, body);
+    };
+    next();
+  });
 
   // Autres routes API
   setupRoutes(app);
@@ -487,12 +508,27 @@ function formatError(error) {
   console.error("Extensions:", error.extensions);
   const originalError = error.originalError;
 
+  // Cas 1: originalError est une AppError directe
   if (originalError?.name === "AppError") {
     return {
       message: originalError.message,
       extensions: {
         code: originalError.code,
         details: originalError.details,
+      },
+      path: error.path,
+    };
+  }
+
+  // ✅ FIX: Cas 2: AppError encapsulée dans extensions.exception
+  // (quand Apollo Server perd la référence originalError mais conserve l'exception sérialisée)
+  const exception = error.extensions?.exception;
+  if (exception?.name === "AppError" && exception?.code) {
+    return {
+      message: error.message,
+      extensions: {
+        code: exception.code,
+        details: exception.details || null,
       },
       path: error.path,
     };

@@ -29,13 +29,13 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./types/blog.graphql"), // Chargement explicite du schéma Blog
   path.join(__dirname, "./types/reconciliation.graphql"), // Chargement explicite du schéma Reconciliation
   path.join(__dirname, "./types/sharedDocument.graphql"), // Chargement explicite du schéma Shared Documents
-  // DÉSACTIVÉ: SuperPDP API pas encore active
-  // path.join(__dirname, "./types/eInvoicing.graphql"), // Chargement explicite du schéma E-Invoicing
+  path.join(__dirname, "./types/eInvoicing.graphql"),
   path.join(__dirname, "./socialIcon.graphql"), // Chargement explicite du schéma Social Icons
   path.join(__dirname, "./communitySuggestion.graphql"), // Chargement explicite du schéma Community Suggestion
   path.join(__dirname, "./clientList.graphql"), // Chargement explicite du schéma ClientList
   path.join(__dirname, "./types/clientAutomation.graphql"), // Chargement explicite du schéma Client Automation
   path.join(__dirname, "./types/clientCustomField.graphql"), // Chargement explicite du schéma Client Custom Fields
+  path.join(__dirname, "./types/clientSegment.graphql"), // Chargement explicite du schéma Client Segments
   path.join(__dirname, "./types/crmEmailAutomation.graphql"), // Chargement explicite du schéma CRM Email Automation
   path.join(__dirname, "./types/calendarConnection.graphql"), // Chargement explicite du schéma Calendar Connection
   path.join(__dirname, "./types/documentAutomation.graphql"), // Chargement explicite du schéma Document Automation

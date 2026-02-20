@@ -510,6 +510,8 @@ const sharedDocumentResolvers = {
             "image/png",
             "image/webp",
             "image/gif",
+            "image/heic",
+            "image/heif",
             "video/mp4",
             "video/webm",
             "video/quicktime",

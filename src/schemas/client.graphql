@@ -55,4 +55,10 @@ extend type Mutation {
 
   # Add an activity entry to a client
   addClientActivity(workspaceId: String, clientId: ID!, input: ClientActivityInput!): Client!
+
+  # Block a client
+  blockClient(workspaceId: String, id: ID!, reason: String): Client!
+
+  # Unblock a client
+  unblockClient(workspaceId: String, id: ID!): Client!
 }

@@ -785,10 +785,18 @@ const purchaseInvoiceResolvers = {
 
   PurchaseInvoiceFile: {
     id: (parent) => parent._id?.toString() || parent.id,
+    createdAt: (parent) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : parent.createdAt || null,
+    updatedAt: (parent) => parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : parent.updatedAt || null,
   },
 
   PurchaseInvoice: {
     id: (parent) => parent._id?.toString() || parent.id,
+    issueDate: (parent) => parent.issueDate instanceof Date ? parent.issueDate.toISOString() : parent.issueDate || null,
+    dueDate: (parent) => parent.dueDate instanceof Date ? parent.dueDate.toISOString() : parent.dueDate || null,
+    paymentDate: (parent) => parent.paymentDate instanceof Date ? parent.paymentDate.toISOString() : parent.paymentDate || null,
+    eInvoiceReceivedAt: (parent) => parent.eInvoiceReceivedAt instanceof Date ? parent.eInvoiceReceivedAt.toISOString() : parent.eInvoiceReceivedAt || null,
+    createdAt: (parent) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : parent.createdAt || null,
+    updatedAt: (parent) => parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : parent.updatedAt || null,
     supplier: async (parent) => {
       if (!parent.supplierId) return null;
       return await Supplier.findById(parent.supplierId).lean();
@@ -801,6 +809,8 @@ const purchaseInvoiceResolvers = {
 
   Supplier: {
     id: (parent) => parent._id?.toString() || parent.id,
+    createdAt: (parent) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : parent.createdAt || null,
+    updatedAt: (parent) => parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : parent.updatedAt || null,
     invoiceCount: async (parent) => {
       return await PurchaseInvoice.countDocuments({ supplierId: parent._id });
     },

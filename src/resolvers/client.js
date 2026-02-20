@@ -1,6 +1,7 @@
 import Client from "../models/Client.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
+import User from "../models/User.js";
 // ✅ Import des wrappers RBAC
 import {
   requireRead,
@@ -399,6 +400,92 @@ const clientResolvers = {
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
+    blockClient: requireWrite("clients")(
+      async (_, { id, reason, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
+        const client = await Client.findOne({
+          _id: id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        });
+
+        if (!client) throw createNotFoundError("Client");
+
+        if (client.isBlocked) {
+          throw new AppError("Ce client est déjà bloqué", ERROR_CODES.BAD_REQUEST);
+        }
+
+        client.isBlocked = true;
+        client.blockedAt = new Date();
+        client.blockedReason = reason || null;
+
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          type: "blocked",
+          description: reason ? `a bloqué le client : ${reason}` : "a bloqué le client",
+          createdAt: new Date(),
+        });
+
+        await client.save();
+        return client;
+      }
+    ),
+
+    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
+    unblockClient: requireWrite("clients")(
+      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
+        const client = await Client.findOne({
+          _id: id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        });
+
+        if (!client) throw createNotFoundError("Client");
+
+        if (!client.isBlocked) {
+          throw new AppError("Ce client n'est pas bloqué", ERROR_CODES.BAD_REQUEST);
+        }
+
+        client.isBlocked = false;
+        client.blockedAt = null;
+        client.blockedReason = null;
+
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          type: "unblocked",
+          description: "a débloqué le client",
+          createdAt: new Date(),
+        });
+
+        await client.save();
+        return client;
+      }
+    ),
+
+    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     addClientNote: requireWrite("clients")(
       async (_, { clientId, input, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
@@ -607,11 +694,55 @@ const clientResolvers = {
       parent.createdAt?.toISOString?.() || parent.createdAt,
     updatedAt: (parent) =>
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
+    userName: async (parent) => {
+      if (parent.userName && !parent.userName.includes("@")) {
+        return parent.userName;
+      }
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("name email").lean();
+          if (user?.name) return user.name;
+        } catch {}
+      }
+      return parent.userName || "Système";
+    },
+    userImage: async (parent) => {
+      if (parent.userImage) return parent.userImage;
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("avatar").lean();
+          return user?.avatar || null;
+        } catch {}
+      }
+      return null;
+    },
   },
 
   ClientActivity: {
     createdAt: (parent) =>
       parent.createdAt?.toISOString?.() || parent.createdAt,
+    userName: async (parent) => {
+      if (parent.userName && !parent.userName.includes("@")) {
+        return parent.userName;
+      }
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("name email").lean();
+          if (user?.name) return user.name;
+        } catch {}
+      }
+      return parent.userName || "Système";
+    },
+    userImage: async (parent) => {
+      if (parent.userImage) return parent.userImage;
+      if (parent.userId) {
+        try {
+          const user = await User.findById(parent.userId).select("avatar").lean();
+          return user?.avatar || null;
+        } catch {}
+      }
+      return null;
+    },
   },
 };
 

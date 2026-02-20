@@ -106,7 +106,7 @@ const invoiceSchema = new mongoose.Schema(
     },
     companyInfo: {
       type: companyInfoSchema,
-      required: true,
+      required: false,
     },
     client: {
       type: clientSchema,
@@ -410,6 +410,43 @@ const invoiceSchema = new mongoose.Schema(
       profile: { type: String, default: "EN16931" }, // Profil Factur-X utilisé
       generatedAt: { type: Date },
     },
+
+    // === ROUTING E-INVOICING / E-REPORTING ===
+
+    // Type de flux déterminé par le routage
+    eInvoiceFlowType: {
+      type: String,
+      enum: ["E_INVOICING", "E_REPORTING_TRANSACTION", "E_REPORTING_PAYMENT", "NONE"],
+      default: "NONE",
+    },
+
+    // Raison du routage (explication française)
+    eInvoiceFlowReason: String,
+
+    // Détails du routage (pour debug/affichage)
+    eInvoiceRoutingDetails: {
+      isB2B: Boolean,
+      sellerInFrance: Boolean,
+      clientInFrance: Boolean,
+      sellerVatRegistered: Boolean,
+      clientVatRegistered: Boolean,
+      obligationActive: Boolean,
+      companySize: String,
+      evaluatedAt: Date,
+    },
+
+    // E-reporting (préparé, commenté pour activation future)
+    // eReportingStatus: {
+    //   type: String,
+    //   enum: ['NOT_REPORTED', 'PENDING_REPORT', 'REPORTED', 'ERROR'],
+    //   default: 'NOT_REPORTED',
+    // },
+    // eReportingPaymentStatus: {
+    //   type: String,
+    //   enum: ['NOT_APPLICABLE', 'PENDING_REPORT', 'REPORTED', 'ERROR'],
+    //   default: 'NOT_APPLICABLE',
+    // },
+    // eReportingPaymentDate: Date,
   },
   {
     timestamps: true,
@@ -422,6 +459,8 @@ invoiceSchema.index({ workspaceId: 1, createdAt: -1 });
 invoiceSchema.index({ workspaceId: 1, status: 1 });
 invoiceSchema.index({ workspaceId: 1, "client.name": 1 });
 invoiceSchema.index({ workspaceId: 1, dueDate: 1 });
+// Index pour le routage e-invoicing
+invoiceSchema.index({ workspaceId: 1, eInvoiceFlowType: 1 });
 // Index legacy pour la migration et audit trail
 invoiceSchema.index({ createdBy: 1 });
 invoiceSchema.index({ issueDate: -1 });

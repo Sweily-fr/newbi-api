@@ -64,7 +64,7 @@ const quoteSchema = new mongoose.Schema({
   },
   companyInfo: {
     type: companyInfoSchema,
-    required: true
+    required: false
   },
   items: {
     type: [itemSchema],
