@@ -207,10 +207,10 @@ const bankingResolvers = {
           impots_taxes: "TAXES", tva: "TAXES", avoirs_remboursement: "OTHER",
           cadeaux: "OTHER", representation: "OTHER", poste: "OFFICE_SUPPLIES", impression: "OFFICE_SUPPLIES",
           autre: "OTHER",
-          ventes: "SALES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
+          ventes: "SERVICES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
           consulting: "SERVICES", abonnements_revenus: "SUBSCRIPTIONS", licences_revenus: "SOFTWARE",
           royalties: "OTHER", loyers_revenus: "RENT", interets: "OTHER", dividendes: "OTHER",
-          plus_values: "OTHER", subventions: "GRANTS", remboursements_revenus: "OTHER",
+          plus_values: "OTHER", subventions: "OTHER", remboursements_revenus: "OTHER",
           indemnites: "OTHER", cadeaux_recus: "OTHER", autre_revenu: "OTHER",
         };
         expenseCategory = subcategoryToExpenseCategory[category] || "OTHER";
@@ -716,6 +716,15 @@ const bankingResolvers = {
   // Résolveurs de types
   Transaction: {
     id: (parent) => parent._id?.toString() || parent.id,
+    // Sanitize expenseCategory pour éviter les valeurs invalides dans l'enum GraphQL
+    expenseCategory: (parent) => {
+      const valid = [
+        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
+        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
+        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+      ];
+      return valid.includes(parent.expenseCategory) ? parent.expenseCategory : (parent.expenseCategory ? "OTHER" : null);
+    },
     // Les enum resolvers gèrent la conversion - garder en minuscules
     status: (parent) => (parent.status || "pending").toLowerCase(),
     type: (parent) => (parent.type || "debit").toLowerCase(),
