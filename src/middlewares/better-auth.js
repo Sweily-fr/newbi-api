@@ -1,21 +1,51 @@
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
+import mongoose from "mongoose";
 
 /**
  * Extrait le token de session depuis les cookies
+ *
+ * Better Auth signe ses cookies avec HMAC-SHA256 via better-call.
+ * Le format du cookie est : rawToken.base64HmacSignature (URL-encodé).
+ * MongoDB stocke uniquement le rawToken, il faut donc retirer la signature.
+ *
  * @param {string} cookieHeader - Header Cookie de la requête
- * @returns {string|null} - Token de session ou null
+ * @returns {string|null} - Token de session brut ou null
  */
 const extractSessionToken = (cookieHeader) => {
   if (!cookieHeader) return null;
 
   // Chercher le cookie better-auth.session_token
   const cookies = cookieHeader.split(";").map((cookie) => cookie.trim());
+  const prefix = "better-auth.session_token=";
 
   for (const cookie of cookies) {
-    if (cookie.startsWith("better-auth.session_token=")) {
-      return cookie.split("=")[1];
+    if (cookie.startsWith(prefix)) {
+      // Extraire la valeur complète (après le nom du cookie)
+      const rawValue = cookie.substring(prefix.length);
+
+      // URL-décoder la valeur (Better Auth URL-encode les cookies signés)
+      let decodedValue;
+      try {
+        decodedValue = decodeURIComponent(rawValue);
+      } catch {
+        decodedValue = rawValue;
+      }
+
+      // Better Auth signe les cookies : rawToken.base64HmacSignature
+      // La signature HMAC-SHA256 en base64 fait toujours 44 caractères et finit par '='
+      const lastDotIndex = decodedValue.lastIndexOf(".");
+      if (lastDotIndex > 0) {
+        const signature = decodedValue.substring(lastDotIndex + 1);
+        if (signature.length === 44 && signature.endsWith("=")) {
+          // Cookie signé : retourner uniquement le token brut (avant la signature)
+          return decodedValue.substring(0, lastDotIndex);
+        }
+      }
+
+      // Fallback : cookie non signé (ancien format ou test), retourner tel quel
+      return decodedValue;
     }
   }
 
@@ -23,9 +53,16 @@ const extractSessionToken = (cookieHeader) => {
 };
 
 /**
- * Valide une session better-auth via l'API du frontend
- * @param {Object} headers - Headers de la requête
- * @returns {Object|null} - Données utilisateur avec organisations ou null
+ * ✅ FIX: Validation directe en MongoDB au lieu d'un appel HTTP vers le frontend
+ *
+ * L'ancien système faisait un fetch vers ${frontendUrl}/api/auth/get-session
+ * ce qui causait :
+ * - Des timeouts (cold start Vercel, latence réseau)
+ * - Des problèmes de forwarding de cookies cross-origin
+ * - Une dépendance circulaire backend→frontend pour valider une session
+ *
+ * La nouvelle approche cherche directement la session dans MongoDB (collection "session")
+ * créée par Better Auth, ce qui est instantané et fiable.
  */
 const validateSession = async (headers) => {
   if (!headers) return null;
@@ -44,49 +81,57 @@ const validateSession = async (headers) => {
       return null;
     }
 
-    // Valider la session via l'API better-auth du frontend
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    let response;
-    try {
-      response = await fetch(`${frontendUrl}/api/auth/get-session`, {
-        method: "GET",
-        headers: {
-          Cookie: cookieHeader,
-          "Content-Type": "application/json",
-        },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    if (!response.ok) {
-      logger.debug(`Validation de session échouée: ${response.status}`);
+    // Validation directe en MongoDB
+    const db = mongoose.connection.db;
+    if (!db) {
+      logger.error("Connexion MongoDB non disponible");
       return null;
     }
 
-    let sessionData;
-    try {
-      sessionData = await response.json();
-    } catch (parseError) {
-      logger.error("Réponse session non-JSON:", parseError.message);
+    const now = new Date();
+
+    // Chercher la session dans la collection Better Auth
+    const session = await db.collection("session").findOne({
+      token: sessionToken,
+      expiresAt: { $gt: now },
+    });
+
+    if (!session) {
+      logger.debug("Session non trouvée ou expirée en MongoDB");
       return null;
     }
 
-    if (!sessionData || !sessionData.user) {
-      logger.debug("Session invalide ou utilisateur non trouvé");
+    // Récupérer l'utilisateur depuis la collection Better Auth
+    const userId = session.userId;
+    if (!userId) {
+      logger.debug("Session sans userId");
+      return null;
+    }
+
+    // Chercher l'utilisateur dans la collection Better Auth "user"
+    const { ObjectId } = mongoose.Types;
+    let userObjectId;
+    try {
+      userObjectId = new ObjectId(userId.toString());
+    } catch {
+      logger.warn("userId invalide dans la session:", userId);
+      return null;
+    }
+
+    const betterAuthUser = await db.collection("user").findOne({
+      _id: userObjectId,
+    });
+
+    if (!betterAuthUser) {
+      logger.debug(`Utilisateur ${userId} non trouvé dans la collection user`);
       return null;
     }
 
     logger.debug(
-      `Session validée pour l'utilisateur: ${sessionData.user.email}`
+      `Session validée directement en MongoDB pour: ${betterAuthUser.email}`
     );
 
-    // Retourner simplement l'utilisateur - les organisations sont gérées côté frontend
-    return sessionData.user;
+    return betterAuthUser;
   } catch (error) {
     logger.error("Erreur lors de la validation de session:", error.message);
     return null;
@@ -95,11 +140,11 @@ const validateSession = async (headers) => {
 
 /**
  * Middleware d'authentification better-auth
- * Valide les sessions via les cookies et l'API better-auth
+ * Valide les sessions via les cookies et lookup direct MongoDB
  */
 const betterAuthMiddleware = async (req) => {
   try {
-    // Valider la session avec better-auth
+    // Valider la session directement en MongoDB
     const sessionUser = await validateSession(req.headers);
 
     if (!sessionUser) {
@@ -107,8 +152,8 @@ const betterAuthMiddleware = async (req) => {
       return null;
     }
 
-    // Récupérer l'utilisateur complet depuis la base de données
-    // en utilisant l'email ou l'ID de la session validée
+    // Récupérer l'utilisateur complet depuis le modèle Mongoose
+    // en utilisant l'email de la session validée
     const user = await User.findOne({
       email: sessionUser.email,
       isDisabled: { $ne: true },

@@ -179,6 +179,21 @@ const clientSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       required: true,
     },
+    // Blocage du client
+    isBlocked: {
+      type: Boolean,
+      default: false,
+    },
+    blockedAt: {
+      type: Date,
+      default: null,
+    },
+    blockedReason: {
+      type: String,
+      trim: true,
+      maxlength: [500, "La raison du blocage ne peut pas dépasser 500 caractères"],
+      default: null,
+    },
     // Notes ajoutées au client (comme les commentaires dans les tâches kanban)
     notes: [
       {
@@ -320,6 +335,8 @@ const clientSchema = new mongoose.Schema(
             "invoice_reminder_sent",
             "document_email_sent",
             "reminder_created",
+            "blocked",
+            "unblocked",
           ],
           required: true,
         },
