@@ -76,6 +76,7 @@ import reconciliationRoutes from "./routes/reconciliation.js";
 // import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
+import guideLeadsRoutes from "./routes/guideLeads.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -225,6 +226,9 @@ async function startServer() {
 
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);
+
+  // Routes leads guides (publique, sans auth)
+  app.use("/api/leads", guideLeadsRoutes);
 
   app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
 
