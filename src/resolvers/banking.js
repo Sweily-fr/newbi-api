@@ -4,8 +4,12 @@ import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
 import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { GraphQLUpload } from "graphql-upload";
+import cloudflareService from "../services/cloudflareService.js";
 
 const bankingResolvers = {
+  Upload: GraphQLUpload,
+
   Query: {
     // Transactions - workspaceId passé en argument (comme les factures)
     transactions: withWorkspace(
@@ -193,6 +197,7 @@ const bankingResolvers = {
         expenseCategory: category,   // Catégorie pour le reporting
         metadata: {
           vendor: input.vendor,
+          paymentMethod: input.paymentMethod || "BANK_TRANSFER",
           notes: input.notes,
           tags: input.tags,
           source: "MANUAL",
@@ -218,6 +223,7 @@ const bankingResolvers = {
           updateData.expenseCategory = input.category;  // Catégorie pour le reporting
         }
         if (input.vendor) updateData["metadata.vendor"] = input.vendor;
+        if (input.paymentMethod) updateData["metadata.paymentMethod"] = input.paymentMethod;
         if (input.notes) updateData["metadata.notes"] = input.notes;
         if (input.tags) updateData["metadata.tags"] = input.tags;
 
@@ -252,6 +258,106 @@ const bankingResolvers = {
         }
 
         return true;
+      }
+    ),
+
+    // Upload de justificatif pour une transaction
+    uploadTransactionReceipt: withWorkspace(
+      async (parent, { transactionId, workspaceId, file }, { user }) => {
+        try {
+          // Vérifier que la transaction existe
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+          });
+
+          if (!transaction) {
+            return {
+              success: false,
+              message: "Transaction non trouvée",
+              receiptFile: null,
+              transaction: null,
+            };
+          }
+
+          // Récupérer les informations du fichier uploadé
+          const { createReadStream, filename, mimetype } = await file;
+
+          // Lire le fichier en buffer
+          const stream = createReadStream();
+          const chunks = [];
+          for await (const chunk of stream) {
+            chunks.push(chunk);
+          }
+          const fileBuffer = Buffer.concat(chunks);
+          const fileSize = fileBuffer.length;
+
+          // Valider la taille (10MB max)
+          if (fileSize > 10 * 1024 * 1024) {
+            return {
+              success: false,
+              message: "Fichier trop volumineux. Maximum 10 Mo.",
+              receiptFile: null,
+              transaction: null,
+            };
+          }
+
+          // Valider le type
+          const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf"];
+          if (!allowedTypes.includes(mimetype)) {
+            return {
+              success: false,
+              message: "Type de fichier non supporté.",
+              receiptFile: null,
+              transaction: null,
+            };
+          }
+
+          // Upload vers Cloudflare R2
+          const uploadResult = await cloudflareService.uploadImage(
+            fileBuffer,
+            filename,
+            user._id || user.id,
+            "receipts",
+            workspaceId
+          );
+
+          // Mettre à jour la transaction avec le fichier
+          const receiptFile = {
+            url: uploadResult.url,
+            key: uploadResult.key,
+            filename: filename,
+            mimetype: mimetype,
+            size: fileSize,
+            uploadedAt: new Date(),
+          };
+
+          const updatedTransaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            {
+              $set: {
+                receiptFile: receiptFile,
+                receiptRequired: false,
+              },
+            },
+            { new: true }
+          );
+
+          return {
+            success: true,
+            message: "Justificatif ajouté avec succès",
+            receiptFile: receiptFile,
+            transaction: updatedTransaction,
+          };
+        } catch (error) {
+          console.error("❌ [UPLOAD RECEIPT] Error:", error);
+          return {
+            success: false,
+            message: error.message || "Erreur lors de l'upload du justificatif",
+            receiptFile: null,
+            transaction: null,
+          };
+        }
       }
     ),
 
