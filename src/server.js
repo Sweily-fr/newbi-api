@@ -131,6 +131,9 @@ directories.forEach(({ path: dirPath, name }) =>
 async function startServer() {
   const app = express();
 
+  // Trust proxy (nginx) pour obtenir la vraie IP client via X-Forwarded-For
+  app.set("trust proxy", 1);
+
   // Configuration CORS
   const allowedOrigins = [
     "http://localhost:3000",

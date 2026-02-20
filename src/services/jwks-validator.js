@@ -201,10 +201,9 @@ class JWKSValidator {
         return null;
       }
 
-      // Vérifier le rate limiting
+      // Vérifier le rate limiting (ne PAS compter comme tentative suspecte)
       if (!this.checkRateLimit(clientIP)) {
         logger.warn("Rate limit dépassé pour l'IP");
-        this.recordFailedAttempt(clientIP, "Rate limit dépassé");
         return null;
       }
 
@@ -259,6 +258,8 @@ class JWKSValidator {
         logger.info(
           `✓ JWT validé avec succès (crypto complète) pour l'utilisateur ${verifiedPayload.sub}`
         );
+        // Reset les tentatives échouées après une validation réussie
+        this.failedAttempts.delete(clientIP);
         return verifiedPayload;
       } catch (verifyError) {
         logger.warn(
@@ -290,6 +291,8 @@ class JWKSValidator {
 
         if (issuerMatch && payload.sub) {
           logger.warn(`⚠️  MODE DÉGRADÉ: JWT accepté sans vérification crypto complète (issuer: ${payload.iss} vs expected: ${process.env.FRONTEND_URL || 'localhost:3000'})`);
+          // Reset les tentatives échouées après une validation réussie
+          this.failedAttempts.delete(clientIP);
           return payload;
         }
 
