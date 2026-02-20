@@ -42,6 +42,7 @@ import notificationPreferencesResolvers from "./notificationPreferences.js";
 import userInvitedResolvers from "./userInvited.js";
 import clientAutomationResolvers from "./clientAutomation.js";
 import { clientCustomFieldResolvers } from "./clientCustomField.js";
+import clientSegmentResolvers from "./clientSegment.js";
 import crmEmailAutomationResolvers from "./crmEmailAutomation.js";
 import notificationResolvers from "./notification.js";
 import calendarConnectionResolvers from "./calendarConnection.js";
@@ -95,6 +96,7 @@ const resolvers = mergeResolvers([
   userInvitedResolvers,
   clientAutomationResolvers,
   clientCustomFieldResolvers,
+  clientSegmentResolvers,
   crmEmailAutomationResolvers,
   notificationResolvers,
   calendarConnectionResolvers,

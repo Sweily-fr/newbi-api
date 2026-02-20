@@ -1,0 +1,92 @@
+enum SegmentMatchType {
+  all
+  any
+}
+
+enum SegmentRuleField {
+  type
+  email
+  name
+  address_city
+  address_country
+  address_postalCode
+  isBlocked
+  isInternational
+  createdAt
+  updatedAt
+}
+
+enum SegmentRuleOperator {
+  equals
+  not_equals
+  contains
+  not_contains
+  starts_with
+  ends_with
+  greater_than
+  less_than
+  is_true
+  is_false
+  is_empty
+  is_not_empty
+  before
+  after
+  in_last_days
+}
+
+type SegmentRule {
+  field: String!
+  operator: String!
+  value: JSON
+}
+
+type ClientSegment {
+  id: ID!
+  name: String!
+  description: String
+  workspaceId: ID!
+  createdBy: ID!
+  matchType: String!
+  rules: [SegmentRule!]!
+  color: String
+  icon: String
+  clientCount: Int
+  createdAt: String!
+  updatedAt: String!
+}
+
+input SegmentRuleInput {
+  field: String!
+  operator: String!
+  value: JSON
+}
+
+input CreateClientSegmentInput {
+  name: String!
+  description: String
+  matchType: String
+  rules: [SegmentRuleInput!]!
+  color: String
+  icon: String
+}
+
+input UpdateClientSegmentInput {
+  name: String
+  description: String
+  matchType: String
+  rules: [SegmentRuleInput!]
+  color: String
+  icon: String
+}
+
+extend type Query {
+  clientSegments(workspaceId: String!): [ClientSegment!]!
+  clientSegment(workspaceId: String!, id: ID!): ClientSegment!
+  clientsInSegment(workspaceId: String!, segmentId: ID!, page: Int, limit: Int, search: String): ClientsResult!
+}
+
+extend type Mutation {
+  createClientSegment(workspaceId: String!, input: CreateClientSegmentInput!): ClientSegment!
+  updateClientSegment(workspaceId: String!, id: ID!, input: UpdateClientSegmentInput!): ClientSegment!
+  deleteClientSegment(workspaceId: String!, id: ID!): Boolean!
+}

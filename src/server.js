@@ -505,12 +505,27 @@ function formatError(error) {
   console.error("Extensions:", error.extensions);
   const originalError = error.originalError;
 
+  // Cas 1: originalError est une AppError directe
   if (originalError?.name === "AppError") {
     return {
       message: originalError.message,
       extensions: {
         code: originalError.code,
         details: originalError.details,
+      },
+      path: error.path,
+    };
+  }
+
+  // ✅ FIX: Cas 2: AppError encapsulée dans extensions.exception
+  // (quand Apollo Server perd la référence originalError mais conserve l'exception sérialisée)
+  const exception = error.extensions?.exception;
+  if (exception?.name === "AppError" && exception?.code) {
+    return {
+      message: error.message,
+      extensions: {
+        code: exception.code,
+        details: exception.details || null,
       },
       path: error.path,
     };

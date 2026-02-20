@@ -86,6 +86,10 @@ type Client {
   contacts: [ClientContact!]
   # Champs personnalisés
   customFields: [ClientCustomFieldValueType!]
+  # Blocage
+  isBlocked: Boolean
+  blockedAt: String
+  blockedReason: String
   # Timeline d'activité
   notes: [ClientNote!]
   activity: [ClientActivity!]
