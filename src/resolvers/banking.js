@@ -182,6 +182,40 @@ const bankingResolvers = {
       // Normaliser la catégorie (fallback "OTHER" si non spécifiée)
       const category = input.category || "OTHER";
 
+      // Mapper vers la catégorie large pour expenseCategory (enum validé)
+      const VALID_EXPENSE_CATEGORIES = [
+        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
+        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
+        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+      ];
+
+      let expenseCategory = category;
+      if (!VALID_EXPENSE_CATEGORIES.includes(category)) {
+        const subcategoryToExpenseCategory = {
+          bureau: "OFFICE_SUPPLIES", materiel: "HARDWARE", mobilier: "OFFICE_SUPPLIES", equipement: "HARDWARE",
+          transport: "TRAVEL", carburant: "TRAVEL", parking: "TRAVEL", peage: "TRAVEL",
+          taxi: "TRAVEL", train: "TRAVEL", avion: "TRAVEL", location_vehicule: "TRAVEL",
+          repas: "MEALS", restaurant: "MEALS", hotel: "ACCOMMODATION",
+          marketing: "MARKETING", publicite: "MARKETING", communication: "MARKETING",
+          telephone: "UTILITIES", internet: "UTILITIES", site_web: "SOFTWARE", reseaux_sociaux: "MARKETING",
+          formation: "TRAINING", conference: "TRAINING", livres: "TRAINING", abonnement: "SUBSCRIPTIONS",
+          comptabilite: "SERVICES", juridique: "SERVICES", assurance: "INSURANCE",
+          banque: "SERVICES", conseil: "SERVICES", sous_traitance: "SERVICES",
+          loyer: "RENT", electricite: "UTILITIES", eau: "UTILITIES", chauffage: "UTILITIES", entretien: "MAINTENANCE",
+          logiciel: "SOFTWARE", saas: "SOFTWARE", licence: "SOFTWARE",
+          salaire: "SALARIES", charges_sociales: "SALARIES", recrutement: "SERVICES",
+          impots_taxes: "TAXES", tva: "TAXES", avoirs_remboursement: "OTHER",
+          cadeaux: "OTHER", representation: "OTHER", poste: "OFFICE_SUPPLIES", impression: "OFFICE_SUPPLIES",
+          autre: "OTHER",
+          ventes: "SALES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
+          consulting: "SERVICES", abonnements_revenus: "SUBSCRIPTIONS", licences_revenus: "SOFTWARE",
+          royalties: "OTHER", loyers_revenus: "RENT", interets: "OTHER", dividendes: "OTHER",
+          plus_values: "OTHER", subventions: "GRANTS", remboursements_revenus: "OTHER",
+          indemnites: "OTHER", cadeaux_recus: "OTHER", autre_revenu: "OTHER",
+        };
+        expenseCategory = subcategoryToExpenseCategory[category] || "OTHER";
+      }
+
       const transaction = new Transaction({
         externalId: `manual-${uuidv4()}`,
         provider: "manual",
@@ -193,8 +227,8 @@ const bankingResolvers = {
         workspaceId: input.workspaceId,
         userId: user._id,
         date: input.date || new Date(),
-        category: category,          // Catégorie pour l'affichage
-        expenseCategory: category,   // Catégorie pour le reporting
+        category: category,              // Catégorie fine (ex: "parking")
+        expenseCategory: expenseCategory, // Catégorie large pour le reporting (ex: "TRAVEL")
         metadata: {
           vendor: input.vendor,
           paymentMethod: input.paymentMethod || "BANK_TRANSFER",
@@ -219,8 +253,45 @@ const bankingResolvers = {
         if (input.type) updateData.type = input.type.toLowerCase();
         if (input.date) updateData.date = input.date;
         if (input.category) {
-          updateData.category = input.category;         // Catégorie pour l'affichage
-          updateData.expenseCategory = input.category;  // Catégorie pour le reporting
+          updateData.category = input.category;         // Catégorie fine (ex: "parking", "carburant") ou large (ex: "TRAVEL")
+
+          // Mapper vers la catégorie large pour expenseCategory (enum validé)
+          const VALID_EXPENSE_CATEGORIES = [
+            "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
+            "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
+            "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+          ];
+
+          if (VALID_EXPENSE_CATEGORIES.includes(input.category)) {
+            // Déjà une catégorie large valide
+            updateData.expenseCategory = input.category;
+          } else {
+            // Sous-catégorie fine → mapper vers la catégorie large
+            const subcategoryToExpenseCategory = {
+              bureau: "OFFICE_SUPPLIES", materiel: "HARDWARE", mobilier: "OFFICE_SUPPLIES", equipement: "HARDWARE",
+              transport: "TRAVEL", carburant: "TRAVEL", parking: "TRAVEL", peage: "TRAVEL",
+              taxi: "TRAVEL", train: "TRAVEL", avion: "TRAVEL", location_vehicule: "TRAVEL",
+              repas: "MEALS", restaurant: "MEALS", hotel: "ACCOMMODATION",
+              marketing: "MARKETING", publicite: "MARKETING", communication: "MARKETING",
+              telephone: "UTILITIES", internet: "UTILITIES", site_web: "SOFTWARE", reseaux_sociaux: "MARKETING",
+              formation: "TRAINING", conference: "TRAINING", livres: "TRAINING", abonnement: "SUBSCRIPTIONS",
+              comptabilite: "SERVICES", juridique: "SERVICES", assurance: "INSURANCE",
+              banque: "SERVICES", conseil: "SERVICES", sous_traitance: "SERVICES",
+              loyer: "RENT", electricite: "UTILITIES", eau: "UTILITIES", chauffage: "UTILITIES", entretien: "MAINTENANCE",
+              logiciel: "SOFTWARE", saas: "SOFTWARE", licence: "SOFTWARE",
+              salaire: "SALARIES", charges_sociales: "SALARIES", recrutement: "SERVICES",
+              impots_taxes: "TAXES", tva: "TAXES", avoirs_remboursement: "OTHER",
+              cadeaux: "OTHER", representation: "OTHER", poste: "OFFICE_SUPPLIES", impression: "OFFICE_SUPPLIES",
+              autre: "OTHER",
+              // Revenus
+              ventes: "SALES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
+              consulting: "SERVICES", abonnements_revenus: "SUBSCRIPTIONS", licences_revenus: "SOFTWARE",
+              royalties: "OTHER", loyers_revenus: "RENT", interets: "OTHER", dividendes: "OTHER",
+              plus_values: "OTHER", subventions: "GRANTS", remboursements_revenus: "OTHER",
+              indemnites: "OTHER", cadeaux_recus: "OTHER", autre_revenu: "OTHER",
+            };
+            updateData.expenseCategory = subcategoryToExpenseCategory[input.category] || "OTHER";
+          }
         }
         if (input.vendor) updateData["metadata.vendor"] = input.vendor;
         if (input.paymentMethod) updateData["metadata.paymentMethod"] = input.paymentMethod;
