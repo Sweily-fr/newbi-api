@@ -27,11 +27,11 @@ const COMPANY_STATUS_TO_SIZE = {
   SA: "GE_ETI",
 };
 
-// Dates d'obligation de réception e-invoicing par taille
+// Dates d'obligation e-invoicing (émission / e-reporting) par taille
 const OBLIGATION_DATES = {
   GE_ETI: new Date("2026-09-01"),
-  PME: new Date("2027-01-01"),
-  TPE_MICRO: new Date("2028-01-01"),
+  PME: new Date("2027-09-01"),
+  TPE_MICRO: new Date("2027-09-01"),
 };
 
 // Codes ISO France + DOM-TOM
