@@ -457,6 +457,7 @@ input CreateTransactionInput {
   date: DateTime
   category: String
   vendor: String
+  paymentMethod: String
   notes: String
   tags: [String!]
 }
@@ -469,17 +470,28 @@ input UpdateTransactionInput {
   date: DateTime
   category: String
   vendor: String
+  paymentMethod: String
   notes: String
   tags: [String!]
 }
 
 # Mutations
 
+type UploadTransactionReceiptResult {
+  success: Boolean!
+  message: String
+  receiptFile: ReceiptFile
+  transaction: Transaction
+}
+
 extend type Mutation {
   # Transactions manuelles
   createTransaction(input: CreateTransactionInput!): Transaction!
   updateTransaction(id: ID!, input: UpdateTransactionInput!): Transaction!
   deleteTransaction(id: ID!): Boolean!
+
+  # Upload de justificatif
+  uploadTransactionReceipt(transactionId: ID!, workspaceId: ID!, file: Upload!): UploadTransactionReceiptResult!
 
   # Paiements
   processPayment(input: ProcessPaymentInput!): PaymentResult!
