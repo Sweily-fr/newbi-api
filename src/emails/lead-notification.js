@@ -93,7 +93,7 @@ export function buildLeadNotificationHtml({
       </div>
 
       <!-- CTA -->
-      <a href="https://app.newbi.fr/dashboard/crm" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
+      <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard/clients" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
         Voir dans le CRM
       </a>
     </div>
