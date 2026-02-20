@@ -20,13 +20,13 @@ const betterAuthJWTMiddleware = async (req) => {
     logger.debug(`Token JWT extrait: ${token.substring(0, 20)}...`);
 
     // Récupérer l'IP client pour les protections de sécurité
+    // Prioriser les headers proxy pour obtenir la vraie IP client
     const clientIP =
-      req.ip ||
-      req.connection.remoteAddress ||
-      req.socket.remoteAddress ||
-      (req.connection.socket ? req.connection.socket.remoteAddress : null) ||
-      req.headers["x-forwarded-for"]?.split(",")[0] ||
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
       req.headers["x-real-ip"] ||
+      req.ip ||
+      req.connection?.remoteAddress ||
+      req.socket?.remoteAddress ||
       "unknown";
 
     // Validation JWKS complète avec vérification cryptographique
