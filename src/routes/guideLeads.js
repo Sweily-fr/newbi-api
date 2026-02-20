@@ -3,20 +3,39 @@ import GuideLead from "../models/GuideLead.js";
 import Client from "../models/Client.js";
 import ClientList from "../models/ClientList.js";
 import ClientCustomField from "../models/ClientCustomField.js";
+import redisService from "../services/redisService.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
 
-// Rate limiting simple (in-memory, 5 req/min/IP)
-const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+// Rate limiting — Redis (primary) avec fallback in-memory
+const RATE_LIMIT_WINDOW = 60; // 1 minute (en secondes pour Redis)
 const RATE_LIMIT_MAX = 5;
 
-function checkRateLimit(ip) {
+// Fallback in-memory (utilisé si Redis n'est pas connecté)
+const rateLimitMap = new Map();
+
+async function checkRateLimit(ip) {
+  // Essayer Redis d'abord
+  if (redisService.isConnected && redisService.client) {
+    try {
+      const key = `guide-lead-rl:${ip}`;
+      const count = await redisService.client.incr(key);
+      if (count === 1) {
+        await redisService.client.expire(key, RATE_LIMIT_WINDOW);
+      }
+      return count <= RATE_LIMIT_MAX;
+    } catch (err) {
+      logger.warn(`[GuideLeads] Erreur Redis rate limit, fallback in-memory: ${err.message}`);
+    }
+  }
+
+  // Fallback in-memory
   const now = Date.now();
+  const windowMs = RATE_LIMIT_WINDOW * 1000;
   const entry = rateLimitMap.get(ip);
 
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW) {
+  if (!entry || now - entry.windowStart > windowMs) {
     rateLimitMap.set(ip, { windowStart: now, count: 1 });
     return true;
   }
@@ -29,15 +48,31 @@ function checkRateLimit(ip) {
   return true;
 }
 
-// Nettoyage périodique de la map (toutes les 5 min)
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of rateLimitMap) {
-    if (now - entry.windowStart > RATE_LIMIT_WINDOW) {
-      rateLimitMap.delete(ip);
-    }
+// Vérification Turnstile côté serveur
+async function verifyTurnstileToken(token, ip) {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) {
+    // Pas de clé configurée → skip la vérification (dev local)
+    return true;
   }
-}, 5 * 60 * 1000);
+
+  if (!token) {
+    return false;
+  }
+
+  try {
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret, response: token, remoteip: ip }),
+    });
+    const outcome = await res.json();
+    return outcome.success === true;
+  } catch (err) {
+    logger.error(`[GuideLeads] Erreur vérification Turnstile: ${err.message}`);
+    return false;
+  }
+}
 
 // Sanitize basic string input
 function sanitize(str) {
@@ -56,11 +91,19 @@ function isValidEmail(email) {
  */
 router.post("/guide", async (req, res) => {
   try {
-    logger.info(`[GuideLeads] POST /guide reçu — body: ${JSON.stringify(req.body)}`);
+    logger.info(`[GuideLeads] POST /guide reçu`);
 
     const ip = req.ip || req.connection?.remoteAddress || "unknown";
 
-    if (!checkRateLimit(ip)) {
+    // 1. Honeypot — rejet silencieux (fake success pour ne pas alerter le bot)
+    if (req.body.website) {
+      logger.warn(`[GuideLeads] Honeypot déclenché pour IP: ${ip}`);
+      return res.json({ success: true });
+    }
+
+    // 2. Rate limiting (Redis ou fallback in-memory)
+    const allowed = await checkRateLimit(ip);
+    if (!allowed) {
       logger.warn(`[GuideLeads] Rate limit atteint pour IP: ${ip}`);
       return res.status(429).json({
         success: false,
@@ -68,11 +111,11 @@ router.post("/guide", async (req, res) => {
       });
     }
 
-    const { firstName, lastName, companyName, email, phone, source, acceptedTerms } = req.body;
+    const { firstName, lastName, companyName, email, phone, source, acceptedTerms, turnstileToken } = req.body;
 
-    // Validation des champs requis
+    // 3. Validation des champs requis
     if (!firstName || !lastName || !companyName || !email || !phone || !acceptedTerms) {
-      logger.warn(`[GuideLeads] Validation échouée — champs manquants: ${JSON.stringify({ firstName: !!firstName, lastName: !!lastName, companyName: !!companyName, email: !!email, phone: !!phone, acceptedTerms: !!acceptedTerms })}`);
+      logger.warn(`[GuideLeads] Validation échouée — champs manquants`);
       return res.status(400).json({
         success: false,
         error: "Les champs prénom, nom, entreprise, email, téléphone et acceptation des conditions sont requis.",
@@ -84,6 +127,16 @@ router.post("/guide", async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "Adresse email invalide.",
+      });
+    }
+
+    // 4. Vérification Turnstile
+    const turnstileValid = await verifyTurnstileToken(turnstileToken, ip);
+    if (!turnstileValid) {
+      logger.warn(`[GuideLeads] Vérification Turnstile échouée pour IP: ${ip}`);
+      return res.status(400).json({
+        success: false,
+        error: "Vérification anti-bot échouée. Veuillez réessayer.",
       });
     }
 
