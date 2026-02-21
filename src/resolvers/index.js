@@ -52,6 +52,7 @@ import purchaseInvoiceResolvers from "./purchaseInvoice.js";
 import treasuryForecastResolvers from "./treasuryForecast.js";
 import purchaseOrderResolvers from "./purchaseOrder.js";
 import importedPurchaseOrderResolvers from "./importedPurchaseOrder.js";
+import financialAnalyticsResolvers from "./financialAnalytics.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -107,6 +108,7 @@ const resolvers = mergeResolvers([
   treasuryForecastResolvers,
   purchaseOrderResolvers,
   importedPurchaseOrderResolvers,
+  financialAnalyticsResolvers,
 ]);
 
 export default resolvers;

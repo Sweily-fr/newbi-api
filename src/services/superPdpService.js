@@ -386,6 +386,9 @@ class SuperPdpService {
         type_code: invoice.invoiceType === "creditNote" ? 381 : 380,
         currency_code: "EUR",
 
+        // Nature de l'opération (réforme 2026)
+        ...(invoice.operationType && { operation_type: invoice.operationType }),
+
         // Notes obligatoires pour la France (BR-FR-05)
         notes: [
           {
@@ -400,6 +403,10 @@ class SuperPdpService {
             subject_code: "AAB",
             note: "Aucun escompte pour paiement anticipé.",
           },
+          // TVA sur les débits (mention conditionnelle)
+          ...(invoice.companyInfo?.vatPaymentCondition === "DEBITS"
+            ? [{ subject_code: "REG", note: "TVA acquittée sur les débits" }]
+            : []),
         ],
 
         process_control: {
@@ -441,6 +448,27 @@ class SuperPdpService {
               this.getCountryCode(invoice.client?.address?.country) || "FR",
           },
         },
+
+        // Adresse de livraison (si disponible)
+        ...(invoice.shipping?.billShipping && invoice.shipping?.shippingAddress
+          ? {
+              delivery: {
+                deliver_to_address: {
+                  country_code:
+                    this.getCountryCode(invoice.shipping.shippingAddress.country) || "FR",
+                  ...(invoice.shipping.shippingAddress.postalCode && {
+                    post_code: invoice.shipping.shippingAddress.postalCode,
+                  }),
+                  ...(invoice.shipping.shippingAddress.street && {
+                    address_line_1: invoice.shipping.shippingAddress.street,
+                  }),
+                  ...(invoice.shipping.shippingAddress.city && {
+                    city: invoice.shipping.shippingAddress.city,
+                  }),
+                },
+              },
+            }
+          : {}),
 
         totals: {
           sum_invoice_lines_amount: formatAmount(invoice.finalTotalHT || 0),

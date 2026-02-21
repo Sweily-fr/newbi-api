@@ -1119,32 +1119,27 @@ const resolvers = {
         // Envoyer des notifications aux membres assignés lors de la création
         if (cleanedInput.assignedMembers && cleanedInput.assignedMembers.length > 0) {
           logger.info(`📧 [CreateTask] Envoi notifications pour ${cleanedInput.assignedMembers.length} membres assignés`);
-          
+
+          // Capturer les données du créateur (déjà récupérées plus haut) pour la closure
+          const notifCreatorImage =
+            creatorData?.image ||
+            creatorData?.avatar ||
+            creatorData?.profile?.profilePicture ||
+            creatorData?.profile?.profilePictureUrl ||
+            null;
+          const notifAssignerName = creatorData?.name || user?.name || user?.email || "Un membre de l'équipe";
+
           (async () => {
             try {
               const db = mongoose.connection.db;
-              
-              // Récupérer les données de l'utilisateur créateur
-              const userData = user
-                ? await db.collection("user").findOne({
-                    _id: new mongoose.Types.ObjectId(user.id),
-                  })
-                : null;
-              const userImage =
-                userData?.image ||
-                userData?.avatar ||
-                userData?.profile?.profilePicture ||
-                userData?.profile?.profilePictureUrl ||
-                null;
-              
+
               // Récupérer les infos du board et de la colonne
               const board = await Board.findById(savedTask.boardId);
               const column = await Column.findById(savedTask.columnId);
-              const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
               const boardName = board?.title || "Tableau sans nom";
               const columnName = column?.title || "Colonne";
-              
-              logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
+
+              logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${notifAssignerName}`);
 
               // Envoyer les emails et notifications pour chaque membre assigné
               for (const memberId of cleanedInput.assignedMembers) {
@@ -1155,9 +1150,13 @@ const resolvers = {
                 }
                 
                 try {
-                  const memberData = await db.collection("user").findOne({
-                    _id: new mongoose.Types.ObjectId(memberId),
-                  });
+                  // Lookup sûr : essayer d'abord comme string, puis comme ObjectId
+                  let memberData = await db.collection("user").findOne({ _id: memberId });
+                  if (!memberData && /^[0-9a-fA-F]{24}$/.test(memberId)) {
+                    memberData = await db.collection("user").findOne({
+                      _id: new mongoose.Types.ObjectId(memberId),
+                    });
+                  }
 
                   if (memberData?.email) {
                     const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${savedTask.boardId}?task=${savedTask._id}`;
@@ -1170,8 +1169,8 @@ const resolvers = {
                         taskDescription: savedTask.description || "",
                         boardName: boardName,
                         columnName: columnName,
-                        assignerName: assignerName,
-                        assignerImage: userImage,
+                        assignerName: notifAssignerName,
+                        assignerImage: notifCreatorImage,
                         dueDate: savedTask.dueDate,
                         priority: savedTask.priority || "medium",
                         taskUrl: taskUrl,
@@ -1193,8 +1192,8 @@ const resolvers = {
                           boardName: boardName,
                           columnName: columnName,
                           actorId: user?.id || user?._id,
-                          actorName: assignerName,
-                          actorImage: userImage,
+                          actorName: notifAssignerName,
+                          actorImage: notifCreatorImage,
                           url: taskUrl,
                         });
 
@@ -2590,6 +2589,11 @@ const resolvers = {
         workspaceId: parent.workspaceId,
       }).sort("position");
       return await enrichTasksWithUserInfo(tasks);
+    },
+    client: async (board) => {
+      if (!board.clientId) return null;
+      const Client = mongoose.model('Client');
+      return Client.findOne({ _id: board.clientId, workspaceId: board.workspaceId });
     },
     totalBillableAmount: async (board) => {
       const tasks = await Task.find({

@@ -16,6 +16,7 @@ type Event {
   visibility: EventVisibility
   isReadOnly: Boolean
   externalEventId: String
+  calendarConnectionId: ID
   externalCalendarLinks: [ExternalCalendarLink]
   createdAt: DateTime!
   updatedAt: DateTime!

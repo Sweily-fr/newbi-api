@@ -165,6 +165,7 @@ export const automationService = {
         activity: {
           id: new mongoose.Types.ObjectId().toString(),
           type: 'automation_executed',
+          userName: 'Système',
           description: `Automatisation "${automation.name}" exécutée`,
           metadata: {
             automationId: automation._id.toString(),

@@ -86,6 +86,8 @@ type Client {
   contacts: [ClientContact!]
   # Champs personnalisés
   customFields: [ClientCustomFieldValueType!]
+  # Membres assignés
+  assignedMembers: [String!]
   # Blocage
   isBlocked: Boolean
   blockedAt: String

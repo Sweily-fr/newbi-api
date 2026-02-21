@@ -1,0 +1,111 @@
+type FinancialAnalyticsKPI {
+  totalRevenueHT: Float!
+  totalRevenueTTC: Float!
+  totalExpenses: Float!
+  netResult: Float!
+  invoiceCount: Int!
+  expenseCount: Int!
+  averageInvoiceHT: Float!
+  clientCount: Int!
+  quoteConversionRate: Float!
+}
+
+type RevenueByClient {
+  clientId: ID
+  clientName: String!
+  clientType: String
+  totalHT: Float!
+  totalTTC: Float!
+  totalVAT: Float!
+  invoiceCount: Int!
+  averageInvoiceHT: Float!
+  totalTimeSeconds: Int
+  totalBillableAmount: Float
+  totalHours: Float
+}
+
+type RevenueByProduct {
+  description: String!
+  totalHT: Float!
+  totalQuantity: Float!
+  invoiceCount: Int!
+  averageUnitPrice: Float!
+}
+
+type MonthlyRevenue {
+  month: String!
+  revenueHT: Float!
+  revenueTTC: Float!
+  revenueVAT: Float!
+  expenseAmount: Float!
+  invoiceCount: Int!
+  expenseCount: Int!
+  netResult: Float!
+}
+
+type PaymentMethodStat {
+  method: String!
+  count: Int!
+  totalTTC: Float!
+}
+
+type InvoiceStatusBreakdown {
+  status: String!
+  count: Int!
+  totalTTC: Float!
+}
+
+type TopClient {
+  clientId: ID
+  clientName: String!
+  totalTTC: Float!
+  invoiceCount: Int!
+  percentage: Float!
+}
+
+type ExpenseByCategoryStat {
+  category: String!
+  amount: Float!
+  count: Int!
+}
+
+type RevenueByClientMonthly {
+  clientId: ID
+  clientName: String!
+  month: String!
+  totalHT: Float!
+  totalTTC: Float!
+  totalVAT: Float!
+  invoiceCount: Int!
+}
+
+type ExpenseByCategoryMonthly {
+  category: String!
+  month: String!
+  amount: Float!
+  count: Int!
+}
+
+type FinancialAnalyticsData {
+  kpi: FinancialAnalyticsKPI!
+  revenueByClient: [RevenueByClient!]!
+  revenueByProduct: [RevenueByProduct!]!
+  monthlyRevenue: [MonthlyRevenue!]!
+  paymentMethodStats: [PaymentMethodStat!]!
+  statusBreakdown: [InvoiceStatusBreakdown!]!
+  topClients: [TopClient!]!
+  expenseByCategory: [ExpenseByCategoryStat!]!
+  revenueByClientMonthly: [RevenueByClientMonthly!]!
+  expenseByCategoryMonthly: [ExpenseByCategoryMonthly!]!
+}
+
+type Query {
+  financialAnalytics(
+    workspaceId: ID
+    startDate: String!
+    endDate: String!
+    clientId: ID
+    clientIds: [ID]
+    status: [String]
+  ): FinancialAnalyticsData!
+}

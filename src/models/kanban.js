@@ -166,6 +166,12 @@ const boardSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client',
+    default: null,
+    index: true
+  },
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
