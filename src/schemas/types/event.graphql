@@ -5,7 +5,7 @@ type Event {
   start: DateTime!
   end: DateTime!
   allDay: Boolean!
-  color: EventColor!
+  color: String!
   location: String
   type: EventType!
   invoiceId: ID
@@ -64,7 +64,7 @@ input CreateEventInput {
   start: DateTime!
   end: DateTime!
   allDay: Boolean = false
-  color: EventColor = sky
+  color: String = "sky"
   location: String
   type: EventType = MANUAL
   emailReminder: EmailReminderInput
@@ -77,7 +77,7 @@ input UpdateEventInput {
   start: DateTime
   end: DateTime
   allDay: Boolean
-  color: EventColor
+  color: String
   location: String
   type: EventType
   emailReminder: EmailReminderInput

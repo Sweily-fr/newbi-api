@@ -1,11 +1,10 @@
 import mongoose from 'mongoose';
 import { DISCOUNT_TYPE } from '../constants/enums.js';
-import { 
-  isValidItemDescription, 
-  isValidUnit, 
-  isPositiveAmount, 
-  isPositiveNonZeroAmount, 
-  isValidPercentage 
+import {
+  isValidItemDescription,
+  isValidUnit,
+  isPositiveAmount,
+  isValidPercentage
 } from '../../utils/validators.js';
 
 /**
@@ -33,8 +32,8 @@ const itemSchema = new mongoose.Schema({
     type: Number,
     required: true,
     validate: {
-      validator: isPositiveNonZeroAmount,
-      message: 'Le prix unitaire doit être un nombre strictement positif'
+      validator: isPositiveAmount,
+      message: 'Le prix unitaire doit être un nombre positif ou nul'
     }
   },
   vatRate: {

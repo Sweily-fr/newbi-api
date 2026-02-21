@@ -1,0 +1,23 @@
+type CalendarColorLabel {
+  color: String!
+  label: String!
+}
+
+input CalendarColorLabelInput {
+  color: String!
+  label: String!
+}
+
+type CalendarColorLabelsResponse {
+  success: Boolean!
+  message: String
+  labels: [CalendarColorLabel!]
+}
+
+extend type Query {
+  getCalendarColorLabels(workspaceId: ID): CalendarColorLabelsResponse!
+}
+
+extend type Mutation {
+  updateCalendarColorLabels(labels: [CalendarColorLabelInput!]!, workspaceId: ID): CalendarColorLabelsResponse!
+}

@@ -111,6 +111,8 @@ const commentSchema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  // IDs des utilisateurs mentionnés dans le commentaire
+  mentions: [String],
   // Images attachées au commentaire
   images: [taskImageSchema],
   isExternal: {
