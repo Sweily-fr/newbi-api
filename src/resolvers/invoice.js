@@ -1274,6 +1274,22 @@ const invoiceResolvers = {
             }
           }
 
+          // Validation : empêcher le changement d'année de issueDate sur une facture finalisée
+          if (
+            input.issueDate &&
+            invoiceData.status !== "DRAFT" &&
+            invoiceData.issueDate
+          ) {
+            const oldYear = new Date(invoiceData.issueDate).getFullYear();
+            const newYear = new Date(input.issueDate).getFullYear();
+            if (oldYear !== newYear) {
+              throw createValidationError(
+                `Impossible de changer l'année d'émission d'une facture finalisée (${oldYear} → ${newYear}). Cela casserait la séquence de numérotation.`,
+                { issueDate: `L'année d'émission ne peut pas être modifiée de ${oldYear} à ${newYear} sur une facture finalisée.` }
+              );
+            }
+          }
+
           // Créer une copie des données d'entrée pour éviter de modifier l'original
           let updatedInput = { ...input };
 
@@ -1845,6 +1861,8 @@ const invoiceResolvers = {
           );
         }
 
+        const oldStatus = invoice.status;
+
         // Si la facture passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
         if (invoice.status === "DRAFT" && status === "PENDING") {
           // Snapshot companyInfo à la finalisation
@@ -1852,60 +1870,77 @@ const invoiceResolvers = {
             const org = await getOrganizationInfo(workspaceId);
             invoice.companyInfo = mapOrganizationToCompanyInfo(org);
           }
-          // Sauvegarder le numéro original du brouillon
-          const originalDraftNumber = invoice.number;
 
-          // D'abord changer temporairement le numéro pour éviter les conflits
-          const tempNumber = `TEMP-${Date.now()}`;
-          invoice.number = tempNumber;
-          await invoice.save();
+          // Transaction atomique pour éviter les numéros TEMP orphelins
+          const MAX_RETRIES = 3;
+          for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            const session = await mongoose.startSession();
+            try {
+              await session.withTransaction(async () => {
+                // Sauvegarder le numéro original du brouillon
+                const originalDraftNumber = invoice.number;
 
-          // Récupérer le préfixe de la dernière facture créée (non-DRAFT)
-          const lastInvoice = await Invoice.findOne({
-            workspaceId: workspaceId,
-            status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-          })
-            .sort({ createdAt: -1 })
-            .select("prefix")
-            .lean();
+                // D'abord changer temporairement le numéro pour éviter les conflits
+                invoice.number = `TEMP-${Date.now()}`;
+                await invoice.save({ session });
 
-          // Définir l'année et la date pour les fonctions de génération de numéro
-          const now = new Date();
-          const year = now.getFullYear();
-          const month = String(now.getMonth() + 1).padStart(2, "0");
+                // Récupérer le préfixe de la dernière facture créée (non-DRAFT)
+                const lastInvoice = await Invoice.findOne({
+                  workspaceId: workspaceId,
+                  status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+                }, null, { session })
+                  .sort({ createdAt: -1 })
+                  .select("prefix")
+                  .lean();
 
-          let prefix;
-          if (lastInvoice && lastInvoice.prefix) {
-            // Utiliser le préfixe de la dernière facture
-            prefix = lastInvoice.prefix;
-          } else {
-            // Aucune facture existante, utiliser le préfixe par défaut
-            prefix = `F-${month}${year}`;
+                // Utiliser l'année de issueDate du document, pas la date serveur
+                const year = (invoice.issueDate || new Date()).getFullYear();
+                const month = String((invoice.issueDate || new Date()).getMonth() + 1).padStart(2, "0");
+
+                let prefix;
+                if (lastInvoice && lastInvoice.prefix) {
+                  prefix = lastInvoice.prefix;
+                } else {
+                  prefix = `F-${month}${year}`;
+                }
+
+                console.log(
+                  "🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:",
+                  prefix
+                );
+
+                const newNumber = await generateInvoiceNumber(prefix, {
+                  isValidatingDraft: true,
+                  currentDraftNumber: invoice.number,
+                  originalDraftNumber: originalDraftNumber,
+                  workspaceId: workspaceId,
+                  year: year,
+                  currentInvoiceId: invoice._id,
+                  session,
+                });
+
+                invoice.number = newNumber;
+                invoice.prefix = prefix;
+                invoice.status = status;
+                await invoice.save({ session });
+              });
+              session.endSession();
+              break; // Succès, sortir de la boucle de retry
+            } catch (err) {
+              session.endSession();
+              if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
+                // Duplicate key error, réessayer
+                console.log(`⚠️ [changeInvoiceStatus] E11000 retry attempt ${attempt + 1}`);
+                continue;
+              }
+              throw err;
+            }
           }
-
-          console.log(
-            "🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:",
-            prefix
-          );
-
-          // Utiliser la fonction handleDraftValidation pour respecter la séquence
-          const newNumber = await generateInvoiceNumber(prefix, {
-            isValidatingDraft: true,
-            currentDraftNumber: invoice.number,
-            originalDraftNumber: originalDraftNumber, // Passer le numéro original
-            workspaceId: workspaceId,
-            year: year,
-            currentInvoiceId: invoice._id, // Passer l'ID de la facture actuelle
-          });
-
-          // Mettre à jour le numéro et le préfixe de la facture
-          invoice.number = newNumber;
-          invoice.prefix = prefix;
+        } else {
+          // Pour les autres transitions (pas DRAFT→PENDING)
+          invoice.status = status;
+          await invoice.save();
         }
-
-        const oldStatus = invoice.status;
-        invoice.status = status;
-        await invoice.save();
 
         // === ROUTAGE E-INVOICING (DRAFT → PENDING) ===
         // Les factures passant de DRAFT à PENDING n'ont pas été routées à la création
