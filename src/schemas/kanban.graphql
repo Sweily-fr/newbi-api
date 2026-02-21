@@ -3,6 +3,8 @@ type Board {
   id: ID!
   title: String!
   description: String
+  clientId: ID
+  client: Client
   userId: ID!
   columns: [Column!]!
   tasks: [Task!]!
@@ -53,6 +55,7 @@ type Comment {
   userName: String
   userImage: String
   content: String!
+  mentions: [String!]
   images: [TaskImage!]
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -131,12 +134,14 @@ type TaskImage {
 input CreateBoardInput {
   title: String!
   description: String
+  clientId: ID
 }
 
 input UpdateBoardInput {
   id: ID!
   title: String
   description: String
+  clientId: ID
 }
 
 input CreateColumnInput {
@@ -207,6 +212,7 @@ input ChecklistItemInput {
 
 input CommentInput {
   content: String
+  mentionedUserIds: [String]
 }
 
 input TaskImageInput {

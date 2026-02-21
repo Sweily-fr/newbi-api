@@ -7,9 +7,10 @@ import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import { ObjectId } from "mongodb";
-import { sendTaskAssignmentEmail } from "../utils/mailer.js";
+import { sendTaskAssignmentEmail, sendMentionEmail } from "../utils/mailer.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "./notification.js";
+import Client from "../models/Client.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -1119,32 +1120,27 @@ const resolvers = {
         // Envoyer des notifications aux membres assignés lors de la création
         if (cleanedInput.assignedMembers && cleanedInput.assignedMembers.length > 0) {
           logger.info(`📧 [CreateTask] Envoi notifications pour ${cleanedInput.assignedMembers.length} membres assignés`);
-          
+
+          // Capturer les données du créateur (déjà récupérées plus haut) pour la closure
+          const notifCreatorImage =
+            creatorData?.image ||
+            creatorData?.avatar ||
+            creatorData?.profile?.profilePicture ||
+            creatorData?.profile?.profilePictureUrl ||
+            null;
+          const notifAssignerName = creatorData?.name || user?.name || user?.email || "Un membre de l'équipe";
+
           (async () => {
             try {
               const db = mongoose.connection.db;
-              
-              // Récupérer les données de l'utilisateur créateur
-              const userData = user
-                ? await db.collection("user").findOne({
-                    _id: new mongoose.Types.ObjectId(user.id),
-                  })
-                : null;
-              const userImage =
-                userData?.image ||
-                userData?.avatar ||
-                userData?.profile?.profilePicture ||
-                userData?.profile?.profilePictureUrl ||
-                null;
-              
+
               // Récupérer les infos du board et de la colonne
               const board = await Board.findById(savedTask.boardId);
               const column = await Column.findById(savedTask.columnId);
-              const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
               const boardName = board?.title || "Tableau sans nom";
               const columnName = column?.title || "Colonne";
-              
-              logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
+
+              logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${notifAssignerName}`);
 
               // Envoyer les emails et notifications pour chaque membre assigné
               for (const memberId of cleanedInput.assignedMembers) {
@@ -1155,9 +1151,13 @@ const resolvers = {
                 }
                 
                 try {
-                  const memberData = await db.collection("user").findOne({
-                    _id: new mongoose.Types.ObjectId(memberId),
-                  });
+                  // Lookup sûr : essayer d'abord comme string, puis comme ObjectId
+                  let memberData = await db.collection("user").findOne({ _id: memberId });
+                  if (!memberData && /^[0-9a-fA-F]{24}$/.test(memberId)) {
+                    memberData = await db.collection("user").findOne({
+                      _id: new mongoose.Types.ObjectId(memberId),
+                    });
+                  }
 
                   if (memberData?.email) {
                     const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${savedTask.boardId}?task=${savedTask._id}`;
@@ -1170,8 +1170,8 @@ const resolvers = {
                         taskDescription: savedTask.description || "",
                         boardName: boardName,
                         columnName: columnName,
-                        assignerName: assignerName,
-                        assignerImage: userImage,
+                        assignerName: notifAssignerName,
+                        assignerImage: notifCreatorImage,
                         dueDate: savedTask.dueDate,
                         priority: savedTask.priority || "medium",
                         taskUrl: taskUrl,
@@ -1193,8 +1193,8 @@ const resolvers = {
                           boardName: boardName,
                           columnName: columnName,
                           actorId: user?.id || user?._id,
-                          actorName: assignerName,
-                          actorImage: userImage,
+                          actorName: notifAssignerName,
+                          actorImage: notifCreatorImage,
                           url: taskUrl,
                         });
 
@@ -1608,16 +1608,16 @@ const resolvers = {
             let checklistDescription;
             const parts = [];
             if (addedItems.length > 0) {
-              parts.push(`a ajouté ${addedItems.length > 1 ? "les éléments" : "l'élément"} : ${addedItems.map(i => i.text).join(", ")}`);
+              parts.push(`a ajouté ${addedItems.length > 1 ? "les éléments" : "l'élément"} : ${addedItems.map(i => i.text).join(" ;; ")}`);
             }
             if (removedItems.length > 0) {
-              parts.push(`a supprimé ${removedItems.length > 1 ? "les éléments" : "l'élément"} : ${removedItems.map(i => i.text).join(", ")}`);
+              parts.push(`a supprimé ${removedItems.length > 1 ? "les éléments" : "l'élément"} : ${removedItems.map(i => i.text).join(" ;; ")}`);
             }
             if (completedItems.length > 0) {
-              parts.push(`a coché ${completedItems.length > 1 ? "les éléments" : "l'élément"} : ${completedItems.join(", ")}`);
+              parts.push(`a coché ${completedItems.length > 1 ? "les éléments" : "l'élément"} : ${completedItems.join(" ;; ")}`);
             }
             if (uncompletedItems.length > 0) {
-              parts.push(`a décoché ${uncompletedItems.length > 1 ? "les éléments" : "l'élément"} : ${uncompletedItems.join(", ")}`);
+              parts.push(`a décoché ${uncompletedItems.length > 1 ? "les éléments" : "l'élément"} : ${uncompletedItems.join(" ;; ")}`);
             }
             checklistDescription = parts.join(" et ");
 
@@ -1976,9 +1976,11 @@ const resolvers = {
           }
 
           // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
+          const mentionedUserIds = input.mentionedUserIds || [];
           const comment = {
             userId: user.id,
             content: input.content || '',
+            mentions: mentionedUserIds,
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -1986,6 +1988,7 @@ const resolvers = {
           logger.info("💬 [Kanban] Commentaire créé:", {
             userId: comment.userId,
             content: comment.content,
+            mentions: mentionedUserIds,
           });
 
           task.comments.push(comment);
@@ -2015,6 +2018,112 @@ const resolvers = {
             },
             "Commentaire ajouté"
           );
+
+          // Envoyer les notifications de mention (en arrière-plan)
+          if (mentionedUserIds.length > 0) {
+            logger.info(`📧 [Mention] Début traitement mentions: ${mentionedUserIds.length} mention(s) détectée(s) pour la tâche "${task.title}" (taskId: ${taskId})`);
+            logger.info(`📧 [Mention] IDs mentionnés: ${JSON.stringify(mentionedUserIds)}, auteur: ${user.id}`);
+            (async () => {
+              try {
+                const db = mongoose.connection.db;
+                if (!db) {
+                  logger.error("❌ [Mention] mongoose.connection.db est null/undefined!");
+                  return;
+                }
+
+                // Récupérer les infos de l'auteur du commentaire
+                const authorData = await db.collection("user").findOne({
+                  _id: new mongoose.Types.ObjectId(user.id),
+                });
+                logger.info(`📧 [Mention] Auteur trouvé: ${authorData ? authorData.email : 'NON TROUVÉ'}`);
+                const authorName = authorData?.name || user?.name || user?.email || "Un membre de l'équipe";
+                const authorImage = authorData?.image || null;
+
+                // Récupérer les infos du board
+                const board = await Board.findById(task.boardId);
+                const boardName = board?.title || "Tableau sans nom";
+
+                // Extraire un extrait du commentaire (texte brut, sans HTML)
+                const commentExcerpt = (input.content || '').replace(/<[^>]*>/g, '').substring(0, 150);
+
+                for (const mentionedUserId of mentionedUserIds) {
+                  // Ne pas notifier l'auteur du commentaire
+                  if (mentionedUserId === user.id) {
+                    logger.info(`📧 [Mention] Skip notification pour l'auteur ${mentionedUserId}`);
+                    continue;
+                  }
+
+                  try {
+                    logger.info(`📧 [Mention] Recherche utilisateur mentionné: ${mentionedUserId}`);
+                    const memberData = await db.collection("user").findOne({
+                      _id: new mongoose.Types.ObjectId(mentionedUserId),
+                    });
+                    logger.info(`📧 [Mention] Utilisateur mentionné trouvé: ${memberData ? memberData.email : 'NON TROUVÉ'}`);
+
+                    if (memberData?.email) {
+                      const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${task.boardId}?task=${task._id}`;
+                      logger.info(`📧 [Mention] URL tâche: ${taskUrl}`);
+                      const memberPrefs = memberData?.notificationPreferences?.kanban_mention;
+                      logger.info(`📧 [Mention] Préférences kanban_mention: ${JSON.stringify(memberPrefs)} (email: ${memberPrefs?.email}, push: ${memberPrefs?.push})`);
+
+                      // Envoyer l'email de mention (si la préférence n'est pas désactivée)
+                      if (memberPrefs?.email !== false) {
+                        logger.info(`📧 [Mention] Envoi email à ${memberData.email}...`);
+                        const emailResult = await sendMentionEmail(memberData.email, {
+                          actorName: authorName,
+                          taskTitle: task.title || "Sans titre",
+                          boardName: boardName,
+                          commentExcerpt: commentExcerpt,
+                          taskUrl: taskUrl,
+                        });
+                        logger.info(`📧 [Mention] Résultat envoi email à ${memberData.email}: ${emailResult ? 'SUCCÈS' : 'ÉCHEC'}`);
+                      } else {
+                        logger.info(`📧 [Mention] Email désactivé par préférence pour ${memberData.email}`);
+                      }
+
+                      // Créer une notification in-app (si la préférence n'est pas désactivée)
+                      if (memberPrefs?.push !== false) {
+                        try {
+                          logger.info(`🔔 [Mention] Création notification in-app pour ${mentionedUserId} (workspace: ${finalWorkspaceId})...`);
+                          const notification = await Notification.createMentionNotification({
+                            userId: mentionedUserId,
+                            workspaceId: finalWorkspaceId,
+                            taskId: task._id,
+                            taskTitle: task.title || "Sans titre",
+                            boardId: task.boardId,
+                            boardName: boardName,
+                            actorId: user.id,
+                            actorName: authorName,
+                            actorImage: authorImage,
+                            commentExcerpt: commentExcerpt,
+                            url: taskUrl,
+                          });
+                          logger.info(`🔔 [Mention] Notification créée: ${notification?._id} (type: ${notification?.type})`);
+
+                          // Publier la notification en temps réel
+                          await publishNotification(notification);
+                          logger.info(`🔔 [Mention] Notification publiée en temps réel pour ${memberData.email}`);
+                        } catch (notifError) {
+                          logger.error(`❌ [Mention] Erreur création notification:`, notifError);
+                        }
+                      } else {
+                        logger.info(`🔔 [Mention] Push désactivé par préférence pour ${memberData.email}`);
+                      }
+                    } else {
+                      logger.warn(`⚠️ [Mention] Utilisateur ${mentionedUserId} n'a pas d'email ou non trouvé en base`);
+                    }
+                  } catch (memberError) {
+                    logger.error(`❌ [Mention] Erreur traitement mention pour ${mentionedUserId}:`, memberError);
+                  }
+                }
+                logger.info(`📧 [Mention] Fin du traitement des mentions pour la tâche "${task.title}"`);
+              } catch (error) {
+                logger.error("❌ [Mention] Erreur lors de l'envoi des notifications de mention:", error);
+              }
+            })();
+          } else {
+            logger.info(`📧 [Mention] Aucune mention dans ce commentaire (mentionedUserIds: ${JSON.stringify(input.mentionedUserIds)})`);
+          }
 
           return enrichedTask;
         } catch (error) {
@@ -2467,6 +2576,10 @@ const resolvers = {
   },
 
   Board: {
+    client: async (board) => {
+      if (!board.clientId) return null;
+      return await Client.findById(board.clientId);
+    },
     columns: async (board, _, { user }) => {
       if (!user) throw new AuthenticationError("Not authenticated");
       return await Column.find({
@@ -2481,6 +2594,11 @@ const resolvers = {
         workspaceId: parent.workspaceId,
       }).sort("position");
       return await enrichTasksWithUserInfo(tasks);
+    },
+    client: async (board) => {
+      if (!board.clientId) return null;
+      const Client = mongoose.model('Client');
+      return Client.findOne({ _id: board.clientId, workspaceId: board.workspaceId });
     },
     totalBillableAmount: async (board) => {
       const tasks = await Task.find({

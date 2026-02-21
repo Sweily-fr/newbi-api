@@ -64,12 +64,34 @@ export async function syncConnection(connectionId) {
     let created = 0;
     let updated = 0;
     let deleted = 0;
+    let skipped = 0;
     let errors = 0;
+
+    // Load all Newbi events pushed to this connection to detect bounce-backs
+    // (events pushed to external calendar that come back during pull)
+    const pushedEvents = await Event.find({
+      'externalCalendarLinks.calendarConnectionId': connection._id
+    });
+    const pushedExternalIds = new Set();
+    for (const pe of pushedEvents) {
+      for (const link of pe.externalCalendarLinks) {
+        if (link.calendarConnectionId.toString() === connection._id.toString()) {
+          pushedExternalIds.add(link.externalEventId);
+        }
+      }
+    }
 
     // Upsert events
     for (const eventData of externalEvents) {
       try {
         externalIdsSeen.add(eventData.externalEventId);
+
+        // Skip bounce-backs: events pushed from Newbi that return during pull
+        if (pushedExternalIds.has(eventData.externalEventId)) {
+          skipped++;
+          continue;
+        }
+
         const existing = existingByExternalId.get(eventData.externalEventId);
 
         if (existing) {
@@ -119,10 +141,8 @@ export async function syncConnection(connectionId) {
 
     // Clean up stale externalCalendarLinks: if a pushed Newbi event's
     // external counterpart was deleted from the external calendar, remove the link
+    // (reuses pushedEvents already loaded above for bounce-back detection)
     let unlinked = 0;
-    const pushedEvents = await Event.find({
-      'externalCalendarLinks.calendarConnectionId': connection._id
-    });
 
     for (const pushedEvent of pushedEvents) {
       const staleLinks = pushedEvent.externalCalendarLinks.filter(
@@ -151,9 +171,9 @@ export async function syncConnection(connectionId) {
     connection.status = 'active';
     await connection.save();
 
-    logger.info(`[CalendarSync] Sync terminée pour ${connectionId}: +${created} ~${updated} -${deleted} ⊘${unlinked} (${errors} erreur(s))`);
+    logger.info(`[CalendarSync] Sync terminée pour ${connectionId}: +${created} ~${updated} -${deleted} ⊘${unlinked} ⤬${skipped} (${errors} erreur(s))`);
 
-    return { created, updated, deleted, unlinked, errors, total: externalEvents.length };
+    return { created, updated, deleted, unlinked, skipped, errors, total: externalEvents.length };
   } catch (error) {
     logger.error(`Calendar sync failed for connection ${connectionId}:`, error.message);
     const frenchError = translateSyncError(error, connection.provider);

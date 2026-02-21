@@ -3,6 +3,16 @@
  * Centralise le mapping pour éviter la duplication dans chaque resolver.
  */
 
+const URL_REGEX = new RegExp(
+  "^(https?:\\/\\/)?" +
+    "((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|" +
+    "((\\d{1,3}\\.){3}\\d{1,3}))" +
+    "(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*" +
+    "(\\?[;&a-z\\d%_.~+=-]*)?" +
+    "(\\#[-a-z\\d_]*)?$",
+  "i"
+);
+
 const VALID_COMPANY_STATUSES = ['SARL', 'SAS', 'EURL', 'SASU', 'EI', 'EIRL', 'SA', 'SNC', 'SCI', 'SCOP', 'ASSOCIATION', 'AUTO_ENTREPRENEUR', 'AUTRE'];
 const VALID_TRANSACTION_CATEGORIES = ['GOODS', 'SERVICES', 'MIXED'];
 const VALID_VAT_CONDITIONS = ['ENCAISSEMENTS', 'DEBITS', 'EXONERATION', 'NONE'];
@@ -86,7 +96,7 @@ export function mapOrganizationToCompanyInfo(organization) {
     name: organization.companyName || '',
     email: organization.companyEmail || '',
     phone: organization.companyPhone || '',
-    website: organization.website || '',
+    website: (organization.website && URL_REGEX.test(organization.website)) ? organization.website : '',
     address: {
       street: organization.addressStreet || '',
       city: organization.addressCity || '',

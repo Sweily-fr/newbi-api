@@ -111,6 +111,8 @@ const commentSchema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  // IDs des utilisateurs mentionnés dans le commentaire
+  mentions: [String],
   // Images attachées au commentaire
   images: [taskImageSchema],
   isExternal: {
@@ -155,14 +157,20 @@ const activitySchema = new mongoose.Schema({
 
 // Schéma du tableau (Board)
 const boardSchema = new mongoose.Schema({
-  title: { 
-    type: String, 
+  title: {
+    type: String,
     required: [true, 'Le titre est requis'],
     trim: true
   },
   description: {
     type: String,
     trim: true
+  },
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client',
+    default: null,
+    index: true
   },
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
@@ -171,12 +179,12 @@ const boardSchema = new mongoose.Schema({
     required: true,
     index: true
   },
-  userId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: true 
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   }
-}, { 
+}, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }

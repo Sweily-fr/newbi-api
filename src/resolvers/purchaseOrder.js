@@ -377,6 +377,22 @@ const purchaseOrderResolvers = {
           );
         }
 
+        // Validation : empêcher le changement d'année de issueDate sur un bon de commande confirmé
+        if (
+          input.issueDate &&
+          po.status !== "DRAFT" &&
+          po.issueDate
+        ) {
+          const oldYear = new Date(po.issueDate).getFullYear();
+          const newYear = new Date(input.issueDate).getFullYear();
+          if (oldYear !== newYear) {
+            throw new AppError(
+              `Impossible de changer l'année d'émission d'un bon de commande confirmé (${oldYear} → ${newYear}). Cela casserait la séquence de numérotation.`,
+              ERROR_CODES.VALIDATION_ERROR
+            );
+          }
+        }
+
         // Si des items sont fournis, recalculer les totaux
         if (input.items) {
           const totals = calculatePurchaseOrderTotals(
@@ -448,6 +464,8 @@ const purchaseOrderResolvers = {
           throw createStatusTransitionError("Bon de commande", po.status, status);
         }
 
+        const oldStatus = po.status;
+
         // Si transition DRAFT → CONFIRMED, snapshot companyInfo et générer un numéro séquentiel
         if (po.status === "DRAFT" && status === "CONFIRMED") {
           // Snapshot companyInfo à la finalisation
@@ -455,30 +473,52 @@ const purchaseOrderResolvers = {
             const org = await getOrganizationInfo(workspaceId);
             po.companyInfo = mapOrganizationToCompanyInfo(org);
           }
-          let prefix = po.prefix;
-          if (!prefix) {
-            const now = new Date();
-            const year = now.getFullYear();
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            prefix = `BC-${year}${month}`;
+
+          // Transaction atomique pour éviter les numéros TEMP orphelins
+          const MAX_RETRIES = 3;
+          for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            const session = await mongoose.startSession();
+            try {
+              await session.withTransaction(async () => {
+                let prefix = po.prefix;
+                if (!prefix) {
+                  const year = (po.issueDate || new Date()).getFullYear();
+                  const month = String((po.issueDate || new Date()).getMonth() + 1).padStart(2, '0');
+                  prefix = `BC-${year}${month}`;
+                }
+
+                const newNumber = await generatePurchaseOrderNumber(prefix, {
+                  workspaceId: po.workspaceId,
+                  userId: user.id,
+                  year: (po.issueDate || new Date()).getFullYear(),
+                  session,
+                });
+
+                // Utiliser un numéro temporaire pour éviter les conflits d'unicité
+                po.number = `TEMP-${Date.now()}`;
+                await po.save({ session });
+
+                po.number = newNumber;
+                po.prefix = prefix;
+                po.status = status;
+                await po.save({ session });
+              });
+              session.endSession();
+              break;
+            } catch (err) {
+              session.endSession();
+              if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
+                console.log(`⚠️ [changePurchaseOrderStatus] E11000 retry attempt ${attempt + 1}`);
+                continue;
+              }
+              throw err;
+            }
           }
-
-          const newNumber = await generatePurchaseOrderNumber(prefix, {
-            workspaceId: po.workspaceId,
-            userId: user.id,
-          });
-
-          // Utiliser un numéro temporaire pour éviter les conflits d'unicité
-          const tempNumber = `TEMP-${Date.now()}`;
-          po.number = tempNumber;
+        } else {
+          po.status = status;
           await po.save();
-
-          po.number = newNumber;
-          po.prefix = prefix;
         }
 
-        po.status = status;
-        await po.save();
         return await po.populate("createdBy");
       })
     ),
@@ -519,16 +559,16 @@ const purchaseOrderResolvers = {
           number,
           prefix,
           client: quoteObj.client,
-          companyInfo: quoteObj.companyInfo || mapOrganizationToCompanyInfo(organization),
+          companyInfo: mapOrganizationToCompanyInfo(organization),
           items: quoteObj.items,
           status: "CONFIRMED",
           issueDate: new Date(),
-          validUntil: quote.validUntil || null,
-          headerNotes: quote.headerNotes,
-          footerNotes: quote.footerNotes,
-          termsAndConditions: quote.termsAndConditions,
-          termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle,
-          termsAndConditionsLink: quote.termsAndConditionsLink,
+          validUntil: (quote.validUntil && new Date(quote.validUntil) >= new Date()) ? quote.validUntil : null,
+          headerNotes: organization.purchaseOrderHeaderNotes || organization.documentHeaderNotes || "",
+          footerNotes: organization.purchaseOrderFooterNotes || organization.documentFooterNotes || "",
+          termsAndConditions: organization.purchaseOrderTermsAndConditions || organization.documentTermsAndConditions || "",
+          termsAndConditionsLinkTitle: "",
+          termsAndConditionsLink: "",
           discount: quote.discount,
           discountType: quote.discountType,
           customFields: quoteObj.customFields,
@@ -542,11 +582,15 @@ const purchaseOrderResolvers = {
           workspaceId,
           createdBy: user.id,
           sourceQuoteId: quote._id,
-          appearance: quoteObj.appearance,
+          appearance: {
+            textColor: organization.purchaseOrderTextColor || organization.documentTextColor || "#000000",
+            headerTextColor: organization.purchaseOrderHeaderTextColor || organization.documentHeaderTextColor || "#ffffff",
+            headerBgColor: organization.purchaseOrderHeaderBgColor || organization.documentHeaderBgColor || "#5b50FF",
+          },
           shipping: quoteObj.shipping,
           isReverseCharge: quote.isReverseCharge || false,
-          clientPositionRight: quote.clientPositionRight || false,
-          showBankDetails: quote.showBankDetails || false,
+          clientPositionRight: organization.purchaseOrderClientPositionRight || false,
+          showBankDetails: organization.showBankDetails || false,
           retenueGarantie: quote.retenueGarantie || 0,
           escompte: quote.escompte || 0,
         });
@@ -597,11 +641,11 @@ const purchaseOrderResolvers = {
           status: "DRAFT",
           issueDate: new Date(),
           dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
-          headerNotes: po.headerNotes,
-          footerNotes: po.footerNotes,
-          termsAndConditions: po.termsAndConditions,
-          termsAndConditionsLinkTitle: po.termsAndConditionsLinkTitle,
-          termsAndConditionsLink: po.termsAndConditionsLink,
+          headerNotes: organization.invoiceHeaderNotes || organization.documentHeaderNotes || "",
+          footerNotes: organization.invoiceFooterNotes || organization.documentFooterNotes || "",
+          termsAndConditions: organization.invoiceTermsAndConditions || organization.documentTermsAndConditions || "",
+          termsAndConditionsLinkTitle: "",
+          termsAndConditionsLink: "",
           purchaseOrderNumber: `${po.prefix}${po.number}`,
           discount: po.discount,
           discountType: po.discountType,
@@ -617,9 +661,13 @@ const purchaseOrderResolvers = {
           createdBy: user.id,
           isReverseCharge: po.isReverseCharge || false,
           shipping: poObj.shipping,
-          appearance: poObj.appearance,
-          clientPositionRight: po.clientPositionRight || false,
-          showBankDetails: po.showBankDetails || false,
+          appearance: {
+            textColor: organization.invoiceTextColor || organization.documentTextColor || "#000000",
+            headerTextColor: organization.invoiceHeaderTextColor || organization.documentHeaderTextColor || "#ffffff",
+            headerBgColor: organization.invoiceHeaderBgColor || organization.documentHeaderBgColor || "#5b50FF",
+          },
+          clientPositionRight: organization.invoiceClientPositionRight || false,
+          showBankDetails: false, // Les coordonnées bancaires seront ajoutées lors de l'édition de la facture
           retenueGarantie: po.retenueGarantie || 0,
           escompte: po.escompte || 0,
         });

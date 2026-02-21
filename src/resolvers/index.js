@@ -46,11 +46,13 @@ import clientSegmentResolvers from "./clientSegment.js";
 import crmEmailAutomationResolvers from "./crmEmailAutomation.js";
 import notificationResolvers from "./notification.js";
 import calendarConnectionResolvers from "./calendarConnection.js";
+import calendarColorLabelsResolvers from "./calendarColorLabels.js";
 import documentAutomationResolvers from "./documentAutomation.js";
 import purchaseInvoiceResolvers from "./purchaseInvoice.js";
 import treasuryForecastResolvers from "./treasuryForecast.js";
 import purchaseOrderResolvers from "./purchaseOrder.js";
 import importedPurchaseOrderResolvers from "./importedPurchaseOrder.js";
+import financialAnalyticsResolvers from "./financialAnalytics.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -100,11 +102,13 @@ const resolvers = mergeResolvers([
   crmEmailAutomationResolvers,
   notificationResolvers,
   calendarConnectionResolvers,
+  calendarColorLabelsResolvers,
   documentAutomationResolvers,
   purchaseInvoiceResolvers,
   treasuryForecastResolvers,
   purchaseOrderResolvers,
   importedPurchaseOrderResolvers,
+  financialAnalyticsResolvers,
 ]);
 
 export default resolvers;

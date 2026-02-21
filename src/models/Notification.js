@@ -114,6 +114,39 @@ notificationSchema.statics.createTaskAssignedNotification = async function({
   });
 };
 
+// Méthode statique pour créer une notification de mention
+notificationSchema.statics.createMentionNotification = async function({
+  userId,
+  workspaceId,
+  taskId,
+  taskTitle,
+  boardId,
+  boardName,
+  actorId,
+  actorName,
+  actorImage,
+  commentExcerpt,
+  url,
+}) {
+  return this.create({
+    userId,
+    workspaceId,
+    type: 'MENTION',
+    title: 'Vous avez été mentionné',
+    message: `${actorName} vous a mentionné dans un commentaire sur "${taskTitle}"${commentExcerpt ? ` : "${commentExcerpt}"` : ''}`,
+    data: {
+      taskId,
+      taskTitle,
+      boardId,
+      boardName,
+      actorId,
+      actorName,
+      actorImage,
+      url,
+    },
+  });
+};
+
 const Notification = mongoose.model('Notification', notificationSchema);
 
 export default Notification;

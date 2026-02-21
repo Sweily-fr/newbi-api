@@ -39,6 +39,7 @@ type Invoice {
   shipping: Shipping
   isReverseCharge: Boolean
   clientPositionRight: Boolean
+  operationType: String
   createdBy: User!
   stripeInvoiceId: String
   linkedTransactionId: ID
@@ -104,6 +105,9 @@ input CreateInvoiceInput {
   shipping: ShippingInput
   isReverseCharge: Boolean
   clientPositionRight: Boolean
+  operationType: String
+  sourcePurchaseOrderId: ID
+  sourceQuoteId: ID
 }
 
 input UpdateInvoiceInput {
@@ -137,6 +141,7 @@ input UpdateInvoiceInput {
   shipping: ShippingInput
   isReverseCharge: Boolean
   clientPositionRight: Boolean
+  operationType: String
 }
 
 extend type Query {

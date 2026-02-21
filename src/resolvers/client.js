@@ -1,4 +1,5 @@
 import Client from "../models/Client.js";
+import ClientCustomField from "../models/ClientCustomField.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import User from "../models/User.js";
@@ -296,6 +297,26 @@ const clientResolvers = {
 
         // Tracker les changements
         const changes = [];
+
+        // Récupérer les noms des champs personnalisés si customFields a changé
+        let customFieldNamesMap = {};
+        if (updateData.customFields) {
+          const fieldIds = [
+            ...(client.customFields || []).map((cf) => cf.fieldId),
+            ...updateData.customFields.map((cf) => cf.fieldId),
+          ].filter(Boolean);
+
+          if (fieldIds.length > 0) {
+            const customFieldDefs = await ClientCustomField.find({
+              _id: { $in: fieldIds },
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            });
+            customFieldDefs.forEach((def) => {
+              customFieldNamesMap[def._id.toString()] = def.name;
+            });
+          }
+        }
+
         Object.keys(updateData).forEach((key) => {
           if (key !== "notes" && key !== "activity") {
             const oldValue = client[key];
@@ -304,21 +325,51 @@ const clientResolvers = {
 
             // Vérifier si la valeur a réellement changé
             if (hasChanged(oldValue, newValue)) {
-              const fieldNames = {
-                name: "le nom",
-                firstName: "le prénom",
-                lastName: "le nom de famille",
-                email: "l'email",
-                phone: "le téléphone",
-                address: "l'adresse de facturation",
-                hasDifferentShippingAddress:
-                  "l'option adresse de livraison différente",
-                shippingAddress: "l'adresse de livraison",
-                siret: "le SIRET",
-                vatNumber: "le numéro de TVA",
-                type: "le type",
-              };
-              changes.push(fieldNames[key] || key);
+              if (key === "customFields") {
+                // Identifier quels champs personnalisés ont changé
+                // .toString() pour uniformiser ObjectId vs string
+                const oldFields = new Map(
+                  (oldValue || []).map((cf) => [cf.fieldId?.toString(), cf.value])
+                );
+                const newFields = new Map(
+                  (newValue || []).map((cf) => [cf.fieldId?.toString(), cf.value])
+                );
+
+                const allFieldIds = new Set([
+                  ...oldFields.keys(),
+                  ...newFields.keys(),
+                ]);
+                const changedFieldNames = [];
+                for (const fieldId of allFieldIds) {
+                  if (oldFields.get(fieldId) !== newFields.get(fieldId)) {
+                    const name = customFieldNamesMap[fieldId];
+                    if (name) {
+                      changedFieldNames.push(`le champ "${name}"`);
+                    }
+                  }
+                }
+                if (changedFieldNames.length > 0) {
+                  changes.push(...changedFieldNames);
+                } else {
+                  changes.push("les champs personnalisés");
+                }
+              } else {
+                const fieldNames = {
+                  name: "le nom",
+                  firstName: "le prénom",
+                  lastName: "le nom de famille",
+                  email: "l'email",
+                  phone: "le téléphone",
+                  address: "l'adresse de facturation",
+                  hasDifferentShippingAddress:
+                    "l'option adresse de livraison différente",
+                  shippingAddress: "l'adresse de livraison",
+                  siret: "le SIRET",
+                  vatNumber: "le numéro de TVA",
+                  type: "le type",
+                };
+                changes.push(fieldNames[key] || key);
+              }
             }
 
             client[key] = newValue;
@@ -400,6 +451,45 @@ const clientResolvers = {
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
+    assignClientMembers: requireWrite("clients")(
+      async (_, { id, memberIds, workspaceId: inputWorkspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+
+        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          throw new AppError(
+            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+            ERROR_CODES.FORBIDDEN
+          );
+        }
+        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+
+        const client = await Client.findOne({
+          _id: id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        });
+
+        if (!client) throw createNotFoundError("Client");
+
+        client.assignedMembers = memberIds;
+
+        client.activity.push({
+          id: new mongoose.Types.ObjectId().toString(),
+          userId: user.id,
+          userName: user.name || user.email,
+          userImage: user.image || null,
+          type: "assigned",
+          description: memberIds.length > 0
+            ? `a assigné ${memberIds.length} membre${memberIds.length > 1 ? "s" : ""}`
+            : "a retiré tous les membres assignés",
+          createdAt: new Date(),
+        });
+
+        await client.save();
+        return client;
+      }
+    ),
+
+    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     blockClient: requireWrite("clients")(
       async (_, { id, reason, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
@@ -437,7 +527,17 @@ const clientResolvers = {
           createdAt: new Date(),
         });
 
-        await client.save();
+        try {
+          await client.save();
+        } catch (saveError) {
+          if (saveError.name === 'ValidationError') {
+            throw new AppError(
+              "Impossible de bloquer ce contact en raison de données incohérentes dans son historique d'activité. Veuillez contacter le support.",
+              ERROR_CODES.BAD_REQUEST
+            );
+          }
+          throw saveError;
+        }
         return client;
       }
     ),
@@ -480,7 +580,17 @@ const clientResolvers = {
           createdAt: new Date(),
         });
 
-        await client.save();
+        try {
+          await client.save();
+        } catch (saveError) {
+          if (saveError.name === 'ValidationError') {
+            throw new AppError(
+              "Impossible de débloquer ce contact en raison de données incohérentes dans son historique d'activité. Veuillez contacter le support.",
+              ERROR_CODES.BAD_REQUEST
+            );
+          }
+          throw saveError;
+        }
         return client;
       }
     ),
@@ -687,6 +797,8 @@ const clientResolvers = {
       parent.createdAt?.toISOString?.() || parent.createdAt,
     updatedAt: (parent) =>
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
+    blockedAt: (parent) =>
+      parent.blockedAt?.toISOString?.() || parent.blockedAt,
   },
 
   ClientNote: {
