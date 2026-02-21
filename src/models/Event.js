@@ -29,7 +29,6 @@ const eventSchema = new mongoose.Schema({
   // Apparence
   color: {
     type: String,
-    enum: ['sky', 'amber', 'orange', 'emerald', 'violet', 'rose', 'blue', 'green', 'red', 'purple', 'pink', 'yellow'],
     default: 'sky'
   },
   
