@@ -5,12 +5,18 @@ import { createNotFoundError, AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
 
 /**
+ * Escape special regex characters in a string
+ */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * Build a MongoDB query from segment rules
  */
 function buildSegmentQuery(rules, matchType, workspaceId) {
   const conditions = rules.map((rule) => {
-    // Map dot-notation fields
-    const field = rule.field.replace("address_", "address.");
+    const field = rule.field;
     const value = rule.value;
 
     switch (rule.operator) {
@@ -19,13 +25,13 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
       case "not_equals":
         return { [field]: { $ne: value } };
       case "contains":
-        return { [field]: { $regex: value, $options: "i" } };
+        return { [field]: { $regex: escapeRegex(value), $options: "i" } };
       case "not_contains":
-        return { [field]: { $not: { $regex: value, $options: "i" } } };
+        return { [field]: { $not: { $regex: escapeRegex(value), $options: "i" } } };
       case "starts_with":
-        return { [field]: { $regex: `^${value}`, $options: "i" } };
+        return { [field]: { $regex: `^${escapeRegex(value)}`, $options: "i" } };
       case "ends_with":
-        return { [field]: { $regex: `${value}$`, $options: "i" } };
+        return { [field]: { $regex: `${escapeRegex(value)}$`, $options: "i" } };
       case "greater_than":
         return { [field]: { $gt: Number(value) } };
       case "less_than":
@@ -47,6 +53,10 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
         daysAgo.setDate(daysAgo.getDate() - Number(value));
         return { [field]: { $gte: daysAgo } };
       }
+      case "assigned_to":
+        return { [field]: value };
+      case "not_assigned_to":
+        return { [field]: { $ne: value } };
       default:
         return {};
     }
@@ -118,9 +128,10 @@ export const clientSegmentResolvers = {
 
         // Add search if provided
         if (search) {
+          const escapedSearch = escapeRegex(search);
           const searchConditions = [
-            { name: { $regex: search, $options: "i" } },
-            { email: { $regex: search, $options: "i" } },
+            { name: { $regex: escapedSearch, $options: "i" } },
+            { email: { $regex: escapedSearch, $options: "i" } },
           ];
           if (query.$and) {
             query.$and.push({ $or: searchConditions });

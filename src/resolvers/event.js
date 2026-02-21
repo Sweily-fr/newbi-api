@@ -94,6 +94,7 @@ const eventResolvers = {
             visibility: event.visibility || 'workspace',
             isReadOnly: event.isReadOnly || false,
             externalEventId: event.externalEventId || null,
+            calendarConnectionId: event.calendarConnectionId?.toString() || null,
             externalCalendarLinks: (event.externalCalendarLinks || []).map(link => ({
               provider: link.provider,
               externalEventId: link.externalEventId,
@@ -122,11 +123,32 @@ const eventResolvers = {
         });
 
 
+        // Deduplicate bounce-backs: external events that are copies of pushed Newbi events
+        // Collect all externalEventIds from Newbi events' externalCalendarLinks
+        const pushedIds = new Set();
+        for (const event of serializedEvents) {
+          if ((event.externalCalendarLinks || []).length > 0) {
+            for (const link of event.externalCalendarLinks) {
+              if (link.calendarConnectionId && link.externalEventId) {
+                pushedIds.add(`${link.calendarConnectionId}:${link.externalEventId}`);
+              }
+            }
+          }
+        }
+        // Filter out external events that match a pushed Newbi event
+        const deduplicatedEvents = serializedEvents.filter(event => {
+          if (event.source !== 'newbi' && event.externalEventId && event.calendarConnectionId) {
+            const key = `${event.calendarConnectionId}:${event.externalEventId}`;
+            if (pushedIds.has(key)) return false;
+          }
+          return true;
+        });
+
         return {
           success: true,
-          events: serializedEvents,
-          totalCount,
-          message: `${events.length} événement(s) récupéré(s)`
+          events: deduplicatedEvents,
+          totalCount: deduplicatedEvents.length,
+          message: `${deduplicatedEvents.length} événement(s) récupéré(s)`
         };
       } catch (error) {
         logger.error('Erreur lors de la récupération des événements:', error);

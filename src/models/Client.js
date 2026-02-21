@@ -179,6 +179,10 @@ const clientSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       required: true,
     },
+    // Membres assignés au client (array d'IDs utilisateur)
+    assignedMembers: [{
+      type: String,
+    }],
     // Blocage du client
     isBlocked: {
       type: Boolean,
@@ -335,8 +339,10 @@ const clientSchema = new mongoose.Schema(
             "invoice_reminder_sent",
             "document_email_sent",
             "reminder_created",
+            "assigned",
             "blocked",
             "unblocked",
+            "automation_executed",
           ],
           required: true,
         },
@@ -347,7 +353,6 @@ const clientSchema = new mongoose.Schema(
         userId: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "User",
-          required: true,
         },
         userName: String,
         userImage: String,

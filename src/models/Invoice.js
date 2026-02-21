@@ -355,6 +355,13 @@ const invoiceSchema = new mongoose.Schema(
       min: 0,
       max: 100,
     },
+    // Nature de l'opération (réforme facturation électronique 2026)
+    operationType: {
+      type: String,
+      enum: ['LB', 'PS', 'LBPS'],
+      default: null,
+    },
+
     // Rapprochement avec transaction bancaire
     linkedTransactionId: {
       type: mongoose.Schema.Types.ObjectId,
