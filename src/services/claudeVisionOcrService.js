@@ -16,10 +16,21 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Prompt système pour l'extraction de factures
-const INVOICE_EXTRACTION_PROMPT = `Tu es un expert en extraction de données de factures françaises. Analyse cette facture et extrais TOUTES les informations disponibles.
+// Prompt système pour l'extraction de factures/reçus/tickets
+const INVOICE_EXTRACTION_PROMPT = `Tu es un expert en extraction de données de documents financiers français (factures, reçus, tickets de caisse, notes de frais).
 
-IMPORTANT: Retourne UNIQUEMENT un JSON valide, sans texte avant ou après.
+IMPORTANT - INSTRUCTIONS CRITIQUES:
+- Retourne UNIQUEMENT un JSON valide, sans texte avant ou après.
+- Extrais TOUTES les informations visibles sur le document, même partielles.
+- Ne laisse AUCUN champ vide si l'information est présente sur le document.
+- Pour les reçus/tickets de caisse, le nom du magasin/commerce EST le vendor.name.
+- OBLIGATION: Tu DOIS extraire au minimum le montant total (total_ttc), la date, et le nom du fournisseur.
+- Lis CHAQUE LIGNE du document attentivement, y compris le haut, le bas, et les petits caractères.
+- Si tu vois un montant avec "TOTAL", "A PAYER", "NET A PAYER", "MONTANT" → c'est le total_ttc.
+- Si tu vois "TVA", "T.V.A", un pourcentage → extrais le montant et le taux de TVA.
+- Si tu vois une date sous quelque forme que ce soit (JJ/MM/AAAA, JJ.MM.AAAA, JJ-MM-AAAA, etc.) → extrais-la.
+- Pour les tickets de caisse: le nom en GROS en haut = vendor.name, le total en bas = total_ttc.
+- NE RETOURNE JAMAIS un JSON avec seulement le nom du fournisseur. Il y a TOUJOURS un montant et une date sur un document financier.
 
 Structure JSON attendue:
 {
@@ -128,7 +139,7 @@ class ClaudeVisionOcrService {
   constructor() {
     this.apiKey = process.env.ANTHROPIC_API_KEY;
     this.defaultModel = MODELS.SONNET;
-    this.maxRetries = 1;
+    this.maxRetries = 2;
     this.client = null;
     this.parallelBatchSize = 40; // Nombre de requêtes parallèles
 
@@ -308,7 +319,8 @@ class ClaudeVisionOcrService {
               doc.base64,
               doc.mediaType,
               doc.url,
-              doc.hash
+              doc.hash,
+              { useBatchModel: true }
             );
 
             // Sauvegarder en cache si disponible
@@ -381,13 +393,14 @@ class ClaudeVisionOcrService {
    * NOUVELLE MÉTHODE: Traitement depuis base64 déjà téléchargé
    * Avec modèle adaptatif (Haiku/Sonnet)
    */
-  async processFromBase64(base64Data, mimeType, originalUrl, hash = null) {
-    // Détecter la complexité pour choisir le modèle
+  async processFromBase64(base64Data, mimeType, originalUrl, hash = null, { useBatchModel = false } = {}) {
+    // Détecter la complexité
     const complexity = this.detectInvoiceComplexity(base64Data);
-    const model = complexity === "simple" ? MODELS.HAIKU : MODELS.SONNET;
-    const maxTokens = complexity === "simple" ? 2000 : 4096;
+    // En mode batch, on utilise Haiku pour les documents simples ; sinon toujours Sonnet pour la qualité
+    const model = useBatchModel && complexity === "simple" ? MODELS.HAIKU : MODELS.SONNET;
+    const maxTokens = 4096;
 
-    console.log(`   📄 ${complexity === "simple" ? "🐇" : "🎵"} ${originalUrl.split("/").pop()?.substring(0, 30)}... (${model.includes("haiku") ? "Haiku" : "Sonnet"})`);
+    console.log(`   📄 ${model.includes("haiku") ? "🐇" : "🎵"} ${originalUrl.split("/").pop()?.substring(0, 30)}... (${model.includes("haiku") ? "Haiku" : "Sonnet"})`);
 
     // Construire le message
     const claudeMediaType = mimeType === "application/pdf" ? "application/pdf" : mimeType;
@@ -402,7 +415,30 @@ class ClaudeVisionOcrService {
       },
       {
         type: "text",
-        text: "Analyse cette facture et extrais toutes les informations en JSON.",
+        text: `Analyse ce document financier avec une EXTRÊME ATTENTION. Lis chaque ligne, chaque zone, chaque coin du document.
+
+ÉTAPES OBLIGATOIRES:
+1. IDENTIFIE le type de document (facture, reçu, ticket de caisse, note de frais)
+2. LIS le haut du document → le nom/logo = vendor.name
+3. LIS la date → convertis en YYYY-MM-DD (attention: format français JJ/MM/AAAA)
+4. LIS chaque ligne d'article avec description, quantité, prix unitaire, total
+5. LIS le bas du document → "TOTAL", "A PAYER", "NET A PAYER" = total_ttc
+6. CHERCHE les montants HT, TVA, TTC séparément
+7. CHERCHE le moyen de paiement (CB, carte, espèces, virement, chèque)
+8. CHERCHE un numéro de facture/ticket
+
+EXTRAIS OBLIGATOIREMENT:
+- vendor.name: le nom du commerce/entreprise (TOUJOURS présent sur un document)
+- totals.total_ttc: le montant total TTC (TOUJOURS présent - cherche "TOTAL", "A PAYER", le dernier montant)
+- totals.total_ht: le montant hors taxes si indiqué
+- totals.total_vat: le montant de TVA si indiqué
+- invoice_date: la date au format YYYY-MM-DD (TOUJOURS présente)
+- items: TOUTES les lignes d'articles/services avec descriptions et prix
+- payment_details.method: CB/CARD/CASH/TRANSFER/CHECK
+- category: la catégorie de dépense la plus appropriée
+
+Si c'est un ticket de caisse: le nom en GROS en haut = vendor.name, le montant "TOTAL" en bas = total_ttc.
+Ne retourne QUE le JSON, rien d'autre.`,
       },
     ];
 
@@ -413,6 +449,7 @@ class ClaudeVisionOcrService {
         const response = await this.client.messages.create({
           model,
           max_tokens: maxTokens,
+          temperature: 0,
           system: INVOICE_EXTRACTION_PROMPT,
           messages: [{ role: "user", content: messageContent }],
         });
@@ -423,6 +460,23 @@ class ClaudeVisionOcrService {
         }
 
         const extractedData = this.parseJsonResponse(textContent.text);
+
+        // Validation: vérifier que les champs critiques sont extraits
+        const hasAmount = extractedData.totals?.total_ttc || extractedData.totals?.total_ht;
+        const hasDate = extractedData.invoice_date;
+        const hasVendor = extractedData.vendor?.name;
+
+        if (!hasAmount || !hasDate) {
+          console.warn(`⚠️ OCR extraction incomplète: amount=${!!hasAmount}, date=${!!hasDate}, vendor=${!!hasVendor}`);
+          // Si on a seulement le vendor et rien d'autre, retenter avec un prompt plus insistant
+          if (hasVendor && !hasAmount && !hasDate && attempt < this.maxRetries) {
+            console.log(`🔄 Relance OCR car données insuffisantes (seulement vendor: ${extractedData.vendor?.name})`);
+            lastError = new Error("Extraction incomplète - retry");
+            const delay = 1000;
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+        }
 
         return {
           success: true,
@@ -528,13 +582,14 @@ class ClaudeVisionOcrService {
         vendor_name: data.vendor?.name,
         client_name: data.client?.name,
         client_number: data.client?.client_number,
-        amount: data.totals?.total_ttc,
+        amount: data.totals?.total_ttc || data.totals?.total_ht || 0,
         amount_ht: data.totals?.total_ht,
-        tax_amount: data.totals?.total_vat,
+        tax_amount: data.totals?.total_vat || 0,
+        tax_rate: data.tax_details?.[0]?.rate || (data.totals?.total_vat && data.totals?.total_ht ? Math.round((data.totals.total_vat / data.totals.total_ht) * 100) : null),
         currency: data.currency || "EUR",
         category: data.category || "OTHER",
-        payment_method: data.payment_details?.method?.toLowerCase() || "unknown",
-        description: data.notes || "Facture importée via Claude Vision",
+        payment_method: data.payment_details?.method?.toLowerCase() || "card",
+        description: data.items?.[0]?.description || data.notes || (data.vendor?.name ? `Achat chez ${data.vendor.name}` : "Document importé via OCR"),
       },
 
       extracted_fields: {
