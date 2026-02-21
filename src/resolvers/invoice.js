@@ -1156,6 +1156,8 @@ const invoiceResolvers = {
               validationErrors[key] = error.errors[key].message;
             });
 
+            console.error("⚠️ Détails de validation Mongoose:", JSON.stringify(validationErrors, null, 2));
+
             throw createValidationError(
               "La facture contient des erreurs de validation",
               validationErrors
