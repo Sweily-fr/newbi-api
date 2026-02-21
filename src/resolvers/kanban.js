@@ -10,6 +10,7 @@ import { ObjectId } from "mongodb";
 import { sendTaskAssignmentEmail, sendMentionEmail } from "../utils/mailer.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "./notification.js";
+import Client from "../models/Client.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -2575,6 +2576,10 @@ const resolvers = {
   },
 
   Board: {
+    client: async (board) => {
+      if (!board.clientId) return null;
+      return await Client.findById(board.clientId);
+    },
     columns: async (board, _, { user }) => {
       if (!user) throw new AuthenticationError("Not authenticated");
       return await Column.find({
