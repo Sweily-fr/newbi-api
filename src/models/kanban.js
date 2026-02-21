@@ -157,8 +157,8 @@ const activitySchema = new mongoose.Schema({
 
 // Schéma du tableau (Board)
 const boardSchema = new mongoose.Schema({
-  title: { 
-    type: String, 
+  title: {
+    type: String,
     required: [true, 'Le titre est requis'],
     trim: true
   },
@@ -179,12 +179,12 @@ const boardSchema = new mongoose.Schema({
     required: true,
     index: true
   },
-  userId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
-    required: true 
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   }
-}, { 
+}, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
