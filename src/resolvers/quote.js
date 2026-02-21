@@ -765,6 +765,22 @@ const quoteResolvers = {
         );
       }
 
+      // Validation : empêcher le changement d'année de issueDate sur un devis finalisé
+      if (
+        input.issueDate &&
+        quote.status !== "DRAFT" &&
+        quote.issueDate
+      ) {
+        const oldYear = new Date(quote.issueDate).getFullYear();
+        const newYear = new Date(input.issueDate).getFullYear();
+        if (oldYear !== newYear) {
+          throw createValidationError(
+            `Impossible de changer l'année d'émission d'un devis finalisé (${oldYear} → ${newYear}). Cela casserait la séquence de numérotation.`,
+            { issueDate: `L'année d'émission ne peut pas être modifiée de ${oldYear} à ${newYear} sur un devis finalisé.` }
+          );
+        }
+      }
+
       // Vérifier si un nouveau numéro est fourni
       if (input.number && input.number !== quote.number) {
         // Vérifier si le numéro fourni existe déjà
@@ -936,6 +952,8 @@ const quoteResolvers = {
         throw createStatusTransitionError("Devis", quote.status, status);
       }
 
+      const oldStatus = quote.status;
+
       // Si le devis passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
       if (quote.status === "DRAFT" && status === "PENDING") {
         // Snapshot companyInfo à la finalisation
@@ -943,119 +961,113 @@ const quoteResolvers = {
           const org = await getOrganizationInfo(workspaceId);
           quote.companyInfo = mapOrganizationToCompanyInfo(org);
         }
-        // Récupérer le préfixe du dernier devis créé (non-DRAFT)
-        const lastQuote = await Quote.findOne({
-          workspaceId: quote.workspaceId,
-          status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
-        })
-          .sort({ createdAt: -1 })
-          .select('prefix')
-          .lean();
-        
-        // Définir l'année et la date pour les fonctions de génération de numéro
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        
-        let prefix;
-        if (lastQuote && lastQuote.prefix) {
-          // Utiliser le préfixe du dernier devis
-          prefix = lastQuote.prefix;
-        } else {
-          // Aucun devis existant, utiliser le préfixe par défaut
-          prefix = `D-${month}${year}`;
-        }
-        
-        console.log('🔍 [changeQuoteStatus] DRAFT → PENDING, prefix:', prefix);
 
-        // Sauvegarder le numéro original avant modification
-        const originalDraftNumber = quote.number;
-
-        // ÉTAPE 1 du swap: Si c'est un devis avec suffixe -DRAFT, faire le swap complet
-        let finalNumber = originalDraftNumber;
-
-        if (originalDraftNumber.endsWith("-DRAFT")) {
-          const baseNumber = originalDraftNumber.replace("-DRAFT", "");
-
-          // Vérifier s'il existe un devis avec le numéro de base
-          const searchQuery = {
-            number: baseNumber,
-            workspaceId: quote.workspaceId,
-            _id: { $ne: quote._id },
-          };
-
-          const existingQuote = await Quote.findOne(searchQuery);
-
-          if (existingQuote) {
-            // Vérifier le statut du devis existant
-            if (existingQuote.status === "DRAFT") {
-              // ÉTAPE 1: 000892 -> TEMP-000892
-              const tempNumber1 = `TEMP-${baseNumber}`;
-              await Quote.findByIdAndUpdate(existingQuote._id, {
-                number: tempNumber1,
-              });
-
-              // ÉTAPE 2: Le devis actuel prend le numéro de base
-              finalNumber = baseNumber;
-
-              // ÉTAPE 3: TEMP-000892 -> 000892-DRAFT (fait après la sauvegarde)
-              // On sauvegarde l'ID pour l'étape 3
-              quote._swapQuoteId = existingQuote._id;
-              quote._originalDraftNumber = originalDraftNumber;
-            } else {
-              // Générer le prochain numéro séquentiel
-              finalNumber = await generateQuoteNumber(prefix, {
+        // Transaction atomique pour éviter les numéros TEMP orphelins
+        const MAX_RETRIES = 3;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+          const session = await mongoose.startSession();
+          try {
+            await session.withTransaction(async () => {
+              // Récupérer le préfixe du dernier devis créé (non-DRAFT)
+              const lastQuote = await Quote.findOne({
                 workspaceId: quote.workspaceId,
-                userId: user.id,
-                year,
-                currentQuoteId: quote._id,
-              });
+                status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] }
+              }, null, { session })
+                .sort({ createdAt: -1 })
+                .select('prefix')
+                .lean();
+
+              // Utiliser l'année de issueDate du document, pas la date serveur
+              const year = (quote.issueDate || new Date()).getFullYear();
+              const month = String((quote.issueDate || new Date()).getMonth() + 1).padStart(2, '0');
+
+              let prefix;
+              if (lastQuote && lastQuote.prefix) {
+                prefix = lastQuote.prefix;
+              } else {
+                prefix = `D-${month}${year}`;
+              }
+
+              console.log('🔍 [changeQuoteStatus] DRAFT → PENDING, prefix:', prefix);
+
+              const originalDraftNumber = quote.number;
+              let finalNumber = originalDraftNumber;
+              let swapQuoteId = null;
+              let swapOriginalNumber = null;
+
+              if (originalDraftNumber.endsWith("-DRAFT")) {
+                const baseNumber = originalDraftNumber.replace("-DRAFT", "");
+
+                const existingQuote = await Quote.findOne({
+                  number: baseNumber,
+                  workspaceId: quote.workspaceId,
+                  _id: { $ne: quote._id },
+                }, null, { session });
+
+                if (existingQuote) {
+                  if (existingQuote.status === "DRAFT") {
+                    await Quote.findByIdAndUpdate(existingQuote._id, {
+                      number: `TEMP-${baseNumber}`,
+                    }, { session });
+                    finalNumber = baseNumber;
+                    swapQuoteId = existingQuote._id;
+                    swapOriginalNumber = originalDraftNumber;
+                  } else {
+                    finalNumber = await generateQuoteNumber(prefix, {
+                      workspaceId: quote.workspaceId,
+                      userId: user.id,
+                      year,
+                      currentQuoteId: quote._id,
+                      session,
+                    });
+                  }
+                } else {
+                  finalNumber = baseNumber;
+                }
+              } else {
+                finalNumber = await generateQuoteNumber(prefix, {
+                  isValidatingDraft: true,
+                  currentDraftNumber: originalDraftNumber,
+                  workspaceId: quote.workspaceId,
+                  userId: user.id,
+                  year,
+                  currentQuoteId: quote._id,
+                  session,
+                });
+              }
+
+              // Numéro temporaire pour éviter les erreurs de clé dupliquée
+              quote.number = `TEMP-${Date.now()}`;
+              await quote.save({ session });
+
+              // Mettre à jour avec le numéro final
+              quote.number = finalNumber;
+              quote.prefix = prefix;
+              quote.status = status;
+              await quote.save({ session });
+
+              // ÉTAPE 3 du swap si nécessaire
+              if (swapQuoteId && swapOriginalNumber) {
+                await Quote.findByIdAndUpdate(swapQuoteId, {
+                  number: swapOriginalNumber,
+                }, { session });
+              }
+            });
+            session.endSession();
+            break;
+          } catch (err) {
+            session.endSession();
+            if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
+              console.log(`⚠️ [changeQuoteStatus] E11000 retry attempt ${attempt + 1}`);
+              continue;
             }
-          } else {
-            // Pas de conflit, juste enlever le suffixe -DRAFT
-            finalNumber = baseNumber;
+            throw err;
           }
-        } else {
-          // Générer un nouveau numéro séquentiel normal
-          finalNumber = await generateQuoteNumber(prefix, {
-            isValidatingDraft: true,
-            currentDraftNumber: originalDraftNumber,
-            workspaceId: quote.workspaceId,
-            userId: user.id,
-            year,
-            currentQuoteId: quote._id,
-          });
         }
-        // Utiliser une stratégie de numéro temporaire pour éviter les erreurs de clé dupliquée
-        const tempNumber = `TEMP-${Date.now()}`;
-        quote.number = tempNumber;
+      } else {
+        quote.status = status;
         await quote.save();
-
-        // Mettre à jour le numéro et le préfixe du devis
-        quote.number = finalNumber;
-        quote.prefix = prefix;
-
-        try {
-          await quote.save();
-        } catch (error) {
-          throw error;
-        }
-
-        // ÉTAPE 3 du swap: Finaliser le changement TEMP-000892 -> 000892-DRAFT
-        if (quote._swapQuoteId && quote._originalDraftNumber) {
-          await Quote.findByIdAndUpdate(quote._swapQuoteId, {
-            number: quote._originalDraftNumber, // 000892-DRAFT
-          });
-
-          // Nettoyer les propriétés temporaires
-          delete quote._swapQuoteId;
-          delete quote._originalDraftNumber;
-        }
       }
-
-      const oldStatus = quote.status;
-      quote.status = status;
-      await quote.save();
       
       // Enregistrer l'activité dans le client si c'est un client existant
       if (quote.client && quote.client.id) {
