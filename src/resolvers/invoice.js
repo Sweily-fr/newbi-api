@@ -1,6 +1,7 @@
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Quote from "../models/Quote.js";
+import PurchaseOrder from "../models/PurchaseOrder.js";
 import Event from "../models/Event.js";
 import Client from "../models/Client.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
@@ -969,10 +970,13 @@ const invoiceResolvers = {
             });
           }
 
+          // Extraire les champs source qui n'existent pas dans le modèle Mongoose
+          const { sourcePurchaseOrderId, sourceQuoteId, ...invoiceInput } = input;
+
           // Créer la facture - companyInfo uniquement pour les documents non-DRAFT
           const isDraft = !input.status || input.status === 'DRAFT';
           const invoice = new Invoice({
-            ...input,
+            ...invoiceInput,
             number,
             prefix,
             companyInfo: isDraft
@@ -1139,6 +1143,36 @@ const invoiceResolvers = {
                   await matchingQuote.save();
                 }
               }
+            }
+          }
+
+          // Lier la facture au bon de commande source
+          if (sourcePurchaseOrderId) {
+            try {
+              await PurchaseOrder.findByIdAndUpdate(sourcePurchaseOrderId, {
+                $addToSet: { linkedInvoices: invoice._id }
+              });
+            } catch (err) {
+              console.error("Erreur lien BC→Facture:", err);
+            }
+          }
+
+          // Lier la facture au devis source (si pas déjà lié par purchaseOrderNumber)
+          if (sourceQuoteId) {
+            try {
+              const sourceQuote = await Quote.findById(sourceQuoteId);
+              if (sourceQuote) {
+                const alreadyLinked = sourceQuote.linkedInvoices?.some(
+                  id => id.toString() === invoice._id.toString()
+                );
+                if (!alreadyLinked && (!sourceQuote.linkedInvoices || sourceQuote.linkedInvoices.length < 3)) {
+                  await Quote.findByIdAndUpdate(sourceQuoteId, {
+                    $addToSet: { linkedInvoices: invoice._id }
+                  });
+                }
+              }
+            } catch (err) {
+              console.error("Erreur lien Devis→Facture:", err);
             }
           }
 

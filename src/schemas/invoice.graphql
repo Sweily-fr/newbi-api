@@ -106,6 +106,8 @@ input CreateInvoiceInput {
   isReverseCharge: Boolean
   clientPositionRight: Boolean
   operationType: String
+  sourcePurchaseOrderId: ID
+  sourceQuoteId: ID
 }
 
 input UpdateInvoiceInput {
