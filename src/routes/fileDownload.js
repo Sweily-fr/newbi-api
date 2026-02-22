@@ -1,5 +1,6 @@
 import express from "express";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import convert from "heic-convert";
 import FileTransfer from "../models/FileTransfer.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
@@ -158,24 +159,56 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
 
     const response = await s3Client.send(command);
 
-    // Configurer les headers pour affichage inline (prévisualisation)
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${encodeURIComponent(file.originalName)}"`
-    );
-    // Pour les PDF, forcer le bon Content-Type
-    const contentType = file.originalName?.toLowerCase().endsWith(".pdf")
-      ? "application/pdf"
-      : file.mimeType || "application/octet-stream";
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Length", file.size);
-    res.setHeader("Cache-Control", "public, max-age=3600");
-    // Headers CORS pour permettre l'affichage dans un iframe
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("X-Content-Type-Options", "nosniff");
+    const isHeic = ["image/heic", "image/heif"].includes(
+      file.mimeType?.toLowerCase()
+    ) || /\.(heic|heif)$/i.test(file.originalName || "");
 
-    // Streamer le fichier vers le client
-    response.Body.pipe(res);
+    if (isHeic) {
+      // Convertir HEIC → JPEG pour compatibilité navigateur
+      // Sharp nécessite le buffer complet pour décoder le HEIC
+      const chunks = [];
+      for await (const chunk of response.Body) {
+        chunks.push(chunk);
+      }
+      const inputBuffer = Buffer.concat(chunks);
+
+      const jpegBuffer = await convert({
+        buffer: inputBuffer,
+        format: "JPEG",
+        quality: 0.85,
+      });
+
+      const displayName = (file.originalName || "image")
+        .replace(/\.(heic|heif)$/i, ".jpg");
+
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(displayName)}"`);
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Content-Length", jpegBuffer.length);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+
+      res.end(jpegBuffer);
+    } else {
+      // Configurer les headers pour affichage inline (prévisualisation)
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(file.originalName)}"`
+      );
+      // Pour les PDF, forcer le bon Content-Type
+      const contentType = file.originalName?.toLowerCase().endsWith(".pdf")
+        ? "application/pdf"
+        : file.mimeType || "application/octet-stream";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Length", file.size);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      // Headers CORS pour permettre l'affichage dans un iframe
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+
+      // Streamer le fichier vers le client
+      response.Body.pipe(res);
+    }
 
     logger.info("✅ Fichier prévisualisé avec succès", {
       fileName: file.originalName,

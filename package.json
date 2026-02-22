@@ -50,6 +50,7 @@
     "graphql-upload": "^13.0.0",
     "graphql-upload-minimal": "^1.6.1",
     "graphql-ws": "^6.0.6",
+    "heic-convert": "^2.1.0",
     "jose": "^6.1.0",
     "jsonwebtoken": "^9.0.2",
     "mindee": "^4.34.0",

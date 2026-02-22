@@ -5,6 +5,7 @@
 
 import express from "express";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import convert from "heic-convert";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import {
   streamFolderAsZip,
@@ -399,23 +400,55 @@ router.get("/preview-file/:documentId", async (req, res) => {
 
     const response = await s3Client.send(command);
 
-    const contentType = document.originalName?.toLowerCase().endsWith(".pdf")
-      ? "application/pdf"
-      : document.mimeType || "application/octet-stream";
+    const isHeic = ["image/heic", "image/heif"].includes(
+      document.mimeType?.toLowerCase()
+    ) || /\.(heic|heif)$/i.test(document.originalName || "");
 
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${encodeURIComponent(document.originalName || document.name)}"`
-    );
-    res.setHeader("Content-Type", contentType);
-    if (document.fileSize) {
-      res.setHeader("Content-Length", document.fileSize);
+    if (isHeic) {
+      // Convertir HEIC → JPEG pour compatibilité navigateur
+      // Sharp nécessite le buffer complet pour décoder le HEIC
+      const chunks = [];
+      for await (const chunk of response.Body) {
+        chunks.push(chunk);
+      }
+      const inputBuffer = Buffer.concat(chunks);
+
+      const jpegBuffer = await convert({
+        buffer: inputBuffer,
+        format: "JPEG",
+        quality: 0.85,
+      });
+
+      const displayName = (document.originalName || document.name)
+        .replace(/\.(heic|heif)$/i, ".jpg");
+
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(displayName)}"`);
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Content-Length", jpegBuffer.length);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+
+      res.end(jpegBuffer);
+    } else {
+      const contentType = document.originalName?.toLowerCase().endsWith(".pdf")
+        ? "application/pdf"
+        : document.mimeType || "application/octet-stream";
+
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(document.originalName || document.name)}"`
+      );
+      res.setHeader("Content-Type", contentType);
+      if (document.fileSize) {
+        res.setHeader("Content-Length", document.fileSize);
+      }
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+
+      response.Body.pipe(res);
     }
-    res.setHeader("Cache-Control", "public, max-age=3600");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-
-    response.Body.pipe(res);
 
     logger.info("✅ Fichier partagé prévisualisé", {
       fileName: document.originalName,
