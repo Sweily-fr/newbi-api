@@ -88,10 +88,36 @@ input UpdateDocumentAutomationInput {
   isActive: Boolean
 }
 
+type DocumentAutomationRunResult {
+  automationId: ID!
+  status: String!
+  totalDocuments: Int!
+  message: String
+  successCount: Int
+  failCount: Int
+  firstError: String
+}
+
+type AutomationPendingDocument {
+  documentId: ID!
+  documentType: String!
+  documentNumber: String
+  prefix: String
+  clientName: String
+}
+
+type ProcessAutomationDocumentResult {
+  success: Boolean!
+  sharedDocumentId: ID
+  fileName: String
+  error: String
+}
+
 extend type Query {
   documentAutomations(workspaceId: ID!): [DocumentAutomation!]!
   documentAutomation(workspaceId: ID!, id: ID!): DocumentAutomation
   documentAutomationLogs(workspaceId: ID!, automationId: ID, limit: Int): [DocumentAutomationLog!]!
+  documentsForAutomation(workspaceId: ID!, automationId: ID!): [AutomationPendingDocument!]!
 }
 
 extend type Mutation {
@@ -100,4 +126,12 @@ extend type Mutation {
   deleteDocumentAutomation(workspaceId: ID!, id: ID!): Boolean!
   toggleDocumentAutomation(workspaceId: ID!, id: ID!): DocumentAutomation!
   testDocumentAutomation(workspaceId: ID!, id: ID!): Boolean!
+  runDocumentAutomation(workspaceId: ID!, id: ID!): DocumentAutomationRunResult!
+  processAutomationDocument(
+    workspaceId: ID!
+    automationId: ID!
+    documentId: ID!
+    documentType: String!
+    pdfBase64: String!
+  ): ProcessAutomationDocumentResult!
 }
