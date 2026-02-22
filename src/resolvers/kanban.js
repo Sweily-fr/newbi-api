@@ -702,43 +702,67 @@ const resolvers = {
           });
         }
 
-        // Enrichir les tâches avec les infos des membres assignés
-        const enrichedTasks = await Promise.all(
-          filteredTasks.map(async (task) => {
-            const taskObj = task.toObject ? task.toObject() : task;
-            const assignedMemberIds = taskObj.assignedMembers || [];
-            
-            // Récupérer les infos des membres assignés
-            const enrichedMembers = await Promise.all(
-              assignedMemberIds.map(async (memberId) => {
-                try {
-                  const memberIdStr = memberId?.toString() || memberId;
-                  const userData = await db.collection('user').findOne({
-                    _id: new mongoose.Types.ObjectId(memberIdStr),
-                  });
-                  
-                  if (userData) {
-                    return {
-                      id: memberIdStr,
-                      userId: memberIdStr,
-                      name: userData.name || userData.email,
-                      email: userData.email,
-                      image: userData.image || userData.avatar || userData.profile?.profilePicture || null,
-                    };
-                  }
-                  return { id: memberIdStr, userId: memberIdStr, name: memberIdStr, email: null, image: null };
-                } catch (e) {
-                  return { id: memberId, userId: memberId, name: memberId, email: null, image: null };
-                }
-              })
-            );
-            
-            return {
-              ...taskObj,
-              assignedMembersInfo: enrichedMembers,
-            };
-          })
-        );
+        // Collecter tous les memberIds uniques de toutes les tâches filtrées
+        const allMemberIds = new Set();
+        filteredTasks.forEach((task) => {
+          const taskObj = task.toObject ? task.toObject() : task;
+          (taskObj.assignedMembers || []).forEach((memberId) => {
+            const memberIdStr = memberId?.toString() || memberId;
+            if (memberIdStr) allMemberIds.add(memberIdStr);
+          });
+        });
+
+        // Batch fetch : une seule requête pour tous les utilisateurs
+        let usersMap = {};
+        if (allMemberIds.size > 0) {
+          try {
+            const objectIds = Array.from(allMemberIds).map((id) => {
+              try { return new mongoose.Types.ObjectId(id); } catch { return null; }
+            }).filter(Boolean);
+            const users = await db.collection('user').find({ _id: { $in: objectIds } }).toArray();
+            users.forEach((u) => {
+              const uid = u._id.toString();
+              let displayName = '';
+              if (u.name && u.lastName) displayName = `${u.name} ${u.lastName}`;
+              else if (u.name) displayName = u.name;
+              else if (u.lastName) displayName = u.lastName;
+              else displayName = u.email || 'Utilisateur';
+              usersMap[uid] = {
+                name: displayName,
+                email: u.email,
+                image: u.image || u.avatar || null,
+              };
+            });
+          } catch (error) {
+            logger.error('❌ [activeTimers] Erreur batch fetch utilisateurs:', error);
+          }
+        }
+
+        // Enrichir les tâches avec les infos pré-chargées (sans requêtes supplémentaires)
+        const enrichedTasks = filteredTasks.map((task) => {
+          const taskObj = task.toObject ? task.toObject() : task;
+          const assignedMemberIds = taskObj.assignedMembers || [];
+
+          const enrichedMembers = assignedMemberIds.map((memberId) => {
+            const memberIdStr = memberId?.toString() || memberId;
+            const userData = usersMap[memberIdStr];
+            if (userData) {
+              return {
+                id: memberIdStr,
+                userId: memberIdStr,
+                name: userData.name,
+                email: userData.email,
+                image: userData.image,
+              };
+            }
+            return { id: memberIdStr, userId: memberIdStr, name: memberIdStr, email: null, image: null };
+          });
+
+          return {
+            ...taskObj,
+            assignedMembersInfo: enrichedMembers,
+          };
+        });
 
         return enrichedTasks;
       }
@@ -1142,22 +1166,21 @@ const resolvers = {
 
               logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${notifAssignerName}`);
 
+              // Batch fetch : récupérer tous les membres assignés en une seule requête
+              const memberIdsToNotify = cleanedInput.assignedMembers.filter(mid => mid !== user.id);
+              const memberObjectIds = memberIdsToNotify.map(mid => {
+                try { return new mongoose.Types.ObjectId(mid); } catch { return null; }
+              }).filter(Boolean);
+              const allMembersData = memberObjectIds.length > 0
+                ? await db.collection("user").find({ _id: { $in: memberObjectIds } }).toArray()
+                : [];
+              const membersDataMap = {};
+              allMembersData.forEach(m => { membersDataMap[m._id.toString()] = m; });
+
               // Envoyer les emails et notifications pour chaque membre assigné
-              for (const memberId of cleanedInput.assignedMembers) {
-                // Ne pas notifier le créateur s'il s'assigne lui-même
-                if (memberId === user.id) {
-                  logger.info(`📧 [CreateTask] Skip notification pour le créateur ${memberId}`);
-                  continue;
-                }
-                
+              for (const memberId of memberIdsToNotify) {
                 try {
-                  // Lookup sûr : essayer d'abord comme string, puis comme ObjectId
-                  let memberData = await db.collection("user").findOne({ _id: memberId });
-                  if (!memberData && /^[0-9a-fA-F]{24}$/.test(memberId)) {
-                    memberData = await db.collection("user").findOne({
-                      _id: new mongoose.Types.ObjectId(memberId),
-                    });
-                  }
+                  const memberData = membersDataMap[memberId];
 
                   if (memberData?.email) {
                     const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${savedTask.boardId}?task=${savedTask._id}`;
@@ -1490,12 +1513,19 @@ const resolvers = {
                   const columnName = column?.title || "Colonne";
                   logger.info(`📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
 
-                  // Récupérer les emails des membres assignés
+                  // Batch fetch : récupérer tous les membres ajoutés en une seule requête
+                  const addedMemberObjectIds = addedMembers.map(mid => {
+                    try { return new mongoose.Types.ObjectId(mid); } catch { return null; }
+                  }).filter(Boolean);
+                  const allAddedMembersData = addedMemberObjectIds.length > 0
+                    ? await db.collection("user").find({ _id: { $in: addedMemberObjectIds } }).toArray()
+                    : [];
+                  const addedMembersDataMap = {};
+                  allAddedMembersData.forEach(m => { addedMembersDataMap[m._id.toString()] = m; });
+
                   for (const memberId of addedMembers) {
                     try {
-                      const memberData = await db.collection("user").findOne({
-                        _id: new mongoose.Types.ObjectId(memberId),
-                      });
+                      const memberData = addedMembersDataMap[memberId];
 
                       if (memberData?.email) {
                         const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${oldTask.boardId}?task=${id}`;
@@ -2576,10 +2606,6 @@ const resolvers = {
   },
 
   Board: {
-    client: async (board) => {
-      if (!board.clientId) return null;
-      return await Client.findById(board.clientId);
-    },
     columns: async (board, _, { user }) => {
       if (!user) throw new AuthenticationError("Not authenticated");
       return await Column.find({
@@ -2601,25 +2627,70 @@ const resolvers = {
       return Client.findOne({ _id: board.clientId, workspaceId: board.workspaceId });
     },
     totalBillableAmount: async (board) => {
-      const tasks = await Task.find({
-        boardId: board.id,
-        workspaceId: board.workspaceId,
-      });
-      let total = 0;
-      for (const task of tasks) {
-        const tt = task.timeTracking;
-        if (!tt || !tt.hourlyRate || tt.hourlyRate <= 0) continue;
-        let totalSeconds = tt.totalSeconds || 0;
-        if (tt.isRunning && tt.currentStartTime) {
-          totalSeconds += Math.floor((Date.now() - new Date(tt.currentStartTime).getTime()) / 1000);
-        }
-        if (totalSeconds <= 0) continue;
-        const hours = totalSeconds / 3600;
-        let billableHours = hours;
-        if (tt.roundingOption === 'up') billableHours = Math.ceil(hours);
-        else if (tt.roundingOption === 'down') billableHours = Math.floor(hours);
-        total += billableHours * tt.hourlyRate;
-      }
+      // Utiliser une aggregation pipeline pour calculer côté MongoDB
+      // Seules les tâches avec hourlyRate > 0 ET (totalSeconds > 0 OU timer en cours) sont pertinentes
+      const result = await Task.aggregate([
+        {
+          $match: {
+            boardId: new mongoose.Types.ObjectId(board.id),
+            workspaceId: new mongoose.Types.ObjectId(board.workspaceId),
+            "timeTracking.hourlyRate": { $gt: 0 },
+          },
+        },
+        {
+          $project: {
+            hourlyRate: "$timeTracking.hourlyRate",
+            totalSeconds: { $ifNull: ["$timeTracking.totalSeconds", 0] },
+            isRunning: { $ifNull: ["$timeTracking.isRunning", false] },
+            currentStartTime: "$timeTracking.currentStartTime",
+            roundingOption: { $ifNull: ["$timeTracking.roundingOption", "none"] },
+          },
+        },
+        {
+          $addFields: {
+            // Ajouter le temps écoulé si le timer est en cours
+            effectiveSeconds: {
+              $cond: {
+                if: { $and: [{ $eq: ["$isRunning", true] }, { $ne: ["$currentStartTime", null] }] },
+                then: {
+                  $add: [
+                    "$totalSeconds",
+                    { $max: [0, { $divide: [{ $subtract: [new Date(), "$currentStartTime"] }, 1000] }] },
+                  ],
+                },
+                else: "$totalSeconds",
+              },
+            },
+          },
+        },
+        { $match: { effectiveSeconds: { $gt: 0 } } },
+        {
+          $addFields: {
+            hours: { $divide: ["$effectiveSeconds", 3600] },
+          },
+        },
+        {
+          $addFields: {
+            billableHours: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ["$roundingOption", "up"] }, then: { $ceil: "$hours" } },
+                  { case: { $eq: ["$roundingOption", "down"] }, then: { $floor: "$hours" } },
+                ],
+                default: "$hours",
+              },
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: { $multiply: ["$billableHours", "$hourlyRate"] } },
+          },
+        },
+      ]);
+
+      const total = result[0]?.total || 0;
       return total > 0 ? total : null;
     },
     members: async (board) => {
@@ -2763,7 +2834,7 @@ const resolvers = {
 
   Column: {
     tasks: async (parent) => {
-      return await Task.find({ columnId: parent.id }).sort("position");
+      return await Task.find({ columnId: parent.id, workspaceId: parent.workspaceId }).sort("position");
     },
   },
 
