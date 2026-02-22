@@ -303,6 +303,10 @@ const taskSchema = new mongoose.Schema({
 boardSchema.index({ workspaceId: 1, createdAt: -1 });
 columnSchema.index({ workspaceId: 1, boardId: 1, order: 1 });
 taskSchema.index({ workspaceId: 1, boardId: 1, columnId: 1, position: 1 });
+// Index pour activeTimers query (tâches avec timer en cours)
+taskSchema.index({ workspaceId: 1, "timeTracking.isRunning": 1, updatedAt: -1 });
+// Index pour Column.tasks resolver (recherche par columnId + workspaceId)
+taskSchema.index({ columnId: 1, workspaceId: 1 });
 // Index legacy pour la migration
 boardSchema.index({ userId: 1, createdAt: -1 });
 columnSchema.index({ boardId: 1, order: 1 });

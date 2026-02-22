@@ -1082,6 +1082,20 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
     transferUrl,
   } = downloadData;
 
+  const todayFormatted = new Date(downloadDate).toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  const downloadTimeFormatted = new Date(downloadDate).toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
   const mailOptions = {
     from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
@@ -1089,52 +1103,95 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
     subject: `Vos fichiers ont été téléchargés`,
     html: `
       <!DOCTYPE html>
-      <html>
+      <html lang="fr">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Fichiers téléchargés</title>
       </head>
-      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f0eeff;">
-        <div style="max-width: 500px; margin: 40px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
-          <div style="text-align: center; padding: 30px 20px; background-color: #f0eeff;">
-            <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 100px; height: auto;">
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
+
+          <!-- Logo -->
+          <div style="text-align: center; padding: 40px 0 24px 0;">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
           </div>
-          
-          <div style="padding: 40px 30px; text-align: center;">
-            <h1 style="color: #1f2937; font-size: 24px; font-weight: 400; margin: 0 0 30px 0; line-height: 1.4;">
-              ${fileName} a été téléchargé !
+
+          <!-- Type de notification -->
+          <div style="text-align: center; margin-bottom: 8px;">
+            <span style="font-size: 11px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.5px; text-transform: uppercase;">
+              FICHIERS TÉLÉCHARGÉS
+            </span>
+          </div>
+
+          <!-- Date -->
+          <div style="text-align: center; margin-bottom: 32px;">
+            <span style="font-size: 12px; color: #6b7280;">
+              ${todayFormatted}
+            </span>
+          </div>
+
+          <!-- Carte principale -->
+          <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
+
+            <!-- Icône -->
+            <div style="margin-bottom: 20px;">
+              <div style="display: inline-block; background-color: #dcfce7; border-radius: 6px; padding: 8px 12px;">
+                <span style="font-size: 11px; font-weight: 500; color: #16a34a; letter-spacing: 0.3px; text-transform: uppercase;">TÉLÉCHARGÉ</span>
+              </div>
+            </div>
+
+            <!-- Titre -->
+            <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
+              ${fileName} a été téléchargé
             </h1>
-            
-            <p style="color: #4b5563; font-size: 14px; line-height: 1.6; margin: 0 0 30px 0;">
+
+            <!-- Message -->
+            <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
               Quelqu'un vient de télécharger vos fichiers. Vous pouvez consulter les détails de ce transfert dans votre tableau de bord.
             </p>
-            
-            <a href="${transferUrl}" style="display: inline-block; background-color: #5b50ff; color: white; font-weight: 400; text-decoration: none; padding: 14px 40px; border-radius: 30px; font-size: 14px;">
+
+            <!-- Détails -->
+            <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Date du téléchargement</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right;">${downloadTimeFormatted}</td>
+                </tr>
+                <tr style="border-top: 1px solid #e5e7eb;">
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Fichiers</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; font-weight: 500;">${filesCount} élément${filesCount > 1 ? "s" : ""}</td>
+                </tr>
+                <tr style="border-top: 1px solid #e5e7eb;">
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Transfert</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${fileName}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- Bouton CTA -->
+            <a href="${transferUrl}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
               Voir mon transfert
             </a>
           </div>
-          
-          <div style="padding: 20px 30px; border-top: 1px solid #e5e7eb;">
-            <p style="color: #6b7280; font-size: 12px; margin: 0 0 8px 0;">Date du téléchargement</p>
-            <p style="color: #1f2937; font-size: 14px; margin: 0;">${new Date(
-              downloadDate
-            ).toLocaleDateString("fr-FR", {
-              day: "numeric",
-              month: "long",
-              year: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}</p>
+
+          <!-- Footer -->
+          <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center; padding-bottom: 40px;">
+            <div style="margin-bottom: 16px;">
+              <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height: 28px; width: auto;">
+            </div>
+            <p style="font-size: 13px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0;">
+              Votre gestion, simplifiée.
+            </p>
+            <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
+              Notification automatique. Ne répondez pas directement à cet email. • <a href="https://newbi.fr/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+            </p>
+            <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+              <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
+              <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+            </div>
           </div>
-          
-          <div style="padding: 20px 30px; border-top: 1px solid #e5e7eb;">
-            <p style="color: #1f2937; font-size: 14px; margin: 0;">${filesCount} élément${filesCount > 1 ? "s" : ""}</p>
-            <p style="color: #6b7280; font-size: 12px; margin: 8px 0 0 0;">${fileName}</p>
-          </div>
-          
-          <div style="text-align: center; padding: 20px 30px; color: #9ca3af; font-size: 11px; border-top: 1px solid #e5e7eb;">
-            <p style="margin: 0 0 10px 0;">Pour être sûr(e) de recevoir nos e-mails, veuillez ajouter contact@newbi.fr à vos contacts.</p>
-          </div>
+
         </div>
       </body>
       </html>

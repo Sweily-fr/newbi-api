@@ -6,6 +6,7 @@ import {
   createNotFoundError,
   createValidationError,
 } from '../utils/errors.js';
+import documentAutomationService from '../services/documentAutomationService.js';
 
 const documentAutomationResolvers = {
   Query: {
@@ -48,6 +49,21 @@ const documentAutomationResolvers = {
         return logs;
       }
     ),
+
+    documentsForAutomation: isAuthenticated(
+      async (_, { workspaceId, automationId }) => {
+        const automation = await DocumentAutomation.findOne({
+          _id: automationId,
+          workspaceId,
+        });
+
+        if (!automation) {
+          throw createNotFoundError('Automatisation');
+        }
+
+        return documentAutomationService.getDocumentsForAutomation(automation, workspaceId);
+      }
+    ),
   },
 
   Mutation: {
@@ -86,6 +102,9 @@ const documentAutomationResolvers = {
         });
 
         await automation.save();
+
+        // Le traitement rétroactif des documents existants est désormais
+        // effectué côté client (génération PDF navigateur) après la création.
 
         return await DocumentAutomation.findById(automation._id)
           .populate('createdBy');
@@ -165,7 +184,8 @@ const documentAutomationResolvers = {
     ),
 
     toggleDocumentAutomation: isAuthenticated(
-      async (_, { workspaceId, id }) => {
+      async (_, { workspaceId, id }, context) => {
+        const { user } = context;
         const automation = await DocumentAutomation.findOne({
           _id: id,
           workspaceId,
@@ -206,6 +226,132 @@ const documentAutomationResolvers = {
         }
 
         return true;
+      }
+    ),
+
+    processAutomationDocument: isAuthenticated(
+      async (_, { workspaceId, automationId, documentId, documentType, pdfBase64 }, context) => {
+        const { user } = context;
+
+        try {
+          const result = await documentAutomationService.processAutomationDocumentWithPDF(
+            automationId,
+            workspaceId,
+            documentId,
+            documentType,
+            pdfBase64,
+            user._id
+          );
+
+          return result;
+        } catch (error) {
+          console.error(
+            `❌ [DocumentAutomation] Erreur processAutomationDocument doc=${documentId}:`,
+            error.message
+          );
+
+          // Logger l'échec
+          try {
+            await DocumentAutomationLog.create({
+              automationId,
+              workspaceId,
+              sourceDocumentType: documentType,
+              sourceDocumentId: documentId,
+              status: 'FAILED',
+              error: error.message,
+            });
+          } catch (logError) {
+            if (logError.code !== 11000) {
+              console.error('❌ [DocumentAutomation] Erreur log:', logError.message);
+            }
+          }
+
+          // Incrémenter les stats d'échec
+          await DocumentAutomation.findByIdAndUpdate(automationId, {
+            $inc: { 'stats.failedExecutions': 1 },
+          }).catch(() => {});
+
+          return {
+            success: false,
+            error: error.message,
+          };
+        }
+      }
+    ),
+
+    runDocumentAutomation: isAuthenticated(
+      async (_, { workspaceId, id }, context) => {
+        const { user } = context;
+
+        const automation = await DocumentAutomation.findOne({
+          _id: id,
+          workspaceId,
+        });
+
+        if (!automation) {
+          throw createNotFoundError('Automatisation');
+        }
+
+        if (!automation.isActive) {
+          throw createValidationError('L\'automatisation doit être active pour être exécutée');
+        }
+
+        // Vérifier que le dossier cible existe
+        const targetFolder = await SharedFolder.findOne({
+          _id: automation.actionConfig.targetFolderId,
+          workspaceId,
+          trashedAt: null,
+        });
+
+        if (!targetFolder) {
+          throw createValidationError('Le dossier cible n\'existe plus');
+        }
+
+        // Compter les documents à traiter
+        const totalDocuments = await documentAutomationService.countExistingDocuments(
+          automation,
+          workspaceId
+        );
+
+        if (totalDocuments === 0) {
+          return {
+            automationId: automation._id.toString(),
+            status: 'NO_DOCUMENTS',
+            totalDocuments: 0,
+            message: 'Aucun document à traiter',
+          };
+        }
+
+        // Await le traitement pour retourner les vrais résultats
+        const stats = await documentAutomationService
+          .executeAutomationForExistingDocuments(automation, workspaceId, user._id);
+
+        let status;
+        let message;
+
+        if (stats.failCount === 0 && stats.successCount > 0) {
+          status = 'COMPLETED';
+          message = `${stats.successCount} document(s) traité(s) avec succès`;
+        } else if (stats.successCount > 0 && stats.failCount > 0) {
+          status = 'PARTIAL';
+          message = `${stats.successCount} succès, ${stats.failCount} échec(s)${stats.firstError ? ` — ${stats.firstError}` : ''}`;
+        } else if (stats.failCount > 0) {
+          status = 'FAILED';
+          message = stats.firstError || `${stats.failCount} document(s) en échec`;
+        } else {
+          status = 'COMPLETED';
+          message = 'Aucun nouveau document à traiter';
+        }
+
+        return {
+          automationId: automation._id.toString(),
+          status,
+          totalDocuments,
+          message,
+          successCount: stats.successCount,
+          failCount: stats.failCount,
+          firstError: stats.firstError || null,
+        };
       }
     ),
   },

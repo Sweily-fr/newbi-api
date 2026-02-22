@@ -8,6 +8,47 @@ type FinancialAnalyticsKPI {
   averageInvoiceHT: Float!
   clientCount: Int!
   quoteConversionRate: Float!
+  # New fields
+  totalExpensesHT: Float!
+  totalExpensesTTC: Float!
+  grossMargin: Float!
+  grossMarginRate: Float!
+  chargeRate: Float!
+  creditNoteCount: Int!
+  creditNoteTotalHT: Float!
+  netRevenueHT: Float!
+  outstandingReceivables: Float!
+  overdueAmount: Float!
+  overdueCount: Int!
+  dso: Float!
+  collectionRate: Float!
+  activeClientCount: Int!
+  newClientCount: Int!
+  retainedClientCount: Int!
+  topClientConcentration: Float!
+  quoteCount: Int!
+  quoteConvertedCount: Int!
+}
+
+type FinancialAnalyticsPreviousPeriod {
+  totalRevenueHT: Float!
+  totalExpensesHT: Float!
+  grossMargin: Float!
+  grossMarginRate: Float!
+  invoiceCount: Int!
+  averageInvoiceHT: Float!
+  collectionRate: Float!
+  dso: Float!
+  activeClientCount: Int!
+  newClientCount: Int!
+  quoteConversionRate: Float!
+  netRevenueHT: Float!
+  creditNoteTotalHT: Float!
+  overdueAmount: Float!
+  overdueCount: Int!
+  outstandingReceivables: Float!
+  topClientConcentration: Float!
+  chargeRate: Float!
 }
 
 type RevenueByClient {
@@ -41,6 +82,13 @@ type MonthlyRevenue {
   invoiceCount: Int!
   expenseCount: Int!
   netResult: Float!
+  # New fields
+  expenseAmountHT: Float!
+  expenseVAT: Float!
+  grossMargin: Float!
+  grossMarginRate: Float!
+  creditNoteHT: Float!
+  netRevenueHT: Float!
 }
 
 type PaymentMethodStat {
@@ -86,8 +134,48 @@ type ExpenseByCategoryMonthly {
   count: Int!
 }
 
+type OverdueInvoice {
+  invoiceId: ID!
+  invoiceNumber: String!
+  clientName: String!
+  totalTTC: Float!
+  dueDate: String!
+  daysOverdue: Int!
+}
+
+type AgingBucket {
+  label: String!
+  min: Int!
+  max: Int!
+  count: Int!
+  totalTTC: Float!
+}
+
+type MonthlyCollection {
+  month: String!
+  invoicedTTC: Float!
+  collectedTTC: Float!
+  invoicedCount: Int!
+  collectedCount: Int!
+}
+
+type CollectionData {
+  overdueInvoices: [OverdueInvoice!]!
+  agingBuckets: [AgingBucket!]!
+  monthlyCollection: [MonthlyCollection!]!
+}
+
+type AnalyticsAlert {
+  type: String!
+  severity: String!
+  message: String!
+  value: Float
+  threshold: Float
+}
+
 type FinancialAnalyticsData {
   kpi: FinancialAnalyticsKPI!
+  previousPeriod: FinancialAnalyticsPreviousPeriod
   revenueByClient: [RevenueByClient!]!
   revenueByProduct: [RevenueByProduct!]!
   monthlyRevenue: [MonthlyRevenue!]!
@@ -97,6 +185,8 @@ type FinancialAnalyticsData {
   expenseByCategory: [ExpenseByCategoryStat!]!
   revenueByClientMonthly: [RevenueByClientMonthly!]!
   expenseByCategoryMonthly: [ExpenseByCategoryMonthly!]!
+  collection: CollectionData!
+  alerts: [AnalyticsAlert!]!
 }
 
 type Query {

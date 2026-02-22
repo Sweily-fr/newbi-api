@@ -18,12 +18,13 @@ const extractSessionToken = (cookieHeader) => {
 
   // Chercher le cookie better-auth.session_token
   const cookies = cookieHeader.split(";").map((cookie) => cookie.trim());
-  const prefix = "better-auth.session_token=";
+  const prefixes = ["better-auth.session_token=", "__Secure-better-auth.session_token="];
 
   for (const cookie of cookies) {
-    if (cookie.startsWith(prefix)) {
+    const matchedPrefix = prefixes.find(p => cookie.startsWith(p));
+    if (matchedPrefix) {
       // Extraire la valeur complète (après le nom du cookie)
-      const rawValue = cookie.substring(prefix.length);
+      const rawValue = cookie.substring(matchedPrefix.length);
 
       // URL-décoder la valeur (Better Auth URL-encode les cookies signés)
       let decodedValue;
