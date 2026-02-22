@@ -422,12 +422,15 @@ router.get("/preview-file/:documentId", async (req, res) => {
       const displayName = (document.originalName || document.name)
         .replace(/\.(heic|heif)$/i, ".jpg");
 
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(displayName)}"`);
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Content-Length", jpegBuffer.length);
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", `frame-ancestors 'self' ${frontendUrl}`);
+      res.removeHeader("X-Frame-Options");
 
       res.end(jpegBuffer);
     } else {
@@ -435,6 +438,7 @@ router.get("/preview-file/:documentId", async (req, res) => {
         ? "application/pdf"
         : document.mimeType || "application/octet-stream";
 
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       res.setHeader(
         "Content-Disposition",
         `inline; filename="${encodeURIComponent(document.originalName || document.name)}"`
@@ -446,6 +450,8 @@ router.get("/preview-file/:documentId", async (req, res) => {
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", `frame-ancestors 'self' ${frontendUrl}`);
+      res.removeHeader("X-Frame-Options");
 
       response.Body.pipe(res);
     }
