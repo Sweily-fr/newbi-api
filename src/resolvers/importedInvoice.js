@@ -17,6 +17,7 @@ import {
   createNotFoundError,
   createInternalServerError,
 } from "../utils/errors.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 // Limite maximale d'import en lot
 const MAX_BATCH_IMPORT = 100;
@@ -659,6 +660,17 @@ const importedInvoiceResolvers = {
 
           await importedInvoice.save();
 
+          // Déclencher les automatisations INVOICE_IMPORTED (fire-and-forget)
+          documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
+            documentId: importedInvoice._id.toString(),
+            documentType: 'importedInvoice',
+            documentNumber: importedInvoice.originalInvoiceNumber || '',
+            clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
+            cloudflareUrl: cloudflareUrl,
+            mimeType: mimeType,
+            fileExtension: fileName?.split('.').pop() || 'pdf',
+          }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
+
           return {
             success: true,
             invoice: importedInvoice,
@@ -708,39 +720,6 @@ const importedInvoiceResolvers = {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
           }
 
-          // Convertir en base64 pour Claude Vision
-          const base64Data = fileBuffer.toString("base64");
-          const contentHash = crypto
-            .createHash("sha256")
-            .update(fileBuffer)
-            .digest("hex");
-
-          // OCR direct via Claude Vision
-          console.log(`🔍 importInvoiceDirect: OCR direct pour ${filename}`);
-          const rawResult = await claudeVisionOcrService.processFromBase64(
-            base64Data,
-            mimetype,
-            filename,
-            contentHash
-          );
-
-          if (!rawResult.success) {
-            throw createInternalServerError(
-              `Erreur OCR: ${rawResult.error || rawResult.message}`
-            );
-          }
-
-          // Formater et extraire les données de facture
-          const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
-
-          let invoiceData;
-          if (structuredResult.transaction_data) {
-            invoiceData = transformOcrToInvoiceDataV2(structuredResult, structuredResult);
-          } else {
-            const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
-            invoiceData = transformOcrToInvoiceDataV2(structuredResult, extractionResult);
-          }
-
           // Récupérer organizationId pour l'upload Cloudflare
           let organizationId = null;
           const rawOrgId =
@@ -766,7 +745,7 @@ const importedInvoiceResolvers = {
             }
           }
 
-          // Upload serveur-à-serveur vers Cloudflare (attendu car besoin de l'URL)
+          // Upload serveur-à-serveur vers Cloudflare (besoin de l'URL pour fallback OCR)
           console.log(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
           const uploadResult = await cloudflareService.uploadImage(
             fileBuffer,
@@ -776,10 +755,57 @@ const importedInvoiceResolvers = {
             organizationId
           );
 
+          let invoiceData;
+          let ocrProvider = "claude-vision";
+
+          if (claudeVisionOcrService.isAvailable()) {
+            // OCR direct via Claude Vision (base64)
+            const base64Data = fileBuffer.toString("base64");
+            const contentHash = crypto
+              .createHash("sha256")
+              .update(fileBuffer)
+              .digest("hex");
+
+            console.log(`🔍 importInvoiceDirect: OCR Claude Vision pour ${filename}`);
+            const rawResult = await claudeVisionOcrService.processFromBase64(
+              base64Data,
+              mimetype,
+              filename,
+              contentHash
+            );
+
+            if (!rawResult.success) {
+              throw createInternalServerError(
+                `Erreur OCR: ${rawResult.error || rawResult.message}`
+              );
+            }
+
+            const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+            if (structuredResult.transaction_data) {
+              invoiceData = transformOcrToInvoiceDataV2(structuredResult, structuredResult);
+            } else {
+              const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
+              invoiceData = transformOcrToInvoiceDataV2(structuredResult, extractionResult);
+            }
+
+            ocrProvider = rawResult.provider || "claude-vision";
+          } else {
+            // Fallback: OCR via service hybride (Mistral, Mindee, Google Document AI)
+            console.log(`🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`);
+            invoiceData = await processInvoiceWithOcr(
+              uploadResult.url,
+              filename,
+              mimetype,
+              workspaceId
+            );
+            ocrProvider = invoiceData.ocrData?.provider || "hybrid";
+          }
+
           // Enregistrer l'utilisation OCR
           await recordOcrUsage(user.id, workspaceId, plan, {
             fileName: filename,
-            provider: rawResult.provider || "claude-vision",
+            provider: ocrProvider,
             success: true,
           });
 
@@ -810,6 +836,17 @@ const importedInvoiceResolvers = {
           });
 
           await importedInvoice.save();
+
+          // Déclencher les automatisations INVOICE_IMPORTED (fire-and-forget)
+          documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
+            documentId: importedInvoice._id.toString(),
+            documentType: 'importedInvoice',
+            documentNumber: importedInvoice.originalInvoiceNumber || '',
+            clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
+            cloudflareUrl: uploadResult.url,
+            mimeType: mimetype,
+            fileExtension: filename?.split('.').pop() || 'pdf',
+          }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
 
           return {
             success: true,
@@ -940,6 +977,17 @@ const importedInvoiceResolvers = {
                   provider: ocrResult.result?.provider || "claude-vision",
                   success: true,
                 });
+
+                // Déclencher les automatisations INVOICE_IMPORTED (fire-and-forget)
+                documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
+                  documentId: importedInvoice._id.toString(),
+                  documentType: 'importedInvoice',
+                  documentNumber: importedInvoice.originalInvoiceNumber || '',
+                  clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
+                  cloudflareUrl: file.cloudflareUrl,
+                  mimeType: file.mimeType,
+                  fileExtension: file.fileName?.split('.').pop() || 'pdf',
+                }, user.id).catch(err => console.error('Erreur automatisation facture importée (batch):', err));
 
                 return {
                   success: true,

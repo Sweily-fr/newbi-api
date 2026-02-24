@@ -640,6 +640,7 @@ const sharedDocumentResolvers = {
           const document = await SharedDocument.findOne({
             _id: id,
             workspaceId,
+            trashedAt: null,
           });
 
           if (!document) {
@@ -649,25 +650,23 @@ const sharedDocumentResolvers = {
             };
           }
 
-          // Supprimer de Cloudflare R2
-          try {
-            await cloudflareService.deleteImage(document.fileKey);
-          } catch (cloudflareError) {
-            console.warn(
-              "⚠️ Erreur suppression Cloudflare:",
-              cloudflareError.message
-            );
-          }
-
-          // Supprimer de la base
-          await SharedDocument.deleteOne({ _id: id });
+          // Soft-delete : mettre en corbeille (suppression définitive dans 30 jours)
+          await SharedDocument.updateOne(
+            { _id: id },
+            {
+              $set: {
+                trashedAt: new Date(),
+                originalFolderId: document.folderId,
+              },
+            }
+          );
 
           return {
             success: true,
-            message: "Document supprimé",
+            message: "Document déplacé vers la corbeille",
           };
         } catch (error) {
-          console.error("❌ Erreur suppression document:", error);
+          console.error("❌ Erreur mise en corbeille document:", error);
           return {
             success: false,
             message: error.message,
@@ -685,32 +684,37 @@ const sharedDocumentResolvers = {
           const documents = await SharedDocument.find({
             _id: { $in: ids },
             workspaceId,
+            trashedAt: null,
           });
 
-          // Supprimer de Cloudflare R2
-          for (const doc of documents) {
-            try {
-              await cloudflareService.deleteImage(doc.fileKey);
-            } catch (cloudflareError) {
-              console.warn(
-                "⚠️ Erreur suppression Cloudflare:",
-                cloudflareError.message
-              );
-            }
+          if (documents.length === 0) {
+            return {
+              success: false,
+              message: "Aucun document trouvé",
+            };
           }
 
-          // Supprimer de la base
-          await SharedDocument.deleteMany({
-            _id: { $in: ids },
-            workspaceId,
-          });
+          const now = new Date();
+
+          // Soft-delete : mettre en corbeille en sauvegardant le dossier original
+          for (const doc of documents) {
+            await SharedDocument.updateOne(
+              { _id: doc._id },
+              {
+                $set: {
+                  trashedAt: now,
+                  originalFolderId: doc.folderId,
+                },
+              }
+            );
+          }
 
           return {
             success: true,
-            message: `${documents.length} document(s) supprimé(s)`,
+            message: `${documents.length} document(s) déplacé(s) vers la corbeille`,
           };
         } catch (error) {
-          console.error("❌ Erreur suppression documents:", error);
+          console.error("❌ Erreur mise en corbeille documents:", error);
           return {
             success: false,
             message: error.message,

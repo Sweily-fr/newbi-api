@@ -5,14 +5,50 @@ import SharedFolder from '../models/SharedFolder.js';
 import Invoice from '../models/Invoice.js';
 import Quote from '../models/Quote.js';
 import CreditNote from '../models/CreditNote.js';
+import ImportedInvoice from '../models/ImportedInvoice.js';
+import ImportedQuote from '../models/ImportedQuote.js';
 import cloudflareService from './cloudflareService.js';
 import axios from 'axios';
+
+// Suivi de progression en mémoire pour les automatisations en cours
+const _progressMap = new Map();
+
+export function getAutomationProgress(automationId) {
+  return _progressMap.get(automationId) || null;
+}
+
+/**
+ * Cache le PDF d'un document dans R2 et met à jour le champ cachedPdf du document.
+ * Permet aux automatisations suivantes d'utiliser une copie R2 serveur-à-serveur.
+ */
+async function cacheDocumentPdf(documentId, documentType, pdfBuffer, workspaceId) {
+  const ModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote };
+  const Model = ModelMap[documentType];
+  if (!Model) return null;
+
+  const uploadResult = await cloudflareService.uploadImage(
+    pdfBuffer,
+    `${documentId}.pdf`,
+    'system',
+    'sharedDocuments',
+    workspaceId
+  );
+
+  await Model.updateOne(
+    { _id: documentId },
+    { $set: { cachedPdf: { key: uploadResult.key, url: uploadResult.url, generatedAt: new Date() } } }
+  );
+
+  return { key: uploadResult.key, url: uploadResult.url };
+}
 
 const DOCUMENT_TYPE_LABELS = {
   invoice: 'Facture',
   quote: 'Devis',
   creditNote: 'Avoir',
   expense: 'Depense',
+  importedInvoice: 'Facture_importee',
+  importedQuote: 'Devis_importe',
 };
 
 /**
@@ -78,8 +114,13 @@ function buildFileName(pattern, documentContext) {
   return sanitizeFileName(fileName) + '.pdf';
 }
 
+// Cache mémoire pour les sous-dossiers résolus (évite les requêtes DB répétées)
+const _folderCache = new Map();
+const FOLDER_CACHE_TTL = 60 * 1000; // 1 minute
+
 /**
- * Résout le dossier cible, en créant les sous-dossiers dynamiques si nécessaire
+ * Résout le dossier cible, en créant les sous-dossiers dynamiques si nécessaire.
+ * Utilise un cache mémoire pour éviter les requêtes répétées dans un batch.
  */
 async function resolveTargetFolder(actionConfig, workspaceId, documentContext, userId) {
   if (!actionConfig.createSubfolder) {
@@ -92,19 +133,24 @@ async function resolveTargetFolder(actionConfig, workspaceId, documentContext, u
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const clientName = sanitizeFileName(documentContext.clientName || 'Sans_client');
 
-  // Résoudre les variables du pattern
   const resolvedPattern = pattern
     .replace('{year}', year)
     .replace('{month}', month)
     .replace('{clientName}', clientName);
 
-  // Découper le pattern en niveaux (ex: "2026/01" → ["2026", "01"])
   const levels = resolvedPattern.split('/').filter(Boolean);
 
   let currentParentId = actionConfig.targetFolderId;
 
   for (const levelName of levels) {
-    // Chercher le sous-dossier existant
+    const cacheKey = `${workspaceId}:${currentParentId}:${levelName}`;
+    const cached = _folderCache.get(cacheKey);
+
+    if (cached && Date.now() - cached.ts < FOLDER_CACHE_TTL) {
+      currentParentId = cached.id;
+      continue;
+    }
+
     let folder = await SharedFolder.findOne({
       workspaceId,
       parentId: currentParentId,
@@ -113,7 +159,6 @@ async function resolveTargetFolder(actionConfig, workspaceId, documentContext, u
     });
 
     if (!folder) {
-      // Créer le sous-dossier
       folder = new SharedFolder({
         name: levelName,
         workspaceId,
@@ -124,6 +169,7 @@ async function resolveTargetFolder(actionConfig, workspaceId, documentContext, u
       await folder.save();
     }
 
+    _folderCache.set(cacheKey, { id: folder._id, ts: Date.now() });
     currentParentId = folder._id;
   }
 
@@ -139,15 +185,11 @@ const documentAutomationService = {
    */
   async executeAutomations(triggerType, workspaceId, documentContext, userId) {
     try {
-      console.log(`🔍 [DocumentAutomation] Recherche automations: trigger=${triggerType}, workspace=${workspaceId}`);
-
       const automations = await DocumentAutomation.find({
         workspaceId,
         triggerType,
         isActive: true,
       });
-
-      console.log(`🔍 [DocumentAutomation] ${automations.length} automation(s) trouvée(s) pour ${triggerType}`);
 
       if (automations.length === 0) {
         return { executed: 0, results: [] };
@@ -166,6 +208,20 @@ const documentAutomationService = {
           });
 
           if (existingSuccessLog) {
+            // Si le SharedDocument est en corbeille, le restaurer
+            if (existingSuccessLog.sharedDocumentId) {
+              await SharedDocument.updateOne(
+                {
+                  _id: existingSuccessLog.sharedDocumentId,
+                  trashedAt: { $ne: null },
+                },
+                {
+                  $set: { trashedAt: null },
+                  $unset: { originalFolderId: '' },
+                }
+              );
+            }
+
             results.push({
               automationId: automation._id,
               automationName: automation.name,
@@ -183,25 +239,6 @@ const documentAutomationService = {
             status: 'FAILED',
           });
 
-          console.log(`📄 [DocumentAutomation] Génération PDF pour ${documentContext.documentType} ${documentContext.documentId} (automation: "${automation.name}")`);
-
-          // Générer le PDF
-          let pdfBuffer;
-          try {
-            pdfBuffer = await generateDocumentPdf(
-              documentContext.documentId,
-              documentContext.documentType
-            );
-          } catch (pdfError) {
-            throw new Error(`Erreur génération PDF: ${pdfError.message}`);
-          }
-
-          if (!pdfBuffer || pdfBuffer.length === 0) {
-            throw new Error('Le PDF généré est vide');
-          }
-
-          console.log(`✅ [DocumentAutomation] PDF généré: ${pdfBuffer.length} bytes`);
-
           // Résoudre le dossier cible
           const targetFolderId = await resolveTargetFolder(
             automation.actionConfig,
@@ -216,14 +253,56 @@ const documentAutomationService = {
             documentContext
           );
 
-          // Upload vers R2
-          const uploadResult = await cloudflareService.uploadImage(
-            pdfBuffer,
-            fileName,
-            userId,
-            'sharedDocuments',
-            workspaceId
-          );
+          // Chercher le PDF en cache pour éviter la regénération Puppeteer
+          const CacheModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote };
+          const CacheModel = CacheModelMap[documentContext.documentType];
+          const cachedDoc = CacheModel
+            ? await CacheModel.findById(documentContext.documentId).select('cachedPdf').lean()
+            : null;
+
+          let uploadResult;
+          let fileSize;
+
+          if (cachedDoc?.cachedPdf?.key) {
+            // Copie R2 serveur-à-serveur (instantanée, pas de Puppeteer)
+            uploadResult = await cloudflareService.copyToSharedDocuments(
+              cachedDoc.cachedPdf.key,
+              cloudflareService.sharedDocumentsBucketName,
+              fileName,
+              workspaceId
+            );
+            fileSize = 0; // Taille inconnue en copie R2, pas critique
+          } else {
+            // Fallback : générer le PDF puis le cacher pour les prochaines fois
+            let pdfBuffer;
+            try {
+              pdfBuffer = await generateDocumentPdf(
+                documentContext.documentId,
+                documentContext.documentType
+              );
+            } catch (pdfError) {
+              throw new Error(`Erreur génération PDF: ${pdfError.message}`);
+            }
+
+            if (!pdfBuffer || pdfBuffer.length === 0) {
+              throw new Error('Le PDF généré est vide');
+            }
+
+            uploadResult = await cloudflareService.uploadImage(
+              pdfBuffer,
+              fileName,
+              userId,
+              'sharedDocuments',
+              workspaceId
+            );
+            fileSize = pdfBuffer.length;
+
+            // Cacher le PDF pour les automatisations futures (fire-and-forget)
+            if (CacheModel) {
+              cacheDocumentPdf(documentContext.documentId, documentContext.documentType, pdfBuffer, workspaceId)
+                .catch(() => {});
+            }
+          }
 
           // Récupérer le nom du dossier cible pour le log
           const targetFolder = await SharedFolder.findById(targetFolderId);
@@ -237,7 +316,7 @@ const documentAutomationService = {
             fileUrl: uploadResult.url,
             fileKey: uploadResult.key,
             mimeType: 'application/pdf',
-            fileSize: pdfBuffer.length,
+            fileSize: fileSize,
             fileExtension: 'pdf',
             workspaceId,
             folderId: targetFolderId,
@@ -249,8 +328,6 @@ const documentAutomationService = {
           });
 
           await sharedDocument.save();
-
-          console.log(`✅ [DocumentAutomation] SharedDocument créé: ${sharedDocument._id} dans dossier "${targetFolderName}" (${targetFolderId})`);
 
           // Logger le succès
           await DocumentAutomationLog.create({
@@ -266,7 +343,7 @@ const documentAutomationService = {
             targetFolderName,
             status: 'SUCCESS',
             fileName,
-            fileSize: pdfBuffer.length,
+            fileSize: fileSize,
           });
 
           // Mettre à jour les stats
@@ -358,6 +435,20 @@ const documentAutomationService = {
           });
 
           if (existingSuccessLog) {
+            // Si le SharedDocument est en corbeille, le restaurer
+            if (existingSuccessLog.sharedDocumentId) {
+              await SharedDocument.updateOne(
+                {
+                  _id: existingSuccessLog.sharedDocumentId,
+                  trashedAt: { $ne: null },
+                },
+                {
+                  $set: { trashedAt: null },
+                  $unset: { originalFolderId: '' },
+                }
+              );
+            }
+
             results.push({
               automationId: automation._id,
               automationName: automation.name,
@@ -519,8 +610,92 @@ const documentAutomationService = {
       QUOTE_ACCEPTED:    { model: Quote,      status: 'COMPLETED', docType: 'quote' },
       QUOTE_CANCELED:    { model: Quote,      status: 'CANCELED',  docType: 'quote' },
       CREDIT_NOTE_CREATED: { model: CreditNote, status: null,      docType: 'creditNote' },
+      INVOICE_IMPORTED:    { model: ImportedInvoice, status: 'VALIDATED', docType: 'importedInvoice' },
+      QUOTE_IMPORTED:      { model: ImportedQuote,   status: 'VALIDATED', docType: 'importedQuote' },
     };
     return TRIGGER_TO_QUERY[triggerType] || null;
+  },
+
+  /**
+   * Supprime les logs SUCCESS dont le SharedDocument associé a été supprimé.
+   * Permet de re-traiter un document si l'utilisateur a supprimé le fichier partagé.
+   */
+  async _cleanOrphanedLogs(automationId, docType, documentIds) {
+    try {
+      const successLogs = await DocumentAutomationLog.find({
+        automationId,
+        sourceDocumentType: docType,
+        sourceDocumentId: { $in: documentIds },
+        status: 'SUCCESS',
+        sharedDocumentId: { $ne: null },
+      }).lean();
+
+      if (successLogs.length === 0) return;
+
+      // Vérifier quels SharedDocuments existent encore
+      const sharedDocIds = successLogs.map(l => l.sharedDocumentId).filter(Boolean);
+      const existingDocs = await SharedDocument.find({
+        _id: { $in: sharedDocIds },
+      }).select('_id').lean();
+
+      const existingIds = new Set(existingDocs.map(d => d._id.toString()));
+
+      // Supprimer les logs dont le SharedDocument n'existe plus
+      const orphanedLogIds = successLogs
+        .filter(l => l.sharedDocumentId && !existingIds.has(l.sharedDocumentId.toString()))
+        .map(l => l._id);
+
+      if (orphanedLogIds.length > 0) {
+        await DocumentAutomationLog.deleteMany({ _id: { $in: orphanedLogIds } });
+
+        // Décrémenter le compteur totalExecutions
+        await DocumentAutomation.findByIdAndUpdate(automationId, {
+          $inc: { 'stats.totalExecutions': -orphanedLogIds.length },
+        });
+
+        // Orphaned logs cleaned
+      }
+    } catch (error) {
+      console.error('⚠️ [DocumentAutomation] Erreur nettoyage logs orphelins:', error.message);
+    }
+  },
+
+  /**
+   * Restaure les SharedDocuments en corbeille qui avaient été créés par une automatisation.
+   * Quand on relance une automatisation, les documents en corbeille sont restaurés
+   * vers leur dossier d'origine au lieu d'être re-créés.
+   */
+  async _restoreTrashedAutomationDocs(automationId, docType, documentIds) {
+    try {
+      const successLogs = await DocumentAutomationLog.find({
+        automationId,
+        sourceDocumentType: docType,
+        sourceDocumentId: { $in: documentIds },
+        status: 'SUCCESS',
+        sharedDocumentId: { $ne: null },
+      }).lean();
+
+      if (successLogs.length === 0) return 0;
+
+      const sharedDocIds = successLogs.map(l => l.sharedDocumentId).filter(Boolean);
+
+      // Restaurer les SharedDocuments en corbeille (folderId est déjà correct)
+      const result = await SharedDocument.updateMany(
+        {
+          _id: { $in: sharedDocIds },
+          trashedAt: { $ne: null },
+        },
+        {
+          $set: { trashedAt: null },
+          $unset: { originalFolderId: '' },
+        }
+      );
+
+      return result.modifiedCount || 0;
+    } catch (error) {
+      console.error('⚠️ [DocumentAutomation] Erreur restauration docs corbeille:', error.message);
+      return 0;
+    }
   },
 
   /**
@@ -538,7 +713,10 @@ const documentAutomationService = {
     const documents = await config.model.find(query).select('_id').lean();
     if (documents.length === 0) return 0;
 
-    // Compter ceux qui ont déjà un log SUCCESS
+    // Nettoyer les logs SUCCESS dont le SharedDocument a été supprimé
+    await this._cleanOrphanedLogs(automation._id, config.docType, documents.map(d => d._id));
+
+    // Compter ceux qui ont déjà un log SUCCESS valide
     const successLogs = await DocumentAutomationLog.countDocuments({
       automationId: automation._id,
       sourceDocumentType: config.docType,
@@ -565,7 +743,10 @@ const documentAutomationService = {
     const documents = await config.model.find(query).lean();
     if (documents.length === 0) return [];
 
-    // Récupérer les IDs qui ont déjà un log SUCCESS
+    // Nettoyer les logs SUCCESS dont le SharedDocument a été supprimé
+    await this._cleanOrphanedLogs(automation._id, config.docType, documents.map(d => d._id));
+
+    // Récupérer les IDs qui ont déjà un log SUCCESS valide
     const successLogs = await DocumentAutomationLog.find({
       automationId: automation._id,
       sourceDocumentType: config.docType,
@@ -580,9 +761,9 @@ const documentAutomationService = {
       .map(d => ({
         documentId: d._id.toString(),
         documentType: config.docType,
-        documentNumber: d.number || '',
+        documentNumber: d.number || d.originalInvoiceNumber || d.originalQuoteNumber || '',
         prefix: d.prefix || '',
-        clientName: d.client?.name || '',
+        clientName: d.client?.name || d.vendor?.name || '',
       }));
   },
 
@@ -604,12 +785,6 @@ const documentAutomationService = {
       status: 'FAILED',
     });
 
-    // Convertir le base64 en Buffer
-    const pdfBuffer = Buffer.from(pdfBase64, 'base64');
-    if (!pdfBuffer || pdfBuffer.length === 0) {
-      throw new Error('Le PDF reçu est vide');
-    }
-
     // Récupérer le document source pour le contexte
     const config = this._getTriggerConfig(automation.triggerType);
     if (!config) {
@@ -621,12 +796,56 @@ const documentAutomationService = {
       throw new Error(`Document non trouvé: ${documentId}`);
     }
 
+    // Récupérer le fichier selon le type de document
+    let fileBuffer = null;
+    let fileMimeType = 'application/pdf';
+    let fileExt = 'pdf';
+    let fileSize = 0;
+    let r2CopySource = null; // Pour copie serveur-à-serveur R2
+
+    if (documentType === 'importedInvoice' || documentType === 'importedQuote') {
+      // Document importé : copie serveur-à-serveur R2 (sans transit par le serveur)
+      const sourceKey = doc.file?.cloudflareKey;
+      if (!sourceKey) throw new Error('Clé R2 introuvable pour le document importé');
+      r2CopySource = {
+        key: sourceKey,
+        bucket: cloudflareService.importedInvoicesBucketName,
+      };
+      fileMimeType = doc.file?.mimeType || 'application/pdf';
+      fileExt = doc.file?.originalFileName?.split('.').pop() || 'pdf';
+      fileSize = doc.file?.fileSize || 0;
+    } else if (pdfBase64) {
+      // PDF fourni par le client
+      fileBuffer = Buffer.from(pdfBase64, 'base64');
+      fileSize = fileBuffer.length;
+      // Cacher le PDF pour les automatisations futures (fire-and-forget)
+      cacheDocumentPdf(documentId, documentType, fileBuffer, workspaceId).catch(() => {});
+    } else if (doc.cachedPdf?.key) {
+      // Copie R2 serveur-à-serveur depuis le cache (instantanée)
+      r2CopySource = {
+        key: doc.cachedPdf.key,
+        bucket: cloudflareService.sharedDocumentsBucketName,
+      };
+    } else {
+      // Générer le PDF côté serveur via l'API Next.js
+      fileBuffer = await generateDocumentPdf(documentId, documentType);
+      fileSize = fileBuffer?.length || 0;
+      // Cacher le PDF pour les automatisations futures (fire-and-forget)
+      if (fileBuffer) {
+        cacheDocumentPdf(documentId, documentType, fileBuffer, workspaceId).catch(() => {});
+      }
+    }
+
+    if (!r2CopySource && (!fileBuffer || fileBuffer.length === 0)) {
+      throw new Error('Le fichier généré/récupéré est vide');
+    }
+
     const documentContext = {
       documentId: doc._id.toString(),
       documentType,
-      documentNumber: doc.number || '',
+      documentNumber: doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '',
       prefix: doc.prefix || '',
-      clientName: doc.client?.name || '',
+      clientName: doc.client?.name || doc.vendor?.name || '',
     };
 
     // Résoudre le dossier cible
@@ -643,14 +862,18 @@ const documentAutomationService = {
       documentContext
     );
 
-    // Upload vers R2
-    const uploadResult = await cloudflareService.uploadImage(
-      pdfBuffer,
-      fileName,
-      userId,
-      'sharedDocuments',
-      workspaceId
-    );
+    // Upload ou copie vers R2
+    let uploadResult;
+    if (r2CopySource) {
+      // Copie serveur-à-serveur R2 (pas de transit réseau)
+      uploadResult = await cloudflareService.copyToSharedDocuments(
+        r2CopySource.key, r2CopySource.bucket, fileName, workspaceId
+      );
+    } else {
+      uploadResult = await cloudflareService.uploadImage(
+        fileBuffer, fileName, userId, 'sharedDocuments', workspaceId
+      );
+    }
 
     // Récupérer le nom du dossier cible
     const targetFolder = await SharedFolder.findById(targetFolderId);
@@ -663,9 +886,9 @@ const documentAutomationService = {
       description: `Importé automatiquement par l'automatisation "${automation.name}"`,
       fileUrl: uploadResult.url,
       fileKey: uploadResult.key,
-      mimeType: 'application/pdf',
-      fileSize: pdfBuffer.length,
-      fileExtension: 'pdf',
+      mimeType: fileMimeType,
+      fileSize: fileSize,
+      fileExtension: fileExt,
       workspaceId,
       folderId: targetFolderId,
       uploadedBy: userId,
@@ -691,7 +914,7 @@ const documentAutomationService = {
       targetFolderName,
       status: 'SUCCESS',
       fileName,
-      fileSize: pdfBuffer.length,
+      fileSize: fileSize,
     });
 
     // Mettre à jour les stats
@@ -719,8 +942,8 @@ const documentAutomationService = {
   async executeAutomationForExistingDocuments(automation, workspaceId, userId) {
     const config = this._getTriggerConfig(automation.triggerType);
     if (!config) {
-      console.log(`⚠️ [DocumentAutomation] Trigger "${automation.triggerType}" non supporté pour le traitement rétroactif`);
-      return { successCount: 0, skipCount: 0, failCount: 0, total: 0 };
+      // Trigger non supporté pour le traitement rétroactif
+      return { successCount: 0, skipCount: 0, failCount: 0, restoredCount: 0, total: 0 };
     }
 
     try {
@@ -732,91 +955,155 @@ const documentAutomationService = {
       const documents = await config.model.find(query).lean();
 
       if (documents.length === 0) {
-        console.log(`ℹ️ [DocumentAutomation] Aucun document existant pour "${automation.name}" (${automation.triggerType})`);
-        return { successCount: 0, skipCount: 0, failCount: 0, total: 0 };
+        // Aucun document existant
+        return { successCount: 0, skipCount: 0, failCount: 0, restoredCount: 0, total: 0 };
       }
 
-      console.log(`🔄 [DocumentAutomation] Traitement rétroactif: ${documents.length} documents pour "${automation.name}"`);
+      // Nettoyer les logs SUCCESS dont le SharedDocument a été supprimé définitivement
+      await this._cleanOrphanedLogs(automation._id, config.docType, documents.map(d => d._id));
+
+      // Restaurer les SharedDocuments en corbeille vers leur dossier d'origine
+      const restoredCount = await this._restoreTrashedAutomationDocs(
+        automation._id, config.docType, documents.map(d => d._id)
+      );
 
       let successCount = 0;
       let skipCount = 0;
       let failCount = 0;
       let firstError = null;
 
+      // Pré-charger TOUS les logs SUCCESS en une seule requête
+      const allDocIds = documents.map(d => d._id);
+      const existingSuccessLogs = await DocumentAutomationLog.find({
+        sourceDocumentType: config.docType,
+        sourceDocumentId: { $in: allDocIds },
+        automationId: automation._id,
+        status: 'SUCCESS',
+      }).select('sourceDocumentId').lean();
+
+      const alreadyProcessedIds = new Set(
+        existingSuccessLogs.map(log => log.sourceDocumentId.toString())
+      );
+
+      // Filtrer les documents à traiter (exclure ceux déjà traités)
+      const docsToProcess = documents.filter(doc => !alreadyProcessedIds.has(doc._id.toString()));
+      skipCount = documents.length - docsToProcess.length;
+
+      if (docsToProcess.length === 0) {
+        return { successCount: 0, skipCount, failCount: 0, restoredCount, total: documents.length };
+      }
+
+      // Supprimer TOUS les logs FAILED en une seule requête
+      await DocumentAutomationLog.deleteMany({
+        sourceDocumentType: config.docType,
+        sourceDocumentId: { $in: docsToProcess.map(d => d._id) },
+        automationId: automation._id,
+        status: 'FAILED',
+      });
+
+      // Pré-résoudre le dossier cible (souvent le même pour tous les docs)
+      const sampleContext = {
+        documentId: docsToProcess[0]._id.toString(),
+        documentType: config.docType,
+        documentNumber: '',
+        prefix: '',
+        clientName: '',
+      };
+      const preResolvedFolderId = await resolveTargetFolder(
+        automation.actionConfig, workspaceId, sampleContext, userId
+      );
+      const preResolvedFolder = await SharedFolder.findById(preResolvedFolderId).lean();
+      const preResolvedFolderName = preResolvedFolder?.name || 'Inconnu';
+
+      const isR2Copy = config.docType === 'importedInvoice' || config.docType === 'importedQuote';
       const BATCH_SIZE = 5;
-      const BATCH_DELAY = 500;
+      const BATCH_DELAY = 200;
+      const automationIdStr = automation._id.toString();
 
-      for (let i = 0; i < documents.length; i += BATCH_SIZE) {
-        const batch = documents.slice(i, i + BATCH_SIZE);
+      // Initialiser le suivi de progression
+      _progressMap.set(automationIdStr, { current: 0, total: docsToProcess.length });
 
-        // Pause entre batches (sauf le premier)
+      for (let i = 0; i < docsToProcess.length; i += BATCH_SIZE) {
+        const batch = docsToProcess.slice(i, i + BATCH_SIZE);
+
         if (i > 0) {
           await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
         }
 
+        // Traitement séquentiel document par document
         for (const doc of batch) {
           try {
-            // Ne skip que les logs SUCCESS (les FAILED peuvent être réessayés)
-            const existingSuccessLog = await DocumentAutomationLog.findOne({
-              sourceDocumentType: config.docType,
-              sourceDocumentId: doc._id,
-              automationId: automation._id,
-              status: 'SUCCESS',
-            });
-
-            if (existingSuccessLog) {
-              skipCount++;
-              continue;
-            }
-
-            // Supprimer les anciens logs FAILED pour ce document (avant de réessayer)
-            await DocumentAutomationLog.deleteMany({
-              sourceDocumentType: config.docType,
-              sourceDocumentId: doc._id,
-              automationId: automation._id,
-              status: 'FAILED',
-            });
-
             const documentContext = {
               documentId: doc._id.toString(),
               documentType: config.docType,
-              documentNumber: doc.number,
+              documentNumber: doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '',
               prefix: doc.prefix || '',
-              clientName: doc.client?.name || '',
+              clientName: doc.client?.name || doc.vendor?.name || '',
             };
 
-            // Générer le PDF
-            const pdfBuffer = await generateDocumentPdf(documentContext.documentId, config.docType);
-            if (!pdfBuffer || pdfBuffer.length === 0) {
-              throw new Error('Le PDF généré est vide');
+            let fileBuffer = null;
+            let fileMimeType = 'application/pdf';
+            let fileExt = 'pdf';
+            let fileSize = 0;
+            let r2CopySource = null;
+
+            if (isR2Copy) {
+              const sourceKey = doc.file?.cloudflareKey;
+              if (!sourceKey) throw new Error('Clé R2 introuvable pour la facture importée');
+              r2CopySource = {
+                key: sourceKey,
+                bucket: cloudflareService.importedInvoicesBucketName,
+              };
+              fileMimeType = doc.file?.mimeType || 'application/pdf';
+              fileExt = doc.file?.originalFileName?.split('.').pop() || 'pdf';
+              fileSize = doc.file?.fileSize || 0;
+            } else if (doc.cachedPdf?.key) {
+              // Copie R2 serveur-à-serveur depuis le cache (instantanée)
+              r2CopySource = {
+                key: doc.cachedPdf.key,
+                bucket: cloudflareService.sharedDocumentsBucketName,
+              };
+            } else {
+              fileBuffer = await generateDocumentPdf(documentContext.documentId, config.docType);
+              fileSize = fileBuffer?.length || 0;
             }
 
-            // Résoudre le dossier cible
-            const targetFolderId = await resolveTargetFolder(
-              automation.actionConfig,
-              workspaceId,
-              documentContext,
-              userId
-            );
+            if (!r2CopySource && (!fileBuffer || fileBuffer.length === 0)) {
+              throw new Error('Le fichier généré/récupéré est vide');
+            }
 
-            // Construire le nom du fichier
+            let targetFolderId = preResolvedFolderId;
+            let targetFolderName = preResolvedFolderName;
+            if (automation.actionConfig.createSubfolder && automation.actionConfig.subfolderPattern) {
+              targetFolderId = await resolveTargetFolder(
+                automation.actionConfig, workspaceId, documentContext, userId
+              );
+              if (targetFolderId.toString() !== preResolvedFolderId.toString()) {
+                const folder = await SharedFolder.findById(targetFolderId).lean();
+                targetFolderName = folder?.name || 'Inconnu';
+              }
+            }
+
             const fileName = buildFileName(
               automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
               documentContext
             );
 
-            // Upload vers R2
-            const uploadResult = await cloudflareService.uploadImage(
-              pdfBuffer,
-              fileName,
-              userId,
-              'sharedDocuments',
-              workspaceId
-            );
-
-            // Récupérer le nom du dossier cible
-            const targetFolder = await SharedFolder.findById(targetFolderId);
-            const targetFolderName = targetFolder?.name || 'Inconnu';
+            let uploadResult;
+            if (r2CopySource) {
+              uploadResult = await cloudflareService.copyToSharedDocuments(
+                r2CopySource.key, r2CopySource.bucket, fileName, workspaceId
+              );
+            } else {
+              uploadResult = await cloudflareService.uploadImage(
+                fileBuffer, fileName, userId, 'sharedDocuments', workspaceId
+              );
+              // Cacher le PDF pour les prochaines automatisations (fire-and-forget)
+              if (!isR2Copy && fileBuffer) {
+                cacheDocumentPdf(doc._id.toString(), config.docType, fileBuffer, workspaceId)
+                  .catch(() => {});
+              }
+            }
 
             // Créer le SharedDocument
             const sharedDocument = new SharedDocument({
@@ -825,9 +1112,9 @@ const documentAutomationService = {
               description: `Importé automatiquement par l'automatisation "${automation.name}"`,
               fileUrl: uploadResult.url,
               fileKey: uploadResult.key,
-              mimeType: 'application/pdf',
-              fileSize: pdfBuffer.length,
-              fileExtension: 'pdf',
+              mimeType: fileMimeType,
+              fileSize: fileSize,
+              fileExtension: fileExt,
               workspaceId,
               folderId: targetFolderId,
               uploadedBy: userId,
@@ -853,65 +1140,39 @@ const documentAutomationService = {
               targetFolderName,
               status: 'SUCCESS',
               fileName,
-              fileSize: pdfBuffer.length,
-            });
-
-            // Mettre à jour les stats
-            await DocumentAutomation.findByIdAndUpdate(automation._id, {
-              $inc: { 'stats.totalExecutions': 1 },
-              $set: {
-                'stats.lastExecutedAt': new Date(),
-                'stats.lastDocumentId': sharedDocument._id,
-              },
+              fileSize,
             });
 
             successCount++;
           } catch (error) {
-            console.error(
-              `❌ [DocumentAutomation] Erreur rétroactive doc ${doc._id} pour "${automation.name}":`,
-              error.message
-            );
-
-            // Logger l'échec
-            try {
-              await DocumentAutomationLog.create({
-                automationId: automation._id,
-                workspaceId,
-                sourceDocumentType: config.docType,
-                sourceDocumentId: doc._id,
-                sourceDocumentNumber: doc.prefix
-                  ? `${doc.prefix}${doc.number}`
-                  : doc.number || '',
-                status: 'FAILED',
-                error: error.message,
-              });
-            } catch (logError) {
-              if (logError.code !== 11000) {
-                console.error('❌ [DocumentAutomation] Erreur log rétroactif:', logError.message);
-              }
-            }
-
-            await DocumentAutomation.findByIdAndUpdate(automation._id, {
-              $inc: { 'stats.failedExecutions': 1 },
-            }).catch(() => {});
-
-            if (!firstError) {
-              firstError = error.message;
-            }
+            if (!firstError) firstError = error.message;
             failCount++;
           }
+
+          // Mettre à jour la progression après chaque document
+          _progressMap.set(automationIdStr, { current: successCount + failCount, total: docsToProcess.length });
         }
       }
 
-      console.log(
-        `✅ [DocumentAutomation] Traitement rétroactif terminé pour "${automation.name}": ` +
-        `${successCount} succès, ${skipCount} ignorés, ${failCount} échecs sur ${documents.length} documents`
-      );
+      // Une seule mise à jour de stats à la fin
+      const statsUpdate = {};
+      if (successCount > 0) {
+        statsUpdate.$inc = { 'stats.totalExecutions': successCount };
+        statsUpdate.$set = { 'stats.lastExecutedAt': new Date() };
+      }
+      if (failCount > 0) {
+        if (!statsUpdate.$inc) statsUpdate.$inc = {};
+        statsUpdate.$inc['stats.failedExecutions'] = failCount;
+      }
+      if (Object.keys(statsUpdate).length > 0) {
+        await DocumentAutomation.findByIdAndUpdate(automation._id, statsUpdate).catch(() => {});
+      }
 
-      return { successCount, skipCount, failCount, total: documents.length, firstError };
+      _progressMap.delete(automationIdStr);
+      return { successCount, skipCount, failCount, restoredCount, total: documents.length, firstError };
     } catch (error) {
-      console.error(`❌ [DocumentAutomation] Erreur globale rétroactive pour "${automation.name}":`, error);
-      return { successCount: 0, skipCount: 0, failCount: 0, total: 0, firstError: error.message };
+      _progressMap.delete(automation._id.toString());
+      return { successCount: 0, skipCount: 0, failCount: 0, restoredCount: 0, total: 0, firstError: error.message };
     }
   },
 };

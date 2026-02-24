@@ -18,7 +18,7 @@ const documentAutomationLogSchema = new mongoose.Schema({
   sourceDocumentType: {
     type: String,
     required: true,
-    enum: ['invoice', 'quote', 'creditNote', 'expense']
+    enum: ['invoice', 'quote', 'creditNote', 'expense', 'importedInvoice']
   },
   sourceDocumentId: {
     type: mongoose.Schema.Types.ObjectId,

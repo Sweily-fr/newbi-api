@@ -1104,21 +1104,17 @@ const quoteResolvers = {
         }
       }
 
-      // Automatisations documents partagés
-      try {
-        const triggerMap = { PENDING: 'QUOTE_SENT', COMPLETED: 'QUOTE_ACCEPTED', CANCELED: 'QUOTE_CANCELED' };
-        const trigger = triggerMap[status];
-        if (trigger) {
-          await documentAutomationService.executeAutomations(trigger, workspaceId, {
-            documentId: quote._id.toString(),
-            documentType: 'quote',
-            documentNumber: quote.number,
-            prefix: quote.prefix || '',
-            clientName: quote.client?.name || '',
-          }, user._id.toString());
-        }
-      } catch (docAutoError) {
-        console.error('Erreur automatisation documents (devis):', docAutoError);
+      // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+      const triggerMap = { PENDING: 'QUOTE_SENT', COMPLETED: 'QUOTE_ACCEPTED', CANCELED: 'QUOTE_CANCELED' };
+      const docTrigger = triggerMap[status];
+      if (docTrigger) {
+        documentAutomationService.executeAutomations(docTrigger, workspaceId, {
+          documentId: quote._id.toString(),
+          documentType: 'quote',
+          documentNumber: quote.number,
+          prefix: quote.prefix || '',
+          clientName: quote.client?.name || '',
+        }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (devis):', err));
       }
 
       return await quote.populate("createdBy");

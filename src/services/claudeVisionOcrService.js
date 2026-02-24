@@ -394,6 +394,10 @@ class ClaudeVisionOcrService {
    * Avec modèle adaptatif (Haiku/Sonnet)
    */
   async processFromBase64(base64Data, mimeType, originalUrl, hash = null, { useBatchModel = false } = {}) {
+    if (!this.isAvailable()) {
+      throw new Error("Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)");
+    }
+
     // Détecter la complexité
     const complexity = this.detectInvoiceComplexity(base64Data);
     // En mode batch, on utilise Haiku pour les documents simples ; sinon toujours Sonnet pour la qualité

@@ -8,6 +8,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
+  CopyObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
@@ -974,6 +975,74 @@ class CloudflareService {
       console.error(`❌ Erreur upload signature:`, error);
       throw new Error(`Échec de l'upload ${imageType}: ${error.message}`);
     }
+  }
+
+  /**
+   * Copie un fichier d'un bucket R2 vers le bucket shared-documents (copie serveur-à-serveur).
+   * Évite de télécharger et re-uploader le fichier à travers le serveur.
+   * @param {string} sourceKey - Clé du fichier source dans le bucket source
+   * @param {string} sourceBucketName - Nom du bucket source
+   * @param {string} destFileName - Nom du fichier de destination (pour générer la clé)
+   * @param {string} workspaceId - ID du workspace (pour le préfixe de destination)
+   * @returns {Promise<{key: string, url: string, contentType: string}>}
+   */
+  async copyToSharedDocuments(sourceKey, sourceBucketName, destFileName, workspaceId) {
+    const uniqueId = crypto.randomUUID();
+    const fileExtension = path.extname(destFileName).toLowerCase() || '.pdf';
+    const destKey = `shared-documents/${workspaceId}/${uniqueId}${fileExtension}`;
+    const contentType = this.getContentType(fileExtension);
+
+    try {
+      // Copie serveur-à-serveur R2 (cross-bucket, même compte)
+      const command = new CopyObjectCommand({
+        Bucket: this.sharedDocumentsBucketName,
+        Key: destKey,
+        CopySource: `${sourceBucketName}/${sourceKey}`,
+        ContentType: contentType,
+        MetadataDirective: 'REPLACE',
+        Metadata: {
+          workspaceId,
+          imageType: 'sharedDocuments',
+          copiedAt: new Date().toISOString(),
+        },
+      });
+
+      await this.client.send(command);
+    } catch (copyError) {
+      // Fallback: télécharger puis re-uploader si CopyObject échoue
+      const getCommand = new GetObjectCommand({
+        Bucket: sourceBucketName,
+        Key: sourceKey,
+      });
+      const response = await this.client.send(getCommand);
+      const fileBuffer = Buffer.from(await response.Body.transformToByteArray());
+
+      const putCommand = new PutObjectCommand({
+        Bucket: this.sharedDocumentsBucketName,
+        Key: destKey,
+        Body: fileBuffer,
+        ContentType: contentType,
+        Metadata: {
+          workspaceId,
+          imageType: 'sharedDocuments',
+          copiedAt: new Date().toISOString(),
+        },
+      });
+
+      await this.client.send(putCommand);
+    }
+
+    // Générer l'URL publique
+    const cleanUrl = this.sharedDocumentsPublicUrl.endsWith("/")
+      ? this.sharedDocumentsPublicUrl.slice(0, -1)
+      : this.sharedDocumentsPublicUrl;
+    const imageUrl = `${cleanUrl}/${destKey}`;
+
+    return {
+      key: destKey,
+      url: imageUrl,
+      contentType,
+    };
   }
 
   /**
