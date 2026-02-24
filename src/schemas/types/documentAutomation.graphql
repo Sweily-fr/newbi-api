@@ -7,6 +7,7 @@ enum DocumentAutomationTriggerType {
   QUOTE_CANCELED
   CREDIT_NOTE_CREATED
   INVOICE_IMPORTED
+  QUOTE_IMPORTED
 }
 
 enum DocumentAutomationLogStatus {
@@ -113,11 +114,17 @@ type ProcessAutomationDocumentResult {
   error: String
 }
 
+type DocumentAutomationProgress {
+  current: Int!
+  total: Int!
+}
+
 extend type Query {
   documentAutomations(workspaceId: ID!): [DocumentAutomation!]!
   documentAutomation(workspaceId: ID!, id: ID!): DocumentAutomation
   documentAutomationLogs(workspaceId: ID!, automationId: ID, limit: Int): [DocumentAutomationLog!]!
   documentsForAutomation(workspaceId: ID!, automationId: ID!): [AutomationPendingDocument!]!
+  documentAutomationProgress(workspaceId: ID!, automationId: ID!): DocumentAutomationProgress
 }
 
 extend type Mutation {
@@ -132,6 +139,6 @@ extend type Mutation {
     automationId: ID!
     documentId: ID!
     documentType: String!
-    pdfBase64: String!
+    pdfBase64: String
   ): ProcessAutomationDocumentResult!
 }

@@ -16,6 +16,7 @@ import {
   createNotFoundError,
   createInternalServerError,
 } from "../utils/errors.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 // Cache mémoire pour les plans utilisateurs
 const planCache = new Map();
@@ -437,6 +438,17 @@ const importedQuoteResolvers = {
           });
 
           await importedQuote.save();
+
+          // Déclencher les automatisations QUOTE_IMPORTED (fire-and-forget)
+          documentAutomationService.executeAutomationsForExpense('QUOTE_IMPORTED', workspaceId, {
+            documentId: importedQuote._id.toString(),
+            documentType: 'importedQuote',
+            documentNumber: importedQuote.originalQuoteNumber || '',
+            clientName: importedQuote.vendor?.name || importedQuote.client?.name || '',
+            cloudflareUrl: uploadResult.url,
+            mimeType: mimetype,
+            fileExtension: filename?.split('.').pop() || 'pdf',
+          }, user.id).catch(err => console.error('Erreur automatisation devis importé:', err));
 
           return {
             success: true,

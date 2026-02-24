@@ -201,6 +201,12 @@ const quoteSchema = new mongoose.Schema({
       message: 'Le montant de la remise doit être un nombre positif'
     }
   },
+  // Cache PDF pour les automatisations (copie R2 serveur-à-serveur)
+  cachedPdf: {
+    key: { type: String },
+    url: { type: String },
+    generatedAt: { type: Date },
+  },
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,

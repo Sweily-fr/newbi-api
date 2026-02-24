@@ -2002,21 +2002,17 @@ const invoiceResolvers = {
           }
         }
 
-        // Automatisations documents partagés
-        try {
-          const triggerMap = { PENDING: 'INVOICE_SENT', CANCELED: 'INVOICE_CANCELED' };
-          const trigger = triggerMap[status];
-          if (trigger) {
-            await documentAutomationService.executeAutomations(trigger, workspaceId, {
-              documentId: invoice._id.toString(),
-              documentType: 'invoice',
-              documentNumber: invoice.number,
-              prefix: invoice.prefix || '',
-              clientName: invoice.client?.name || '',
-            }, user._id.toString());
-          }
-        } catch (docAutoError) {
-          console.error('Erreur automatisation documents:', docAutoError);
+        // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+        const triggerMap = { PENDING: 'INVOICE_SENT', CANCELED: 'INVOICE_CANCELED' };
+        const trigger = triggerMap[status];
+        if (trigger) {
+          documentAutomationService.executeAutomations(trigger, workspaceId, {
+            documentId: invoice._id.toString(),
+            documentType: 'invoice',
+            documentNumber: invoice.number,
+            prefix: invoice.prefix || '',
+            clientName: invoice.client?.name || '',
+          }, user._id.toString()).catch(err => console.error('Erreur automatisation documents:', err));
         }
 
         return await invoice.populate("createdBy");
@@ -2165,18 +2161,14 @@ const invoiceResolvers = {
           }
         }
 
-        // Automatisations documents partagés
-        try {
-          await documentAutomationService.executeAutomations('INVOICE_PAID', workspaceId, {
-            documentId: invoice._id.toString(),
-            documentType: 'invoice',
-            documentNumber: invoice.number,
-            prefix: invoice.prefix || '',
-            clientName: invoice.client?.name || '',
-          }, user._id.toString());
-        } catch (docAutoError) {
-          console.error('Erreur automatisation documents (paid):', docAutoError);
-        }
+        // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+        documentAutomationService.executeAutomations('INVOICE_PAID', workspaceId, {
+          documentId: invoice._id.toString(),
+          documentType: 'invoice',
+          documentNumber: invoice.number,
+          prefix: invoice.prefix || '',
+          clientName: invoice.client?.name || '',
+        }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (paid):', err));
 
         return await invoice.populate("createdBy");
       }

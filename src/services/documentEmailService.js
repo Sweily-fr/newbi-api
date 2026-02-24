@@ -6,6 +6,7 @@ import Client from '../models/Client.js';
 import EmailSettings from '../models/EmailSettings.js';
 import emailReminderService from './emailReminderService.js';
 import axios from 'axios';
+import cloudflareService from './cloudflareService.js';
 
 /**
  * Service d'envoi de documents (factures, devis, avoirs) par email
@@ -283,6 +284,31 @@ async function sendDocumentEmail({
     pdfBuffer = await generateDocumentPdf(documentId, documentType);
   }
   
+  // Cache le PDF dans R2 pour les automatisations futures (fire-and-forget)
+  if (pdfBuffer && (documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.QUOTE || documentType === DOCUMENT_TYPES.CREDIT_NOTE)) {
+    const ModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote };
+    const Model = ModelMap[documentType];
+    if (Model) {
+      (async () => {
+        try {
+          const uploadResult = await cloudflareService.uploadImage(
+            pdfBuffer,
+            `${documentId}.pdf`,
+            'system',
+            'sharedDocuments',
+            workspaceId
+          );
+          await Model.updateOne(
+            { _id: documentId },
+            { $set: { cachedPdf: { key: uploadResult.key, url: uploadResult.url, generatedAt: new Date() } } }
+          );
+        } catch (err) {
+          console.warn('⚠️ [DocumentEmail] Erreur cache PDF:', err.message);
+        }
+      })();
+    }
+  }
+
   const attachments = pdfBuffer ? [{
     filename: `${documentNumber}.pdf`,
     content: pdfBuffer,
