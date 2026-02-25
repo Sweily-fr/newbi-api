@@ -6,6 +6,7 @@ import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 const bankingResolvers = {
   Upload: GraphQLUpload,
@@ -389,7 +390,7 @@ const bankingResolvers = {
             fileBuffer,
             filename,
             user._id || user.id,
-            "receipts",
+            "receipt",
             workspaceId
           );
 
@@ -413,6 +414,22 @@ const bankingResolvers = {
             },
             { new: true }
           );
+
+          // Déclencher les automatisations TRANSACTION_RECEIPT (fire-and-forget)
+          documentAutomationService.executeAutomations(
+            'TRANSACTION_RECEIPT',
+            workspaceId,
+            {
+              documentId: transactionId,
+              documentType: 'transaction',
+              documentNumber: updatedTransaction?.externalId || '',
+              prefix: '',
+              clientName: updatedTransaction?.description || '',
+            },
+            user._id || user.id
+          ).catch(err => {
+            console.error('⚠️ [UPLOAD RECEIPT] Erreur automation (non bloquante):', err.message);
+          });
 
           return {
             success: true,

@@ -736,6 +736,17 @@ const quoteResolvers = {
           }
         }
         
+        // Automatisations documents partagés pour les brouillons (fire-and-forget)
+        if (quote.status === 'DRAFT') {
+          documentAutomationService.executeAutomations('QUOTE_DRAFT', workspaceId, {
+            documentId: quote._id.toString(),
+            documentType: 'quote',
+            documentNumber: quote.number,
+            prefix: quote.prefix || '',
+            clientName: quote.client?.name || '',
+          }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (quote draft):', err));
+        }
+
         return await quote.populate("createdBy");
         }
       )
