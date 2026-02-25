@@ -17,6 +17,7 @@ import {
 } from "../utils/errors.js";
 import { requireCompanyInfo, getOrganizationInfo } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 // Fonction utilitaire pour calculer les totaux
 const calculatePurchaseOrderTotals = (
@@ -356,6 +357,20 @@ const purchaseOrderResolvers = {
           });
 
           await purchaseOrder.save();
+
+          // Automatisations documents partagés (fire-and-forget)
+          const poTriggerMap = { DRAFT: 'PURCHASE_ORDER_DRAFT', CONFIRMED: 'PURCHASE_ORDER_CONFIRMED' };
+          const poTrigger = poTriggerMap[purchaseOrder.status];
+          if (poTrigger) {
+            documentAutomationService.executeAutomations(poTrigger, workspaceId, {
+              documentId: purchaseOrder._id.toString(),
+              documentType: 'purchaseOrder',
+              documentNumber: purchaseOrder.number,
+              prefix: purchaseOrder.prefix || '',
+              clientName: purchaseOrder.client?.name || '',
+            }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (PO create):', err));
+          }
+
           return await purchaseOrder.populate("createdBy");
         }
       )
@@ -517,6 +532,24 @@ const purchaseOrderResolvers = {
         } else {
           po.status = status;
           await po.save();
+        }
+
+        // Automatisations documents partagés (fire-and-forget)
+        const statusTriggerMap = {
+          CONFIRMED: 'PURCHASE_ORDER_CONFIRMED',
+          IN_PROGRESS: 'PURCHASE_ORDER_IN_PROGRESS',
+          DELIVERED: 'PURCHASE_ORDER_DELIVERED',
+          CANCELED: 'PURCHASE_ORDER_CANCELED',
+        };
+        const poStatusTrigger = statusTriggerMap[status];
+        if (poStatusTrigger) {
+          documentAutomationService.executeAutomations(poStatusTrigger, workspaceId, {
+            documentId: po._id.toString(),
+            documentType: 'purchaseOrder',
+            documentNumber: po.number,
+            prefix: po.prefix || '',
+            clientName: po.client?.name || '',
+          }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (PO status):', err));
         }
 
         return await po.populate("createdBy");

@@ -990,13 +990,6 @@ const sharedDocumentResolvers = {
             };
           }
 
-          if (folder.isSystem) {
-            return {
-              success: false,
-              message: "Ce dossier système ne peut pas être supprimé",
-            };
-          }
-
           const now = new Date();
 
           // Fonction récursive pour collecter tous les IDs de sous-dossiers

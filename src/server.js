@@ -82,6 +82,7 @@ import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
 import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
 import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
+import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -453,6 +454,10 @@ async function startServer() {
     // Démarrer le cron de synchronisation des calendriers externes
     startCalendarSyncCron();
     logger.info("✅ Cron de synchronisation des calendriers démarré");
+
+    // Démarrer le cron de vérification des documents en retard
+    startOverdueAutomationCron();
+    logger.info("✅ Cron de vérification des documents en retard démarré");
   });
 
   // Nettoyage propre à l'arrêt

@@ -7,6 +7,9 @@ import Quote from '../models/Quote.js';
 import CreditNote from '../models/CreditNote.js';
 import ImportedInvoice from '../models/ImportedInvoice.js';
 import ImportedQuote from '../models/ImportedQuote.js';
+import PurchaseOrder from '../models/PurchaseOrder.js';
+import PurchaseInvoice from '../models/PurchaseInvoice.js';
+import Transaction from '../models/Transaction.js';
 import cloudflareService from './cloudflareService.js';
 import axios from 'axios';
 
@@ -22,7 +25,7 @@ export function getAutomationProgress(automationId) {
  * Permet aux automatisations suivantes d'utiliser une copie R2 serveur-à-serveur.
  */
 async function cacheDocumentPdf(documentId, documentType, pdfBuffer, workspaceId) {
-  const ModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote };
+  const ModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote, purchaseOrder: PurchaseOrder };
   const Model = ModelMap[documentType];
   if (!Model) return null;
 
@@ -49,6 +52,9 @@ const DOCUMENT_TYPE_LABELS = {
   expense: 'Depense',
   importedInvoice: 'Facture_importee',
   importedQuote: 'Devis_importe',
+  purchaseOrder: 'BonCommande',
+  purchaseInvoice: 'Facture_achat',
+  transaction: 'Justificatif',
 };
 
 /**
@@ -62,6 +68,7 @@ async function generateDocumentPdf(documentId, documentType) {
     invoice: '/api/invoices/generate-pdf',
     quote: '/api/quotes/generate-pdf',
     creditNote: '/api/credit-notes/generate-pdf',
+    purchaseOrder: '/api/purchase-orders/generate-pdf',
   };
 
   const endpoint = endpointMap[documentType];
@@ -73,6 +80,7 @@ async function generateDocumentPdf(documentId, documentType) {
     invoice: 'invoiceId',
     quote: 'quoteId',
     creditNote: 'creditNoteId',
+    purchaseOrder: 'purchaseOrderId',
   };
 
   const body = { [bodyKeyMap[documentType]]: documentId };
@@ -100,7 +108,7 @@ function sanitizeFileName(name) {
 /**
  * Construit le nom du fichier à partir du pattern et du contexte
  */
-function buildFileName(pattern, documentContext) {
+function buildFileName(pattern, documentContext, extension = 'pdf') {
   const typeLabel = DOCUMENT_TYPE_LABELS[documentContext.documentType] || documentContext.documentType;
   const number = documentContext.prefix
     ? `${documentContext.prefix}${documentContext.documentNumber}`
@@ -111,7 +119,7 @@ function buildFileName(pattern, documentContext) {
     .replace('{number}', number || '')
     .replace('{clientName}', documentContext.clientName || 'Sans_client');
 
-  return sanitizeFileName(fileName) + '.pdf';
+  return sanitizeFileName(fileName) + '.' + (extension || 'pdf');
 }
 
 // Cache mémoire pour les sous-dossiers résolus (évite les requêtes DB répétées)
@@ -247,14 +255,14 @@ const documentAutomationService = {
             userId
           );
 
-          // Construire le nom du fichier
-          const fileName = buildFileName(
+          // Construire le nom du fichier (extension par défaut .pdf, corrigée pour les transactions)
+          let fileName = buildFileName(
             automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
             documentContext
           );
 
           // Chercher le PDF en cache pour éviter la regénération Puppeteer
-          const CacheModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote };
+          const CacheModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote, purchaseOrder: PurchaseOrder };
           const CacheModel = CacheModelMap[documentContext.documentType];
           const cachedDoc = CacheModel
             ? await CacheModel.findById(documentContext.documentId).select('cachedPdf').lean()
@@ -262,8 +270,34 @@ const documentAutomationService = {
 
           let uploadResult;
           let fileSize;
+          let fileMimeType = 'application/pdf';
+          let fileExt = 'pdf';
 
-          if (cachedDoc?.cachedPdf?.key) {
+          if (documentContext.documentType === 'transaction') {
+            // Transaction : copier le justificatif existant (image ou PDF)
+            const txn = await Transaction.findById(documentContext.documentId).select('receiptFile').lean();
+            if (!txn?.receiptFile?.url) {
+              throw new Error('Aucun justificatif pour cette transaction');
+            }
+            const response = await axios.get(txn.receiptFile.url, { responseType: 'arraybuffer', timeout: 30000 });
+            const fileBuffer = Buffer.from(response.data);
+            fileMimeType = txn.receiptFile.mimetype || 'application/pdf';
+            fileExt = txn.receiptFile.filename?.split('.').pop() || 'pdf';
+            // Reconstruire le nom du fichier avec la bonne extension
+            fileName = buildFileName(
+              automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
+              documentContext,
+              fileExt
+            );
+            uploadResult = await cloudflareService.uploadImage(
+              fileBuffer,
+              fileName,
+              userId,
+              'sharedDocuments',
+              workspaceId
+            );
+            fileSize = fileBuffer.length;
+          } else if (cachedDoc?.cachedPdf?.key) {
             // Copie R2 serveur-à-serveur (instantanée, pas de Puppeteer)
             uploadResult = await cloudflareService.copyToSharedDocuments(
               cachedDoc.cachedPdf.key,
@@ -315,9 +349,9 @@ const documentAutomationService = {
             description: `Importé automatiquement par l'automatisation "${automation.name}"`,
             fileUrl: uploadResult.url,
             fileKey: uploadResult.key,
-            mimeType: 'application/pdf',
+            mimeType: fileMimeType,
             fileSize: fileSize,
-            fileExtension: 'pdf',
+            fileExtension: fileExt,
             workspaceId,
             folderId: targetFolderId,
             uploadedBy: userId,
@@ -603,15 +637,30 @@ const documentAutomationService = {
    */
   _getTriggerConfig(triggerType) {
     const TRIGGER_TO_QUERY = {
+      INVOICE_DRAFT:     { model: Invoice,    status: 'DRAFT',     docType: 'invoice' },
       INVOICE_SENT:      { model: Invoice,    status: 'PENDING',   docType: 'invoice' },
       INVOICE_PAID:      { model: Invoice,    status: 'COMPLETED', docType: 'invoice' },
+      INVOICE_OVERDUE:   { model: Invoice,    status: 'OVERDUE',   docType: 'invoice' },
       INVOICE_CANCELED:  { model: Invoice,    status: 'CANCELED',  docType: 'invoice' },
+      QUOTE_DRAFT:       { model: Quote,      status: 'DRAFT',     docType: 'quote' },
       QUOTE_SENT:        { model: Quote,      status: 'PENDING',   docType: 'quote' },
       QUOTE_ACCEPTED:    { model: Quote,      status: 'COMPLETED', docType: 'quote' },
       QUOTE_CANCELED:    { model: Quote,      status: 'CANCELED',  docType: 'quote' },
       CREDIT_NOTE_CREATED: { model: CreditNote, status: null,      docType: 'creditNote' },
       INVOICE_IMPORTED:    { model: ImportedInvoice, status: 'VALIDATED', docType: 'importedInvoice' },
       QUOTE_IMPORTED:      { model: ImportedQuote,   status: 'VALIDATED', docType: 'importedQuote' },
+      PURCHASE_ORDER_DRAFT:       { model: PurchaseOrder,   status: 'DRAFT',       docType: 'purchaseOrder' },
+      PURCHASE_ORDER_CONFIRMED:   { model: PurchaseOrder,   status: 'CONFIRMED',   docType: 'purchaseOrder' },
+      PURCHASE_ORDER_IN_PROGRESS: { model: PurchaseOrder,   status: 'IN_PROGRESS', docType: 'purchaseOrder' },
+      PURCHASE_ORDER_DELIVERED:   { model: PurchaseOrder,   status: 'DELIVERED',   docType: 'purchaseOrder' },
+      PURCHASE_ORDER_CANCELED:    { model: PurchaseOrder,   status: 'CANCELED',    docType: 'purchaseOrder' },
+      PURCHASE_INVOICE_TO_PROCESS: { model: PurchaseInvoice, status: 'TO_PROCESS', docType: 'purchaseInvoice' },
+      PURCHASE_INVOICE_TO_PAY:     { model: PurchaseInvoice, status: 'TO_PAY',     docType: 'purchaseInvoice' },
+      PURCHASE_INVOICE_PENDING:    { model: PurchaseInvoice, status: 'PENDING',    docType: 'purchaseInvoice' },
+      PURCHASE_INVOICE_PAID:       { model: PurchaseInvoice, status: 'PAID',       docType: 'purchaseInvoice' },
+      PURCHASE_INVOICE_OVERDUE:    { model: PurchaseInvoice, status: 'OVERDUE',    docType: 'purchaseInvoice' },
+      PURCHASE_INVOICE_ARCHIVED:   { model: PurchaseInvoice, status: 'ARCHIVED',   docType: 'purchaseInvoice' },
+      TRANSACTION_RECEIPT:         { model: Transaction,     status: null,          docType: 'transaction', customFilter: { 'receiptFile.url': { $exists: true, $ne: null } } },
     };
     return TRIGGER_TO_QUERY[triggerType] || null;
   },
@@ -709,6 +758,9 @@ const documentAutomationService = {
     if (config.status) {
       query.status = config.status;
     }
+    if (config.customFilter) {
+      Object.assign(query, config.customFilter);
+    }
 
     const documents = await config.model.find(query).select('_id').lean();
     if (documents.length === 0) return 0;
@@ -739,6 +791,9 @@ const documentAutomationService = {
     if (config.status) {
       query.status = config.status;
     }
+    if (config.customFilter) {
+      Object.assign(query, config.customFilter);
+    }
 
     const documents = await config.model.find(query).lean();
     if (documents.length === 0) return [];
@@ -758,13 +813,26 @@ const documentAutomationService = {
 
     return documents
       .filter(d => !successIds.has(d._id.toString()))
-      .map(d => ({
-        documentId: d._id.toString(),
-        documentType: config.docType,
-        documentNumber: d.number || d.originalInvoiceNumber || d.originalQuoteNumber || '',
-        prefix: d.prefix || '',
-        clientName: d.client?.name || d.vendor?.name || '',
-      }));
+      .map(d => {
+        let clientName = d.client?.name || d.vendor?.name || '';
+        let documentNumber = d.number || d.originalInvoiceNumber || d.originalQuoteNumber || '';
+
+        if (config.docType === 'purchaseInvoice') {
+          clientName = d.supplierName || '';
+          documentNumber = d.invoiceNumber || '';
+        } else if (config.docType === 'transaction') {
+          clientName = d.description || '';
+          documentNumber = d.externalId || '';
+        }
+
+        return {
+          documentId: d._id.toString(),
+          documentType: config.docType,
+          documentNumber,
+          prefix: d.prefix || '',
+          clientName,
+        };
+      });
   },
 
   /**
@@ -814,6 +882,24 @@ const documentAutomationService = {
       fileMimeType = doc.file?.mimeType || 'application/pdf';
       fileExt = doc.file?.originalFileName?.split('.').pop() || 'pdf';
       fileSize = doc.file?.fileSize || 0;
+    } else if (documentType === 'purchaseInvoice') {
+      // Facture d'achat : copie du premier fichier attaché
+      const sourceFile = doc.files?.[0];
+      if (!sourceFile?.url) throw new Error('Aucun fichier attaché à la facture d\'achat');
+      const response = await axios.get(sourceFile.url, { responseType: 'arraybuffer', timeout: 30000 });
+      fileBuffer = Buffer.from(response.data);
+      fileMimeType = sourceFile.mimetype || 'application/pdf';
+      fileExt = sourceFile.filename?.split('.').pop() || 'pdf';
+      fileSize = fileBuffer.length;
+    } else if (documentType === 'transaction') {
+      // Transaction : copie du justificatif (receiptFile)
+      const receiptUrl = doc.receiptFile?.url;
+      if (!receiptUrl) throw new Error('Aucun justificatif pour cette transaction');
+      const response = await axios.get(receiptUrl, { responseType: 'arraybuffer', timeout: 30000 });
+      fileBuffer = Buffer.from(response.data);
+      fileMimeType = doc.receiptFile?.mimetype || 'application/pdf';
+      fileExt = doc.receiptFile?.filename?.split('.').pop() || 'pdf';
+      fileSize = fileBuffer.length;
     } else if (pdfBase64) {
       // PDF fourni par le client
       fileBuffer = Buffer.from(pdfBase64, 'base64');
@@ -840,12 +926,22 @@ const documentAutomationService = {
       throw new Error('Le fichier généré/récupéré est vide');
     }
 
+    let contextClientName = doc.client?.name || doc.vendor?.name || '';
+    let contextDocNumber = doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '';
+    if (documentType === 'purchaseInvoice') {
+      contextClientName = doc.supplierName || '';
+      contextDocNumber = doc.invoiceNumber || '';
+    } else if (documentType === 'transaction') {
+      contextClientName = doc.description || '';
+      contextDocNumber = doc.externalId || '';
+    }
+
     const documentContext = {
       documentId: doc._id.toString(),
       documentType,
-      documentNumber: doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '',
+      documentNumber: contextDocNumber,
       prefix: doc.prefix || '',
-      clientName: doc.client?.name || doc.vendor?.name || '',
+      clientName: contextClientName,
     };
 
     // Résoudre le dossier cible
@@ -859,7 +955,8 @@ const documentAutomationService = {
     // Construire le nom du fichier
     const fileName = buildFileName(
       automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
-      documentContext
+      documentContext,
+      fileExt
     );
 
     // Upload ou copie vers R2
@@ -951,6 +1048,9 @@ const documentAutomationService = {
       if (config.status) {
         query.status = config.status;
       }
+      if (config.customFilter) {
+        Object.assign(query, config.customFilter);
+      }
 
       const documents = await config.model.find(query).lean();
 
@@ -1016,6 +1116,7 @@ const documentAutomationService = {
       const preResolvedFolderName = preResolvedFolder?.name || 'Inconnu';
 
       const isR2Copy = config.docType === 'importedInvoice' || config.docType === 'importedQuote';
+      const isFileCopy = config.docType === 'purchaseInvoice' || config.docType === 'transaction';
       const BATCH_SIZE = 5;
       const BATCH_DELAY = 200;
       const automationIdStr = automation._id.toString();
@@ -1033,12 +1134,22 @@ const documentAutomationService = {
         // Traitement séquentiel document par document
         for (const doc of batch) {
           try {
+            let ctxClientName = doc.client?.name || doc.vendor?.name || '';
+            let ctxDocNumber = doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '';
+            if (config.docType === 'purchaseInvoice') {
+              ctxClientName = doc.supplierName || '';
+              ctxDocNumber = doc.invoiceNumber || '';
+            } else if (config.docType === 'transaction') {
+              ctxClientName = doc.description || '';
+              ctxDocNumber = doc.externalId || '';
+            }
+
             const documentContext = {
               documentId: doc._id.toString(),
               documentType: config.docType,
-              documentNumber: doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '',
+              documentNumber: ctxDocNumber,
               prefix: doc.prefix || '',
-              clientName: doc.client?.name || doc.vendor?.name || '',
+              clientName: ctxClientName,
             };
 
             let fileBuffer = null;
@@ -1057,6 +1168,26 @@ const documentAutomationService = {
               fileMimeType = doc.file?.mimeType || 'application/pdf';
               fileExt = doc.file?.originalFileName?.split('.').pop() || 'pdf';
               fileSize = doc.file?.fileSize || 0;
+            } else if (isFileCopy) {
+              // Facture d'achat ou transaction : récupérer le fichier existant via URL
+              let sourceUrl, sourceMime, sourceFilename;
+              if (config.docType === 'purchaseInvoice') {
+                const sourceFile = doc.files?.[0];
+                if (!sourceFile?.url) throw new Error('Aucun fichier attaché à la facture d\'achat');
+                sourceUrl = sourceFile.url;
+                sourceMime = sourceFile.mimetype || 'application/pdf';
+                sourceFilename = sourceFile.filename || '';
+              } else {
+                if (!doc.receiptFile?.url) throw new Error('Aucun justificatif pour cette transaction');
+                sourceUrl = doc.receiptFile.url;
+                sourceMime = doc.receiptFile.mimetype || 'application/pdf';
+                sourceFilename = doc.receiptFile.filename || '';
+              }
+              const response = await axios.get(sourceUrl, { responseType: 'arraybuffer', timeout: 30000 });
+              fileBuffer = Buffer.from(response.data);
+              fileMimeType = sourceMime;
+              fileExt = sourceFilename.split('.').pop() || 'pdf';
+              fileSize = fileBuffer.length;
             } else if (doc.cachedPdf?.key) {
               // Copie R2 serveur-à-serveur depuis le cache (instantanée)
               r2CopySource = {
@@ -1086,7 +1217,8 @@ const documentAutomationService = {
 
             const fileName = buildFileName(
               automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
-              documentContext
+              documentContext,
+              fileExt
             );
 
             let uploadResult;
@@ -1099,7 +1231,7 @@ const documentAutomationService = {
                 fileBuffer, fileName, userId, 'sharedDocuments', workspaceId
               );
               // Cacher le PDF pour les prochaines automatisations (fire-and-forget)
-              if (!isR2Copy && fileBuffer) {
+              if (!isR2Copy && !isFileCopy && fileBuffer) {
                 cacheDocumentPdf(doc._id.toString(), config.docType, fileBuffer, workspaceId)
                   .catch(() => {});
               }
@@ -1174,6 +1306,115 @@ const documentAutomationService = {
       _progressMap.delete(automation._id.toString());
       return { successCount: 0, skipCount: 0, failCount: 0, restoredCount: 0, total: 0, firstError: error.message };
     }
+  },
+
+  /**
+   * Vérifie les factures en retard et déclenche les automatisations OVERDUE.
+   * Appelé par le cron quotidien.
+   * - Factures (Invoice) : PENDING + dueDate dépassée → trigger INVOICE_OVERDUE
+   * - Factures d'achat (PurchaseInvoice) : TO_PAY + dueDate dépassée → trigger PURCHASE_INVOICE_OVERDUE
+   */
+  async checkOverdueAutomations() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    console.log('🔍 [OverdueCron] Vérification des documents en retard...');
+
+    // Trouver tous les workspaces ayant des automatisations OVERDUE actives
+    const overdueAutomations = await DocumentAutomation.find({
+      triggerType: { $in: ['INVOICE_OVERDUE', 'PURCHASE_INVOICE_OVERDUE'] },
+      isActive: true,
+    }).lean();
+
+    if (overdueAutomations.length === 0) {
+      console.log('ℹ️ [OverdueCron] Aucune automatisation OVERDUE active.');
+      return { processed: 0 };
+    }
+
+    let totalProcessed = 0;
+
+    // Grouper par workspace
+    const byWorkspace = {};
+    for (const auto of overdueAutomations) {
+      const wsId = auto.workspaceId.toString();
+      if (!byWorkspace[wsId]) byWorkspace[wsId] = [];
+      byWorkspace[wsId].push(auto);
+    }
+
+    for (const [workspaceId, automations] of Object.entries(byWorkspace)) {
+      for (const automation of automations) {
+        try {
+          if (automation.triggerType === 'INVOICE_OVERDUE') {
+            // Factures PENDING dont la date d'échéance est dépassée
+            const overdueInvoices = await Invoice.find({
+              workspaceId,
+              status: 'PENDING',
+              dueDate: { $lt: today },
+            }).lean();
+
+            for (const inv of overdueInvoices) {
+              // Vérifier si déjà traité par cette automatisation
+              const alreadyProcessed = await DocumentAutomationLog.findOne({
+                automationId: automation._id,
+                sourceDocumentId: inv._id,
+                status: 'SUCCESS',
+              });
+              if (alreadyProcessed) {
+                // Vérifier que le SharedDocument existe encore
+                const exists = await SharedDocument.findById(alreadyProcessed.sharedDocumentId);
+                if (exists) continue;
+              }
+
+              // Déclencher l'automatisation
+              await this.executeAutomations('INVOICE_OVERDUE', workspaceId, {
+                documentId: inv._id.toString(),
+                documentType: 'invoice',
+                documentNumber: inv.number,
+                prefix: inv.prefix || '',
+                clientName: inv.client?.name || '',
+              }, automation.createdBy.toString());
+              totalProcessed++;
+            }
+          } else if (automation.triggerType === 'PURCHASE_INVOICE_OVERDUE') {
+            // Factures d'achat TO_PAY dont la date d'échéance est dépassée
+            const overduePIs = await PurchaseInvoice.find({
+              workspaceId: automation.workspaceId,
+              status: 'TO_PAY',
+              dueDate: { $lt: today },
+            }).lean();
+
+            for (const pi of overduePIs) {
+              const alreadyProcessed = await DocumentAutomationLog.findOne({
+                automationId: automation._id,
+                sourceDocumentId: pi._id,
+                status: 'SUCCESS',
+              });
+              if (alreadyProcessed) {
+                const exists = await SharedDocument.findById(alreadyProcessed.sharedDocumentId);
+                if (exists) continue;
+              }
+
+              await this.executeAutomationsForExpense('PURCHASE_INVOICE_OVERDUE', workspaceId, {
+                documentId: pi._id.toString(),
+                documentType: 'purchaseInvoice',
+                documentNumber: pi.invoiceNumber || '',
+                supplierName: pi.supplierName || '',
+                fileUrl: pi.files?.[0]?.url || null,
+                fileKey: pi.files?.[0]?.path || null,
+                fileName: pi.files?.[0]?.originalFilename || null,
+                mimeType: pi.files?.[0]?.mimetype || 'application/pdf',
+              }, automation.createdBy.toString());
+              totalProcessed++;
+            }
+          }
+        } catch (err) {
+          console.error(`❌ [OverdueCron] Erreur automation ${automation._id}:`, err.message);
+        }
+      }
+    }
+
+    console.log(`✅ [OverdueCron] ${totalProcessed} document(s) en retard traité(s).`);
+    return { processed: totalProcessed };
   },
 };
 

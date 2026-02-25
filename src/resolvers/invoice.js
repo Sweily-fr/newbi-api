@@ -1176,6 +1176,17 @@ const invoiceResolvers = {
             }
           }
 
+          // Automatisations documents partagés pour les brouillons (fire-and-forget)
+          if (invoice.status === 'DRAFT') {
+            documentAutomationService.executeAutomations('INVOICE_DRAFT', workspaceId, {
+              documentId: invoice._id.toString(),
+              documentType: 'invoice',
+              documentNumber: invoice.number,
+              prefix: invoice.prefix || '',
+              clientName: invoice.client?.name || '',
+            }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (draft):', err));
+          }
+
           return await invoice.populate("createdBy");
         } catch (error) {
           // Intercepter les erreurs de validation Mongoose
