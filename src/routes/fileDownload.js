@@ -50,6 +50,10 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
       r2Key: file.r2Key,
     });
 
+    if (!file.r2Key) {
+      return res.status(404).json({ error: "Fichier non disponible (clé de stockage manquante)" });
+    }
+
     // Récupérer le fichier depuis R2
     const command = new GetObjectCommand({
       Bucket: process.env.TRANSFER_BUCKET,
@@ -150,6 +154,10 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       fileName: file.originalName,
       r2Key: file.r2Key,
     });
+
+    if (!file.r2Key) {
+      return res.status(404).json({ error: "Fichier non disponible (clé de stockage manquante)" });
+    }
 
     // Récupérer le fichier depuis R2
     const command = new GetObjectCommand({
