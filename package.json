@@ -6,10 +6,10 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon --ignore logs/ --ignore '*.log' src/server.js",
+    "dev": "nodemon --ext js,json,graphql --ignore logs/ --ignore '*.log' src/server.js",
     "start:staging": "NODE_ENV=staging node src/server.js",
     "start:production": "NODE_ENV=production node src/server.js",
-    "dev:staging": "NODE_ENV=staging nodemon --ignore logs/ --ignore '*.log' src/server.js",
+    "dev:staging": "NODE_ENV=staging nodemon --ext js,json,graphql --ignore logs/ --ignore '*.log' src/server.js",
     "test": "jest",
     "lint": "eslint src/**/*.js",
     "process-payouts": "node process-scheduled-payouts.js"
