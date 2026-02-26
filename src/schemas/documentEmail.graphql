@@ -19,4 +19,5 @@ extend type Mutation {
   sendInvoiceEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
   sendQuoteEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
   sendCreditNoteEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
+  sendPurchaseOrderEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
 }

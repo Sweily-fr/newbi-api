@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Invoice from '../models/Invoice.js';
 import Quote from '../models/Quote.js';
 import CreditNote from '../models/CreditNote.js';
+import PurchaseOrder from '../models/PurchaseOrder.js';
 import Client from '../models/Client.js';
 import EmailSettings from '../models/EmailSettings.js';
 import emailReminderService from './emailReminderService.js';
@@ -16,12 +17,14 @@ const DOCUMENT_TYPES = {
   INVOICE: 'invoice',
   QUOTE: 'quote',
   CREDIT_NOTE: 'creditNote',
+  PURCHASE_ORDER: 'purchaseOrder',
 };
 
 const DOCUMENT_LABELS = {
   invoice: { singular: 'facture', plural: 'factures', article: 'la' },
   quote: { singular: 'devis', plural: 'devis', article: 'le' },
   creditNote: { singular: 'avoir', plural: 'avoirs', article: 'l\'' },
+  purchaseOrder: { singular: 'bon de commande', plural: 'bons de commande', article: 'le' },
 };
 
 /**
@@ -39,6 +42,9 @@ async function getDocument(documentId, documentType, workspaceId) {
     break;
   case DOCUMENT_TYPES.CREDIT_NOTE:
     document = await CreditNote.findOne({ _id: documentId, workspaceId });
+    break;
+  case DOCUMENT_TYPES.PURCHASE_ORDER:
+    document = await PurchaseOrder.findOne({ _id: documentId, workspaceId });
     break;
   default:
     throw new Error(`Type de document inconnu: ${documentType}`);
@@ -68,10 +74,13 @@ async function generateDocumentPdf(documentId, documentType) {
   case DOCUMENT_TYPES.CREDIT_NOTE:
     endpoint = '/api/credit-notes/generate-pdf';
     break;
+  case DOCUMENT_TYPES.PURCHASE_ORDER:
+    endpoint = '/api/purchase-orders/generate-pdf';
+    break;
   default:
     throw new Error(`Type de document inconnu: ${documentType}`);
   }
-  
+
   try {
     // Construire le body avec le bon paramètre selon le type de document
     const body = {};
@@ -81,6 +90,8 @@ async function generateDocumentPdf(documentId, documentType) {
       body.quoteId = documentId;
     } else if (documentType === DOCUMENT_TYPES.CREDIT_NOTE) {
       body.creditNoteId = documentId;
+    } else if (documentType === DOCUMENT_TYPES.PURCHASE_ORDER) {
+      body.purchaseOrderId = documentId;
     }
     
     const response = await axios.post(
@@ -118,17 +129,21 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null) {
   const labels = DOCUMENT_LABELS[documentType];
   const documentLabel = labels.singular;
   
-  const titleText = documentType === DOCUMENT_TYPES.INVOICE 
-    ? 'Votre facture' 
-    : documentType === DOCUMENT_TYPES.QUOTE 
-      ? 'Votre devis' 
-      : 'Votre avoir';
-  
-  const detailsTitle = documentType === DOCUMENT_TYPES.INVOICE 
-    ? 'DE LA FACTURE' 
-    : documentType === DOCUMENT_TYPES.QUOTE 
-      ? 'DU DEVIS' 
-      : 'DE L\'AVOIR';
+  const titleText = documentType === DOCUMENT_TYPES.INVOICE
+    ? 'Votre facture'
+    : documentType === DOCUMENT_TYPES.QUOTE
+      ? 'Votre devis'
+      : documentType === DOCUMENT_TYPES.PURCHASE_ORDER
+        ? 'Votre bon de commande'
+        : 'Votre avoir';
+
+  const detailsTitle = documentType === DOCUMENT_TYPES.INVOICE
+    ? 'DE LA FACTURE'
+    : documentType === DOCUMENT_TYPES.QUOTE
+      ? 'DU DEVIS'
+      : documentType === DOCUMENT_TYPES.PURCHASE_ORDER
+        ? 'DU BON DE COMMANDE'
+        : 'DE L\'AVOIR';
   
   return `
     <!DOCTYPE html>
@@ -194,7 +209,7 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null) {
         
         <!-- Informations complémentaires -->
         <div class="email-content" style="padding: 0 40px 40px 40px; font-size: 14px; line-height: 1.6; color: #4a4a4a;">
-          <p style="margin: 0 0 16px 0;">${labels.article.charAt(0).toUpperCase() + labels.article.slice(1)}${documentLabel} est jointe à cet email au format PDF.</p>
+          <p style="margin: 0 0 16px 0;">${labels.article.charAt(0).toUpperCase() + labels.article.slice(1)}${labels.article.endsWith("'") ? '' : ' '}${documentLabel} est ${documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.CREDIT_NOTE ? 'jointe' : 'joint'} à cet email au format PDF.</p>
           <p style="margin: 0 0 24px 0;">Pour toute question, n'hésitez pas à nous contacter.</p>
           <p style="margin: 0;">
             Cordialement,<br>
@@ -205,7 +220,7 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null) {
         <!-- Footer -->
         <div class="email-footer" style="background-color: #f8f9fa; padding: 20px 40px; text-align: center; border-top: 1px solid #e5e7eb;">
           <p style="margin: 0; font-size: 12px; color: #9ca3af; line-height: 1.5;">
-            ${documentType === DOCUMENT_TYPES.INVOICE ? 'Cette facture a été envoyée' : documentType === DOCUMENT_TYPES.QUOTE ? 'Ce devis a été envoyé' : 'Cet avoir a été envoyé'} par ${variables.companyName} depuis la plateforme Newbi Logiciel de gestion.
+            ${documentType === DOCUMENT_TYPES.INVOICE ? 'Cette facture a été envoyée' : documentType === DOCUMENT_TYPES.QUOTE ? 'Ce devis a été envoyé' : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? 'Ce bon de commande a été envoyé' : 'Cet avoir a été envoyé'} par ${variables.companyName} depuis la plateforme Newbi Logiciel de gestion.
           </p>
         </div>
       </div>
@@ -285,8 +300,8 @@ async function sendDocumentEmail({
   }
   
   // Cache le PDF dans R2 pour les automatisations futures (fire-and-forget)
-  if (pdfBuffer && (documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.QUOTE || documentType === DOCUMENT_TYPES.CREDIT_NOTE)) {
-    const ModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote };
+  if (pdfBuffer && (documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.QUOTE || documentType === DOCUMENT_TYPES.CREDIT_NOTE || documentType === DOCUMENT_TYPES.PURCHASE_ORDER)) {
+    const ModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote, purchaseOrder: PurchaseOrder };
     const Model = ModelMap[documentType];
     if (Model) {
       (async () => {
@@ -363,11 +378,13 @@ async function sendDocumentEmail({
       const client = await Client.findById(clientId);
       
       if (client) {
-        const documentLabel = documentType === DOCUMENT_TYPES.INVOICE 
-          ? 'facture' 
-          : documentType === DOCUMENT_TYPES.QUOTE 
-            ? 'devis' 
-            : 'avoir';
+        const documentLabel = documentType === DOCUMENT_TYPES.INVOICE
+          ? 'facture'
+          : documentType === DOCUMENT_TYPES.QUOTE
+            ? 'devis'
+            : documentType === DOCUMENT_TYPES.PURCHASE_ORDER
+              ? 'bon de commande'
+              : 'avoir';
         
         client.activity.push({
           id: new mongoose.Types.ObjectId().toString(),
@@ -410,15 +427,19 @@ function getDefaultEmailContent(documentType, documentNumber) {
     subject = `Facture ${documentNumber}`;
   } else if (documentType === DOCUMENT_TYPES.QUOTE) {
     subject = `Devis ${documentNumber}`;
+  } else if (documentType === DOCUMENT_TYPES.PURCHASE_ORDER) {
+    subject = `Bon de commande ${documentNumber}`;
   } else {
     subject = `Avoir ${documentNumber}`;
   }
-  
+
   let instruction;
   if (documentType === DOCUMENT_TYPES.QUOTE) {
     instruction = 'N\'hésitez pas à nous contacter pour toute question concernant ce devis.';
   } else if (documentType === DOCUMENT_TYPES.INVOICE) {
     instruction = 'Nous vous remercions de bien vouloir procéder au règlement selon les conditions indiquées.';
+  } else if (documentType === DOCUMENT_TYPES.PURCHASE_ORDER) {
+    instruction = 'N\'hésitez pas à nous contacter pour toute question concernant ce bon de commande.';
   } else {
     instruction = 'Cet avoir a été établi suite à votre demande.';
   }
