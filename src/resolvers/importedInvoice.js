@@ -625,24 +625,24 @@ const importedInvoiceResolvers = {
             workspaceId
           );
 
-          // Enregistrer l'utilisation OCR
-          await recordOcrUsage(user.id, workspaceId, plan, {
-            fileName,
-            provider: invoiceData.ocrData?.provider || "claude-vision",
-            success: true,
-          });
-
-          // Vérifier les doublons potentiels
-          const duplicates = await ImportedInvoice.findPotentialDuplicates(
-            workspaceId,
-            invoiceData.originalInvoiceNumber,
-            invoiceData.vendor?.name,
-            invoiceData.totalTTC
-          );
+          // OPTIMISATION: Enregistrer usage OCR + détecter doublons en parallèle
+          const [duplicates] = await Promise.all([
+            ImportedInvoice.findPotentialDuplicates(
+              workspaceId,
+              invoiceData.originalInvoiceNumber,
+              invoiceData.vendor?.name,
+              invoiceData.totalTTC
+            ),
+            recordOcrUsage(user.id, workspaceId, plan, {
+              fileName,
+              provider: invoiceData.ocrData?.provider || "claude-vision",
+              success: true,
+            }),
+          ]);
 
           const isDuplicate = duplicates.length > 0;
 
-          // Créer la facture importée
+          // Créer et sauvegarder la facture importée
           const importedInvoice = new ImportedInvoice({
             workspaceId,
             importedBy: user.id,
@@ -660,7 +660,7 @@ const importedInvoiceResolvers = {
 
           await importedInvoice.save();
 
-          // Déclencher les automatisations INVOICE_IMPORTED (fire-and-forget)
+          // Déclencher les automatisations (fire-and-forget, pas de await)
           documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
             documentId: importedInvoice._id.toString(),
             documentType: 'importedInvoice',
@@ -745,34 +745,40 @@ const importedInvoiceResolvers = {
             }
           }
 
-          // Upload serveur-à-serveur vers Cloudflare (besoin de l'URL pour fallback OCR)
-          console.log(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
-          const uploadResult = await cloudflareService.uploadImage(
-            fileBuffer,
-            filename,
-            user.id,
-            "importedInvoice",
-            organizationId
-          );
+          // OPTIMISATION: Lancer l'upload Cloudflare et l'OCR en parallèle
+          // L'OCR Claude Vision utilise le base64 (pas l'URL), donc les deux sont indépendants
+          console.log(`⚡ importInvoiceDirect: Upload + OCR en parallèle pour ${filename}`);
 
           let invoiceData;
           let ocrProvider = "claude-vision";
+          let uploadResult;
 
           if (claudeVisionOcrService.isAvailable()) {
-            // OCR direct via Claude Vision (base64)
+            // Préparer les données OCR (synchrone, rapide)
             const base64Data = fileBuffer.toString("base64");
             const contentHash = crypto
               .createHash("sha256")
               .update(fileBuffer)
               .digest("hex");
 
-            console.log(`🔍 importInvoiceDirect: OCR Claude Vision pour ${filename}`);
-            const rawResult = await claudeVisionOcrService.processFromBase64(
-              base64Data,
-              mimetype,
-              filename,
-              contentHash
-            );
+            // Lancer upload Cloudflare + OCR Claude Vision en parallèle
+            const [uploadRes, rawResult] = await Promise.all([
+              cloudflareService.uploadImage(
+                fileBuffer,
+                filename,
+                user.id,
+                "importedInvoice",
+                organizationId
+              ),
+              claudeVisionOcrService.processFromBase64(
+                base64Data,
+                mimetype,
+                filename,
+                contentHash
+              ),
+            ]);
+
+            uploadResult = uploadRes;
 
             if (!rawResult.success) {
               throw createInternalServerError(
@@ -791,7 +797,14 @@ const importedInvoiceResolvers = {
 
             ocrProvider = rawResult.provider || "claude-vision";
           } else {
-            // Fallback: OCR via service hybride (Mistral, Mindee, Google Document AI)
+            // Fallback: Upload d'abord (besoin de l'URL pour OCR hybride)
+            uploadResult = await cloudflareService.uploadImage(
+              fileBuffer,
+              filename,
+              user.id,
+              "importedInvoice",
+              organizationId
+            );
             console.log(`🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`);
             invoiceData = await processInvoiceWithOcr(
               uploadResult.url,
@@ -802,24 +815,24 @@ const importedInvoiceResolvers = {
             ocrProvider = invoiceData.ocrData?.provider || "hybrid";
           }
 
-          // Enregistrer l'utilisation OCR
-          await recordOcrUsage(user.id, workspaceId, plan, {
-            fileName: filename,
-            provider: ocrProvider,
-            success: true,
-          });
-
-          // Vérifier les doublons potentiels
-          const duplicates = await ImportedInvoice.findPotentialDuplicates(
-            workspaceId,
-            invoiceData.originalInvoiceNumber,
-            invoiceData.vendor?.name,
-            invoiceData.totalTTC
-          );
+          // OPTIMISATION: Lancer doublons + enregistrement OCR en parallèle
+          const [duplicates] = await Promise.all([
+            ImportedInvoice.findPotentialDuplicates(
+              workspaceId,
+              invoiceData.originalInvoiceNumber,
+              invoiceData.vendor?.name,
+              invoiceData.totalTTC
+            ),
+            recordOcrUsage(user.id, workspaceId, plan, {
+              fileName: filename,
+              provider: ocrProvider,
+              success: true,
+            }),
+          ]);
 
           const isDuplicate = duplicates.length > 0;
 
-          // Créer la facture importée
+          // Créer et sauvegarder la facture importée
           const importedInvoice = new ImportedInvoice({
             workspaceId,
             importedBy: user.id,
@@ -837,7 +850,7 @@ const importedInvoiceResolvers = {
 
           await importedInvoice.save();
 
-          // Déclencher les automatisations INVOICE_IMPORTED (fire-and-forget)
+          // Déclencher les automatisations (fire-and-forget, pas de await)
           documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
             documentId: importedInvoice._id.toString(),
             documentType: 'importedInvoice',
@@ -918,8 +931,8 @@ const importedInvoiceResolvers = {
 
         console.log(`📊 OCR: ${successfulOcr.length} réussis, ${failedOcr.length} échoués`);
 
-        // ========== PHASE 2: Extraction + Sauvegarde en parallèle ==========
-        const SAVE_BATCH_SIZE = 20;
+        // ========== PHASE 2: Extraction + Sauvegarde en parallèle (optimisé) ==========
+        const SAVE_BATCH_SIZE = 40; // Augmenté de 20 à 40 grâce au pool MongoDB élargi
 
         for (let i = 0; i < successfulOcr.length; i += SAVE_BATCH_SIZE) {
           const batch = successfulOcr.slice(i, i + SAVE_BATCH_SIZE);
@@ -934,25 +947,30 @@ const importedInvoiceResolvers = {
                 let invoiceData;
 
                 if (ocrResult.result?.transaction_data) {
-                  // Claude Vision retourne déjà les données structurées
                   invoiceData = transformOcrToInvoiceDataV2(ocrResult.result, ocrResult.result);
                 } else {
-                  // Fallback: utiliser le service d'extraction
                   const extractionResult = await invoiceExtractionService.extractInvoiceData(ocrResult.result);
                   invoiceData = transformOcrToInvoiceDataV2(ocrResult.result, extractionResult);
                 }
 
-                // Vérifier les doublons
-                const duplicates = await ImportedInvoice.findPotentialDuplicates(
-                  workspaceId,
-                  invoiceData.originalInvoiceNumber,
-                  invoiceData.vendor?.name,
-                  invoiceData.totalTTC
-                );
+                // Doublons + enregistrement OCR en parallèle
+                const [duplicates] = await Promise.all([
+                  ImportedInvoice.findPotentialDuplicates(
+                    workspaceId,
+                    invoiceData.originalInvoiceNumber,
+                    invoiceData.vendor?.name,
+                    invoiceData.totalTTC
+                  ),
+                  recordOcrUsage(user.id, workspaceId, plan, {
+                    documentId: null,
+                    fileName: file.fileName,
+                    provider: ocrResult.result?.provider || "claude-vision",
+                    success: true,
+                  }),
+                ]);
 
                 const isDuplicate = duplicates.length > 0;
 
-                // Créer et sauvegarder la facture
                 const importedInvoice = new ImportedInvoice({
                   workspaceId,
                   importedBy: user.id,
@@ -970,15 +988,7 @@ const importedInvoiceResolvers = {
 
                 await importedInvoice.save();
 
-                // Enregistrer l'utilisation OCR
-                await recordOcrUsage(user.id, workspaceId, plan, {
-                  documentId: importedInvoice._id,
-                  fileName: file.fileName,
-                  provider: ocrResult.result?.provider || "claude-vision",
-                  success: true,
-                });
-
-                // Déclencher les automatisations INVOICE_IMPORTED (fire-and-forget)
+                // Automatisations fire-and-forget
                 documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
                   documentId: importedInvoice._id.toString(),
                   documentType: 'importedInvoice',

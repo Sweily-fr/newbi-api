@@ -86,10 +86,15 @@ import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
-// Connexion à MongoDB
+// Connexion à MongoDB avec pool de connexions optimisé pour les opérations concurrentes
 mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => logger.info("Connecté à MongoDB"))
+  .connect(process.env.MONGODB_URI, {
+    maxPoolSize: 50,
+    minPoolSize: 10,
+    maxIdleTimeMS: 30000,
+    serverSelectionTimeoutMS: 5000,
+  })
+  .then(() => logger.info("Connecté à MongoDB (pool: 10-50 connexions)"))
   .catch((err) => logger.error("Erreur de connexion MongoDB:", err));
 
 // Création des dossiers nécessaires

@@ -18,6 +18,7 @@ const importedInvoiceItemSchema = new mongoose.Schema({
 // Schéma pour les informations du fournisseur (émetteur de la facture)
 const vendorInfoSchema = new mongoose.Schema({
   name: { type: String, default: '' },
+  normalizedName: { type: String, default: '' },
   address: { type: String, default: '' },
   city: { type: String, default: '' },
   postalCode: { type: String, default: '' },
@@ -197,6 +198,18 @@ importedInvoiceSchema.index({ workspaceId: 1, status: 1, createdAt: -1 });
 importedInvoiceSchema.index({ workspaceId: 1, 'vendor.name': 1 });
 importedInvoiceSchema.index({ workspaceId: 1, invoiceDate: -1 });
 importedInvoiceSchema.index({ workspaceId: 1, originalInvoiceNumber: 1 });
+// Index pour la détection de doublons par montant (évite un scan complet)
+importedInvoiceSchema.index({ workspaceId: 1, totalTTC: 1, 'vendor.normalizedName': 1 });
+// Index pour le champ normalisé du vendor name (recherche exacte rapide)
+importedInvoiceSchema.index({ workspaceId: 1, 'vendor.normalizedName': 1 });
+
+// Pre-save hook: normaliser le nom du vendor pour recherches rapides
+importedInvoiceSchema.pre('save', function(next) {
+  if (this.vendor?.name && this.isModified('vendor.name')) {
+    this.vendor.normalizedName = this.vendor.name.toLowerCase().trim();
+  }
+  next();
+});
 
 // Méthode pour valider une facture
 importedInvoiceSchema.methods.validate = function() {
@@ -219,30 +232,53 @@ importedInvoiceSchema.methods.archive = function() {
   return this.save();
 };
 
-// Méthode statique pour trouver les doublons potentiels
+// Méthode statique pour trouver les doublons potentiels (optimisée avec index)
 importedInvoiceSchema.statics.findPotentialDuplicates = async function(workspaceId, invoiceNumber, vendorName, totalTTC) {
-  const query = {
-    workspaceId,
-    status: { $ne: 'REJECTED' },
-    $or: []
-  };
+  // Lancer les deux requêtes en parallèle pour exploiter les index séparément
+  const queries = [];
 
+  // Requête 1: Par numéro de facture (index: workspaceId + originalInvoiceNumber)
   if (invoiceNumber) {
-    query.$or.push({ originalInvoiceNumber: invoiceNumber });
+    queries.push(
+      this.find({
+        workspaceId,
+        status: { $ne: 'REJECTED' },
+        originalInvoiceNumber: invoiceNumber,
+      }).limit(3).lean()
+    );
   }
 
+  // Requête 2: Par vendor normalisé + montant (index: workspaceId + totalTTC + vendor.normalizedName)
   if (vendorName && totalTTC) {
-    query.$or.push({
-      'vendor.name': { $regex: new RegExp(vendorName, 'i') },
-      totalTTC: totalTTC
-    });
+    const normalizedName = vendorName.toLowerCase().trim();
+    queries.push(
+      this.find({
+        workspaceId,
+        status: { $ne: 'REJECTED' },
+        'vendor.normalizedName': normalizedName,
+        totalTTC: totalTTC,
+      }).limit(3).lean()
+    );
   }
 
-  if (query.$or.length === 0) {
+  if (queries.length === 0) {
     return [];
   }
 
-  return this.find(query).limit(5);
+  // Exécuter en parallèle et dédupliquer les résultats
+  const results = await Promise.all(queries);
+  const seen = new Set();
+  const duplicates = [];
+  for (const batch of results) {
+    for (const doc of batch) {
+      const id = doc._id.toString();
+      if (!seen.has(id)) {
+        seen.add(id);
+        duplicates.push(doc);
+      }
+    }
+  }
+  return duplicates.slice(0, 5);
 };
 
 // Méthode statique pour obtenir les statistiques
