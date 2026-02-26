@@ -3,18 +3,21 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
 import { getJWKSValidator } from "../services/jwks-validator.js";
+import { betterAuthMiddleware } from "./better-auth.js";
 
 /**
- * Middleware d'authentification utilisant les sessions Better Auth
- * Valide les JWT avec vérification cryptographique JWKS complète
+ * Middleware d'authentification unifié
+ * 1. Essaie le JWT (Authorization: Bearer) si présent — nécessaire pour WebSocket
+ * 2. Fallback sur le cookie session (better-auth.session_token) — auth principale
  */
 const betterAuthJWTMiddleware = async (req) => {
   try {
     // Récupérer le token JWT depuis les headers
     const token = extractJWTToken(req.headers);
     if (!token) {
-      logger.debug("Aucun token JWT trouvé dans les headers");
-      return null;
+      // Pas de JWT → essayer l'auth par cookie session
+      logger.debug("Pas de JWT, tentative auth par cookie session");
+      return await betterAuthMiddleware(req);
     }
 
     logger.debug(`Token JWT extrait: ${token.substring(0, 20)}...`);
