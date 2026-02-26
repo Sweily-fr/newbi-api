@@ -269,11 +269,8 @@ async function startServer() {
     schema,
     context: async ({ req }) => {
       try {
-        // Essayer d'abord better-auth (cookies), puis JWT
-        let user = await betterAuthMiddleware(req);
-        if (!user) {
-          user = await betterAuthJWTMiddleware(req);
-        }
+        // Auth unifiée : cookie session (principal) + JWT fallback (WebSocket)
+        let user = await betterAuthJWTMiddleware(req);
 
         // Récupérer l'organizationId depuis les headers (envoyé par le frontend)
         const organizationId = req.headers["x-organization-id"] || null;
