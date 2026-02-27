@@ -118,7 +118,7 @@ INSTRUCTIONS CRITIQUES:
 8. Pour le moyen de paiement, cherche: Carte Bancaire, CB, Espèces, Chèque, Virement, etc.
 9. Extrait les informations légales: SIRET, TVA intracommunautaire, RCS, APE
 10. Extrait les totaux: HT, TVA, TTC, montant payé, rendu monnaie
-11. Pour la catégorie, choisis parmi: OFFICE_SUPPLIES, TRAVEL, MEALS, EQUIPMENT, MARKETING, TRAINING, SERVICES, RENT, SALARIES, OTHER
+11. Pour la catégorie, choisis parmi: RENT, SUBSCRIPTIONS, OFFICE_SUPPLIES, SERVICES, TRANSPORT, MEALS, TELECOMMUNICATIONS, INSURANCE, ENERGY, SOFTWARE, HARDWARE, MARKETING, TRAINING, MAINTENANCE, TAXES, UTILITIES, OTHER
 
 STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
 {
@@ -145,7 +145,7 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
     "client_number": "57803110",
     "client_name": "Mr AANGOUR MOHAMED",
     "status": "paid",
-    "category": "EQUIPMENT",
+    "category": "HARDWARE",
     "subcategory": "electronics",
     "payment_method": "card",
     "description": "Achat matériel informatique (Pack EPSON, Souris LOGITECH)"
@@ -444,7 +444,7 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
         document_number: null,
         vendor_name: "Fournisseur inconnu",
         status: "pending",
-        category: "autre",
+        category: "OTHER",
         subcategory: "non_classifie",
         payment_method: "unknown",
         description: "Document non analysable - Veuillez saisir manuellement",

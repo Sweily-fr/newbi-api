@@ -102,7 +102,7 @@ Structure JSON attendue:
     "bank_name": "nom de la banque"
   },
 
-  "category": "OFFICE_SUPPLIES" | "TRAVEL" | "MEALS" | "EQUIPMENT" | "MARKETING" | "TRAINING" | "SERVICES" | "RENT" | "SALARIES" | "UTILITIES" | "INSURANCE" | "SUBSCRIPTIONS" | "OTHER",
+  "category": "RENT" | "SUBSCRIPTIONS" | "OFFICE_SUPPLIES" | "SERVICES" | "TRANSPORT" | "MEALS" | "TELECOMMUNICATIONS" | "INSURANCE" | "ENERGY" | "SOFTWARE" | "HARDWARE" | "MARKETING" | "TRAINING" | "MAINTENANCE" | "TAXES" | "UTILITIES" | "OTHER",
 
   "currency": "EUR",
   "notes": "mentions légales ou notes importantes",
@@ -439,7 +439,7 @@ EXTRAIS OBLIGATOIREMENT:
 - invoice_date: la date au format YYYY-MM-DD (TOUJOURS présente)
 - items: TOUTES les lignes d'articles/services avec descriptions et prix
 - payment_details.method: CB/CARD/CASH/TRANSFER/CHECK
-- category: la catégorie de dépense la plus appropriée
+- category: la catégorie parmi RENT, SUBSCRIPTIONS, OFFICE_SUPPLIES, SERVICES, TRANSPORT, MEALS, TELECOMMUNICATIONS, INSURANCE, ENERGY, SOFTWARE, HARDWARE, MARKETING, TRAINING, MAINTENANCE, TAXES, UTILITIES, OTHER
 
 Si c'est un ticket de caisse: le nom en GROS en haut = vendor.name, le montant "TOTAL" en bas = total_ttc.
 Ne retourne QUE le JSON, rien d'autre.`,
