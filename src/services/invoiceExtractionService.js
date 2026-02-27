@@ -135,17 +135,22 @@ const FRENCH_INVOICE_PATTERNS = {
 
 // Catégories de dépenses avec mots-clés
 const EXPENSE_CATEGORIES = {
+  RENT: ['loyer', 'location', 'bail', 'charges locatives'],
+  SUBSCRIPTIONS: ['abonnement', 'licence', 'saas'],
   OFFICE_SUPPLIES: ['fourniture', 'bureau', 'papeterie', 'cartouche', 'encre', 'stylo', 'classeur', 'papier'],
-  EQUIPMENT: ['ordinateur', 'écran', 'clavier', 'souris', 'imprimante', 'scanner', 'téléphone', 'matériel', 'équipement', 'informatique'],
-  TRAVEL: ['transport', 'train', 'avion', 'taxi', 'uber', 'vtc', 'essence', 'carburant', 'péage', 'parking', 'hôtel', 'hébergement'],
+  SERVICES: ['prestation', 'service', 'conseil', 'consulting', 'nettoyage', 'sous-traitance'],
+  TRANSPORT: ['transport', 'train', 'avion', 'taxi', 'uber', 'vtc', 'essence', 'carburant', 'péage', 'parking', 'hôtel', 'hébergement', 'déplacement'],
   MEALS: ['restaurant', 'repas', 'déjeuner', 'dîner', 'café', 'traiteur', 'restauration'],
+  TELECOMMUNICATIONS: ['télécom', 'téléphone', 'internet', 'fibre', 'mobile', 'forfait', 'opérateur'],
+  INSURANCE: ['assurance', 'mutuelle', 'prévoyance'],
+  ENERGY: ['électricité', 'gaz', 'eau', 'edf', 'engie', 'énergie'],
+  SOFTWARE: ['logiciel', 'software', 'application', 'plugin'],
+  HARDWARE: ['ordinateur', 'écran', 'clavier', 'souris', 'imprimante', 'scanner', 'matériel', 'équipement', 'informatique'],
   MARKETING: ['publicité', 'marketing', 'communication', 'flyer', 'affiche', 'pub', 'google ads', 'facebook'],
   TRAINING: ['formation', 'cours', 'séminaire', 'conférence', 'atelier', 'coaching'],
-  SERVICES: ['prestation', 'service', 'conseil', 'consulting', 'maintenance', 'réparation', 'nettoyage'],
-  RENT: ['loyer', 'location', 'bail', 'charges locatives'],
-  UTILITIES: ['électricité', 'gaz', 'eau', 'internet', 'télécom', 'abonnement', 'edf', 'engie'],
-  INSURANCE: ['assurance', 'mutuelle', 'prévoyance'],
-  SUBSCRIPTIONS: ['abonnement', 'licence', 'saas', 'logiciel', 'software'],
+  MAINTENANCE: ['maintenance', 'réparation', 'entretien', 'dépannage', 'sav'],
+  TAXES: ['impôt', 'taxe', 'cfe', 'cvae', 'cotisation', 'urssaf', 'tva', 'contribution'],
+  UTILITIES: ['service public', 'collectivité', 'mairie', 'préfecture'],
 };
 
 // Cache des fournisseurs connus (SIRET -> infos fournisseur)
@@ -654,7 +659,7 @@ RÉPONDS UNIQUEMENT EN JSON VALIDE:
   "payment": {
     "method": "Virement"
   },
-  "category": "SERVICES"
+  "category": "RENT | SUBSCRIPTIONS | OFFICE_SUPPLIES | SERVICES | TRANSPORT | MEALS | TELECOMMUNICATIONS | INSURANCE | ENERGY | SOFTWARE | HARDWARE | MARKETING | TRAINING | MAINTENANCE | TAXES | UTILITIES | OTHER"
 }`;
   }
 
@@ -822,7 +827,7 @@ ${relevantText}
   "payment": {
     "method": "Virement"
   },
-  "category": "CONSTRUCTION"
+  "category": "RENT | SUBSCRIPTIONS | OFFICE_SUPPLIES | SERVICES | TRANSPORT | MEALS | TELECOMMUNICATIONS | INSURANCE | ENERGY | SOFTWARE | HARDWARE | MARKETING | TRAINING | MAINTENANCE | TAXES | UTILITIES | OTHER"
 }
 
 Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
