@@ -110,6 +110,8 @@ type ImportedInvoice {
   linkedExpenseId: ID
   isDuplicate: Boolean
   duplicateOf: ID
+  source: String
+  gmailMessageId: String
   createdAt: String!
   updatedAt: String!
 }
@@ -237,6 +239,7 @@ input ImportedInvoiceFilters {
   dateTo: String
   minAmount: Float
   maxAmount: Float
+  source: String
 }
 
 # Queries

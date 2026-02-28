@@ -371,9 +371,9 @@ const creditNoteResolvers = {
                 metadata: {
                   documentType: 'creditNote',
                   documentId: creditNote._id.toString(),
-                  documentNumber: `${creditNote.prefix}${creditNote.number}`,
+                  documentNumber: `${creditNote.prefix}-${creditNote.number}`,
                   status: creditNote.status,
-                  originalInvoiceNumber: `${originalInvoice.prefix}${originalInvoice.number}`,
+                  originalInvoiceNumber: `${originalInvoice.prefix}-${originalInvoice.number}`,
                 },
                 createdAt: new Date(),
               });

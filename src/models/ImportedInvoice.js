@@ -186,6 +186,18 @@ const importedInvoiceSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ImportedInvoice',
     default: null
+  },
+
+  // Source de l'import
+  source: {
+    type: String,
+    enum: ['OCR_UPLOAD', 'GMAIL', 'MANUAL'],
+    default: 'OCR_UPLOAD'
+  },
+  gmailMessageId: {
+    type: String,
+    default: null,
+    sparse: true
   }
 
 }, {

@@ -679,7 +679,7 @@ const purchaseOrderResolvers = {
           termsAndConditions: organization.invoiceTermsAndConditions || organization.documentTermsAndConditions || "",
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
-          purchaseOrderNumber: `${po.prefix}${po.number}`,
+          purchaseOrderNumber: `${po.prefix}-${po.number}`,
           discount: po.discount,
           discountType: po.discountType,
           customFields: poObj.customFields,

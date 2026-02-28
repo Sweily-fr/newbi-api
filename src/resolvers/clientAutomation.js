@@ -2,6 +2,7 @@ import ClientAutomation from '../models/ClientAutomation.js';
 import ClientList from '../models/ClientList.js';
 import Client from '../models/Client.js';
 import Invoice from '../models/Invoice.js';
+import Quote from '../models/Quote.js';
 import {
   requireWrite,
   requireRead,
@@ -192,6 +193,118 @@ export const automationService = {
 
     return paidInvoicesCount === 0;
   },
+
+  /**
+   * Trouve les clients existants qui correspondent au déclencheur d'une automatisation
+   * et exécute l'action sur chacun d'eux (application rétroactive)
+   */
+  async applyToExistingClients(automation, workspaceId) {
+    const results = { applied: 0, errors: 0 };
+
+    // Récupérer tous les clients du workspace
+    let clientIds = [];
+
+    // Si une liste source est spécifiée, ne prendre que les clients de cette liste
+    if (automation.sourceListId) {
+      const sourceList = await ClientList.findById(automation.sourceListId);
+      if (!sourceList) return results;
+      clientIds = sourceList.clients.map(id => id.toString());
+    } else {
+      const clients = await Client.find({ workspaceId }, '_id');
+      clientIds = clients.map(c => c._id.toString());
+    }
+
+    if (clientIds.length === 0) return results;
+
+    // Filtrer selon le type de déclencheur
+    let matchingClientIds = [];
+
+    switch (automation.triggerType) {
+    case 'CLIENT_CREATED':
+      // Tous les clients existants correspondent
+      matchingClientIds = clientIds;
+      break;
+
+    case 'INVOICE_PAID': {
+      const paidInvoices = await Invoice.find({
+        workspaceId,
+        status: 'COMPLETED',
+        'client.id': { $in: clientIds },
+      }).distinct('client.id');
+      matchingClientIds = paidInvoices.map(id => id.toString());
+      break;
+    }
+
+    case 'FIRST_INVOICE_PAID': {
+      // Clients avec exactement 1 facture payée
+      const invoiceAgg = await Invoice.aggregate([
+        { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId), status: 'COMPLETED', 'client.id': { $in: clientIds } } },
+        { $group: { _id: '$client.id', count: { $sum: 1 } } },
+        { $match: { count: 1 } },
+      ]);
+      matchingClientIds = invoiceAgg.map(r => r._id.toString());
+      break;
+    }
+
+    case 'QUOTE_ACCEPTED': {
+      const acceptedQuotes = await Quote.find({
+        workspaceId,
+        status: 'ACCEPTED',
+        'client.id': { $in: clientIds },
+      }).distinct('client.id');
+      matchingClientIds = acceptedQuotes.map(id => id.toString());
+      break;
+    }
+
+    case 'INVOICE_OVERDUE': {
+      const now = new Date();
+      const overdueInvoices = await Invoice.find({
+        workspaceId,
+        status: { $in: ['SENT', 'PENDING'] },
+        dueDate: { $lt: now },
+        'client.id': { $in: clientIds },
+      }).distinct('client.id');
+      matchingClientIds = overdueInvoices.map(id => id.toString());
+      break;
+    }
+
+    default:
+      return results;
+    }
+
+    // Vérifier le montant minimum si configuré
+    if (automation.triggerConfig?.minAmount && automation.triggerType !== 'CLIENT_CREATED') {
+      const minAmount = automation.triggerConfig.minAmount;
+      const invoicesAboveMin = await Invoice.find({
+        workspaceId,
+        status: 'COMPLETED',
+        'client.id': { $in: matchingClientIds },
+        finalTotalTTC: { $gte: minAmount },
+      }).distinct('client.id');
+      matchingClientIds = invoicesAboveMin.map(id => id.toString());
+    }
+
+    // Exécuter l'action sur chaque client correspondant
+    for (const clientId of matchingClientIds) {
+      try {
+        await this.executeAction(automation, clientId);
+        results.applied++;
+      } catch (error) {
+        console.error(`Erreur application rétroactive pour client ${clientId}:`, error);
+        results.errors++;
+      }
+    }
+
+    // Mettre à jour les statistiques
+    if (results.applied > 0) {
+      await ClientAutomation.findByIdAndUpdate(automation._id, {
+        $inc: { 'stats.totalExecutions': results.applied },
+        $set: { 'stats.lastExecutedAt': new Date() },
+      });
+    }
+
+    return results;
+  },
 };
 
 const clientAutomationResolvers = {
@@ -266,6 +379,15 @@ const clientAutomationResolvers = {
 
         await automation.save();
 
+        // Appliquer rétroactivement aux clients existants (fire-and-forget)
+        automationService.applyToExistingClients(automation, workspaceId).then(result => {
+          if (result.applied > 0) {
+            console.log(`Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`);
+          }
+        }).catch(error => {
+          console.error('Erreur application rétroactive:', error);
+        });
+
         return await ClientAutomation.findById(automation._id)
           .populate('createdBy')
           .populate('sourceListId')
@@ -336,6 +458,23 @@ const clientAutomationResolvers = {
         await ClientAutomation.deleteOne({ _id: id });
 
         return true;
+      }
+    ),
+
+    applyClientAutomationToExisting: requireWrite('clients')(
+      async (_, { workspaceId, id }) => {
+        const automation = await ClientAutomation.findOne({
+          _id: id,
+          workspaceId,
+          isActive: true,
+        });
+
+        if (!automation) {
+          throw createNotFoundError('Automatisation active');
+        }
+
+        const result = await automationService.applyToExistingClients(automation, workspaceId);
+        return result;
       }
     ),
 

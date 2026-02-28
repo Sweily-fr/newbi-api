@@ -10,6 +10,7 @@ type Event {
   type: EventType!
   invoiceId: ID
   invoice: Invoice
+  clientId: ID
   userId: ID!
   emailReminder: EmailReminder
   source: EventSource
@@ -68,6 +69,7 @@ input CreateEventInput {
   color: String = "sky"
   location: String
   type: EventType = MANUAL
+  clientId: ID
   emailReminder: EmailReminderInput
 }
 
