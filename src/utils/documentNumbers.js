@@ -278,7 +278,7 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    prefix = `F-${month}${year}`;
+    prefix = `F-${year}${month}`;
   }
   
   const sOpts = sessionOpts(options);
@@ -395,7 +395,7 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    prefix = `D-${month}${year}`;
+    prefix = `D-${year}${month}`;
   }
   
   const sOpts = sessionOpts(options);

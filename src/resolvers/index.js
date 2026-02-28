@@ -46,6 +46,7 @@ import clientSegmentResolvers from "./clientSegment.js";
 import crmEmailAutomationResolvers from "./crmEmailAutomation.js";
 import notificationResolvers from "./notification.js";
 import calendarConnectionResolvers from "./calendarConnection.js";
+import gmailConnectionResolvers from "./gmailConnection.js";
 import calendarColorLabelsResolvers from "./calendarColorLabels.js";
 import documentAutomationResolvers from "./documentAutomation.js";
 import purchaseInvoiceResolvers from "./purchaseInvoice.js";
@@ -102,6 +103,7 @@ const resolvers = mergeResolvers([
   crmEmailAutomationResolvers,
   notificationResolvers,
   calendarConnectionResolvers,
+  gmailConnectionResolvers,
   calendarColorLabelsResolvers,
   documentAutomationResolvers,
   purchaseInvoiceResolvers,

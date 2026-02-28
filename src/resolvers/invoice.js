@@ -1074,7 +1074,7 @@ const invoiceResolvers = {
                     metadata: {
                       documentType: "invoice",
                       documentId: invoice._id.toString(),
-                      documentNumber: `${prefix}${number}`,
+                      documentNumber: `${prefix}-${number}`,
                       status: invoice.status,
                     },
                     createdAt: new Date(),
@@ -1110,13 +1110,14 @@ const invoiceResolvers = {
 
             // Trouver un devis dont le préfixe+numéro correspond au numéro de bon de commande
             const matchingQuote = quotes.find((quote) => {
-              // Construire l'identifiant complet du devis (préfixe + numéro)
-              const quoteFullId = `${quote.prefix}${quote.number}`;
+              // Construire l'identifiant complet du devis (préfixe-numéro)
+              const quoteFullId = `${quote.prefix}-${quote.number}`;
+              const inputLower = input.purchaseOrderNumber.toLowerCase();
 
-              // Comparer avec le numéro de bon de commande (insensible à la casse)
+              // Comparer avec le numéro de bon de commande (supporte ancien format sans tiret et nouveau avec tiret)
               return (
-                quoteFullId.toLowerCase() ===
-                input.purchaseOrderNumber.toLowerCase()
+                quoteFullId.toLowerCase() === inputLower ||
+                `${quote.prefix}${quote.number}`.toLowerCase() === inputLower
               );
             });
 
@@ -1997,7 +1998,7 @@ const invoiceResolvers = {
                   metadata: {
                     documentType: "invoice",
                     documentId: invoice._id.toString(),
-                    documentNumber: `${invoice.prefix}${invoice.number}`,
+                    documentNumber: `${invoice.prefix}-${invoice.number}`,
                     status: status,
                   },
                   createdAt: new Date(),
@@ -2320,8 +2321,9 @@ const invoiceResolvers = {
           );
         }
 
-        // Générer le numéro de facture
-        const prefix = quote.prefix || "F";
+        // Générer le numéro de facture avec un préfixe de facture (pas celui du devis)
+        const now = new Date();
+        const prefix = `F-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
         const number = await generateInvoiceNumber(prefix, {
           isDraft: true,
           workspaceId: workspaceId,
@@ -2336,7 +2338,7 @@ const invoiceResolvers = {
         const invoice = new Invoice({
           number,
           prefix,
-          purchaseOrderNumber: `${quote.prefix}${quote.number}`, // Référence au devis
+          purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Référence au devis
           isDeposit,
           status: "DRAFT",
           issueDate: new Date(),
@@ -2349,10 +2351,10 @@ const invoiceResolvers = {
           items: [
             {
               description: isDeposit
-                ? `Acompte sur devis ${quote.prefix}${quote.number}`
+                ? `Acompte sur devis ${quote.prefix}-${quote.number}`
                 : numericAmount >= remainingAmount - 0.01
-                ? `Facture sur devis ${quote.prefix}${quote.number}`
-                : `Facture partielle sur devis ${quote.prefix}${quote.number}`,
+                ? `Facture sur devis ${quote.prefix}-${quote.number}`
+                : `Facture partielle sur devis ${quote.prefix}-${quote.number}`,
               quantity: 1,
               unitPrice: unitPriceHT,
               vatRate: vatRate,

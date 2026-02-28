@@ -76,12 +76,14 @@ import reconciliationRoutes from "./routes/reconciliation.js";
 // import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
+import gmailConnectRoutes from "./routes/gmail-connect.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
 import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
 import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
+import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
 import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
@@ -235,6 +237,9 @@ async function startServer() {
 
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);
+
+  // Routes connexion Gmail pour import factures fournisseurs
+  app.use("/gmail-connect", gmailConnectRoutes);
 
   // Routes leads guides (publique, sans auth)
   app.use("/api/leads", guideLeadsRoutes);
@@ -456,6 +461,10 @@ async function startServer() {
     // Démarrer le cron de synchronisation des calendriers externes
     startCalendarSyncCron();
     logger.info("✅ Cron de synchronisation des calendriers démarré");
+
+    // Démarrer le cron de synchronisation Gmail (factures fournisseurs)
+    startGmailSyncCron();
+    logger.info("✅ Cron de synchronisation Gmail démarré");
 
     // Démarrer le cron de vérification des documents en retard
     startOverdueAutomationCron();

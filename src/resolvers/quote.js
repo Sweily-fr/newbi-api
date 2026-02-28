@@ -723,7 +723,7 @@ const quoteResolvers = {
                   metadata: {
                     documentType: 'quote',
                     documentId: quote._id.toString(),
-                    documentNumber: `${prefix}${number}`,
+                    documentNumber: `${prefix}-${number}`,
                     status: quote.status
                   },
                   createdAt: new Date()
@@ -1095,14 +1095,14 @@ const quoteResolvers = {
               activity: {
                 id: new mongoose.Types.ObjectId().toString(),
                 type: 'quote_status_changed',
-                description: `a changé le statut du devis ${quote.prefix}${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                description: `a changé le statut du devis ${quote.prefix}-${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
                 userId: user._id,
                 userName: user.name || user.email,
                 userImage: user.image || null,
                 metadata: {
                   documentType: 'quote',
                   documentId: quote._id.toString(),
-                  documentNumber: `${quote.prefix}${quote.number}`,
+                  documentNumber: `${quote.prefix}-${quote.number}`,
                   status: status
                 },
                 createdAt: new Date()
@@ -1398,7 +1398,7 @@ const quoteResolvers = {
             termsAndConditions: quote.termsAndConditions,
             termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle,
             termsAndConditionsLink: quote.termsAndConditionsLink,
-            purchaseOrderNumber: `${quote.prefix}${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
+            purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
             discount: quote.discount,
             discountType: quote.discountType,
             customFields: quoteObj.customFields,

@@ -1,0 +1,47 @@
+enum GmailConnectionStatus {
+  active
+  syncing
+  expired
+  error
+  disconnected
+}
+
+type GmailConnection {
+  id: ID!
+  accountEmail: String!
+  accountName: String
+  isActive: Boolean!
+  scanPeriodMonths: Int!
+  status: GmailConnectionStatus!
+  lastSyncAt: String
+  lastSyncError: String
+  totalEmailsScanned: Int!
+  totalInvoicesFound: Int!
+  createdAt: String!
+}
+
+type GmailSyncResult {
+  success: Boolean!
+  scannedCount: Int!
+  invoicesFound: Int!
+  skippedCount: Int!
+  message: String
+}
+
+type GmailSyncStats {
+  totalEmailsScanned: Int!
+  totalInvoicesFound: Int!
+  pendingReview: Int!
+  lastSyncAt: String
+}
+
+extend type Query {
+  gmailConnection(workspaceId: ID!): GmailConnection
+  gmailSyncStats(workspaceId: ID!): GmailSyncStats!
+}
+
+extend type Mutation {
+  disconnectGmail(connectionId: ID!): GmailConnection!
+  triggerGmailSync(connectionId: ID!): GmailSyncResult!
+  updateGmailScanPeriod(connectionId: ID!, scanPeriodMonths: Int!): GmailConnection!
+}
