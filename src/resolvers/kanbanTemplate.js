@@ -101,6 +101,8 @@ const kanbanTemplateResolvers = {
           description: description || "",
           userId: user.id,
           workspaceId: finalWorkspaceId,
+          templateId: template._id,
+          templateName: template.name,
         });
         const savedBoard = await board.save();
 

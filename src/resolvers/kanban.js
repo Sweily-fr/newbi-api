@@ -2603,6 +2603,108 @@ const resolvers = {
         }
       }
     ),
+
+    // Ajouter du temps manuellement
+    addManualTime: withWorkspace(
+      async (
+        _,
+        { taskId, seconds, description, workspaceId },
+        { user, workspaceId: contextWorkspaceId, db }
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+        try {
+          if (!seconds || seconds <= 0) {
+            throw new Error("Le temps ajouté doit être supérieur à 0");
+          }
+
+          const task = await Task.findOne({
+            _id: taskId,
+            workspaceId: finalWorkspaceId,
+          });
+          if (!task) throw new Error("Task not found");
+
+          // Initialiser timeTracking si nécessaire
+          if (!task.timeTracking) {
+            task.timeTracking = {
+              totalSeconds: 0,
+              isRunning: false,
+              entries: [],
+            };
+          }
+
+          // Récupérer les infos de l'utilisateur
+          let userFromDb;
+          try {
+            userFromDb = await db.collection("user").findOne({ _id: user.id });
+            if (!userFromDb && /^[0-9a-fA-F]{24}$/.test(user.id)) {
+              userFromDb = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+            }
+          } catch (e) {
+            logger.warn("Could not fetch user from db for manual time:", e.message);
+          }
+
+          const userName = userFromDb?.name || user.email;
+          const userImage =
+            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+              ? userFromDb.image
+              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+                ? userFromDb.avatar
+                : null;
+
+          // Créer une entrée de temps manuelle
+          const now = new Date();
+          const manualEntry = {
+            startTime: now,
+            endTime: now,
+            duration: seconds,
+            isManual: true,
+          };
+
+          // Mettre à jour le timeTracking
+          task.timeTracking.totalSeconds += seconds;
+          task.timeTracking.entries.push(manualEntry);
+
+          // Formater la durée pour l'activité
+          const hours = Math.floor(seconds / 3600);
+          const minutes = Math.floor((seconds % 3600) / 60);
+          const durationStr = hours > 0
+            ? `${hours}h ${minutes > 0 ? minutes + "m" : ""}`
+            : `${minutes}m`;
+
+          // Ajouter l'activité
+          if (!task.activity) task.activity = [];
+          task.activity.push({
+            userId: user.id,
+            userName,
+            userImage,
+            type: "manual_time_added",
+            description: description || `a ajouté ${durationStr} manuellement`,
+            createdAt: now,
+          });
+
+          await task.save();
+
+          // Publier l'événement
+          safePublish(
+            `${TASK_UPDATED}_${finalWorkspaceId}_${task.boardId}`,
+            {
+              type: "MANUAL_TIME_ADDED",
+              task: task,
+              taskId: task._id,
+              boardId: task.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Temps manuel ajouté"
+          );
+
+          return task;
+        } catch (error) {
+          logger.error("Error adding manual time:", error);
+          throw new Error(error.message || "Failed to add manual time");
+        }
+      }
+    ),
   },
 
   Board: {
@@ -2691,6 +2793,54 @@ const resolvers = {
       ]);
 
       const total = result[0]?.total || 0;
+      return total > 0 ? total : null;
+    },
+    taskCount: async (board) => {
+      return Task.countDocuments({
+        boardId: new mongoose.Types.ObjectId(board.id),
+        workspaceId: new mongoose.Types.ObjectId(board.workspaceId),
+      });
+    },
+    totalTimeSpent: async (board) => {
+      const result = await Task.aggregate([
+        {
+          $match: {
+            boardId: new mongoose.Types.ObjectId(board.id),
+            workspaceId: new mongoose.Types.ObjectId(board.workspaceId),
+          },
+        },
+        {
+          $project: {
+            totalSeconds: { $ifNull: ["$timeTracking.totalSeconds", 0] },
+            isRunning: { $ifNull: ["$timeTracking.isRunning", false] },
+            currentStartTime: "$timeTracking.currentStartTime",
+          },
+        },
+        {
+          $addFields: {
+            effectiveSeconds: {
+              $cond: {
+                if: { $and: [{ $eq: ["$isRunning", true] }, { $ne: ["$currentStartTime", null] }] },
+                then: {
+                  $add: [
+                    "$totalSeconds",
+                    { $max: [0, { $divide: [{ $subtract: [new Date(), "$currentStartTime"] }, 1000] }] },
+                  ],
+                },
+                else: "$totalSeconds",
+              },
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$effectiveSeconds" },
+          },
+        },
+      ]);
+
+      const total = Math.round(result[0]?.total || 0);
       return total > 0 ? total : null;
     },
     members: async (board) => {

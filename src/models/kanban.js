@@ -27,6 +27,10 @@ const timeEntrySchema = new mongoose.Schema({
     type: Number, // en secondes
     required: true,
     default: 0
+  },
+  isManual: {
+    type: Boolean,
+    default: false
   }
 }, { _id: true });
 
@@ -143,7 +147,7 @@ const activitySchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['created', 'updated', 'moved', 'assigned', 'unassigned', 'priority_changed', 'due_date_changed', 'status_changed', 'comment_added', 'timer_started', 'timer_stopped', 'timer_reset']
+    enum: ['created', 'updated', 'moved', 'assigned', 'unassigned', 'priority_changed', 'due_date_changed', 'status_changed', 'comment_added', 'timer_started', 'timer_stopped', 'timer_reset', 'manual_time_added']
   },
   field: String, // Champ modifié (ex: 'priority', 'dueDate', 'columnId')
   oldValue: mongoose.Schema.Types.Mixed, // Ancienne valeur (String ou Array pour assigned/unassigned)
@@ -183,6 +187,15 @@ const boardSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  templateId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'KanbanTemplate',
+    default: null
+  },
+  templateName: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true,

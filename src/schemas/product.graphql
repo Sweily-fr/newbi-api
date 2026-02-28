@@ -7,6 +7,7 @@ type Product {
   unit: String!
   category: String
   reference: String
+  customFields: [ProductCustomFieldValue]
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -27,6 +28,7 @@ input CreateProductInput {
   unit: String!
   category: String
   reference: String
+  customFields: [ProductCustomFieldValueInput]
 }
 
 input UpdateProductInput {
@@ -37,6 +39,7 @@ input UpdateProductInput {
   unit: String
   category: String
   reference: String
+  customFields: [ProductCustomFieldValueInput]
 }
 
 extend type Query {
