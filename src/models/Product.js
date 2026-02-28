@@ -50,7 +50,18 @@ const productSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
-  }
+  },
+  // Champs personnalisés
+  customFields: [{
+    fieldId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ProductCustomField',
+      required: true
+    },
+    value: {
+      type: mongoose.Schema.Types.Mixed
+    }
+  }]
 }, {
   timestamps: true
 });

@@ -1,0 +1,74 @@
+# Définition d'un champ personnalisé produit (au niveau workspace)
+type ProductCustomField {
+  id: ID!
+  name: String!
+  fieldType: CustomFieldType!
+  description: String
+  options: [CustomFieldOption!]
+  placeholder: String
+  isRequired: Boolean!
+  order: Int!
+  isActive: Boolean!
+  workspaceId: ID!
+  createdBy: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Valeur d'un champ personnalisé pour un produit
+type ProductCustomFieldValue {
+  fieldId: ID!
+  field: ProductCustomField
+  value: JSON
+}
+
+input ProductCustomFieldValueInput {
+  fieldId: ID!
+  value: JSON!
+}
+
+# Input pour créer un champ personnalisé produit
+input CreateProductCustomFieldInput {
+  name: String!
+  fieldType: CustomFieldType!
+  description: String
+  options: [CustomFieldOptionInput!]
+  placeholder: String
+  isRequired: Boolean
+  order: Int
+  isActive: Boolean
+}
+
+# Input pour modifier un champ personnalisé produit (tous les champs optionnels)
+input UpdateProductCustomFieldInput {
+  name: String
+  fieldType: CustomFieldType
+  description: String
+  options: [CustomFieldOptionInput!]
+  placeholder: String
+  isRequired: Boolean
+  order: Int
+  isActive: Boolean
+}
+
+extend type Query {
+  # Récupérer tous les champs personnalisés produits d'un workspace
+  productCustomFields(workspaceId: ID!): [ProductCustomField!]!
+
+  # Récupérer un champ personnalisé produit par ID
+  productCustomField(workspaceId: ID!, id: ID!): ProductCustomField
+}
+
+extend type Mutation {
+  # Créer un nouveau champ personnalisé produit
+  createProductCustomField(workspaceId: ID!, input: CreateProductCustomFieldInput!): ProductCustomField!
+
+  # Modifier un champ personnalisé produit
+  updateProductCustomField(workspaceId: ID!, id: ID!, input: UpdateProductCustomFieldInput!): ProductCustomField!
+
+  # Supprimer un champ personnalisé produit
+  deleteProductCustomField(workspaceId: ID!, id: ID!): Boolean!
+
+  # Réordonner les champs personnalisés produits
+  reorderProductCustomFields(workspaceId: ID!, fieldIds: [ID!]!): [ProductCustomField!]!
+}
