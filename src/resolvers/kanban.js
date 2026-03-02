@@ -2989,6 +2989,13 @@ const resolvers = {
   },
 
   Task: {
+    // Résoudre le client assigné à la tâche
+    client: async (task) => {
+      if (!task.clientId) return null;
+      const Client = mongoose.model('Client');
+      return Client.findOne({ _id: task.clientId, workspaceId: task.workspaceId });
+    },
+
     // Transformer les images de la tâche pour avoir des IDs corrects
     images: (task) => {
       if (!task.images || task.images.length === 0) return [];

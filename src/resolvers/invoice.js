@@ -994,6 +994,8 @@ const invoiceResolvers = {
                   }
                 : undefined,
             },
+            // Lier la facture au devis source si applicable
+            ...(sourceQuoteId ? { sourceQuote: sourceQuoteId } : {}),
             workspaceId: workspaceId, // ✅ Ajout automatique du workspaceId
             createdBy: user._id, // ✅ Conservé pour audit trail
             ...totals, // Ajouter tous les totaux calculés
@@ -2334,7 +2336,10 @@ const invoiceResolvers = {
         const vatRate = 20;
         const unitPriceHT = numericAmount / (1 + vatRate / 100);
 
-        // Créer la facture avec les données du devis (en DRAFT, pas de companyInfo embarqué)
+        // Utiliser les paramètres par défaut de facture (organisation), pas ceux du devis
+        const org = linkedInvoiceOrg;
+
+        // Créer la facture avec les paramètres par défaut de facture (pas ceux du devis)
         const invoice = new Invoice({
           number,
           prefix,
@@ -2366,15 +2371,25 @@ const invoiceResolvers = {
             },
           ],
 
-          headerNotes: quote.headerNotes || "",
-          footerNotes: quote.footerNotes || "",
-          termsAndConditions: quote.termsAndConditions || "",
-          termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle || "",
-          termsAndConditionsLink: quote.termsAndConditionsLink || "",
+          // Paramètres par défaut de FACTURE (depuis l'organisation), pas ceux du devis
+          headerNotes: org?.invoiceHeaderNotes || org?.documentHeaderNotes || "",
+          footerNotes: org?.invoiceFooterNotes || org?.documentFooterNotes || "",
+          termsAndConditions: org?.invoiceTermsAndConditions || org?.documentTermsAndConditions || "",
+          termsAndConditionsLinkTitle: "",
+          termsAndConditionsLink: "",
+
+          // Apparence par défaut de facture
+          appearance: {
+            textColor: org?.invoiceTextColor || org?.documentTextColor || "#000000",
+            headerTextColor: org?.invoiceHeaderTextColor || org?.documentHeaderTextColor || "#ffffff",
+            headerBgColor: org?.invoiceHeaderBgColor || org?.documentHeaderBgColor || "#5b50FF",
+          },
+          showBankDetails: org?.showBankDetails || false,
+          clientPositionRight: org?.invoiceClientPositionRight || false,
 
           discount: 0,
           discountType: "FIXED",
-          customFields: quote.customFields || [],
+          customFields: [],
           createdBy: user._id, // ✅ Conservé pour audit trail
           workspaceId: workspaceId, // ✅ Ajout du workspaceId
         });
