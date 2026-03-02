@@ -13,7 +13,7 @@ function startCalendarSyncCron() {
     logger.info('[Calendar Cron] Démarrage de la synchronisation des calendriers');
 
     try {
-      const result = await syncAllActiveConnections();
+      const result = await syncAllActiveConnections({ excludeWebhookActive: true });
       if (result.total > 0) {
         logger.info(`[Calendar Cron] Synchronisation terminée: ${result.successCount}/${result.total} réussies, ${result.failCount} échouées`);
       }

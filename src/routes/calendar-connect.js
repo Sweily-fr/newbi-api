@@ -3,6 +3,7 @@ import { betterAuthJWTMiddleware } from '../middlewares/better-auth-jwt.js';
 import CalendarConnection from '../models/CalendarConnection.js';
 import { getCalendarProvider } from '../services/calendar/CalendarProviderFactory.js';
 import { syncConnection } from '../services/calendar/CalendarSyncService.js';
+import { registerWebhookForConnection } from '../services/calendar/CalendarWebhookService.js';
 import { translateGoogleError } from '../services/calendar/providers/GoogleCalendarProvider.js';
 import { translateMicrosoftError } from '../services/calendar/providers/MicrosoftCalendarProvider.js';
 import logger from '../utils/logger.js';
@@ -137,6 +138,11 @@ router.get('/google/callback', async (req, res) => {
       logger.warn('Initial calendar sync failed (will retry later):', syncError.message);
     }
 
+    // Register webhook for real-time sync (fire-and-forget)
+    registerWebhookForConnection(connection._id).catch(err =>
+      logger.warn(`[Google OAuth] Webhook registration failed for connection ${connection._id}:`, err.message)
+    );
+
     logger.info(`Google Calendar connected for user ${stateData.userId}`);
     res.redirect(`${process.env.FRONTEND_URL}/dashboard/calendar?calendar_connected=google`);
   } catch (error) {
@@ -260,6 +266,11 @@ router.get('/microsoft/callback', async (req, res) => {
     } catch (syncError) {
       logger.warn('Initial Microsoft calendar sync failed:', syncError.message);
     }
+
+    // Register webhook for real-time sync (fire-and-forget)
+    registerWebhookForConnection(connection._id).catch(err =>
+      logger.warn(`[Microsoft OAuth] Webhook registration failed for connection ${connection._id}:`, err.message)
+    );
 
     logger.info(`Microsoft Calendar connected for user ${stateData.userId}`);
     res.redirect(`${process.env.FRONTEND_URL}/dashboard/calendar?calendar_connected=microsoft`);

@@ -7,6 +7,11 @@ import {
   pushEventToCalendar,
   disconnectCalendar
 } from '../services/calendar/CalendarSyncService.js';
+import {
+  publishCalendarEventsChanged,
+  cleanupWebhookForConnection,
+  registerWebhookForConnection
+} from '../services/calendar/CalendarWebhookService.js';
 import logger from '../utils/logger.js';
 
 const calendarConnectionResolvers = {
@@ -140,6 +145,8 @@ const calendarConnectionResolvers = {
           await connection.save();
           const syncResult = await syncConnection(connection._id);
           syncMessage = ` (${syncResult.created} événement(s) synchronisé(s))`;
+          // Publish real-time update after sync
+          publishCalendarEventsChanged(user.id || user._id);
         } catch (syncError) {
           logger.warn('Initial Apple calendar sync failed:', syncError.message);
           syncMessage = '. Synchronisation initiale échouée, réessayez depuis le panneau calendrier.';
@@ -185,6 +192,13 @@ const calendarConnectionResolvers = {
 
         if (!connection) {
           return { success: false, message: 'Connexion non trouvée', connection: null };
+        }
+
+        // Cleanup webhook/subscription before disconnecting
+        try {
+          await cleanupWebhookForConnection(connection);
+        } catch (cleanupError) {
+          logger.warn(`[disconnectCalendar] Webhook cleanup failed for ${connectionId}:`, cleanupError.message);
         }
 
         const disconnected = await disconnectCalendar(connectionId);
@@ -234,9 +248,15 @@ const calendarConnectionResolvers = {
         // Re-sync with updated calendar selection
         try {
           await syncConnection(connection._id);
+          publishCalendarEventsChanged(user.id || user._id);
         } catch (syncError) {
           logger.warn('Re-sync after calendar selection update failed:', syncError.message);
         }
+
+        // Re-register webhook with possibly new calendar selection
+        registerWebhookForConnection(connection._id).catch(err =>
+          logger.warn('[updateSelectedCalendars] Webhook re-registration failed:', err.message)
+        );
 
         return {
           success: true,
@@ -278,6 +298,14 @@ const calendarConnectionResolvers = {
         }
 
         const result = await syncConnection(connectionId);
+        publishCalendarEventsChanged(user.id || user._id);
+
+        // Register webhook if not already active (for existing connections)
+        if (!connection.webhookExpiration || connection.webhookExpiration < new Date()) {
+          registerWebhookForConnection(connectionId).catch(err =>
+            logger.warn(`[syncCalendar] Webhook registration failed for ${connectionId}:`, err.message)
+          );
+        }
 
         const updatedConnection = await CalendarConnection.findById(connectionId);
 
@@ -316,6 +344,7 @@ const calendarConnectionResolvers = {
         const results = await syncAllForUser(user.id || user._id);
         const totalSynced = results.reduce((sum, r) => sum + (r.total || 0), 0);
         const successCount = results.filter(r => r.success).length;
+        publishCalendarEventsChanged(user.id || user._id);
 
         return {
           success: true,

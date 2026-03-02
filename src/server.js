@@ -76,6 +76,7 @@ import reconciliationRoutes from "./routes/reconciliation.js";
 // import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
+import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
@@ -83,6 +84,7 @@ import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
 import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
 import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
+import { startCalendarWebhookRenewalCron } from "./cron/calendarWebhookRenewalCron.js";
 import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
 import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
@@ -237,6 +239,9 @@ async function startServer() {
 
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);
+
+  // Routes webhooks calendriers (Google/Microsoft push notifications)
+  app.use("/calendar-webhooks", calendarWebhookRoutes);
 
   // Routes connexion Gmail pour import factures fournisseurs
   app.use("/gmail-connect", gmailConnectRoutes);
@@ -461,6 +466,10 @@ async function startServer() {
     // Démarrer le cron de synchronisation des calendriers externes
     startCalendarSyncCron();
     logger.info("✅ Cron de synchronisation des calendriers démarré");
+
+    // Démarrer le cron de renouvellement des webhooks calendrier
+    startCalendarWebhookRenewalCron();
+    logger.info("✅ Cron de renouvellement des webhooks calendrier démarré");
 
     // Démarrer le cron de synchronisation Gmail (factures fournisseurs)
     startGmailSyncCron();

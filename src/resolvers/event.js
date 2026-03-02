@@ -4,7 +4,11 @@ import CalendarConnection from '../models/CalendarConnection.js';
 import { isAuthenticated, withWorkspace } from '../middlewares/better-auth-jwt.js';
 import emailReminderService from '../services/emailReminderService.js';
 import { deleteEventFromExternalCalendars, updateEventInExternalCalendars, pushEventToCalendar } from '../services/calendar/CalendarSyncService.js';
+import { publishCalendarEventsChanged } from '../services/calendar/CalendarWebhookService.js';
+import { getPubSub } from '../config/redis.js';
 import logger from '../utils/logger.js';
+
+const CALENDAR_EVENTS_CHANGED = 'CALENDAR_EVENTS_CHANGED';
 
 const eventResolvers = {
   Event: {
@@ -228,6 +232,9 @@ const eventResolvers = {
 
         await event.save();
 
+        // Publish calendar events changed for real-time sync
+        publishCalendarEventsChanged(user.id || user._id);
+
         // Auto-push to external calendars with autoSync enabled (fire-and-forget)
         CalendarConnection.find({
           userId: user.id || user._id,
@@ -335,6 +342,9 @@ const eventResolvers = {
           };
         }
 
+        // Publish calendar events changed for real-time sync
+        publishCalendarEventsChanged(user.id || user._id);
+
         // Propagate changes to external calendars (fire-and-forget)
         if (event.externalCalendarLinks?.length > 0) {
           updateEventInExternalCalendars(event).catch(err =>
@@ -387,6 +397,9 @@ const eventResolvers = {
             message: 'Événement non trouvé'
           };
         }
+
+        // Publish calendar events changed for real-time sync
+        publishCalendarEventsChanged(user.id || user._id);
 
         return {
           success: true,
@@ -441,6 +454,14 @@ const eventResolvers = {
     })
   },
 
+  Subscription: {
+    calendarEventsChanged: {
+      subscribe: (_, { userId }) => {
+        const pubsub = getPubSub();
+        return pubsub.asyncIterator(`${CALENDAR_EVENTS_CHANGED}_${userId}`);
+      },
+    },
+  },
 };
 
 export default eventResolvers;
