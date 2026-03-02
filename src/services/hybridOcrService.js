@@ -19,6 +19,7 @@ import googleDocumentAI from "./googleDocumentAIService.js";
 import mistralOcrService from "./mistralOcrService.js";
 import ocrCacheService from "./ocrCacheService.js";
 import OcrUsage from "../models/OcrUsage.js";
+import invoiceExtractionService from "./invoiceExtractionService.js";
 
 class HybridOcrService {
   constructor() {
@@ -216,6 +217,51 @@ class HybridOcrService {
           result = provider.service.toInvoiceFormat(rawResult);
           result.success = true;
           result.text = result.extractedText;
+
+          // Si Google Document AI n'a pas renvoyé d'entités structurées
+          // (processeur OCR basique vs Invoice Parser), extraire via regex
+          const hasEntities = result.transaction_data?.vendor_name ||
+            result.transaction_data?.amount ||
+            result.transaction_data?.document_number;
+          if (!hasEntities && result.extractedText) {
+            try {
+              const regex = invoiceExtractionService.extractWithPatterns(result.extractedText);
+              if (regex) {
+                const totalTTC = parseFloat(regex.netToPay || regex.totalTTC) || 0;
+                const totalHT = parseFloat(regex.totalHT || regex.totalHtMois) || 0;
+                const totalTVA = parseFloat(regex.tvaAmount) || 0;
+                result.transaction_data = {
+                  vendor_name: '',
+                  amount: totalTTC,
+                  amount_ht: totalHT,
+                  tax_amount: totalTVA,
+                  transaction_date: regex.invoiceDate || null,
+                  due_date: regex.dueDate || null,
+                  document_number: regex.invoiceNumber || null,
+                  currency: 'EUR',
+                  category: 'OTHER',
+                  payment_method: regex.paymentMethod || '',
+                };
+                result.extracted_fields = {
+                  ...result.extracted_fields,
+                  vendor_siret: regex.siret || null,
+                  vendor_vat_number: regex.vatNumber || null,
+                  vendor_email: regex.email || null,
+                  vendor_phone: regex.phone || null,
+                  vendor_city: regex.city || '',
+                  vendor_postal_code: regex.postalCode || '',
+                  totals: {
+                    total_ht: totalHT,
+                    total_tax: totalTVA,
+                    total_ttc: totalTTC,
+                  },
+                };
+                console.log(`📝 Google Document AI: données extraites via regex fallback (TTC: ${totalTTC}, N°: ${regex.invoiceNumber})`);
+              }
+            } catch (extractionError) {
+              console.warn(`⚠️ Regex extraction fallback échoué:`, extractionError.message);
+            }
+          }
 
           // Incrémenter le compteur d'usage Google
           if (workspaceId) {
