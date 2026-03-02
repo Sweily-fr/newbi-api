@@ -17,6 +17,9 @@ import {
   createNotFoundError,
   createInternalServerError,
 } from "../utils/errors.js";
+import documentAutomationService from "../services/documentAutomationService.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import Supplier from "../models/Supplier.js";
 
 // Limite maximale d'import en lot
 const MAX_BATCH_IMPORT = 100;
@@ -437,6 +440,129 @@ function transformOcrToInvoiceDataV2(ocrResult, extractionResult) {
   };
 }
 
+// === Conversion ImportedInvoice → PurchaseInvoice helpers ===
+
+const CATEGORY_MAP = {
+  TRAVEL: "TRANSPORT",
+  EQUIPMENT: "HARDWARE",
+  SALARIES: "OTHER",
+};
+
+function mapCategory(importedCategory) {
+  if (!importedCategory) return "OTHER";
+  return CATEGORY_MAP[importedCategory] || importedCategory;
+}
+
+const PAYMENT_METHOD_MAP = {
+  CARD: "CREDIT_CARD",
+  TRANSFER: "BANK_TRANSFER",
+};
+
+function mapPaymentMethod(importedMethod) {
+  if (!importedMethod || importedMethod === "UNKNOWN") return null;
+  return PAYMENT_METHOD_MAP[importedMethod] || importedMethod;
+}
+
+async function findOrCreateSupplier(vendor, workspaceId, userId) {
+  if (!vendor?.name) return null;
+
+  const wsId = new mongoose.Types.ObjectId(workspaceId);
+
+  // Search by siret first
+  if (vendor.siret) {
+    const bySiret = await Supplier.findOne({ workspaceId: wsId, siret: vendor.siret });
+    if (bySiret) return bySiret;
+  }
+
+  // Search by name (case-insensitive)
+  const escapedName = vendor.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const byName = await Supplier.findOne({
+    workspaceId: wsId,
+    name: { $regex: new RegExp(`^${escapedName}$`, "i") },
+  });
+  if (byName) return byName;
+
+  // Create new supplier
+  return Supplier.create({
+    workspaceId: wsId,
+    name: vendor.name,
+    email: vendor.email || undefined,
+    phone: vendor.phone || undefined,
+    siret: vendor.siret || undefined,
+    vatNumber: vendor.vatNumber || undefined,
+    address: {
+      street: vendor.address || undefined,
+      city: vendor.city || undefined,
+      postalCode: vendor.postalCode || undefined,
+      country: vendor.country || undefined,
+    },
+    createdBy: userId,
+  });
+}
+
+async function convertSingleImportedInvoice(importedInvoice, userId) {
+  const supplier = await findOrCreateSupplier(
+    importedInvoice.vendor,
+    importedInvoice.workspaceId,
+    userId
+  );
+
+  const file = importedInvoice.file;
+  const files = file
+    ? [
+        {
+          filename: file.cloudflareKey || file.originalFileName,
+          originalFilename: file.originalFileName,
+          mimetype: file.mimeType || "application/pdf",
+          path: file.url,
+          size: file.fileSize || 1,
+          url: file.url,
+          ocrProcessed: true,
+        },
+      ]
+    : [];
+
+  const ocrMetadata = {
+    supplierName: importedInvoice.vendor?.name || null,
+    supplierSiret: importedInvoice.vendor?.siret || null,
+    supplierVatNumber: importedInvoice.vendor?.vatNumber || null,
+    invoiceNumber: importedInvoice.originalInvoiceNumber || null,
+    invoiceDate: importedInvoice.invoiceDate ? new Date(importedInvoice.invoiceDate) : null,
+    dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
+    amountHT: importedInvoice.totalHT || null,
+    amountTVA: importedInvoice.totalVAT || null,
+    amountTTC: importedInvoice.totalTTC || null,
+    confidenceScore: importedInvoice.ocrData?.confidence || null,
+  };
+
+  const purchaseInvoice = await PurchaseInvoice.create({
+    supplierName: importedInvoice.vendor?.name || "Fournisseur inconnu",
+    supplierId: supplier?._id || null,
+    invoiceNumber: importedInvoice.originalInvoiceNumber || null,
+    issueDate: importedInvoice.invoiceDate ? new Date(importedInvoice.invoiceDate) : new Date(),
+    dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
+    amountHT: importedInvoice.totalHT || 0,
+    amountTVA: importedInvoice.totalVAT || 0,
+    amountTTC: importedInvoice.totalTTC,
+    currency: importedInvoice.currency || "EUR",
+    status: "TO_PROCESS",
+    category: mapCategory(importedInvoice.category),
+    paymentMethod: mapPaymentMethod(importedInvoice.paymentMethod),
+    notes: importedInvoice.notes || null,
+    files,
+    ocrMetadata,
+    source: "OCR",
+    workspaceId: new mongoose.Types.ObjectId(importedInvoice.workspaceId),
+    createdBy: userId,
+  });
+
+  // Mark the imported invoice as VALIDATED
+  importedInvoice.status = "VALIDATED";
+  await importedInvoice.save();
+
+  return purchaseInvoice;
+}
+
 const importedInvoiceResolvers = {
   Upload: GraphQLUpload,
 
@@ -624,24 +750,24 @@ const importedInvoiceResolvers = {
             workspaceId
           );
 
-          // Enregistrer l'utilisation OCR
-          await recordOcrUsage(user.id, workspaceId, plan, {
-            fileName,
-            provider: invoiceData.ocrData?.provider || "claude-vision",
-            success: true,
-          });
-
-          // Vérifier les doublons potentiels
-          const duplicates = await ImportedInvoice.findPotentialDuplicates(
-            workspaceId,
-            invoiceData.originalInvoiceNumber,
-            invoiceData.vendor?.name,
-            invoiceData.totalTTC
-          );
+          // OPTIMISATION: Enregistrer usage OCR + détecter doublons en parallèle
+          const [duplicates] = await Promise.all([
+            ImportedInvoice.findPotentialDuplicates(
+              workspaceId,
+              invoiceData.originalInvoiceNumber,
+              invoiceData.vendor?.name,
+              invoiceData.totalTTC
+            ),
+            recordOcrUsage(user.id, workspaceId, plan, {
+              fileName,
+              provider: invoiceData.ocrData?.provider || "claude-vision",
+              success: true,
+            }),
+          ]);
 
           const isDuplicate = duplicates.length > 0;
 
-          // Créer la facture importée
+          // Créer et sauvegarder la facture importée
           const importedInvoice = new ImportedInvoice({
             workspaceId,
             importedBy: user.id,
@@ -658,6 +784,17 @@ const importedInvoiceResolvers = {
           });
 
           await importedInvoice.save();
+
+          // Déclencher les automatisations (fire-and-forget, pas de await)
+          documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
+            documentId: importedInvoice._id.toString(),
+            documentType: 'importedInvoice',
+            documentNumber: importedInvoice.originalInvoiceNumber || '',
+            clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
+            cloudflareUrl: cloudflareUrl,
+            mimeType: mimeType,
+            fileExtension: fileName?.split('.').pop() || 'pdf',
+          }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
 
           return {
             success: true,
@@ -708,39 +845,6 @@ const importedInvoiceResolvers = {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
           }
 
-          // Convertir en base64 pour Claude Vision
-          const base64Data = fileBuffer.toString("base64");
-          const contentHash = crypto
-            .createHash("sha256")
-            .update(fileBuffer)
-            .digest("hex");
-
-          // OCR direct via Claude Vision
-          console.log(`🔍 importInvoiceDirect: OCR direct pour ${filename}`);
-          const rawResult = await claudeVisionOcrService.processFromBase64(
-            base64Data,
-            mimetype,
-            filename,
-            contentHash
-          );
-
-          if (!rawResult.success) {
-            throw createInternalServerError(
-              `Erreur OCR: ${rawResult.error || rawResult.message}`
-            );
-          }
-
-          // Formater et extraire les données de facture
-          const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
-
-          let invoiceData;
-          if (structuredResult.transaction_data) {
-            invoiceData = transformOcrToInvoiceDataV2(structuredResult, structuredResult);
-          } else {
-            const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
-            invoiceData = transformOcrToInvoiceDataV2(structuredResult, extractionResult);
-          }
-
           // Récupérer organizationId pour l'upload Cloudflare
           let organizationId = null;
           const rawOrgId =
@@ -766,34 +870,94 @@ const importedInvoiceResolvers = {
             }
           }
 
-          // Upload serveur-à-serveur vers Cloudflare (attendu car besoin de l'URL)
-          console.log(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
-          const uploadResult = await cloudflareService.uploadImage(
-            fileBuffer,
-            filename,
-            user.id,
-            "importedInvoice",
-            organizationId
-          );
+          // OPTIMISATION: Lancer l'upload Cloudflare et l'OCR en parallèle
+          // L'OCR Claude Vision utilise le base64 (pas l'URL), donc les deux sont indépendants
+          console.log(`⚡ importInvoiceDirect: Upload + OCR en parallèle pour ${filename}`);
 
-          // Enregistrer l'utilisation OCR
-          await recordOcrUsage(user.id, workspaceId, plan, {
-            fileName: filename,
-            provider: rawResult.provider || "claude-vision",
-            success: true,
-          });
+          let invoiceData;
+          let ocrProvider = "claude-vision";
+          let uploadResult;
 
-          // Vérifier les doublons potentiels
-          const duplicates = await ImportedInvoice.findPotentialDuplicates(
-            workspaceId,
-            invoiceData.originalInvoiceNumber,
-            invoiceData.vendor?.name,
-            invoiceData.totalTTC
-          );
+          if (claudeVisionOcrService.isAvailable()) {
+            // Préparer les données OCR (synchrone, rapide)
+            const base64Data = fileBuffer.toString("base64");
+            const contentHash = crypto
+              .createHash("sha256")
+              .update(fileBuffer)
+              .digest("hex");
+
+            // Lancer upload Cloudflare + OCR Claude Vision en parallèle
+            const [uploadRes, rawResult] = await Promise.all([
+              cloudflareService.uploadImage(
+                fileBuffer,
+                filename,
+                user.id,
+                "importedInvoice",
+                organizationId
+              ),
+              claudeVisionOcrService.processFromBase64(
+                base64Data,
+                mimetype,
+                filename,
+                contentHash
+              ),
+            ]);
+
+            uploadResult = uploadRes;
+
+            if (!rawResult.success) {
+              throw createInternalServerError(
+                `Erreur OCR: ${rawResult.error || rawResult.message}`
+              );
+            }
+
+            const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+            if (structuredResult.transaction_data) {
+              invoiceData = transformOcrToInvoiceDataV2(structuredResult, structuredResult);
+            } else {
+              const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
+              invoiceData = transformOcrToInvoiceDataV2(structuredResult, extractionResult);
+            }
+
+            ocrProvider = rawResult.provider || "claude-vision";
+          } else {
+            // Fallback: Upload d'abord (besoin de l'URL pour OCR hybride)
+            uploadResult = await cloudflareService.uploadImage(
+              fileBuffer,
+              filename,
+              user.id,
+              "importedInvoice",
+              organizationId
+            );
+            console.log(`🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`);
+            invoiceData = await processInvoiceWithOcr(
+              uploadResult.url,
+              filename,
+              mimetype,
+              workspaceId
+            );
+            ocrProvider = invoiceData.ocrData?.provider || "hybrid";
+          }
+
+          // OPTIMISATION: Lancer doublons + enregistrement OCR en parallèle
+          const [duplicates] = await Promise.all([
+            ImportedInvoice.findPotentialDuplicates(
+              workspaceId,
+              invoiceData.originalInvoiceNumber,
+              invoiceData.vendor?.name,
+              invoiceData.totalTTC
+            ),
+            recordOcrUsage(user.id, workspaceId, plan, {
+              fileName: filename,
+              provider: ocrProvider,
+              success: true,
+            }),
+          ]);
 
           const isDuplicate = duplicates.length > 0;
 
-          // Créer la facture importée
+          // Créer et sauvegarder la facture importée
           const importedInvoice = new ImportedInvoice({
             workspaceId,
             importedBy: user.id,
@@ -810,6 +974,17 @@ const importedInvoiceResolvers = {
           });
 
           await importedInvoice.save();
+
+          // Déclencher les automatisations (fire-and-forget, pas de await)
+          documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
+            documentId: importedInvoice._id.toString(),
+            documentType: 'importedInvoice',
+            documentNumber: importedInvoice.originalInvoiceNumber || '',
+            clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
+            cloudflareUrl: uploadResult.url,
+            mimeType: mimetype,
+            fileExtension: filename?.split('.').pop() || 'pdf',
+          }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
 
           return {
             success: true,
@@ -881,8 +1056,8 @@ const importedInvoiceResolvers = {
 
         console.log(`📊 OCR: ${successfulOcr.length} réussis, ${failedOcr.length} échoués`);
 
-        // ========== PHASE 2: Extraction + Sauvegarde en parallèle ==========
-        const SAVE_BATCH_SIZE = 20;
+        // ========== PHASE 2: Extraction + Sauvegarde en parallèle (optimisé) ==========
+        const SAVE_BATCH_SIZE = 40; // Augmenté de 20 à 40 grâce au pool MongoDB élargi
 
         for (let i = 0; i < successfulOcr.length; i += SAVE_BATCH_SIZE) {
           const batch = successfulOcr.slice(i, i + SAVE_BATCH_SIZE);
@@ -897,25 +1072,30 @@ const importedInvoiceResolvers = {
                 let invoiceData;
 
                 if (ocrResult.result?.transaction_data) {
-                  // Claude Vision retourne déjà les données structurées
                   invoiceData = transformOcrToInvoiceDataV2(ocrResult.result, ocrResult.result);
                 } else {
-                  // Fallback: utiliser le service d'extraction
                   const extractionResult = await invoiceExtractionService.extractInvoiceData(ocrResult.result);
                   invoiceData = transformOcrToInvoiceDataV2(ocrResult.result, extractionResult);
                 }
 
-                // Vérifier les doublons
-                const duplicates = await ImportedInvoice.findPotentialDuplicates(
-                  workspaceId,
-                  invoiceData.originalInvoiceNumber,
-                  invoiceData.vendor?.name,
-                  invoiceData.totalTTC
-                );
+                // Doublons + enregistrement OCR en parallèle
+                const [duplicates] = await Promise.all([
+                  ImportedInvoice.findPotentialDuplicates(
+                    workspaceId,
+                    invoiceData.originalInvoiceNumber,
+                    invoiceData.vendor?.name,
+                    invoiceData.totalTTC
+                  ),
+                  recordOcrUsage(user.id, workspaceId, plan, {
+                    documentId: null,
+                    fileName: file.fileName,
+                    provider: ocrResult.result?.provider || "claude-vision",
+                    success: true,
+                  }),
+                ]);
 
                 const isDuplicate = duplicates.length > 0;
 
-                // Créer et sauvegarder la facture
                 const importedInvoice = new ImportedInvoice({
                   workspaceId,
                   importedBy: user.id,
@@ -933,13 +1113,16 @@ const importedInvoiceResolvers = {
 
                 await importedInvoice.save();
 
-                // Enregistrer l'utilisation OCR
-                await recordOcrUsage(user.id, workspaceId, plan, {
-                  documentId: importedInvoice._id,
-                  fileName: file.fileName,
-                  provider: ocrResult.result?.provider || "claude-vision",
-                  success: true,
-                });
+                // Automatisations fire-and-forget
+                documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
+                  documentId: importedInvoice._id.toString(),
+                  documentType: 'importedInvoice',
+                  documentNumber: importedInvoice.originalInvoiceNumber || '',
+                  clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
+                  cloudflareUrl: file.cloudflareUrl,
+                  mimeType: file.mimeType,
+                  fileExtension: file.fileName?.split('.').pop() || 'pdf',
+                }, user.id).catch(err => console.error('Erreur automatisation facture importée (batch):', err));
 
                 return {
                   success: true,
@@ -1167,6 +1350,58 @@ const importedInvoiceResolvers = {
           extraImportsAvailable: result.extraImportsAvailable,
           totalSpent: result.totalSpent,
           message: `${quantity} import(s) supplémentaire(s) ajouté(s) avec succès.`,
+        };
+      }
+    ),
+
+    /**
+     * Convertit une facture importée en facture d'achat (PurchaseInvoice)
+     */
+    convertImportedInvoiceToPurchaseInvoice: isAuthenticated(
+      async (_, { id }, { user }) => {
+        const importedInvoice = await ImportedInvoice.findById(id);
+        if (!importedInvoice) {
+          throw createNotFoundError("Facture importée introuvable");
+        }
+        if (importedInvoice.status !== "PENDING_REVIEW") {
+          throw createValidationError(
+            `Impossible de convertir : statut actuel "${importedInvoice.status}" (attendu PENDING_REVIEW)`
+          );
+        }
+        return convertSingleImportedInvoice(importedInvoice, user.id);
+      }
+    ),
+
+    /**
+     * Convertit plusieurs factures importées en factures d'achat
+     */
+    convertImportedInvoicesToPurchaseInvoices: isAuthenticated(
+      async (_, { ids }, { user }) => {
+        let converted = 0;
+        let skipped = 0;
+        let errors = 0;
+
+        for (const id of ids) {
+          try {
+            const importedInvoice = await ImportedInvoice.findById(id);
+            if (!importedInvoice || importedInvoice.status !== "PENDING_REVIEW") {
+              skipped++;
+              continue;
+            }
+            await convertSingleImportedInvoice(importedInvoice, user.id);
+            converted++;
+          } catch (err) {
+            console.error(`Erreur conversion facture importée ${id}:`, err.message);
+            errors++;
+          }
+        }
+
+        return {
+          success: errors === 0,
+          converted,
+          skipped,
+          errors,
+          message: `${converted} convertie(s), ${skipped} ignorée(s), ${errors} erreur(s)`,
         };
       }
     ),

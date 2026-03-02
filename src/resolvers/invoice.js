@@ -994,6 +994,8 @@ const invoiceResolvers = {
                   }
                 : undefined,
             },
+            // Lier la facture au devis source si applicable
+            ...(sourceQuoteId ? { sourceQuote: sourceQuoteId } : {}),
             workspaceId: workspaceId, // ✅ Ajout automatique du workspaceId
             createdBy: user._id, // ✅ Conservé pour audit trail
             ...totals, // Ajouter tous les totaux calculés
@@ -1074,7 +1076,7 @@ const invoiceResolvers = {
                     metadata: {
                       documentType: "invoice",
                       documentId: invoice._id.toString(),
-                      documentNumber: `${prefix}${number}`,
+                      documentNumber: `${prefix}-${number}`,
                       status: invoice.status,
                     },
                     createdAt: new Date(),
@@ -1110,13 +1112,14 @@ const invoiceResolvers = {
 
             // Trouver un devis dont le préfixe+numéro correspond au numéro de bon de commande
             const matchingQuote = quotes.find((quote) => {
-              // Construire l'identifiant complet du devis (préfixe + numéro)
-              const quoteFullId = `${quote.prefix}${quote.number}`;
+              // Construire l'identifiant complet du devis (préfixe-numéro)
+              const quoteFullId = `${quote.prefix}-${quote.number}`;
+              const inputLower = input.purchaseOrderNumber.toLowerCase();
 
-              // Comparer avec le numéro de bon de commande (insensible à la casse)
+              // Comparer avec le numéro de bon de commande (supporte ancien format sans tiret et nouveau avec tiret)
               return (
-                quoteFullId.toLowerCase() ===
-                input.purchaseOrderNumber.toLowerCase()
+                quoteFullId.toLowerCase() === inputLower ||
+                `${quote.prefix}${quote.number}`.toLowerCase() === inputLower
               );
             });
 
@@ -1174,6 +1177,17 @@ const invoiceResolvers = {
             } catch (err) {
               console.error("Erreur lien Devis→Facture:", err);
             }
+          }
+
+          // Automatisations documents partagés pour les brouillons (fire-and-forget)
+          if (invoice.status === 'DRAFT') {
+            documentAutomationService.executeAutomations('INVOICE_DRAFT', workspaceId, {
+              documentId: invoice._id.toString(),
+              documentType: 'invoice',
+              documentNumber: invoice.number,
+              prefix: invoice.prefix || '',
+              clientName: invoice.client?.name || '',
+            }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (draft):', err));
           }
 
           return await invoice.populate("createdBy");
@@ -1986,7 +2000,7 @@ const invoiceResolvers = {
                   metadata: {
                     documentType: "invoice",
                     documentId: invoice._id.toString(),
-                    documentNumber: `${invoice.prefix}${invoice.number}`,
+                    documentNumber: `${invoice.prefix}-${invoice.number}`,
                     status: status,
                   },
                   createdAt: new Date(),
@@ -2002,21 +2016,17 @@ const invoiceResolvers = {
           }
         }
 
-        // Automatisations documents partagés
-        try {
-          const triggerMap = { PENDING: 'INVOICE_SENT', CANCELED: 'INVOICE_CANCELED' };
-          const trigger = triggerMap[status];
-          if (trigger) {
-            await documentAutomationService.executeAutomations(trigger, workspaceId, {
-              documentId: invoice._id.toString(),
-              documentType: 'invoice',
-              documentNumber: invoice.number,
-              prefix: invoice.prefix || '',
-              clientName: invoice.client?.name || '',
-            }, user._id.toString());
-          }
-        } catch (docAutoError) {
-          console.error('Erreur automatisation documents:', docAutoError);
+        // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+        const triggerMap = { PENDING: 'INVOICE_SENT', CANCELED: 'INVOICE_CANCELED' };
+        const trigger = triggerMap[status];
+        if (trigger) {
+          documentAutomationService.executeAutomations(trigger, workspaceId, {
+            documentId: invoice._id.toString(),
+            documentType: 'invoice',
+            documentNumber: invoice.number,
+            prefix: invoice.prefix || '',
+            clientName: invoice.client?.name || '',
+          }, user._id.toString()).catch(err => console.error('Erreur automatisation documents:', err));
         }
 
         return await invoice.populate("createdBy");
@@ -2165,18 +2175,14 @@ const invoiceResolvers = {
           }
         }
 
-        // Automatisations documents partagés
-        try {
-          await documentAutomationService.executeAutomations('INVOICE_PAID', workspaceId, {
-            documentId: invoice._id.toString(),
-            documentType: 'invoice',
-            documentNumber: invoice.number,
-            prefix: invoice.prefix || '',
-            clientName: invoice.client?.name || '',
-          }, user._id.toString());
-        } catch (docAutoError) {
-          console.error('Erreur automatisation documents (paid):', docAutoError);
-        }
+        // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+        documentAutomationService.executeAutomations('INVOICE_PAID', workspaceId, {
+          documentId: invoice._id.toString(),
+          documentType: 'invoice',
+          documentNumber: invoice.number,
+          prefix: invoice.prefix || '',
+          clientName: invoice.client?.name || '',
+        }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (paid):', err));
 
         return await invoice.populate("createdBy");
       }
@@ -2317,8 +2323,9 @@ const invoiceResolvers = {
           );
         }
 
-        // Générer le numéro de facture
-        const prefix = quote.prefix || "F";
+        // Générer le numéro de facture avec un préfixe de facture (pas celui du devis)
+        const now = new Date();
+        const prefix = `F-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
         const number = await generateInvoiceNumber(prefix, {
           isDraft: true,
           workspaceId: workspaceId,
@@ -2329,11 +2336,14 @@ const invoiceResolvers = {
         const vatRate = 20;
         const unitPriceHT = numericAmount / (1 + vatRate / 100);
 
-        // Créer la facture avec les données du devis (en DRAFT, pas de companyInfo embarqué)
+        // Utiliser les paramètres par défaut de facture (organisation), pas ceux du devis
+        const org = linkedInvoiceOrg;
+
+        // Créer la facture avec les paramètres par défaut de facture (pas ceux du devis)
         const invoice = new Invoice({
           number,
           prefix,
-          purchaseOrderNumber: `${quote.prefix}${quote.number}`, // Référence au devis
+          purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Référence au devis
           isDeposit,
           status: "DRAFT",
           issueDate: new Date(),
@@ -2346,10 +2356,10 @@ const invoiceResolvers = {
           items: [
             {
               description: isDeposit
-                ? `Acompte sur devis ${quote.prefix}${quote.number}`
+                ? `Acompte sur devis ${quote.prefix}-${quote.number}`
                 : numericAmount >= remainingAmount - 0.01
-                ? `Facture sur devis ${quote.prefix}${quote.number}`
-                : `Facture partielle sur devis ${quote.prefix}${quote.number}`,
+                ? `Facture sur devis ${quote.prefix}-${quote.number}`
+                : `Facture partielle sur devis ${quote.prefix}-${quote.number}`,
               quantity: 1,
               unitPrice: unitPriceHT,
               vatRate: vatRate,
@@ -2361,15 +2371,25 @@ const invoiceResolvers = {
             },
           ],
 
-          headerNotes: quote.headerNotes || "",
-          footerNotes: quote.footerNotes || "",
-          termsAndConditions: quote.termsAndConditions || "",
-          termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle || "",
-          termsAndConditionsLink: quote.termsAndConditionsLink || "",
+          // Paramètres par défaut de FACTURE (depuis l'organisation), pas ceux du devis
+          headerNotes: org?.invoiceHeaderNotes || org?.documentHeaderNotes || "",
+          footerNotes: org?.invoiceFooterNotes || org?.documentFooterNotes || "",
+          termsAndConditions: org?.invoiceTermsAndConditions || org?.documentTermsAndConditions || "",
+          termsAndConditionsLinkTitle: "",
+          termsAndConditionsLink: "",
+
+          // Apparence par défaut de facture
+          appearance: {
+            textColor: org?.invoiceTextColor || org?.documentTextColor || "#000000",
+            headerTextColor: org?.invoiceHeaderTextColor || org?.documentHeaderTextColor || "#ffffff",
+            headerBgColor: org?.invoiceHeaderBgColor || org?.documentHeaderBgColor || "#5b50FF",
+          },
+          showBankDetails: org?.showBankDetails || false,
+          clientPositionRight: org?.invoiceClientPositionRight || false,
 
           discount: 0,
           discountType: "FIXED",
-          customFields: quote.customFields || [],
+          customFields: [],
           createdBy: user._id, // ✅ Conservé pour audit trail
           workspaceId: workspaceId, // ✅ Ajout du workspaceId
         });

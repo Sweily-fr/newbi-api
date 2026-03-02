@@ -6,7 +6,7 @@ import {
   createNotFoundError,
   createValidationError,
 } from '../utils/errors.js';
-import documentAutomationService from '../services/documentAutomationService.js';
+import documentAutomationService, { getAutomationProgress } from '../services/documentAutomationService.js';
 
 const documentAutomationResolvers = {
   Query: {
@@ -62,6 +62,12 @@ const documentAutomationResolvers = {
         }
 
         return documentAutomationService.getDocumentsForAutomation(automation, workspaceId);
+      }
+    ),
+
+    documentAutomationProgress: isAuthenticated(
+      async (_, { automationId }) => {
+        return getAutomationProgress(automationId) || null;
       }
     ),
   },
@@ -307,13 +313,13 @@ const documentAutomationResolvers = {
           throw createValidationError('Le dossier cible n\'existe plus');
         }
 
-        // Compter les documents à traiter
-        const totalDocuments = await documentAutomationService.countExistingDocuments(
-          automation,
-          workspaceId
-        );
+        // Lancer le traitement (inclut restauration corbeille + traitement nouveaux docs)
+        const stats = await documentAutomationService
+          .executeAutomationForExistingDocuments(automation, workspaceId, user._id);
 
-        if (totalDocuments === 0) {
+        const totalDocuments = stats.total;
+
+        if (totalDocuments === 0 || (stats.successCount === 0 && stats.failCount === 0 && stats.restoredCount === 0)) {
           return {
             automationId: automation._id.toString(),
             status: 'NO_DOCUMENTS',
@@ -322,22 +328,25 @@ const documentAutomationResolvers = {
           };
         }
 
-        // Await le traitement pour retourner les vrais résultats
-        const stats = await documentAutomationService
-          .executeAutomationForExistingDocuments(automation, workspaceId, user._id);
-
         let status;
         let message;
 
+        const restoredNote = stats.restoredCount > 0
+          ? `, ${stats.restoredCount} restauré(s) depuis la corbeille`
+          : '';
+
         if (stats.failCount === 0 && stats.successCount > 0) {
           status = 'COMPLETED';
-          message = `${stats.successCount} document(s) traité(s) avec succès`;
+          message = `${stats.successCount} document(s) traité(s) avec succès${restoredNote}`;
         } else if (stats.successCount > 0 && stats.failCount > 0) {
           status = 'PARTIAL';
-          message = `${stats.successCount} succès, ${stats.failCount} échec(s)${stats.firstError ? ` — ${stats.firstError}` : ''}`;
+          message = `${stats.successCount} succès, ${stats.failCount} échec(s)${restoredNote}${stats.firstError ? ` — ${stats.firstError}` : ''}`;
         } else if (stats.failCount > 0) {
           status = 'FAILED';
           message = stats.firstError || `${stats.failCount} document(s) en échec`;
+        } else if (stats.restoredCount > 0) {
+          status = 'COMPLETED';
+          message = `${stats.restoredCount} document(s) restauré(s) depuis la corbeille`;
         } else {
           status = 'COMPLETED';
           message = 'Aucun nouveau document à traiter';

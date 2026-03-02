@@ -1,12 +1,28 @@
 enum DocumentAutomationTriggerType {
+  INVOICE_DRAFT
   INVOICE_SENT
   INVOICE_PAID
+  INVOICE_OVERDUE
   INVOICE_CANCELED
+  QUOTE_DRAFT
   QUOTE_SENT
   QUOTE_ACCEPTED
   QUOTE_CANCELED
   CREDIT_NOTE_CREATED
   INVOICE_IMPORTED
+  QUOTE_IMPORTED
+  PURCHASE_ORDER_DRAFT
+  PURCHASE_ORDER_CONFIRMED
+  PURCHASE_ORDER_IN_PROGRESS
+  PURCHASE_ORDER_DELIVERED
+  PURCHASE_ORDER_CANCELED
+  PURCHASE_INVOICE_TO_PROCESS
+  PURCHASE_INVOICE_TO_PAY
+  PURCHASE_INVOICE_PENDING
+  PURCHASE_INVOICE_PAID
+  PURCHASE_INVOICE_OVERDUE
+  PURCHASE_INVOICE_ARCHIVED
+  TRANSACTION_RECEIPT
 }
 
 enum DocumentAutomationLogStatus {
@@ -113,11 +129,17 @@ type ProcessAutomationDocumentResult {
   error: String
 }
 
+type DocumentAutomationProgress {
+  current: Int!
+  total: Int!
+}
+
 extend type Query {
   documentAutomations(workspaceId: ID!): [DocumentAutomation!]!
   documentAutomation(workspaceId: ID!, id: ID!): DocumentAutomation
   documentAutomationLogs(workspaceId: ID!, automationId: ID, limit: Int): [DocumentAutomationLog!]!
   documentsForAutomation(workspaceId: ID!, automationId: ID!): [AutomationPendingDocument!]!
+  documentAutomationProgress(workspaceId: ID!, automationId: ID!): DocumentAutomationProgress
 }
 
 extend type Mutation {
@@ -132,6 +154,6 @@ extend type Mutation {
     automationId: ID!
     documentId: ID!
     documentType: String!
-    pdfBase64: String!
+    pdfBase64: String
   ): ProcessAutomationDocumentResult!
 }

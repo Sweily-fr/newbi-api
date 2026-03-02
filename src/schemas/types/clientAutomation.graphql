@@ -72,9 +72,15 @@ extend type Query {
   clientAutomation(workspaceId: ID!, id: ID!): ClientAutomation
 }
 
+type ApplyAutomationResult {
+  applied: Int!
+  errors: Int!
+}
+
 extend type Mutation {
   createClientAutomation(workspaceId: ID!, input: CreateClientAutomationInput!): ClientAutomation!
   updateClientAutomation(workspaceId: ID!, id: ID!, input: UpdateClientAutomationInput!): ClientAutomation!
   deleteClientAutomation(workspaceId: ID!, id: ID!): Boolean!
   toggleClientAutomation(workspaceId: ID!, id: ID!): ClientAutomation!
+  applyClientAutomationToExisting(workspaceId: ID!, id: ID!): ApplyAutomationResult!
 }

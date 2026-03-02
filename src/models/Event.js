@@ -99,6 +99,13 @@ const eventSchema = new mongoose.Schema({
     ref: 'Invoice',
     sparse: true // Permet d'avoir des événements sans facture associée
   },
+
+  // Référence vers un client (si l'événement est lié à un client, ex: rappel)
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client',
+    sparse: true
+  },
   
   // Référence vers l'organisation/workspace (Better Auth)
   // Optionnel pour les événements externes (user-scoped)

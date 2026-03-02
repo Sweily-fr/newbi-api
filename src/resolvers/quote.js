@@ -723,7 +723,7 @@ const quoteResolvers = {
                   metadata: {
                     documentType: 'quote',
                     documentId: quote._id.toString(),
-                    documentNumber: `${prefix}${number}`,
+                    documentNumber: `${prefix}-${number}`,
                     status: quote.status
                   },
                   createdAt: new Date()
@@ -736,6 +736,17 @@ const quoteResolvers = {
           }
         }
         
+        // Automatisations documents partagés pour les brouillons (fire-and-forget)
+        if (quote.status === 'DRAFT') {
+          documentAutomationService.executeAutomations('QUOTE_DRAFT', workspaceId, {
+            documentId: quote._id.toString(),
+            documentType: 'quote',
+            documentNumber: quote.number,
+            prefix: quote.prefix || '',
+            clientName: quote.client?.name || '',
+          }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (quote draft):', err));
+        }
+
         return await quote.populate("createdBy");
         }
       )
@@ -1084,14 +1095,14 @@ const quoteResolvers = {
               activity: {
                 id: new mongoose.Types.ObjectId().toString(),
                 type: 'quote_status_changed',
-                description: `a changé le statut du devis ${quote.prefix}${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                description: `a changé le statut du devis ${quote.prefix}-${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
                 userId: user._id,
                 userName: user.name || user.email,
                 userImage: user.image || null,
                 metadata: {
                   documentType: 'quote',
                   documentId: quote._id.toString(),
-                  documentNumber: `${quote.prefix}${quote.number}`,
+                  documentNumber: `${quote.prefix}-${quote.number}`,
                   status: status
                 },
                 createdAt: new Date()
@@ -1104,21 +1115,17 @@ const quoteResolvers = {
         }
       }
 
-      // Automatisations documents partagés
-      try {
-        const triggerMap = { PENDING: 'QUOTE_SENT', COMPLETED: 'QUOTE_ACCEPTED', CANCELED: 'QUOTE_CANCELED' };
-        const trigger = triggerMap[status];
-        if (trigger) {
-          await documentAutomationService.executeAutomations(trigger, workspaceId, {
-            documentId: quote._id.toString(),
-            documentType: 'quote',
-            documentNumber: quote.number,
-            prefix: quote.prefix || '',
-            clientName: quote.client?.name || '',
-          }, user._id.toString());
-        }
-      } catch (docAutoError) {
-        console.error('Erreur automatisation documents (devis):', docAutoError);
+      // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+      const triggerMap = { PENDING: 'QUOTE_SENT', COMPLETED: 'QUOTE_ACCEPTED', CANCELED: 'QUOTE_CANCELED' };
+      const docTrigger = triggerMap[status];
+      if (docTrigger) {
+        documentAutomationService.executeAutomations(docTrigger, workspaceId, {
+          documentId: quote._id.toString(),
+          documentType: 'quote',
+          documentNumber: quote.number,
+          prefix: quote.prefix || '',
+          clientName: quote.client?.name || '',
+        }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (devis):', err));
       }
 
       return await quote.populate("createdBy");
@@ -1391,7 +1398,7 @@ const quoteResolvers = {
             termsAndConditions: quote.termsAndConditions,
             termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle,
             termsAndConditionsLink: quote.termsAndConditionsLink,
-            purchaseOrderNumber: `${quote.prefix}${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
+            purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
             discount: quote.discount,
             discountType: quote.discountType,
             customFields: quoteObj.customFields,

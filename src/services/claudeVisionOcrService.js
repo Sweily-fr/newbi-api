@@ -102,7 +102,7 @@ Structure JSON attendue:
     "bank_name": "nom de la banque"
   },
 
-  "category": "OFFICE_SUPPLIES" | "TRAVEL" | "MEALS" | "EQUIPMENT" | "MARKETING" | "TRAINING" | "SERVICES" | "RENT" | "SALARIES" | "UTILITIES" | "INSURANCE" | "SUBSCRIPTIONS" | "OTHER",
+  "category": "RENT" | "SUBSCRIPTIONS" | "OFFICE_SUPPLIES" | "SERVICES" | "TRANSPORT" | "MEALS" | "TELECOMMUNICATIONS" | "INSURANCE" | "ENERGY" | "SOFTWARE" | "HARDWARE" | "MARKETING" | "TRAINING" | "MAINTENANCE" | "TAXES" | "UTILITIES" | "OTHER",
 
   "currency": "EUR",
   "notes": "mentions légales ou notes importantes",
@@ -394,6 +394,10 @@ class ClaudeVisionOcrService {
    * Avec modèle adaptatif (Haiku/Sonnet)
    */
   async processFromBase64(base64Data, mimeType, originalUrl, hash = null, { useBatchModel = false } = {}) {
+    if (!this.isAvailable()) {
+      throw new Error("Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)");
+    }
+
     // Détecter la complexité
     const complexity = this.detectInvoiceComplexity(base64Data);
     // En mode batch, on utilise Haiku pour les documents simples ; sinon toujours Sonnet pour la qualité
@@ -435,7 +439,7 @@ EXTRAIS OBLIGATOIREMENT:
 - invoice_date: la date au format YYYY-MM-DD (TOUJOURS présente)
 - items: TOUTES les lignes d'articles/services avec descriptions et prix
 - payment_details.method: CB/CARD/CASH/TRANSFER/CHECK
-- category: la catégorie de dépense la plus appropriée
+- category: la catégorie parmi RENT, SUBSCRIPTIONS, OFFICE_SUPPLIES, SERVICES, TRANSPORT, MEALS, TELECOMMUNICATIONS, INSURANCE, ENERGY, SOFTWARE, HARDWARE, MARKETING, TRAINING, MAINTENANCE, TAXES, UTILITIES, OTHER
 
 Si c'est un ticket de caisse: le nom en GROS en haut = vendor.name, le montant "TOTAL" en bas = total_ttc.
 Ne retourne QUE le JSON, rien d'autre.`,

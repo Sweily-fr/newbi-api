@@ -110,6 +110,8 @@ type ImportedInvoice {
   linkedExpenseId: ID
   isDuplicate: Boolean
   duplicateOf: ID
+  source: String
+  gmailMessageId: String
   createdAt: String!
   updatedAt: String!
 }
@@ -237,6 +239,7 @@ input ImportedInvoiceFilters {
   dateTo: String
   minAmount: Float
   maxAmount: Float
+  source: String
 }
 
 # Queries
@@ -343,6 +346,25 @@ extend type Mutation {
     quantity: Int!
     paymentId: String
   ): PurchaseExtraImportsResult!
+
+  """
+  Convertit une facture importée en facture d'achat (PurchaseInvoice)
+  """
+  convertImportedInvoiceToPurchaseInvoice(id: ID!): PurchaseInvoice!
+
+  """
+  Convertit plusieurs factures importées en factures d'achat
+  """
+  convertImportedInvoicesToPurchaseInvoices(ids: [ID!]!): BulkConvertResult!
+}
+
+# Résultat de conversion en lot (ImportedInvoice → PurchaseInvoice)
+type BulkConvertResult {
+  success: Boolean!
+  converted: Int!
+  skipped: Int!
+  errors: Int!
+  message: String
 }
 
 # Input pour l'import en lot

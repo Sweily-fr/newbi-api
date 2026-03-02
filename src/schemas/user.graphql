@@ -92,8 +92,15 @@ type ReactivateAccountResponse {
   user: User
 }
 
+type UserEmailLookup {
+  email: String!
+  name: String
+  image: String
+}
+
 extend type Query {
   me: User
+  lookupUsersByEmails(emails: [String!]!): [UserEmailLookup!]!
 }
 
 extend type Mutation {

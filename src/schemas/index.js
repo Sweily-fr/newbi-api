@@ -35,9 +35,11 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./clientList.graphql"), // Chargement explicite du schéma ClientList
   path.join(__dirname, "./types/clientAutomation.graphql"), // Chargement explicite du schéma Client Automation
   path.join(__dirname, "./types/clientCustomField.graphql"), // Chargement explicite du schéma Client Custom Fields
+  path.join(__dirname, "./types/productCustomField.graphql"), // Chargement explicite du schéma Product Custom Fields
   path.join(__dirname, "./types/clientSegment.graphql"), // Chargement explicite du schéma Client Segments
   path.join(__dirname, "./types/crmEmailAutomation.graphql"), // Chargement explicite du schéma CRM Email Automation
   path.join(__dirname, "./types/calendarConnection.graphql"), // Chargement explicite du schéma Calendar Connection
+  path.join(__dirname, "./types/gmailConnection.graphql"), // Chargement explicite du schéma Gmail Connection
   path.join(__dirname, "./types/calendarColorLabels.graphql"), // Chargement explicite du schéma Calendar Color Labels
   path.join(__dirname, "./types/documentAutomation.graphql"), // Chargement explicite du schéma Document Automation
   path.join(__dirname, "./purchaseInvoice.graphql"),

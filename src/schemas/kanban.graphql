@@ -10,6 +10,10 @@ type Board {
   tasks: [Task!]!
   members: [OrganizationMember!]!
   totalBillableAmount: Float
+  taskCount: Int
+  totalTimeSpent: Int
+  templateId: ID
+  templateName: String
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -31,6 +35,7 @@ type TimeEntry {
   startTime: DateTime!
   endTime: DateTime
   duration: Int!
+  isManual: Boolean
 }
 
 type TimerStartedBy {
@@ -95,6 +100,8 @@ type Task {
   columnId: String!
   position: Int
   checklist: [ChecklistItem!]
+  clientId: ID
+  client: Client
   assignedMembers: [String!]
   assignedMembersInfo: [AssignedMemberInfo!]
   images: [TaskImage!]
@@ -176,6 +183,7 @@ input CreateTaskInput {
   columnId: String!
   position: Int
   checklist: [ChecklistItemInput!]
+  clientId: ID
   assignedMembers: [String!]
   timeTracking: TimeTrackingInput
 }
@@ -192,6 +200,7 @@ input UpdateTaskInput {
   columnId: String
   position: Int
   checklist: [ChecklistItemInput!]
+  clientId: ID
   assignedMembers: [String!]
   timeTracking: TimeTrackingInput
 }
@@ -280,7 +289,8 @@ type Mutation {
   stopTimer(taskId: ID!, workspaceId: ID): Task!
   resetTimer(taskId: ID!, workspaceId: ID): Task!
   updateTimerSettings(taskId: ID!, hourlyRate: Float, roundingOption: String, workspaceId: ID): Task!
-  
+  addManualTime(taskId: ID!, seconds: Int!, description: String, workspaceId: ID): Task!
+
   # Mutations pour les images de tâches
   uploadTaskImage(taskId: ID!, file: Upload!, imageType: String, workspaceId: ID): TaskImageUploadResult!
   deleteTaskImage(taskId: ID!, imageId: ID!, workspaceId: ID): Task!

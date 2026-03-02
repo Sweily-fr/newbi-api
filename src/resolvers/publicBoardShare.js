@@ -521,13 +521,28 @@ const resolvers = {
     revokePublicShare: withWorkspace(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        
+
         const share = await PublicBoardShare.findOneAndUpdate(
           { _id: id, workspaceId: finalWorkspaceId },
           { isActive: false, updatedAt: new Date() },
           { new: true }
         );
-        
+
+        return !!share;
+      }
+    ),
+
+    // Réactiver un lien de partage désactivé
+    reactivatePublicShare: withWorkspace(
+      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+        const share = await PublicBoardShare.findOneAndUpdate(
+          { _id: id, workspaceId: finalWorkspaceId },
+          { isActive: true, updatedAt: new Date() },
+          { new: true }
+        );
+
         return !!share;
       }
     ),

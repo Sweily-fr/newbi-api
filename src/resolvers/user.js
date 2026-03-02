@@ -40,6 +40,18 @@ const userResolvers = {
     me: isAuthenticated(async (_, __, { user }) => {
       return await User.findById(user.id);
     }),
+    lookupUsersByEmails: isAuthenticated(async (_, { emails }, { db }) => {
+      const normalizedEmails = emails.map(e => e.toLowerCase().trim());
+      const users = await db.collection('user').find({
+        email: { $in: normalizedEmails }
+      }).project({ email: 1, name: 1, image: 1, avatar: 1, profile: 1 }).toArray();
+
+      return users.map(user => ({
+        email: user.email,
+        name: user.name || `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim() || null,
+        image: user.image || user.avatar || null,
+      }));
+    }),
   },
 
   Mutation: {

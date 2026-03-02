@@ -245,6 +245,7 @@ extend type Mutation {
   updatePublicShare(input: UpdatePublicShareInput!, workspaceId: ID): PublicBoardShare!
   deletePublicShare(id: ID!, workspaceId: ID): Boolean!
   revokePublicShare(id: ID!, workspaceId: ID): Boolean!
+  reactivatePublicShare(id: ID!, workspaceId: ID): Boolean!
   
   # Révoquer l'accès d'un visiteur spécifique (le bannit)
   revokeVisitorAccess(shareId: ID!, visitorEmail: String!, reason: String, workspaceId: ID): PublicBoardShare!

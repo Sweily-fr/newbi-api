@@ -33,6 +33,7 @@ type KanbanTemplate {
   id: ID!
   name: String!
   description: String
+  clientId: ID
   columns: [KanbanTemplateColumn!]!
   tasks: [KanbanTemplateTask!]!
   sourceBoardId: ID
@@ -50,6 +51,7 @@ input CreateBoardFromTemplateInput {
   title: String!
   description: String
   templateId: ID!
+  clientId: ID
 }
 
 extend type Query {

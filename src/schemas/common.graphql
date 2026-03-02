@@ -95,6 +95,8 @@ type Client {
   # Timeline d'activité
   notes: [ClientNote!]
   activity: [ClientActivity!]
+  # Indique si le client a des documents liés (factures, devis, bons de commande)
+  hasDocuments: Boolean!
   # Métadonnées
   createdBy: ID!
   createdAt: String!

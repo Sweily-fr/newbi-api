@@ -76,19 +76,29 @@ import reconciliationRoutes from "./routes/reconciliation.js";
 // import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
+import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
+import gmailConnectRoutes from "./routes/gmail-connect.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
 import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
 import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
+import { startCalendarWebhookRenewalCron } from "./cron/calendarWebhookRenewalCron.js";
+import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
+import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
-// Connexion à MongoDB
+// Connexion à MongoDB avec pool de connexions optimisé pour les opérations concurrentes
 mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => logger.info("Connecté à MongoDB"))
+  .connect(process.env.MONGODB_URI, {
+    maxPoolSize: 50,
+    minPoolSize: 10,
+    maxIdleTimeMS: 30000,
+    serverSelectionTimeoutMS: 5000,
+  })
+  .then(() => logger.info("Connecté à MongoDB (pool: 10-50 connexions)"))
   .catch((err) => logger.error("Erreur de connexion MongoDB:", err));
 
 // Création des dossiers nécessaires
@@ -230,6 +240,12 @@ async function startServer() {
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);
 
+  // Routes webhooks calendriers (Google/Microsoft push notifications)
+  app.use("/calendar-webhooks", calendarWebhookRoutes);
+
+  // Routes connexion Gmail pour import factures fournisseurs
+  app.use("/gmail-connect", gmailConnectRoutes);
+
   // Routes leads guides (publique, sans auth)
   app.use("/api/leads", guideLeadsRoutes);
 
@@ -263,11 +279,8 @@ async function startServer() {
     schema,
     context: async ({ req }) => {
       try {
-        // Essayer d'abord better-auth (cookies), puis JWT
-        let user = await betterAuthMiddleware(req);
-        if (!user) {
-          user = await betterAuthJWTMiddleware(req);
-        }
+        // Auth unifiée : cookie session (principal) + JWT fallback (WebSocket)
+        let user = await betterAuthJWTMiddleware(req);
 
         // Récupérer l'organizationId depuis les headers (envoyé par le frontend)
         const organizationId = req.headers["x-organization-id"] || null;
@@ -453,6 +466,18 @@ async function startServer() {
     // Démarrer le cron de synchronisation des calendriers externes
     startCalendarSyncCron();
     logger.info("✅ Cron de synchronisation des calendriers démarré");
+
+    // Démarrer le cron de renouvellement des webhooks calendrier
+    startCalendarWebhookRenewalCron();
+    logger.info("✅ Cron de renouvellement des webhooks calendrier démarré");
+
+    // Démarrer le cron de synchronisation Gmail (factures fournisseurs)
+    startGmailSyncCron();
+    logger.info("✅ Cron de synchronisation Gmail démarré");
+
+    // Démarrer le cron de vérification des documents en retard
+    startOverdueAutomationCron();
+    logger.info("✅ Cron de vérification des documents en retard démarré");
   });
 
   // Nettoyage propre à l'arrêt

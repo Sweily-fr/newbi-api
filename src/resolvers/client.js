@@ -2,6 +2,7 @@ import Client from "../models/Client.js";
 import ClientCustomField from "../models/ClientCustomField.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
+import PurchaseOrder from "../models/PurchaseOrder.js";
 import User from "../models/User.js";
 // ✅ Import des wrappers RBAC
 import {
@@ -442,6 +443,16 @@ const clientResolvers = {
           throw createResourceInUseError("client", "devis");
         }
 
+        // Vérifier si le client est utilisé dans des bons de commande
+        const purchaseOrderCount = await PurchaseOrder.countDocuments({
+          "client.id": id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        });
+
+        if (purchaseOrderCount > 0) {
+          throw createResourceInUseError("client", "bons de commande");
+        }
+
         await Client.deleteOne({
           _id: id,
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -799,6 +810,18 @@ const clientResolvers = {
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
     blockedAt: (parent) =>
       parent.blockedAt?.toISOString?.() || parent.blockedAt,
+    hasDocuments: async (parent) => {
+      const clientId = parent._id?.toString() || parent.id;
+      const workspaceId = parent.workspaceId;
+
+      const [invoiceCount, quoteCount, purchaseOrderCount] = await Promise.all([
+        Invoice.countDocuments({ "client.id": clientId, workspaceId }),
+        Quote.countDocuments({ "client.id": clientId, workspaceId }),
+        PurchaseOrder.countDocuments({ "client.id": clientId, workspaceId }),
+      ]);
+
+      return invoiceCount + quoteCount + purchaseOrderCount > 0;
+    },
   },
 
   ClientNote: {

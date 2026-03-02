@@ -45,10 +45,10 @@ const supplierSchema = new mongoose.Schema(
     defaultCategory: {
       type: String,
       enum: [
-        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
-        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
-        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS",
-        "TELECOMMUNICATIONS", "TRANSPORT", "ENERGY", "OTHER",
+        "RENT", "SUBSCRIPTIONS", "OFFICE_SUPPLIES", "SERVICES", "TRANSPORT",
+        "MEALS", "TELECOMMUNICATIONS", "INSURANCE", "ENERGY", "SOFTWARE",
+        "HARDWARE", "MARKETING", "TRAINING", "MAINTENANCE", "TAXES",
+        "UTILITIES", "OTHER",
       ],
       default: "OTHER",
     },

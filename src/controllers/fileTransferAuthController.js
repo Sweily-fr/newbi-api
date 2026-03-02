@@ -169,7 +169,7 @@ async function generateDownloadUrls(
     }
     const downloadUrls = [];
     const filesToProcess = fileId
-      ? fileTransfer.files.filter((f) => f._id.toString() === fileId)
+      ? fileTransfer.files.filter((f) => f._id.toString() === fileId || f.fileId === fileId)
       : fileTransfer.files;
 
     if (filesToProcess.length === 0) {

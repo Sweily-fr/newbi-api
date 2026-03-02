@@ -199,19 +199,37 @@ export class BridgeProvider extends BankingProvider {
       });
 
       // Bridge utilise /v3/providers pour lister les banques
-      const response = await this.client.get("/v3/providers", {
-        params: {
-          country_code: country.toUpperCase(),
-          limit: 200,
-        },
-      });
+      // Pagination par curseur : on récupère toutes les pages
+      let allProviders = [];
+      let nextUrl = "/v3/providers";
+      let params = {
+        country_code: country.toUpperCase(),
+        limit: 500, // Maximum autorisé par Bridge API v3
+      };
 
-      const providers = response.data.resources || response.data || [];
+      while (nextUrl) {
+        const response = await this.client.get(nextUrl, {
+          params: params ? params : undefined,
+        });
 
-      console.log(`✅ ${providers.length} banques récupérées pour ${country}`);
+        const providers = response.data.resources || response.data || [];
+        allProviders = allProviders.concat(providers);
+
+        // Bridge retourne next_uri pour la page suivante, null si terminé
+        const nextUri = response.data.pagination?.next_uri || null;
+        if (nextUri) {
+          // next_uri est une URL complète avec les params, on l'utilise directement
+          nextUrl = nextUri;
+          params = null; // Les params sont inclus dans next_uri
+        } else {
+          nextUrl = null;
+        }
+      }
+
+      console.log(`✅ ${allProviders.length} banques récupérées pour ${country}`);
 
       // Filtrer pour ne garder que ceux avec la capacité "aggregation"
-      const aggregationProviders = providers.filter((p) =>
+      const aggregationProviders = allProviders.filter((p) =>
         p.capabilities?.includes("aggregation")
       );
 

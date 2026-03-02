@@ -11,6 +11,7 @@ import {
   requireDelete,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 const checkAccess = async (id, workspaceId) => {
   const doc = await PurchaseInvoice.findOne({
@@ -289,6 +290,30 @@ const purchaseInvoiceResolvers = {
         }
 
         await invoice.save();
+
+        // Automatisations documents partagés (fire-and-forget)
+        const piTriggerMap = {
+          TO_PROCESS: 'PURCHASE_INVOICE_TO_PROCESS',
+          TO_PAY: 'PURCHASE_INVOICE_TO_PAY',
+          PENDING: 'PURCHASE_INVOICE_PENDING',
+          PAID: 'PURCHASE_INVOICE_PAID',
+          OVERDUE: 'PURCHASE_INVOICE_OVERDUE',
+          ARCHIVED: 'PURCHASE_INVOICE_ARCHIVED',
+        };
+        const piTrigger = piTriggerMap[invoice.status];
+        if (piTrigger) {
+          documentAutomationService.executeAutomationsForExpense(piTrigger, workspaceId, {
+            documentId: invoice._id.toString(),
+            documentType: 'purchaseInvoice',
+            documentNumber: invoice.invoiceNumber || '',
+            supplierName: invoice.supplierName || '',
+            fileUrl: invoice.files?.[0]?.url || null,
+            fileKey: invoice.files?.[0]?.path || null,
+            fileName: invoice.files?.[0]?.originalFilename || null,
+            mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+          }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI create):', err));
+        }
+
         return invoice;
       }
     ),
@@ -304,12 +329,40 @@ const purchaseInvoiceResolvers = {
           }
         });
 
+        const oldStatus = invoice.status;
+
         // Auto-detect overdue
         if (invoice.dueDate && new Date(invoice.dueDate) < new Date() && invoice.status === "TO_PAY") {
           invoice.status = "OVERDUE";
         }
 
         await invoice.save();
+
+        // Automatisations documents partagés si le statut a changé (fire-and-forget)
+        if (invoice.status !== oldStatus) {
+          const piUpdateTriggerMap = {
+            TO_PROCESS: 'PURCHASE_INVOICE_TO_PROCESS',
+            TO_PAY: 'PURCHASE_INVOICE_TO_PAY',
+            PENDING: 'PURCHASE_INVOICE_PENDING',
+            PAID: 'PURCHASE_INVOICE_PAID',
+            OVERDUE: 'PURCHASE_INVOICE_OVERDUE',
+            ARCHIVED: 'PURCHASE_INVOICE_ARCHIVED',
+          };
+          const piUpdateTrigger = piUpdateTriggerMap[invoice.status];
+          if (piUpdateTrigger) {
+            documentAutomationService.executeAutomationsForExpense(piUpdateTrigger, workspaceId, {
+              documentId: invoice._id.toString(),
+              documentType: 'purchaseInvoice',
+              documentNumber: invoice.invoiceNumber || '',
+              supplierName: invoice.supplierName || '',
+              fileUrl: invoice.files?.[0]?.url || null,
+              fileKey: invoice.files?.[0]?.path || null,
+              fileName: invoice.files?.[0]?.originalFilename || null,
+              mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+            }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI update):', err));
+          }
+        }
+
         return invoice;
       }
     ),
@@ -441,6 +494,19 @@ const purchaseInvoiceResolvers = {
         if (paymentMethod) invoice.paymentMethod = paymentMethod;
 
         await invoice.save();
+
+        // Automatisations documents partagés (fire-and-forget)
+        documentAutomationService.executeAutomationsForExpense('PURCHASE_INVOICE_PAID', workspaceId, {
+          documentId: invoice._id.toString(),
+          documentType: 'purchaseInvoice',
+          documentNumber: invoice.invoiceNumber || '',
+          supplierName: invoice.supplierName || '',
+          fileUrl: invoice.files?.[0]?.url || null,
+          fileKey: invoice.files?.[0]?.path || null,
+          fileName: invoice.files?.[0]?.originalFilename || null,
+          mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+        }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI paid):', err));
+
         return invoice;
       }
     ),
@@ -545,6 +611,19 @@ const purchaseInvoiceResolvers = {
         );
 
         await invoice.save();
+
+        // Automatisations documents partagés (fire-and-forget)
+        documentAutomationService.executeAutomationsForExpense('PURCHASE_INVOICE_PAID', workspaceId, {
+          documentId: invoice._id.toString(),
+          documentType: 'purchaseInvoice',
+          documentNumber: invoice.invoiceNumber || '',
+          supplierName: invoice.supplierName || '',
+          fileUrl: invoice.files?.[0]?.url || null,
+          fileKey: invoice.files?.[0]?.path || null,
+          fileName: invoice.files?.[0]?.originalFilename || null,
+          mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+        }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI reconcile):', err));
+
         return invoice;
       }
     ),

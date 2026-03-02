@@ -24,35 +24,49 @@ documentCounterSchema.index(
 /**
  * Obtient le prochain numéro séquentiel de manière atomique.
  * Utilise findOneAndUpdate avec $inc pour garantir l'atomicité.
- * Initialisation paresseuse : si le compteur vient d'être créé (upsert),
- * on initialise lastNumber à partir du max existant dans les documents.
+ * Vérifie toujours la cohérence entre le compteur et les documents existants
+ * pour gérer les cas de suppression de documents.
  */
 documentCounterSchema.statics.getNextNumber = async function (documentType, prefix, workspaceId, year, options = {}) {
   const session = options.session || null;
   const findOpts = session ? { session } : {};
 
-  // Tenter d'incrémenter atomiquement le compteur
+  // Vérifier le max existant dans les documents réels
+  const existingMax = await getExistingMaxNumber(documentType, prefix, workspaceId, year, findOpts);
+
+  // Récupérer le compteur actuel (sans incrémenter encore)
+  const currentCounter = await this.findOne(
+    { documentType, prefix, workspaceId, year },
+    null,
+    findOpts
+  );
+
+  // Si le compteur est désynchronisé (en avance par rapport aux documents réels),
+  // le réinitialiser au max existant avant d'incrémenter
+  if (currentCounter && currentCounter.lastNumber > existingMax) {
+    await this.findOneAndUpdate(
+      { documentType, prefix, workspaceId, year },
+      { $set: { lastNumber: existingMax } },
+      findOpts
+    );
+  }
+
+  // Incrémenter atomiquement le compteur
   const counter = await this.findOneAndUpdate(
     { documentType, prefix, workspaceId, year },
     { $inc: { lastNumber: 1 } },
     { new: true, upsert: true, ...findOpts }
   );
 
-  // Si le compteur vient d'être créé (lastNumber === 1 après le $inc),
-  // vérifier s'il y a des documents existants et ajuster
-  if (counter.lastNumber === 1) {
-    const existingMax = await getExistingMaxNumber(documentType, prefix, workspaceId, year, findOpts);
-
-    if (existingMax > 0) {
-      // Ajuster le compteur au max existant + 1
-      const adjusted = await DocumentCounter.findOneAndUpdate(
-        { documentType, prefix, workspaceId, year, lastNumber: 1 },
-        { $set: { lastNumber: existingMax + 1 } },
-        { new: true, ...findOpts }
-      );
-      // Si un autre processus a déjà ajusté entre-temps, utiliser la valeur actuelle
-      return adjusted ? adjusted.lastNumber : counter.lastNumber;
-    }
+  // Si le compteur vient d'être créé par upsert et qu'il y a des documents existants,
+  // ajuster au max existant + 1
+  if (counter.lastNumber === 1 && existingMax > 0) {
+    const adjusted = await this.findOneAndUpdate(
+      { documentType, prefix, workspaceId, year, lastNumber: 1 },
+      { $set: { lastNumber: existingMax + 1 } },
+      { new: true, ...findOpts }
+    );
+    return adjusted ? adjusted.lastNumber : counter.lastNumber;
   }
 
   return counter.lastNumber;

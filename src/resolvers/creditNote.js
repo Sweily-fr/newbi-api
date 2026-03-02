@@ -371,9 +371,9 @@ const creditNoteResolvers = {
                 metadata: {
                   documentType: 'creditNote',
                   documentId: creditNote._id.toString(),
-                  documentNumber: `${creditNote.prefix}${creditNote.number}`,
+                  documentNumber: `${creditNote.prefix}-${creditNote.number}`,
                   status: creditNote.status,
-                  originalInvoiceNumber: `${originalInvoice.prefix}${originalInvoice.number}`,
+                  originalInvoiceNumber: `${originalInvoice.prefix}-${originalInvoice.number}`,
                 },
                 createdAt: new Date(),
               });
@@ -388,18 +388,14 @@ const creditNoteResolvers = {
             // Ne pas bloquer la création de l'avoir si l'ajout de l'activité échoue
           }
 
-          // Automatisations documents partagés
-          try {
-            await documentAutomationService.executeAutomations('CREDIT_NOTE_CREATED', workspaceId, {
-              documentId: creditNote._id.toString(),
-              documentType: 'creditNote',
-              documentNumber: creditNote.number,
-              prefix: creditNote.prefix || '',
-              clientName: creditNote.client?.name || '',
-            }, context.user._id.toString());
-          } catch (docAutoError) {
-            console.error('Erreur automatisation documents (avoir):', docAutoError);
-          }
+          // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+          documentAutomationService.executeAutomations('CREDIT_NOTE_CREATED', workspaceId, {
+            documentId: creditNote._id.toString(),
+            documentType: 'creditNote',
+            documentNumber: creditNote.number,
+            prefix: creditNote.prefix || '',
+            clientName: creditNote.client?.name || '',
+          }, context.user._id.toString()).catch(err => console.error('Erreur automatisation documents (avoir):', err));
 
           return await CreditNote.findById(creditNote._id).populate('originalInvoice');
         } catch (error) {
