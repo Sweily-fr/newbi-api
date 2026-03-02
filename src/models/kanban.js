@@ -283,6 +283,13 @@ const taskSchema = new mongoose.Schema({
     min: 0
   },
   checklist: [checklistItemSchema],
+  // Client assigné à la tâche
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client',
+    default: null,
+    index: true
+  },
   // Membres assignés à la tâche (seulement les userId, les infos sont récupérées depuis la collection user)
   assignedMembers: [String],
   // Images attachées à la description de la tâche

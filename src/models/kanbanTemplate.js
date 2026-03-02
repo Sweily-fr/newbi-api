@@ -45,6 +45,11 @@ const kanbanTemplateSchema = new mongoose.Schema({
   },
   columns: [templateColumnSchema],
   tasks: [templateTaskSchema],
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client',
+    default: null
+  },
   sourceBoardId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Board'

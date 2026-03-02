@@ -74,6 +74,7 @@ const kanbanTemplateResolvers = {
         const template = new KanbanTemplate({
           name,
           description: description || "",
+          clientId: board.clientId || null,
           columns: templateColumns,
           tasks: templateTasks,
           sourceBoardId: boardId,
@@ -90,7 +91,7 @@ const kanbanTemplateResolvers = {
     createBoardFromTemplate: withWorkspace(
       async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const { title, description, templateId } = input;
+        const { title, description, templateId, clientId } = input;
 
         const template = await KanbanTemplate.findOne({ _id: templateId, workspaceId: finalWorkspaceId });
         if (!template) throw new Error("Template not found");
@@ -99,6 +100,7 @@ const kanbanTemplateResolvers = {
         const board = new Board({
           title,
           description: description || "",
+          clientId: clientId || null,
           userId: user.id,
           workspaceId: finalWorkspaceId,
           templateId: template._id,
