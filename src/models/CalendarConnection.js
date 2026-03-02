@@ -100,6 +100,23 @@ const calendarConnectionSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Webhook fields for real-time sync (Google & Microsoft)
+  webhookChannelId: {
+    type: String,
+    default: null
+  },
+  webhookResourceId: {
+    type: String,
+    default: null
+  },
+  webhookExpiration: {
+    type: Date,
+    default: null
+  },
+  graphSubscriptionId: {
+    type: String,
+    default: null
+  },
   // Account info (display)
   accountEmail: {
     type: String,

@@ -122,3 +122,12 @@ extend type Mutation {
   # Synchroniser les événements avec les factures
   syncInvoiceEvents(workspaceId: ID): EventsResponse!
 }
+
+type CalendarEventsChangedPayload {
+  userId: ID!
+  timestamp: String!
+}
+
+extend type Subscription {
+  calendarEventsChanged(userId: ID!): CalendarEventsChangedPayload!
+}

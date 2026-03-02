@@ -212,13 +212,24 @@ export async function syncAllForUser(userId) {
 
 /**
  * Sync all active connections (for cron job)
+ * When excludeWebhookActive is true, skip Google/Microsoft connections that have
+ * an active webhook (webhookExpiration in the future), since those are synced in real-time.
  */
-export async function syncAllActiveConnections() {
-  const connections = await CalendarConnection.find({
-    status: 'active'
-  });
+export async function syncAllActiveConnections({ excludeWebhookActive = false } = {}) {
+  const query = { status: 'active' };
 
-  logger.info(`Starting calendar sync for ${connections.length} active connections`);
+  if (excludeWebhookActive) {
+    // Sync: Apple (always) + Google/Microsoft without active webhook
+    query.$or = [
+      { provider: 'apple' },
+      { provider: { $in: ['google', 'microsoft'] }, webhookExpiration: null },
+      { provider: { $in: ['google', 'microsoft'] }, webhookExpiration: { $lt: new Date() } },
+    ];
+  }
+
+  const connections = await CalendarConnection.find(query);
+
+  logger.info(`Starting calendar sync for ${connections.length} active connections${excludeWebhookActive ? ' (excluding webhook-active)' : ''}`);
 
   let successCount = 0;
   let failCount = 0;
