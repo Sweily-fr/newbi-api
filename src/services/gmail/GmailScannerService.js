@@ -2,7 +2,7 @@ import GmailConnection from '../../models/GmailConnection.js';
 import ProcessedEmail from '../../models/ProcessedEmail.js';
 import ImportedInvoice from '../../models/ImportedInvoice.js';
 import GmailOAuthProvider, { translateGmailError } from './GmailOAuthProvider.js';
-import claudeVisionOcrService from '../claudeVisionOcrService.js';
+import hybridOcrService from '../hybridOcrService.js';
 import cloudflareService from '../cloudflareService.js';
 import logger from '../../utils/logger.js';
 
@@ -65,14 +65,22 @@ function findPdfAttachments(parts, result = []) {
 }
 
 /**
- * Transforme les données OCR Claude Vision en données ImportedInvoice
+ * Transforme les données OCR (format hybridOcrService / toInvoiceFormat) en données ImportedInvoice.
+ *
+ * Le service hybride retourne un objet avec :
+ *   - transaction_data  : { vendor_name, amount, transaction_date, ... }
+ *   - extracted_fields  : { vendor_address, items, totals, ... }
+ * OU (legacy) un objet .data avec vendor/totals/items directement.
+ *
+ * Cette fonction gère les deux formats pour garantir la compatibilité.
  */
 function transformOcrDataToInvoice(ocrResult) {
-  const data = ocrResult.data || {};
-  const vendor = data.vendor || {};
-  const totals = data.totals || {};
-  const paymentDetails = data.payment_details || {};
-  const items = data.items || [];
+  const tx = ocrResult.transaction_data || {};
+  const ef = ocrResult.extracted_fields || {};
+  const legacyData = ocrResult.data || {};
+
+  // Choisir le bon format : nouveau (transaction_data) ou legacy (data.vendor)
+  const hasNewFormat = ocrResult.transaction_data != null;
 
   const paymentMethodMap = {
     card: 'CARD', cb: 'CARD', carte: 'CARD',
@@ -89,57 +97,125 @@ function transformOcrDataToInvoice(ocrResult) {
     UTILITIES: 'UTILITIES', INSURANCE: 'INSURANCE', SUBSCRIPTIONS: 'SUBSCRIPTIONS',
   };
 
-  let invoiceDate = null;
-  if (data.invoice_date) {
-    try {
-      invoiceDate = new Date(data.invoice_date);
-      if (isNaN(invoiceDate.getTime())) invoiceDate = null;
-    } catch { invoiceDate = null; }
-  }
+  // ── Extraire les valeurs selon le format ──
+  let vendorName, vendorAddress, vendorCity, vendorPostalCode, vendorCountry;
+  let vendorSiret, vendorVatNumber, vendorEmail, vendorPhone;
+  let invoiceNumber, rawInvoiceDate, rawDueDate;
+  let totalHT, totalVAT, totalTTC, currency, rawCategory, rawMethod;
+  let items;
 
-  let dueDate = null;
-  if (data.due_date) {
-    try {
-      dueDate = new Date(data.due_date);
-      if (isNaN(dueDate.getTime())) dueDate = null;
-    } catch { dueDate = null; }
-  }
+  if (hasNewFormat) {
+    // Format toInvoiceFormat() (Claude Vision, Mindee, Google Document AI)
+    vendorName = tx.vendor_name || '';
+    vendorAddress = ef.vendor_address || '';
+    vendorCity = ef.vendor_city || '';
+    vendorPostalCode = ef.vendor_postal_code || '';
+    vendorCountry = ef.vendor_country || 'France';
+    vendorSiret = ef.vendor_siret || null;
+    vendorVatNumber = ef.vendor_vat_number || null;
+    vendorEmail = ef.vendor_email || null;
+    vendorPhone = ef.vendor_phone || null;
 
-  const rawMethod = (paymentDetails.method || '').toLowerCase().replace(/[^a-z_]/g, '');
-  const category = categoryMap[data.category?.toUpperCase()] || 'OTHER';
-  const paymentMethod = paymentMethodMap[rawMethod] || 'UNKNOWN';
+    invoiceNumber = tx.document_number || null;
+    rawInvoiceDate = tx.transaction_date;
+    rawDueDate = tx.due_date;
 
-  return {
-    originalInvoiceNumber: data.invoice_number || null,
-    vendor: {
-      name: vendor.name || '',
-      address: vendor.address || '',
-      city: vendor.city || '',
-      postalCode: vendor.postal_code || '',
-      country: vendor.country || 'France',
-      siret: vendor.siret || null,
-      vatNumber: vendor.vat_number || null,
-      email: vendor.email || null,
-      phone: vendor.phone || null,
-    },
-    invoiceDate,
-    dueDate,
-    totalHT: parseFloat(totals.total_ht) || 0,
-    totalVAT: parseFloat(totals.total_vat) || 0,
-    totalTTC: parseFloat(totals.total_ttc) || 0,
-    currency: data.currency || 'EUR',
-    items: items.map(item => ({
+    const totals = ef.totals || {};
+    totalHT = parseFloat(tx.amount_ht || totals.total_ht) || 0;
+    totalVAT = parseFloat(tx.tax_amount || totals.total_tax) || 0;
+    totalTTC = parseFloat(tx.amount || totals.total_ttc) || 0;
+    currency = tx.currency || 'EUR';
+    rawCategory = tx.category || 'OTHER';
+    rawMethod = tx.payment_method || '';
+
+    items = (ef.items || []).map(item => ({
+      description: item.description || '',
+      quantity: parseFloat(item.quantity) || 1,
+      unitPrice: parseFloat(item.unit_price_ht || item.unit_price) || 0,
+      totalPrice: parseFloat(item.total_ttc || item.total_ht || item.total) || 0,
+      vatRate: parseFloat(item.vat_rate) || 20,
+    }));
+  } else {
+    // Format legacy (data.vendor / data.totals)
+    const vendor = legacyData.vendor || {};
+    const totals = legacyData.totals || {};
+    const pd = legacyData.payment_details || {};
+
+    vendorName = vendor.name || '';
+    vendorAddress = vendor.address || '';
+    vendorCity = vendor.city || '';
+    vendorPostalCode = vendor.postal_code || '';
+    vendorCountry = vendor.country || 'France';
+    vendorSiret = vendor.siret || null;
+    vendorVatNumber = vendor.vat_number || null;
+    vendorEmail = vendor.email || null;
+    vendorPhone = vendor.phone || null;
+
+    invoiceNumber = legacyData.invoice_number || null;
+    rawInvoiceDate = legacyData.invoice_date;
+    rawDueDate = legacyData.due_date;
+
+    totalHT = parseFloat(totals.total_ht) || 0;
+    totalVAT = parseFloat(totals.total_vat) || 0;
+    totalTTC = parseFloat(totals.total_ttc) || 0;
+    currency = legacyData.currency || 'EUR';
+    rawCategory = legacyData.category || 'OTHER';
+    rawMethod = (pd.method || '').toLowerCase().replace(/[^a-z_]/g, '');
+
+    items = (legacyData.items || []).map(item => ({
       description: item.description || '',
       quantity: parseFloat(item.quantity) || 1,
       unitPrice: parseFloat(item.unit_price) || 0,
       totalPrice: parseFloat(item.total_price || item.total) || 0,
       vatRate: parseFloat(item.vat_rate) || 20,
-    })),
+    }));
+  }
+
+  // ── Parser les dates ──
+  let invoiceDate = null;
+  if (rawInvoiceDate) {
+    try {
+      invoiceDate = new Date(rawInvoiceDate);
+      if (isNaN(invoiceDate.getTime())) invoiceDate = null;
+    } catch { invoiceDate = null; }
+  }
+
+  let dueDate = null;
+  if (rawDueDate) {
+    try {
+      dueDate = new Date(rawDueDate);
+      if (isNaN(dueDate.getTime())) dueDate = null;
+    } catch { dueDate = null; }
+  }
+
+  const category = categoryMap[rawCategory?.toUpperCase()] || 'OTHER';
+  const paymentMethod = paymentMethodMap[rawMethod] || 'UNKNOWN';
+
+  return {
+    originalInvoiceNumber: invoiceNumber,
+    vendor: {
+      name: vendorName,
+      address: vendorAddress,
+      city: vendorCity,
+      postalCode: vendorPostalCode,
+      country: vendorCountry,
+      siret: vendorSiret,
+      vatNumber: vendorVatNumber,
+      email: vendorEmail,
+      phone: vendorPhone,
+    },
+    invoiceDate,
+    dueDate,
+    totalHT,
+    totalVAT,
+    totalTTC,
+    currency,
+    items,
     category,
     paymentMethod,
     ocrData: {
-      extractedText: ocrResult.extractedText || '',
-      rawData: data,
+      extractedText: ocrResult.extractedText || ocrResult.text || '',
+      rawData: hasNewFormat ? { transaction_data: tx, extracted_fields: ef } : legacyData,
       confidence: 0.85,
       processedAt: new Date(),
     },
@@ -348,22 +424,28 @@ async function processGmailMessage(gmail, messageId, connection) {
         continue;
       }
 
-      // OCR with Claude Vision
+      // OCR with hybrid service (fallback: Claude → Mindee → Google → Mistral)
       let ocrResult;
       try {
-        ocrResult = await claudeVisionOcrService.processFromBase64(
-          base64Data,
+        const hybridResult = await hybridOcrService.processDocumentFromUrl(
+          uploadResult.url,
+          attachment.filename,
           'application/pdf',
-          attachment.filename
+          connection.workspaceId.toString()
         );
+
+        if (hybridResult && hybridResult.success) {
+          // Passer directement le résultat hybride — transformOcrDataToInvoice
+          // gère les deux formats (transaction_data/extracted_fields et legacy data.vendor)
+          ocrResult = hybridResult;
+          logger.info(`[Gmail Scan] OCR réussi pour ${attachment.filename} via ${hybridResult.provider}`);
+        } else {
+          logger.warn(`[Gmail Scan] OCR échoué pour ${attachment.filename}: ${hybridResult?.error || 'unknown'}`);
+          ocrResult = { success: false, extractedText: '', data: {} };
+        }
       } catch (ocrError) {
         logger.warn(`[Gmail Scan] OCR échoué pour ${attachment.filename}: ${ocrError.message}`);
-        // Still create the invoice with minimal data
-        ocrResult = {
-          success: false,
-          extractedText: '',
-          data: {},
-        };
+        ocrResult = { success: false, extractedText: '', data: {} };
       }
 
       // Transform OCR data

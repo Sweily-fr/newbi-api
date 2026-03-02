@@ -122,9 +122,10 @@ class GoogleDocumentAIService {
       
       const [result] = await this.client.processDocument(request);
       
+      const entitiesCount = result.document?.entities?.length || 0;
       // eslint-disable-next-line no-console
-      console.log(`✅ Google Document AI: Document traité (${result.document?.text?.length || 0} caractères)`);
-      
+      console.log(`✅ Google Document AI: Document traité (${result.document?.text?.length || 0} caractères, ${entitiesCount} entités)`);
+
       return this.parseResult(result.document);
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -214,26 +215,50 @@ class GoogleDocumentAIService {
   }
 
   /**
-   * Convertit le résultat au format attendu par invoiceExtractionService
+   * Convertit le résultat au format standard (transaction_data / extracted_fields)
+   * compatible avec GmailScannerService.transformOcrDataToInvoice()
    */
   toInvoiceFormat(result) {
     const entities = result.entities || {};
-    
+
     return {
       success: true,
       extractedText: result.text,
-      structuredData: {
-        invoiceNumber: entities.invoiceNumber?.value,
-        invoiceDate: entities.invoiceDate?.value,
-        dueDate: entities.dueDate?.value,
-        totalTTC: this.parseAmount(entities.totalTTC?.value),
-        totalHT: this.parseAmount(entities.totalHT?.value),
-        totalTVA: this.parseAmount(entities.totalTVA?.value),
-        vendorName: entities.vendorName?.value,
-        vendorAddress: entities.vendorAddress?.value,
-        clientName: entities.clientName?.value,
-        clientAddress: entities.clientAddress?.value,
+      transaction_data: {
+        vendor_name: entities.vendorName?.value || '',
+        amount: this.parseAmount(entities.totalTTC?.value) || 0,
+        amount_ht: this.parseAmount(entities.totalHT?.value) || 0,
+        tax_amount: this.parseAmount(entities.totalTVA?.value) || 0,
+        transaction_date: entities.invoiceDate?.value || null,
+        due_date: entities.dueDate?.value || null,
+        document_number: entities.invoiceNumber?.value || null,
         currency: entities.currency?.value || 'EUR',
+        category: 'OTHER',
+        payment_method: '',
+      },
+      extracted_fields: {
+        vendor_address: entities.vendorAddress?.value || '',
+        vendor_city: '',
+        vendor_postal_code: '',
+        vendor_country: 'France',
+        vendor_siret: entities.vendorSiret?.value || null,
+        vendor_vat_number: entities.vendorVatNumber?.value || null,
+        vendor_email: null,
+        vendor_phone: null,
+        client_name: entities.clientName?.value || null,
+        client_address: entities.clientAddress?.value || null,
+        items: (entities.items || []).map(item => ({
+          description: item.description || '',
+          quantity: 1,
+          unit_price: 0,
+          total: 0,
+          vat_rate: 20,
+        })),
+        totals: {
+          total_ht: this.parseAmount(entities.totalHT?.value) || 0,
+          total_tax: this.parseAmount(entities.totalTVA?.value) || 0,
+          total_ttc: this.parseAmount(entities.totalTTC?.value) || 0,
+        },
       },
       confidence: result.confidence,
       metadata: {

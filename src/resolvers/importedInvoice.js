@@ -18,6 +18,8 @@ import {
   createInternalServerError,
 } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import Supplier from "../models/Supplier.js";
 
 // Limite maximale d'import en lot
 const MAX_BATCH_IMPORT = 100;
@@ -436,6 +438,129 @@ function transformOcrToInvoiceDataV2(ocrResult, extractionResult) {
     },
     description: transactionData.description || "Facture importée",
   };
+}
+
+// === Conversion ImportedInvoice → PurchaseInvoice helpers ===
+
+const CATEGORY_MAP = {
+  TRAVEL: "TRANSPORT",
+  EQUIPMENT: "HARDWARE",
+  SALARIES: "OTHER",
+};
+
+function mapCategory(importedCategory) {
+  if (!importedCategory) return "OTHER";
+  return CATEGORY_MAP[importedCategory] || importedCategory;
+}
+
+const PAYMENT_METHOD_MAP = {
+  CARD: "CREDIT_CARD",
+  TRANSFER: "BANK_TRANSFER",
+};
+
+function mapPaymentMethod(importedMethod) {
+  if (!importedMethod || importedMethod === "UNKNOWN") return null;
+  return PAYMENT_METHOD_MAP[importedMethod] || importedMethod;
+}
+
+async function findOrCreateSupplier(vendor, workspaceId, userId) {
+  if (!vendor?.name) return null;
+
+  const wsId = new mongoose.Types.ObjectId(workspaceId);
+
+  // Search by siret first
+  if (vendor.siret) {
+    const bySiret = await Supplier.findOne({ workspaceId: wsId, siret: vendor.siret });
+    if (bySiret) return bySiret;
+  }
+
+  // Search by name (case-insensitive)
+  const escapedName = vendor.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const byName = await Supplier.findOne({
+    workspaceId: wsId,
+    name: { $regex: new RegExp(`^${escapedName}$`, "i") },
+  });
+  if (byName) return byName;
+
+  // Create new supplier
+  return Supplier.create({
+    workspaceId: wsId,
+    name: vendor.name,
+    email: vendor.email || undefined,
+    phone: vendor.phone || undefined,
+    siret: vendor.siret || undefined,
+    vatNumber: vendor.vatNumber || undefined,
+    address: {
+      street: vendor.address || undefined,
+      city: vendor.city || undefined,
+      postalCode: vendor.postalCode || undefined,
+      country: vendor.country || undefined,
+    },
+    createdBy: userId,
+  });
+}
+
+async function convertSingleImportedInvoice(importedInvoice, userId) {
+  const supplier = await findOrCreateSupplier(
+    importedInvoice.vendor,
+    importedInvoice.workspaceId,
+    userId
+  );
+
+  const file = importedInvoice.file;
+  const files = file
+    ? [
+        {
+          filename: file.cloudflareKey || file.originalFileName,
+          originalFilename: file.originalFileName,
+          mimetype: file.mimeType || "application/pdf",
+          path: file.url,
+          size: file.fileSize || 1,
+          url: file.url,
+          ocrProcessed: true,
+        },
+      ]
+    : [];
+
+  const ocrMetadata = {
+    supplierName: importedInvoice.vendor?.name || null,
+    supplierSiret: importedInvoice.vendor?.siret || null,
+    supplierVatNumber: importedInvoice.vendor?.vatNumber || null,
+    invoiceNumber: importedInvoice.originalInvoiceNumber || null,
+    invoiceDate: importedInvoice.invoiceDate ? new Date(importedInvoice.invoiceDate) : null,
+    dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
+    amountHT: importedInvoice.totalHT || null,
+    amountTVA: importedInvoice.totalVAT || null,
+    amountTTC: importedInvoice.totalTTC || null,
+    confidenceScore: importedInvoice.ocrData?.confidence || null,
+  };
+
+  const purchaseInvoice = await PurchaseInvoice.create({
+    supplierName: importedInvoice.vendor?.name || "Fournisseur inconnu",
+    supplierId: supplier?._id || null,
+    invoiceNumber: importedInvoice.originalInvoiceNumber || null,
+    issueDate: importedInvoice.invoiceDate ? new Date(importedInvoice.invoiceDate) : new Date(),
+    dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
+    amountHT: importedInvoice.totalHT || 0,
+    amountTVA: importedInvoice.totalVAT || 0,
+    amountTTC: importedInvoice.totalTTC,
+    currency: importedInvoice.currency || "EUR",
+    status: "TO_PROCESS",
+    category: mapCategory(importedInvoice.category),
+    paymentMethod: mapPaymentMethod(importedInvoice.paymentMethod),
+    notes: importedInvoice.notes || null,
+    files,
+    ocrMetadata,
+    source: "OCR",
+    workspaceId: new mongoose.Types.ObjectId(importedInvoice.workspaceId),
+    createdBy: userId,
+  });
+
+  // Mark the imported invoice as VALIDATED
+  importedInvoice.status = "VALIDATED";
+  await importedInvoice.save();
+
+  return purchaseInvoice;
 }
 
 const importedInvoiceResolvers = {
@@ -1225,6 +1350,58 @@ const importedInvoiceResolvers = {
           extraImportsAvailable: result.extraImportsAvailable,
           totalSpent: result.totalSpent,
           message: `${quantity} import(s) supplémentaire(s) ajouté(s) avec succès.`,
+        };
+      }
+    ),
+
+    /**
+     * Convertit une facture importée en facture d'achat (PurchaseInvoice)
+     */
+    convertImportedInvoiceToPurchaseInvoice: isAuthenticated(
+      async (_, { id }, { user }) => {
+        const importedInvoice = await ImportedInvoice.findById(id);
+        if (!importedInvoice) {
+          throw createNotFoundError("Facture importée introuvable");
+        }
+        if (importedInvoice.status !== "PENDING_REVIEW") {
+          throw createValidationError(
+            `Impossible de convertir : statut actuel "${importedInvoice.status}" (attendu PENDING_REVIEW)`
+          );
+        }
+        return convertSingleImportedInvoice(importedInvoice, user.id);
+      }
+    ),
+
+    /**
+     * Convertit plusieurs factures importées en factures d'achat
+     */
+    convertImportedInvoicesToPurchaseInvoices: isAuthenticated(
+      async (_, { ids }, { user }) => {
+        let converted = 0;
+        let skipped = 0;
+        let errors = 0;
+
+        for (const id of ids) {
+          try {
+            const importedInvoice = await ImportedInvoice.findById(id);
+            if (!importedInvoice || importedInvoice.status !== "PENDING_REVIEW") {
+              skipped++;
+              continue;
+            }
+            await convertSingleImportedInvoice(importedInvoice, user.id);
+            converted++;
+          } catch (err) {
+            console.error(`Erreur conversion facture importée ${id}:`, err.message);
+            errors++;
+          }
+        }
+
+        return {
+          success: errors === 0,
+          converted,
+          skipped,
+          errors,
+          message: `${converted} convertie(s), ${skipped} ignorée(s), ${errors} erreur(s)`,
         };
       }
     ),
