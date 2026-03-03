@@ -397,6 +397,17 @@ const quoteResolvers = {
         return quote;
       }
     ),
+
+    checkQuoteNumberExists: requireRead("quotes")(
+      async (_, { workspaceId, number, prefix, excludeId }) => {
+        const query = { workspaceId, number, prefix };
+        if (excludeId) {
+          query._id = { $ne: excludeId };
+        }
+        const count = await Quote.countDocuments(query);
+        return count > 0;
+      }
+    ),
   },
 
   Mutation: {

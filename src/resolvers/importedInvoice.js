@@ -1381,10 +1381,17 @@ const importedInvoiceResolvers = {
         let skipped = 0;
         let errors = 0;
 
+        // Batch-load toutes les factures importées en une seule query
+        const importedInvoices = await ImportedInvoice.find({
+          _id: { $in: ids },
+          status: "PENDING_REVIEW",
+        });
+        const invoiceMap = new Map(importedInvoices.map(inv => [inv._id.toString(), inv]));
+
         for (const id of ids) {
           try {
-            const importedInvoice = await ImportedInvoice.findById(id);
-            if (!importedInvoice || importedInvoice.status !== "PENDING_REVIEW") {
+            const importedInvoice = invoiceMap.get(id.toString());
+            if (!importedInvoice) {
               skipped++;
               continue;
             }

@@ -385,6 +385,7 @@ expenseSchema.index({ workspaceId: 1, status: 1 });
 expenseSchema.index({ workspaceId: 1, vendor: "text" });
 // Index legacy pour la migration
 expenseSchema.index({ createdBy: 1 });
+expenseSchema.index({ workspaceId: 1, createdBy: 1 });
 expenseSchema.index({ tags: 1 });
 
 // Exporter les constantes pour les utiliser dans d'autres fichiers

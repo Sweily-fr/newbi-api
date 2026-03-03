@@ -477,6 +477,7 @@ invoiceSchema.index({ workspaceId: 1, eInvoiceFlowType: 1 });
 // Index legacy pour la migration et audit trail
 invoiceSchema.index({ createdBy: 1 });
 invoiceSchema.index({ issueDate: -1 });
+invoiceSchema.index({ workspaceId: 1, issueDate: -1 });
 
 // Ajout d'un champ virtuel pour l'année d'émission
 invoiceSchema.virtual("issueYear").get(function () {

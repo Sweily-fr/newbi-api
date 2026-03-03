@@ -286,15 +286,14 @@ export const clientListResolvers = {
           throw new Error('Une ou plusieurs listes n\'existent pas');
         }
 
-        // Ajouter le client à chaque liste
-        for (const list of lists) {
-          if (!list.clients.includes(clientId)) {
-            list.clients.push(clientId);
-            await list.save();
-          }
-        }
+        // Ajouter le client à toutes les listes en une seule opération
+        await ClientList.updateMany(
+          { _id: { $in: listIds }, workspaceId, clients: { $ne: clientId } },
+          { $push: { clients: clientId } }
+        );
 
-        return lists.map(list => list.populate('clients'));
+        // Récupérer les listes mises à jour avec les clients peuplés
+        return await ClientList.find({ _id: { $in: listIds }, workspaceId }).populate('clients');
       } catch (error) {
         console.error('Erreur lors de l\'ajout du client aux listes:', error);
         throw error;
@@ -321,13 +320,14 @@ export const clientListResolvers = {
           throw new Error('Une ou plusieurs listes n\'existent pas');
         }
 
-        // Supprimer le client de chaque liste
-        for (const list of lists) {
-          list.clients = list.clients.filter(id => id.toString() !== clientId);
-          await list.save();
-        }
+        // Supprimer le client de toutes les listes en une seule opération
+        await ClientList.updateMany(
+          { _id: { $in: listIds }, workspaceId },
+          { $pull: { clients: clientId } }
+        );
 
-        return lists.map(list => list.populate('clients'));
+        // Récupérer les listes mises à jour avec les clients peuplés
+        return await ClientList.find({ _id: { $in: listIds }, workspaceId }).populate('clients');
       } catch (error) {
         console.error('Erreur lors de la suppression du client des listes:', error);
         throw error;

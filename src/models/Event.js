@@ -177,6 +177,8 @@ eventSchema.index({ invoiceId: 1 }, { sparse: true });
 eventSchema.index({ externalEventId: 1, calendarConnectionId: 1 }, { sparse: true });
 eventSchema.index({ userId: 1, visibility: 1, start: 1 });
 eventSchema.index({ calendarConnectionId: 1 }, { sparse: true });
+// Index pour le cron emailReminderScheduler (toutes les 5 min)
+eventSchema.index({ 'emailReminder.status': 1, 'emailReminder.scheduledFor': 1 }, { sparse: true });
 
 // Méthodes statiques
 eventSchema.statics.createInvoiceDueEvent = async function(invoice, userId, workspaceId) {

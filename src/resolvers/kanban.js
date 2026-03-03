@@ -384,9 +384,9 @@ const resolvers = {
     boards: withWorkspace(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        return await Board.find({ workspaceId: finalWorkspaceId }).sort({
-          createdAt: -1,
-        });
+        return await Board.find({ workspaceId: finalWorkspaceId })
+          .sort({ createdAt: -1 })
+          .limit(100);
       }
     ),
 
@@ -644,7 +644,9 @@ const resolvers = {
         return await Column.find({
           boardId,
           workspaceId: finalWorkspaceId,
-        }).sort("order");
+        })
+          .sort("order")
+          .limit(100);
       }
     ),
 
@@ -664,7 +666,7 @@ const resolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const query = { boardId, workspaceId: finalWorkspaceId };
         if (columnId) query.columnId = columnId;
-        const tasks = await Task.find(query).sort("position");
+        const tasks = await Task.find(query).sort("position").limit(1000);
         return await enrichTasksWithUserInfo(tasks);
       }
     ),
@@ -687,7 +689,9 @@ const resolvers = {
         const tasks = await Task.find({
           workspaceId: finalWorkspaceId,
           "timeTracking.isRunning": true,
-        }).sort({ updatedAt: -1 });
+        })
+          .sort({ updatedAt: -1 })
+          .limit(100);
 
         // Filtrer les tâches où l'utilisateur connecté est membre assigné
         let filteredTasks = tasks;
@@ -2076,6 +2080,15 @@ const resolvers = {
                 // Extraire un extrait du commentaire (texte brut, sans HTML)
                 const commentExcerpt = (input.content || '').replace(/<[^>]*>/g, '').substring(0, 150);
 
+                // Batch-load tous les utilisateurs mentionnés en une seule query (au lieu de N queries)
+                const mentionedIds = mentionedUserIds
+                  .filter(id => id !== user.id) // Exclure l'auteur
+                  .map(id => new mongoose.Types.ObjectId(id));
+                const mentionedUsers = mentionedIds.length > 0
+                  ? await db.collection("user").find({ _id: { $in: mentionedIds } }).toArray()
+                  : [];
+                const mentionedUserMap = new Map(mentionedUsers.map(u => [u._id.toString(), u]));
+
                 for (const mentionedUserId of mentionedUserIds) {
                   // Ne pas notifier l'auteur du commentaire
                   if (mentionedUserId === user.id) {
@@ -2084,10 +2097,7 @@ const resolvers = {
                   }
 
                   try {
-                    logger.info(`📧 [Mention] Recherche utilisateur mentionné: ${mentionedUserId}`);
-                    const memberData = await db.collection("user").findOne({
-                      _id: new mongoose.Types.ObjectId(mentionedUserId),
-                    });
+                    const memberData = mentionedUserMap.get(mentionedUserId);
                     logger.info(`📧 [Mention] Utilisateur mentionné trouvé: ${memberData ? memberData.email : 'NON TROUVÉ'}`);
 
                     if (memberData?.email) {
@@ -2713,14 +2723,18 @@ const resolvers = {
       return await Column.find({
         boardId: board.id,
         workspaceId: board.workspaceId,
-      }).sort({ order: 1 });
+      })
+        .sort({ order: 1 })
+        .limit(100);
     },
     tasks: async (parent, _, { user }) => {
       if (!user) return [];
       const tasks = await Task.find({
         boardId: parent.id,
         workspaceId: parent.workspaceId,
-      }).sort("position");
+      })
+        .sort("position")
+        .limit(1000);
       return await enrichTasksWithUserInfo(tasks);
     },
     client: async (board) => {
@@ -2984,7 +2998,7 @@ const resolvers = {
 
   Column: {
     tasks: async (parent) => {
-      return await Task.find({ columnId: parent.id, workspaceId: parent.workspaceId }).sort("position");
+      return await Task.find({ columnId: parent.id, workspaceId: parent.workspaceId }).sort("position").limit(500);
     },
   },
 
