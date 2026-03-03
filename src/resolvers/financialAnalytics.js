@@ -206,7 +206,7 @@ const financialAnalyticsResolvers = {
         // ==============================
         // MAIN AGGREGATIONS (parallel)
         // ==============================
-        const [invoiceStats, expenseStats, quoteStats, creditNoteStats] = await Promise.all([
+        const [invoiceStats, expenseStats, quoteStats, creditNoteStats, monthlyCollectedStats, currentReceivablesStats] = await Promise.all([
           // 1. Invoice facet aggregation
           Invoice.aggregate([
             { $match: invoiceMatch },
@@ -405,116 +405,14 @@ const financialAnalyticsResolvers = {
                     },
                   },
                 ],
-                // Outstanding receivables (PENDING + OVERDUE)
-                receivables: [
-                  { $match: { status: { $in: ['PENDING', 'OVERDUE'] } } },
-                  {
-                    $group: {
-                      _id: null,
-                      outstandingReceivables: { $sum: '$finalTotalTTC' },
-                    },
-                  },
-                ],
-                // Overdue invoices list
-                overdueInvoices: [
-                  {
-                    $match: {
-                      status: 'OVERDUE',
-                      dueDate: { $ne: null },
-                    },
-                  },
-                  {
-                    $project: {
-                      invoiceId: '$_id',
-                      invoiceNumber: {
-                        $cond: {
-                          if: { $and: [{ $ifNull: ['$prefix', false] }, { $ifNull: ['$number', false] }] },
-                          then: { $concat: ['$prefix', '-', '$number'] },
-                          else: { $ifNull: ['$number', 'N/A'] },
-                        },
-                      },
-                      clientName: {
-                        $cond: {
-                          if: { $eq: ['$client.type', 'INDIVIDUAL'] },
-                          then: {
-                            $concat: [
-                              { $ifNull: ['$client.firstName', ''] },
-                              ' ',
-                              { $ifNull: ['$client.lastName', ''] },
-                            ],
-                          },
-                          else: { $ifNull: ['$client.name', 'Client inconnu'] },
-                        },
-                      },
-                      totalTTC: '$finalTotalTTC',
-                      dueDate: 1,
-                      daysOverdue: {
-                        $floor: {
-                          $divide: [
-                            { $subtract: [now, '$dueDate'] },
-                            86400000, // ms in a day
-                          ],
-                        },
-                      },
-                    },
-                  },
-                  { $sort: { daysOverdue: -1 } },
-                ],
-                // Aging buckets
-                agingBuckets: [
-                  {
-                    $match: {
-                      status: { $in: ['PENDING', 'OVERDUE'] },
-                      dueDate: { $ne: null },
-                    },
-                  },
-                  {
-                    $addFields: {
-                      daysOverdue: {
-                        $floor: {
-                          $divide: [
-                            { $subtract: [now, '$dueDate'] },
-                            86400000,
-                          ],
-                        },
-                      },
-                    },
-                  },
-                  // Exclude invoices not yet due (negative daysOverdue)
-                  { $match: { daysOverdue: { $gte: 0 } } },
-                  {
-                    $bucket: {
-                      groupBy: '$daysOverdue',
-                      boundaries: [0, 31, 61, 91],
-                      default: '90+',
-                      output: {
-                        count: { $sum: 1 },
-                        totalTTC: { $sum: '$finalTotalTTC' },
-                      },
-                    },
-                  },
-                ],
-                // Monthly collected (based on paymentDate of COMPLETED invoices)
-                monthlyCollected: [
-                  {
-                    $match: {
-                      status: 'COMPLETED',
-                      paymentDate: { $ne: null },
-                    },
-                  },
-                  {
-                    $group: {
-                      _id: {
-                        year: { $year: '$paymentDate' },
-                        month: { $month: '$paymentDate' },
-                      },
-                      collectedTTC: { $sum: '$finalTotalTTC' },
-                      collectedCount: { $sum: 1 },
-                    },
-                  },
-                ],
-                // Collection rate data
+                // Note: receivables, overdueInvoices, agingBuckets moved to separate aggregation
+                // (unfiltered by issueDate — snapshot of current state)
+                // Note: monthlyCollected moved to a separate aggregation (filtered by paymentDate, not issueDate)
+                // Collection rate data (excluding CANCELED from denominator)
                 collectionTotals: [
+                  {
+                    $match: { status: { $ne: 'CANCELED' } },
+                  },
                   {
                     $group: {
                       _id: null,
@@ -522,6 +420,8 @@ const financialAnalyticsResolvers = {
                       completedInvoices: {
                         $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
                       },
+                      // Revenue TTC excluding CANCELED (for DSO calculation)
+                      totalRevenueTTCExclCanceled: { $sum: '$finalTotalTTC' },
                     },
                   },
                 ],
@@ -697,6 +597,132 @@ const financialAnalyticsResolvers = {
               },
             },
           ]),
+
+          // 5. Monthly collected — separate aggregation filtered by paymentDate (not issueDate)
+          // This ensures invoices issued before the selected period but paid during it are counted
+          (() => {
+            const paymentDateQuery = { $ne: null };
+            if (startDate) paymentDateQuery.$gte = new Date(startDate);
+            if (endDate) paymentDateQuery.$lte = new Date(endDate);
+            return Invoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: 'COMPLETED',
+                  paymentDate: paymentDateQuery,
+                },
+              },
+              {
+                $group: {
+                  _id: {
+                    year: { $year: '$paymentDate' },
+                    month: { $month: '$paymentDate' },
+                  },
+                  collectedTTC: { $sum: '$finalTotalTTC' },
+                  collectedCount: { $sum: 1 },
+                },
+              },
+            ]);
+          })(),
+
+          // 6. Current receivables snapshot (NOT filtered by issueDate — shows all unpaid invoices)
+          Invoice.aggregate([
+            {
+              $match: {
+                workspaceId: wId,
+                status: { $in: ['PENDING', 'OVERDUE'] },
+              },
+            },
+            {
+              $facet: {
+                // Total outstanding receivables
+                receivables: [
+                  {
+                    $group: {
+                      _id: null,
+                      outstandingReceivables: { $sum: '$finalTotalTTC' },
+                    },
+                  },
+                ],
+                // Overdue invoices: PENDING or OVERDUE with dueDate in the past
+                overdueInvoices: [
+                  {
+                    $match: {
+                      dueDate: { $ne: null, $lt: now },
+                    },
+                  },
+                  {
+                    $project: {
+                      invoiceId: '$_id',
+                      invoiceNumber: {
+                        $cond: {
+                          if: { $and: [{ $ifNull: ['$prefix', false] }, { $ifNull: ['$number', false] }] },
+                          then: { $concat: ['$prefix', '-', '$number'] },
+                          else: { $ifNull: ['$number', 'N/A'] },
+                        },
+                      },
+                      clientName: {
+                        $cond: {
+                          if: { $eq: ['$client.type', 'INDIVIDUAL'] },
+                          then: {
+                            $concat: [
+                              { $ifNull: ['$client.firstName', ''] },
+                              ' ',
+                              { $ifNull: ['$client.lastName', ''] },
+                            ],
+                          },
+                          else: { $ifNull: ['$client.name', 'Client inconnu'] },
+                        },
+                      },
+                      totalTTC: '$finalTotalTTC',
+                      dueDate: 1,
+                      daysOverdue: {
+                        $floor: {
+                          $divide: [
+                            { $subtract: [now, '$dueDate'] },
+                            86400000,
+                          ],
+                        },
+                      },
+                    },
+                  },
+                  { $sort: { daysOverdue: -1 } },
+                ],
+                // Aging buckets: PENDING+OVERDUE with past due date
+                agingBuckets: [
+                  {
+                    $match: {
+                      dueDate: { $ne: null },
+                    },
+                  },
+                  {
+                    $addFields: {
+                      daysOverdue: {
+                        $floor: {
+                          $divide: [
+                            { $subtract: [now, '$dueDate'] },
+                            86400000,
+                          ],
+                        },
+                      },
+                    },
+                  },
+                  { $match: { daysOverdue: { $gte: 0 } } },
+                  {
+                    $bucket: {
+                      groupBy: '$daysOverdue',
+                      boundaries: [0, 31, 61, 91],
+                      default: '91+',
+                      output: {
+                        count: { $sum: 1 },
+                        totalTTC: { $sum: '$finalTotalTTC' },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          ]),
         ]);
 
         // ==============================
@@ -711,8 +737,11 @@ const financialAnalyticsResolvers = {
           invoiceCount: 0,
           clients: [],
         };
-        const receivables = invResult.receivables[0] || { outstandingReceivables: 0 };
-        const collectionTotals = invResult.collectionTotals[0] || { totalInvoices: 0, completedInvoices: 0 };
+        const collectionTotals = invResult.collectionTotals[0] || { totalInvoices: 0, completedInvoices: 0, totalRevenueTTCExclCanceled: 0 };
+
+        // Current receivables snapshot (unfiltered by issueDate)
+        const recvResult = currentReceivablesStats[0] || { receivables: [], overdueInvoices: [], agingBuckets: [] };
+        const receivables = recvResult.receivables[0] || { outstandingReceivables: 0 };
 
         // Expense results
         const expResult = expenseStats[0];
@@ -758,7 +787,7 @@ const financialAnalyticsResolvers = {
         const outstandingReceivables = Math.round(receivables.outstandingReceivables * 100) / 100;
 
         // Overdue invoices
-        const overdueInvoices = invResult.overdueInvoices.map((inv) => ({
+        const overdueInvoices = (recvResult.overdueInvoices || []).map((inv) => ({
           invoiceId: inv.invoiceId.toString(),
           invoiceNumber: (inv.invoiceNumber || 'N/A').trim(),
           clientName: (inv.clientName || 'Client inconnu').trim(),
@@ -769,12 +798,13 @@ const financialAnalyticsResolvers = {
         const overdueAmount = overdueInvoices.reduce((sum, inv) => sum + inv.totalTTC, 0);
         const overdueCount = overdueInvoices.length;
 
-        // DSO: (créances en cours TTC / CA TTC) × nbJours
+        // DSO: (créances en cours TTC / CA TTC hors annulées) × nbJours
         const periodStart = new Date(startDate);
         const periodEnd = new Date(endDate);
         const nbDays = Math.max(1, Math.ceil((periodEnd - periodStart) / 86400000));
-        const dso = totalRevenueTTC > 0
-          ? Math.round((outstandingReceivables / totalRevenueTTC) * nbDays * 100) / 100
+        const revenueTTCForDso = collectionTotals.totalRevenueTTCExclCanceled || totalRevenueTTC;
+        const dso = revenueTTCForDso > 0
+          ? Math.round((outstandingReceivables / revenueTTCForDso) * nbDays * 100) / 100
           : 0;
 
         // Collection rate: COMPLETED / total non-DRAFT (in count)
@@ -784,12 +814,12 @@ const financialAnalyticsResolvers = {
 
         // Aging buckets - normalize from MongoDB $bucket output
         const agingBucketsConfig = [
-          { label: '0-30 jours', min: 0, max: 30 },
+          { label: '1-30 jours', min: 0, max: 30 },
           { label: '31-60 jours', min: 31, max: 60 },
           { label: '61-90 jours', min: 61, max: 90 },
-          { label: '90+ jours', min: 91, max: 9999 },
+          { label: '91+ jours', min: 91, max: 9999 },
         ];
-        const rawAgingBuckets = invResult.agingBuckets || [];
+        const rawAgingBuckets = recvResult.agingBuckets || [];
         const agingBucketMap = {};
         for (const b of rawAgingBuckets) {
           agingBucketMap[b._id] = b;
@@ -799,7 +829,7 @@ const financialAnalyticsResolvers = {
           if (cfg.min === 0) key = 0;
           else if (cfg.min === 31) key = 31;
           else if (cfg.min === 61) key = 61;
-          else key = '90+';
+          else key = '91+';
           const raw = agingBucketMap[key] || {};
           return {
             label: cfg.label,
@@ -810,13 +840,13 @@ const financialAnalyticsResolvers = {
           };
         });
 
-        // Monthly collection - merge invoiced (from monthlyRevenue) + collected
+        // Monthly collection - merge invoiced (from monthlyRevenue) + collected (from separate paymentDate query)
         const invoicedMap = {};
         for (const r of invResult.monthlyRevenue) {
           invoicedMap[r.month] = { invoicedTTC: r.revenueTTC, invoicedCount: r.invoiceCount };
         }
         const collectedMap = {};
-        for (const r of (invResult.monthlyCollected || [])) {
+        for (const r of (monthlyCollectedStats || [])) {
           const m = `${r._id.year}-${String(r._id.month).padStart(2, '0')}`;
           collectedMap[m] = { collectedTTC: r.collectedTTC, collectedCount: r.collectedCount };
         }
@@ -957,6 +987,13 @@ const financialAnalyticsResolvers = {
                         totalRevenueHT: { $sum: '$finalTotalHT' },
                         totalRevenueTTC: { $sum: '$finalTotalTTC' },
                         invoiceCount: { $sum: 1 },
+                        // Count/revenue excluding CANCELED (for collectionRate and DSO)
+                        invoiceCountExclCanceled: {
+                          $sum: { $cond: [{ $ne: ['$status', 'CANCELED'] }, 1, 0] },
+                        },
+                        revenueTTCExclCanceled: {
+                          $sum: { $cond: [{ $ne: ['$status', 'CANCELED'] }, '$finalTotalTTC', 0] },
+                        },
                         clients: { $addToSet: '$client.id' },
                         completedCount: {
                           $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
@@ -974,7 +1011,12 @@ const financialAnalyticsResolvers = {
                     },
                   ],
                   overdue: [
-                    { $match: { status: 'OVERDUE' } },
+                    {
+                      $match: {
+                        status: { $in: ['PENDING', 'OVERDUE'] },
+                        dueDate: { $ne: null, $lt: now },
+                      },
+                    },
                     {
                       $group: {
                         _id: null,
@@ -1059,12 +1101,14 @@ const financialAnalyticsResolvers = {
             ? Math.round((prevTotalExpensesHT / prevNetRevenueHT) * 10000) / 100
             : 0;
 
-          const prevCollectionRate = prevInvTotals.invoiceCount > 0
-            ? Math.round((prevInvTotals.completedCount / prevInvTotals.invoiceCount) * 10000) / 100
+          const prevInvoiceCountForRate = prevInvTotals.invoiceCountExclCanceled || prevInvTotals.invoiceCount;
+          const prevCollectionRate = prevInvoiceCountForRate > 0
+            ? Math.round((prevInvTotals.completedCount / prevInvoiceCountForRate) * 10000) / 100
             : 0;
           const prevNbDays = Math.max(1, Math.ceil((prevEnd - prevStart) / 86400000));
-          const prevDso = prevTotalRevenueTTC > 0
-            ? Math.round((prevReceivables.outstandingReceivables / prevTotalRevenueTTC) * prevNbDays * 100) / 100
+          const prevRevenueTTCForDso = prevInvTotals.revenueTTCExclCanceled || prevTotalRevenueTTC;
+          const prevDso = prevRevenueTTCForDso > 0
+            ? Math.round((prevReceivables.outstandingReceivables / prevRevenueTTCForDso) * prevNbDays * 100) / 100
             : 0;
 
           const prevActiveClientCount = (prevInvTotals.clients || []).filter(Boolean).length;

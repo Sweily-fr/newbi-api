@@ -6,6 +6,7 @@ enum DiscountType {
 enum InvoiceStatus {
   DRAFT
   PENDING
+  OVERDUE
   COMPLETED
   CANCELED
 }
