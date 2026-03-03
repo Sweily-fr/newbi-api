@@ -55,7 +55,8 @@ const treasuryForecastResolvers = {
         }
         const accounts = await AccountBanking.find(accountQuery).lean();
         const currentBalance = accounts.reduce((sum, a) => {
-          const bal = typeof a.balance === "number" ? a.balance : (a.balance?.available ?? 0);
+          // Use same logic as GraphQL resolver: balance is stored as Number in MongoDB
+          const bal = typeof a.balance === "number" ? a.balance : (a.balance?.current ?? a.balance?.available ?? 0);
           return sum + bal;
         }, 0);
 
@@ -91,18 +92,24 @@ const treasuryForecastResolvers = {
         const txEndDate = new Date(endMonth + "-01");
         txEndDate.setMonth(txEndDate.getMonth() + 1);
 
+        // Resolve effective date: date → processedAt → createdAt (same fallback as frontend)
+        const effectiveDateField = {
+          $ifNull: ["$date", { $ifNull: ["$processedAt", "$createdAt"] }],
+        };
+
         const bankTxBaseMatch = {
           workspaceId: workspaceId,
           status: "completed",
-          date: { $gte: txStartDate, $lt: txEndDate },
         };
 
         // 4a. Income: all positive-amount transactions
         const bankIncomeTx = await Transaction.aggregate([
           { $match: { ...bankTxBaseMatch, amount: { $gt: 0 } } },
+          { $addFields: { _effectiveDate: effectiveDateField } },
+          { $match: { _effectiveDate: { $gte: txStartDate, $lt: txEndDate } } },
           {
             $group: {
-              _id: { $dateToString: { format: "%Y-%m", date: "$date" } },
+              _id: { $dateToString: { format: "%Y-%m", date: "$_effectiveDate" } },
               total: { $sum: "$amount" },
             },
           },
@@ -115,10 +122,12 @@ const treasuryForecastResolvers = {
         // 4b. Expenses: all negative-amount transactions (stored as absolute values)
         const bankExpenseTx = await Transaction.aggregate([
           { $match: { ...bankTxBaseMatch, amount: { $lt: 0 } } },
+          { $addFields: { _effectiveDate: effectiveDateField } },
+          { $match: { _effectiveDate: { $gte: txStartDate, $lt: txEndDate } } },
           {
             $group: {
               _id: {
-                month: { $dateToString: { format: "%Y-%m", date: "$date" } },
+                month: { $dateToString: { format: "%Y-%m", date: "$_effectiveDate" } },
                 category: { $ifNull: ["$expenseCategory", "OTHER"] },
               },
               total: { $sum: "$amount" },
@@ -191,9 +200,8 @@ const treasuryForecastResolvers = {
           let forecastIncome = Object.values(manualForecast.income).reduce((s, v) => s + v, 0);
           let forecastExpense = Object.values(manualForecast.expense).reduce((s, v) => s + v, 0);
 
-          // Auto-forecast: apply when no manual forecast AND (current/future month OR past month with actual data)
-          const hasActualData = actualIncome > 0 || actualExpense > 0;
-          const needsAutoForecast = forecastIncome === 0 && forecastExpense === 0 && (month >= currentMonth || hasActualData);
+          // Auto-forecast: only apply to current and future months without manual forecast
+          const needsAutoForecast = forecastIncome === 0 && forecastExpense === 0 && month >= currentMonth;
           const autoForecastIncome = needsAutoForecast && avgMonthlyIncome > 0 ? { SALES: avgMonthlyIncome } : {};
           const autoForecastExpense = needsAutoForecast && avgMonthlyExpense > 0 ? { ...autoExpenseByCategory } : {};
 
