@@ -106,6 +106,7 @@ extend type Query {
   quoteStats(workspaceId: ID!): QuoteStats!
   nextQuoteNumber(workspaceId: ID!, prefix: String): String!
   quoteByNumber(workspaceId: ID!, number: String!): Quote
+  checkQuoteNumberExists(workspaceId: ID!, number: Int!, prefix: String!, excludeId: ID): Boolean!
 }
 
 extend type Mutation {

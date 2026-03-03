@@ -63,44 +63,56 @@ async function processWorkspaceReminders(settings) {
   
   // Trouver les factures impayées avec date d'échéance dépassée
   const overdueInvoices = await Invoice.find(query).populate('client');
-  
+
   console.log(`📄 [InvoiceReminder] ${overdueInvoices.length} facture(s) en retard trouvée(s)`);
-  
+
+  if (overdueInvoices.length === 0) return;
+
+  // Batch-load tous les logs de relance pour éviter N+1 queries
+  const invoiceIds = overdueInvoices.map(inv => inv._id);
+  const allReminderLogs = await InvoiceReminderLog.find({
+    invoiceId: { $in: invoiceIds },
+    reminderType: { $in: ['FIRST', 'SECOND'] },
+  }).lean();
+
+  // Indexer par invoiceId+type pour lookup O(1)
+  const reminderLogMap = new Map();
+  for (const log of allReminderLogs) {
+    reminderLogMap.set(`${log.invoiceId}_${log.reminderType}`, true);
+  }
+
+  // Batch-load les EmailSettings pour ce workspace (1 seule query)
+  const emailSettings = await EmailSettings.findOne({ workspaceId });
+
   for (const invoice of overdueInvoices) {
-    await processInvoiceReminder(invoice, settings, firstReminderDate, secondReminderDate);
+    await processInvoiceReminder(invoice, settings, firstReminderDate, secondReminderDate, reminderLogMap, emailSettings);
   }
 }
 
 /**
  * Traite la relance pour une facture spécifique
  */
-async function processInvoiceReminder(invoice, settings, firstReminderDate, secondReminderDate) {
+async function processInvoiceReminder(invoice, settings, firstReminderDate, secondReminderDate, reminderLogMap, emailSettings) {
   try {
     const invoiceDueDate = new Date(invoice.dueDate);
     invoiceDueDate.setHours(0, 0, 0, 0);
-    
-    // Vérifier si une première relance doit être envoyée
+
+    // Vérifier si une première relance doit être envoyée (lookup O(1) dans la map)
     if (invoiceDueDate <= firstReminderDate) {
-      const firstReminderSent = await InvoiceReminderLog.findOne({
-        invoiceId: invoice._id,
-        reminderType: 'FIRST',
-      });
-      
+      const firstReminderSent = reminderLogMap.has(`${invoice._id}_FIRST`);
+
       if (!firstReminderSent) {
-        await sendReminder(invoice, settings, 'FIRST');
+        await sendReminder(invoice, settings, 'FIRST', emailSettings);
         return;
       }
     }
-    
+
     // Vérifier si une deuxième relance doit être envoyée
     if (invoiceDueDate <= secondReminderDate) {
-      const secondReminderSent = await InvoiceReminderLog.findOne({
-        invoiceId: invoice._id,
-        reminderType: 'SECOND',
-      });
-      
+      const secondReminderSent = reminderLogMap.has(`${invoice._id}_SECOND`);
+
       if (!secondReminderSent) {
-        await sendReminder(invoice, settings, 'SECOND');
+        await sendReminder(invoice, settings, 'SECOND', emailSettings);
         return;
       }
     }
@@ -112,7 +124,7 @@ async function processInvoiceReminder(invoice, settings, firstReminderDate, seco
 /**
  * Envoie une relance par email
  */
-async function sendReminder(invoice, settings, reminderType) {
+async function sendReminder(invoice, settings, reminderType, preloadedEmailSettings) {
   try {
     console.log(`📧 [InvoiceReminder] Envoi ${reminderType} relance pour facture ${invoice.number}`);
     
@@ -175,8 +187,8 @@ async function sendReminder(invoice, settings, reminderType) {
       contentType: 'application/pdf',
     }] : [];
     
-    // Récupérer les paramètres email du workspace
-    const emailSettings = await EmailSettings.findOne({ 
+    // Utiliser les paramètres email pré-chargés ou fallback sur un fetch
+    const emailSettings = preloadedEmailSettings ?? await EmailSettings.findOne({
       workspaceId: invoice.workspaceId
     });
     
