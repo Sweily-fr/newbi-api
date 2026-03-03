@@ -25,12 +25,14 @@ const reconciliationResolvers = {
             .sort({ date: -1 })
             .limit(50);
 
-          // Récupérer les factures en attente de paiement
+          // Récupérer les factures en attente de paiement (cap à 500 pour éviter surcharge mémoire)
           const pendingInvoices = await Invoice.find({
             workspaceId,
             status: "PENDING",
             linkedTransactionId: null,
-          }).sort({ dueDate: 1 });
+          })
+            .sort({ dueDate: 1 })
+            .limit(500);
 
           // Générer des suggestions de correspondance
           const suggestions = [];

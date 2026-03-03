@@ -581,6 +581,17 @@ const invoiceResolvers = {
         return referencesWithContract;
       }
     ),
+
+    checkInvoiceNumberExists: requireRead("invoices")(
+      async (_, { workspaceId, number, prefix, excludeId }) => {
+        const query = { workspaceId, number, prefix };
+        if (excludeId) {
+          query._id = { $ne: excludeId };
+        }
+        const count = await Invoice.countDocuments(query);
+        return count > 0;
+      }
+    ),
   },
 
   Mutation: {

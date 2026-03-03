@@ -72,6 +72,7 @@ const notificationSchema = new mongoose.Schema({
 // Index composé pour les requêtes fréquentes
 notificationSchema.index({ userId: 1, read: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, workspaceId: 1, createdAt: -1 });
 
 // Méthode pour marquer comme lu
 notificationSchema.methods.markAsRead = function() {

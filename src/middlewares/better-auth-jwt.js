@@ -5,6 +5,36 @@ import User from "../models/User.js";
 import { getJWKSValidator } from "../services/jwks-validator.js";
 import { betterAuthMiddleware } from "./better-auth.js";
 
+// Cache LRU en mémoire pour User.findById — évite une query DB par requête authentifiée
+const USER_CACHE_TTL = 30_000; // 30 secondes
+const USER_CACHE_MAX = 500;
+const _userCache = new Map();
+
+function getCachedUser(userId) {
+  const entry = _userCache.get(userId);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > USER_CACHE_TTL) {
+    _userCache.delete(userId);
+    return null;
+  }
+  return entry.user;
+}
+
+function setCachedUser(userId, user) {
+  // Eviction LRU simple : supprimer la plus ancienne entrée si la taille max est atteinte
+  if (_userCache.size >= USER_CACHE_MAX) {
+    const oldestKey = _userCache.keys().next().value;
+    _userCache.delete(oldestKey);
+  }
+  _userCache.set(userId, { user, ts: Date.now() });
+}
+
+// Permet d'invalider le cache depuis l'extérieur (ex: après updateUser)
+export function invalidateUserCache(userId) {
+  if (userId) _userCache.delete(userId);
+  else _userCache.clear();
+}
+
 /**
  * Middleware d'authentification unifié
  * 1. Essaie le JWT (Authorization: Bearer) si présent — nécessaire pour WebSocket
@@ -53,8 +83,14 @@ const betterAuthJWTMiddleware = async (req) => {
       return null;
     }
 
-    // Récupérer l'utilisateur depuis la base de données
-    const user = await User.findById(decoded.sub);
+    // Récupérer l'utilisateur (cache LRU 30s → évite 1 query DB par requête)
+    let user = getCachedUser(decoded.sub);
+    if (!user) {
+      user = await User.findById(decoded.sub);
+      if (user && !user.isDisabled) {
+        setCachedUser(decoded.sub, user);
+      }
+    }
     if (!user || user.isDisabled) {
       return null;
     }

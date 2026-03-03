@@ -125,6 +125,7 @@ extend type Query {
   purchaseOrders(workspaceId: ID!, startDate: String, endDate: String, status: PurchaseOrderStatus, search: String, page: Int, limit: Int): PurchaseOrderPagination!
   purchaseOrderStats(workspaceId: ID!): PurchaseOrderStats!
   nextPurchaseOrderNumber(workspaceId: ID!, prefix: String): String!
+  checkPurchaseOrderNumberExists(workspaceId: ID!, number: Int!, prefix: String!, excludeId: ID): Boolean!
 }
 
 extend type Mutation {
