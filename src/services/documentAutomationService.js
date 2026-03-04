@@ -131,24 +131,33 @@ const FOLDER_CACHE_TTL = 60 * 1000; // 1 minute
  * Utilise un cache mémoire pour éviter les requêtes répétées dans un batch.
  */
 async function resolveTargetFolder(actionConfig, workspaceId, documentContext, userId) {
-  if (!actionConfig.createSubfolder) {
-    return actionConfig.targetFolderId;
+  const createSubfolder = actionConfig.createSubfolder;
+  const targetFolderId = actionConfig.targetFolderId;
+
+  console.log(`📁 [resolveTargetFolder] createSubfolder=${createSubfolder}, pattern=${actionConfig.subfolderPattern}, targetFolderId=${targetFolderId}`);
+
+  if (!createSubfolder) {
+    console.log(`📁 [resolveTargetFolder] Pas de sous-dossier, retour targetFolderId=${targetFolderId}`);
+    return targetFolderId;
   }
 
-  const pattern = actionConfig.subfolderPattern || '{year}';
-  const now = new Date();
-  const year = now.getFullYear().toString();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const clientName = sanitizeFileName(documentContext.clientName || 'Sans_client');
+  const pattern = actionConfig.subfolderPattern || 'year';
 
-  const resolvedPattern = pattern
-    .replace('{year}', year)
-    .replace('{month}', month)
-    .replace('{clientName}', clientName);
+  // Déterminer le nom du sous-dossier selon le type de filtre
+  let folderName;
+  if (pattern === 'year') {
+    folderName = actionConfig.filterYear ? String(actionConfig.filterYear) : String(new Date().getFullYear());
+  } else if (pattern === 'client') {
+    folderName = sanitizeFileName(actionConfig.filterClientName || documentContext.clientName || 'Sans_client');
+  } else {
+    // Fallback : utiliser le pattern comme nom de dossier
+    folderName = sanitizeFileName(pattern);
+  }
 
-  const levels = resolvedPattern.split('/').filter(Boolean);
+  const levels = [folderName];
+  console.log(`📁 [resolveTargetFolder] Pattern: "${pattern}" → dossier: "${folderName}"`);
 
-  let currentParentId = actionConfig.targetFolderId;
+  let currentParentId = targetFolderId;
 
   for (const levelName of levels) {
     const cacheKey = `${workspaceId}:${currentParentId}:${levelName}`;
@@ -156,6 +165,7 @@ async function resolveTargetFolder(actionConfig, workspaceId, documentContext, u
 
     if (cached && Date.now() - cached.ts < FOLDER_CACHE_TTL) {
       currentParentId = cached.id;
+      console.log(`📁 [resolveTargetFolder] Cache hit: "${levelName}" → ${cached.id}`);
       continue;
     }
 
@@ -175,12 +185,16 @@ async function resolveTargetFolder(actionConfig, workspaceId, documentContext, u
         isSharedWithAccountant: true,
       });
       await folder.save();
+      console.log(`📁 [resolveTargetFolder] Dossier CRÉÉ: "${levelName}" (${folder._id}) sous parentId=${currentParentId}`);
+    } else {
+      console.log(`📁 [resolveTargetFolder] Dossier existant: "${levelName}" (${folder._id})`);
     }
 
     _folderCache.set(cacheKey, { id: folder._id, ts: Date.now() });
     currentParentId = folder._id;
   }
 
+  console.log(`📁 [resolveTargetFolder] Résultat final: folderId=${currentParentId}`);
   return currentParentId;
 }
 
@@ -207,6 +221,22 @@ const documentAutomationService = {
 
       for (const automation of automations) {
         try {
+          // Vérifier les filtres année/client
+          const ac = automation.actionConfig;
+          if (ac.filterYear && documentContext.issueDate) {
+            const docYear = new Date(documentContext.issueDate).getFullYear();
+            if (docYear !== ac.filterYear) {
+              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+              continue;
+            }
+          }
+          if (ac.filterClientId && documentContext.clientId) {
+            if (documentContext.clientId.toString() !== ac.filterClientId.toString()) {
+              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+              continue;
+            }
+          }
+
           // Ne skip que les logs SUCCESS (les FAILED peuvent être réessayés)
           const existingSuccessLog = await DocumentAutomationLog.findOne({
             sourceDocumentType: documentContext.documentType,
@@ -456,13 +486,33 @@ const documentAutomationService = {
         return { executed: 0, results: [] };
       }
 
+      // Utiliser le vrai type de document pour les logs (cohérent avec executeAutomationForExistingDocuments)
+      const logDocType = expenseContext.documentType || 'expense';
+
       const results = [];
 
       for (const automation of automations) {
         try {
+          // Vérifier les filtres année/client
+          const ac = automation.actionConfig;
+          if (ac.filterYear && expenseContext.issueDate) {
+            const docYear = new Date(expenseContext.issueDate).getFullYear();
+            if (docYear !== ac.filterYear) {
+              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+              continue;
+            }
+          }
+          if (ac.filterClientId && expenseContext.clientId) {
+            if (expenseContext.clientId.toString() !== ac.filterClientId.toString()) {
+              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+              continue;
+            }
+          }
+
           // Ne skip que les logs SUCCESS (les FAILED peuvent être réessayés)
+          // Vérifier les deux formats pour compatibilité avec les anciens logs
           const existingSuccessLog = await DocumentAutomationLog.findOne({
-            sourceDocumentType: 'expense',
+            sourceDocumentType: { $in: [logDocType, 'expense'] },
             sourceDocumentId: expenseContext.documentId,
             automationId: automation._id,
             status: 'SUCCESS',
@@ -494,26 +544,53 @@ const documentAutomationService = {
 
           // Supprimer les anciens logs FAILED pour cette dépense (avant de réessayer)
           await DocumentAutomationLog.deleteMany({
-            sourceDocumentType: 'expense',
+            sourceDocumentType: { $in: [logDocType, 'expense'] },
             sourceDocumentId: expenseContext.documentId,
             automationId: automation._id,
             status: 'FAILED',
           });
 
-          // Récupérer le fichier existant via son URL publique
-          let fileBuffer;
-          try {
-            const response = await axios.get(expenseContext.cloudflareUrl, {
-              responseType: 'arraybuffer',
-              timeout: 30000,
-            });
-            fileBuffer = Buffer.from(response.data);
-          } catch (fetchError) {
-            throw new Error(`Erreur récupération fichier: ${fetchError.message}`);
+          // Récupérer le fichier : copie R2 serveur-à-serveur pour les documents importés,
+          // sinon téléchargement HTTP
+          let fileBuffer = null;
+          let fileSize = 0;
+          let r2CopySource = null;
+
+          const isImported = logDocType === 'importedInvoice' || logDocType === 'importedQuote';
+
+          if (isImported) {
+            // Copie R2 serveur-à-serveur (plus fiable, pas de téléchargement HTTP)
+            const ImportModel = logDocType === 'importedInvoice' ? ImportedInvoice : ImportedQuote;
+            const sourceDoc = await ImportModel.findById(expenseContext.documentId).select('file').lean();
+            const sourceKey = sourceDoc?.file?.cloudflareKey;
+            if (sourceKey) {
+              r2CopySource = {
+                key: sourceKey,
+                bucket: cloudflareService.importedInvoicesBucketName,
+              };
+              fileSize = sourceDoc.file?.fileSize || 0;
+            }
           }
 
-          if (!fileBuffer || fileBuffer.length === 0) {
-            throw new Error('Le fichier source est vide');
+          // Fallback : téléchargement HTTP si pas de copie R2
+          if (!r2CopySource) {
+            if (!expenseContext.cloudflareUrl) {
+              throw new Error('Aucune URL source pour le fichier');
+            }
+            try {
+              const response = await axios.get(expenseContext.cloudflareUrl, {
+                responseType: 'arraybuffer',
+                timeout: 30000,
+              });
+              fileBuffer = Buffer.from(response.data);
+              fileSize = fileBuffer.length;
+            } catch (fetchError) {
+              throw new Error(`Erreur récupération fichier: ${fetchError.message}`);
+            }
+
+            if (!fileBuffer || fileBuffer.length === 0) {
+              throw new Error('Le fichier source est vide');
+            }
           }
 
           // Résoudre le dossier cible
@@ -530,14 +607,21 @@ const documentAutomationService = {
             expenseContext
           );
 
-          // Upload vers R2
-          const uploadResult = await cloudflareService.uploadImage(
-            fileBuffer,
-            fileName,
-            userId,
-            'sharedDocuments',
-            workspaceId
-          );
+          // Upload ou copie vers R2
+          let uploadResult;
+          if (r2CopySource) {
+            uploadResult = await cloudflareService.copyToSharedDocuments(
+              r2CopySource.key, r2CopySource.bucket, fileName, workspaceId
+            );
+          } else {
+            uploadResult = await cloudflareService.uploadImage(
+              fileBuffer,
+              fileName,
+              userId,
+              'sharedDocuments',
+              workspaceId
+            );
+          }
 
           const targetFolder = await SharedFolder.findById(targetFolderId);
           const targetFolderName = targetFolder?.name || 'Inconnu';
@@ -550,7 +634,7 @@ const documentAutomationService = {
             fileUrl: uploadResult.url,
             fileKey: uploadResult.key,
             mimeType: expenseContext.mimeType || 'application/pdf',
-            fileSize: fileBuffer.length,
+            fileSize: fileSize,
             fileExtension: expenseContext.fileExtension || 'pdf',
             workspaceId,
             folderId: targetFolderId,
@@ -566,7 +650,7 @@ const documentAutomationService = {
           await DocumentAutomationLog.create({
             automationId: automation._id,
             workspaceId,
-            sourceDocumentType: 'expense',
+            sourceDocumentType: logDocType,
             sourceDocumentId: expenseContext.documentId,
             sourceDocumentNumber: expenseContext.documentNumber || '',
             sharedDocumentId: sharedDocument._id,
@@ -574,7 +658,7 @@ const documentAutomationService = {
             targetFolderName,
             status: 'SUCCESS',
             fileName,
-            fileSize: fileBuffer.length,
+            fileSize: fileSize,
           });
 
           await DocumentAutomation.findByIdAndUpdate(automation._id, {
@@ -600,7 +684,7 @@ const documentAutomationService = {
             await DocumentAutomationLog.create({
               automationId: automation._id,
               workspaceId,
-              sourceDocumentType: 'expense',
+              sourceDocumentType: logDocType,
               sourceDocumentId: expenseContext.documentId,
               sourceDocumentNumber: expenseContext.documentNumber || '',
               status: 'FAILED',
@@ -671,9 +755,12 @@ const documentAutomationService = {
    */
   async _cleanOrphanedLogs(automationId, docType, documentIds) {
     try {
+      // Compatibilité avec les anciens logs 'expense'
+      const isExpenseType = ['importedInvoice', 'importedQuote', 'purchaseInvoice'].includes(docType);
+      const typeFilter = isExpenseType ? { $in: [docType, 'expense'] } : docType;
       const successLogs = await DocumentAutomationLog.find({
         automationId,
-        sourceDocumentType: docType,
+        sourceDocumentType: typeFilter,
         sourceDocumentId: { $in: documentIds },
         status: 'SUCCESS',
         sharedDocumentId: { $ne: null },
@@ -716,9 +803,12 @@ const documentAutomationService = {
    */
   async _restoreTrashedAutomationDocs(automationId, docType, documentIds) {
     try {
+      // Compatibilité avec les anciens logs 'expense'
+      const isExpenseType = ['importedInvoice', 'importedQuote', 'purchaseInvoice'].includes(docType);
+      const typeFilter = isExpenseType ? { $in: [docType, 'expense'] } : docType;
       const successLogs = await DocumentAutomationLog.find({
         automationId,
-        sourceDocumentType: docType,
+        sourceDocumentType: typeFilter,
         sourceDocumentId: { $in: documentIds },
         status: 'SUCCESS',
         sharedDocumentId: { $ne: null },
@@ -795,7 +885,27 @@ const documentAutomationService = {
       Object.assign(query, config.customFilter);
     }
 
-    const documents = await config.model.find(query).lean();
+    let documents = await config.model.find(query).lean();
+
+    // Filtrer par année si filterYear est défini
+    const filterYear = automation.actionConfig?.filterYear;
+    if (filterYear) {
+      documents = documents.filter(doc => {
+        const issueDate = doc.issueDate || doc.date || doc.createdAt;
+        return issueDate && new Date(issueDate).getFullYear() === filterYear;
+      });
+    }
+
+    // Filtrer par client si filterClientId est défini
+    const filterClientId = automation.actionConfig?.filterClientId;
+    if (filterClientId) {
+      const filterClientIdStr = filterClientId.toString();
+      documents = documents.filter(doc => {
+        const docClientId = doc.client?._id || doc.clientId;
+        return docClientId && docClientId.toString() === filterClientIdStr;
+      });
+    }
+
     if (documents.length === 0) return [];
 
     // Nettoyer les logs SUCCESS dont le SharedDocument a été supprimé
@@ -1052,7 +1162,26 @@ const documentAutomationService = {
         Object.assign(query, config.customFilter);
       }
 
-      const documents = await config.model.find(query).lean();
+      let documents = await config.model.find(query).lean();
+
+      // Filtrer par année si filterYear est défini
+      const filterYear = automation.actionConfig.filterYear;
+      if (filterYear) {
+        documents = documents.filter(doc => {
+          const issueDate = doc.issueDate || doc.date || doc.createdAt;
+          return issueDate && new Date(issueDate).getFullYear() === filterYear;
+        });
+      }
+
+      // Filtrer par client si filterClientId est défini
+      const filterClientId = automation.actionConfig.filterClientId;
+      if (filterClientId) {
+        const filterClientIdStr = filterClientId.toString();
+        documents = documents.filter(doc => {
+          const docClientId = doc.client?._id || doc.clientId;
+          return docClientId && docClientId.toString() === filterClientIdStr;
+        });
+      }
 
       if (documents.length === 0) {
         // Aucun document existant
@@ -1073,9 +1202,14 @@ const documentAutomationService = {
       let firstError = null;
 
       // Pré-charger TOUS les logs SUCCESS en une seule requête
+      // Vérifier les deux formats pour compatibilité avec les anciens logs 'expense'
       const allDocIds = documents.map(d => d._id);
+      const isExpenseType = ['importedInvoice', 'importedQuote', 'purchaseInvoice'].includes(config.docType);
+      const logTypeFilter = isExpenseType
+        ? { $in: [config.docType, 'expense'] }
+        : config.docType;
       const existingSuccessLogs = await DocumentAutomationLog.find({
-        sourceDocumentType: config.docType,
+        sourceDocumentType: logTypeFilter,
         sourceDocumentId: { $in: allDocIds },
         automationId: automation._id,
         status: 'SUCCESS',
@@ -1095,7 +1229,7 @@ const documentAutomationService = {
 
       // Supprimer TOUS les logs FAILED en une seule requête
       await DocumentAutomationLog.deleteMany({
-        sourceDocumentType: config.docType,
+        sourceDocumentType: isExpenseType ? { $in: [config.docType, 'expense'] } : config.docType,
         sourceDocumentId: { $in: docsToProcess.map(d => d._id) },
         automationId: automation._id,
         status: 'FAILED',

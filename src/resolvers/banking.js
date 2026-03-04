@@ -425,6 +425,8 @@ const bankingResolvers = {
               documentNumber: updatedTransaction?.externalId || '',
               prefix: '',
               clientName: updatedTransaction?.description || '',
+              issueDate: updatedTransaction?.date || updatedTransaction?.createdAt,
+              clientId: null,
             },
             user._id || user.id
           ).catch(err => {

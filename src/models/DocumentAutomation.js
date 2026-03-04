@@ -71,8 +71,20 @@ const documentAutomationSchema = new mongoose.Schema({
     },
     subfolderPattern: {
       type: String,
-      default: '{year}',
-      enum: ['{year}', '{month}', '{year}/{month}', '{clientName}', '{year}/{clientName}']
+      default: 'year'
+    },
+    filterYear: {
+      type: Number,
+      default: null
+    },
+    filterClientId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Client',
+      default: null
+    },
+    filterClientName: {
+      type: String,
+      default: null
     },
     documentNaming: {
       type: String,

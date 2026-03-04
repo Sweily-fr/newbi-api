@@ -99,7 +99,10 @@ const documentAutomationResolvers = {
           actionConfig: {
             targetFolderId: input.actionConfig.targetFolderId,
             createSubfolder: input.actionConfig.createSubfolder || false,
-            subfolderPattern: input.actionConfig.subfolderPattern || '{year}',
+            subfolderPattern: input.actionConfig.subfolderPattern || 'year',
+            filterYear: input.actionConfig.filterYear || null,
+            filterClientId: input.actionConfig.filterClientId || null,
+            filterClientName: input.actionConfig.filterClientName || null,
             documentNaming: input.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
             tags: input.actionConfig.tags || [],
             documentStatus: input.actionConfig.documentStatus || 'classified',
@@ -143,28 +146,31 @@ const documentAutomationResolvers = {
           }
         }
 
-        // Mettre à jour les champs simples
-        if (input.name !== undefined) automation.name = input.name;
-        if (input.description !== undefined) automation.description = input.description;
-        if (input.triggerType !== undefined) automation.triggerType = input.triggerType;
-        if (input.isActive !== undefined) automation.isActive = input.isActive;
+        // Construire l'objet $set pour la mise à jour directe MongoDB
+        const $set = {};
 
-        // Mettre à jour l'actionConfig (merge)
+        if (input.name !== undefined) $set.name = input.name;
+        if (input.description !== undefined) $set.description = input.description;
+        if (input.triggerType !== undefined) $set.triggerType = input.triggerType;
+        if (input.isActive !== undefined) $set.isActive = input.isActive;
+
+        // Mettre à jour l'actionConfig champ par champ via $set (plus fiable que Mongoose subdoc)
         if (input.actionConfig) {
           const currentConfig = automation.actionConfig || {};
-          automation.actionConfig = {
-            targetFolderId: input.actionConfig.targetFolderId || currentConfig.targetFolderId,
-            createSubfolder: input.actionConfig.createSubfolder ?? currentConfig.createSubfolder,
-            subfolderPattern: input.actionConfig.subfolderPattern || currentConfig.subfolderPattern,
-            documentNaming: input.actionConfig.documentNaming || currentConfig.documentNaming,
-            tags: input.actionConfig.tags !== undefined ? input.actionConfig.tags : currentConfig.tags,
-            documentStatus: input.actionConfig.documentStatus || currentConfig.documentStatus,
-          };
+          $set['actionConfig.targetFolderId'] = input.actionConfig.targetFolderId || currentConfig.targetFolderId;
+          $set['actionConfig.createSubfolder'] = input.actionConfig.createSubfolder ?? currentConfig.createSubfolder ?? false;
+          $set['actionConfig.subfolderPattern'] = input.actionConfig.subfolderPattern || currentConfig.subfolderPattern || 'year';
+          $set['actionConfig.filterYear'] = input.actionConfig.filterYear !== undefined ? input.actionConfig.filterYear : (currentConfig.filterYear || null);
+          $set['actionConfig.filterClientId'] = input.actionConfig.filterClientId !== undefined ? input.actionConfig.filterClientId : (currentConfig.filterClientId || null);
+          $set['actionConfig.filterClientName'] = input.actionConfig.filterClientName !== undefined ? input.actionConfig.filterClientName : (currentConfig.filterClientName || null);
+          $set['actionConfig.documentNaming'] = input.actionConfig.documentNaming || currentConfig.documentNaming || '{documentType}-{number}-{clientName}';
+          $set['actionConfig.tags'] = input.actionConfig.tags !== undefined ? input.actionConfig.tags : (currentConfig.tags || []);
+          $set['actionConfig.documentStatus'] = input.actionConfig.documentStatus || currentConfig.documentStatus || 'classified';
         }
 
-        await automation.save();
+        await DocumentAutomation.findByIdAndUpdate(id, { $set }, { runValidators: true });
 
-        return await DocumentAutomation.findById(automation._id)
+        return await DocumentAutomation.findById(id)
           .populate('createdBy');
       }
     ),

@@ -36,6 +36,9 @@ type DocumentAutomationActionConfig {
   targetFolder: SharedFolder
   createSubfolder: Boolean
   subfolderPattern: String
+  filterYear: Int
+  filterClientId: ID
+  filterClientName: String
   documentNaming: String
   tags: [String]
   documentStatus: String
@@ -83,6 +86,9 @@ input DocumentAutomationActionConfigInput {
   targetFolderId: ID!
   createSubfolder: Boolean
   subfolderPattern: String
+  filterYear: Int
+  filterClientId: ID
+  filterClientName: String
   documentNaming: String
   tags: [String]
   documentStatus: String

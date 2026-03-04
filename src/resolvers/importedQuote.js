@@ -448,6 +448,8 @@ const importedQuoteResolvers = {
             cloudflareUrl: uploadResult.url,
             mimeType: mimetype,
             fileExtension: filename?.split('.').pop() || 'pdf',
+            issueDate: importedQuote.quoteDate || importedQuote.createdAt,
+            clientId: importedQuote.client?._id || null,
           }, user.id).catch(err => console.error('Erreur automatisation devis importé:', err));
 
           return {
