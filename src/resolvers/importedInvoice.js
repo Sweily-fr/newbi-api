@@ -794,6 +794,8 @@ const importedInvoiceResolvers = {
             cloudflareUrl: cloudflareUrl,
             mimeType: mimeType,
             fileExtension: fileName?.split('.').pop() || 'pdf',
+            issueDate: importedInvoice.invoiceDate || importedInvoice.createdAt,
+            clientId: importedInvoice.client?._id || null,
           }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
 
           return {
@@ -984,6 +986,8 @@ const importedInvoiceResolvers = {
             cloudflareUrl: uploadResult.url,
             mimeType: mimetype,
             fileExtension: filename?.split('.').pop() || 'pdf',
+            issueDate: importedInvoice.invoiceDate || importedInvoice.createdAt,
+            clientId: importedInvoice.client?._id || null,
           }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
 
           return {
@@ -1122,6 +1126,8 @@ const importedInvoiceResolvers = {
                   cloudflareUrl: file.cloudflareUrl,
                   mimeType: file.mimeType,
                   fileExtension: file.fileName?.split('.').pop() || 'pdf',
+                  issueDate: importedInvoice.invoiceDate || importedInvoice.createdAt,
+                  clientId: importedInvoice.client?._id || null,
                 }, user.id).catch(err => console.error('Erreur automatisation facture importée (batch):', err));
 
                 return {

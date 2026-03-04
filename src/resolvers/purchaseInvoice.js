@@ -311,6 +311,8 @@ const purchaseInvoiceResolvers = {
             fileKey: invoice.files?.[0]?.path || null,
             fileName: invoice.files?.[0]?.originalFilename || null,
             mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+            issueDate: invoice.invoiceDate || invoice.createdAt,
+            clientId: invoice.supplierId || null,
           }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI create):', err));
         }
 
@@ -359,6 +361,8 @@ const purchaseInvoiceResolvers = {
               fileKey: invoice.files?.[0]?.path || null,
               fileName: invoice.files?.[0]?.originalFilename || null,
               mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+              issueDate: invoice.invoiceDate || invoice.createdAt,
+              clientId: invoice.supplierId || null,
             }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI update):', err));
           }
         }
@@ -505,6 +509,8 @@ const purchaseInvoiceResolvers = {
           fileKey: invoice.files?.[0]?.path || null,
           fileName: invoice.files?.[0]?.originalFilename || null,
           mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+          issueDate: invoice.invoiceDate || invoice.createdAt,
+          clientId: invoice.supplierId || null,
         }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI paid):', err));
 
         return invoice;
@@ -622,6 +628,8 @@ const purchaseInvoiceResolvers = {
           fileKey: invoice.files?.[0]?.path || null,
           fileName: invoice.files?.[0]?.originalFilename || null,
           mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
+          issueDate: invoice.invoiceDate || invoice.createdAt,
+          clientId: invoice.supplierId || null,
         }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI reconcile):', err));
 
         return invoice;

@@ -755,6 +755,8 @@ const quoteResolvers = {
             documentNumber: quote.number,
             prefix: quote.prefix || '',
             clientName: quote.client?.name || '',
+            issueDate: quote.issueDate || quote.createdAt,
+            clientId: quote.client?._id || quote.clientId || null,
           }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (quote draft):', err));
         }
 
@@ -1136,6 +1138,8 @@ const quoteResolvers = {
           documentNumber: quote.number,
           prefix: quote.prefix || '',
           clientName: quote.client?.name || '',
+          issueDate: quote.issueDate || quote.createdAt,
+          clientId: quote.client?._id || quote.clientId || null,
         }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (devis):', err));
       }
 

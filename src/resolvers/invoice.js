@@ -1198,6 +1198,8 @@ const invoiceResolvers = {
               documentNumber: invoice.number,
               prefix: invoice.prefix || '',
               clientName: invoice.client?.name || '',
+              issueDate: invoice.issueDate || invoice.createdAt,
+              clientId: invoice.client?._id || invoice.clientId || null,
             }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (draft):', err));
           }
 
@@ -2037,6 +2039,8 @@ const invoiceResolvers = {
             documentNumber: invoice.number,
             prefix: invoice.prefix || '',
             clientName: invoice.client?.name || '',
+            issueDate: invoice.issueDate || invoice.createdAt,
+            clientId: invoice.client?._id || invoice.clientId || null,
           }, user._id.toString()).catch(err => console.error('Erreur automatisation documents:', err));
         }
 
@@ -2193,6 +2197,8 @@ const invoiceResolvers = {
           documentNumber: invoice.number,
           prefix: invoice.prefix || '',
           clientName: invoice.client?.name || '',
+          issueDate: invoice.issueDate || invoice.createdAt,
+          clientId: invoice.client?._id || invoice.clientId || null,
         }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (paid):', err));
 
         return await invoice.populate("createdBy");
