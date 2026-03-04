@@ -3,6 +3,7 @@ import Event from '../../models/Event.js';
 import { getCalendarProvider } from './CalendarProviderFactory.js';
 import { translateGoogleError } from './providers/GoogleCalendarProvider.js';
 import { translateMicrosoftError } from './providers/MicrosoftCalendarProvider.js';
+import { publishCalendarEventsChanged } from './CalendarWebhookService.js';
 import logger from '../../utils/logger.js';
 
 /**
@@ -95,6 +96,14 @@ export async function syncConnection(connectionId) {
         const existing = existingByExternalId.get(eventData.externalEventId);
 
         if (existing) {
+          // If the event was modified locally after the last sync,
+          // don't overwrite — the user's changes take priority.
+          // The resolver already propagated changes to the external calendar.
+          if (connection.lastSyncAt && existing.updatedAt > connection.lastSyncAt) {
+            skipped++;
+            continue;
+          }
+
           // Update if changed
           let hasChanges = false;
           for (const field of ['title', 'description', 'location', 'allDay', 'color']) {
@@ -132,8 +141,14 @@ export async function syncConnection(connectionId) {
     }
 
     // Delete events that no longer exist in the external calendar
+    // but skip events modified locally (user may have changed them)
     for (const [externalId, existingEvent] of existingByExternalId) {
       if (!externalIdsSeen.has(externalId)) {
+        // Don't delete events modified locally after last sync
+        if (connection.lastSyncAt && existingEvent.updatedAt > connection.lastSyncAt) {
+          skipped++;
+          continue;
+        }
         await Event.findByIdAndDelete(existingEvent._id);
         deleted++;
       }
@@ -151,13 +166,30 @@ export async function syncConnection(connectionId) {
       );
 
       if (staleLinks.length > 0) {
-        const staleIds = staleLinks.map(l => l.externalEventId);
-        await Event.updateOne(
-          { _id: pushedEvent._id },
-          { $pull: { externalCalendarLinks: { calendarConnectionId: connection._id, externalEventId: { $in: staleIds } } } }
+        // Check if the event will have any remaining links after removing stale ones
+        const remainingLinks = pushedEvent.externalCalendarLinks.filter(
+          link => {
+            if (link.calendarConnectionId.toString() !== connection._id.toString()) return true;
+            return externalIdsSeen.has(link.externalEventId);
+          }
         );
-        unlinked += staleLinks.length;
-        logger.info(`[CalendarSync] Removed ${staleLinks.length} stale link(s) from event "${pushedEvent.title}" (${pushedEvent._id})`);
+
+        if (remainingLinks.length === 0) {
+          // No more external links — the event was deleted from all external calendars
+          // Bidirectional delete: also delete the Newbi event
+          await Event.findByIdAndDelete(pushedEvent._id);
+          deleted++;
+          logger.info(`[CalendarSync] Bidirectional delete: event "${pushedEvent.title}" (${pushedEvent._id}) deleted — external counterpart removed`);
+        } else {
+          // Still has links to other calendars, just remove the stale ones
+          const staleIds = staleLinks.map(l => l.externalEventId);
+          await Event.updateOne(
+            { _id: pushedEvent._id },
+            { $pull: { externalCalendarLinks: { calendarConnectionId: connection._id, externalEventId: { $in: staleIds } } } }
+          );
+          unlinked += staleLinks.length;
+          logger.info(`[CalendarSync] Removed ${staleLinks.length} stale link(s) from event "${pushedEvent.title}" (${pushedEvent._id}), ${remainingLinks.length} link(s) remaining`);
+        }
       }
     }
 
@@ -202,6 +234,8 @@ export async function syncAllForUser(userId) {
     try {
       const result = await syncConnection(connection._id);
       results.push({ connectionId: connection._id, provider: connection.provider, success: true, ...result });
+      // Notify frontend of changes via PubSub
+      publishCalendarEventsChanged(connection.userId);
     } catch (error) {
       results.push({ connectionId: connection._id, provider: connection.provider, success: false, error: error.message });
     }
@@ -215,15 +249,21 @@ export async function syncAllForUser(userId) {
  * When excludeWebhookActive is true, skip Google/Microsoft connections that have
  * an active webhook (webhookExpiration in the future), since those are synced in real-time.
  */
-export async function syncAllActiveConnections({ excludeWebhookActive = false } = {}) {
+export async function syncAllActiveConnections({ excludeWebhookActive = false, excludeProviders = [], onlyProviders = [] } = {}) {
   const query = { status: 'active' };
 
+  if (onlyProviders.length > 0) {
+    query.provider = { $in: onlyProviders };
+  } else if (excludeProviders.length > 0) {
+    query.provider = { $nin: excludeProviders };
+  }
+
   if (excludeWebhookActive) {
-    // Sync: Apple (always) + Google/Microsoft without active webhook
+    // Skip connections that have an active webhook (webhookExpiration in the future)
+    // Apple never has webhooks so this is safe for all providers
     query.$or = [
-      { provider: 'apple' },
-      { provider: { $in: ['google', 'microsoft'] }, webhookExpiration: null },
-      { provider: { $in: ['google', 'microsoft'] }, webhookExpiration: { $lt: new Date() } },
+      { webhookExpiration: null },
+      { webhookExpiration: { $lt: new Date() } },
     ];
   }
 
@@ -238,6 +278,8 @@ export async function syncAllActiveConnections({ excludeWebhookActive = false } 
     try {
       await syncConnection(connection._id);
       successCount++;
+      // Notify frontend of changes via PubSub
+      publishCalendarEventsChanged(connection.userId);
     } catch (error) {
       failCount++;
       logger.warn(`Sync failed for connection ${connection._id} (${connection.provider}): ${error.message}`);
@@ -286,27 +328,39 @@ export async function pushEventToCalendar(eventId, connectionId) {
 }
 
 /**
- * Propagate event deletion to all linked external calendars (fire-and-forget)
+ * Propagate event deletion to all linked external calendars.
+ * Returns { totalLinks, succeeded, failed, errors[] }
  */
 export async function deleteEventFromExternalCalendars(event) {
   const links = event.externalCalendarLinks;
-  if (!links || links.length === 0) return;
+  const result = { totalLinks: 0, succeeded: 0, failed: 0, errors: [] };
+
+  if (!links || links.length === 0) return result;
+
+  result.totalLinks = links.length;
 
   for (const link of links) {
     try {
       const connection = await CalendarConnection.findById(link.calendarConnectionId);
       if (!connection || connection.status === 'disconnected') {
         logger.warn(`[CalendarSync] Skipping delete propagation — connection ${link.calendarConnectionId} not found or disconnected`);
+        result.failed++;
+        result.errors.push(`Connection ${link.calendarConnectionId} not found or disconnected`);
         continue;
       }
 
       const provider = getCalendarProvider(connection.provider);
       await provider.deleteEvent(connection, link.externalEventId);
       logger.info(`[CalendarSync] Propagated delete to ${connection.provider} (${link.externalEventId})`);
+      result.succeeded++;
     } catch (error) {
       logger.error(`[CalendarSync] Failed to propagate delete to ${link.provider} (${link.externalEventId}):`, error.message);
+      result.failed++;
+      result.errors.push(`${link.provider}: ${error.message}`);
     }
   }
+
+  return result;
 }
 
 /**
@@ -331,6 +385,40 @@ export async function updateEventInExternalCalendars(event) {
       logger.error(`[CalendarSync] Failed to propagate update to ${link.provider} (${link.externalEventId}):`, error.message);
     }
   }
+}
+
+/**
+ * Update an external event back to its source calendar (bidirectional sync)
+ */
+export async function updateExternalEvent(event) {
+  if (!event.externalEventId || !event.calendarConnectionId) return;
+
+  const connection = await CalendarConnection.findById(event.calendarConnectionId);
+  if (!connection || connection.status === 'disconnected') {
+    logger.warn(`[CalendarSync] Skipping external update — connection ${event.calendarConnectionId} not found or disconnected`);
+    return;
+  }
+
+  const provider = getCalendarProvider(connection.provider);
+  await provider.updateEvent(connection, event.externalEventId, event);
+  logger.info(`[CalendarSync] Propagated update back to ${connection.provider} (${event.externalEventId})`);
+}
+
+/**
+ * Delete an external event from its source calendar (bidirectional sync)
+ */
+export async function deleteExternalEvent(event) {
+  if (!event.externalEventId || !event.calendarConnectionId) return;
+
+  const connection = await CalendarConnection.findById(event.calendarConnectionId);
+  if (!connection || connection.status === 'disconnected') {
+    logger.warn(`[CalendarSync] Skipping external delete — connection ${event.calendarConnectionId} not found or disconnected`);
+    return;
+  }
+
+  const provider = getCalendarProvider(connection.provider);
+  await provider.deleteEvent(connection, event.externalEventId);
+  logger.info(`[CalendarSync] Propagated delete back to ${connection.provider} (${event.externalEventId})`);
 }
 
 /**

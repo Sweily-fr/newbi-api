@@ -146,7 +146,7 @@ const notificationResolvers = {
     notificationReceived: {
       subscribe: (_, { workspaceId }) => {
         const pubsub = getPubSub();
-        return pubsub.asyncIterator(`${NOTIFICATION_RECEIVED}_${workspaceId}`);
+        return pubsub.asyncIterableIterator([`${NOTIFICATION_RECEIVED}_${workspaceId}`]);
       },
     },
   },
