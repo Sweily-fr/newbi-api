@@ -1809,7 +1809,7 @@ const resolvers = {
           const pubsub = getPubSub();
           logger.debug(`📡 [PublicShare] Subscription accessApproved pour ${email} sur token ${token.substring(0, 8)}...`);
           
-          return pubsub.asyncIterator(['ACCESS_APPROVED']);
+          return pubsub.asyncIterableIterator(['ACCESS_APPROVED']);
         } catch (error) {
           logger.error('❌ [PublicShare] Erreur subscription accessApproved:', error);
           throw error;
@@ -1834,7 +1834,7 @@ const resolvers = {
           const pubsub = getPubSub();
           logger.debug(`📡 [PublicShare] Subscription accessRevoked pour ${email} sur token ${token.substring(0, 8)}...`);
           
-          return pubsub.asyncIterator(['ACCESS_REVOKED']);
+          return pubsub.asyncIterableIterator(['ACCESS_REVOKED']);
         } catch (error) {
           logger.error('❌ [PublicShare] Erreur subscription accessRevoked:', error);
           throw error;
@@ -1859,7 +1859,7 @@ const resolvers = {
           const pubsub = getPubSub();
           logger.debug(`📡 [PublicShare] Subscription accessRequested pour board ${boardId}`);
           
-          return pubsub.asyncIterator(['ACCESS_REQUESTED']);
+          return pubsub.asyncIterableIterator(['ACCESS_REQUESTED']);
         } catch (error) {
           logger.error('❌ [PublicShare] Erreur subscription accessRequested:', error);
           throw error;
@@ -1882,7 +1882,7 @@ const resolvers = {
           const pubsub = getPubSub();
           logger.debug(`📡 [PublicShare] Subscription visitorPresence pour board ${boardId}`);
           
-          return pubsub.asyncIterator(['VISITOR_PRESENCE']);
+          return pubsub.asyncIterableIterator(['VISITOR_PRESENCE']);
         } catch (error) {
           logger.error('❌ [PublicShare] Erreur subscription visitorPresence:', error);
           throw error;

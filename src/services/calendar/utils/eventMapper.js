@@ -91,7 +91,7 @@ export function mapGoogleEventToNewbi(googleEvent, connectionId, userId, calenda
     type: 'EXTERNAL',
     source: 'google',
     visibility: 'private',
-    isReadOnly: true,
+    isReadOnly: false,
     externalEventId: googleEvent.id,
     calendarConnectionId: connectionId,
     userId
@@ -146,7 +146,7 @@ export function mapMicrosoftEventToNewbi(msEvent, connectionId, userId, calendar
     type: 'EXTERNAL',
     source: 'microsoft',
     visibility: 'private',
-    isReadOnly: true,
+    isReadOnly: false,
     externalEventId: msEvent.id,
     calendarConnectionId: connectionId,
     userId
@@ -170,8 +170,8 @@ export function mapAppleEventToNewbi(calDavEvent, connectionId, userId, calendar
     type: 'EXTERNAL',
     source: 'apple',
     visibility: 'private',
-    isReadOnly: true,
-    externalEventId: vevent.uid || calDavEvent.url,
+    isReadOnly: false,
+    externalEventId: calDavEvent.url || vevent.uid,
     calendarConnectionId: connectionId,
     userId
   };
@@ -230,41 +230,78 @@ export function mapNewbiToMicrosoftEvent(newbiEvent) {
  */
 export function mapNewbiToICalEvent(newbiEvent) {
   const uid = `newbi-${newbiEvent._id || newbiEvent.id}@newbi.fr`;
-  const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const now = formatDateTimeUTC(new Date());
+  const created = formatDateTimeUTC(newbiEvent.createdAt || new Date());
 
   let dtStart, dtEnd;
   if (newbiEvent.allDay) {
-    dtStart = `DTSTART;VALUE=DATE:${formatDateValue(newbiEvent.start)}`;
-    dtEnd = `DTEND;VALUE=DATE:${formatDateValue(newbiEvent.end)}`;
+    dtStart = `DTSTART;VALUE=DATE:${formatDateLocal(newbiEvent.start)}`;
+    dtEnd = `DTEND;VALUE=DATE:${formatDateLocal(newbiEvent.end, true)}`;
   } else {
-    dtStart = `DTSTART:${formatDateTimeValue(newbiEvent.start)}`;
-    dtEnd = `DTEND:${formatDateTimeValue(newbiEvent.end)}`;
+    dtStart = `DTSTART;TZID=Europe/Paris:${formatDateTimeLocal(newbiEvent.start)}`;
+    dtEnd = `DTEND;TZID=Europe/Paris:${formatDateTimeLocal(newbiEvent.end)}`;
   }
 
-  return [
+  const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
+    'CALSCALE:GREGORIAN',
     'PRODID:-//Newbi//Calendar//FR',
     'BEGIN:VEVENT',
     `UID:${uid}`,
     `DTSTAMP:${now}`,
+    `CREATED:${created}`,
+    `LAST-MODIFIED:${now}`,
+    `SEQUENCE:0`,
+    `STATUS:CONFIRMED`,
     dtStart,
     dtEnd,
     `SUMMARY:${escapeICalText(newbiEvent.title)}`,
     newbiEvent.description ? `DESCRIPTION:${escapeICalText(newbiEvent.description)}` : '',
     newbiEvent.location ? `LOCATION:${escapeICalText(newbiEvent.location)}` : '',
     'END:VEVENT',
-    'END:VCALENDAR'
-  ].filter(Boolean).join('\r\n');
+    'END:VCALENDAR',
+  ].filter(Boolean);
+
+  // RFC 5545 requires each line to end with CRLF, including the last one
+  return lines.join('\r\n') + '\r\n';
 }
 
-function formatDateValue(date) {
-  const d = new Date(date);
-  return d.toISOString().split('T')[0].replace(/-/g, '');
-}
-
-function formatDateTimeValue(date) {
+/**
+ * Format a date as UTC iCal datetime (e.g. 20260304T140000Z)
+ */
+function formatDateTimeUTC(date) {
   return new Date(date).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+/**
+ * Format a date as local iCal datetime in Europe/Paris (e.g. 20260304T150000)
+ */
+function formatDateTimeLocal(date) {
+  const d = new Date(date);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type) => parts.find(p => p.type === type)?.value || '00';
+  return `${get('year')}${get('month')}${get('day')}T${get('hour')}${get('minute')}${get('second')}`;
+}
+
+/**
+ * Format a date as local iCal DATE value in Europe/Paris (e.g. 20260304)
+ * For all-day end dates, add 1 day (iCal DTEND is exclusive)
+ */
+function formatDateLocal(date, addOneDay = false) {
+  const d = new Date(date);
+  if (addOneDay) d.setDate(d.getDate() + 1);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d);
+  const get = (type) => parts.find(p => p.type === type)?.value || '00';
+  return `${get('year')}${get('month')}${get('day')}`;
 }
 
 function escapeICalText(text) {

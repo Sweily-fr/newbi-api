@@ -40,7 +40,7 @@ export function publishCalendarEventsChanged(userId) {
 // ============================================
 
 /**
- * Register a Google Calendar push notification channel
+ * Register Google Calendar push notification channels for all enabled calendars
  */
 export async function registerGoogleWatch(connectionId) {
   const connection = await CalendarConnection.findById(connectionId);
@@ -57,46 +57,74 @@ export async function registerGoogleWatch(connectionId) {
   oauth2Client.setCredentials({ access_token: accessToken });
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-  const channelId = crypto.randomUUID();
+  const enabledCalendars = connection.selectedCalendars.filter(c => c.enabled);
+  const calendarIds = enabledCalendars.length > 0
+    ? enabledCalendars.map(c => c.calendarId)
+    : ['primary'];
+
   // Google watch channels expire max ~7 days; use 6 days
   const expiration = Date.now() + 6 * 24 * 60 * 60 * 1000;
+  const webhookChannels = [];
+  let latestExpiration = null;
 
-  // Watch the primary calendar (covers most use cases)
-  // For multiple calendars, the sync service pulls all enabled calendars anyway
-  const enabledCalendars = connection.selectedCalendars.filter(c => c.enabled);
-  const calendarId = enabledCalendars.length > 0 ? enabledCalendars[0].calendarId : 'primary';
+  for (const calendarId of calendarIds) {
+    const channelId = crypto.randomUUID();
+    try {
+      const response = await calendar.events.watch({
+        calendarId,
+        requestBody: {
+          id: channelId,
+          type: 'web_hook',
+          address: `${WEBHOOK_BASE_URL}/calendar-webhooks/google`,
+          expiration: String(expiration),
+        },
+      });
 
-  try {
-    const response = await calendar.events.watch({
-      calendarId,
-      requestBody: {
-        id: channelId,
-        type: 'web_hook',
-        address: `${WEBHOOK_BASE_URL}/calendar-webhooks/google`,
-        expiration: String(expiration),
-      },
-    });
+      const channelExpiration = new Date(parseInt(response.data.expiration));
+      webhookChannels.push({
+        calendarId,
+        channelId: response.data.id,
+        resourceId: response.data.resourceId,
+        expiration: channelExpiration,
+      });
 
-    connection.webhookChannelId = response.data.id;
-    connection.webhookResourceId = response.data.resourceId;
-    connection.webhookExpiration = new Date(parseInt(response.data.expiration));
+      if (!latestExpiration || channelExpiration > latestExpiration) {
+        latestExpiration = channelExpiration;
+      }
+
+      logger.info(`[CalendarWebhook] Google watch registered for calendar ${calendarId} on connection ${connectionId} (channel: ${channelId})`);
+    } catch (error) {
+      logger.error(`[CalendarWebhook] Failed to register Google watch for calendar ${calendarId} on connection ${connectionId}:`, error.message);
+    }
+  }
+
+  if (webhookChannels.length > 0) {
+    // Keep first channel in legacy fields for backward compatibility
+    connection.webhookChannelId = webhookChannels[0].channelId;
+    connection.webhookResourceId = webhookChannels[0].resourceId;
+    connection.webhookExpiration = latestExpiration;
+    connection.webhookChannels = webhookChannels;
     await connection.save();
 
-    logger.info(`[CalendarWebhook] Google watch registered for connection ${connectionId} (channel: ${channelId}, expires: ${connection.webhookExpiration.toISOString()})`);
+    logger.info(`[CalendarWebhook] ${webhookChannels.length} Google watch(es) registered for connection ${connectionId} (expires: ${latestExpiration.toISOString()})`);
     return connection;
-  } catch (error) {
-    logger.error(`[CalendarWebhook] Failed to register Google watch for connection ${connectionId}:`, error.message);
-    return null;
   }
+
+  logger.error(`[CalendarWebhook] No Google watches could be registered for connection ${connectionId}`);
+  return null;
 }
 
 /**
- * Stop a Google Calendar push notification channel
+ * Stop all Google Calendar push notification channels for a connection
  */
 export async function stopGoogleWatch(connection) {
-  if (!connection.webhookChannelId || !connection.webhookResourceId) {
-    return;
-  }
+  const channels = connection.webhookChannels && connection.webhookChannels.length > 0
+    ? connection.webhookChannels
+    : (connection.webhookChannelId && connection.webhookResourceId
+      ? [{ channelId: connection.webhookChannelId, resourceId: connection.webhookResourceId }]
+      : []);
+
+  if (channels.length === 0) return;
 
   try {
     const accessToken = await ensureValidToken(connection);
@@ -107,24 +135,30 @@ export async function stopGoogleWatch(connection) {
     oauth2Client.setCredentials({ access_token: accessToken });
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-    await calendar.channels.stop({
-      requestBody: {
-        id: connection.webhookChannelId,
-        resourceId: connection.webhookResourceId,
-      },
-    });
-
-    logger.info(`[CalendarWebhook] Google watch stopped for connection ${connection._id} (channel: ${connection.webhookChannelId})`);
-  } catch (error) {
-    // 404 means channel already expired/stopped — not an error
-    if (error.code !== 404) {
-      logger.warn(`[CalendarWebhook] Failed to stop Google watch for connection ${connection._id}:`, error.message);
+    for (const channel of channels) {
+      try {
+        await calendar.channels.stop({
+          requestBody: {
+            id: channel.channelId,
+            resourceId: channel.resourceId,
+          },
+        });
+        logger.info(`[CalendarWebhook] Google watch stopped for connection ${connection._id} (channel: ${channel.channelId})`);
+      } catch (error) {
+        // 404 means channel already expired/stopped — not an error
+        if (error.code !== 404) {
+          logger.warn(`[CalendarWebhook] Failed to stop Google watch channel ${channel.channelId} for connection ${connection._id}:`, error.message);
+        }
+      }
     }
+  } catch (error) {
+    logger.warn(`[CalendarWebhook] Failed to get token to stop Google watches for connection ${connection._id}:`, error.message);
   }
 
   connection.webhookChannelId = null;
   connection.webhookResourceId = null;
   connection.webhookExpiration = null;
+  connection.webhookChannels = [];
   await connection.save();
 }
 

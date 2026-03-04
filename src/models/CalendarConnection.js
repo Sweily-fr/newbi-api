@@ -113,6 +113,13 @@ const calendarConnectionSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // Additional webhook channels for multi-calendar Google watch
+  webhookChannels: [{
+    calendarId: String,
+    channelId: String,
+    resourceId: String,
+    expiration: Date
+  }],
   graphSubscriptionId: {
     type: String,
     default: null

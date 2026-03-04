@@ -34,10 +34,18 @@ router.post('/google', async (req, res) => {
   }
 
   try {
-    const connection = await CalendarConnection.findOne({
+    // Search in both legacy webhookChannelId and new webhookChannels array
+    let connection = await CalendarConnection.findOne({
       webhookChannelId: channelId,
       status: { $ne: 'disconnected' }
     });
+
+    if (!connection) {
+      connection = await CalendarConnection.findOne({
+        'webhookChannels.channelId': channelId,
+        status: { $ne: 'disconnected' }
+      });
+    }
 
     if (!connection) {
       logger.warn(`[CalendarWebhook/Google] No connection found for channel ${channelId}`);

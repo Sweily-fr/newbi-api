@@ -254,11 +254,15 @@ export default class AppleCalendarProvider {
     const icsData = mapNewbiToICalEvent(newbiEvent);
     const filename = `newbi-${newbiEvent._id || newbiEvent.id}.ics`;
 
+    logger.info(`[Apple CalDAV] ICS content being pushed:\n${icsData}`);
+
     const result = await client.createCalendarObject({
       calendar: targetCalendar,
       filename,
       iCalString: icsData
     });
+
+    logger.info(`[Apple CalDAV] createCalendarObject response: ${JSON.stringify(result)}`);
 
     const eventUrl = result?.url || `${targetCalendar.url}${filename}`;
     logger.info(`Event pushed to Apple Calendar: ${eventUrl}`);

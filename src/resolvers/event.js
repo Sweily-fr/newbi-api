@@ -3,7 +3,7 @@ import Invoice from '../models/Invoice.js';
 import CalendarConnection from '../models/CalendarConnection.js';
 import { isAuthenticated, withWorkspace } from '../middlewares/better-auth-jwt.js';
 import emailReminderService from '../services/emailReminderService.js';
-import { deleteEventFromExternalCalendars, updateEventInExternalCalendars, pushEventToCalendar } from '../services/calendar/CalendarSyncService.js';
+import { deleteEventFromExternalCalendars, updateEventInExternalCalendars, updateExternalEvent, deleteExternalEvent, pushEventToCalendar } from '../services/calendar/CalendarSyncService.js';
 import { publishCalendarEventsChanged } from '../services/calendar/CalendarWebhookService.js';
 import { getPubSub } from '../config/redis.js';
 import logger from '../utils/logger.js';
@@ -274,19 +274,14 @@ const eventResolvers = {
 
         const { id, ...updateData } = input;
 
-        // Vérifier si l'événement est en lecture seule (événement externe)
-        const existingEvent = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId });
-        if (existingEvent?.isReadOnly) {
-          return {
-            success: false,
-            event: null,
-            message: 'Les événements externes ne peuvent pas être modifiés'
-          };
-        }
+        const userId = user?.id || user?._id;
 
         // Si la date ou le rappel email change, recalculer la date d'envoi
         if (updateData.emailReminder || updateData.start) {
-          const event = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId });
+          const event = await Event.findOne({
+            _id: id,
+            $or: [{ workspaceId: finalWorkspaceId }, { userId }]
+          });
           
           if (event) {
             const newStart = updateData.start || event.start;
@@ -329,7 +324,7 @@ const eventResolvers = {
         }
 
         const event = await Event.findOneAndUpdate(
-          { _id: id, workspaceId: finalWorkspaceId },
+          { _id: id, $or: [{ workspaceId: finalWorkspaceId }, { userId }] },
           updateData,
           { new: true, runValidators: true }
         ).populate('invoiceId');
@@ -352,6 +347,13 @@ const eventResolvers = {
           );
         }
 
+        // Propagate changes back to the source external calendar (bidirectional sync)
+        if (event.externalEventId && event.calendarConnectionId) {
+          updateExternalEvent(event).catch(err =>
+            logger.error('[updateEvent] Erreur propagation update vers calendrier source:', err.message)
+          );
+        }
+
         return {
           success: true,
           event,
@@ -370,25 +372,39 @@ const eventResolvers = {
     deleteEvent: withWorkspace(async (_, { id, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
       try {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const userId = user?.id || user?._id;
 
-        // Vérifier si l'événement est en lecture seule (événement externe)
-        const existingEvent = await Event.findOne({ _id: id, workspaceId: finalWorkspaceId });
-        if (existingEvent?.isReadOnly) {
-          return {
-            success: false,
-            event: null,
-            message: 'Les événements externes ne peuvent pas être supprimés'
-          };
+        const existingEvent = await Event.findOne({
+          _id: id,
+          $or: [{ workspaceId: finalWorkspaceId }, { userId }]
+        });
+
+        // Propagate deletion to source external calendar (bidirectional sync)
+        if (existingEvent?.externalEventId && existingEvent?.calendarConnectionId) {
+          try {
+            await deleteExternalEvent(existingEvent);
+          } catch (err) {
+            logger.error('[deleteEvent] Erreur suppression sur calendrier source:', err.message);
+          }
         }
 
-        // Propagate deletion to external calendars before removing (fire-and-forget)
-        if (existingEvent?.externalCalendarLinks?.length > 0) {
-          deleteEventFromExternalCalendars(existingEvent).catch(err =>
-            logger.error('[deleteEvent] Erreur propagation suppression calendriers externes:', err.message)
-          );
+        // Propagate deletion to external calendars before removing
+        let externalDeleteResult = null;
+        const linksCount = existingEvent?.externalCalendarLinks?.length || 0;
+        if (linksCount > 0) {
+          logger.info(`[deleteEvent] Attempting external calendar deletion for ${linksCount} link(s)`);
+          try {
+            externalDeleteResult = await deleteEventFromExternalCalendars(existingEvent);
+          } catch (err) {
+            logger.error('[deleteEvent] Erreur propagation suppression calendriers externes:', err.message);
+            externalDeleteResult = { totalLinks: linksCount, succeeded: 0, failed: linksCount, errors: [err.message] };
+          }
         }
 
-        const event = await Event.findOneAndDelete({ _id: id, workspaceId: finalWorkspaceId });
+        const event = await Event.findOneAndDelete({
+          _id: id,
+          $or: [{ workspaceId: finalWorkspaceId }, { userId }]
+        });
 
         if (!event) {
           return {
@@ -401,10 +417,20 @@ const eventResolvers = {
         // Publish calendar events changed for real-time sync
         publishCalendarEventsChanged(user.id || user._id);
 
+        // Build return message based on external deletion result
+        let message;
+        if (!externalDeleteResult || externalDeleteResult.totalLinks === 0) {
+          message = 'Événement supprimé avec succès';
+        } else if (externalDeleteResult.failed === 0) {
+          message = 'Événement supprimé avec succès (y compris des calendriers externes)';
+        } else {
+          message = `Événement supprimé, mais la suppression a échoué sur ${externalDeleteResult.failed} calendrier(s) externe(s)`;
+        }
+
         return {
           success: true,
           event,
-          message: 'Événement supprimé avec succès'
+          message
         };
       } catch (error) {
         logger.error('Erreur lors de la suppression de l\'événement:', error);
@@ -458,7 +484,7 @@ const eventResolvers = {
     calendarEventsChanged: {
       subscribe: (_, { userId }) => {
         const pubsub = getPubSub();
-        return pubsub.asyncIterator(`${CALENDAR_EVENTS_CHANGED}_${userId}`);
+        return pubsub.asyncIterableIterator([`${CALENDAR_EVENTS_CHANGED}_${userId}`]);
       },
     },
   },
