@@ -7,6 +7,9 @@ type EmailSettings {
   invoiceEmailTemplate: String
   quoteEmailTemplate: String
   creditNoteEmailTemplate: String
+  purchaseOrderEmailTemplate: String
+  useCustomFooter: Boolean
+  customEmailFooter: String
   verified: Boolean!
   verifiedAt: String
   createdAt: String!
@@ -20,6 +23,9 @@ input EmailSettingsInput {
   invoiceEmailTemplate: String
   quoteEmailTemplate: String
   creditNoteEmailTemplate: String
+  purchaseOrderEmailTemplate: String
+  useCustomFooter: Boolean
+  customEmailFooter: String
 }
 
 extend type Query {
