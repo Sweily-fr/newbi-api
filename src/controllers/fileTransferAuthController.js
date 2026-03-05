@@ -274,45 +274,55 @@ export const markDownloadCompleted = async (req, res) => {
 
     await downloadEvent.markCompleted(duration);
 
-    logger.info(" Téléchargement marqué comme terminé", {
+    logger.info("✅ Téléchargement marqué comme terminé", {
       downloadEventId,
       fileName: downloadEvent.fileName,
       duration,
       isLastFile,
     });
 
-    // Envoyer notification de téléchargement SEULEMENT pour le dernier fichier
+    // Incrémenter le compteur + notification SEULEMENT pour le dernier fichier
     if (isLastFile) {
       try {
-        const fileTransfer = await FileTransfer.findById(
-          downloadEvent.transferId
-        );
-        if (fileTransfer && fileTransfer.notifyOnDownload) {
-          const owner = await User.findById(fileTransfer.userId);
-          if (owner && owner.email) {
-            const transferUrl = `${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers`;
-            // Utiliser le nom du transfert ou le premier fichier
-            const displayName =
-              fileTransfer.files.length > 1
-                ? `${fileTransfer.files.length} fichiers`
-                : fileTransfer.files[0]?.originalName || downloadEvent.fileName;
+        const fileTransfer = await FileTransfer.findById(downloadEvent.transferId);
+        if (fileTransfer) {
+          // Incrémenter le compteur de téléchargements
+          await fileTransfer.incrementDownloadCount();
+          logger.info("📊 Compteur de téléchargements incrémenté (via lien public)", {
+            transferId: downloadEvent.transferId,
+            newCount: fileTransfer.downloadCount,
+          });
 
-            await sendDownloadNotificationEmail(owner.email, {
-              fileName: displayName,
-              downloadDate: new Date(),
-              filesCount: fileTransfer.files.length,
-              shareLink: fileTransfer.shareLink,
-              transferUrl,
-            });
-            logger.info(" Notification de téléchargement envoyée", {
-              ownerEmail: owner.email,
-              filesCount: fileTransfer.files.length,
-            });
+          // Envoyer notification si activée
+          if (fileTransfer.notifyOnDownload) {
+            try {
+              const owner = await User.findById(fileTransfer.userId);
+              if (owner && owner.email) {
+                const transferUrl = `${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers`;
+                const displayName =
+                  fileTransfer.files.length > 1
+                    ? `${fileTransfer.files.length} fichiers`
+                    : fileTransfer.files[0]?.originalName || downloadEvent.fileName;
+
+                await sendDownloadNotificationEmail(owner.email, {
+                  fileName: displayName,
+                  downloadDate: new Date(),
+                  filesCount: fileTransfer.files.length,
+                  shareLink: fileTransfer.shareLink,
+                  transferUrl,
+                });
+                logger.info("📧 Notification de téléchargement envoyée", {
+                  ownerEmail: owner.email,
+                  filesCount: fileTransfer.files.length,
+                });
+              }
+            } catch (emailError) {
+              logger.error("❌ Erreur envoi notification téléchargement:", emailError);
+            }
           }
         }
-      } catch (emailError) {
-        logger.error(" Erreur envoi notification téléchargement:", emailError);
-        // Ne pas bloquer la réponse si l'email échoue
+      } catch (countError) {
+        logger.error("❌ Erreur incrémentation compteur:", countError);
       }
     }
 
