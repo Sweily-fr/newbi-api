@@ -40,6 +40,21 @@ const emailSettingsSchema = new mongoose.Schema({
     default: '',
     trim: true,
   },
+  purchaseOrderEmailTemplate: {
+    type: String,
+    default: '',
+    trim: true,
+  },
+  // Personnalisation du bas de l'email
+  useCustomFooter: {
+    type: Boolean,
+    default: false,
+  },
+  customEmailFooter: {
+    type: String,
+    default: '',
+    trim: true,
+  },
   // Pour vérification future (optionnel)
   verified: {
     type: Boolean,

@@ -125,7 +125,7 @@ function replaceVariables(text, variables) {
 /**
  * Génère le template HTML de l'email
  */
-function generateEmailHtml(emailBody, variables, documentType, dueDate = null) {
+function generateEmailHtml(emailBody, variables, documentType, dueDate = null, customFooter = null) {
   const labels = DOCUMENT_LABELS[documentType];
   const documentLabel = labels.singular;
   
@@ -220,7 +220,7 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null) {
         <!-- Footer -->
         <div class="email-footer" style="background-color: #f8f9fa; padding: 20px 40px; text-align: center; border-top: 1px solid #e5e7eb;">
           <p style="margin: 0; font-size: 12px; color: #9ca3af; line-height: 1.5;">
-            ${documentType === DOCUMENT_TYPES.INVOICE ? 'Cette facture a été envoyée' : documentType === DOCUMENT_TYPES.QUOTE ? 'Ce devis a été envoyé' : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? 'Ce bon de commande a été envoyé' : 'Cet avoir a été envoyé'} par ${variables.companyName} depuis la plateforme Newbi Logiciel de gestion.
+            ${customFooter || `${documentType === DOCUMENT_TYPES.INVOICE ? 'Cette facture a été envoyée' : documentType === DOCUMENT_TYPES.QUOTE ? 'Ce devis a été envoyé' : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? 'Ce bon de commande a été envoyé' : 'Cet avoir a été envoyé'} par ${variables.companyName} depuis la plateforme Newbi Logiciel de gestion.`}
           </p>
         </div>
       </div>
@@ -286,8 +286,16 @@ async function sendDocumentEmail({
     ? new Date(document.dueDate).toLocaleDateString('fr-FR') 
     : null;
   
+  // Récupérer les paramètres email du workspace (avancé pour le footer)
+  const emailSettings = await EmailSettings.findOne({ workspaceId });
+
+  // Déterminer le footer personnalisé
+  const customFooter = emailSettings?.useCustomFooter && emailSettings?.customEmailFooter
+    ? replaceVariables(emailSettings.customEmailFooter, variables)
+    : null;
+
   // Générer le HTML
-  const emailHtml = generateEmailHtml(finalBody, variables, documentType, dueDate);
+  const emailHtml = generateEmailHtml(finalBody, variables, documentType, dueDate, customFooter);
   
   // Utiliser le PDF envoyé depuis le client, sinon essayer de le générer côté serveur
   let pdfBuffer = null;
@@ -329,9 +337,6 @@ async function sendDocumentEmail({
     content: pdfBuffer,
     contentType: 'application/pdf',
   }] : [];
-  
-  // Récupérer les paramètres email du workspace
-  const emailSettings = await EmailSettings.findOne({ workspaceId });
   
   let fromEmail, fromName, replyTo;
   if (emailSettings?.fromEmail) {
