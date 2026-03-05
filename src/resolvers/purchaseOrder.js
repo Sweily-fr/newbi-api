@@ -482,7 +482,7 @@ const purchaseOrderResolvers = {
 
         const allowedTransitions = {
           DRAFT: ["CONFIRMED"],
-          CONFIRMED: ["IN_PROGRESS", "CANCELED"],
+          CONFIRMED: ["IN_PROGRESS", "DRAFT", "CANCELED"],
           IN_PROGRESS: ["DELIVERED", "CANCELED"],
           DELIVERED: [],
           CANCELED: [],
