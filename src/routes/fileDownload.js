@@ -1,6 +1,7 @@
 import express from "express";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import convert from "heic-convert";
+import sharp from "sharp";
 import FileTransfer from "../models/FileTransfer.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
@@ -180,11 +181,16 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       }
       const inputBuffer = Buffer.concat(chunks);
 
-      const jpegBuffer = await convert({
+      const rawJpeg = await convert({
         buffer: inputBuffer,
         format: "JPEG",
         quality: 0.85,
       });
+
+      const jpegBuffer = await sharp(rawJpeg)
+        .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 80, progressive: true })
+        .toBuffer();
 
       const displayName = (file.originalName || "image")
         .replace(/\.(heic|heif)$/i, ".jpg");
