@@ -46,6 +46,10 @@ const withdrawalSchema = new mongoose.Schema(
     },
     rejectionReason: String,
     notes: String,
+    hasInvoice: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

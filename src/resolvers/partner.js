@@ -217,6 +217,7 @@ const partnerResolvers = {
             processedAt: w.processedAt ? w.processedAt.toISOString() : null,
             method: w.method,
             bankDetails: w.bankDetails || null,
+            hasInvoice: w.hasInvoice || false,
           })),
         };
       } catch (error) {
@@ -261,6 +262,7 @@ const partnerResolvers = {
           processedAt: w.processedAt ? w.processedAt.toISOString() : null,
           method: w.method,
           bankDetails: w.bankDetails || null,
+          hasInvoice: w.hasInvoice || false,
         }));
       } catch (error) {
         logger.error('Erreur lors de la récupération des retraits:', error);
@@ -357,6 +359,7 @@ const partnerResolvers = {
               processedAt: w.processedAt?.toISOString() || null,
               method: w.method,
               bankDetails: w.bankDetails || null,
+              hasInvoice: w.hasInvoice || false,
               partner: {
                 id: partner._id.toString(),
                 name: partner.name || partner.email,
@@ -517,7 +520,7 @@ const partnerResolvers = {
     /**
      * Demander un retrait de gains
      */
-    requestWithdrawal: async (_, { amount, method }, { user }) => {
+    requestWithdrawal: async (_, { amount, method, hasInvoice }, { user }) => {
       if (!user) {
         throw new AppError('Non authentifié', ERROR_CODES.UNAUTHORIZED);
       }
@@ -595,6 +598,7 @@ const partnerResolvers = {
           amount,
           method,
           status: 'pending',
+          hasInvoice: hasInvoice || false,
         });
 
         await withdrawal.save();
@@ -629,6 +633,7 @@ const partnerResolvers = {
             processedAt: null,
             method: withdrawal.method,
             bankDetails: null,
+            hasInvoice: withdrawal.hasInvoice || false,
           },
         };
       } catch (error) {
