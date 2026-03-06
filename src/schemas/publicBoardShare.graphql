@@ -205,6 +205,15 @@ type UpdateVisitorProfileResult {
   visitor: ExternalVisitor
 }
 
+# Input pour les images de commentaire déjà uploadées
+input CommentImageInput {
+  id: ID!
+  key: String!
+  url: String!
+  fileName: String!
+  contentType: String
+}
+
 # Résultat de l'upload d'image visiteur
 type VisitorImageUploadResult {
   success: Boolean!
@@ -268,6 +277,7 @@ extend type Mutation {
     taskId: ID!
     content: String!
     visitorEmail: String!
+    images: [CommentImageInput!]
   ): ExternalCommentResult!
   
   # Pour les visiteurs externes - mettre à jour leur profil

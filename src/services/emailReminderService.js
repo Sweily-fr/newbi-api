@@ -245,7 +245,7 @@ class EmailReminderService {
   /**
    * Envoie un email de rappel
    */
-  async sendReminder(eventId, reminderType, anticipation = null) {
+  async sendReminder(eventId, reminderType, anticipation = null, { skipPreferencesCheck = false } = {}) {
     try {
       // Récupérer l'événement
       const event = await Event.findById(eventId).populate('userId');
@@ -262,24 +262,27 @@ class EmailReminderService {
         return { success: false, reason: 'Utilisateur ou email non trouvé' };
       }
 
-      // Vérifier les préférences utilisateur
-      const preferencesCheck = await this.checkUserPreferences(user._id);
-      
-      if (!preferencesCheck.enabled) {
-        logger.info(`Rappel annulé pour ${user.email}: ${preferencesCheck.reason}`);
-        
-        // Mettre à jour le statut de l'événement
-        event.emailReminder.status = 'cancelled';
-        event.emailReminder.failureReason = preferencesCheck.reason;
-        await event.save();
-        
-        return { success: false, reason: preferencesCheck.reason, cancelled: true };
+      // Vérifier les préférences utilisateur (sauf si envoi immédiat depuis création d'événement)
+      let preferences = {};
+      if (!skipPreferencesCheck) {
+        const preferencesCheck = await this.checkUserPreferences(user._id);
+
+        if (!preferencesCheck.enabled) {
+          logger.info(`Rappel annulé pour ${user.email}: ${preferencesCheck.reason}`);
+
+          // Mettre à jour le statut de l'événement
+          event.emailReminder.status = 'cancelled';
+          event.emailReminder.failureReason = preferencesCheck.reason;
+          await event.save();
+
+          return { success: false, reason: preferencesCheck.reason, cancelled: true };
+        }
+
+        preferences = preferencesCheck.preferences;
       }
 
-      const preferences = preferencesCheck.preferences;
-
       // Vérifier la période "Ne pas déranger"
-      if (this.isInDoNotDisturbPeriod(preferences)) {
+      if (!skipPreferencesCheck && this.isInDoNotDisturbPeriod(preferences)) {
         const nextAllowed = this.getNextAllowedTime(preferences);
         logger.info(`Email différé pour ${user.email} jusqu'à ${nextAllowed}`);
         
