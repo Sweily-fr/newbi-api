@@ -202,11 +202,12 @@ const financialAnalyticsResolvers = {
         const Expense = mongoose.model('Expense');
         const Quote = mongoose.model('Quote');
         const CreditNote = mongoose.model('CreditNote');
+        const ImportedInvoice = mongoose.model('ImportedInvoice');
 
         // ==============================
         // MAIN AGGREGATIONS (parallel)
         // ==============================
-        const [invoiceStats, expenseStats, quoteStats, creditNoteStats, monthlyCollectedStats, currentReceivablesStats] = await Promise.all([
+        const [invoiceStats, expenseStats, quoteStats, creditNoteStats, monthlyCollectedStats, currentReceivablesStats, importedInvoiceMonthlyStats, importedInvoiceCollectedStats] = await Promise.all([
           // 1. Invoice facet aggregation
           Invoice.aggregate([
             { $match: invoiceMatch },
@@ -723,6 +724,54 @@ const financialAnalyticsResolvers = {
               },
             },
           ]),
+
+          // 7. Imported invoices — monthly invoiced (by invoiceDate)
+          (() => {
+            const importedMatch = {
+              workspaceId: wId,
+              status: { $ne: 'REJECTED' },
+            };
+            if (startDate || endDate) importedMatch.invoiceDate = dateQuery;
+            return ImportedInvoice.aggregate([
+              { $match: importedMatch },
+              {
+                $group: {
+                  _id: {
+                    year: { $year: '$invoiceDate' },
+                    month: { $month: '$invoiceDate' },
+                  },
+                  invoicedTTC: { $sum: '$totalTTC' },
+                  invoicedCount: { $sum: 1 },
+                },
+              },
+            ]);
+          })(),
+
+          // 8. Imported invoices — monthly collected (by paymentDate)
+          (() => {
+            const paymentDateQuery = { $ne: null };
+            if (startDate) paymentDateQuery.$gte = new Date(startDate);
+            if (endDate) paymentDateQuery.$lte = new Date(endDate);
+            return ImportedInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $ne: 'REJECTED' },
+                  paymentDate: paymentDateQuery,
+                },
+              },
+              {
+                $group: {
+                  _id: {
+                    year: { $year: '$paymentDate' },
+                    month: { $month: '$paymentDate' },
+                  },
+                  collectedTTC: { $sum: '$totalTTC' },
+                  collectedCount: { $sum: 1 },
+                },
+              },
+            ]);
+          })(),
         ]);
 
         // ==============================
@@ -845,10 +894,32 @@ const financialAnalyticsResolvers = {
         for (const r of invResult.monthlyRevenue) {
           invoicedMap[r.month] = { invoicedTTC: r.revenueTTC, invoicedCount: r.invoiceCount };
         }
+        // Merge imported invoices into invoicedMap
+        for (const r of (importedInvoiceMonthlyStats || [])) {
+          if (!r._id.year || !r._id.month) continue;
+          const m = `${r._id.year}-${String(r._id.month).padStart(2, '0')}`;
+          if (invoicedMap[m]) {
+            invoicedMap[m].invoicedTTC += r.invoicedTTC;
+            invoicedMap[m].invoicedCount += r.invoicedCount;
+          } else {
+            invoicedMap[m] = { invoicedTTC: r.invoicedTTC, invoicedCount: r.invoicedCount };
+          }
+        }
         const collectedMap = {};
         for (const r of (monthlyCollectedStats || [])) {
           const m = `${r._id.year}-${String(r._id.month).padStart(2, '0')}`;
           collectedMap[m] = { collectedTTC: r.collectedTTC, collectedCount: r.collectedCount };
+        }
+        // Merge imported invoices into collectedMap
+        for (const r of (importedInvoiceCollectedStats || [])) {
+          if (!r._id.year || !r._id.month) continue;
+          const m = `${r._id.year}-${String(r._id.month).padStart(2, '0')}`;
+          if (collectedMap[m]) {
+            collectedMap[m].collectedTTC += r.collectedTTC;
+            collectedMap[m].collectedCount += r.collectedCount;
+          } else {
+            collectedMap[m] = { collectedTTC: r.collectedTTC, collectedCount: r.collectedCount };
+          }
         }
         const allCollectionMonths = [...new Set([...Object.keys(invoicedMap), ...Object.keys(collectedMap)])].sort();
         const monthlyCollection = allCollectionMonths.map((m) => {

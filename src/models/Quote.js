@@ -44,6 +44,16 @@ const quoteSchema = new mongoose.Schema({
       message: 'Le numéro de devis doit contenir uniquement des lettres, chiffres ou tirets (max 20 caractères)'
     }
   },
+  projectReference: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(value) {
+        return !value || value.length <= 100;
+      },
+      message: 'La référence du projet ne doit pas dépasser 100 caractères'
+    }
+  },
   issueDate: {
     type: Date,
     required: true,

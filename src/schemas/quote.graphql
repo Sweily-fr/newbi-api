@@ -6,6 +6,7 @@ type Quote {
   id: ID!
   prefix: String
   number: String!
+  projectReference: String
   issueDate: String!
   validUntil: String
   client: EmbeddedClient!
@@ -51,6 +52,7 @@ type QuotePagination {
 input CreateQuoteInput {
   prefix: String
   number: String
+  projectReference: String
   issueDate: String!
   validUntil: String
   client: ClientInput!
@@ -77,6 +79,7 @@ input CreateQuoteInput {
 input UpdateQuoteInput {
   prefix: String
   number: String
+  projectReference: String
   issueDate: String
   validUntil: String
   client: ClientInput
