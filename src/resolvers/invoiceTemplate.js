@@ -1,4 +1,4 @@
-import Invoice from "../models/invoice.js";
+import Invoice from "../models/Invoice.js";
 import InvoiceTemplate from "../models/invoiceTemplate.js";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
