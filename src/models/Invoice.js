@@ -541,4 +541,4 @@ invoiceSchema.statics.numberExistsForYear = async function (
   return count > 0;
 };
 
-export default mongoose.model("Invoice", invoiceSchema);
+export default mongoose.models.Invoice || mongoose.model("Invoice", invoiceSchema);

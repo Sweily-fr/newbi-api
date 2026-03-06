@@ -6,6 +6,7 @@
 import express from "express";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import convert from "heic-convert";
+import sharp from "sharp";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import {
   streamFolderAsZip,
@@ -16,6 +17,30 @@ import {
 } from "../services/sharedDocumentZipService.js";
 import SharedDocument from "../models/SharedDocument.js";
 import logger from "../utils/logger.js";
+
+// Cache mémoire pour les previews HEIC convertis (LRU simple, max 50 entrées, TTL 30 min)
+const previewCache = new Map();
+const CACHE_MAX = 50;
+const CACHE_TTL = 30 * 60 * 1000;
+
+function getCachedPreview(key) {
+  const entry = previewCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL) {
+    previewCache.delete(key);
+    return null;
+  }
+  return entry.buffer;
+}
+
+function setCachedPreview(key, buffer) {
+  if (previewCache.size >= CACHE_MAX) {
+    // Supprimer la plus ancienne entrée
+    const oldest = previewCache.keys().next().value;
+    previewCache.delete(oldest);
+  }
+  previewCache.set(key, { buffer, ts: Date.now() });
+}
 
 // Configuration R2
 const s3Client = new S3Client({
@@ -405,19 +430,30 @@ router.get("/preview-file/:documentId", async (req, res) => {
     ) || /\.(heic|heif)$/i.test(document.originalName || "");
 
     if (isHeic) {
-      // Convertir HEIC → JPEG pour compatibilité navigateur
-      // Sharp nécessite le buffer complet pour décoder le HEIC
-      const chunks = [];
-      for await (const chunk of response.Body) {
-        chunks.push(chunk);
-      }
-      const inputBuffer = Buffer.concat(chunks);
+      const cacheKey = `preview:${documentId}`;
+      let jpegBuffer = getCachedPreview(cacheKey);
 
-      const jpegBuffer = await convert({
-        buffer: inputBuffer,
-        format: "JPEG",
-        quality: 0.85,
-      });
+      if (!jpegBuffer) {
+        const chunks = [];
+        for await (const chunk of response.Body) {
+          chunks.push(chunk);
+        }
+        const inputBuffer = Buffer.concat(chunks);
+
+        // heic-convert pour décoder le HEIC, puis sharp pour resize/optimiser
+        const rawJpeg = await convert({
+          buffer: inputBuffer,
+          format: "JPEG",
+          quality: 0.85,
+        });
+
+        jpegBuffer = await sharp(rawJpeg)
+          .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 80, progressive: true })
+          .toBuffer();
+
+        setCachedPreview(cacheKey, jpegBuffer);
+      }
 
       const displayName = (document.originalName || document.name)
         .replace(/\.(heic|heif)$/i, ".jpg");

@@ -133,7 +133,12 @@ const resolvers = {
         let visitorsMap = {}; // Map pour les visiteurs (email -> infos)
         const db = mongoose.connection.db;
         const allMemberIds = [...new Set(tasks.flatMap(t => t.assignedMembers || []))];
-        
+
+        // Collecter les userIds des créateurs de tâches
+        const taskCreatorIds = [...new Set(
+          tasks.map(t => t.userId).filter(Boolean)
+        )];
+
         // Collecter aussi les userIds des commentaires non-externes
         const commentUserIds = [...new Set(
           tasks.flatMap(t => (t.comments || [])
@@ -216,9 +221,9 @@ const resolvers = {
           }
         }
         
-        // Combiner tous les IDs à récupérer
-        const allUserIds = [...new Set([...allMemberIds, ...commentUserIds])];
-        
+        // Combiner tous les IDs à récupérer (inclut les créateurs de tâches)
+        const allUserIds = [...new Set([...allMemberIds, ...taskCreatorIds, ...commentUserIds])];
+
         if (allUserIds.length > 0 || commentEmails.length > 0) {
           const objectIds = allUserIds.map(id => {
             try {
@@ -227,7 +232,7 @@ const resolvers = {
               return null;
             }
           }).filter(Boolean);
-          
+
           // Construire la requête pour récupérer par ID ou par email
           const query = { $or: [] };
           if (objectIds.length > 0) {
@@ -236,10 +241,10 @@ const resolvers = {
           if (commentEmails.length > 0) {
             query.$or.push({ email: { $in: commentEmails } });
           }
-          
+
           if (query.$or.length > 0) {
             const users = await db.collection('user').find(query).toArray();
-            
+
             users.forEach(user => {
               membersMap[user._id.toString()] = {
                 id: user._id.toString(),
@@ -839,7 +844,7 @@ const resolvers = {
     ),
     
     // Ajouter un commentaire externe
-    addExternalComment: async (_, { token, taskId, content, visitorEmail }) => {
+    addExternalComment: async (_, { token, taskId, content, visitorEmail, images }) => {
       try {
         // Vérifier le lien de partage
         const share = await PublicBoardShare.findOne({ token });
@@ -886,6 +891,14 @@ const resolvers = {
           userEmail: visitorEmail,
           content: content.trim(),
           isExternal: true,
+          images: (images || []).map(img => ({
+            key: img.key,
+            url: img.url,
+            fileName: img.fileName,
+            contentType: img.contentType || 'image/jpeg',
+            uploadedBy: `external_${visitorEmail}`,
+            uploadedAt: new Date()
+          })),
           createdAt: new Date(),
           updatedAt: new Date()
         };
@@ -1009,14 +1022,15 @@ const resolvers = {
         let emailToUserMap = {};
         
         const allMemberIds = task.assignedMembers || [];
+        const taskCreatorId = task.userId ? [task.userId] : [];
         const commentUserIds = (task.comments || [])
           .filter(c => !c.isExternal && c.userId && !c.userId.toString().startsWith('external_'))
           .map(c => c.userId.toString());
         const commentEmails = (task.comments || [])
           .filter(c => !c.isExternal && c.userEmail)
           .map(c => c.userEmail.toLowerCase());
-        
-        const allUserIds = [...new Set([...allMemberIds, ...commentUserIds])];
+
+        const allUserIds = [...new Set([...allMemberIds, ...taskCreatorId, ...commentUserIds])];
         
         if (allUserIds.length > 0 || commentEmails.length > 0) {
           const objectIds = allUserIds.map(id => {

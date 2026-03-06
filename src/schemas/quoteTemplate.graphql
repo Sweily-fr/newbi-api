@@ -1,0 +1,40 @@
+type QuoteTemplate {
+  id: ID!
+  name: String!
+  description: String
+  items: [Item!]
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLink: String
+  termsAndConditionsLinkTitle: String
+  customFields: [CustomField!]
+  discount: Float
+  discountType: DiscountType
+  appearance: Appearance
+  clientPositionRight: Boolean
+  isReverseCharge: Boolean
+  showBankDetails: Boolean
+  shipping: Shipping
+  prefix: String
+  retenueGarantie: Float
+  escompte: Float
+  sourceQuoteId: ID
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+input SaveQuoteAsTemplateInput {
+  quoteId: ID!
+  name: String!
+  description: String
+}
+
+extend type Query {
+  quoteTemplates(workspaceId: ID): [QuoteTemplate!]!
+}
+
+extend type Mutation {
+  saveQuoteAsTemplate(input: SaveQuoteAsTemplateInput!, workspaceId: ID): QuoteTemplate!
+  deleteQuoteTemplate(id: ID!, workspaceId: ID): Boolean!
+}

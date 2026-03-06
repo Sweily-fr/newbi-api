@@ -379,6 +379,8 @@ const purchaseOrderResolvers = {
               documentNumber: purchaseOrder.number,
               prefix: purchaseOrder.prefix || '',
               clientName: purchaseOrder.client?.name || '',
+              issueDate: purchaseOrder.issueDate || purchaseOrder.createdAt,
+              clientId: purchaseOrder.client?._id || purchaseOrder.clientId || null,
             }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (PO create):', err));
           }
 
@@ -480,7 +482,7 @@ const purchaseOrderResolvers = {
 
         const allowedTransitions = {
           DRAFT: ["CONFIRMED"],
-          CONFIRMED: ["IN_PROGRESS", "CANCELED"],
+          CONFIRMED: ["IN_PROGRESS", "DRAFT", "CANCELED"],
           IN_PROGRESS: ["DELIVERED", "CANCELED"],
           DELIVERED: [],
           CANCELED: [],
@@ -560,6 +562,8 @@ const purchaseOrderResolvers = {
             documentNumber: po.number,
             prefix: po.prefix || '',
             clientName: po.client?.name || '',
+            issueDate: po.issueDate || po.createdAt,
+            clientId: po.client?._id || po.clientId || null,
           }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (PO status):', err));
         }
 

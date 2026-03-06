@@ -395,6 +395,8 @@ const creditNoteResolvers = {
             documentNumber: creditNote.number,
             prefix: creditNote.prefix || '',
             clientName: creditNote.client?.name || '',
+            issueDate: creditNote.issueDate || creditNote.createdAt,
+            clientId: creditNote.client?._id || creditNote.clientId || null,
           }, context.user._id.toString()).catch(err => console.error('Erreur automatisation documents (avoir):', err));
 
           return await CreditNote.findById(creditNote._id).populate('originalInvoice');

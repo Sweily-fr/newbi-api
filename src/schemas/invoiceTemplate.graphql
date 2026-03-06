@@ -1,0 +1,43 @@
+type InvoiceTemplate {
+  id: ID!
+  name: String!
+  description: String
+  items: [Item!]
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLink: String
+  termsAndConditionsLinkTitle: String
+  customFields: [CustomField!]
+  discount: Float
+  discountType: DiscountType
+  invoiceType: String
+  appearance: Appearance
+  clientPositionRight: Boolean
+  isReverseCharge: Boolean
+  showBankDetails: Boolean
+  bankDetails: BankDetails
+  shipping: Shipping
+  prefix: String
+  retenueGarantie: Float
+  escompte: Float
+  operationType: String
+  sourceInvoiceId: ID
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+input SaveInvoiceAsTemplateInput {
+  invoiceId: ID!
+  name: String!
+  description: String
+}
+
+extend type Query {
+  invoiceTemplates(workspaceId: ID): [InvoiceTemplate!]!
+}
+
+extend type Mutation {
+  saveInvoiceAsTemplate(input: SaveInvoiceAsTemplateInput!, workspaceId: ID): InvoiceTemplate!
+  deleteInvoiceTemplate(id: ID!, workspaceId: ID): Boolean!
+}
