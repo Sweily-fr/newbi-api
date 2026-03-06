@@ -1,0 +1,40 @@
+type PurchaseOrderTemplate {
+  id: ID!
+  name: String!
+  description: String
+  items: [Item!]
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLink: String
+  termsAndConditionsLinkTitle: String
+  customFields: [CustomField!]
+  discount: Float
+  discountType: DiscountType
+  appearance: Appearance
+  clientPositionRight: Boolean
+  isReverseCharge: Boolean
+  showBankDetails: Boolean
+  shipping: Shipping
+  prefix: String
+  retenueGarantie: Float
+  escompte: Float
+  sourcePurchaseOrderId: ID
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+input SavePurchaseOrderAsTemplateInput {
+  purchaseOrderId: ID!
+  name: String!
+  description: String
+}
+
+extend type Query {
+  purchaseOrderTemplates(workspaceId: ID): [PurchaseOrderTemplate!]!
+}
+
+extend type Mutation {
+  savePurchaseOrderAsTemplate(input: SavePurchaseOrderAsTemplateInput!, workspaceId: ID): PurchaseOrderTemplate!
+  deletePurchaseOrderTemplate(id: ID!, workspaceId: ID): Boolean!
+}

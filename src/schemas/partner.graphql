@@ -33,6 +33,7 @@ type Withdrawal {
   processedAt: String
   method: String
   bankDetails: BankDetailsInfo
+  hasInvoice: Boolean
 }
 
 type WithdrawalAdmin {
@@ -43,6 +44,7 @@ type WithdrawalAdmin {
   processedAt: String
   method: String
   bankDetails: BankDetailsInfo
+  hasInvoice: Boolean
   partner: PartnerInfo!
 }
 
@@ -117,6 +119,7 @@ type Mutation {
   requestWithdrawal(
     amount: Float!
     method: String!
+    hasInvoice: Boolean
   ): WithdrawalResponse!
   
   # Mettre à jour les coordonnées bancaires de l'organisation
