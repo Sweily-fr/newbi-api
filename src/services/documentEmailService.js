@@ -424,11 +424,11 @@ async function sendDocumentEmail({
   let fromEmail, fromName, replyTo;
   if (emailSettings?.fromEmail) {
     fromEmail = emailSettings.fromEmail;
-    fromName = emailSettings.fromName || document.companyInfo?.name || '';
+    fromName = emailSettings.fromName || currentCompanyName || '';
     replyTo = emailSettings.replyTo || emailSettings.fromEmail;
   } else {
     fromEmail = document.companyInfo?.email || 'noreply@newbi.fr';
-    fromName = document.companyInfo?.name || '';
+    fromName = currentCompanyName || '';
     replyTo = fromEmail;
   }
   
