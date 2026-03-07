@@ -4,6 +4,7 @@ Types GraphQL pour les factures importées via OCR
 enum ImportedInvoiceStatus {
   PENDING_REVIEW
   VALIDATED
+  COMPLETED
   REJECTED
   ARCHIVED
 }
