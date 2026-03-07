@@ -145,83 +145,145 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null, c
         ? 'DU BON DE COMMANDE'
         : 'DE L\'AVOIR';
   
+  const pdfNote = `${labels.article.charAt(0).toUpperCase() + labels.article.slice(1)}${labels.article.endsWith("'") ? '' : ' '}${documentLabel} est ${documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.CREDIT_NOTE ? 'jointe' : 'joint'} à cet email au format PDF.`;
+
+  const footerText = customFooter || `${documentType === DOCUMENT_TYPES.INVOICE ? 'Cette facture a été envoyée' : documentType === DOCUMENT_TYPES.QUOTE ? 'Ce devis a été envoyé' : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? 'Ce bon de commande a été envoyé' : 'Cet avoir a été envoyé'} par ${variables.companyName} depuis la plateforme Newbi Logiciel de gestion.`;
+
   return `
     <!DOCTYPE html>
     <html>
     <head>
-      <meta charset="utf-8">
+      <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${titleText}</title>
       <style>
-        @media only screen and (max-width: 480px) {
-          .email-header { padding: 24px 16px 20px 16px !important; }
-          .email-details { margin: 0 16px 20px 16px !important; padding: 16px !important; }
-          .email-content { padding: 0 16px 24px 16px !important; }
-          .email-footer { padding: 16px !important; }
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          margin: 0;
+          padding: 0;
+          background-color: #f0eeff;
+        }
+        .container {
+          max-width: 600px;
+          margin: 40px auto;
+          padding: 20px;
+          background-color: #ffffff;
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+          text-align: center;
+          padding: 20px 0;
+          border-bottom: 1px solid #e5e7eb;
+        }
+        .content {
+          padding: 30px 20px;
+        }
+        h1 {
+          color: #1f2937;
+          font-size: 24px;
+          font-weight: 700;
+          margin-bottom: 20px;
+        }
+        p {
+          margin-bottom: 16px;
+          color: #4b5563;
+        }
+        .details-block {
+          background-color: #e6e1ff;
+          padding: 20px;
+          border-radius: 6px;
+          margin: 20px 0;
+        }
+        .details-block h2 {
+          margin: 0 0 16px 0;
+          font-size: 13px;
+          font-weight: 600;
+          color: #1f2937;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .details-block table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        .details-block td {
+          padding: 8px 0;
+          font-size: 14px;
+        }
+        .details-block td:first-child {
+          color: #6b7280;
+        }
+        .details-block td:last-child {
+          text-align: right;
+          font-weight: 500;
+          color: #1f2937;
+        }
+        .pdf-note {
+          background-color: #f9fafb;
+          padding: 12px 16px;
+          border-radius: 6px;
+          font-size: 14px;
+          color: #6b7280;
+          margin-top: 20px;
+        }
+        .footer {
+          text-align: center;
+          padding: 20px;
+          color: #6b7280;
+          font-size: 14px;
+          border-top: 1px solid #e5e7eb;
         }
       </style>
     </head>
-    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
-      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
-        <!-- Header -->
-        <div class="email-header" style="padding: 40px 40px 30px 40px;">
-          <h1 style="margin: 0 0 30px 0; font-size: 24px; font-weight: 400; text-align: center; color: #1a1a1a;">
-            ${titleText}
-          </h1>
-          
-          <!-- Corps du message -->
-          <div style="font-size: 15px; line-height: 1.6; color: #4a4a4a;">
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #1f2937;">${titleText}</h1>
+        </div>
+        <div class="content">
+          <div style="font-size: 15px; line-height: 1.6; color: #4b5563;">
             ${emailBody.replace(/\n/g, '<br>')}
           </div>
+
+          <div class="details-block">
+            <h2>DÉTAILS ${detailsTitle}</h2>
+            <table>
+              <tr>
+                <td>Numéro</td>
+                <td>${variables.documentNumber}</td>
+              </tr>
+              <tr>
+                <td>Montant total</td>
+                <td style="font-weight: 600;">${variables.totalAmount}</td>
+              </tr>
+              <tr>
+                <td>Date</td>
+                <td>${variables.issueDate}</td>
+              </tr>
+              ${documentType === DOCUMENT_TYPES.INVOICE && dueDate ? `
+              <tr>
+                <td>Date d'échéance</td>
+                <td>${dueDate}</td>
+              </tr>
+              ` : ''}
+              ${documentType === DOCUMENT_TYPES.CREDIT_NOTE && variables.invoiceNumber ? `
+              <tr>
+                <td>Facture associée</td>
+                <td>${variables.invoiceNumber}</td>
+              </tr>
+              ` : ''}
+            </table>
+          </div>
+
+          <div class="pdf-note">
+            ${pdfNote}
+          </div>
         </div>
-        
-        <!-- Bloc détails document -->
-        <div class="email-details" style="margin: 0 40px 30px 40px; background-color: #f8f9fa; border-radius: 8px; padding: 20px 24px;">
-          <h2 style="margin: 0 0 16px 0; font-size: 13px; font-weight: 600; color: #1a1a1a; text-transform: uppercase; letter-spacing: 0.5px;">
-            DÉTAILS ${detailsTitle}
-          </h2>
-          <table style="width: 100%; border-collapse: collapse;">
-            <tr>
-              <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Numéro</td>
-              <td style="padding: 8px 0; font-size: 14px; color: #1a1a1a; text-align: right; font-weight: 500;">${variables.documentNumber}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Montant total</td>
-              <td style="padding: 8px 0; font-size: 14px; color: #1a1a1a; text-align: right; font-weight: 600;">${variables.totalAmount}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date</td>
-              <td style="padding: 8px 0; font-size: 14px; color: #1a1a1a; text-align: right; font-weight: 500;">${variables.issueDate}</td>
-            </tr>
-            ${documentType === DOCUMENT_TYPES.INVOICE && dueDate ? `
-            <tr>
-              <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date d'échéance</td>
-              <td style="padding: 8px 0; font-size: 14px; color: #1a1a1a; text-align: right; font-weight: 500;">${dueDate}</td>
-            </tr>
-            ` : ''}
-            ${documentType === DOCUMENT_TYPES.CREDIT_NOTE && variables.invoiceNumber ? `
-            <tr>
-              <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Facture associée</td>
-              <td style="padding: 8px 0; font-size: 14px; color: #1a1a1a; text-align: right; font-weight: 500;">${variables.invoiceNumber}</td>
-            </tr>
-            ` : ''}
-          </table>
-        </div>
-        
-        <!-- Informations complémentaires -->
-        <div class="email-content" style="padding: 0 40px 40px 40px; font-size: 14px; line-height: 1.6; color: #4a4a4a;">
-          <p style="margin: 0 0 16px 0;">${labels.article.charAt(0).toUpperCase() + labels.article.slice(1)}${labels.article.endsWith("'") ? '' : ' '}${documentLabel} est ${documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.CREDIT_NOTE ? 'jointe' : 'joint'} à cet email au format PDF.</p>
-          <p style="margin: 0 0 24px 0;">Pour toute question, n'hésitez pas à nous contacter.</p>
-          <p style="margin: 0;">
-            Cordialement,<br>
-            L'équipe ${variables.companyName}
-          </p>
-        </div>
-        
-        <!-- Footer -->
-        <div class="email-footer" style="background-color: #f8f9fa; padding: 20px 40px; text-align: center; border-top: 1px solid #e5e7eb;">
-          <p style="margin: 0; font-size: 12px; color: #9ca3af; line-height: 1.5;">
-            ${customFooter || `${documentType === DOCUMENT_TYPES.INVOICE ? 'Cette facture a été envoyée' : documentType === DOCUMENT_TYPES.QUOTE ? 'Ce devis a été envoyé' : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? 'Ce bon de commande a été envoyé' : 'Cet avoir a été envoyé'} par ${variables.companyName} depuis la plateforme Newbi Logiciel de gestion.`}
-          </p>
+        <div class="footer">
+          <p style="margin: 0; font-size: 12px; color: #9ca3af;">${footerText}</p>
         </div>
       </div>
     </body>
