@@ -178,6 +178,24 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null, c
           padding: 20px 0;
           border-bottom: 1px solid #e5e7eb;
         }
+        .logo {
+          display: inline-block;
+          margin-bottom: 20px;
+        }
+        .logo-text {
+          font-size: 34px;
+          font-weight: 800;
+          color: #1f2937;
+          letter-spacing: -0.025em;
+        }
+        .logo-dot {
+          color: #3b82f6;
+        }
+        .logo-subtitle {
+          font-size: 14px;
+          color: #6b7280;
+          margin-top: -5px;
+        }
         .content {
           padding: 30px 20px;
         }
@@ -191,43 +209,24 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null, c
           margin-bottom: 16px;
           color: #4b5563;
         }
-        .details-block {
-          background-color: #e6e1ff;
-          padding: 20px;
+        .btn {
+          display: inline-block;
+          background-color: #5b50ff;
+          color: white;
+          font-weight: 600;
+          text-decoration: none;
+          padding: 12px 24px;
           border-radius: 6px;
           margin: 20px 0;
+          text-align: center;
         }
-        .details-block h2 {
-          margin: 0 0 16px 0;
-          font-size: 13px;
-          font-weight: 600;
-          color: #1f2937;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
+        .btn:hover {
+          background-color: #4a41e0;
         }
-        .details-block table {
-          width: 100%;
-          border-collapse: collapse;
-        }
-        .details-block td {
-          padding: 8px 0;
-          font-size: 14px;
-        }
-        .details-block td:first-child {
+        .link-fallback {
+          word-break: break-all;
           color: #6b7280;
-        }
-        .details-block td:last-child {
-          text-align: right;
-          font-weight: 500;
-          color: #1f2937;
-        }
-        .pdf-note {
-          background-color: #f9fafb;
-          padding: 12px 16px;
-          border-radius: 6px;
           font-size: 14px;
-          color: #6b7280;
-          margin-top: 20px;
         }
         .footer {
           text-align: center;
@@ -235,6 +234,13 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null, c
           color: #6b7280;
           font-size: 14px;
           border-top: 1px solid #e5e7eb;
+        }
+        .security-notice {
+          background-color: #e6e1ff;
+          padding: 15px;
+          border-radius: 6px;
+          margin-top: 30px;
+          font-size: 14px;
         }
       </style>
     </head>
@@ -248,41 +254,42 @@ function generateEmailHtml(emailBody, variables, documentType, dueDate = null, c
             ${emailBody.replace(/\n/g, '<br>')}
           </div>
 
-          <div class="details-block">
-            <h2>DÉTAILS ${detailsTitle}</h2>
-            <table>
+          <div class="security-notice">
+            <h2 style="margin: 0 0 16px 0; font-size: 13px; font-weight: 600; color: #1f2937; text-transform: uppercase; letter-spacing: 0.5px;">
+              DÉTAILS ${detailsTitle}
+            </h2>
+            <table style="width: 100%; border-collapse: collapse;">
               <tr>
-                <td>Numéro</td>
-                <td>${variables.documentNumber}</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Numéro</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${variables.documentNumber}</td>
               </tr>
               <tr>
-                <td>Montant total</td>
-                <td style="font-weight: 600;">${variables.totalAmount}</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Montant total</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 600;">${variables.totalAmount}</td>
               </tr>
               <tr>
-                <td>Date</td>
-                <td>${variables.issueDate}</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${variables.issueDate}</td>
               </tr>
               ${documentType === DOCUMENT_TYPES.INVOICE && dueDate ? `
               <tr>
-                <td>Date d'échéance</td>
-                <td>${dueDate}</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date d'échéance</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${dueDate}</td>
               </tr>
               ` : ''}
               ${documentType === DOCUMENT_TYPES.CREDIT_NOTE && variables.invoiceNumber ? `
               <tr>
-                <td>Facture associée</td>
-                <td>${variables.invoiceNumber}</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Facture associée</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${variables.invoiceNumber}</td>
               </tr>
               ` : ''}
             </table>
           </div>
 
-          <div class="pdf-note">
-            ${pdfNote}
-          </div>
+          <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">${pdfNote}</p>
         </div>
         <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} ${variables.companyName}. Tous droits réservés.</p>
           <p style="margin: 0; font-size: 12px; color: #9ca3af;">${footerText}</p>
         </div>
       </div>
@@ -317,12 +324,25 @@ async function sendDocumentEmail({
   const total = document.finalTotalTTC ?? document.totalTTC ?? 0;
   const documentNumber = `${document.prefix || ''}-${document.number}`.replace(/^-/, '');
   
+  // Récupérer le nom d'entreprise actuel depuis l'organisation (pas le snapshot du document)
+  let currentCompanyName = document.companyInfo?.name || 'Votre Entreprise';
+  try {
+    const db = mongoose.connection.db;
+    const organizationCollection = db.collection('organization');
+    const organization = await organizationCollection.findOne({ _id: new mongoose.Types.ObjectId(workspaceId) });
+    if (organization?.companyName) {
+      currentCompanyName = organization.companyName;
+    }
+  } catch {
+    // Fallback sur le snapshot du document
+  }
+
   const variables = {
     documentNumber,
     clientName: document.client?.name || 'Client',
     totalAmount: new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(total),
     issueDate: new Date(document.issueDate).toLocaleDateString('fr-FR'),
-    companyName: document.companyInfo?.name || 'Votre Entreprise',
+    companyName: currentCompanyName,
   };
   
   // Ajouter le numéro de facture associée pour les avoirs (avec préfixe)
