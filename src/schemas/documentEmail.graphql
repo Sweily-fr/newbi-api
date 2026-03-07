@@ -6,6 +6,7 @@ input SendDocumentEmailInput {
   emailBody: String!
   recipientEmail: String!
   ccEmails: [String]
+  bccEmails: [String]
   pdfBase64: String
 }
 

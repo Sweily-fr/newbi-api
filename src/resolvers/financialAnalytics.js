@@ -725,52 +725,62 @@ const financialAnalyticsResolvers = {
             },
           ]),
 
-          // 7. Imported invoices — monthly invoiced (by invoiceDate)
+          // 7. Imported invoices — monthly invoiced (by invoiceDate, fallback createdAt)
           (() => {
             const importedMatch = {
               workspaceId: wId,
-              status: { $ne: 'REJECTED' },
+              status: { $in: ['VALIDATED', 'COMPLETED'] },
             };
-            if (startDate || endDate) importedMatch.invoiceDate = dateQuery;
-            return ImportedInvoice.aggregate([
+            const pipeline = [
               { $match: importedMatch },
-              {
-                $group: {
-                  _id: {
-                    year: { $year: '$invoiceDate' },
-                    month: { $month: '$invoiceDate' },
-                  },
-                  invoicedTTC: { $sum: '$totalTTC' },
-                  invoicedCount: { $sum: 1 },
+              { $addFields: { _effectiveDate: { $ifNull: ['$invoiceDate', '$createdAt'] } } },
+            ];
+            if (startDate || endDate) {
+              const effectiveDateFilter = {};
+              if (startDate) effectiveDateFilter.$gte = new Date(startDate);
+              if (endDate) effectiveDateFilter.$lte = new Date(endDate);
+              pipeline.push({ $match: { _effectiveDate: effectiveDateFilter } });
+            }
+            pipeline.push({
+              $group: {
+                _id: {
+                  year: { $year: '$_effectiveDate' },
+                  month: { $month: '$_effectiveDate' },
                 },
+                invoicedTTC: { $sum: '$totalTTC' },
+                invoicedCount: { $sum: 1 },
               },
-            ]);
+            });
+            return ImportedInvoice.aggregate(pipeline);
           })(),
 
-          // 8. Imported invoices — monthly collected (by paymentDate)
+          // 8. Imported invoices — monthly collected (COMPLETED = encaissé, by invoiceDate fallback createdAt)
           (() => {
-            const paymentDateQuery = { $ne: null };
-            if (startDate) paymentDateQuery.$gte = new Date(startDate);
-            if (endDate) paymentDateQuery.$lte = new Date(endDate);
-            return ImportedInvoice.aggregate([
-              {
-                $match: {
-                  workspaceId: wId,
-                  status: { $ne: 'REJECTED' },
-                  paymentDate: paymentDateQuery,
+            const importedCollectedMatch = {
+              workspaceId: wId,
+              status: 'COMPLETED',
+            };
+            const pipeline = [
+              { $match: importedCollectedMatch },
+              { $addFields: { _effectiveDate: { $ifNull: ['$invoiceDate', '$createdAt'] } } },
+            ];
+            if (startDate || endDate) {
+              const effectiveDateFilter = {};
+              if (startDate) effectiveDateFilter.$gte = new Date(startDate);
+              if (endDate) effectiveDateFilter.$lte = new Date(endDate);
+              pipeline.push({ $match: { _effectiveDate: effectiveDateFilter } });
+            }
+            pipeline.push({
+              $group: {
+                _id: {
+                  year: { $year: '$_effectiveDate' },
+                  month: { $month: '$_effectiveDate' },
                 },
+                collectedTTC: { $sum: '$totalTTC' },
+                collectedCount: { $sum: 1 },
               },
-              {
-                $group: {
-                  _id: {
-                    year: { $year: '$paymentDate' },
-                    month: { $month: '$paymentDate' },
-                  },
-                  collectedTTC: { $sum: '$totalTTC' },
-                  collectedCount: { $sum: 1 },
-                },
-              },
-            ]);
+            });
+            return ImportedInvoice.aggregate(pipeline);
           })(),
         ]);
 

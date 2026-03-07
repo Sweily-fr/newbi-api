@@ -62,6 +62,7 @@ const importedInvoiceSchema = new mongoose.Schema({
     enum: [
       'PENDING_REVIEW',    // En attente de vérification
       'VALIDATED',         // Validée par l'utilisateur
+      'COMPLETED',         // Encaissée / payée
       'REJECTED',          // Rejetée (erreur OCR, doublon, etc.)
       'ARCHIVED'           // Archivée
     ],
