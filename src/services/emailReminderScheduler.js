@@ -54,16 +54,18 @@ class EmailReminderScheduler {
     
     try {
       const now = new Date();
+      const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
       const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
 
-      logger.debug(`🔍 Recherche de rappels à envoyer entre ${now.toISOString()} et ${fiveMinutesFromNow.toISOString()}`);
+      logger.debug(`🔍 Recherche de rappels à envoyer entre ${fiveMinutesAgo.toISOString()} et ${fiveMinutesFromNow.toISOString()}`);
 
       // Trouver les événements avec rappel activé et en attente
+      // Inclut aussi les rappels récemment manqués (5 min dans le passé) pour ne rien perdre
       const events = await Event.find({
         'emailReminder.enabled': true,
         'emailReminder.status': { $in: ['pending', 'failed'] },
         'emailReminder.scheduledFor': {
-          $gte: now,
+          $gte: fiveMinutesAgo,
           $lte: fiveMinutesFromNow
         }
       }).populate('userId');

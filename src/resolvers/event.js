@@ -232,23 +232,7 @@ const eventResolvers = {
 
         await event.save();
 
-        // Si rappel email activé, envoyer immédiatement le mail de rappel (fire-and-forget)
-        if (input.emailReminder?.enabled) {
-          emailReminderService.sendReminder(
-            event._id,
-            'anticipated',
-            input.emailReminder.anticipation,
-            { skipPreferencesCheck: true }
-          ).then(result => {
-            if (result.success) {
-              logger.info(`[createEvent] Email de rappel envoyé immédiatement pour l'événement ${event._id}`);
-            } else {
-              logger.warn(`[createEvent] Échec envoi rappel immédiat: ${result.reason}`);
-            }
-          }).catch(err => {
-            logger.error(`[createEvent] Erreur envoi rappel immédiat:`, err);
-          });
-        }
+        // Le rappel email sera envoyé par le scheduler (emailReminderScheduler) à l'heure programmée (scheduledFor)
 
         // Publish calendar events changed for real-time sync
         publishCalendarEventsChanged(user.id || user._id);

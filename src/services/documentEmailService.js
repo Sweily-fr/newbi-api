@@ -240,6 +240,7 @@ async function sendDocumentEmail({
   emailBody,
   recipientEmail,
   ccEmails = [],
+  bccEmails = [],
   pdfBase64 = null,
 }) {
   // Récupérer le document
@@ -366,6 +367,10 @@ async function sendDocumentEmail({
   
   if (ccEmails && ccEmails.length > 0) {
     mailOptions.cc = ccEmails.filter(email => email && email.trim());
+  }
+
+  if (bccEmails && bccEmails.length > 0) {
+    mailOptions.bcc = bccEmails.filter(email => email && email.trim());
   }
   
   // Vérifier que le transporter est initialisé

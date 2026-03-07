@@ -13,6 +13,7 @@ const documentEmailResolvers = {
           emailBody: input.emailBody,
           recipientEmail: input.recipientEmail,
           ccEmails: input.ccEmails || [],
+          bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
         });
         
@@ -30,6 +31,7 @@ const documentEmailResolvers = {
           emailBody: input.emailBody,
           recipientEmail: input.recipientEmail,
           ccEmails: input.ccEmails || [],
+          bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
         });
         
@@ -47,6 +49,7 @@ const documentEmailResolvers = {
           emailBody: input.emailBody,
           recipientEmail: input.recipientEmail,
           ccEmails: input.ccEmails || [],
+          bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
         });
 
@@ -64,6 +67,7 @@ const documentEmailResolvers = {
           emailBody: input.emailBody,
           recipientEmail: input.recipientEmail,
           ccEmails: input.ccEmails || [],
+          bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
         });
 
