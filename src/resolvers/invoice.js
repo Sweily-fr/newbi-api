@@ -584,7 +584,7 @@ const invoiceResolvers = {
 
     checkInvoiceNumberExists: requireRead("invoices")(
       async (_, { workspaceId, number, prefix, excludeId }) => {
-        const query = { workspaceId, number, prefix };
+        const query = { workspaceId, number, prefix, status: { $ne: "DRAFT" } };
         if (excludeId) {
           query._id = { $ne: excludeId };
         }
@@ -1609,7 +1609,6 @@ const invoiceResolvers = {
               workspaceId: workspaceId,
               userId: context.user._id,
               isPending: true,
-              year: year,
             });
 
             // Mettre à jour le numéro et le préfixe
@@ -1941,7 +1940,6 @@ const invoiceResolvers = {
                   currentDraftNumber: invoice.number,
                   originalDraftNumber: originalDraftNumber,
                   workspaceId: workspaceId,
-                  year: year,
                   currentInvoiceId: invoice._id,
                   session,
                 });

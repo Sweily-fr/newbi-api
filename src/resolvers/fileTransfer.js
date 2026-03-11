@@ -689,7 +689,7 @@ export default {
             paymentCurrency,
             recipientEmail,
             message,
-            uploadMethod: "shared-documents",
+            uploadMethod: "direct",
             notifyOnDownload,
             passwordProtected,
             password: passwordProtected ? password : null,

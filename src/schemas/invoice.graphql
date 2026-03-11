@@ -162,7 +162,7 @@ extend type Query {
     purchaseOrderNumber: String!
   ): [Invoice!]!
   situationReferences(workspaceId: ID!, search: String): [SituationReference!]!
-  checkInvoiceNumberExists(workspaceId: ID!, number: Int!, prefix: String!, excludeId: ID): Boolean!
+  checkInvoiceNumberExists(workspaceId: ID!, number: String!, prefix: String!, excludeId: ID): Boolean!
 }
 
 type SituationReference {

@@ -249,7 +249,7 @@ const purchaseOrderResolvers = {
 
     checkPurchaseOrderNumberExists: requireRead("purchaseOrders")(
       async (_, { workspaceId, number, prefix, excludeId }) => {
-        const query = { workspaceId, number, prefix };
+        const query = { workspaceId, number, prefix, status: { $ne: "DRAFT" } };
         if (excludeId) {
           query._id = { $ne: excludeId };
         }
@@ -518,7 +518,6 @@ const purchaseOrderResolvers = {
                 const newNumber = await generatePurchaseOrderNumber(prefix, {
                   workspaceId: po.workspaceId,
                   userId: user.id,
-                  year: (po.issueDate || new Date()).getFullYear(),
                   session,
                 });
 

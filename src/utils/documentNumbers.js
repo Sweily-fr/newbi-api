@@ -4,6 +4,8 @@ import CreditNote from '../models/CreditNote.js';
 import PurchaseOrder from '../models/PurchaseOrder.js';
 import DocumentCounter from '../models/DocumentCounter.js';
 
+const _getNow = () => new Date();
+
 /**
  * Helper: retourne les options de session MongoDB si une session est présente.
  * Utilisé pour propager la session de transaction à toutes les opérations DB.
@@ -12,25 +14,24 @@ const sessionOpts = (options) => options?.session ? { session: options.session }
 
 /**
  * Génère un numéro séquentiel pour les factures selon les règles métier spécifiques
- * 
+ *
  * Règles:
- * 1. Si aucune facture n'existe encore, on peut choisir le numéro de facture que l'on veut
+ * 1. Si aucune facture n'existe encore pour ce préfixe, on peut choisir le numéro de facture que l'on veut
  * 2. Les numéros de facture sont calculés à partir du dernier numéro de facture créée (Sans prendre en compte les brouillons)
  * 3. Les factures créées doivent être séquentielles sans écart de chiffres (Status: PENDING, COMPLETED, CANCELED)
  * 4. TOUS les brouillons utilisent le format DRAFT-ID, même s'ils sont les derniers créés
- * 5. Quand le préfixe arrive à l'année suivante, les numéros de facture doivent repasser à 0
- * 6. La numérotation est séquentielle PAR PRÉFIXE (chaque préfixe a sa propre séquence)
+ * 5. Quand le préfixe change (ex: changement d'année), si le nouveau préfixe n'a jamais été utilisé,
+ *    l'utilisateur peut choisir librement le numéro de départ. Si le préfixe a déjà été utilisé,
+ *    la séquence continue normalement.
+ * 6. La numérotation est séquentielle PAR PRÉFIXE (chaque préfixe a sa propre séquence, pas de reset par année)
  */
 const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
   const workspaceId = options.workspaceId || options.userId || 'default';
 
-  // Si un numéro manuel est fourni et qu'il n'y a pas encore de factures, l'utiliser
+  // Si un numéro manuel est fourni et qu'il n'y a pas encore de factures pour ce préfixe, l'utiliser
   if (options.manualNumber) {
-    // Vérifier s'il existe des factures finalisées
     const baseQuery = {
       status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
     if (prefix) baseQuery.prefix = prefix;
     if (options.workspaceId) baseQuery.workspaceId = options.workspaceId;
@@ -45,7 +46,7 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
 
   // Compteur atomique : génération sans race condition
   const nextNumber = await DocumentCounter.getNextNumber(
-    'invoice', prefix || '', workspaceId, currentYear, { session: options.session }
+    'invoice', prefix || '', workspaceId, { session: options.session }
   );
 
   return String(nextNumber).padStart(4, '0');
@@ -56,13 +57,11 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
  * Règle 4: Gestion des brouillons qui se chevauchent
  */
 const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
-  
   // Extraire le numéro numérique si c'est un brouillon avec préfixe DRAFT- ou TEMP-
   let targetNumber = draftNumber;
   let isDraftPrefixed = false;
   let isTempNumber = false;
-  
+
   if (draftNumber.startsWith('DRAFT-')) {
     targetNumber = draftNumber.replace('DRAFT-', '');
     isDraftPrefixed = true;
@@ -70,24 +69,23 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
     // Pour les numéros temporaires, on ignore et on génère le prochain séquentiel
     isTempNumber = true;
   }
-  
-  // Vérifier s'il existe déjà des factures non-brouillons
+
+  // Vérifier s'il existe déjà des factures non-brouillons pour ce préfixe
   const existingNonDraftsQuery = {
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
-  
+
   // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
   if (prefix) {
     existingNonDraftsQuery.prefix = prefix;
   }
-  
+
   if (options.workspaceId) {
     existingNonDraftsQuery.workspaceId = options.workspaceId;
   } else if (options.userId) {
     existingNonDraftsQuery.createdBy = options.userId;
   }
-  
+
   const sOpts = sessionOpts(options);
   const existingNonDrafts = await Invoice.find(existingNonDraftsQuery, null, sOpts).lean();
 
@@ -101,7 +99,6 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
         const conflictingDraftQuery = {
           status: 'DRAFT',
           number: options.originalDraftNumber,
-          $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
         };
 
         if (options.workspaceId) {
@@ -126,7 +123,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
 
         return options.originalDraftNumber;
       }
-      // Sinon, commencer à 000001 par défaut
+      // Sinon, commencer à 0001 par défaut
       return '0001';
     }
 
@@ -135,7 +132,6 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
       const conflictingDraftQuery = {
         status: 'DRAFT',
         number: targetNumber,
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
 
       if (options.workspaceId) {
@@ -164,7 +160,6 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
     const lowerDraftsQuery = {
       status: 'DRAFT',
       number: { $lt: targetNumber, $regex: /^\d+$/ },
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
 
     if (options.workspaceId) {
@@ -184,7 +179,7 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
 
     return targetNumber; // Utiliser le numéro sans préfixe
   }
-  
+
   // Si des factures non-brouillons existent, calculer le prochain numéro séquentiel
   const numericNumbers = existingNonDrafts
     .map(invoice => {
@@ -195,34 +190,33 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
     })
     .filter(num => num !== null)
     .sort((a, b) => a - b);
-  
+
   // RÈGLE STRICTE: Numérotation séquentielle obligatoire
   if (numericNumbers.length === 0) {
     return '0001';
   }
-  
+
   // Toujours utiliser le prochain numéro séquentiel
   const maxNumber = Math.max(...numericNumbers);
   const nextSequentialNumber = maxNumber + 1;
-  
+
   // Renommer tous les brouillons avec des numéros qui pourraient entrer en conflit
   const conflictingDraftsQuery = {
     status: 'DRAFT',
     number: { $lte: String(nextSequentialNumber).padStart(4, '0'), $regex: /^\d+$/ },
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
-  
+
   if (options.workspaceId) {
     conflictingDraftsQuery.workspaceId = options.workspaceId;
   } else if (options.userId) {
     conflictingDraftsQuery.createdBy = options.userId;
   }
-  
+
   // Exclure la facture actuelle si on a son ID
   if (options.currentInvoiceId) {
     conflictingDraftsQuery._id = { $ne: options.currentInvoiceId };
   }
-  
+
   const conflictingDrafts = await Invoice.find(conflictingDraftsQuery, null, sOpts).lean();
 
   for (const draft of conflictingDrafts) {
@@ -240,14 +234,12 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
  * La numérotation est séquentielle PAR PRÉFIXE (chaque préfixe a sa propre séquence)
  */
 const generateQuoteSequentialNumber = async (prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
   const workspaceId = options.workspaceId || options.userId || 'default';
 
   // Si un numéro manuel est fourni et qu'il n'y a pas encore de devis finalisés, l'utiliser
   if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
     const query = {
       status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
     if (prefix) query.prefix = prefix;
     if (options.workspaceId) query.workspaceId = options.workspaceId;
@@ -261,26 +253,24 @@ const generateQuoteSequentialNumber = async (prefix, options = {}) => {
 
   // Compteur atomique : génération sans race condition
   const nextNumber = await DocumentCounter.getNextNumber(
-    'quote', prefix || '', workspaceId, currentYear, { session: options.session }
+    'quote', prefix || '', workspaceId, { session: options.session }
   );
 
   return String(nextNumber).padStart(4, '0');
 };
 
 const generateInvoiceNumber = async (customPrefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
-  
   // Générer le préfixe si non fourni
   let prefix;
   if (customPrefix) {
     prefix = customPrefix;
   } else {
-    const now = new Date();
+    const now = _getNow();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     prefix = `F-${year}${month}`;
   }
-  
+
   const sOpts = sessionOpts(options);
 
   // Gestion des brouillons
@@ -290,8 +280,9 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       const nonDraftQuery = {
         number: options.manualNumber,
         status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
+
+      if (prefix) nonDraftQuery.prefix = prefix;
 
       if (options.workspaceId) {
         nonDraftQuery.workspaceId = options.workspaceId;
@@ -309,7 +300,6 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       const draftQuery = {
         number: options.manualNumber,
         status: 'DRAFT',
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
 
       if (options.workspaceId) {
@@ -334,16 +324,12 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
     }
 
     // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-
-    const nextSequentialNumber = await generateInvoiceSequentialNumber(prefix, {
-      ...options,
-      year: currentYear
-    });
+    const nextSequentialNumber = await generateInvoiceSequentialNumber(prefix, options);
 
     // Vérifier si le numéro DRAFT-{number} existe déjà
     const draftNumber = `DRAFT-${nextSequentialNumber}`;
     const existingQuery = {
       number: draftNumber,
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
 
     if (options.workspaceId) {
@@ -363,41 +349,33 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
 
     return draftNumber;
   }
-  
+
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
   if (options.isValidatingDraft && options.currentDraftNumber) {
-    return await handleDraftValidation(options.currentDraftNumber, prefix, {
-      ...options,
-      year: currentYear
-    });
+    return await handleDraftValidation(options.currentDraftNumber, prefix, options);
   }
-  
+
   // Si un numéro manuel est fourni pour une facture non-brouillon
   if (options.manualNumber) {
     return options.manualNumber;
   }
-  
+
   // Génération normale pour les factures non-brouillons
-  return await generateInvoiceSequentialNumber(prefix, {
-    ...options,
-    year: currentYear
-  });
+  return await generateInvoiceSequentialNumber(prefix, options);
 };
 
 const generateQuoteNumber = async (customPrefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
-  
   // Générer le préfixe si non fourni
   let prefix;
   if (customPrefix) {
     prefix = customPrefix;
   } else {
-    const now = new Date();
+    const now = _getNow();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     prefix = `D-${year}${month}`;
   }
-  
+
   const sOpts = sessionOpts(options);
 
   // Gestion des brouillons
@@ -407,8 +385,9 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       const nonDraftQuery = {
         number: options.manualNumber,
         status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
+
+      if (prefix) nonDraftQuery.prefix = prefix;
 
       if (options.workspaceId) {
         nonDraftQuery.workspaceId = options.workspaceId;
@@ -426,7 +405,6 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
       const draftQuery = {
         number: options.manualNumber,
         status: 'DRAFT',
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
 
       if (options.workspaceId) {
@@ -458,10 +436,7 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
 
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
   if (options.isValidatingDraft && options.currentDraftNumber) {
-    return await handleQuoteDraftValidation(options.currentDraftNumber, prefix, {
-      ...options,
-      year: currentYear
-    });
+    return await handleQuoteDraftValidation(options.currentDraftNumber, prefix, options);
   }
 
   // Si un numéro manuel est fourni pour un devis non-brouillon
@@ -470,10 +445,7 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
   }
 
   // Génération normale pour les devis non-brouillons
-  return await generateQuoteSequentialNumber(prefix, {
-    ...options,
-    year: currentYear
-  });
+  return await generateQuoteSequentialNumber(prefix, options);
 };
 
 /**
@@ -481,40 +453,42 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
  * Utilisée par le frontend pour vérifier si un numéro est valide
  */
 const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
-  
   // Si c'est un brouillon, pas de validation de séquence
   if (options.isDraft) {
     return { isValid: true };
   }
-  
+
   const baseQuery = {
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
-  
+
+  // Filtrer par préfixe (la séquence est par préfixe, pas par année)
+  if (prefix) {
+    baseQuery.prefix = prefix;
+  }
+
   if (options.workspaceId) {
     baseQuery.workspaceId = options.workspaceId;
   } else if (options.userId) {
     baseQuery.createdBy = options.userId;
   }
-  
+
   const existingInvoices = await Invoice.find(baseQuery).lean();
-  
+
   // Si aucune facture n'existe, n'importe quel numéro est valide
   if (existingInvoices.length === 0) {
     return { isValid: true };
   }
-  
+
   // Vérifier si le numéro est déjà utilisé
   const numberExists = existingInvoices.some(invoice => invoice.number === number);
   if (numberExists) {
-    return { 
-      isValid: false, 
-      message: 'Ce numéro de facture est déjà utilisé' 
+    return {
+      isValid: false,
+      message: 'Ce numéro de facture est déjà utilisé'
     };
   }
-  
+
   // Vérifier la séquence
   const numericNumbers = existingInvoices
     .map(invoice => {
@@ -525,18 +499,18 @@ const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
     })
     .filter(num => num !== null)
     .sort((a, b) => a - b);
-  
+
   if (numericNumbers.length > 0) {
     const maxNumber = Math.max(...numericNumbers);
     const inputNumber = parseInt(number, 10);
-    
+
     if (inputNumber <= maxNumber) {
       return {
         isValid: false,
         message: `Le numéro doit être supérieur à ${String(maxNumber).padStart(4, '0')}`
       };
     }
-    
+
     if (inputNumber > maxNumber + 1) {
       return {
         isValid: false,
@@ -544,7 +518,7 @@ const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
       };
     }
   }
-  
+
   return { isValid: true };
 };
 
@@ -553,25 +527,24 @@ const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
  * Similaire à handleDraftValidation mais pour les devis
  */
 const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
   const sOpts = sessionOpts(options);
 
   // Détecter le préfixe de brouillon et les numéros temporaires
   let targetNumber = draftNumber;
   let isDraftPrefixed = false;
   let isTempNumber = false;
-  
+
   if (draftNumber.startsWith('DRAFT-')) {
     // Gérer les formats DRAFT-000052-123456 (avec timestamp) et DRAFT-000052
     const draftPart = draftNumber.replace('DRAFT-', '');
-    
+
     // Si le format contient un timestamp (DRAFT-000052-123456), extraire le numéro de base
     if (draftPart.includes('-') && /^\d{6}-\d+$/.test(draftPart)) {
       targetNumber = draftPart.split('-')[0]; // Extraire 000052 de 000052-123456
     } else {
       targetNumber = draftPart; // Format simple DRAFT-000052
     }
-    
+
     isDraftPrefixed = true;
   } else if (draftNumber.startsWith('TEMP-')) {
     isTempNumber = true;
@@ -584,7 +557,7 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
       }
     }
   }
-  
+
   // Si c'est un numéro temporaire, traiter selon le numéro original
   if (isTempNumber) {
     // Si on a un numéro original, traiter la logique de swap
@@ -593,15 +566,16 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
       const finalizedQuery = {
         number: targetNumber,
         status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
-      
+
+      if (prefix) finalizedQuery.prefix = prefix;
+
       if (options.workspaceId) {
         finalizedQuery.workspaceId = options.workspaceId;
       } else if (options.userId) {
         finalizedQuery.createdBy = options.userId;
       }
-      
+
       const existingFinalized = await Quote.findOne(finalizedQuery, null, sOpts);
 
       if (existingFinalized) {
@@ -614,47 +588,42 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
         await Quote.findByIdAndUpdate(existingFinalized._id, {
           number: tempNumber
         }, sOpts);
-        
+
         // Maintenant on peut assigner le numéro cible au devis actuel
         // L'étape 3 sera faite après l'assignation
         return targetNumber;
       }
-      
+
       return targetNumber;
     }
-    
+
     // Sinon, générer un nouveau numéro séquentiel
-    return await generateQuoteSequentialNumber(prefix, {
-      ...options,
-      year: currentYear
-    });
+    return await generateQuoteSequentialNumber(prefix, options);
   }
-  
+
   // Si c'est un brouillon avec préfixe DRAFT-, il doit obtenir le prochain numéro séquentiel
   if (isDraftPrefixed) {
     // Pour les brouillons DRAFT-ID, générer le prochain numéro séquentiel
-    const nextSequentialNumber = await generateQuoteSequentialNumber(prefix, {
-      ...options,
-      year: currentYear
-    });
-    
+    const nextSequentialNumber = await generateQuoteSequentialNumber(prefix, options);
+
     // Vérifier s'il existe un brouillon avec ce numéro séquentiel
     const conflictQuery = {
       number: nextSequentialNumber,
       status: 'DRAFT',
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
-    
+
+    if (prefix) conflictQuery.prefix = prefix;
+
     if (options.workspaceId) {
       conflictQuery.workspaceId = options.workspaceId;
     } else if (options.userId) {
       conflictQuery.createdBy = options.userId;
     }
-    
+
     if (options.currentQuoteId) {
       conflictQuery._id = { $ne: options.currentQuoteId };
     }
-    
+
     const conflictingDraft = await Quote.findOne(conflictQuery, null, sOpts);
 
     if (conflictingDraft) {
@@ -666,20 +635,21 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
 
     return nextSequentialNumber;
   }
-  
+
   // Pour les brouillons normaux, vérifier d'abord s'il existe un devis finalisé avec ce numéro
   const finalizedQuery = {
     number: draftNumber,
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
-  
+
+  if (prefix) finalizedQuery.prefix = prefix;
+
   if (options.workspaceId) {
     finalizedQuery.workspaceId = options.workspaceId;
   } else if (options.userId) {
     finalizedQuery.createdBy = options.userId;
   }
-  
+
   const existingFinalized = await Quote.findOne(finalizedQuery, null, sOpts);
 
   if (existingFinalized) {
@@ -692,7 +662,6 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
     const duplicateDraftQuery = {
       number: draftNumber,
       status: 'DRAFT',
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
 
     if (options.workspaceId) {
@@ -721,7 +690,6 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
   const duplicateDraftQuery = {
     number: draftNumber,
     status: 'DRAFT',
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
 
   if (options.workspaceId) {
@@ -742,13 +710,12 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
       number: `${draft.number}-${timestamp}`
     }, sOpts);
   }
-  
+
   // Sinon, passer le numéro actuel comme manualNumber
   // pour qu'il soit utilisé comme point de départ si aucun devis finalisé n'existe
   return await generateQuoteSequentialNumber(prefix, {
     ...options,
     manualNumber: draftNumber,
-    year: currentYear
   });
 };
 
@@ -758,13 +725,11 @@ const handleQuoteDraftValidation = async (draftNumber, prefix, options = {}) => 
  * La numérotation est séquentielle PAR PRÉFIXE (chaque préfixe a sa propre séquence)
  */
 const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
   const workspaceId = options.workspaceId || options.userId || 'default';
 
   if (options.manualNumber) {
     const baseQuery = {
       status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
     if (prefix) baseQuery.prefix = prefix;
     if (options.workspaceId) baseQuery.workspaceId = options.workspaceId;
@@ -778,7 +743,7 @@ const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
   }
 
   const nextNumber = await DocumentCounter.getNextNumber(
-    'creditNote', prefix || '', workspaceId, currentYear, { session: options.session }
+    'creditNote', prefix || '', workspaceId, { session: options.session }
   );
 
   return String(nextNumber).padStart(4, '0');
@@ -788,33 +753,35 @@ const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
  * Gère la logique de validation des brouillons d'avoir
  */
 const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
   const sOpts = sessionOpts(options);
-  
+
   // Extraire le numéro numérique si c'est un brouillon avec préfixe DRAFT- ou TEMP-
   let targetNumber = draftNumber;
   let isDraftPrefixed = false;
   let isTempNumber = false;
-  
+
   if (draftNumber.startsWith('DRAFT-')) {
     targetNumber = draftNumber.replace('DRAFT-', '');
     isDraftPrefixed = true;
   } else if (draftNumber.startsWith('TEMP-')) {
     isTempNumber = true;
   }
-  
-  // Vérifier s'il existe déjà des avoirs non-brouillons
+
+  // Vérifier s'il existe déjà des avoirs non-brouillons pour ce préfixe
   const existingNonDraftsQuery = {
     status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
-  
+
+  if (prefix) {
+    existingNonDraftsQuery.prefix = prefix;
+  }
+
   if (options.workspaceId) {
     existingNonDraftsQuery.workspaceId = options.workspaceId;
   } else if (options.userId) {
     existingNonDraftsQuery.createdBy = options.userId;
   }
-  
+
   const existingNonDrafts = await CreditNote.find(existingNonDraftsQuery, null, sOpts).lean();
 
   if (existingNonDrafts.length === 0) {
@@ -823,7 +790,6 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
         const conflictingDraftQuery = {
           status: 'DRAFT',
           number: options.originalDraftNumber,
-          $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
         };
 
         if (options.workspaceId) {
@@ -854,7 +820,6 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
       const conflictingDraftQuery = {
         status: 'DRAFT',
         number: targetNumber,
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
 
       if (options.workspaceId) {
@@ -900,7 +865,6 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
   const conflictingDraftsQuery = {
     status: 'DRAFT',
     number: { $lte: String(nextSequentialNumber).padStart(4, '0'), $regex: /^\d+$/ },
-    $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
   };
 
   if (options.workspaceId) {
@@ -929,19 +893,17 @@ const handleCreditNoteDraftValidation = async (draftNumber, prefix, options = {}
  * Génère un numéro d'avoir
  */
 const generateCreditNoteNumber = async (customPrefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
-  
   // Générer le préfixe si non fourni
   let prefix;
   if (customPrefix) {
     prefix = customPrefix;
   } else {
-    const now = new Date();
+    const now = _getNow();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     prefix = `AV-${year}${month}`;
   }
-  
+
   const sOpts = sessionOpts(options);
 
   // Gestion des brouillons
@@ -950,8 +912,9 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
       const nonDraftQuery = {
         number: options.manualNumber,
         status: { $in: ['PENDING', 'COMPLETED', 'CANCELED'] },
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
+
+      if (prefix) nonDraftQuery.prefix = prefix;
 
       if (options.workspaceId) {
         nonDraftQuery.workspaceId = options.workspaceId;
@@ -968,7 +931,6 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
       const draftQuery = {
         number: options.manualNumber,
         status: 'DRAFT',
-        $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
       };
 
       if (options.workspaceId) {
@@ -992,31 +954,22 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
       return `DRAFT-${options.manualNumber}`;
     }
 
-    const nextSequentialNumber = await generateCreditNoteSequentialNumber(prefix, {
-      ...options,
-      year: currentYear
-    });
+    const nextSequentialNumber = await generateCreditNoteSequentialNumber(prefix, options);
     return `DRAFT-${nextSequentialNumber}`;
   }
-  
+
   // Gestion de la validation d'un brouillon (passage de DRAFT à PENDING/COMPLETED)
   if (options.isValidatingDraft && options.currentDraftNumber) {
-    return await handleCreditNoteDraftValidation(options.currentDraftNumber, prefix, {
-      ...options,
-      year: currentYear
-    });
+    return await handleCreditNoteDraftValidation(options.currentDraftNumber, prefix, options);
   }
-  
+
   // Si un numéro manuel est fourni pour un avoir non-brouillon
   if (options.manualNumber) {
     return options.manualNumber;
   }
-  
+
   // Génération normale pour les avoirs non-brouillons
-  return await generateCreditNoteSequentialNumber(prefix, {
-    ...options,
-    year: currentYear
-  });
+  return await generateCreditNoteSequentialNumber(prefix, options);
 };
 
 /**
@@ -1024,13 +977,11 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
  * La numérotation est séquentielle PAR PRÉFIXE
  */
 const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
   const workspaceId = options.workspaceId || options.userId || 'default';
 
   if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
     const query = {
       status: { $in: ['CONFIRMED', 'IN_PROGRESS', 'DELIVERED', 'CANCELED'] },
-      $expr: { $eq: [{ $year: '$issueDate' }, currentYear] }
     };
     if (prefix) query.prefix = prefix;
     if (options.workspaceId) query.workspaceId = options.workspaceId;
@@ -1043,7 +994,7 @@ const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
   }
 
   const nextNumber = await DocumentCounter.getNextNumber(
-    'purchaseOrder', prefix || '', workspaceId, currentYear, { session: options.session }
+    'purchaseOrder', prefix || '', workspaceId, { session: options.session }
   );
 
   return String(nextNumber).padStart(4, '0');
@@ -1053,13 +1004,11 @@ const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
  * Génère un numéro de bon de commande
  */
 const generatePurchaseOrderNumber = async (customPrefix, options = {}) => {
-  const currentYear = options.year || new Date().getFullYear();
-
   let prefix;
   if (customPrefix) {
     prefix = customPrefix;
   } else {
-    const now = new Date();
+    const now = _getNow();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     prefix = `BC-${year}${month}`;
@@ -1074,10 +1023,7 @@ const generatePurchaseOrderNumber = async (customPrefix, options = {}) => {
     return options.manualNumber;
   }
 
-  return await generatePurchaseOrderSequentialNumber(prefix, {
-    ...options,
-    year: currentYear
-  });
+  return await generatePurchaseOrderSequentialNumber(prefix, options);
 };
 
 export {
