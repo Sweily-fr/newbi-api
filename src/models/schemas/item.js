@@ -88,12 +88,6 @@ const itemSchema = new mongoose.Schema({
   details: {
     type: String,
     trim: true,
-    validate: {
-      validator: function(value) {
-        return !value || value.length <= 2000;
-      },
-      message: 'Les détails ne doivent pas dépasser 2000 caractères'
-    }
   },
   progressPercentage: {
     type: Number,
