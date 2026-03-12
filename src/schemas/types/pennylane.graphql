@@ -1,0 +1,140 @@
+# === PENNYLANE INTEGRATION TYPES ===
+
+"""
+Compte Pennylane connecté à une organisation
+"""
+type PennylaneAccount {
+  id: ID!
+  organizationId: String!
+  isConnected: Boolean!
+  companyName: String
+  companyId: String
+  environment: String!
+  lastSyncAt: String
+  syncStatus: String!
+  syncError: String
+  stats: PennylaneStats
+  autoSync: PennylaneAutoSync
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+Statistiques de synchronisation Pennylane
+"""
+type PennylaneStats {
+  invoicesSynced: Int!
+  expensesSynced: Int!
+  clientsSynced: Int!
+  productsSynced: Int!
+}
+
+"""
+Préférences de synchronisation automatique
+"""
+type PennylaneAutoSync {
+  invoices: Boolean!
+  expenses: Boolean!
+  clients: Boolean!
+}
+
+"""
+Résultat d'une opération Pennylane
+"""
+type PennylaneResult {
+  success: Boolean!
+  message: String
+  account: PennylaneAccount
+}
+
+"""
+Résultat du test de connexion Pennylane
+"""
+type PennylaneConnectionResult {
+  success: Boolean!
+  message: String
+  companyName: String
+  companyId: String
+}
+
+"""
+Résultat de synchronisation d'une entité
+"""
+type PennylaneSyncResult {
+  success: Boolean!
+  message: String
+  pennylaneId: String
+}
+
+"""
+Résultat détaillé d'une synchronisation complète
+"""
+type PennylaneSyncAllResult {
+  success: Boolean!
+  message: String
+  invoicesSynced: Int
+  invoicesErrors: Int
+  expensesSynced: Int
+  expensesErrors: Int
+  clientsSynced: Int
+  clientsErrors: Int
+  productsSynced: Int
+  productsErrors: Int
+}
+
+"""
+Input pour les préférences de sync automatique
+"""
+input PennylaneAutoSyncInput {
+  invoices: Boolean
+  expenses: Boolean
+  clients: Boolean
+}
+
+# === QUERIES ===
+
+extend type Query {
+  """
+  Récupérer le compte Pennylane de l'organisation active
+  """
+  myPennylaneAccount: PennylaneAccount
+}
+
+# === MUTATIONS ===
+
+extend type Mutation {
+  """
+  Tester la connexion à Pennylane avec un token API
+  """
+  testPennylaneConnection(apiToken: String!): PennylaneConnectionResult!
+
+  """
+  Connecter Pennylane à l'organisation (sauvegarde le token après test)
+  """
+  connectPennylane(apiToken: String!, environment: String): PennylaneResult!
+
+  """
+  Déconnecter Pennylane de l'organisation
+  """
+  disconnectPennylane: PennylaneResult!
+
+  """
+  Mettre à jour les préférences de synchronisation automatique
+  """
+  updatePennylaneAutoSync(autoSync: PennylaneAutoSyncInput!): PennylaneResult!
+
+  """
+  Synchroniser une facture spécifique vers Pennylane
+  """
+  syncInvoiceToPennylane(invoiceId: ID!): PennylaneSyncResult!
+
+  """
+  Synchroniser une dépense spécifique vers Pennylane
+  """
+  syncExpenseToPennylane(expenseId: ID!): PennylaneSyncResult!
+
+  """
+  Lancer une synchronisation complète vers Pennylane
+  """
+  syncAllToPennylane: PennylaneSyncAllResult!
+}

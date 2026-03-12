@@ -19,6 +19,7 @@ import {
   withOrganization,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { syncExpenseIfNeeded } from "../services/pennylaneSyncHelper.js";
 
 const unlinkAsync = promisify(fs.unlink);
 const mkdirAsync = promisify(fs.mkdir);
@@ -487,6 +488,13 @@ const expenseResolvers = {
 
           if (!updatedExpense) {
             throw new AppError("Dépense non trouvée", ERROR_CODES.NOT_FOUND);
+          }
+
+          // Sync Pennylane si le statut a changé vers APPROVED/PAID (fire-and-forget)
+          if (input.status && input.status !== expense.status) {
+            syncExpenseIfNeeded(updatedExpense, workspaceId).catch(err =>
+              console.error('Erreur sync Pennylane dépense:', err)
+            );
           }
 
           return updatedExpense;

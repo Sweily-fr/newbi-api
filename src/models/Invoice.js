@@ -376,6 +376,18 @@ const invoiceSchema = new mongoose.Schema(
       index: true,
     },
 
+    // === PENNYLANE SYNC ===
+    pennylaneId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    pennylaneSyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
+
     // === E-INVOICING SUPERPDP ===
 
     // ID de la facture chez SuperPDP
