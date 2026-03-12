@@ -366,6 +366,18 @@ const expenseSchema = new mongoose.Schema(
       enum: ["MANUAL", "OCR", "BANK"],
       default: "MANUAL",
     },
+    // === PENNYLANE SYNC ===
+    pennylaneId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    pennylaneSyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
+
     // Indique si la dépense est rapprochée avec une transaction bancaire
     isReconciled: {
       type: Boolean,

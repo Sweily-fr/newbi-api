@@ -19,7 +19,7 @@ const creditNoteItemSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: isValidItemDescription,
-      message: 'La description de l\'article contient des caractères non autorisés ou dépasse 200 caractères'
+      message: 'La description de l\'article contient des caractères non autorisés ou dépasse 2000 caractères'
     }
   },
   quantity: {
@@ -92,9 +92,9 @@ const creditNoteItemSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: function(value) {
-        return !value || value.length <= 500;
+        return !value || value.length <= 2000;
       },
-      message: 'Les détails ne doivent pas dépasser 500 caractères'
+      message: 'Les détails ne doivent pas dépasser 2000 caractères'
     }
   }
 });

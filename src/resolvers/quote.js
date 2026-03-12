@@ -400,7 +400,7 @@ const quoteResolvers = {
 
     checkQuoteNumberExists: requireRead("quotes")(
       async (_, { workspaceId, number, prefix, excludeId }) => {
-        const query = { workspaceId, number, prefix };
+        const query = { workspaceId, number, prefix, status: { $ne: "DRAFT" } };
         if (excludeId) {
           query._id = { $ne: excludeId };
         }
@@ -896,7 +896,6 @@ const quoteResolvers = {
               currentDraftNumber: quote.number,
               workspaceId: quote.workspaceId,
               userId: user.id,
-              year,
               currentQuoteId: quote._id,
             });
             
@@ -1040,7 +1039,6 @@ const quoteResolvers = {
                     finalNumber = await generateQuoteNumber(prefix, {
                       workspaceId: quote.workspaceId,
                       userId: user.id,
-                      year,
                       currentQuoteId: quote._id,
                       session,
                     });
@@ -1054,7 +1052,6 @@ const quoteResolvers = {
                   currentDraftNumber: originalDraftNumber,
                   workspaceId: quote.workspaceId,
                   userId: user.id,
-                  year,
                   currentQuoteId: quote._id,
                   session,
                 });

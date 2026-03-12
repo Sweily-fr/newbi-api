@@ -31,6 +31,7 @@ import { evaluateAndRouteInvoice } from "../utils/eInvoiceRoutingHelper.js";
 import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -584,7 +585,7 @@ const invoiceResolvers = {
 
     checkInvoiceNumberExists: requireRead("invoices")(
       async (_, { workspaceId, number, prefix, excludeId }) => {
-        const query = { workspaceId, number, prefix };
+        const query = { workspaceId, number, prefix, status: { $ne: "DRAFT" } };
         if (excludeId) {
           query._id = { $ne: excludeId };
         }
@@ -1609,7 +1610,6 @@ const invoiceResolvers = {
               workspaceId: workspaceId,
               userId: context.user._id,
               isPending: true,
-              year: year,
             });
 
             // Mettre à jour le numéro et le préfixe
@@ -1941,7 +1941,6 @@ const invoiceResolvers = {
                   currentDraftNumber: invoice.number,
                   originalDraftNumber: originalDraftNumber,
                   workspaceId: workspaceId,
-                  year: year,
                   currentInvoiceId: invoice._id,
                   session,
                 });
@@ -2043,6 +2042,11 @@ const invoiceResolvers = {
             clientId: invoice.client?._id || invoice.clientId || null,
           }, user._id.toString()).catch(err => console.error('Erreur automatisation documents:', err));
         }
+
+        // Sync Pennylane (fire-and-forget)
+        syncInvoiceIfNeeded(invoice, workspaceId).catch(err =>
+          console.error('Erreur sync Pennylane:', err)
+        );
 
         return await invoice.populate("createdBy");
       }
@@ -2200,6 +2204,11 @@ const invoiceResolvers = {
           issueDate: invoice.issueDate || invoice.createdAt,
           clientId: invoice.client?._id || invoice.clientId || null,
         }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (paid):', err));
+
+        // Sync Pennylane (fire-and-forget)
+        syncInvoiceIfNeeded(invoice, workspaceId).catch(err =>
+          console.error('Erreur sync Pennylane (paid):', err)
+        );
 
         return await invoice.populate("createdBy");
       }

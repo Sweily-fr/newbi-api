@@ -58,6 +58,8 @@ import treasuryForecastResolvers from "./treasuryForecast.js";
 import purchaseOrderResolvers from "./purchaseOrder.js";
 import importedPurchaseOrderResolvers from "./importedPurchaseOrder.js";
 import financialAnalyticsResolvers from "./financialAnalytics.js";
+import pennylaneResolvers from "./pennylaneResolvers.js";
+import installedAppResolvers from "./installedApp.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -119,6 +121,8 @@ const resolvers = mergeResolvers([
   purchaseOrderResolvers,
   importedPurchaseOrderResolvers,
   financialAnalyticsResolvers,
+  pennylaneResolvers,
+  installedAppResolvers,
 ]);
 
 export default resolvers;

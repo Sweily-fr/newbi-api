@@ -1,0 +1,16 @@
+type InstalledApp {
+  id: ID!
+  organizationId: String!
+  appId: String!
+  installedBy: String!
+  createdAt: String!
+}
+
+extend type Query {
+  getInstalledApps(organizationId: ID!): [InstalledApp!]!
+}
+
+extend type Mutation {
+  installApp(organizationId: ID!, appId: String!): InstalledApp!
+  uninstallApp(organizationId: ID!, appId: String!): Boolean!
+}
