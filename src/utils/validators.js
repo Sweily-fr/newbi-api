@@ -80,8 +80,9 @@ const CUSTOM_FIELD_VALUE_REGEX =
 
 // Regex pour la validation des descriptions d'articles
 // Accepte les lettres, chiffres, espaces et caractères spéciaux courants
+// Pas de limite de longueur
 const ITEM_DESCRIPTION_REGEX =
-  /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\]{1,2000}$/;
+  /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\€£¥₽¢₩₴₦₱₸₺₼₾₿\n\r\t°²³]+$/;
 
 // Regex pour la validation des unités de mesure
 // Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)
@@ -90,8 +91,8 @@ const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-²³()]{1,20}$/;
 
 // Regex pour la validation des notes de pied de page
 // Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne)
-// Limite de 2000 caractères
-const FOOTER_NOTES_REGEX = /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]{0,2000}$/u;
+// Pas de limite de longueur
+const FOOTER_NOTES_REGEX = /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]+$/u;
 
 // Regex pour la validation du capital social (montant avec ou sans décimales, jusqu'à 20 chiffres)
 // Exemples: 1000, 10000.50, 1000000
@@ -251,8 +252,6 @@ const isValidUnit = (unit) => {
 // Validation des notes de pied de page
 const isValidFooterNotes = (value) => {
   if (!value) return true;
-  // Vérifier la longueur maximale
-  if (value.length > 2000) return false;
   return FOOTER_NOTES_REGEX.test(value);
 };
 

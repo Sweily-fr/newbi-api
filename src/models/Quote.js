@@ -112,12 +112,6 @@ const quoteSchema = new mongoose.Schema({
   termsAndConditions: {
     type: String,
     trim: true,
-    validate: {
-      validator: function(value) {
-        return !value || value.length <= 2000;
-      },
-      message: 'Les conditions générales ne doivent pas dépasser 2000 caractères'
-    }
   },
   termsAndConditionsLinkTitle: {
     type: String,
