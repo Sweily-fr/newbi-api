@@ -431,7 +431,19 @@ export const withRBAC = (resolver, options = {}) => {
       if (error instanceof AppError) {
         throw error;
       }
-      
+
+      // Gérer les erreurs de validation Mongoose avec un message user-friendly
+      if (error instanceof mongoose.Error.ValidationError) {
+        const messages = Object.values(error.errors).map(e => e.message);
+        logger.warn(`Erreur de validation dans ${resolver.name || 'resolver'}:`, messages.join(', '));
+        throw new AppError(
+          messages.length === 1
+            ? messages[0]
+            : `Veuillez corriger les erreurs suivantes : ${messages.join(', ')}`,
+          ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+
       // Logger les erreurs inattendues avec stack trace complète
       logger.error(`Erreur RBAC dans ${resolver.name || 'resolver'}:`, error.message);
       logger.error('Stack trace:', error.stack);

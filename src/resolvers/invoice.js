@@ -31,6 +31,7 @@ import { evaluateAndRouteInvoice } from "../utils/eInvoiceRoutingHelper.js";
 import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -2042,6 +2043,11 @@ const invoiceResolvers = {
           }, user._id.toString()).catch(err => console.error('Erreur automatisation documents:', err));
         }
 
+        // Sync Pennylane (fire-and-forget)
+        syncInvoiceIfNeeded(invoice, workspaceId).catch(err =>
+          console.error('Erreur sync Pennylane:', err)
+        );
+
         return await invoice.populate("createdBy");
       }
     ),
@@ -2198,6 +2204,11 @@ const invoiceResolvers = {
           issueDate: invoice.issueDate || invoice.createdAt,
           clientId: invoice.client?._id || invoice.clientId || null,
         }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (paid):', err));
+
+        // Sync Pennylane (fire-and-forget)
+        syncInvoiceIfNeeded(invoice, workspaceId).catch(err =>
+          console.error('Erreur sync Pennylane (paid):', err)
+        );
 
         return await invoice.populate("createdBy");
       }
