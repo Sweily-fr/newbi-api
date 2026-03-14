@@ -238,124 +238,135 @@ class EmailReminderService {
       subject = `Rappel : ${event.title} - aujourd'hui`;
     }
 
+    const messageText = reminderType === 'anticipated'
+      ? `Votre événement <strong>${event.title}</strong> arrive dans <strong>${anticipationText}</strong>.`
+      : `Votre événement <strong>${event.title}</strong> est prévu <strong>aujourd'hui</strong>.`;
+
     const html = `
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${subject}</title>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
-  <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${subject}</title>
+      <style>
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          margin: 0;
+          padding: 0;
+          background-color: #f0eeff;
+        }
+        .container {
+          max-width: 600px;
+          margin: 40px auto;
+          padding: 20px;
+          background-color: #ffffff;
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+          text-align: center;
+          padding: 20px 0;
+          border-bottom: 1px solid #e5e7eb;
+        }
+        .content {
+          padding: 30px 20px;
+        }
+        h1 {
+          color: #1f2937;
+          font-size: 24px;
+          font-weight: 700;
+          margin-bottom: 20px;
+        }
+        p {
+          margin-bottom: 16px;
+          color: #4b5563;
+        }
+        .btn {
+          display: inline-block;
+          background-color: #5b50ff;
+          color: white;
+          font-weight: 600;
+          text-decoration: none;
+          padding: 12px 24px;
+          border-radius: 6px;
+          margin: 20px 0;
+          text-align: center;
+        }
+        .footer {
+          text-align: center;
+          padding: 20px;
+          color: #6b7280;
+          font-size: 14px;
+          border-top: 1px solid #e5e7eb;
+        }
+        .security-notice {
+          background-color: #e6e1ff;
+          padding: 15px;
+          border-radius: 6px;
+          margin-top: 30px;
+          font-size: 14px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #1f2937;">Rappel de calendrier</h1>
+        </div>
+        <div class="content">
+          <div style="font-size: 15px; line-height: 1.6; color: #4b5563;">
+            <p>Bonjour,</p>
+            <p>${messageText}</p>
+          </div>
 
-    <!-- Logo -->
-    <div style="text-align: center; padding: 40px 0 24px 0;">
-      <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
-    </div>
+          <div class="security-notice">
+            <h2 style="margin: 0 0 16px 0; font-size: 13px; font-weight: 600; color: #1f2937; text-transform: uppercase; letter-spacing: 0.5px;">
+              DÉTAILS DE L'ÉVÉNEMENT
+            </h2>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Événement</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 600;">${event.title}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${eventDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Heure</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${eventTime}</td>
+              </tr>
+              ${event.location ? `<tr>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Lieu</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${event.location}</td>
+              </tr>` : ''}
+              ${event.description ? `<tr>
+                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Description</td>
+                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right;">${event.description}</td>
+              </tr>` : ''}
+            </table>
+          </div>
 
-    <!-- Type de notification -->
-    <div style="text-align: center; margin-bottom: 8px;">
-      <span style="font-size: 11px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.5px; text-transform: uppercase;">
-        RAPPEL DE CALENDRIER
-      </span>
-    </div>
+          <div style="text-align: center; margin-top: 24px;">
+            <a href="${frontendUrl}/dashboard/calendar?event=${event._id}" class="btn" style="display: inline-block; background-color: #5b50ff; color: white; font-weight: 600; text-decoration: none; padding: 12px 24px; border-radius: 6px;">
+              Voir dans le calendrier
+            </a>
+          </div>
 
-    <!-- Date -->
-    <div style="text-align: center; margin-bottom: 32px;">
-      <span style="font-size: 12px; color: #6b7280;">
-        ${formattedDate}
-      </span>
-    </div>
-
-    <!-- Carte principale -->
-    <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
-
-      <!-- Badge -->
-      <div style="margin-bottom: 20px;">
-        <div style="display: inline-flex; align-items: center; background-color: #f3f4f6; border-radius: 6px; padding: 8px 12px;">
-          <img src="https://pub-f5ac1d55852142ab931dc75bdc939d68.r2.dev/mail.png" alt="Rappel" style="height: 16px; width: 16px; margin-right: 8px;">
-          <span style="font-size: 11px; font-weight: 500; color: #374151; letter-spacing: 0.3px; text-transform: uppercase;">${reminderType === 'anticipated' ? 'RAPPEL' : 'ECHEANCE'}</span>
+          <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">
+            Vous pouvez gérer vos rappels dans les <a href="${frontendUrl}/dashboard/settings" style="color: #5b50ff; text-decoration: none;">paramètres</a> de votre compte.
+          </p>
+        </div>
+        <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
+          <p style="margin: 0; font-size: 12px; color: #9ca3af;">Ce rappel a été envoyé depuis la plateforme Newbi Logiciel de gestion.</p>
         </div>
       </div>
-
-      <!-- Titre -->
-      <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
-        ${event.title}
-      </h1>
-
-      <!-- Salutation -->
-      <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">
-        Bonjour,
-      </p>
-
-      <!-- Message -->
-      <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
-        ${reminderType === 'anticipated'
-          ? `Votre événement arrive dans <strong style="color: #1a1a1a;">${anticipationText}</strong>.`
-          : `Votre événement est prévu <strong style="color: #1a1a1a;">aujourd'hui</strong>.`
-        }
-      </p>
-
-      <!-- Détails de l'événement -->
-      <div style="background-color: #f9fafb; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px;">
-        <table style="width: 100%; border-collapse: collapse;">
-          <tr>
-            <td style="padding: 6px 0; font-size: 14px; color: #6b7280; width: 100px;">Date</td>
-            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; font-weight: 500;">${eventDate}</td>
-          </tr>
-          <tr>
-            <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Heure</td>
-            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; font-weight: 500;">${eventTime}</td>
-          </tr>
-          ${event.location ? `<tr>
-            <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Lieu</td>
-            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; font-weight: 500;">${event.location}</td>
-          </tr>` : ''}
-          ${event.description ? `<tr>
-            <td style="padding: 6px 0; font-size: 14px; color: #6b7280; vertical-align: top;">Description</td>
-            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a;">${event.description}</td>
-          </tr>` : ''}
-        </table>
-      </div>
-
-      <!-- Bouton CTA -->
-      <a href="${frontendUrl}/dashboard/calendar?event=${event._id}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
-        Voir dans le calendrier
-      </a>
-    </div>
-
-    <!-- Aide -->
-    <p style="font-size: 14px; color: #4b5563; margin: 0 0 32px 0; padding: 0 8px; line-height: 1.6;">
-      Vous pouvez gérer vos rappels dans les <a href="${frontendUrl}/dashboard/settings" style="color: #5B4FFF; text-decoration: none;">paramètres</a> de votre compte.
-    </p>
-
-    <!-- Signature -->
-    <div style="padding: 0 8px;">
-      <p style="font-size: 14px; color: #4b5563; margin: 0 0 8px 0;">Merci,</p>
-      <p style="font-size: 14px; color: #4b5563; margin: 0 0 48px 0; font-weight: 500;">L'équipe Newbi</p>
-    </div>
-
-    <!-- Footer -->
-    <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center;">
-      <div style="margin-bottom: 16px;">
-        <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height: 28px; width: auto;">
-      </div>
-      <p style="font-size: 13px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0;">
-        Votre gestion, simplifiée.
-      </p>
-      <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
-        Vous pouvez gérer vos notifications dans les paramètres de votre compte
-      </p>
-      <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
-        <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
-        <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
-      </div>
-    </div>
-
-  </div>
-</body>
-</html>
+    </body>
+    </html>
     `;
 
     return { subject, html };
