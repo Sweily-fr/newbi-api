@@ -266,6 +266,11 @@ const purchaseOrderSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  operationType: {
+    type: String,
+    enum: ['LB', 'PS', 'LBPS', null],
+    default: null,
+  },
   retenueGarantie: {
     type: Number,
     default: 0,
