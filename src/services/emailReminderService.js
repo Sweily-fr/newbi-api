@@ -210,17 +210,20 @@ class EmailReminderService {
    */
   generateEmailContent(event, reminderType, anticipation = null) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const tz = 'Europe/Paris';
     const eventDate = new Date(event.start).toLocaleDateString('fr-FR', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
-      day: 'numeric'
+      day: 'numeric',
+      timeZone: tz
     });
     const eventTime = event.allDay ? 'Toute la journée' : new Date(event.start).toLocaleTimeString('fr-FR', {
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
+      timeZone: tz
     });
-    const formattedDate = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+    const formattedDate = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: tz }).toUpperCase();
 
     let subject = '';
     let anticipationText = '';
