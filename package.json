@@ -74,6 +74,7 @@
     "node-ical": "^0.25.1",
     "nodemailer": "^6.10.0",
     "redis": "^5.8.3",
+    "resend": "^6.9.3",
     "sharp": "^0.34.4",
     "stripe": "^18.0.0",
     "subscriptions-transport-ws": "^0.11.0",
