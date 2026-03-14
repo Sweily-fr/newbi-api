@@ -72,11 +72,15 @@ class EmailReminderService {
         return { enabled: false, reason: 'Utilisateur non trouvé' };
       }
 
-      // Vérifier les préférences email (à adapter selon votre structure Better Auth)
+      // Vérifier les préférences email
+      // Si l'utilisateur n'a pas explicitement configuré ses préférences,
+      // on considère que les rappels sont autorisés (il a activé le rappel sur l'événement)
       const emailPreferences = user.emailPreferences || {};
       const reminders = emailPreferences.reminders || {};
-      
-      if (!reminders.enabled) {
+
+      // Seulement bloquer si l'utilisateur a explicitement désactivé les rappels
+      // (emailPreferences existe et reminders.enabled est explicitement false)
+      if (user.emailPreferences?.reminders && reminders.enabled === false) {
         return { enabled: false, reason: 'Rappels désactivés par l\'utilisateur' };
       }
 
