@@ -227,6 +227,9 @@ class EmailReminderService {
 
     if (reminderType === 'anticipated') {
       const anticipationMap = {
+        '5m': '5 minutes',
+        '10m': '10 minutes',
+        '15m': '15 minutes',
         '1h': '1 heure',
         '3h': '3 heures',
         '1d': '1 jour',
@@ -535,6 +538,15 @@ class EmailReminderService {
     }
 
     switch (anticipation) {
+      case '5m':
+        scheduledTime.setMinutes(scheduledTime.getMinutes() - 5);
+        break;
+      case '10m':
+        scheduledTime.setMinutes(scheduledTime.getMinutes() - 10);
+        break;
+      case '15m':
+        scheduledTime.setMinutes(scheduledTime.getMinutes() - 15);
+        break;
       case '1h':
         scheduledTime.setHours(scheduledTime.getHours() - 1);
         break;

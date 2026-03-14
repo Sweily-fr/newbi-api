@@ -130,7 +130,7 @@ const eventSchema = new mongoose.Schema({
     },
     anticipation: {
       type: String,
-      enum: [null, '1h', '3h', '1d', '3d'],
+      enum: [null, '5m', '10m', '15m', '1h', '3h', '1d', '3d'],
       default: null
     },
     sentAt: {
