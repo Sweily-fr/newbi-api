@@ -130,7 +130,12 @@ const eventSchema = new mongoose.Schema({
     },
     anticipation: {
       type: String,
-      enum: [null, '5m', '10m', '15m', '1h', '3h', '1d', '3d'],
+      enum: [null, '1h', '3h', '1d', '3d'],
+      default: null
+    },
+    echeance: {
+      type: String,
+      enum: [null, '0m', '5m', '10m', '15m'],
       default: null
     },
     sentAt: {
@@ -144,6 +149,15 @@ const eventSchema = new mongoose.Schema({
     },
     scheduledFor: {
       type: Date,
+      default: null
+    },
+    echeanceScheduledFor: {
+      type: Date,
+      default: null
+    },
+    echeanceStatus: {
+      type: String,
+      enum: ['pending', 'sent', 'failed', 'cancelled', null],
       default: null
     },
     failureReason: {

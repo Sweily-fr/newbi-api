@@ -57,26 +57,31 @@ class EmailReminderScheduler {
 
       logger.debug(`🔍 Recherche de rappels à envoyer (scheduledFor <= ${now.toISOString()})`);
 
-      // Trouver les événements avec rappel activé et en attente
-      // scheduledFor <= now : envoyer uniquement quand l'heure est passée (pas en avance)
-      // end >= now : ignorer les événements déjà terminés (pas de rappels parasites)
+      // Trouver les événements avec rappel activé et au moins un rappel en attente
+      // end >= now : ignorer les événements déjà terminés
       const events = await Event.find({
         'emailReminder.enabled': true,
-        'emailReminder.status': { $in: ['pending', 'failed'] },
-        'emailReminder.scheduledFor': { $lte: now },
-        end: { $gte: now }
+        end: { $gte: now },
+        $or: [
+          { 'emailReminder.status': { $in: ['pending', 'failed'] }, 'emailReminder.scheduledFor': { $lte: now } },
+          { 'emailReminder.echeanceStatus': { $in: ['pending', 'failed'] }, 'emailReminder.echeanceScheduledFor': { $lte: now } }
+        ]
       }).populate('userId');
 
       // Annuler les rappels d'événements déjà terminés (nettoyage)
       await Event.updateMany(
         {
           'emailReminder.enabled': true,
-          'emailReminder.status': { $in: ['pending', 'failed'] },
+          $or: [
+            { 'emailReminder.status': { $in: ['pending', 'failed'] } },
+            { 'emailReminder.echeanceStatus': { $in: ['pending', 'failed'] } }
+          ],
           end: { $lt: now }
         },
         {
           $set: {
             'emailReminder.status': 'cancelled',
+            'emailReminder.echeanceStatus': 'cancelled',
             'emailReminder.failureReason': 'Événement déjà terminé'
           }
         }
@@ -87,34 +92,48 @@ class EmailReminderScheduler {
       // Traiter chaque événement
       for (const event of events) {
         try {
-          const reminderType = event.emailReminder.anticipation ? 'anticipated' : 'due';
+          // Rappel anticipé
+          if (event.emailReminder.status === 'pending' && event.emailReminder.scheduledFor && event.emailReminder.scheduledFor <= now) {
+            logger.info(`Envoi de rappel anticipé pour "${event.title}" (${event._id})`);
 
-          logger.info(`Envoi de rappel ${reminderType} pour l'événement "${event.title}" (${event._id})`);
+            const result = await emailReminderService.sendReminder(
+              event._id,
+              'anticipated',
+              event.emailReminder.anticipation
+            );
 
-          const result = await emailReminderService.sendReminder(
-            event._id,
-            reminderType,
-            event.emailReminder.anticipation
-          );
-
-          if (result.success) {
-            logger.info(`✅ Rappel envoyé avec succès pour "${event.title}"`);
-          } else if (result.deferred) {
-            logger.info(`⏰ Rappel différé pour "${event.title}" jusqu'à ${result.nextAttempt}`);
-          } else if (result.cancelled) {
-            logger.info(`❌ Rappel annulé pour "${event.title}": ${result.reason}`);
-          } else {
-            logger.error(`❌ Échec de l'envoi du rappel pour "${event.title}": ${result.reason}`);
-            
-            // Réessayer dans 2 minutes si échec (max 3 tentatives)
-            const retryCount = event.emailReminder.retryCount || 0;
-            if (retryCount < 3) {
-              event.emailReminder.retryCount = retryCount + 1;
-              event.emailReminder.scheduledFor = new Date(now.getTime() + 2 * 60 * 1000);
-              await event.save();
-              logger.info(`🔄 Nouvelle tentative programmée (${retryCount + 1}/3)`);
+            if (result.success) {
+              logger.info(`✅ Rappel anticipé envoyé pour "${event.title}"`);
+            } else if (result.deferred) {
+              logger.info(`⏰ Rappel différé pour "${event.title}" jusqu'à ${result.nextAttempt}`);
+            } else if (result.cancelled) {
+              logger.info(`❌ Rappel annulé pour "${event.title}": ${result.reason}`);
             } else {
-              logger.error(`❌ Nombre maximum de tentatives atteint pour "${event.title}"`);
+              logger.error(`❌ Échec rappel anticipé pour "${event.title}": ${result.reason}`);
+              const retryCount = event.emailReminder.retryCount || 0;
+              if (retryCount < 3) {
+                event.emailReminder.retryCount = retryCount + 1;
+                event.emailReminder.scheduledFor = new Date(now.getTime() + 2 * 60 * 1000);
+                await event.save();
+              }
+            }
+          }
+
+          // Rappel à l'échéance
+          if (event.emailReminder.echeanceStatus === 'pending' && event.emailReminder.echeanceScheduledFor && event.emailReminder.echeanceScheduledFor <= now) {
+            logger.info(`Envoi de rappel échéance pour "${event.title}" (${event._id})`);
+
+            const result = await emailReminderService.sendReminder(
+              event._id,
+              'due',
+              event.emailReminder.echeance,
+              { reminderField: 'echeance' }
+            );
+
+            if (result.success) {
+              logger.info(`✅ Rappel échéance envoyé pour "${event.title}"`);
+            } else if (!result.deferred && !result.cancelled) {
+              logger.error(`❌ Échec rappel échéance pour "${event.title}": ${result.reason}`);
             }
           }
         } catch (error) {
