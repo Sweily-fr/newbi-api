@@ -2071,7 +2071,7 @@ const resolvers = {
                 });
                 logger.info(`📧 [Mention] Auteur trouvé: ${authorData ? authorData.email : 'NON TROUVÉ'}`);
                 const authorName = authorData?.name || user?.name || user?.email || "Un membre de l'équipe";
-                const authorImage = authorData?.image || null;
+                const authorImage = authorData?.image || authorData?.avatar || authorData?.profile?.profilePicture || null;
 
                 // Récupérer les infos du board
                 const board = await Board.findById(task.boardId);

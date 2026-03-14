@@ -35,6 +35,7 @@ type Quote {
   shipping: Shipping
   isReverseCharge: Boolean
   clientPositionRight: Boolean
+  operationType: String
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -74,6 +75,7 @@ input CreateQuoteInput {
   shipping: ShippingInput
   isReverseCharge: Boolean
   clientPositionRight: Boolean
+  operationType: String
 }
 
 input UpdateQuoteInput {
@@ -101,6 +103,7 @@ input UpdateQuoteInput {
   shipping: ShippingInput
   isReverseCharge: Boolean
   clientPositionRight: Boolean
+  operationType: String
 }
 
 extend type Query {
