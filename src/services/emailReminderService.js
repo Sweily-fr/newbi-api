@@ -509,9 +509,15 @@ class EmailReminderService {
 
   /**
    * Calcule la date d'envoi en fonction de l'anticipation
+   * Pour les événements "toute la journée", la base est 9h00 (au lieu de 00h00)
    */
-  calculateScheduledTime(eventStart, anticipation) {
+  calculateScheduledTime(eventStart, anticipation, allDay = false) {
     const scheduledTime = new Date(eventStart);
+
+    // Pour les événements "toute la journée", utiliser 9h00 comme référence
+    if (allDay) {
+      scheduledTime.setHours(9, 0, 0, 0);
+    }
 
     if (!anticipation) {
       return scheduledTime;

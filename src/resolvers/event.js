@@ -219,7 +219,8 @@ const eventResolvers = {
         if (input.emailReminder?.enabled) {
           const scheduledTime = emailReminderService.calculateScheduledTime(
             input.start,
-            input.emailReminder.anticipation
+            input.emailReminder.anticipation,
+            input.allDay || false
           );
           
           event.emailReminder = {
@@ -292,13 +293,15 @@ const eventResolvers = {
           
           if (event) {
             const newStart = updateData.start || event.start;
-            
+            const isAllDay = updateData.allDay !== undefined ? updateData.allDay : event.allDay;
+
             if (updateData.emailReminder?.enabled) {
               const scheduledTime = emailReminderService.calculateScheduledTime(
                 newStart,
-                updateData.emailReminder.anticipation
+                updateData.emailReminder.anticipation,
+                isAllDay
               );
-              
+
               updateData.emailReminder = {
                 enabled: true,
                 anticipation: updateData.emailReminder.anticipation || null,
@@ -317,9 +320,10 @@ const eventResolvers = {
               // La date change mais le rappel reste activé, recalculer
               const scheduledTime = emailReminderService.calculateScheduledTime(
                 newStart,
-                event.emailReminder.anticipation
+                event.emailReminder.anticipation,
+                isAllDay
               );
-              
+
               updateData.emailReminder = {
                 ...event.emailReminder.toObject(),
                 scheduledFor: scheduledTime,
