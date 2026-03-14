@@ -211,33 +211,15 @@ const emailReminderResolvers = {
 
         const { subject, html } = emailReminderService.generateEmailContent(testEvent, 'due');
 
-        const mailOptions = {
-          from: `"Newbi" <${process.env.FROM_EMAIL || process.env.SMTP_USER}>`,
+        logger.info(`📧 Tentative d'envoi d'email de test à ${dbUser.email}`);
+
+        await emailReminderService.sendEmail({
           to: dbUser.email,
           subject: `[TEST] ${subject}`,
           html
-        };
-
-        logger.info('📧 Tentative d\'envoi d\'email de test:', {
-          from: mailOptions.from,
-          to: mailOptions.to,
-          subject: mailOptions.subject
         });
 
-        const result = await emailReminderService.transporter.sendMail(mailOptions);
-
-        logger.info(`✅ Email de test envoyé avec succès à ${dbUser.email}`, {
-          messageId: result.messageId,
-          response: result.response,
-          accepted: result.accepted,
-          rejected: result.rejected,
-          pending: result.pending
-        });
-
-        // Vérifier si l'email a été accepté
-        if (result.rejected && result.rejected.length > 0) {
-          logger.warn('⚠️ Emails rejetés:', result.rejected);
-        }
+        logger.info(`✅ Email de test envoyé avec succès à ${dbUser.email}`);
 
         return {
           success: true,

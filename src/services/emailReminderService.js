@@ -1,3 +1,4 @@
+import { Resend } from 'resend';
 import nodemailer from 'nodemailer';
 import logger from '../utils/logger.js';
 import EmailLog from '../models/EmailLog.js';
@@ -6,15 +7,39 @@ import User from '../models/User.js';
 
 /**
  * Service de gestion des rappels par email
+ * Utilise Resend en priorité, fallback sur SMTP/nodemailer
  */
 class EmailReminderService {
   constructor() {
+    this.resend = null;
     this.transporter = null;
-    this.initTransporter();
+    this.useResend = false;
+    this.fromEmail = process.env.FROM_EMAIL || 'no-reply@newbi.fr';
+    this.resendFromEmail = process.env.RESEND_FROM_EMAIL || 'no-reply@newbi.sweily.fr';
+    this.initEmailProvider();
   }
 
   /**
-   * Initialise le transporteur nodemailer
+   * Initialise le fournisseur d'email (Resend ou SMTP)
+   */
+  initEmailProvider() {
+    // Toujours initialiser SMTP (pour compatibilité avec les autres services)
+    this.initTransporter();
+
+    // Si Resend est configuré, l'utiliser en priorité pour les rappels
+    if (process.env.RESEND_API_KEY) {
+      try {
+        this.resend = new Resend(process.env.RESEND_API_KEY);
+        this.useResend = true;
+        logger.info('✅ Service d\'email Resend initialisé (prioritaire pour les rappels)');
+      } catch (error) {
+        logger.error('❌ Erreur lors de l\'initialisation de Resend:', error);
+      }
+    }
+  }
+
+  /**
+   * Initialise le transporteur nodemailer (fallback)
    */
   initTransporter() {
     try {
@@ -34,15 +59,15 @@ class EmailReminderService {
         secure: config.secure,
         user: config.auth.user,
         passLength: config.auth.pass ? config.auth.pass.length : 0,
-        fromEmail: process.env.FROM_EMAIL
+        fromEmail: this.fromEmail
       });
 
       this.transporter = nodemailer.createTransport(config);
-      
+
       // Tester la connexion SMTP
       this.testConnection();
-      
-      logger.info('✅ Service d\'email initialisé avec succès');
+
+      logger.info('✅ Service d\'email initialisé avec SMTP (fallback)');
     } catch (error) {
       logger.error('❌ Erreur lors de l\'initialisation du service d\'email:', error);
     }
@@ -62,12 +87,48 @@ class EmailReminderService {
   }
 
   /**
+   * Envoie un email via Resend ou SMTP
+   */
+  async sendEmail({ to, subject, html }) {
+    if (this.useResend && this.resend) {
+      const { data, error } = await this.resend.emails.send({
+        from: `Newbi <${this.resendFromEmail}>`,
+        to: [to],
+        subject,
+        html
+      });
+
+      if (error) {
+        throw new Error(`Resend error: ${error.message}`);
+      }
+
+      logger.info(`📧 Email envoyé via Resend (id: ${data?.id}) à ${to}`);
+      return data;
+    }
+
+    // Fallback SMTP
+    if (!this.transporter) {
+      throw new Error('Aucun service d\'email configuré (ni Resend, ni SMTP)');
+    }
+
+    const result = await this.transporter.sendMail({
+      from: `"Newbi" <${this.fromEmail}>`,
+      to,
+      subject,
+      html
+    });
+
+    logger.info(`📧 Email envoyé via SMTP à ${to}`);
+    return result;
+  }
+
+  /**
    * Vérifie si l'utilisateur a activé les rappels par email
    */
   async checkUserPreferences(userId) {
     try {
       const user = await User.findById(userId);
-      
+
       if (!user) {
         return { enabled: false, reason: 'Utilisateur non trouvé' };
       }
@@ -113,7 +174,7 @@ class EmailReminderService {
     if (startHour > endHour) {
       return hour >= startHour || hour < endHour;
     }
-    
+
     return hour >= startHour && hour < endHour;
   }
 
@@ -307,14 +368,14 @@ class EmailReminderService {
     try {
       // Récupérer l'événement
       const event = await Event.findById(eventId).populate('userId');
-      
+
       if (!event) {
         logger.error(`Événement ${eventId} non trouvé`);
         return { success: false, reason: 'Événement non trouvé' };
       }
 
       const user = event.userId;
-      
+
       if (!user || !user.email) {
         logger.error(`Utilisateur ou email non trouvé pour l'événement ${eventId}`);
         return { success: false, reason: 'Utilisateur ou email non trouvé' };
@@ -343,7 +404,7 @@ class EmailReminderService {
       if (!skipPreferencesCheck && this.isInDoNotDisturbPeriod(preferences)) {
         const nextAllowed = this.getNextAllowedTime(preferences);
         logger.info(`Email différé pour ${user.email} jusqu'à ${nextAllowed}`);
-        
+
         // Enregistrer le report dans les logs
         await EmailLog.create({
           eventId: event._id,
@@ -363,20 +424,19 @@ class EmailReminderService {
             end: event.end
           }
         });
-        
+
         // Reprogrammer pour plus tard
         event.emailReminder.scheduledFor = nextAllowed;
         await event.save();
-        
+
         return { success: false, reason: 'Différé (Ne pas déranger)', deferred: true, nextAttempt: nextAllowed };
       }
 
       // Générer le contenu de l'email
       const { subject, html } = this.generateEmailContent(event, reminderType, anticipation);
 
-      // Envoyer l'email
-      await this.transporter.sendMail({
-        from: `"Newbi" <${process.env.FROM_EMAIL || process.env.SMTP_USER}>`,
+      // Envoyer l'email via Resend ou SMTP
+      await this.sendEmail({
         to: user.email,
         subject,
         html
@@ -423,8 +483,8 @@ class EmailReminderService {
           await EmailLog.create({
             eventId: event._id,
             workspaceId: event.workspaceId,
-            recipientEmail: event.userId.email || 'unknown',
-            recipientUserId: event.userId,
+            recipientEmail: event.userId?.email || 'unknown',
+            recipientUserId: event.userId?._id || event.userId,
             reminderType,
             anticipation,
             status: 'failed',
@@ -452,7 +512,7 @@ class EmailReminderService {
    */
   calculateScheduledTime(eventStart, anticipation) {
     const scheduledTime = new Date(eventStart);
-    
+
     if (!anticipation) {
       return scheduledTime;
     }
