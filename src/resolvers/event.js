@@ -215,19 +215,26 @@ const eventResolvers = {
           workspaceId: finalWorkspaceId
         });
 
-        // Si rappel email activé, calculer la date d'envoi
+        // Si rappel email activé, calculer les dates d'envoi
         if (input.emailReminder?.enabled) {
-          const scheduledTime = emailReminderService.calculateScheduledTime(
-            input.start,
-            input.emailReminder.anticipation,
-            input.allDay || false
-          );
-          
+          const anticipation = input.emailReminder.anticipation || null;
+          const echeance = input.emailReminder.echeance || null;
+          const isAllDay = input.allDay || false;
+
+          const finalEcheance = isAllDay ? null : echeance;
+
           event.emailReminder = {
             enabled: true,
-            anticipation: input.emailReminder.anticipation || null,
-            status: 'pending',
-            scheduledFor: scheduledTime
+            anticipation,
+            echeance: finalEcheance,
+            status: anticipation ? 'pending' : (isAllDay ? 'pending' : 'sent'),
+            scheduledFor: anticipation
+              ? emailReminderService.calculateScheduledTime(input.start, anticipation, isAllDay)
+              : (isAllDay ? emailReminderService.calculateScheduledTime(input.start, null, true) : null),
+            echeanceStatus: finalEcheance ? 'pending' : null,
+            echeanceScheduledFor: finalEcheance
+              ? emailReminderService.calculateScheduledTime(input.start, finalEcheance, false)
+              : null,
           };
         }
 
@@ -296,17 +303,21 @@ const eventResolvers = {
             const isAllDay = updateData.allDay !== undefined ? updateData.allDay : event.allDay;
 
             if (updateData.emailReminder?.enabled) {
-              const scheduledTime = emailReminderService.calculateScheduledTime(
-                newStart,
-                updateData.emailReminder.anticipation,
-                isAllDay
-              );
+              const anticipation = updateData.emailReminder.anticipation || null;
+              const echeance = isAllDay ? null : (updateData.emailReminder.echeance || null);
 
               updateData.emailReminder = {
                 enabled: true,
-                anticipation: updateData.emailReminder.anticipation || null,
-                status: 'pending',
-                scheduledFor: scheduledTime,
+                anticipation,
+                echeance,
+                status: anticipation ? 'pending' : (isAllDay ? 'pending' : 'sent'),
+                scheduledFor: anticipation
+                  ? emailReminderService.calculateScheduledTime(newStart, anticipation, isAllDay)
+                  : (isAllDay ? emailReminderService.calculateScheduledTime(newStart, null, true) : null),
+                echeanceStatus: echeance ? 'pending' : null,
+                echeanceScheduledFor: echeance
+                  ? emailReminderService.calculateScheduledTime(newStart, echeance, false)
+                  : null,
                 sentAt: null,
                 failureReason: null
               };
@@ -314,20 +325,25 @@ const eventResolvers = {
               // Désactiver le rappel
               updateData.emailReminder = {
                 enabled: false,
-                status: 'cancelled'
+                status: 'cancelled',
+                echeanceStatus: 'cancelled'
               };
             } else if (updateData.start && event.emailReminder?.enabled) {
               // La date change mais le rappel reste activé, recalculer
-              const scheduledTime = emailReminderService.calculateScheduledTime(
-                newStart,
-                event.emailReminder.anticipation,
-                isAllDay
-              );
+              const anticipation = event.emailReminder.anticipation;
+              const echeance = isAllDay ? null : event.emailReminder.echeance;
 
               updateData.emailReminder = {
                 ...event.emailReminder.toObject(),
-                scheduledFor: scheduledTime,
-                status: 'pending',
+                echeance,
+                status: anticipation ? 'pending' : (isAllDay ? 'pending' : 'sent'),
+                scheduledFor: anticipation
+                  ? emailReminderService.calculateScheduledTime(newStart, anticipation, isAllDay)
+                  : (isAllDay ? emailReminderService.calculateScheduledTime(newStart, null, true) : null),
+                echeanceStatus: echeance ? 'pending' : null,
+                echeanceScheduledFor: echeance
+                  ? emailReminderService.calculateScheduledTime(newStart, echeance, false)
+                  : null,
                 sentAt: null
               };
             }

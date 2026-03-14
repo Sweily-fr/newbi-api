@@ -227,6 +227,7 @@ class EmailReminderService {
 
     if (reminderType === 'anticipated') {
       const anticipationMap = {
+        '0m': 'quelques instants',
         '5m': '5 minutes',
         '10m': '10 minutes',
         '15m': '15 minutes',
@@ -378,7 +379,7 @@ class EmailReminderService {
   /**
    * Envoie un email de rappel
    */
-  async sendReminder(eventId, reminderType, anticipation = null, { skipPreferencesCheck = false } = {}) {
+  async sendReminder(eventId, reminderType, anticipation = null, { skipPreferencesCheck = false, reminderField = 'anticipation' } = {}) {
     try {
       // Récupérer l'événement
       const event = await Event.findById(eventId).populate('userId');
@@ -459,7 +460,11 @@ class EmailReminderService {
       logger.info(`✅ Email de rappel envoyé à ${user.email} pour l'événement "${event.title}"`);
 
       // Mettre à jour l'événement
-      event.emailReminder.status = 'sent';
+      if (reminderField === 'echeance') {
+        event.emailReminder.echeanceStatus = 'sent';
+      } else {
+        event.emailReminder.status = 'sent';
+      }
       event.emailReminder.sentAt = new Date();
       await event.save();
 
@@ -538,6 +543,9 @@ class EmailReminderService {
     }
 
     switch (anticipation) {
+      case '0m':
+        // Au début de l'événement, pas de soustraction
+        break;
       case '5m':
         scheduledTime.setMinutes(scheduledTime.getMinutes() - 5);
         break;

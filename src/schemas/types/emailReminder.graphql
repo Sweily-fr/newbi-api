@@ -1,15 +1,19 @@
 type EmailReminder {
   enabled: Boolean!
   anticipation: String
+  echeance: String
   sentAt: String
   status: String!
   scheduledFor: String
+  echeanceScheduledFor: String
+  echeanceStatus: String
   failureReason: String
 }
 
 input EmailReminderInput {
   enabled: Boolean!
   anticipation: String
+  echeance: String
 }
 
 type EmailPreferences {
