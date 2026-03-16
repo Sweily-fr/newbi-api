@@ -37,6 +37,9 @@ type Quote {
   clientPositionRight: Boolean
   operationType: String
   createdBy: User!
+  # E-Signature
+  signatureStatus: String
+  signingUrl: String
   createdAt: String!
   updatedAt: String!
   convertedToInvoice: Invoice
