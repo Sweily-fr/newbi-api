@@ -60,6 +60,7 @@ import importedPurchaseOrderResolvers from "./importedPurchaseOrder.js";
 import financialAnalyticsResolvers from "./financialAnalytics.js";
 import pennylaneResolvers from "./pennylaneResolvers.js";
 import installedAppResolvers from "./installedApp.js";
+import esignatureResolvers from "./esignatureResolvers.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -123,6 +124,7 @@ const resolvers = mergeResolvers([
   financialAnalyticsResolvers,
   pennylaneResolvers,
   installedAppResolvers,
+  esignatureResolvers,
 ]);
 
 export default resolvers;

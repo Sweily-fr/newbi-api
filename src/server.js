@@ -79,6 +79,7 @@ import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
+import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -209,6 +210,9 @@ async function startServer() {
   // DÉSACTIVÉ: SuperPDP API pas encore active
   // Webhook SuperPDP pour la facturation électronique
   // app.use("/webhook/superpdp", superPdpWebhookRoutes);
+
+  // Webhook eSignature
+  app.use("/api/esignature/webhook", esignatureWebhookRoutes);
 
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));

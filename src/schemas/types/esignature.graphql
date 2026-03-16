@@ -1,0 +1,118 @@
+# === E-SIGNATURE TYPES ===
+
+"""
+Signataire d'une demande de signature
+"""
+type SignatureSigner {
+  name: String!
+  surname: String!
+  email: String!
+  mobile: String
+  authentication: [String!]!
+  signedAt: String
+}
+
+"""
+Demande de signature électronique
+"""
+type SignatureRequest {
+  id: ID!
+  organizationId: String!
+  workspaceId: ID!
+  documentType: String!
+  documentId: ID!
+  documentNumber: String
+  signatureProvider: String!
+  externalSignatureId: String
+  signatureType: String!
+  status: String!
+  signers: [SignatureSigner!]!
+  signingUrl: String
+  signedDocumentUrl: String
+  auditTrailUrl: String
+  errorMessage: String
+  callbackReceived: Boolean!
+  createdBy: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+Input pour un signataire
+"""
+input SignerInput {
+  name: String!
+  surname: String!
+  email: String!
+  mobile: String
+  authentication: [String!]
+}
+
+"""
+Input pour demander une signature
+"""
+input RequestSignatureInput {
+  documentType: String!
+  documentId: ID!
+  signatureType: String
+  signers: [SignerInput!]!
+  title: String
+  signatureMode: [String!]
+  documentBase64: String!
+}
+
+"""
+Résultat d'une opération de signature
+"""
+type SignatureResult {
+  success: Boolean!
+  message: String
+  signatureRequest: SignatureRequest
+}
+
+# === QUERIES ===
+
+extend type Query {
+  """
+  Récupérer une demande de signature par ID
+  """
+  getSignatureRequest(id: ID!): SignatureRequest
+
+  """
+  Lister les demandes de signature (filtres optionnels)
+  """
+  getSignatureRequests(
+    documentId: ID
+    documentType: String
+    status: String
+  ): [SignatureRequest!]!
+
+  """
+  Récupérer le statut de signature d'un document
+  """
+  getDocumentSignatureStatus(
+    documentType: String!
+    documentId: ID!
+  ): SignatureRequest
+}
+
+# === MUTATIONS ===
+
+extend type Mutation {
+  """
+  Créer une demande de signature pour un document
+  """
+  requestDocumentSignature(
+    input: RequestSignatureInput!
+  ): SignatureResult!
+
+  """
+  Annuler une demande de signature en cours
+  """
+  cancelSignature(signatureId: ID!): SignatureResult!
+
+  """
+  Relancer une signature en erreur
+  """
+  retrySignature(signatureId: ID!): SignatureResult!
+}
