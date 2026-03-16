@@ -12,9 +12,27 @@ import cloudflareTransferService from "../services/cloudflareTransferService.js"
 import FileTransfer from "../models/FileTransfer.js";
 import { v4 as uuidv4 } from "uuid";
 
-// Fonction utilitaire pour récupérer les informations d'un fichier par son ID
-// Cache temporaire pour stocker les métadonnées des fichiers uploadés
+// Cache temporaire pour stocker les métadonnées des fichiers uploadés (avec TTL)
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 const fileMetadataCache = new Map();
+const cacheTimers = new Map();
+
+function setCacheEntry(key, value) {
+  fileMetadataCache.set(key, value);
+  if (cacheTimers.has(key)) clearTimeout(cacheTimers.get(key));
+  cacheTimers.set(key, setTimeout(() => {
+    fileMetadataCache.delete(key);
+    cacheTimers.delete(key);
+  }, CACHE_TTL));
+}
+
+function deleteCacheEntry(key) {
+  fileMetadataCache.delete(key);
+  if (cacheTimers.has(key)) {
+    clearTimeout(cacheTimers.get(key));
+    cacheTimers.delete(key);
+  }
+}
 
 const getFileInfoByTransferId = async (fileId) => {
   try {
@@ -182,14 +200,7 @@ export default {
             uploadedAt: new Date(),
           };
 
-          fileMetadataCache.set(fileId, fileMetadata);
-
-          setTimeout(
-            () => {
-              fileMetadataCache.delete(fileId);
-            },
-            60 * 60 * 1000
-          );
+          setCacheEntry(fileId, fileMetadata);
 
           return {
             success: true,
@@ -371,14 +382,7 @@ export default {
               uploadedAt: new Date(),
             };
 
-            fileMetadataCache.set(fileId, fileMetadata);
-
-            setTimeout(
-              () => {
-                fileMetadataCache.delete(fileId);
-              },
-              60 * 60 * 1000
-            );
+            setCacheEntry(fileId, fileMetadata);
           }
 
           return {
@@ -493,15 +497,7 @@ export default {
             };
 
             // Ajouter au cache temporaire pour la création du transfert
-            fileMetadataCache.set(fileId, fileMetadata);
-
-            // Nettoyer le cache après 1 heure (pour éviter l'accumulation)
-            setTimeout(
-              () => {
-                fileMetadataCache.delete(fileId);
-              },
-              60 * 60 * 1000
-            );
+            setCacheEntry(fileId, fileMetadata);
           }
 
           return {

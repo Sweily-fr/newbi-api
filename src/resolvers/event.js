@@ -443,7 +443,7 @@ const eventResolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         // Récupérer toutes les factures du workspace
-        const invoices = await Invoice.find({ workspaceId: finalWorkspaceId });
+        const invoices = await Invoice.find({ workspaceId: finalWorkspaceId }).limit(500);
 
         const events = [];
         

@@ -122,11 +122,11 @@ const quoteResolvers = {
       }
     },
     createdBy: async (quote) => {
-      return await User.findById(quote.createdBy);
+      return await User.findById(quote.createdBy).lean();
     },
     convertedToInvoice: async (quote) => {
       if (!quote.convertedToInvoice) return null;
-      return await Invoice.findById(quote.convertedToInvoice);
+      return await Invoice.findById(quote.convertedToInvoice).lean();
     },
     linkedInvoices: async (quote) => {
       // Trouver toutes les factures liées à ce devis
@@ -134,10 +134,10 @@ const quoteResolvers = {
       // comme des factures d'acompte, etc.
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
         // Si le champ linkedInvoices est déjà rempli, utiliser ces références
-        return await Invoice.find({ _id: { $in: quote.linkedInvoices } });
+        return await Invoice.find({ _id: { $in: quote.linkedInvoices } }).lean();
       } else if (quote.convertedToInvoice) {
         // Pour la compatibilité avec les anciens devis qui n'ont que convertedToInvoice
-        const invoice = await Invoice.findById(quote.convertedToInvoice);
+        const invoice = await Invoice.findById(quote.convertedToInvoice).lean();
         return invoice ? [invoice] : [];
       }
 

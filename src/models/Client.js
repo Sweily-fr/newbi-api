@@ -389,5 +389,7 @@ clientSchema.index({ createdBy: 1 });
 clientSchema.index({ workspaceId: 1 });
 clientSchema.index({ email: 1, workspaceId: 1 }, { unique: true });
 clientSchema.index({ name: "text" }, { weights: { name: 10 } });
+clientSchema.index({ workspaceId: 1, 'address.city': 1 });
+clientSchema.index({ workspaceId: 1, 'address.postalCode': 1 });
 
 export default mongoose.model("Client", clientSchema);
