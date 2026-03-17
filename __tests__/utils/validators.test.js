@@ -299,8 +299,8 @@ describe("Footer notes validation", () => {
     expect(isValidFooterNotes("")).toBe(true);
   });
 
-  it("should accept long footer notes (no length limit)", () => {
-    expect(isValidFooterNotes("a".repeat(2001))).toBe(true);
+  it("should reject notes exceeding 2000 chars", () => {
+    expect(isValidFooterNotes("a".repeat(2001))).toBe(false);
   });
 });
 
