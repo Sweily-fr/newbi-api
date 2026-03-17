@@ -133,6 +133,11 @@ const eventSchema = new mongoose.Schema({
       enum: [null, '1h', '3h', '1d', '3d'],
       default: null
     },
+    echeance: {
+      type: String,
+      enum: [null, '0m', '5m', '10m', '15m'],
+      default: null
+    },
     sentAt: {
       type: Date,
       default: null
@@ -144,6 +149,15 @@ const eventSchema = new mongoose.Schema({
     },
     scheduledFor: {
       type: Date,
+      default: null
+    },
+    echeanceScheduledFor: {
+      type: Date,
+      default: null
+    },
+    echeanceStatus: {
+      type: String,
+      enum: ['pending', 'sent', 'failed', 'cancelled', null],
       default: null
     },
     failureReason: {
@@ -177,6 +191,8 @@ eventSchema.index({ invoiceId: 1 }, { sparse: true });
 eventSchema.index({ externalEventId: 1, calendarConnectionId: 1 }, { sparse: true });
 eventSchema.index({ userId: 1, visibility: 1, start: 1 });
 eventSchema.index({ calendarConnectionId: 1 }, { sparse: true });
+// Index standalone pour requêtes par userId seul
+eventSchema.index({ userId: 1 });
 // Index pour le cron emailReminderScheduler (toutes les 5 min)
 eventSchema.index({ 'emailReminder.status': 1, 'emailReminder.scheduledFor': 1 }, { sparse: true });
 

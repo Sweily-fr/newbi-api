@@ -79,10 +79,10 @@ const CUSTOM_FIELD_VALUE_REGEX =
   /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\€£¥₽¢₩₴₦₱₸₺₼₾₿]{1,500}$/;
 
 // Regex pour la validation des descriptions d'articles
-// Accepte les lettres, chiffres, espaces et caractères spéciaux courants
+// Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne)
 // Pas de limite de longueur
 const ITEM_DESCRIPTION_REGEX =
-  /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\€£¥₽¢₩₴₦₱₸₺₼₾₿\n\r\t°²³]+$/;
+  /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]+$/u;
 
 // Regex pour la validation des unités de mesure
 // Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)

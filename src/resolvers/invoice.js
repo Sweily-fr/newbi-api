@@ -445,124 +445,119 @@ const invoiceResolvers = {
           { $limit: 20 },
         ]);
 
-        // Pour chaque référence, calculer le montant du contrat et le total facturé
-        const referencesWithContract = await Promise.all(
-          references.map(async (ref) => {
-            let contractTotal = 0;
+        // Batch fetch: récupérer tous les devis en une seule requête au lieu de N
+        const purchaseOrderNumbers = references
+          .map(ref => ref.firstInvoice?.purchaseOrderNumber)
+          .filter(Boolean);
 
-            // Calculer le total TTC réel en tenant compte du progressPercentage
-            let totalTTC = 0;
-            if (ref.invoices && ref.invoices.length > 0) {
-              ref.invoices.forEach((inv) => {
-                if (inv.items && inv.items.length > 0) {
-                  inv.items.forEach((item) => {
-                    const quantity = item.quantity || 1;
-                    const unitPrice = item.unitPrice || 0;
-                    const progressPercentage =
-                      item.progressPercentage !== undefined &&
-                      item.progressPercentage !== null
-                        ? item.progressPercentage
-                        : 100;
-                    const vatRate = item.vatRate || 0;
-                    const discount = item.discount || 0;
-                    const discountType = item.discountType || "PERCENTAGE";
-
-                    let itemHT =
-                      quantity * unitPrice * (progressPercentage / 100);
-
-                    // Appliquer la remise
-                    if (discount > 0) {
-                      if (discountType === "PERCENTAGE") {
-                        itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
-                      } else {
-                        itemHT = Math.max(0, itemHT - discount);
-                      }
-                    }
-
-                    // Ajouter la TVA
-                    const itemTTC = itemHT * (1 + vatRate / 100);
-                    totalTTC += itemTTC;
-                  });
-                } else {
-                  // Fallback sur finalTotalTTC si pas d'items
-                  totalTTC += inv.finalTotalTTC || 0;
-                }
+        let quotesMap = new Map();
+        if (purchaseOrderNumbers.length > 0) {
+          const orConditions = [];
+          for (const pon of purchaseOrderNumbers) {
+            if (pon.includes("-")) {
+              const lastDashIndex = pon.lastIndexOf("-");
+              orConditions.push({
+                prefix: pon.substring(0, lastDashIndex),
+                number: pon.substring(lastDashIndex + 1),
               });
             }
+            orConditions.push({ number: pon });
+          }
+          const allQuotes = await Quote.find({
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            $or: orConditions,
+          }).lean();
 
-            // Essayer de trouver le devis associé via purchaseOrderNumber de la première facture
-            const firstInvoicePurchaseOrder =
-              ref.firstInvoice?.purchaseOrderNumber;
-            if (firstInvoicePurchaseOrder) {
-              // Chercher le devis par son numéro complet
-              let quote = null;
+          // Indexer par prefix-number et par number
+          for (const q of allQuotes) {
+            if (q.prefix) quotesMap.set(`${q.prefix}-${q.number}`, q);
+            quotesMap.set(q.number, q);
+          }
+        }
 
-              if (firstInvoicePurchaseOrder.includes("-")) {
-                const lastDashIndex =
-                  firstInvoicePurchaseOrder.lastIndexOf("-");
-                const possiblePrefix = firstInvoicePurchaseOrder.substring(
-                  0,
-                  lastDashIndex
-                );
-                const possibleNumber = firstInvoicePurchaseOrder.substring(
-                  lastDashIndex + 1
-                );
+        // Calculer les montants de manière synchrone (plus de requêtes DB dans la boucle)
+        const referencesWithContract = references.map((ref) => {
+          let contractTotal = 0;
 
-                quote = await Quote.findOne({
-                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                  prefix: possiblePrefix,
-                  number: possibleNumber,
+          // Calculer le total TTC réel en tenant compte du progressPercentage
+          let totalTTC = 0;
+          if (ref.invoices && ref.invoices.length > 0) {
+            ref.invoices.forEach((inv) => {
+              if (inv.items && inv.items.length > 0) {
+                inv.items.forEach((item) => {
+                  const quantity = item.quantity || 1;
+                  const unitPrice = item.unitPrice || 0;
+                  const progressPercentage =
+                    item.progressPercentage !== undefined &&
+                    item.progressPercentage !== null
+                      ? item.progressPercentage
+                      : 100;
+                  const vatRate = item.vatRate || 0;
+                  const discount = item.discount || 0;
+                  const discountType = item.discountType || "PERCENTAGE";
+
+                  let itemHT =
+                    quantity * unitPrice * (progressPercentage / 100);
+
+                  if (discount > 0) {
+                    if (discountType === "PERCENTAGE") {
+                      itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
+                    } else {
+                      itemHT = Math.max(0, itemHT - discount);
+                    }
+                  }
+
+                  const itemTTC = itemHT * (1 + vatRate / 100);
+                  totalTTC += itemTTC;
                 });
+              } else {
+                totalTTC += inv.finalTotalTTC || 0;
               }
+            });
+          }
 
-              if (!quote) {
-                quote = await Quote.findOne({
-                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                  number: firstInvoicePurchaseOrder,
-                });
+          // Lookup synchrone dans le map pré-chargé
+          const firstInvoicePurchaseOrder =
+            ref.firstInvoice?.purchaseOrderNumber;
+          if (firstInvoicePurchaseOrder) {
+            const quote = quotesMap.get(firstInvoicePurchaseOrder) || null;
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
+            }
+          }
+
+          if (contractTotal === 0 && ref.firstInvoice?.contractTotal) {
+            contractTotal = ref.firstInvoice.contractTotal;
+          }
+
+          if (contractTotal === 0 && ref.firstInvoice?.items) {
+            contractTotal = ref.firstInvoice.items.reduce((sum, item) => {
+              const quantity = item.quantity || 1;
+              const unitPrice = item.unitPrice || 0;
+              const vatRate = item.vatRate || 0;
+              const discount = item.discount || 0;
+              const discountType = item.discountType || "PERCENTAGE";
+
+              let lineTotal = quantity * unitPrice;
+              if (discountType === "PERCENTAGE") {
+                lineTotal = lineTotal * (1 - discount / 100);
+              } else {
+                lineTotal = lineTotal - discount;
               }
+              lineTotal = lineTotal * (1 + vatRate / 100);
 
-              if (quote) {
-                contractTotal = quote.finalTotalTTC || 0;
-              }
-            }
+              return sum + lineTotal;
+            }, 0);
+          }
 
-            // Si pas de devis, utiliser contractTotal de la première facture
-            if (contractTotal === 0 && ref.firstInvoice?.contractTotal) {
-              contractTotal = ref.firstInvoice.contractTotal;
-            }
-
-            // Si toujours pas de contrat, calculer depuis la première facture (sans les %)
-            if (contractTotal === 0 && ref.firstInvoice?.items) {
-              contractTotal = ref.firstInvoice.items.reduce((sum, item) => {
-                const quantity = item.quantity || 1;
-                const unitPrice = item.unitPrice || 0;
-                const vatRate = item.vatRate || 0;
-                const discount = item.discount || 0;
-                const discountType = item.discountType || "PERCENTAGE";
-
-                let lineTotal = quantity * unitPrice;
-                if (discountType === "PERCENTAGE") {
-                  lineTotal = lineTotal * (1 - discount / 100);
-                } else {
-                  lineTotal = lineTotal - discount;
-                }
-                // Ajouter la TVA
-                lineTotal = lineTotal * (1 + vatRate / 100);
-
-                return sum + lineTotal;
-              }, 0);
-            }
-
-            return {
-              reference: ref._id,
-              count: ref.count,
-              lastInvoiceDate: ref.lastInvoiceDate,
-              totalTTC: totalTTC,
-              contractTotal: contractTotal,
-            };
-          })
-        );
+          return {
+            reference: ref._id,
+            count: ref.count,
+            lastInvoiceDate: ref.lastInvoiceDate,
+            totalTTC: totalTTC,
+            contractTotal: contractTotal,
+          };
+        });
 
         console.log(
           `✅ ${referencesWithContract.length} référence(s) de situation trouvée(s)`

@@ -73,12 +73,6 @@ const creditNoteSchema = new mongoose.Schema(
       type: String,
       required: false,
       trim: true,
-      validate: {
-        validator: function (value) {
-          return !value || value.length <= 500;
-        },
-        message: "La raison ne doit pas dépasser 500 caractères",
-      },
     },
     issueDate: {
       type: Date,
@@ -118,12 +112,6 @@ const creditNoteSchema = new mongoose.Schema(
     headerNotes: {
       type: String,
       trim: true,
-      validate: {
-        validator: function (value) {
-          return !value || value.length <= 1000;
-        },
-        message: "Les notes ne doivent pas dépasser 1000 caractères",
-      },
     },
     footerNotes: {
       type: String,
@@ -131,7 +119,7 @@ const creditNoteSchema = new mongoose.Schema(
       validate: {
         validator: isValidFooterNotes,
         message:
-          "Les notes de bas de page ne doivent pas dépasser 2000 caractères ou contiennent des caractères non autorisés",
+          "Les notes de bas de page contiennent des caractères non autorisés",
       },
     },
     termsAndConditions: {
@@ -297,6 +285,11 @@ const creditNoteSchema = new mongoose.Schema(
     clientPositionRight: {
       type: Boolean,
       default: false,
+    },
+    operationType: {
+      type: String,
+      enum: ['LB', 'PS', 'LBPS', null],
+      default: null,
     },
     // Retenue de garantie (en pourcentage)
     retenueGarantie: {

@@ -243,8 +243,8 @@ extend type Query {
   # Pour les visiteurs externes - accéder au tableau via le token
   getPublicBoard(token: String!, email: String!, password: String): PublicAccessResult!
   
-  # Vérifier si un token est valide (sans email)
-  validatePublicToken(token: String!): Boolean!
+  # Vérifier si un token est valide (sans email) - retourne le nom du lien si valide, null sinon
+  validatePublicToken(token: String!): String
 }
 
 # Mutations pour le partage public

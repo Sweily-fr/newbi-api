@@ -625,7 +625,8 @@ const importedInvoiceResolvers = {
           ImportedInvoice.find(query)
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit),
+            .limit(limit)
+            .lean(),
           ImportedInvoice.countDocuments(query),
         ]);
 
@@ -1303,7 +1304,7 @@ const importedInvoiceResolvers = {
      */
     deleteImportedInvoices: isAuthenticated(async (_, { ids }) => {
       // Récupérer les factures pour avoir les cloudflareKeys
-      const invoices = await ImportedInvoice.find({ _id: { $in: ids } });
+      const invoices = await ImportedInvoice.find({ _id: { $in: ids } }).lean();
 
       // Supprimer les fichiers PDF sur Cloudflare
       for (const invoice of invoices) {

@@ -417,9 +417,9 @@ const resolvers = {
     validatePublicToken: async (_, { token }) => {
       try {
         const share = await PublicBoardShare.findOne({ token });
-        return share ? share.isValid() : false;
+        return share && share.isValid() ? (share.name || "Tableau partagé") : null;
       } catch {
-        return false;
+        return null;
       }
     }
   },

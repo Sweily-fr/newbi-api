@@ -341,7 +341,7 @@ const userSchema = new mongoose.Schema(
       reminders: {
         enabled: {
           type: Boolean,
-          default: false,
+          default: true,
         },
         types: {
           type: [String],

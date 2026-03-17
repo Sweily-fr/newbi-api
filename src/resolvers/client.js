@@ -14,6 +14,7 @@ import {
   createNotFoundError,
   createAlreadyExistsError,
   createResourceInUseError,
+  createValidationError,
   AppError,
   ERROR_CODES,
 } from "../utils/errors.js";
@@ -134,7 +135,7 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // Pour une entreprise, le numéro d'identification est obligatoire
           if (!input.siret || input.siret.trim() === "") {
-            throw new Error(
+            throw createValidationError(
               input.isInternational
                 ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
                 : "Le SIREN/SIRET est obligatoire pour une entreprise française"
@@ -146,7 +147,7 @@ const clientResolvers = {
             !/^\d{9}$/.test(input.siret) &&
             !/^\d{14}$/.test(input.siret)
           ) {
-            throw new Error(
+            throw createValidationError(
               "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres"
             );
           }
@@ -183,7 +184,22 @@ const clientResolvers = {
           ],
         });
 
-        await client.save();
+        try {
+          await client.save();
+        } catch (saveError) {
+          // Gérer l'erreur de duplicate key (race condition sur l'index unique email+workspaceId)
+          if (saveError.code === 11000) {
+            throw createAlreadyExistsError("client", "email", input.email);
+          }
+          // Gérer les erreurs de validation Mongoose
+          if (saveError.name === "ValidationError") {
+            const firstError = Object.values(saveError.errors)[0];
+            throw createValidationError(
+              firstError?.message || "Les données du client ne sont pas valides"
+            );
+          }
+          throw saveError;
+        }
 
         // Exécuter les automatisations CLIENT_CREATED
         try {
@@ -246,7 +262,7 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // Pour une entreprise, le numéro d'identification est obligatoire
           if (!input.siret || input.siret.trim() === "") {
-            throw new Error(
+            throw createValidationError(
               input.isInternational
                 ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
                 : "Le SIREN/SIRET est obligatoire pour une entreprise française"
@@ -258,7 +274,7 @@ const clientResolvers = {
             !/^\d{9}$/.test(input.siret) &&
             !/^\d{14}$/.test(input.siret)
           ) {
-            throw new Error(
+            throw createValidationError(
               "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres"
             );
           }
@@ -395,7 +411,20 @@ const clientResolvers = {
           });
         }
 
-        await client.save();
+        try {
+          await client.save();
+        } catch (saveError) {
+          if (saveError.code === 11000) {
+            throw createAlreadyExistsError("client", "email", input.email);
+          }
+          if (saveError.name === "ValidationError") {
+            const firstError = Object.values(saveError.errors)[0];
+            throw createValidationError(
+              firstError?.message || "Les données du client ne sont pas valides"
+            );
+          }
+          throw saveError;
+        }
         return client;
       }
     ),

@@ -21,9 +21,51 @@ import Stripe from "stripe";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 import constants from "../utils/constants.js";
 const { BASE_URL } = constants;
+import mongoose from "mongoose";
 
-// Taille maximale autorisée (5 GB en octets)
-const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024;
+// Taille maximale par défaut (5 GB en octets)
+const DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024;
+
+// Limites de transfert par plan (en Go)
+const FILE_TRANSFER_LIMITS = {
+  freelance: 5,
+  pme: 15,
+  entreprise: 50,
+};
+
+/**
+ * Récupère la taille max de transfert selon le plan de l'utilisateur
+ */
+async function getMaxFileSize(userId) {
+  try {
+    const db = mongoose.connection.db;
+    if (!db) return DEFAULT_MAX_FILE_SIZE;
+
+    // Chercher l'organisation de l'utilisateur
+    const member = await db.collection("member").findOne({
+      userId: userId.toString(),
+    });
+    if (!member) return DEFAULT_MAX_FILE_SIZE;
+
+    const orgId = member.organizationId?.toString();
+    if (!orgId) return DEFAULT_MAX_FILE_SIZE;
+
+    // Chercher la subscription active
+    const subscription = await db.collection("subscription").findOne({
+      $or: [
+        { referenceId: orgId },
+        { organizationId: orgId },
+      ],
+      status: { $in: ["active", "trialing"] },
+    });
+
+    const plan = subscription?.plan?.toLowerCase() || "freelance";
+    const limitGB = FILE_TRANSFER_LIMITS[plan] || FILE_TRANSFER_LIMITS.freelance;
+    return limitGB * 1024 * 1024 * 1024;
+  } catch {
+    return DEFAULT_MAX_FILE_SIZE;
+  }
+}
 
 export default {
   Query: {
@@ -232,6 +274,9 @@ export default {
           // Calculer la date d'expiration (48 heures par défaut)
           const expiryDate = calculateExpiryDate(2);
 
+          // Récupérer la limite de taille selon le plan
+          const maxFileSize = await getMaxFileSize(user.id);
+
           // Sauvegarder les fichiers
           const uploadedFiles = [];
           let totalSize = 0;
@@ -243,14 +288,14 @@ export default {
           }
 
           // Vérifier la taille totale
-          if (totalSize > MAX_FILE_SIZE) {
+          if (totalSize > maxFileSize) {
             // Supprimer les fichiers téléchargés
             for (const file of uploadedFiles) {
               deleteFile(file.filePath);
             }
 
             throw new UserInputError(
-              "La taille totale des fichiers dépasse la limite de 100 GB"
+              `La taille totale des fichiers dépasse la limite autorisée (${Math.round(maxFileSize / (1024 * 1024 * 1024))} Go)`
             );
           }
 
@@ -363,6 +408,9 @@ export default {
             );
           }
 
+          // Récupérer la limite de taille selon le plan
+          const maxFileSize = await getMaxFileSize(user.id);
+
           // Sauvegarder les fichiers
           const uploadedFiles = [];
           let totalSize = 0;
@@ -374,16 +422,14 @@ export default {
           }
 
           // Vérifier la taille totale
-          if (totalSize > MAX_FILE_SIZE) {
+          if (totalSize > maxFileSize) {
             // Supprimer les fichiers téléchargés
             for (const file of uploadedFiles) {
               deleteFile(file.filePath);
             }
 
             throw new UserInputError(
-              `La taille totale des fichiers dépasse la limite autorisée (${
-                MAX_FILE_SIZE / (1024 * 1024 * 1024)
-              } GB)`
+              `La taille totale des fichiers dépasse la limite autorisée (${Math.round(maxFileSize / (1024 * 1024 * 1024))} Go)`
             );
           }
 

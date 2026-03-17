@@ -267,6 +267,11 @@ const quoteSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  operationType: {
+    type: String,
+    enum: ['LB', 'PS', 'LBPS', null],
+    default: null,
+  },
   // Retenue de garantie (en pourcentage)
   retenueGarantie: {
     type: Number,

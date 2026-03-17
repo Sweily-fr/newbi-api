@@ -250,21 +250,19 @@ const sharedDocumentResolvers = {
           return canAccessFolder(userId, folder, effectiveVis);
         });
 
-        // Ajouter le compte de documents pour chaque dossier accessible (exclure docs en corbeille)
-        const foldersWithCount = await Promise.all(
-          accessibleFolders.map(async (folder) => {
-            const documentsCount = await SharedDocument.countDocuments({
-              workspaceId,
-              folderId: folder._id,
-              trashedAt: null,
-            });
-            return {
-              ...folder.toObject(),
-              id: folder._id,
-              documentsCount,
-            };
-          })
-        );
+        // Compter les documents en une seule agrégation au lieu de N requêtes
+        const folderIds = accessibleFolders.map(f => f._id);
+        const countResults = await SharedDocument.aggregate([
+          { $match: { workspaceId, folderId: { $in: folderIds }, trashedAt: null } },
+          { $group: { _id: "$folderId", count: { $sum: 1 } } },
+        ]);
+        const countMap = new Map(countResults.map(r => [r._id.toString(), r.count]));
+
+        const foldersWithCount = accessibleFolders.map((folder) => ({
+          ...folder.toObject(),
+          id: folder._id,
+          documentsCount: countMap.get(folder._id.toString()) || 0,
+        }));
 
         return {
           success: true,

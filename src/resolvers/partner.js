@@ -318,58 +318,63 @@ const partnerResolvers = {
           .sort({ requestedAt: -1 })
           .lean();
 
-        // Récupérer les infos des partenaires et calculer leurs stats
-        const withdrawalsWithPartnerInfo = await Promise.all(
-          withdrawals.map(async (w) => {
-            const partner = await User.findById(w.partnerId).lean();
-            
-            if (!partner) {
-              return null;
-            }
+        // Batch fetch: récupérer toutes les données en 3 requêtes au lieu de N*3
+        const partnerIds = [...new Set(withdrawals.map(w => w.partnerId.toString()))];
+        const partnerObjectIds = partnerIds.map(id => new mongoose.Types.ObjectId(id));
 
-            // Calculer les gains totaux
-            const confirmedCommissions = await PartnerCommission.find({
-              partnerId: w.partnerId,
-              status: { $in: ['confirmed', 'paid'] },
-            });
+        const [partners, allCommissions, allPartnerWithdrawals] = await Promise.all([
+          User.find({ _id: { $in: partnerObjectIds } }).lean(),
+          PartnerCommission.find({
+            partnerId: { $in: partnerObjectIds },
+            status: { $in: ['confirmed', 'paid'] },
+          }).lean(),
+          Withdrawal.find({
+            partnerId: { $in: partnerObjectIds },
+            status: { $in: ['completed', 'pending', 'processing'] },
+          }).lean(),
+        ]);
 
-            const totalEarnings = confirmedCommissions.reduce(
-              (sum, comm) => sum + comm.commissionAmount,
-              0
-            );
+        // Indexer par partnerId pour accès O(1)
+        const partnerMap = new Map(partners.map(p => [p._id.toString(), p]));
 
-            // Calculer le solde disponible
-            const allWithdrawals = await Withdrawal.find({
-              partnerId: w.partnerId,
-              status: { $in: ['completed', 'pending', 'processing'] },
-            });
+        const earningsByPartner = new Map();
+        for (const comm of allCommissions) {
+          const pid = comm.partnerId.toString();
+          earningsByPartner.set(pid, (earningsByPartner.get(pid) || 0) + comm.commissionAmount);
+        }
 
-            const totalWithdrawn = allWithdrawals.reduce(
-              (sum, withdrawal) => sum + withdrawal.amount,
-              0
-            );
+        const withdrawnByPartner = new Map();
+        for (const wd of allPartnerWithdrawals) {
+          const pid = wd.partnerId.toString();
+          withdrawnByPartner.set(pid, (withdrawnByPartner.get(pid) || 0) + wd.amount);
+        }
 
-            const availableBalance = totalEarnings - totalWithdrawn;
+        const withdrawalsWithPartnerInfo = withdrawals.map((w) => {
+          const partner = partnerMap.get(w.partnerId.toString());
+          if (!partner) return null;
 
-            return {
-              id: w._id.toString(),
-              amount: w.amount,
-              status: w.status,
-              requestedAt: w.requestedAt.toISOString(),
-              processedAt: w.processedAt?.toISOString() || null,
-              method: w.method,
-              bankDetails: w.bankDetails || null,
-              hasInvoice: w.hasInvoice || false,
-              partner: {
-                id: partner._id.toString(),
-                name: partner.name || partner.email,
-                email: partner.email,
-                totalEarnings,
-                availableBalance,
-              },
-            };
-          })
-        );
+          const totalEarnings = earningsByPartner.get(w.partnerId.toString()) || 0;
+          const totalWithdrawn = withdrawnByPartner.get(w.partnerId.toString()) || 0;
+          const availableBalance = totalEarnings - totalWithdrawn;
+
+          return {
+            id: w._id.toString(),
+            amount: w.amount,
+            status: w.status,
+            requestedAt: w.requestedAt.toISOString(),
+            processedAt: w.processedAt?.toISOString() || null,
+            method: w.method,
+            bankDetails: w.bankDetails || null,
+            hasInvoice: w.hasInvoice || false,
+            partner: {
+              id: partner._id.toString(),
+              name: partner.name || partner.email,
+              email: partner.email,
+              totalEarnings,
+              availableBalance,
+            },
+          };
+        });
 
         return withdrawalsWithPartnerInfo.filter(w => w !== null);
       } catch (error) {
@@ -392,7 +397,7 @@ const partnerResolvers = {
 
       try {
         // Récupérer le code de parrainage du partenaire
-        const partner = await User.findById(user._id);
+        const partner = await User.findById(user._id).lean();
         if (!partner || !partner.referralCode) {
           logger.warn(`Partenaire ${user._id} sans code de parrainage`);
           return [];
@@ -403,50 +408,55 @@ const partnerResolvers = {
         // Récupérer tous les utilisateurs qui ont ce code de parrainage
         const referrals = await User.find({
           referredBy: partner.referralCode
-        }).sort({ createdAt: -1 });
+        }).sort({ createdAt: -1 }).lean();
 
         logger.info(`${referrals.length} filleuls trouvés`);
 
-        // Pour chaque filleul, récupérer ses commissions
-        const referralsWithCommissions = await Promise.all(
-          referrals.map(async (referral) => {
-            // Récupérer les commissions confirmées/payées pour ce filleul
-            const commissions = await PartnerCommission.find({
-              partnerId: partner._id,
-              referralId: referral._id,
-              status: { $in: ['confirmed', 'paid'] }
-            });
+        // Batch fetch: une seule requête pour toutes les commissions
+        const referralIds = referrals.map(r => r._id);
+        const allCommissions = await PartnerCommission.find({
+          partnerId: partner._id,
+          referralId: { $in: referralIds },
+          status: { $in: ['confirmed', 'paid'] }
+        }).lean();
 
-            // Calculer les totaux
-            const totalRevenue = commissions.reduce((sum, c) => sum + (c.paymentAmount || 0), 0);
-            const totalCommission = commissions.reduce((sum, c) => sum + (c.commissionAmount || 0), 0);
+        // Grouper les commissions par referralId
+        const commissionsByReferral = new Map();
+        for (const comm of allCommissions) {
+          const rid = comm.referralId.toString();
+          if (!commissionsByReferral.has(rid)) commissionsByReferral.set(rid, []);
+          commissionsByReferral.get(rid).push(comm);
+        }
 
-            // Déterminer le type d'abonnement et le prix (prendre la dernière commission)
-            const lastCommission = commissions[0];
-            const subscriptionType = lastCommission?.subscriptionType === 'annual' ? 'ANNUAL' : 'MONTHLY';
-            const subscriptionPrice = lastCommission?.paymentAmount || 0;
+        const referralsWithCommissions = referrals.map((referral) => {
+          const commissions = commissionsByReferral.get(referral._id.toString()) || [];
 
-            // Déterminer le statut
-            const status = commissions.length > 0 ? 'ACTIVE' : 'TRIAL';
+          const totalRevenue = commissions.reduce((sum, c) => sum + (c.paymentAmount || 0), 0);
+          const totalCommission = commissions.reduce((sum, c) => sum + (c.commissionAmount || 0), 0);
 
-            return {
-              id: referral._id.toString(),
-              name: referral.profile?.firstName && referral.profile?.lastName
-                ? `${referral.profile.firstName} ${referral.profile.lastName}`
-                : null,
-              email: referral.email || 'Email non disponible',
-              company: referral.company?.name || null,
-              subscriptionType,
-              subscriptionPrice,
-              status,
-              registrationDate: referral.createdAt 
-                ? referral.createdAt.toISOString() 
-                : new Date().toISOString(),
-              totalRevenue,
-              commission: totalCommission,
-            };
-          })
-        );
+          const lastCommission = commissions[0];
+          const subscriptionType = lastCommission?.subscriptionType === 'annual' ? 'ANNUAL' : 'MONTHLY';
+          const subscriptionPrice = lastCommission?.paymentAmount || 0;
+
+          const status = commissions.length > 0 ? 'ACTIVE' : 'TRIAL';
+
+          return {
+            id: referral._id.toString(),
+            name: referral.profile?.firstName && referral.profile?.lastName
+              ? `${referral.profile.firstName} ${referral.profile.lastName}`
+              : null,
+            email: referral.email || 'Email non disponible',
+            company: referral.company?.name || null,
+            subscriptionType,
+            subscriptionPrice,
+            status,
+            registrationDate: referral.createdAt
+              ? referral.createdAt.toISOString()
+              : new Date().toISOString(),
+            totalRevenue,
+            commission: totalCommission,
+          };
+        });
 
         logger.info(`Données complètes préparées pour ${referralsWithCommissions.length} filleuls`);
 
