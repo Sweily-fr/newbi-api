@@ -17,7 +17,7 @@ const bankingResolvers = {
       async (
         parent,
         { workspaceId, filters = {}, limit = 50, offset = 0 },
-        { user }
+        { user },
       ) => {
         const query = { workspaceId };
 
@@ -40,7 +40,7 @@ const bankingResolvers = {
           .limit(limit)
           .skip(offset)
           .lean();
-      }
+      },
     ),
 
     transaction: withWorkspace(
@@ -53,7 +53,7 @@ const bankingResolvers = {
           throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
         }
         return transaction;
-      }
+      },
     ),
 
     transactionByExternalId: withWorkspace(
@@ -68,14 +68,14 @@ const bankingResolvers = {
           throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
         }
         return transaction;
-      }
+      },
     ),
 
     // Comptes bancaires - workspaceId passé en argument
     bankingAccounts: withWorkspace(
       async (parent, { workspaceId }, { user }) => {
         return await AccountBanking.findByWorkspace(workspaceId);
-      }
+      },
     ),
 
     bankingAccount: withWorkspace(
@@ -84,11 +84,11 @@ const bankingResolvers = {
         if (!account) {
           throw new AppError(
             "Compte bancaire non trouvé",
-            ERROR_CODES.NOT_FOUND
+            ERROR_CODES.NOT_FOUND,
           );
         }
         return account;
-      }
+      },
     ),
 
     accountBalance: withWorkspace(
@@ -99,10 +99,10 @@ const bankingResolvers = {
         } catch (error) {
           throw new AppError(
             `Erreur lors de la récupération du solde: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
 
     // Métriques
@@ -116,19 +116,19 @@ const bankingResolvers = {
         }
 
         return await ApiMetric.find(query).sort({ date: -1 });
-      }
+      },
     ),
 
     providerStats: withWorkspace(
       async (
         parent,
         { provider, startDate, endDate },
-        { user, workspaceId }
+        { user, workspaceId },
       ) => {
         const stats = await ApiMetric.getProviderStats(
           provider.toLowerCase(),
           startDate,
-          endDate
+          endDate,
         );
         return (
           stats[0] || {
@@ -139,20 +139,20 @@ const bankingResolvers = {
             successRate: 0,
           }
         );
-      }
+      },
     ),
 
     costComparison: withWorkspace(
       async (parent, { startDate, endDate }, { user, workspaceId }) => {
         const comparison = await ApiMetric.getCostComparison(
           startDate,
-          endDate
+          endDate,
         );
         return comparison.map((item) => ({
           ...item,
           provider: item._id.toUpperCase(),
         }));
-      }
+      },
     ),
 
     // Historique des transactions
@@ -163,15 +163,15 @@ const bankingResolvers = {
           return await bankingService.getTransactionHistory(
             accountId,
             workspaceId,
-            filters
+            filters,
           );
         } catch (error) {
           throw new AppError(
             `Erreur lors de la récupération de l'historique: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
   },
 
@@ -185,34 +185,96 @@ const bankingResolvers = {
 
       // Mapper vers la catégorie large pour expenseCategory (enum validé)
       const VALID_EXPENSE_CATEGORIES = [
-        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
-        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
-        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+        "OFFICE_SUPPLIES",
+        "TRAVEL",
+        "MEALS",
+        "ACCOMMODATION",
+        "SOFTWARE",
+        "HARDWARE",
+        "SERVICES",
+        "MARKETING",
+        "TAXES",
+        "RENT",
+        "UTILITIES",
+        "SALARIES",
+        "INSURANCE",
+        "MAINTENANCE",
+        "TRAINING",
+        "SUBSCRIPTIONS",
+        "OTHER",
       ];
 
       let expenseCategory = category;
       if (!VALID_EXPENSE_CATEGORIES.includes(category)) {
         const subcategoryToExpenseCategory = {
-          bureau: "OFFICE_SUPPLIES", materiel: "HARDWARE", mobilier: "OFFICE_SUPPLIES", equipement: "HARDWARE",
-          transport: "TRAVEL", carburant: "TRAVEL", parking: "TRAVEL", peage: "TRAVEL",
-          taxi: "TRAVEL", train: "TRAVEL", avion: "TRAVEL", location_vehicule: "TRAVEL",
-          repas: "MEALS", restaurant: "MEALS", hotel: "ACCOMMODATION",
-          marketing: "MARKETING", publicite: "MARKETING", communication: "MARKETING",
-          telephone: "UTILITIES", internet: "UTILITIES", site_web: "SOFTWARE", reseaux_sociaux: "MARKETING",
-          formation: "TRAINING", conference: "TRAINING", livres: "TRAINING", abonnement: "SUBSCRIPTIONS",
-          comptabilite: "SERVICES", juridique: "SERVICES", assurance: "INSURANCE",
-          banque: "SERVICES", conseil: "SERVICES", sous_traitance: "SERVICES",
-          loyer: "RENT", electricite: "UTILITIES", eau: "UTILITIES", chauffage: "UTILITIES", entretien: "MAINTENANCE",
-          logiciel: "SOFTWARE", saas: "SOFTWARE", licence: "SOFTWARE",
-          salaire: "SALARIES", charges_sociales: "SALARIES", recrutement: "SERVICES",
-          impots_taxes: "TAXES", tva: "TAXES", avoirs_remboursement: "OTHER",
-          cadeaux: "OTHER", representation: "OTHER", poste: "OFFICE_SUPPLIES", impression: "OFFICE_SUPPLIES",
+          bureau: "OFFICE_SUPPLIES",
+          materiel: "HARDWARE",
+          mobilier: "OFFICE_SUPPLIES",
+          equipement: "HARDWARE",
+          transport: "TRAVEL",
+          carburant: "TRAVEL",
+          parking: "TRAVEL",
+          peage: "TRAVEL",
+          taxi: "TRAVEL",
+          train: "TRAVEL",
+          avion: "TRAVEL",
+          location_vehicule: "TRAVEL",
+          repas: "MEALS",
+          restaurant: "MEALS",
+          hotel: "ACCOMMODATION",
+          marketing: "MARKETING",
+          publicite: "MARKETING",
+          communication: "MARKETING",
+          telephone: "UTILITIES",
+          internet: "UTILITIES",
+          site_web: "SOFTWARE",
+          reseaux_sociaux: "MARKETING",
+          formation: "TRAINING",
+          conference: "TRAINING",
+          livres: "TRAINING",
+          abonnement: "SUBSCRIPTIONS",
+          comptabilite: "SERVICES",
+          juridique: "SERVICES",
+          assurance: "INSURANCE",
+          banque: "SERVICES",
+          conseil: "SERVICES",
+          sous_traitance: "SERVICES",
+          loyer: "RENT",
+          electricite: "UTILITIES",
+          eau: "UTILITIES",
+          chauffage: "UTILITIES",
+          entretien: "MAINTENANCE",
+          logiciel: "SOFTWARE",
+          saas: "SOFTWARE",
+          licence: "SOFTWARE",
+          salaire: "SALARIES",
+          charges_sociales: "SALARIES",
+          recrutement: "SERVICES",
+          impots_taxes: "TAXES",
+          tva: "TAXES",
+          avoirs_remboursement: "OTHER",
+          cadeaux: "OTHER",
+          representation: "OTHER",
+          poste: "OFFICE_SUPPLIES",
+          impression: "OFFICE_SUPPLIES",
           autre: "OTHER",
-          ventes: "SERVICES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
-          consulting: "SERVICES", abonnements_revenus: "SUBSCRIPTIONS", licences_revenus: "SOFTWARE",
-          royalties: "OTHER", loyers_revenus: "RENT", interets: "OTHER", dividendes: "OTHER",
-          plus_values: "OTHER", subventions: "OTHER", remboursements_revenus: "OTHER",
-          indemnites: "OTHER", cadeaux_recus: "OTHER", autre_revenu: "OTHER",
+          ventes: "SERVICES",
+          services: "SERVICES",
+          honoraires: "SERVICES",
+          commissions: "SERVICES",
+          consulting: "SERVICES",
+          abonnements_revenus: "SUBSCRIPTIONS",
+          licences_revenus: "SOFTWARE",
+          royalties: "OTHER",
+          loyers_revenus: "RENT",
+          interets: "OTHER",
+          dividendes: "OTHER",
+          plus_values: "OTHER",
+          subventions: "OTHER",
+          remboursements_revenus: "OTHER",
+          indemnites: "OTHER",
+          cadeaux_recus: "OTHER",
+          autre_revenu: "OTHER",
         };
         expenseCategory = subcategoryToExpenseCategory[category] || "OTHER";
       }
@@ -228,7 +290,7 @@ const bankingResolvers = {
         workspaceId: input.workspaceId,
         userId: user._id,
         date: input.date || new Date(),
-        category: category,              // Catégorie fine (ex: "parking")
+        category: category, // Catégorie fine (ex: "parking")
         expenseCategory: expenseCategory, // Catégorie large pour le reporting (ex: "TRAVEL")
         metadata: {
           vendor: input.vendor,
@@ -254,13 +316,27 @@ const bankingResolvers = {
         if (input.type) updateData.type = input.type.toLowerCase();
         if (input.date) updateData.date = input.date;
         if (input.category) {
-          updateData.category = input.category;         // Catégorie fine (ex: "parking", "carburant") ou large (ex: "TRAVEL")
+          updateData.category = input.category; // Catégorie fine (ex: "parking", "carburant") ou large (ex: "TRAVEL")
 
           // Mapper vers la catégorie large pour expenseCategory (enum validé)
           const VALID_EXPENSE_CATEGORIES = [
-            "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
-            "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
-            "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+            "OFFICE_SUPPLIES",
+            "TRAVEL",
+            "MEALS",
+            "ACCOMMODATION",
+            "SOFTWARE",
+            "HARDWARE",
+            "SERVICES",
+            "MARKETING",
+            "TAXES",
+            "RENT",
+            "UTILITIES",
+            "SALARIES",
+            "INSURANCE",
+            "MAINTENANCE",
+            "TRAINING",
+            "SUBSCRIPTIONS",
+            "OTHER",
           ];
 
           if (VALID_EXPENSE_CATEGORIES.includes(input.category)) {
@@ -269,40 +345,90 @@ const bankingResolvers = {
           } else {
             // Sous-catégorie fine → mapper vers la catégorie large
             const subcategoryToExpenseCategory = {
-              bureau: "OFFICE_SUPPLIES", materiel: "HARDWARE", mobilier: "OFFICE_SUPPLIES", equipement: "HARDWARE",
-              transport: "TRAVEL", carburant: "TRAVEL", parking: "TRAVEL", peage: "TRAVEL",
-              taxi: "TRAVEL", train: "TRAVEL", avion: "TRAVEL", location_vehicule: "TRAVEL",
-              repas: "MEALS", restaurant: "MEALS", hotel: "ACCOMMODATION",
-              marketing: "MARKETING", publicite: "MARKETING", communication: "MARKETING",
-              telephone: "UTILITIES", internet: "UTILITIES", site_web: "SOFTWARE", reseaux_sociaux: "MARKETING",
-              formation: "TRAINING", conference: "TRAINING", livres: "TRAINING", abonnement: "SUBSCRIPTIONS",
-              comptabilite: "SERVICES", juridique: "SERVICES", assurance: "INSURANCE",
-              banque: "SERVICES", conseil: "SERVICES", sous_traitance: "SERVICES",
-              loyer: "RENT", electricite: "UTILITIES", eau: "UTILITIES", chauffage: "UTILITIES", entretien: "MAINTENANCE",
-              logiciel: "SOFTWARE", saas: "SOFTWARE", licence: "SOFTWARE",
-              salaire: "SALARIES", charges_sociales: "SALARIES", recrutement: "SERVICES",
-              impots_taxes: "TAXES", tva: "TAXES", avoirs_remboursement: "OTHER",
-              cadeaux: "OTHER", representation: "OTHER", poste: "OFFICE_SUPPLIES", impression: "OFFICE_SUPPLIES",
+              bureau: "OFFICE_SUPPLIES",
+              materiel: "HARDWARE",
+              mobilier: "OFFICE_SUPPLIES",
+              equipement: "HARDWARE",
+              transport: "TRAVEL",
+              carburant: "TRAVEL",
+              parking: "TRAVEL",
+              peage: "TRAVEL",
+              taxi: "TRAVEL",
+              train: "TRAVEL",
+              avion: "TRAVEL",
+              location_vehicule: "TRAVEL",
+              repas: "MEALS",
+              restaurant: "MEALS",
+              hotel: "ACCOMMODATION",
+              marketing: "MARKETING",
+              publicite: "MARKETING",
+              communication: "MARKETING",
+              telephone: "UTILITIES",
+              internet: "UTILITIES",
+              site_web: "SOFTWARE",
+              reseaux_sociaux: "MARKETING",
+              formation: "TRAINING",
+              conference: "TRAINING",
+              livres: "TRAINING",
+              abonnement: "SUBSCRIPTIONS",
+              comptabilite: "SERVICES",
+              juridique: "SERVICES",
+              assurance: "INSURANCE",
+              banque: "SERVICES",
+              conseil: "SERVICES",
+              sous_traitance: "SERVICES",
+              loyer: "RENT",
+              electricite: "UTILITIES",
+              eau: "UTILITIES",
+              chauffage: "UTILITIES",
+              entretien: "MAINTENANCE",
+              logiciel: "SOFTWARE",
+              saas: "SOFTWARE",
+              licence: "SOFTWARE",
+              salaire: "SALARIES",
+              charges_sociales: "SALARIES",
+              recrutement: "SERVICES",
+              impots_taxes: "TAXES",
+              tva: "TAXES",
+              avoirs_remboursement: "OTHER",
+              cadeaux: "OTHER",
+              representation: "OTHER",
+              poste: "OFFICE_SUPPLIES",
+              impression: "OFFICE_SUPPLIES",
               autre: "OTHER",
               // Revenus
-              ventes: "SALES", services: "SERVICES", honoraires: "SERVICES", commissions: "SERVICES",
-              consulting: "SERVICES", abonnements_revenus: "SUBSCRIPTIONS", licences_revenus: "SOFTWARE",
-              royalties: "OTHER", loyers_revenus: "RENT", interets: "OTHER", dividendes: "OTHER",
-              plus_values: "OTHER", subventions: "GRANTS", remboursements_revenus: "OTHER",
-              indemnites: "OTHER", cadeaux_recus: "OTHER", autre_revenu: "OTHER",
+              ventes: "SALES",
+              services: "SERVICES",
+              honoraires: "SERVICES",
+              commissions: "SERVICES",
+              consulting: "SERVICES",
+              abonnements_revenus: "SUBSCRIPTIONS",
+              licences_revenus: "SOFTWARE",
+              royalties: "OTHER",
+              loyers_revenus: "RENT",
+              interets: "OTHER",
+              dividendes: "OTHER",
+              plus_values: "OTHER",
+              subventions: "GRANTS",
+              remboursements_revenus: "OTHER",
+              indemnites: "OTHER",
+              cadeaux_recus: "OTHER",
+              autre_revenu: "OTHER",
             };
-            updateData.expenseCategory = subcategoryToExpenseCategory[input.category] || "OTHER";
+            updateData.expenseCategory =
+              subcategoryToExpenseCategory[input.category] || "OTHER";
           }
         }
         if (input.vendor) updateData["metadata.vendor"] = input.vendor;
-        if (input.paymentMethod) updateData["metadata.paymentMethod"] = input.paymentMethod;
+        if (input.paymentMethod)
+          updateData["metadata.paymentMethod"] = input.paymentMethod;
         if (input.notes) updateData["metadata.notes"] = input.notes;
         if (input.tags) updateData["metadata.tags"] = input.tags;
 
         const transaction = await Transaction.findOneAndUpdate(
           { _id: id, workspaceId },
           { $set: updateData },
-          { new: true }
+          { new: true },
         );
 
         if (!transaction) {
@@ -310,7 +436,7 @@ const bankingResolvers = {
         }
 
         return transaction;
-      }
+      },
     ),
 
     // Supprimer une transaction
@@ -325,12 +451,12 @@ const bankingResolvers = {
         if (!transaction) {
           throw new AppError(
             "Transaction non trouvée ou non supprimable",
-            ERROR_CODES.NOT_FOUND
+            ERROR_CODES.NOT_FOUND,
           );
         }
 
         return true;
-      }
+      },
     ),
 
     // Upload de justificatif pour une transaction
@@ -375,7 +501,13 @@ const bankingResolvers = {
           }
 
           // Valider le type
-          const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf"];
+          const allowedTypes = [
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp",
+            "application/pdf",
+          ];
           if (!allowedTypes.includes(mimetype)) {
             return {
               success: false,
@@ -391,7 +523,7 @@ const bankingResolvers = {
             filename,
             user._id || user.id,
             "receipt",
-            workspaceId
+            workspaceId,
           );
 
           // Mettre à jour la transaction avec le fichier
@@ -412,26 +544,32 @@ const bankingResolvers = {
                 receiptRequired: false,
               },
             },
-            { new: true }
+            { new: true },
           );
 
           // Déclencher les automatisations TRANSACTION_RECEIPT (fire-and-forget)
-          documentAutomationService.executeAutomations(
-            'TRANSACTION_RECEIPT',
-            workspaceId,
-            {
-              documentId: transactionId,
-              documentType: 'transaction',
-              documentNumber: updatedTransaction?.externalId || '',
-              prefix: '',
-              clientName: updatedTransaction?.description || '',
-              issueDate: updatedTransaction?.date || updatedTransaction?.createdAt,
-              clientId: null,
-            },
-            user._id || user.id
-          ).catch(err => {
-            console.error('⚠️ [UPLOAD RECEIPT] Erreur automation (non bloquante):', err.message);
-          });
+          documentAutomationService
+            .executeAutomations(
+              "TRANSACTION_RECEIPT",
+              workspaceId,
+              {
+                documentId: transactionId,
+                documentType: "transaction",
+                documentNumber: updatedTransaction?.externalId || "",
+                prefix: "",
+                clientName: updatedTransaction?.description || "",
+                issueDate:
+                  updatedTransaction?.date || updatedTransaction?.createdAt,
+                clientId: null,
+              },
+              user._id || user.id,
+            )
+            .catch((err) => {
+              console.error(
+                "⚠️ [UPLOAD RECEIPT] Erreur automation (non bloquante):",
+                err.message,
+              );
+            });
 
           return {
             success: true,
@@ -448,7 +586,7 @@ const bankingResolvers = {
             transaction: null,
           };
         }
-      }
+      },
     ),
 
     // Traitement des paiements
@@ -479,7 +617,7 @@ const bankingResolvers = {
             message: error.message,
           };
         }
-      }
+      },
     ),
 
     // Traitement des remboursements
@@ -509,7 +647,7 @@ const bankingResolvers = {
             message: error.message,
           };
         }
-      }
+      },
     ),
 
     // Gestion des comptes
@@ -519,7 +657,7 @@ const bankingResolvers = {
         if (!user.isEmailVerified && !user.emailVerified) {
           throw new AppError(
             "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
-            ERROR_CODES.EMAIL_NOT_VERIFIED
+            ERROR_CODES.EMAIL_NOT_VERIFIED,
           );
         }
 
@@ -538,7 +676,7 @@ const bankingResolvers = {
           const standardAccount =
             bankingService.currentProvider.mapToStandardFormat(
               providerAccount,
-              "account"
+              "account",
             );
 
           // Sauvegarde en base
@@ -555,10 +693,10 @@ const bankingResolvers = {
         } catch (error) {
           throw new AppError(
             `Erreur lors de la création du compte: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
 
     updateBankingAccount: withWorkspace(
@@ -567,7 +705,7 @@ const bankingResolvers = {
         if (!account) {
           throw new AppError(
             "Compte bancaire non trouvé",
-            ERROR_CODES.NOT_FOUND
+            ERROR_CODES.NOT_FOUND,
           );
         }
 
@@ -584,7 +722,7 @@ const bankingResolvers = {
 
         await account.save();
         return account;
-      }
+      },
     ),
 
     deleteBankingAccount: withWorkspace(
@@ -593,7 +731,7 @@ const bankingResolvers = {
         if (!account) {
           throw new AppError(
             "Compte bancaire non trouvé",
-            ERROR_CODES.NOT_FOUND
+            ERROR_CODES.NOT_FOUND,
           );
         }
 
@@ -603,7 +741,7 @@ const bankingResolvers = {
           // Suppression via le provider si supporté
           try {
             await bankingService.currentProvider.deleteAccount(
-              account.externalId
+              account.externalId,
             );
           } catch (error) {
             console.warn("Suppression côté provider échouée:", error.message);
@@ -615,10 +753,10 @@ const bankingResolvers = {
         } catch (error) {
           throw new AppError(
             `Erreur lors de la suppression du compte: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
 
     syncAccountBalance: withWorkspace(
@@ -629,10 +767,10 @@ const bankingResolvers = {
         } catch (error) {
           throw new AppError(
             `Erreur lors de la synchronisation: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
 
     // Administration
@@ -644,10 +782,10 @@ const bankingResolvers = {
         } catch (error) {
           throw new AppError(
             `Erreur lors du changement de provider: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
 
     syncTransactionHistory: withWorkspace(
@@ -657,15 +795,15 @@ const bankingResolvers = {
           return await bankingService.getTransactionHistory(
             accountId,
             workspaceId,
-            { sync: true }
+            { sync: true },
           );
         } catch (error) {
           throw new AppError(
             `Erreur lors de la synchronisation: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
 
     /**
@@ -693,7 +831,7 @@ const bankingResolvers = {
                 since: input.since,
                 until: input.until,
                 fullSync: input.fullSync,
-              }
+              },
             );
             result = {
               success: true,
@@ -716,7 +854,7 @@ const bankingResolvers = {
                 since: input.since,
                 until: input.until,
                 fullSync: input.fullSync,
-              }
+              },
             );
             result.success = true;
           }
@@ -725,10 +863,10 @@ const bankingResolvers = {
         } catch (error) {
           throw new AppError(
             `Erreur lors de la synchronisation: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR
+            ERROR_CODES.EXTERNAL_API_ERROR,
           );
         }
-      }
+      },
     ),
   },
 
@@ -738,11 +876,29 @@ const bankingResolvers = {
     // Sanitize expenseCategory pour éviter les valeurs invalides dans l'enum GraphQL
     expenseCategory: (parent) => {
       const valid = [
-        "OFFICE_SUPPLIES", "TRAVEL", "MEALS", "ACCOMMODATION", "SOFTWARE",
-        "HARDWARE", "SERVICES", "MARKETING", "TAXES", "RENT", "UTILITIES",
-        "SALARIES", "INSURANCE", "MAINTENANCE", "TRAINING", "SUBSCRIPTIONS", "OTHER",
+        "OFFICE_SUPPLIES",
+        "TRAVEL",
+        "MEALS",
+        "ACCOMMODATION",
+        "SOFTWARE",
+        "HARDWARE",
+        "SERVICES",
+        "MARKETING",
+        "TAXES",
+        "RENT",
+        "UTILITIES",
+        "SALARIES",
+        "INSURANCE",
+        "MAINTENANCE",
+        "TRAINING",
+        "SUBSCRIPTIONS",
+        "OTHER",
       ];
-      return valid.includes(parent.expenseCategory) ? parent.expenseCategory : (parent.expenseCategory ? "OTHER" : null);
+      return valid.includes(parent.expenseCategory)
+        ? parent.expenseCategory
+        : parent.expenseCategory
+          ? "OTHER"
+          : null;
     },
     // Les enum resolvers gèrent la conversion - garder en minuscules
     status: (parent) => (parent.status || "pending").toLowerCase(),
@@ -783,7 +939,8 @@ const bankingResolvers = {
           id: invoice._id.toString(),
           number: invoice.number,
           status: invoice.status,
-          clientName: invoice.client?.name ||
+          clientName:
+            invoice.client?.name ||
             `${invoice.client?.firstName || ""} ${invoice.client?.lastName || ""}`.trim() ||
             "Client inconnu",
           totalTTC: invoice.finalTotalTTC || invoice.totalTTC || 0,
@@ -801,7 +958,9 @@ const bankingResolvers = {
       }
       // Charger l'utilisateur si nécessaire
       const User = (await import("../models/User.js")).default;
-      return await User.findById(transaction.userId);
+      const user = await User.findById(transaction.userId).lean();
+      if (!user) return null;
+      return { ...user, id: user._id.toString() };
     },
   },
 
@@ -824,7 +983,8 @@ const bankingResolvers = {
       currency: parent.currency || parent.balance?.currency || "EUR",
     }),
     name: (parent) => parent.name || parent.institutionName || "Compte",
-    bankName: (parent) => parent.bankName || parent.institutionName || parent.name || "Banque",
+    bankName: (parent) =>
+      parent.bankName || parent.institutionName || parent.name || "Banque",
     institutionName: (parent) => parent.institutionName || null,
     institutionLogo: (parent) => parent.institutionLogo || null,
     accountHolder: (parent) => ({

@@ -28,10 +28,14 @@ const clientResolvers = {
         const { workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -42,19 +46,27 @@ const clientResolvers = {
         });
         if (!client) throw createNotFoundError("Client");
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "clients"
     clients: requireRead("clients")(
-      async (_, { page = 1, limit = 10, search, workspaceId: inputWorkspaceId }, context) => {
+      async (
+        _,
+        { page = 1, limit = 10, search, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -100,7 +112,7 @@ const clientResolvers = {
           currentPage,
           totalPages,
         };
-      }
+      },
     ),
   },
 
@@ -111,10 +123,14 @@ const clientResolvers = {
         const { user, workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -137,7 +153,7 @@ const clientResolvers = {
             throw new Error(
               input.isInternational
                 ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
-                : "Le SIREN/SIRET est obligatoire pour une entreprise française"
+                : "Le SIREN/SIRET est obligatoire pour une entreprise française",
             );
           }
           // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
@@ -147,7 +163,7 @@ const clientResolvers = {
             !/^\d{14}$/.test(input.siret)
           ) {
             throw new Error(
-              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres"
+              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
             );
           }
         } else if (input.type === "INDIVIDUAL") {
@@ -160,7 +176,7 @@ const clientResolvers = {
             clientData.name = input.lastName;
           } else if (!input.name) {
             console.warn(
-              "Création d'un client particulier sans prénom, nom de famille, ni nom complet"
+              "Création d'un client particulier sans prénom, nom de famille, ni nom complet",
             );
           }
         }
@@ -191,17 +207,17 @@ const clientResolvers = {
             "CLIENT_CREATED",
             workspaceId,
             client._id.toString(),
-            {}
+            {},
           );
         } catch (automationError) {
           console.error(
             "Erreur lors de l'exécution des automatisations CLIENT_CREATED:",
-            automationError
+            automationError,
           );
         }
 
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
@@ -210,10 +226,14 @@ const clientResolvers = {
         const { user, workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -249,7 +269,7 @@ const clientResolvers = {
             throw new Error(
               input.isInternational
                 ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
-                : "Le SIREN/SIRET est obligatoire pour une entreprise française"
+                : "Le SIREN/SIRET est obligatoire pour une entreprise française",
             );
           }
           // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
@@ -259,7 +279,7 @@ const clientResolvers = {
             !/^\d{14}$/.test(input.siret)
           ) {
             throw new Error(
-              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres"
+              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
             );
           }
         } else if (input.type === "INDIVIDUAL") {
@@ -277,7 +297,7 @@ const clientResolvers = {
             updateData.name = lastName;
           } else if (!input.name && !client.name) {
             console.warn(
-              "Mise à jour d'un client particulier sans prénom, nom de famille, ni nom complet"
+              "Mise à jour d'un client particulier sans prénom, nom de famille, ni nom complet",
             );
           }
         }
@@ -330,10 +350,16 @@ const clientResolvers = {
                 // Identifier quels champs personnalisés ont changé
                 // .toString() pour uniformiser ObjectId vs string
                 const oldFields = new Map(
-                  (oldValue || []).map((cf) => [cf.fieldId?.toString(), cf.value])
+                  (oldValue || []).map((cf) => [
+                    cf.fieldId?.toString(),
+                    cf.value,
+                  ]),
                 );
                 const newFields = new Map(
-                  (newValue || []).map((cf) => [cf.fieldId?.toString(), cf.value])
+                  (newValue || []).map((cf) => [
+                    cf.fieldId?.toString(),
+                    cf.value,
+                  ]),
                 );
 
                 const allFieldIds = new Set([
@@ -397,7 +423,7 @@ const clientResolvers = {
 
         await client.save();
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "clients"
@@ -406,10 +432,14 @@ const clientResolvers = {
         const { workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -458,7 +488,7 @@ const clientResolvers = {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
         return true;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
@@ -466,10 +496,14 @@ const clientResolvers = {
       async (_, { id, memberIds, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
 
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -489,15 +523,16 @@ const clientResolvers = {
           userName: user.name || user.email,
           userImage: user.image || null,
           type: "assigned",
-          description: memberIds.length > 0
-            ? `a assigné ${memberIds.length} membre${memberIds.length > 1 ? "s" : ""}`
-            : "a retiré tous les membres assignés",
+          description:
+            memberIds.length > 0
+              ? `a assigné ${memberIds.length} membre${memberIds.length > 1 ? "s" : ""}`
+              : "a retiré tous les membres assignés",
           createdAt: new Date(),
         });
 
         await client.save();
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
@@ -505,10 +540,14 @@ const clientResolvers = {
       async (_, { id, reason, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
 
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -521,7 +560,10 @@ const clientResolvers = {
         if (!client) throw createNotFoundError("Client");
 
         if (client.isBlocked) {
-          throw new AppError("Ce client est déjà bloqué", ERROR_CODES.BAD_REQUEST);
+          throw new AppError(
+            "Ce client est déjà bloqué",
+            ERROR_CODES.BAD_REQUEST,
+          );
         }
 
         client.isBlocked = true;
@@ -534,23 +576,25 @@ const clientResolvers = {
           userName: user.name || user.email,
           userImage: user.image || null,
           type: "blocked",
-          description: reason ? `a bloqué le client : ${reason}` : "a bloqué le client",
+          description: reason
+            ? `a bloqué le client : ${reason}`
+            : "a bloqué le client",
           createdAt: new Date(),
         });
 
         try {
           await client.save();
         } catch (saveError) {
-          if (saveError.name === 'ValidationError') {
+          if (saveError.name === "ValidationError") {
             throw new AppError(
               "Impossible de bloquer ce contact en raison de données incohérentes dans son historique d'activité. Veuillez contacter le support.",
-              ERROR_CODES.BAD_REQUEST
+              ERROR_CODES.BAD_REQUEST,
             );
           }
           throw saveError;
         }
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
@@ -558,10 +602,14 @@ const clientResolvers = {
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId: contextWorkspaceId } = context;
 
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -574,7 +622,10 @@ const clientResolvers = {
         if (!client) throw createNotFoundError("Client");
 
         if (!client.isBlocked) {
-          throw new AppError("Ce client n'est pas bloqué", ERROR_CODES.BAD_REQUEST);
+          throw new AppError(
+            "Ce client n'est pas bloqué",
+            ERROR_CODES.BAD_REQUEST,
+          );
         }
 
         client.isBlocked = false;
@@ -594,28 +645,36 @@ const clientResolvers = {
         try {
           await client.save();
         } catch (saveError) {
-          if (saveError.name === 'ValidationError') {
+          if (saveError.name === "ValidationError") {
             throw new AppError(
               "Impossible de débloquer ce contact en raison de données incohérentes dans son historique d'activité. Veuillez contacter le support.",
-              ERROR_CODES.BAD_REQUEST
+              ERROR_CODES.BAD_REQUEST,
             );
           }
           throw saveError;
         }
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     addClientNote: requireWrite("clients")(
-      async (_, { clientId, input, workspaceId: inputWorkspaceId }, context) => {
+      async (
+        _,
+        { clientId, input, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -656,19 +715,27 @@ const clientResolvers = {
 
         await client.save();
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     updateClientNote: requireWrite("clients")(
-      async (_, { clientId, noteId, content, workspaceId: inputWorkspaceId }, context) => {
+      async (
+        _,
+        { clientId, noteId, content, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -708,19 +775,27 @@ const clientResolvers = {
 
         await client.save();
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "clients"
     deleteClientNote: requireDelete("clients")(
-      async (_, { clientId, noteId, workspaceId: inputWorkspaceId }, context) => {
+      async (
+        _,
+        { clientId, noteId, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -759,19 +834,27 @@ const clientResolvers = {
 
         await client.save();
         return client;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     addClientActivity: requireWrite("clients")(
-      async (_, { clientId, input, workspaceId: inputWorkspaceId }, context) => {
+      async (
+        _,
+        { clientId, input, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -798,7 +881,7 @@ const clientResolvers = {
 
         await client.save();
         return client;
-      }
+      },
     ),
   },
 
@@ -829,25 +912,43 @@ const clientResolvers = {
       parent.createdAt?.toISOString?.() || parent.createdAt,
     updatedAt: (parent) =>
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
-    userName: async (parent) => {
+    userName: async (parent, _, context) => {
       if (parent.userName && !parent.userName.includes("@")) {
         return parent.userName;
       }
       if (parent.userId) {
         try {
-          const user = await User.findById(parent.userId).select("name email").lean();
+          // Cache per-request pour éviter N+1
+          if (!context._userCache) context._userCache = {};
+          const key = parent.userId.toString();
+          if (!context._userCache[key]) {
+            context._userCache[key] = await User.findById(parent.userId)
+              .select("name email avatar")
+              .lean();
+          }
+          const user = context._userCache[key];
           if (user?.name) return user.name;
-        } catch {}
+        } catch {
+          /* ignore */
+        }
       }
       return parent.userName || "Système";
     },
-    userImage: async (parent) => {
+    userImage: async (parent, _, context) => {
       if (parent.userImage) return parent.userImage;
       if (parent.userId) {
         try {
-          const user = await User.findById(parent.userId).select("avatar").lean();
-          return user?.avatar || null;
-        } catch {}
+          if (!context._userCache) context._userCache = {};
+          const key = parent.userId.toString();
+          if (!context._userCache[key]) {
+            context._userCache[key] = await User.findById(parent.userId)
+              .select("name email avatar")
+              .lean();
+          }
+          return context._userCache[key]?.avatar || null;
+        } catch {
+          /* ignore */
+        }
       }
       return null;
     },
@@ -856,25 +957,42 @@ const clientResolvers = {
   ClientActivity: {
     createdAt: (parent) =>
       parent.createdAt?.toISOString?.() || parent.createdAt,
-    userName: async (parent) => {
+    userName: async (parent, _, context) => {
       if (parent.userName && !parent.userName.includes("@")) {
         return parent.userName;
       }
       if (parent.userId) {
         try {
-          const user = await User.findById(parent.userId).select("name email").lean();
+          if (!context._userCache) context._userCache = {};
+          const key = parent.userId.toString();
+          if (!context._userCache[key]) {
+            context._userCache[key] = await User.findById(parent.userId)
+              .select("name email avatar")
+              .lean();
+          }
+          const user = context._userCache[key];
           if (user?.name) return user.name;
-        } catch {}
+        } catch {
+          /* ignore */
+        }
       }
       return parent.userName || "Système";
     },
-    userImage: async (parent) => {
+    userImage: async (parent, _, context) => {
       if (parent.userImage) return parent.userImage;
       if (parent.userId) {
         try {
-          const user = await User.findById(parent.userId).select("avatar").lean();
-          return user?.avatar || null;
-        } catch {}
+          if (!context._userCache) context._userCache = {};
+          const key = parent.userId.toString();
+          if (!context._userCache[key]) {
+            context._userCache[key] = await User.findById(parent.userId)
+              .select("name email avatar")
+              .lean();
+          }
+          return context._userCache[key]?.avatar || null;
+        } catch {
+          /* ignore */
+        }
       }
       return null;
     },
