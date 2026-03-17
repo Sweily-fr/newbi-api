@@ -3,6 +3,7 @@ import itemSchema from './schemas/item.js';
 import customFieldSchema from './schemas/customField.js';
 import bankDetailsSchema from './schemas/bankDetails.js';
 import shippingSchema from './schemas/shipping.js';
+import { applyBankDetailsEncryption } from '../utils/encryption.js';
 
 const invoiceTemplateSchema = new mongoose.Schema({
   name: {
@@ -100,6 +101,9 @@ const invoiceTemplateSchema = new mongoose.Schema({
 });
 
 invoiceTemplateSchema.index({ workspaceId: 1, createdAt: -1 });
+
+// AES-256-GCM encryption for IBAN and BIC fields at rest
+applyBankDetailsEncryption(invoiceTemplateSchema, ['bankDetails']);
 
 const InvoiceTemplate = mongoose.model('InvoiceTemplate', invoiceTemplateSchema);
 

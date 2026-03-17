@@ -122,7 +122,7 @@ const quoteResolvers = {
       }
     },
     createdBy: async (quote) => {
-      return await User.findById(quote.createdBy).lean();
+      return await User.findById(quote.createdBy);
     },
     convertedToInvoice: async (quote) => {
       if (!quote.convertedToInvoice) return null;

@@ -5,6 +5,7 @@ import {
   isPositiveAmount,
   isValidFooterNotes,
 } from "../utils/validators.js";
+import { applyBankDetailsEncryption } from "../utils/encryption.js";
 
 import clientSchema from "./schemas/client.js";
 import itemSchema from "./schemas/item.js";
@@ -545,5 +546,8 @@ invoiceSchema.statics.numberExistsForYear = async function (
 
   return count > 0;
 };
+
+// AES-256-GCM encryption for IBAN and BIC fields at rest
+applyBankDetailsEncryption(invoiceSchema, ['bankDetails', 'companyInfo.bankDetails']);
 
 export default mongoose.models.Invoice || mongoose.model("Invoice", invoiceSchema);

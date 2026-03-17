@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyBankDetailsEncryption } from '../utils/encryption.js';
 import {
   URL_REGEX,
   isPositiveAmount,
@@ -378,5 +379,8 @@ creditNoteSchema.statics.numberExistsForYear = async function (
 creditNoteSchema.statics.findByInvoice = async function (invoiceId) {
   return this.find({ originalInvoice: invoiceId }).sort({ createdAt: -1 });
 };
+
+// AES-256-GCM encryption for IBAN and BIC fields at rest
+applyBankDetailsEncryption(creditNoteSchema, ['bankDetails', 'companyInfo.bankDetails']);
 
 export default mongoose.model("CreditNote", creditNoteSchema);

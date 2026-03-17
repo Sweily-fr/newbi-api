@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyBankDetailsEncryption } from '../utils/encryption.js';
 
 /**
  * Schéma pour les demandes de retrait des partenaires
@@ -59,6 +60,9 @@ const withdrawalSchema = new mongoose.Schema(
 // Index composé pour les requêtes fréquentes
 withdrawalSchema.index({ partnerId: 1, status: 1 });
 withdrawalSchema.index({ partnerId: 1, requestedAt: -1 });
+
+// AES-256-GCM encryption for IBAN and BIC fields at rest
+applyBankDetailsEncryption(withdrawalSchema, ['bankDetails']);
 
 const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
 
