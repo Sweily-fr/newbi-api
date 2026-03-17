@@ -24,12 +24,7 @@ const clientSchema = new mongoose.Schema(
       validate: {
         validator: function (v) {
           if (this.type === "COMPANY") {
-            return (
-              v &&
-              v.length >= 2 &&
-              v.length <= 100 &&
-              /^[a-zA-ZÀ-ÿ0-9\s&'"\-.,()]{2,100}$/.test(v)
-            );
+            return v && v.length >= 2 && v.length <= 200 && NAME_REGEX.test(v);
           } else {
             return (
               v &&
@@ -41,7 +36,7 @@ const clientSchema = new mongoose.Schema(
         },
         message: function (props) {
           if (this.type === "COMPANY") {
-            return "Le nom de l'entreprise doit contenir entre 2 et 100 caractères";
+            return "Le nom de l'entreprise doit contenir entre 2 et 200 caractères (< et > interdits)";
           } else {
             return "Le nom doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)";
           }
@@ -180,9 +175,11 @@ const clientSchema = new mongoose.Schema(
       required: true,
     },
     // Membres assignés au client (array d'IDs utilisateur)
-    assignedMembers: [{
-      type: String,
-    }],
+    assignedMembers: [
+      {
+        type: String,
+      },
+    ],
     // Blocage du client
     isBlocked: {
       type: Boolean,
@@ -195,7 +192,10 @@ const clientSchema = new mongoose.Schema(
     blockedReason: {
       type: String,
       trim: true,
-      maxlength: [500, "La raison du blocage ne peut pas dépasser 500 caractères"],
+      maxlength: [
+        500,
+        "La raison du blocage ne peut pas dépasser 500 caractères",
+      ],
       default: null,
     },
     // Notes ajoutées au client (comme les commentaires dans les tâches kanban)
@@ -303,17 +303,19 @@ const clientSchema = new mongoose.Schema(
       },
     ],
     // Champs personnalisés (valeurs)
-    customFields: [{
-      fieldId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'ClientCustomField',
-        required: true
+    customFields: [
+      {
+        fieldId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "ClientCustomField",
+          required: true,
+        },
+        value: {
+          type: mongoose.Schema.Types.Mixed,
+          required: true,
+        },
       },
-      value: {
-        type: mongoose.Schema.Types.Mixed,
-        required: true
-      }
-    }],
+    ],
     // Historique d'activité du client
     activity: [
       {
@@ -381,7 +383,7 @@ const clientSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index pour améliorer les performances des recherches
@@ -389,7 +391,7 @@ clientSchema.index({ createdBy: 1 });
 clientSchema.index({ workspaceId: 1 });
 clientSchema.index({ email: 1, workspaceId: 1 }, { unique: true });
 clientSchema.index({ name: "text" }, { weights: { name: 10 } });
-clientSchema.index({ workspaceId: 1, 'address.city': 1 });
-clientSchema.index({ workspaceId: 1, 'address.postalCode': 1 });
+clientSchema.index({ workspaceId: 1, "address.city": 1 });
+clientSchema.index({ workspaceId: 1, "address.postalCode": 1 });
 
 export default mongoose.model("Client", clientSchema);
