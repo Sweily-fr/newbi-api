@@ -1,53 +1,26 @@
 import mongoose from 'mongoose';
-import { IBAN_REGEX, BIC_REGEX } from '../../utils/validators.js';
 
 /**
  * Schéma pour les coordonnées bancaires
+ *
+ * NOTE: IBAN and BIC fields are encrypted at rest using AES-256-GCM.
+ * Regex validation (IBAN_REGEX, BIC_REGEX) has been removed from the schema
+ * because encrypted values do not match plaintext patterns.
+ * Validation of plaintext values should be performed BEFORE encryption,
+ * in the resolvers/business logic layer using isValidIBAN/isValidBIC from validators.js.
  */
 const bankDetailsSchema = new mongoose.Schema({
   iban: {
     type: String,
-    trim: true,
-    match: [IBAN_REGEX, 'Veuillez fournir un IBAN valide'],
-    validate: {
-      validator: function(v) {
-        // Si IBAN est fourni, BIC et bankName doivent aussi être fournis
-        if (v && (!this.bic || !this.bankName)) {
-          return false;
-        }
-        return true;
-      },
-      message: 'Si l\'IBAN est fourni, le BIC et le nom de la banque doivent aussi être fournis'
-    }
+    trim: false, // Disabled: trimming would corrupt encrypted data
   },
   bic: {
     type: String,
-    trim: true,
-    match: [BIC_REGEX, 'Veuillez fournir un BIC valide'],
-    validate: {
-      validator: function(v) {
-        // Si BIC est fourni, IBAN et bankName doivent aussi être fournis
-        if (v && (!this.iban || !this.bankName)) {
-          return false;
-        }
-        return true;
-      },
-      message: 'Si le BIC est fourni, l\'IBAN et le nom de la banque doivent aussi être fournis'
-    }
+    trim: false, // Disabled: trimming would corrupt encrypted data
   },
   bankName: {
     type: String,
     trim: true,
-    validate: {
-      validator: function(v) {
-        // Si bankName est fourni, IBAN et BIC doivent aussi être fournis
-        if (v && (!this.iban || !this.bic)) {
-          return false;
-        }
-        return true;
-      },
-      message: 'Si le nom de la banque est fourni, l\'IBAN et le BIC doivent aussi être fournis'
-    }
   }
 });
 

@@ -44,6 +44,8 @@ import mongoose from "mongoose";
 import { graphqlUploadExpress } from "graphql-upload";
 import fs from "fs";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import stripe from "./utils/stripe.js";
 import {
   handleStripeWebhook as handleFileTransferStripeWebhook,
@@ -144,6 +146,32 @@ async function startServer() {
 
   // Trust proxy (nginx) pour obtenir la vraie IP client via X-Forwarded-For
   app.set("trust proxy", 1);
+
+  // Security headers
+  app.use(helmet({
+    contentSecurityPolicy: false, // Managed separately or by frontend
+    crossOriginEmbedderPolicy: false, // Needed for GraphQL playground
+  }));
+
+  // Global rate limiter
+  const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000, // limit each IP to 1000 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later.' },
+  });
+  app.use(globalLimiter);
+
+  // Strict rate limiter for auth routes
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20, // strict limit for auth
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many authentication attempts, please try again later.' },
+  });
+  app.use('/api/auth', authLimiter);
 
   // Configuration CORS
   const allowedOrigins = [
@@ -253,7 +281,7 @@ async function startServer() {
   // Routes leads guides (publique, sans auth)
   app.use("/api/leads", guideLeadsRoutes);
 
-  app.use(graphqlUploadExpress({ maxFileSize: 10000000000, maxFiles: 20 }));
+  app.use(graphqlUploadExpress({ maxFileSize: 104857600, maxFiles: 20 }));
 
   // DEBUG: Log les requêtes GraphQL qui retournent 400
   app.use("/graphql", (req, res, next) => {

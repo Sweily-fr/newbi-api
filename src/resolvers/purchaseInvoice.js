@@ -890,7 +890,7 @@ const purchaseInvoiceResolvers = {
     },
     createdBy: async (parent) => {
       const User = mongoose.model("User");
-      return await User.findById(parent.createdBy).lean();
+      return await User.findById(parent.createdBy);
     },
   },
 

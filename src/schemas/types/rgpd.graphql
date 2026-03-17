@@ -1,0 +1,82 @@
+# === RGPD TYPES ===
+# Gestion de la suppression de compte et export de données (RGPD)
+
+"""
+Demande de suppression de compte avec délai de grâce de 30 jours
+"""
+type DeletionRequest {
+  id: ID!
+  userId: String!
+  userEmail: String!
+  requestedAt: String!
+  scheduledAt: String!
+  status: String!
+  reason: String
+}
+
+"""
+Résumé des données supprimées lors de la suppression de compte
+"""
+type DeletionSummary {
+  invoicesAnonymized: Int!
+  creditNotesAnonymized: Int!
+  quotesAnonymized: Int!
+  clientsDeleted: Int!
+  productsDeleted: Int!
+  expensesDeleted: Int!
+  signaturesDeleted: Int!
+  kanbanProjectsDeleted: Int!
+  fileTransfersDeleted: Int!
+  organizationDeleted: Boolean!
+}
+
+"""
+Résultat de la suppression immédiate du compte
+"""
+type AccountDeletionResult {
+  success: Boolean!
+  summary: DeletionSummary
+}
+
+"""
+Export des données personnelles (RGPD Article 20 - Portabilité)
+"""
+type DataExport {
+  data: String!
+  exportedAt: String!
+}
+
+extend type Query {
+  """
+  Récupère la demande de suppression en cours (si existante)
+  """
+  myDeletionRequest: DeletionRequest
+}
+
+extend type Mutation {
+  """
+  Demande la suppression du compte avec un délai de grâce de 30 jours.
+  L'utilisateur peut annuler pendant cette période.
+  """
+  requestAccountDeletion(reason: String): DeletionRequest!
+
+  """
+  Annule une demande de suppression en cours
+  """
+  cancelAccountDeletion: Boolean!
+
+  """
+  Confirme et exécute immédiatement la suppression du compte.
+  ATTENTION : Cette action est irréversible.
+  Les factures et avoirs sont anonymisés (conservation légale 10 ans).
+  Toutes les autres données sont supprimées définitivement.
+  """
+  confirmAccountDeletion: AccountDeletionResult!
+
+  """
+  Exporte toutes les données personnelles de l'utilisateur (RGPD Article 20).
+  Retourne un JSON contenant : profil, factures, devis, avoirs, clients,
+  produits, dépenses, paramètres, etc.
+  """
+  exportMyData: DataExport!
+}

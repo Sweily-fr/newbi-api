@@ -11,10 +11,10 @@ export default defineConfig({
       reporter: ['text', 'lcov', 'html'],
       exclude: ['node_modules', 'dist', '__tests__', 'src/tests', 'src/emails'],
       thresholds: {
-        statements: 30,
-        branches: 20,
-        functions: 25,
-        lines: 30,
+        statements: 45,
+        branches: 30,
+        functions: 40,
+        lines: 45,
       }
     }
   }

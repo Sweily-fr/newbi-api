@@ -81,8 +81,11 @@ integrationSchema.statics.validateApiKey = function(provider, apiKey) {
  */
 integrationSchema.statics.encryptApiKey = function(apiKey) {
   // Utiliser une clé d'environnement pour le chiffrement
-  const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-encryption-key-change-in-production';
-  
+  const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+  if (!ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY environment variable is required');
+  }
+
   // Générer un vecteur d'initialisation aléatoire
   const iv = crypto.randomBytes(16);
   
@@ -105,8 +108,11 @@ integrationSchema.statics.encryptApiKey = function(apiKey) {
 
 integrationSchema.statics.decryptApiKey = function(encryptedData, iv) {
   try {
-    const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-encryption-key-change-in-production';
-    
+    const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+    if (!ENCRYPTION_KEY) {
+      throw new Error('ENCRYPTION_KEY environment variable is required');
+    }
+
     // Créer un déchiffreur
     const decipher = crypto.createDecipheriv(
       'aes-256-cbc',
