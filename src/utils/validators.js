@@ -3,7 +3,8 @@
  */
 
 // Regex pour la validation d'email
-const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+const EMAIL_REGEX =
+  /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 
 // Regex pour la validation de numéro de téléphone (format international ou national)
 // Accepte les formats avec ou sans préfixe international
@@ -27,7 +28,8 @@ const PHONE_FR_REGEX =
 // Regex pour la validation des noms et prénoms (lettres, chiffres, espaces, tirets, apostrophes)
 // Exclut explicitement les caractères < et > pour prévenir les risques d'injection XSS
 // Autorise tous les caractères spéciaux courants pour les noms de produits: / \ : ; ! ? @ # $ % * + = [ ] { } | ~ " _
-const NAME_REGEX = /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-'.(),&/\\:;!?@#$%*+=[\]{}|~"_]{2,200}$/;
+const NAME_REGEX =
+  /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-'.(),&/\\:;!?@#$%*+=[\]{}|~"_]{2,200}$/;
 
 // Regex pour la validation de SIREN (9 chiffres) ou SIRET (14 chiffres)
 const SIRET_REGEX = /^\d{9}$|^\d{14}$/;
@@ -48,13 +50,13 @@ const BIC_REGEX = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
 const POSTAL_CODE_FR_REGEX = /^(0[1-9]|[1-8]\d|9[0-8])\d{3}$/;
 
 // Regex pour la validation de rue (adresse)
-const STREET_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s,'\-\.]{3,100}$/;
+const STREET_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s,'\-.]{3,100}$/;
 
 // Regex pour la validation de ville
-const CITY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-\.]{2,50}$/;
+const CITY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-.]{2,50}$/;
 
 // Regex pour la validation de pays
-const COUNTRY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-\.]{2,50}$/;
+const COUNTRY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-.]{2,50}$/;
 
 // Regex pour la validation d'URL
 const URL_REGEX = new RegExp(
@@ -64,30 +66,29 @@ const URL_REGEX = new RegExp(
     "(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*" + // port et chemin
     "(\\?[;&a-z\\d%_.~+=-]*)?" + // paramètres de requête
     "(\\#[-a-z\\d_]*)?$",
-  "i"
+  "i",
 ); // fragment
 
 // Regex pour la validation de mot de passe fort
 // Au moins 8 caractères, une majuscule, une minuscule, un chiffre et un caractère spécial
 const STRONG_PASSWORD_REGEX =
-  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[_@$!%*?&#\-+.~\[\]{}()\\^\/])[A-Za-z\d_@$!%*?&#\-+.~\[\]{}()\\^\/]{8,}$/;
+  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[_@$!%*?&#\-+.~[\]{}()\\^/])[A-Za-z\d_@$!%*?&#\-+.~[\]{}()\\^/]{8,}$/;
 
 // Regex pour la validation des valeurs de champs personnalisés
 // Accepte les lettres, chiffres, espaces et caractères spéciaux courants
 // Limite à 500 caractères pour éviter les attaques par injection
 const CUSTOM_FIELD_VALUE_REGEX =
-  /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.,;:!?@#$%&*()\[\]\-_+='"/\\€£¥₽¢₩₴₦₱₸₺₼₾₿]{1,500}$/;
+  /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s.,;:!?@#$%&*()[\]\-_+='"/\\€£¥₽¢₩₴₦₱₸₺₼₾₿]{1,500}$/;
 
 // Regex pour la validation des descriptions d'articles
 // Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne)
 // Pas de limite de longueur
-const ITEM_DESCRIPTION_REGEX =
-  /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]+$/u;
+const ITEM_DESCRIPTION_REGEX = /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]+$/u;
 
 // Regex pour la validation des unités de mesure
 // Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)
 // Accepte 1-20 caractères OU une chaîne vide
-const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\/\-²³()]{1,20}$/;
+const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s./\-²³()]{1,20}$/;
 
 // Regex pour la validation des notes de pied de page
 // Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne)
@@ -246,12 +247,13 @@ const isValidItemDescription = (description) => {
 // Validation des unités de mesure
 // Accepte soit une chaîne vide, soit 1-20 caractères valides
 const isValidUnit = (unit) => {
-  return unit === '' || UNIT_REGEX.test(unit);
+  return unit === "" || UNIT_REGEX.test(unit);
 };
 
 // Validation des notes de pied de page
 const isValidFooterNotes = (value) => {
   if (!value) return true;
+  if (value.length > 2000) return false;
   return FOOTER_NOTES_REGEX.test(value);
 };
 
