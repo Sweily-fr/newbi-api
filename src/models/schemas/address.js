@@ -28,7 +28,7 @@ const addressSchema = new mongoose.Schema({
       validator: function (v) {
         return !v || STREET_REGEX.test(v);
       },
-      message: "Veuillez fournir une adresse valide (3 à 100 caractères)",
+      message: "Veuillez fournir une adresse valide (3 à 200 caractères)",
     },
   },
   city: {
@@ -38,11 +38,12 @@ const addressSchema = new mongoose.Schema({
       validator: function (v) {
         return (
           !v ||
-          (v.length >= 2 && v.length <= 50 && /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
+          (v.length >= 2 &&
+            v.length <= 50 &&
+            /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s'-./()[\]]{2,50}$/.test(v))
         );
       },
-      message:
-        "La ville doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)",
+      message: "La ville doit contenir entre 2 et 50 caractères",
     },
   },
   postalCode: {
@@ -51,7 +52,7 @@ const addressSchema = new mongoose.Schema({
     validate: {
       validator: function (v) {
         // Format libre pour les adresses internationales (2-20 caractères alphanumériques avec espaces/tirets)
-        return !v || /^[a-zA-Z0-9\s\-]{2,20}$/.test(v);
+        return !v || /^[a-zA-Z0-9\s-]{2,20}$/.test(v);
       },
       message:
         "Le code postal doit contenir entre 2 et 20 caractères alphanumériques",
