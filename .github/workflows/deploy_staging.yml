@@ -30,6 +30,7 @@ jobs:
           
           # Sync files
           rsync -avz --exclude='uploads' --exclude='node_modules' --exclude='.git' \
+            --exclude='.env' --exclude='.env.*' --exclude='ecosystem.config.cjs' \
             -e 'ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no' \
             ./* joaquim@51.91.254.74:~/staging
           

@@ -61,6 +61,7 @@ import financialAnalyticsResolvers from "./financialAnalytics.js";
 import pennylaneResolvers from "./pennylaneResolvers.js";
 import installedAppResolvers from "./installedApp.js";
 import esignatureResolvers from "./esignatureResolvers.js";
+import rgpdResolvers from "./rgpd.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -125,6 +126,7 @@ const resolvers = mergeResolvers([
   pennylaneResolvers,
   installedAppResolvers,
   esignatureResolvers,
+  rgpdResolvers,
 ]);
 
 export default resolvers;

@@ -65,8 +65,10 @@ const smtpSettingsSchema = new mongoose.Schema({
   },
 });
 
-// Encryption key (devrait être dans .env en production)
-const ENCRYPTION_KEY = process.env.SMTP_ENCRYPTION_KEY || 'your-32-character-secret-key!!';
+const ENCRYPTION_KEY = process.env.SMTP_ENCRYPTION_KEY;
+if (!ENCRYPTION_KEY) {
+  throw new Error('SMTP_ENCRYPTION_KEY environment variable is required');
+}
 const ALGORITHM = 'aes-256-cbc';
 
 // Chiffrer le mot de passe avant de sauvegarder

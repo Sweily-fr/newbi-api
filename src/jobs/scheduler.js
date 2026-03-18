@@ -5,6 +5,7 @@
 import cron from 'node-cron';
 import { cleanupExpiredFiles } from './cleanupExpiredFiles.js';
 import { cleanupOrphanChunks } from './cleanupOrphanChunks.js';
+import { processAccountDeletions } from './processAccountDeletions.js';
 import logger from '../utils/logger.js';
 
 /**
@@ -33,9 +34,21 @@ function setupScheduledJobs() {
     }
   });
 
+  // Job de traitement des suppressions de compte RGPD - s'exécute tous les jours à 4h du matin
+  // Traite les demandes dont le délai de grâce de 30 jours est écoulé
+  cron.schedule('0 4 * * *', async () => {
+    try {
+      logger.info('Exécution du job de traitement des suppressions de compte RGPD');
+      await processAccountDeletions();
+    } catch (error) {
+      logger.error('Erreur lors du traitement des suppressions RGPD:', error);
+    }
+  });
+
   logger.info('Jobs planifiés configurés avec succès');
   logger.info('  - Nettoyage fichiers expirés: tous les jours à 3h UTC');
   logger.info('  - Nettoyage chunks orphelins: toutes les 6 heures');
+  logger.info('  - Suppressions RGPD: tous les jours à 4h UTC');
 }
 
 export {

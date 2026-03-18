@@ -1,1 +1,8 @@
+# Scan staged files for secrets with gitleaks
+if command -v gitleaks &> /dev/null; then
+  gitleaks protect --staged --config="$(git rev-parse --show-toplevel)/.gitleaks.toml" --verbose
+else
+  echo "Warning: gitleaks is not installed. Skipping secret scan. Install with: brew install gitleaks"
+fi
+
 npx lint-staged

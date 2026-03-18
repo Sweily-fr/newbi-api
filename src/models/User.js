@@ -14,6 +14,7 @@ import {
 } from "../utils/validators.js";
 import addressSchema from "./schemas/address.js";
 import bankDetailsSchema from "./schemas/bankDetails.js";
+import { applyBankDetailsEncryption } from "../utils/encryption.js";
 
 /**
  * Schéma utilisateur principal
@@ -454,5 +455,8 @@ userSchema.pre("save", async function (next) {
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
+
+// AES-256-GCM encryption for IBAN and BIC fields at rest
+applyBankDetailsEncryption(userSchema, ['companyInfo.bankDetails']);
 
 export default mongoose.model("User", userSchema, "user");
