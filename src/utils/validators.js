@@ -254,6 +254,7 @@ const isValidUnit = (unit) => {
 // Validation des notes de pied de page
 const isValidFooterNotes = (value) => {
   if (!value) return true;
+  if (value.length > 2000) return false;
   return FOOTER_NOTES_REGEX.test(value);
 };
 
