@@ -43,6 +43,8 @@
     "@aws-sdk/s3-request-presigner": "^3.848.0",
     "@azure/msal-node": "^5.0.3",
     "@google-cloud/documentai": "^9.5.0",
+    "@graphql-tools/load-files": "^7.0.1",
+    "@graphql-tools/merge": "^9.1.7",
     "@graphql-tools/schema": "^10.0.25",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@react-email/render": "^2.0.0",
@@ -87,8 +89,6 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@graphql-tools/load-files": "^7.0.1",
-    "@graphql-tools/merge": "^9.0.19",
     "@react-email/components": "^1.0.1",
     "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^8.57.1",
