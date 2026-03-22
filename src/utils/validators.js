@@ -50,14 +50,13 @@ const BIC_REGEX = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
 const POSTAL_CODE_FR_REGEX = /^(0[1-9]|[1-8]\d|9[0-8])\d{3}$/;
 
 // Regex pour la validation de rue (adresse)
-const STREET_REGEX =
-  /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ0-9\s,'-./:;°#"()&+[\]]{3,200}$/;
+const STREET_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s,'\-.]{3,100}$/;
 
 // Regex pour la validation de ville
-const CITY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s'-./()[\]]{2,50}$/;
+const CITY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-.]{2,50}$/;
 
 // Regex pour la validation de pays
-const COUNTRY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'-.]{2,50}$/;
+const COUNTRY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-.]{2,50}$/;
 
 // Regex pour la validation d'URL
 const URL_REGEX = new RegExp(

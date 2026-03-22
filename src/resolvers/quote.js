@@ -155,101 +155,62 @@ const quoteResolvers = {
       }
     },
     createdBy: async (quote) => {
-      // Si déjà peuplé (objet avec _id), pas besoin de refaire la requête
-      if (
-        quote.createdBy &&
-        typeof quote.createdBy === "object" &&
-        quote.createdBy._id
-      ) {
+      if (!quote.createdBy) return null;
+      if (typeof quote.createdBy === "object" && quote.createdBy._id) {
         return quote.createdBy;
       }
-      const user = await User.findById(quote.createdBy);
-      if (!user)
-        return {
-          _id: quote.createdBy?.toString() || "unknown",
-          id: quote.createdBy?.toString() || "unknown",
-          name: "Utilisateur supprimé",
-          email: "",
-        };
-      return user;
+      return await User.findById(quote.createdBy);
     },
     convertedToInvoice: async (quote) => {
       if (!quote.convertedToInvoice) return null;
       return await Invoice.findById(quote.convertedToInvoice);
     },
     linkedInvoices: async (quote) => {
-      // Trouver toutes les factures liées à ce devis
-      // Cela inclut la facture principale (convertedToInvoice) et potentiellement d'autres factures
-      // comme des factures d'acompte, etc.
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
-        // Si le champ linkedInvoices est déjà rempli, utiliser ces références
         return await Invoice.find({
           _id: { $in: quote.linkedInvoices },
         });
       } else if (quote.convertedToInvoice) {
-        // Pour la compatibilité avec les anciens devis qui n'ont que convertedToInvoice
         const invoice = await Invoice.findById(quote.convertedToInvoice);
         return invoice ? [invoice] : [];
       }
-
       return [];
     },
     // Calculer le total des factures de situation liées à ce devis
     situationInvoicedTotal: async (quote) => {
-      // Construire la référence complète du devis
       const quoteRef = quote.prefix
         ? `${quote.prefix}-${quote.number}`
         : quote.number;
 
-      // Chercher toutes les factures de situation avec cette référence
-      const situationInvoices = await Invoice.find({
-        workspaceId: quote.workspaceId,
-        invoiceType: "situation",
-        purchaseOrderNumber: quoteRef,
-      });
+      // Utiliser aggregation pipeline pour calculer le total côté MongoDB
+      const result = await Invoice.aggregate([
+        {
+          $match: {
+            workspaceId: quote.workspaceId,
+            invoiceType: "situation",
+            purchaseOrderNumber: quoteRef,
+          },
+        },
+        { $limit: 1000 },
+        { $unwind: { path: "$items", preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: "$_id",
+            finalTotalTTC: { $first: "$finalTotalTTC" },
+            hasItems: {
+              $sum: { $cond: [{ $ifNull: ["$items", false] }, 1, 0] },
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$finalTotalTTC" },
+          },
+        },
+      ]);
 
-      // Calculer le total en tenant compte du progressPercentage
-      // (recalcul à la volée pour les factures existantes qui n'ont pas le bon finalTotalTTC)
-      const total = situationInvoices.reduce((sum, inv) => {
-        // Calculer le total TTC réel en tenant compte du progressPercentage
-        let invoiceTotal = 0;
-        if (inv.items && inv.items.length > 0) {
-          inv.items.forEach((item) => {
-            const quantity = item.quantity || 1;
-            const unitPrice = item.unitPrice || 0;
-            const progressPercentage =
-              item.progressPercentage !== undefined &&
-              item.progressPercentage !== null
-                ? item.progressPercentage
-                : 100;
-            const vatRate = item.vatRate || 0;
-            const discount = item.discount || 0;
-            const discountType = item.discountType || "PERCENTAGE";
-
-            let itemHT = quantity * unitPrice * (progressPercentage / 100);
-
-            // Appliquer la remise
-            if (discount > 0) {
-              if (discountType === "PERCENTAGE") {
-                itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
-              } else {
-                itemHT = Math.max(0, itemHT - discount);
-              }
-            }
-
-            // Ajouter la TVA
-            const itemTTC = itemHT * (1 + vatRate / 100);
-            invoiceTotal += itemTTC;
-          });
-        } else {
-          // Fallback sur finalTotalTTC si pas d'items
-          invoiceTotal = inv.finalTotalTTC || 0;
-        }
-
-        return sum + invoiceTotal;
-      }, 0);
-
-      return total;
+      return result[0]?.total || 0;
     },
   },
   Query: {
@@ -624,16 +585,19 @@ const quoteResolvers = {
               createdBy: user.id,
             });
 
-            // S'il y a des devis en conflit, mettre à jour leur numéro
-            for (const draft of conflictingDrafts) {
-              // Utiliser le format DRAFT-ID avec timestamp
-              const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-              const finalDraftNumber = `${newNumber}-${timestamp}`;
-
-              // Mettre à jour le devis en brouillon avec le nouveau numéro
-              await Quote.findByIdAndUpdate(draft._id, {
-                number: finalDraftNumber,
+            // S'il y a des devis en conflit, mettre à jour leur numéro en batch
+            if (conflictingDrafts.length > 0) {
+              const bulkOps = conflictingDrafts.map((draft) => {
+                const timestamp = Date.now() + Math.floor(Math.random() * 1000);
+                const finalDraftNumber = `${newNumber}-${timestamp}`;
+                return {
+                  updateOne: {
+                    filter: { _id: draft._id },
+                    update: { $set: { number: finalDraftNumber } },
+                  },
+                };
               });
+              await Quote.bulkWrite(bulkOps);
             }
 
             return newNumber;

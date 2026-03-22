@@ -19,141 +19,190 @@ const checkAccess = async (id, workspaceId) => {
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
   });
   if (!doc) {
-    throw new AppError(
-      "Facture d'achat non trouvée",
-      ERROR_CODES.NOT_FOUND
-    );
+    throw new AppError("Facture d'achat non trouvée", ERROR_CODES.NOT_FOUND);
   }
   return doc;
 };
 
 const resolveWorkspaceId = (inputWorkspaceId, contextWorkspaceId) => {
-  if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-    throw new AppError(
-      "Organisation invalide.",
-      ERROR_CODES.FORBIDDEN
-    );
+  if (
+    inputWorkspaceId &&
+    contextWorkspaceId &&
+    inputWorkspaceId !== contextWorkspaceId
+  ) {
+    throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
   }
   return inputWorkspaceId || contextWorkspaceId;
 };
 
 const purchaseInvoiceResolvers = {
   Query: {
-    purchaseInvoice: requireRead("expenses")(
-      async (_, { id }, context) => {
-        const workspaceId = resolveWorkspaceId(null, context.workspaceId);
-        return await checkAccess(id, workspaceId);
+    purchaseInvoice: requireRead("expenses")(async (_, { id }, context) => {
+      const workspaceId = resolveWorkspaceId(null, context.workspaceId);
+      return await checkAccess(id, workspaceId);
+    }),
+
+    purchaseInvoices: requireRead("expenses")(async (_, args, context) => {
+      const workspaceId = resolveWorkspaceId(
+        args.workspaceId,
+        context.workspaceId,
+      );
+      const {
+        page = 1,
+        limit = 20,
+        search,
+        status,
+        category,
+        supplierId,
+        startDate,
+        endDate,
+        dueDateStart,
+        dueDateEnd,
+        minAmount,
+        maxAmount,
+        hasFile,
+        sortField = "issueDate",
+        sortOrder = "DESC",
+      } = args;
+
+      const query = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
+
+      if (status) query.status = status;
+      if (category) query.category = category;
+      if (supplierId)
+        query.supplierId = new mongoose.Types.ObjectId(supplierId);
+
+      if (startDate || endDate) {
+        query.issueDate = {};
+        if (startDate) query.issueDate.$gte = new Date(startDate);
+        if (endDate) query.issueDate.$lte = new Date(endDate);
       }
-    ),
 
-    purchaseInvoices: requireRead("expenses")(
-      async (_, args, context) => {
-        const workspaceId = resolveWorkspaceId(args.workspaceId, context.workspaceId);
-        const {
-          page = 1, limit = 20, search, status, category, supplierId,
-          startDate, endDate, dueDateStart, dueDateEnd,
-          minAmount, maxAmount, hasFile,
-          sortField = "issueDate", sortOrder = "DESC",
-        } = args;
-
-        const query = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
-
-        if (status) query.status = status;
-        if (category) query.category = category;
-        if (supplierId) query.supplierId = new mongoose.Types.ObjectId(supplierId);
-
-        if (startDate || endDate) {
-          query.issueDate = {};
-          if (startDate) query.issueDate.$gte = new Date(startDate);
-          if (endDate) query.issueDate.$lte = new Date(endDate);
-        }
-
-        if (dueDateStart || dueDateEnd) {
-          query.dueDate = {};
-          if (dueDateStart) query.dueDate.$gte = new Date(dueDateStart);
-          if (dueDateEnd) query.dueDate.$lte = new Date(dueDateEnd);
-        }
-
-        if (minAmount !== undefined || maxAmount !== undefined) {
-          query.amountTTC = {};
-          if (minAmount !== undefined) query.amountTTC.$gte = minAmount;
-          if (maxAmount !== undefined) query.amountTTC.$lte = maxAmount;
-        }
-
-        if (hasFile === true) {
-          query["files.0"] = { $exists: true };
-        } else if (hasFile === false) {
-          query.files = { $size: 0 };
-        }
-
-        if (search) {
-          query.$or = [
-            { supplierName: { $regex: search, $options: "i" } },
-            { invoiceNumber: { $regex: search, $options: "i" } },
-          ];
-          const numSearch = parseFloat(search);
-          if (!isNaN(numSearch)) {
-            query.$or.push({ amountTTC: numSearch });
-          }
-        }
-
-        const sort = {};
-        sort[sortField] = sortOrder === "ASC" ? 1 : -1;
-
-        const skip = (page - 1) * limit;
-        const [items, totalCount] = await Promise.all([
-          PurchaseInvoice.find(query).sort(sort).skip(skip).limit(limit).lean(),
-          PurchaseInvoice.countDocuments(query),
-        ]);
-
-        return {
-          items,
-          totalCount,
-          currentPage: page,
-          totalPages: Math.ceil(totalCount / limit) || 1,
-          hasNextPage: page * limit < totalCount,
-        };
+      if (dueDateStart || dueDateEnd) {
+        query.dueDate = {};
+        if (dueDateStart) query.dueDate.$gte = new Date(dueDateStart);
+        if (dueDateEnd) query.dueDate.$lte = new Date(dueDateEnd);
       }
-    ),
+
+      if (minAmount !== undefined || maxAmount !== undefined) {
+        query.amountTTC = {};
+        if (minAmount !== undefined) query.amountTTC.$gte = minAmount;
+        if (maxAmount !== undefined) query.amountTTC.$lte = maxAmount;
+      }
+
+      if (hasFile === true) {
+        query["files.0"] = { $exists: true };
+      } else if (hasFile === false) {
+        query.files = { $size: 0 };
+      }
+
+      if (search) {
+        query.$or = [
+          { supplierName: { $regex: search, $options: "i" } },
+          { invoiceNumber: { $regex: search, $options: "i" } },
+        ];
+        const numSearch = parseFloat(search);
+        if (!isNaN(numSearch)) {
+          query.$or.push({ amountTTC: numSearch });
+        }
+      }
+
+      const sort = {};
+      sort[sortField] = sortOrder === "ASC" ? 1 : -1;
+
+      const skip = (page - 1) * limit;
+      const [items, totalCount] = await Promise.all([
+        PurchaseInvoice.find(query).sort(sort).skip(skip).limit(limit).lean(),
+        PurchaseInvoice.countDocuments(query),
+      ]);
+
+      return {
+        items,
+        totalCount,
+        currentPage: page,
+        totalPages: Math.ceil(totalCount / limit) || 1,
+        hasNextPage: page * limit < totalCount,
+      };
+    }),
 
     purchaseInvoiceStats: requireRead("expenses")(
       async (_, { workspaceId: inputWorkspaceId }, context) => {
-        const workspaceId = resolveWorkspaceId(inputWorkspaceId, context.workspaceId);
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const wId = new mongoose.Types.ObjectId(workspaceId);
 
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        const endOfMonth = new Date(
+          now.getFullYear(),
+          now.getMonth() + 1,
+          0,
+          23,
+          59,
+          59,
+        );
 
-        const [toPay, overdue, paidThisMonth, totalThisMonth] = await Promise.all([
-          PurchaseInvoice.aggregate([
-            { $match: { workspaceId: wId, status: { $in: ["TO_PAY", "OVERDUE"] } } },
-            { $group: { _id: null, total: { $sum: "$amountTTC" }, count: { $sum: 1 } } },
-          ]),
-          PurchaseInvoice.aggregate([
-            { $match: { workspaceId: wId, status: "OVERDUE" } },
-            { $group: { _id: null, total: { $sum: "$amountTTC" }, count: { $sum: 1 } } },
-          ]),
-          PurchaseInvoice.aggregate([
-            {
-              $match: {
-                workspaceId: wId,
-                status: "PAID",
-                paymentDate: { $gte: startOfMonth, $lte: endOfMonth },
+        const [toPay, overdue, paidThisMonth, totalThisMonth] =
+          await Promise.all([
+            PurchaseInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: ["TO_PAY", "OVERDUE"] },
+                },
               },
-            },
-            { $group: { _id: null, total: { $sum: "$amountTTC" }, count: { $sum: 1 } } },
-          ]),
-          PurchaseInvoice.aggregate([
-            {
-              $match: {
-                workspaceId: wId,
-                issueDate: { $gte: startOfMonth, $lte: endOfMonth },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: "$amountTTC" },
+                  count: { $sum: 1 },
+                },
               },
-            },
-            { $group: { _id: null, total: { $sum: "$amountTTC" }, count: { $sum: 1 } } },
-          ]),
-        ]);
+            ]),
+            PurchaseInvoice.aggregate([
+              { $match: { workspaceId: wId, status: "OVERDUE" } },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: "$amountTTC" },
+                  count: { $sum: 1 },
+                },
+              },
+            ]),
+            PurchaseInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: "PAID",
+                  paymentDate: { $gte: startOfMonth, $lte: endOfMonth },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: "$amountTTC" },
+                  count: { $sum: 1 },
+                },
+              },
+            ]),
+            PurchaseInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  issueDate: { $gte: startOfMonth, $lte: endOfMonth },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: "$amountTTC" },
+                  count: { $sum: 1 },
+                },
+              },
+            ]),
+          ]);
 
         return {
           totalToPay: toPay[0]?.total || 0,
@@ -165,7 +214,7 @@ const purchaseInvoiceResolvers = {
           totalThisMonth: totalThisMonth[0]?.total || 0,
           totalThisMonthCount: totalThisMonth[0]?.count || 0,
         };
-      }
+      },
     ),
 
     purchaseInvoiceReconciliationMatches: requireRead("expenses")(
@@ -203,7 +252,9 @@ const purchaseInvoiceResolvers = {
 
         return transactions.map((t) => {
           let confidence = 0.5;
-          const amountDiff = Math.abs(Math.abs(t.amount) - invoice.amountTTC) / invoice.amountTTC;
+          const amountDiff =
+            Math.abs(Math.abs(t.amount) - invoice.amountTTC) /
+            invoice.amountTTC;
           if (amountDiff < 0.001) confidence += 0.3;
           else if (amountDiff < 0.02) confidence += 0.2;
 
@@ -221,23 +272,29 @@ const purchaseInvoiceResolvers = {
             confidence: Math.min(confidence, 1),
           };
         });
-      }
+      },
     ),
 
-    supplier: requireRead("expenses")(
-      async (_, { id }, context) => {
-        const supplier = await Supplier.findOne({
-          _id: id,
-          workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
-        });
-        if (!supplier) throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
-        return supplier;
-      }
-    ),
+    supplier: requireRead("expenses")(async (_, { id }, context) => {
+      const supplier = await Supplier.findOne({
+        _id: id,
+        workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
+      });
+      if (!supplier)
+        throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
+      return supplier;
+    }),
 
     suppliers: requireRead("expenses")(
-      async (_, { workspaceId: inputWorkspaceId, page = 1, limit = 50, search }, context) => {
-        const workspaceId = resolveWorkspaceId(inputWorkspaceId, context.workspaceId);
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, page = 1, limit = 50, search },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
 
         if (search) {
@@ -256,14 +313,17 @@ const purchaseInvoiceResolvers = {
           currentPage: page,
           totalPages: Math.ceil(totalCount / limit) || 1,
         };
-      }
+      },
     ),
   },
 
   Mutation: {
     createPurchaseInvoice: requireWrite("expenses")(
       async (_, { input }, context) => {
-        const workspaceId = resolveWorkspaceId(input.workspaceId, context.workspaceId);
+        const workspaceId = resolveWorkspaceId(
+          input.workspaceId,
+          context.workspaceId,
+        );
 
         const invoice = new PurchaseInvoice({
           ...input,
@@ -275,7 +335,10 @@ const purchaseInvoiceResolvers = {
         if (!input.supplierId && input.supplierName) {
           let supplier = await Supplier.findOne({
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            name: { $regex: `^${input.supplierName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: "i" },
+            name: {
+              $regex: `^${input.supplierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+              $options: "i",
+            },
           });
 
           if (!supplier) {
@@ -293,31 +356,43 @@ const purchaseInvoiceResolvers = {
 
         // Automatisations documents partagés (fire-and-forget)
         const piTriggerMap = {
-          TO_PROCESS: 'PURCHASE_INVOICE_TO_PROCESS',
-          TO_PAY: 'PURCHASE_INVOICE_TO_PAY',
-          PENDING: 'PURCHASE_INVOICE_PENDING',
-          PAID: 'PURCHASE_INVOICE_PAID',
-          OVERDUE: 'PURCHASE_INVOICE_OVERDUE',
-          ARCHIVED: 'PURCHASE_INVOICE_ARCHIVED',
+          TO_PROCESS: "PURCHASE_INVOICE_TO_PROCESS",
+          TO_PAY: "PURCHASE_INVOICE_TO_PAY",
+          PENDING: "PURCHASE_INVOICE_PENDING",
+          PAID: "PURCHASE_INVOICE_PAID",
+          OVERDUE: "PURCHASE_INVOICE_OVERDUE",
+          ARCHIVED: "PURCHASE_INVOICE_ARCHIVED",
         };
         const piTrigger = piTriggerMap[invoice.status];
         if (piTrigger) {
-          documentAutomationService.executeAutomationsForExpense(piTrigger, workspaceId, {
-            documentId: invoice._id.toString(),
-            documentType: 'purchaseInvoice',
-            documentNumber: invoice.invoiceNumber || '',
-            supplierName: invoice.supplierName || '',
-            fileUrl: invoice.files?.[0]?.url || null,
-            fileKey: invoice.files?.[0]?.path || null,
-            fileName: invoice.files?.[0]?.originalFilename || null,
-            mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
-            issueDate: invoice.invoiceDate || invoice.createdAt,
-            clientId: invoice.supplierId || null,
-          }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI create):', err));
+          documentAutomationService
+            .executeAutomationsForExpense(
+              piTrigger,
+              workspaceId,
+              {
+                documentId: invoice._id.toString(),
+                documentType: "purchaseInvoice",
+                documentNumber: invoice.invoiceNumber || "",
+                supplierName: invoice.supplierName || "",
+                fileUrl: invoice.files?.[0]?.url || null,
+                fileKey: invoice.files?.[0]?.path || null,
+                fileName: invoice.files?.[0]?.originalFilename || null,
+                mimeType: invoice.files?.[0]?.mimetype || "application/pdf",
+                issueDate: invoice.invoiceDate || invoice.createdAt,
+                clientId: invoice.supplierId || null,
+              },
+              context.user.id,
+            )
+            .catch((err) =>
+              console.error(
+                "Erreur automatisation documents (PI create):",
+                err,
+              ),
+            );
         }
 
         return invoice;
-      }
+      },
     ),
 
     updatePurchaseInvoice: requireWrite("expenses")(
@@ -334,7 +409,11 @@ const purchaseInvoiceResolvers = {
         const oldStatus = invoice.status;
 
         // Auto-detect overdue
-        if (invoice.dueDate && new Date(invoice.dueDate) < new Date() && invoice.status === "TO_PAY") {
+        if (
+          invoice.dueDate &&
+          new Date(invoice.dueDate) < new Date() &&
+          invoice.status === "TO_PAY"
+        ) {
           invoice.status = "OVERDUE";
         }
 
@@ -343,32 +422,44 @@ const purchaseInvoiceResolvers = {
         // Automatisations documents partagés si le statut a changé (fire-and-forget)
         if (invoice.status !== oldStatus) {
           const piUpdateTriggerMap = {
-            TO_PROCESS: 'PURCHASE_INVOICE_TO_PROCESS',
-            TO_PAY: 'PURCHASE_INVOICE_TO_PAY',
-            PENDING: 'PURCHASE_INVOICE_PENDING',
-            PAID: 'PURCHASE_INVOICE_PAID',
-            OVERDUE: 'PURCHASE_INVOICE_OVERDUE',
-            ARCHIVED: 'PURCHASE_INVOICE_ARCHIVED',
+            TO_PROCESS: "PURCHASE_INVOICE_TO_PROCESS",
+            TO_PAY: "PURCHASE_INVOICE_TO_PAY",
+            PENDING: "PURCHASE_INVOICE_PENDING",
+            PAID: "PURCHASE_INVOICE_PAID",
+            OVERDUE: "PURCHASE_INVOICE_OVERDUE",
+            ARCHIVED: "PURCHASE_INVOICE_ARCHIVED",
           };
           const piUpdateTrigger = piUpdateTriggerMap[invoice.status];
           if (piUpdateTrigger) {
-            documentAutomationService.executeAutomationsForExpense(piUpdateTrigger, workspaceId, {
-              documentId: invoice._id.toString(),
-              documentType: 'purchaseInvoice',
-              documentNumber: invoice.invoiceNumber || '',
-              supplierName: invoice.supplierName || '',
-              fileUrl: invoice.files?.[0]?.url || null,
-              fileKey: invoice.files?.[0]?.path || null,
-              fileName: invoice.files?.[0]?.originalFilename || null,
-              mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
-              issueDate: invoice.invoiceDate || invoice.createdAt,
-              clientId: invoice.supplierId || null,
-            }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI update):', err));
+            documentAutomationService
+              .executeAutomationsForExpense(
+                piUpdateTrigger,
+                workspaceId,
+                {
+                  documentId: invoice._id.toString(),
+                  documentType: "purchaseInvoice",
+                  documentNumber: invoice.invoiceNumber || "",
+                  supplierName: invoice.supplierName || "",
+                  fileUrl: invoice.files?.[0]?.url || null,
+                  fileKey: invoice.files?.[0]?.path || null,
+                  fileName: invoice.files?.[0]?.originalFilename || null,
+                  mimeType: invoice.files?.[0]?.mimetype || "application/pdf",
+                  issueDate: invoice.invoiceDate || invoice.createdAt,
+                  clientId: invoice.supplierId || null,
+                },
+                context.user.id,
+              )
+              .catch((err) =>
+                console.error(
+                  "Erreur automatisation documents (PI update):",
+                  err,
+                ),
+              );
           }
         }
 
         return invoice;
-      }
+      },
     ),
 
     deletePurchaseInvoice: requireDelete("expenses")(
@@ -391,7 +482,7 @@ const purchaseInvoiceResolvers = {
 
         await PurchaseInvoice.deleteOne({ _id: id });
         return { success: true, message: "Facture d'achat supprimée" };
-      }
+      },
     ),
 
     addPurchaseInvoiceFile: requireWrite("expenses")(
@@ -424,7 +515,11 @@ const purchaseInvoiceResolvers = {
           const buffer = Buffer.concat(chunks);
 
           const uniqueFilename = `purchase-invoices/${workspaceId}/${Date.now()}-${filename.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
-          const uploadResult = await cloudflareService.uploadImage(buffer, uniqueFilename, mimetype);
+          const uploadResult = await cloudflareService.uploadImage(
+            buffer,
+            uniqueFilename,
+            mimetype,
+          );
 
           fileData = {
             filename: uniqueFilename,
@@ -437,17 +532,26 @@ const purchaseInvoiceResolvers = {
             ocrData: null,
           };
         } else {
-          throw new AppError("Aucun fichier fourni", ERROR_CODES.VALIDATION_ERROR);
+          throw new AppError(
+            "Aucun fichier fourni",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
         }
 
         invoice.files.push(fileData);
 
         // Apply OCR data if provided
         if (input.ocrData) {
-          const ocr = typeof input.ocrData === "string" ? JSON.parse(input.ocrData) : input.ocrData;
-          if (ocr.supplierName) invoice.ocrMetadata.supplierName = ocr.supplierName;
-          if (ocr.invoiceNumber) invoice.ocrMetadata.invoiceNumber = ocr.invoiceNumber;
-          if (ocr.invoiceDate) invoice.ocrMetadata.invoiceDate = new Date(ocr.invoiceDate);
+          const ocr =
+            typeof input.ocrData === "string"
+              ? JSON.parse(input.ocrData)
+              : input.ocrData;
+          if (ocr.supplierName)
+            invoice.ocrMetadata.supplierName = ocr.supplierName;
+          if (ocr.invoiceNumber)
+            invoice.ocrMetadata.invoiceNumber = ocr.invoiceNumber;
+          if (ocr.invoiceDate)
+            invoice.ocrMetadata.invoiceDate = new Date(ocr.invoiceDate);
           if (ocr.dueDate) invoice.ocrMetadata.dueDate = new Date(ocr.dueDate);
           if (ocr.amountHT) invoice.ocrMetadata.amountHT = ocr.amountHT;
           if (ocr.amountTVA) invoice.ocrMetadata.amountTVA = ocr.amountTVA;
@@ -455,12 +559,13 @@ const purchaseInvoiceResolvers = {
           if (ocr.amountTTC) invoice.ocrMetadata.amountTTC = ocr.amountTTC;
           if (ocr.iban) invoice.ocrMetadata.iban = ocr.iban;
           if (ocr.bic) invoice.ocrMetadata.bic = ocr.bic;
-          if (ocr.confidenceScore) invoice.ocrMetadata.confidenceScore = ocr.confidenceScore;
+          if (ocr.confidenceScore)
+            invoice.ocrMetadata.confidenceScore = ocr.confidenceScore;
         }
 
         await invoice.save();
         return invoice;
-      }
+      },
     ),
 
     removePurchaseInvoiceFile: requireWrite("expenses")(
@@ -469,7 +574,8 @@ const purchaseInvoiceResolvers = {
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
         const file = invoice.files.id(fileId);
-        if (!file) throw new AppError("Fichier non trouvé", ERROR_CODES.NOT_FOUND);
+        if (!file)
+          throw new AppError("Fichier non trouvé", ERROR_CODES.NOT_FOUND);
 
         // Delete from Cloudflare
         try {
@@ -485,7 +591,7 @@ const purchaseInvoiceResolvers = {
         invoice.files.pull(fileId);
         await invoice.save();
         return invoice;
-      }
+      },
     ),
 
     markPurchaseInvoiceAsPaid: requireWrite("expenses")(
@@ -500,21 +606,30 @@ const purchaseInvoiceResolvers = {
         await invoice.save();
 
         // Automatisations documents partagés (fire-and-forget)
-        documentAutomationService.executeAutomationsForExpense('PURCHASE_INVOICE_PAID', workspaceId, {
-          documentId: invoice._id.toString(),
-          documentType: 'purchaseInvoice',
-          documentNumber: invoice.invoiceNumber || '',
-          supplierName: invoice.supplierName || '',
-          fileUrl: invoice.files?.[0]?.url || null,
-          fileKey: invoice.files?.[0]?.path || null,
-          fileName: invoice.files?.[0]?.originalFilename || null,
-          mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
-          issueDate: invoice.invoiceDate || invoice.createdAt,
-          clientId: invoice.supplierId || null,
-        }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI paid):', err));
+        documentAutomationService
+          .executeAutomationsForExpense(
+            "PURCHASE_INVOICE_PAID",
+            workspaceId,
+            {
+              documentId: invoice._id.toString(),
+              documentType: "purchaseInvoice",
+              documentNumber: invoice.invoiceNumber || "",
+              supplierName: invoice.supplierName || "",
+              fileUrl: invoice.files?.[0]?.url || null,
+              fileKey: invoice.files?.[0]?.path || null,
+              fileName: invoice.files?.[0]?.originalFilename || null,
+              mimeType: invoice.files?.[0]?.mimetype || "application/pdf",
+              issueDate: invoice.invoiceDate || invoice.createdAt,
+              clientId: invoice.supplierId || null,
+            },
+            context.user.id,
+          )
+          .catch((err) =>
+            console.error("Erreur automatisation documents (PI paid):", err),
+          );
 
         return invoice;
-      }
+      },
     ),
 
     bulkUpdatePurchaseInvoiceStatus: requireWrite("expenses")(
@@ -527,7 +642,7 @@ const purchaseInvoiceResolvers = {
 
         const result = await PurchaseInvoice.updateMany(
           { _id: { $in: ids }, workspaceId },
-          { $set: updateData }
+          { $set: updateData },
         );
 
         return {
@@ -535,14 +650,17 @@ const purchaseInvoiceResolvers = {
           updatedCount: result.modifiedCount,
           message: `${result.modifiedCount} facture(s) mise(s) à jour`,
         };
-      }
+      },
     ),
 
     bulkDeletePurchaseInvoices: requireDelete("expenses")(
       async (_, { ids }, context) => {
         const workspaceId = new mongoose.Types.ObjectId(context.workspaceId);
 
-        const invoices = await PurchaseInvoice.find({ _id: { $in: ids }, workspaceId });
+        const invoices = await PurchaseInvoice.find({
+          _id: { $in: ids },
+          workspaceId,
+        });
 
         // Delete files
         for (const inv of invoices) {
@@ -559,14 +677,17 @@ const purchaseInvoiceResolvers = {
           }
         }
 
-        const result = await PurchaseInvoice.deleteMany({ _id: { $in: ids }, workspaceId });
+        const result = await PurchaseInvoice.deleteMany({
+          _id: { $in: ids },
+          workspaceId,
+        });
 
         return {
           success: true,
           updatedCount: result.deletedCount,
           message: `${result.deletedCount} facture(s) supprimée(s)`,
         };
-      }
+      },
     ),
 
     bulkCategorizePurchaseInvoices: requireWrite("expenses")(
@@ -575,7 +696,7 @@ const purchaseInvoiceResolvers = {
 
         const result = await PurchaseInvoice.updateMany(
           { _id: { $in: ids }, workspaceId },
-          { $set: { category } }
+          { $set: { category } },
         );
 
         return {
@@ -583,7 +704,7 @@ const purchaseInvoiceResolvers = {
           updatedCount: result.modifiedCount,
           message: `${result.modifiedCount} facture(s) catégorisée(s)`,
         };
-      }
+      },
     ),
 
     reconcilePurchaseInvoice: requireWrite("expenses")(
@@ -600,11 +721,14 @@ const purchaseInvoiceResolvers = {
         });
 
         if (txCount !== transactionIds.length) {
-          throw new AppError("Certaines transactions sont introuvables", ERROR_CODES.NOT_FOUND);
+          throw new AppError(
+            "Certaines transactions sont introuvables",
+            ERROR_CODES.NOT_FOUND,
+          );
         }
 
         invoice.linkedTransactionIds = transactionIds.map(
-          (id) => new mongoose.Types.ObjectId(id)
+          (id) => new mongoose.Types.ObjectId(id),
         );
         invoice.isReconciled = true;
         invoice.status = "PAID";
@@ -613,27 +737,39 @@ const purchaseInvoiceResolvers = {
         // Mark transactions as matched
         await Transaction.updateMany(
           { _id: { $in: transactionIds } },
-          { $set: { reconciliationStatus: "matched" } }
+          { $set: { reconciliationStatus: "matched" } },
         );
 
         await invoice.save();
 
         // Automatisations documents partagés (fire-and-forget)
-        documentAutomationService.executeAutomationsForExpense('PURCHASE_INVOICE_PAID', workspaceId, {
-          documentId: invoice._id.toString(),
-          documentType: 'purchaseInvoice',
-          documentNumber: invoice.invoiceNumber || '',
-          supplierName: invoice.supplierName || '',
-          fileUrl: invoice.files?.[0]?.url || null,
-          fileKey: invoice.files?.[0]?.path || null,
-          fileName: invoice.files?.[0]?.originalFilename || null,
-          mimeType: invoice.files?.[0]?.mimetype || 'application/pdf',
-          issueDate: invoice.invoiceDate || invoice.createdAt,
-          clientId: invoice.supplierId || null,
-        }, context.user.id).catch(err => console.error('Erreur automatisation documents (PI reconcile):', err));
+        documentAutomationService
+          .executeAutomationsForExpense(
+            "PURCHASE_INVOICE_PAID",
+            workspaceId,
+            {
+              documentId: invoice._id.toString(),
+              documentType: "purchaseInvoice",
+              documentNumber: invoice.invoiceNumber || "",
+              supplierName: invoice.supplierName || "",
+              fileUrl: invoice.files?.[0]?.url || null,
+              fileKey: invoice.files?.[0]?.path || null,
+              fileName: invoice.files?.[0]?.originalFilename || null,
+              mimeType: invoice.files?.[0]?.mimetype || "application/pdf",
+              issueDate: invoice.invoiceDate || invoice.createdAt,
+              clientId: invoice.supplierId || null,
+            },
+            context.user.id,
+          )
+          .catch((err) =>
+            console.error(
+              "Erreur automatisation documents (PI reconcile):",
+              err,
+            ),
+          );
 
         return invoice;
-      }
+      },
     ),
 
     unreconcilePurchaseInvoice: requireWrite("expenses")(
@@ -645,7 +781,7 @@ const purchaseInvoiceResolvers = {
           const Transaction = mongoose.model("Transaction");
           await Transaction.updateMany(
             { _id: { $in: invoice.linkedTransactionIds } },
-            { $set: { reconciliationStatus: "unmatched" } }
+            { $set: { reconciliationStatus: "unmatched" } },
           );
         }
 
@@ -654,37 +790,38 @@ const purchaseInvoiceResolvers = {
 
         await invoice.save();
         return invoice;
-      }
+      },
     ),
 
-    createSupplier: requireWrite("expenses")(
-      async (_, { input }, context) => {
-        const workspaceId = resolveWorkspaceId(input.workspaceId, context.workspaceId);
+    createSupplier: requireWrite("expenses")(async (_, { input }, context) => {
+      const workspaceId = resolveWorkspaceId(
+        input.workspaceId,
+        context.workspaceId,
+      );
 
-        const supplier = new Supplier({
-          name: input.name,
-          email: input.email,
-          phone: input.phone,
-          siret: input.siret,
-          vatNumber: input.vatNumber,
-          address: {
-            street: input.street,
-            city: input.city,
-            postalCode: input.postalCode,
-            country: input.country,
-          },
-          iban: input.iban,
-          bic: input.bic,
-          defaultCategory: input.defaultCategory,
-          notes: input.notes,
-          workspaceId: new mongoose.Types.ObjectId(workspaceId),
-          createdBy: context.user.id,
-        });
+      const supplier = new Supplier({
+        name: input.name,
+        email: input.email,
+        phone: input.phone,
+        siret: input.siret,
+        vatNumber: input.vatNumber,
+        address: {
+          street: input.street,
+          city: input.city,
+          postalCode: input.postalCode,
+          country: input.country,
+        },
+        iban: input.iban,
+        bic: input.bic,
+        defaultCategory: input.defaultCategory,
+        notes: input.notes,
+        workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        createdBy: context.user.id,
+      });
 
-        await supplier.save();
-        return supplier;
-      }
-    ),
+      await supplier.save();
+      return supplier;
+    }),
 
     updateSupplier: requireWrite("expenses")(
       async (_, { id, input }, context) => {
@@ -692,7 +829,8 @@ const purchaseInvoiceResolvers = {
           _id: id,
           workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
         });
-        if (!supplier) throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
+        if (!supplier)
+          throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
 
         Object.keys(input).forEach((key) => {
           if (["street", "city", "postalCode", "country"].includes(key)) {
@@ -705,40 +843,43 @@ const purchaseInvoiceResolvers = {
 
         await supplier.save();
         return supplier;
-      }
+      },
     ),
 
-    deleteSupplier: requireDelete("expenses")(
-      async (_, { id }, context) => {
-        const supplier = await Supplier.findOne({
-          _id: id,
-          workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
-        });
-        if (!supplier) throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
+    deleteSupplier: requireDelete("expenses")(async (_, { id }, context) => {
+      const supplier = await Supplier.findOne({
+        _id: id,
+        workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
+      });
+      if (!supplier)
+        throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
 
-        await Supplier.deleteOne({ _id: id });
-        return { success: true, message: "Fournisseur supprimé" };
-      }
-    ),
+      await Supplier.deleteOne({ _id: id });
+      return { success: true, message: "Fournisseur supprimé" };
+    }),
 
     mergeSuppliers: requireWrite("expenses")(
       async (_, { targetId, sourceIds }, context) => {
         const workspaceId = new mongoose.Types.ObjectId(context.workspaceId);
 
         const target = await Supplier.findOne({ _id: targetId, workspaceId });
-        if (!target) throw new AppError("Fournisseur cible non trouvé", ERROR_CODES.NOT_FOUND);
+        if (!target)
+          throw new AppError(
+            "Fournisseur cible non trouvé",
+            ERROR_CODES.NOT_FOUND,
+          );
 
         // Update all purchase invoices to point to target
         await PurchaseInvoice.updateMany(
           { supplierId: { $in: sourceIds }, workspaceId },
-          { $set: { supplierId: targetId, supplierName: target.name } }
+          { $set: { supplierId: targetId, supplierName: target.name } },
         );
 
         // Delete source suppliers
         await Supplier.deleteMany({ _id: { $in: sourceIds }, workspaceId });
 
         return target;
-      }
+      },
     ),
 
     // ============================================================
@@ -747,17 +888,22 @@ const purchaseInvoiceResolvers = {
 
     syncPurchaseInvoicesFromSuperPdp: requireWrite("expenses")(
       async (_, { workspaceId: inputWorkspaceId, since }, context) => {
-        const workspaceId = resolveWorkspaceId(inputWorkspaceId, context.workspaceId);
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         // Vérifier que l'e-invoicing est activé pour cette organisation
-        const isEnabled = await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
+        const isEnabled =
+          await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
         if (!isEnabled) {
           return {
             success: false,
             imported: 0,
             skipped: 0,
             errors: 0,
-            message: "La facturation électronique n'est pas activée. Connectez votre compte SuperPDP dans les paramètres.",
+            message:
+              "La facturation électronique n'est pas activée. Connectez votre compte SuperPDP dans les paramètres.",
           };
         }
 
@@ -769,15 +915,19 @@ const purchaseInvoiceResolvers = {
 
         try {
           while (hasMore) {
-            const result = await superPdpService.getReceivedInvoices(workspaceId, {
-              page,
-              limit: 50,
-              since,
-            });
+            const result = await superPdpService.getReceivedInvoices(
+              workspaceId,
+              {
+                page,
+                limit: 50,
+                since,
+              },
+            );
 
             for (const superPdpInvoice of result.invoices) {
               try {
-                const superPdpId = superPdpInvoice.id || superPdpInvoice.invoiceId;
+                const superPdpId =
+                  superPdpInvoice.id || superPdpInvoice.invoiceId;
 
                 // Vérifier si la facture existe déjà (par superPdpInvoiceId)
                 const existing = await PurchaseInvoice.findOne({
@@ -791,16 +941,22 @@ const purchaseInvoiceResolvers = {
                 }
 
                 // Transformer la facture SuperPDP → PurchaseInvoice
-                const purchaseInvoiceData = superPdpService.transformReceivedInvoiceToPurchaseInvoice(
-                  superPdpInvoice,
-                  workspaceId,
-                  context.user._id || context.user.id
-                );
+                const purchaseInvoiceData =
+                  superPdpService.transformReceivedInvoiceToPurchaseInvoice(
+                    superPdpInvoice,
+                    workspaceId,
+                    context.user._id || context.user.id,
+                  );
 
                 // Auto-créer ou trouver le fournisseur
                 let supplier = await Supplier.findOne({
                   workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                  name: { $regex: new RegExp(`^${purchaseInvoiceData.supplierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+                  name: {
+                    $regex: new RegExp(
+                      `^${purchaseInvoiceData.supplierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+                      "i",
+                    ),
+                  },
                 });
 
                 if (!supplier) {
@@ -821,11 +977,11 @@ const purchaseInvoiceResolvers = {
                 imported++;
 
                 logger.info(
-                  `✅ Facture d'achat importée depuis SuperPDP: ${purchaseInvoiceData.invoiceNumber} (${purchaseInvoiceData.supplierName})`
+                  `✅ Facture d'achat importée depuis SuperPDP: ${purchaseInvoiceData.invoiceNumber} (${purchaseInvoiceData.supplierName})`,
                 );
               } catch (err) {
                 errors++;
-                logger.error(`❌ Erreur import facture SuperPDP:`, err);
+                logger.error("❌ Erreur import facture SuperPDP:", err);
               }
             }
 
@@ -847,7 +1003,7 @@ const purchaseInvoiceResolvers = {
             message: `Erreur de synchronisation : ${error.message}`,
           };
         }
-      }
+      },
     ),
 
     acknowledgePurchaseInvoiceEInvoice: requireWrite("expenses")(
@@ -858,7 +1014,7 @@ const purchaseInvoiceResolvers = {
         if (!invoice.superPdpInvoiceId) {
           throw new AppError(
             "Cette facture n'est pas liée à une e-facture SuperPDP",
-            ERROR_CODES.VALIDATION_ERROR
+            ERROR_CODES.VALIDATION_ERROR,
           );
         }
 
@@ -866,44 +1022,80 @@ const purchaseInvoiceResolvers = {
         await invoice.save();
 
         return invoice;
-      }
+      },
     ),
   },
 
   PurchaseInvoiceFile: {
     id: (parent) => parent._id?.toString() || parent.id,
-    createdAt: (parent) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : parent.createdAt || null,
-    updatedAt: (parent) => parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : parent.updatedAt || null,
+    createdAt: (parent) =>
+      parent.createdAt instanceof Date
+        ? parent.createdAt.toISOString()
+        : parent.createdAt || null,
+    updatedAt: (parent) =>
+      parent.updatedAt instanceof Date
+        ? parent.updatedAt.toISOString()
+        : parent.updatedAt || null,
   },
 
   PurchaseInvoice: {
     id: (parent) => parent._id?.toString() || parent.id,
-    issueDate: (parent) => parent.issueDate instanceof Date ? parent.issueDate.toISOString() : parent.issueDate || null,
-    dueDate: (parent) => parent.dueDate instanceof Date ? parent.dueDate.toISOString() : parent.dueDate || null,
-    paymentDate: (parent) => parent.paymentDate instanceof Date ? parent.paymentDate.toISOString() : parent.paymentDate || null,
-    eInvoiceReceivedAt: (parent) => parent.eInvoiceReceivedAt instanceof Date ? parent.eInvoiceReceivedAt.toISOString() : parent.eInvoiceReceivedAt || null,
-    createdAt: (parent) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : parent.createdAt || null,
-    updatedAt: (parent) => parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : parent.updatedAt || null,
+    issueDate: (parent) =>
+      parent.issueDate instanceof Date
+        ? parent.issueDate.toISOString()
+        : parent.issueDate || null,
+    dueDate: (parent) =>
+      parent.dueDate instanceof Date
+        ? parent.dueDate.toISOString()
+        : parent.dueDate || null,
+    paymentDate: (parent) =>
+      parent.paymentDate instanceof Date
+        ? parent.paymentDate.toISOString()
+        : parent.paymentDate || null,
+    eInvoiceReceivedAt: (parent) =>
+      parent.eInvoiceReceivedAt instanceof Date
+        ? parent.eInvoiceReceivedAt.toISOString()
+        : parent.eInvoiceReceivedAt || null,
+    createdAt: (parent) =>
+      parent.createdAt instanceof Date
+        ? parent.createdAt.toISOString()
+        : parent.createdAt || null,
+    updatedAt: (parent) =>
+      parent.updatedAt instanceof Date
+        ? parent.updatedAt.toISOString()
+        : parent.updatedAt || null,
     supplier: async (parent) => {
       if (!parent.supplierId) return null;
-      return await Supplier.findById(parent.supplierId).lean();
+      const supplier = await Supplier.findById(parent.supplierId).lean();
+      if (!supplier) return null;
+      return { ...supplier, id: supplier._id.toString() };
     },
     createdBy: async (parent) => {
       const User = mongoose.model("User");
-      return await User.findById(parent.createdBy);
+      const user = await User.findById(parent.createdBy).lean();
+      if (!user) return null;
+      return { ...user, id: user._id.toString() };
     },
   },
 
   Supplier: {
     id: (parent) => parent._id?.toString() || parent.id,
-    createdAt: (parent) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : parent.createdAt || null,
-    updatedAt: (parent) => parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : parent.updatedAt || null,
+    createdAt: (parent) =>
+      parent.createdAt instanceof Date
+        ? parent.createdAt.toISOString()
+        : parent.createdAt || null,
+    updatedAt: (parent) =>
+      parent.updatedAt instanceof Date
+        ? parent.updatedAt.toISOString()
+        : parent.updatedAt || null,
     invoiceCount: async (parent) => {
-      return await PurchaseInvoice.countDocuments({ supplierId: parent._id });
+      const supplierId = parent._id || parent.id;
+      return await PurchaseInvoice.countDocuments({ supplierId });
     },
     totalAmount: async (parent) => {
+      const supplierId = parent._id || parent.id;
       const result = await PurchaseInvoice.aggregate([
-        { $match: { supplierId: parent._id } },
+        { $match: { supplierId: new mongoose.Types.ObjectId(supplierId) } },
         { $group: { _id: null, total: { $sum: "$amountTTC" } } },
       ]);
       return result[0]?.total || 0;

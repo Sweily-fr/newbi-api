@@ -5,7 +5,6 @@ import {
   isPositiveAmount,
   isValidFooterNotes,
 } from "../utils/validators.js";
-import { applyBankDetailsEncryption } from "../utils/encryption.js";
 
 import clientSchema from "./schemas/client.js";
 import itemSchema from "./schemas/item.js";
@@ -358,7 +357,7 @@ const invoiceSchema = new mongoose.Schema(
     // Nature de l'opération (réforme facturation électronique 2026)
     operationType: {
       type: String,
-      enum: ['LB', 'PS', 'LBPS'],
+      enum: ["LB", "PS", "LBPS"],
       default: null,
     },
 
@@ -435,7 +434,12 @@ const invoiceSchema = new mongoose.Schema(
     // Type de flux déterminé par le routage
     eInvoiceFlowType: {
       type: String,
-      enum: ["E_INVOICING", "E_REPORTING_TRANSACTION", "E_REPORTING_PAYMENT", "NONE"],
+      enum: [
+        "E_INVOICING",
+        "E_REPORTING_TRANSACTION",
+        "E_REPORTING_PAYMENT",
+        "NONE",
+      ],
       default: "NONE",
     },
 
@@ -469,7 +473,7 @@ const invoiceSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index pour améliorer les performances des recherches
@@ -484,6 +488,8 @@ invoiceSchema.index({ workspaceId: 1, eInvoiceFlowType: 1 });
 invoiceSchema.index({ createdBy: 1 });
 invoiceSchema.index({ issueDate: -1 });
 invoiceSchema.index({ workspaceId: 1, issueDate: -1 });
+// Index pour les factures de situation (situationInvoicedTotal dans quote resolver)
+invoiceSchema.index({ workspaceId: 1, invoiceType: 1, purchaseOrderNumber: 1 });
 
 // Ajout d'un champ virtuel pour l'année d'émission
 invoiceSchema.virtual("issueYear").get(function () {
@@ -529,14 +535,14 @@ invoiceSchema.index(
     unique: true,
     partialFilterExpression: { number: { $exists: true } }, // Ignorer les documents sans numéro
     name: "prefix_number_workspaceId_year_unique",
-  }
+  },
 );
 
 // Ajout d'une méthode statique pour vérifier si un numéro existe déjà pour une année donnée dans une organisation
 invoiceSchema.statics.numberExistsForYear = async function (
   number,
   workspaceId,
-  year
+  year,
 ) {
   const count = await this.countDocuments({
     number,
@@ -547,7 +553,5 @@ invoiceSchema.statics.numberExistsForYear = async function (
   return count > 0;
 };
 
-// AES-256-GCM encryption for IBAN and BIC fields at rest
-applyBankDetailsEncryption(invoiceSchema, ['bankDetails', 'companyInfo.bankDetails']);
-
-export default mongoose.models.Invoice || mongoose.model("Invoice", invoiceSchema);
+export default mongoose.models.Invoice ||
+  mongoose.model("Invoice", invoiceSchema);

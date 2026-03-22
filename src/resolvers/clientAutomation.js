@@ -1,18 +1,15 @@
-import ClientAutomation from '../models/ClientAutomation.js';
-import ClientList from '../models/ClientList.js';
-import Client from '../models/Client.js';
-import Invoice from '../models/Invoice.js';
-import Quote from '../models/Quote.js';
+import ClientAutomation from "../models/ClientAutomation.js";
+import ClientList from "../models/ClientList.js";
+import Client from "../models/Client.js";
+import Invoice from "../models/Invoice.js";
+import Quote from "../models/Quote.js";
 import {
   requireWrite,
   requireRead,
   requireDelete,
-} from '../middlewares/rbac.js';
-import {
-  createNotFoundError,
-  createValidationError,
-} from '../utils/errors.js';
-import mongoose from 'mongoose';
+} from "../middlewares/rbac.js";
+import { createNotFoundError, createValidationError } from "../utils/errors.js";
+import mongoose from "mongoose";
 
 /**
  * Service pour exécuter les automatisations
@@ -49,7 +46,9 @@ export const automationService = {
 
           // Vérifier si le client est dans la liste source (si spécifiée)
           if (automation.sourceListId) {
-            const sourceList = await ClientList.findById(automation.sourceListId);
+            const sourceList = await ClientList.findById(
+              automation.sourceListId,
+            );
             if (!sourceList || !sourceList.clients.includes(clientId)) {
               continue;
             }
@@ -60,10 +59,10 @@ export const automationService = {
 
           // Mettre à jour les statistiques
           await ClientAutomation.findByIdAndUpdate(automation._id, {
-            $inc: { 'stats.totalExecutions': 1 },
+            $inc: { "stats.totalExecutions": 1 },
             $set: {
-              'stats.lastExecutedAt': new Date(),
-              'stats.lastClientId': clientId,
+              "stats.lastExecutedAt": new Date(),
+              "stats.lastClientId": clientId,
             },
           });
 
@@ -75,7 +74,7 @@ export const automationService = {
         } catch (error) {
           console.error(
             `Erreur lors de l'exécution de l'automatisation ${automation._id}:`,
-            error
+            error,
           );
           results.push({
             automationId: automation._id,
@@ -123,41 +122,41 @@ export const automationService = {
     const { actionType, sourceListId, targetListId } = automation;
 
     switch (actionType) {
-    case 'MOVE_TO_LIST':
-      // Retirer de la liste source si spécifiée
-      if (sourceListId) {
-        await ClientList.findByIdAndUpdate(sourceListId, {
+      case "MOVE_TO_LIST":
+        // Retirer de la liste source si spécifiée
+        if (sourceListId) {
+          await ClientList.findByIdAndUpdate(sourceListId, {
+            $pull: { clients: clientId },
+          });
+        } else {
+          // Retirer de toutes les listes du workspace
+          await ClientList.updateMany(
+            { workspaceId: automation.workspaceId },
+            { $pull: { clients: clientId } },
+          );
+        }
+        // Ajouter à la liste cible
+        await ClientList.findByIdAndUpdate(targetListId, {
+          $addToSet: { clients: clientId },
+        });
+        break;
+
+      case "ADD_TO_LIST":
+        // Ajouter à la liste cible sans retirer des autres
+        await ClientList.findByIdAndUpdate(targetListId, {
+          $addToSet: { clients: clientId },
+        });
+        break;
+
+      case "REMOVE_FROM_LIST":
+        // Retirer de la liste cible
+        await ClientList.findByIdAndUpdate(targetListId, {
           $pull: { clients: clientId },
         });
-      } else {
-        // Retirer de toutes les listes du workspace
-        await ClientList.updateMany(
-          { workspaceId: automation.workspaceId },
-          { $pull: { clients: clientId } }
-        );
-      }
-      // Ajouter à la liste cible
-      await ClientList.findByIdAndUpdate(targetListId, {
-        $addToSet: { clients: clientId },
-      });
-      break;
+        break;
 
-    case 'ADD_TO_LIST':
-      // Ajouter à la liste cible sans retirer des autres
-      await ClientList.findByIdAndUpdate(targetListId, {
-        $addToSet: { clients: clientId },
-      });
-      break;
-
-    case 'REMOVE_FROM_LIST':
-      // Retirer de la liste cible
-      await ClientList.findByIdAndUpdate(targetListId, {
-        $pull: { clients: clientId },
-      });
-      break;
-
-    default:
-      throw new Error(`Action non supportée: ${actionType}`);
+      default:
+        throw new Error(`Action non supportée: ${actionType}`);
     }
 
     // Enregistrer l'activité dans le client
@@ -165,8 +164,8 @@ export const automationService = {
       $push: {
         activity: {
           id: new mongoose.Types.ObjectId().toString(),
-          type: 'automation_executed',
-          userName: 'Système',
+          type: "automation_executed",
+          userName: "Système",
           description: `Automatisation "${automation.name}" exécutée`,
           metadata: {
             automationId: automation._id.toString(),
@@ -185,9 +184,9 @@ export const automationService = {
    */
   async isFirstPaidInvoice(clientId, workspaceId, currentInvoiceId) {
     const paidInvoicesCount = await Invoice.countDocuments({
-      'client.id': clientId,
+      "client.id": clientId,
       workspaceId,
-      status: 'COMPLETED',
+      status: "COMPLETED",
       _id: { $ne: currentInvoiceId },
     });
 
@@ -208,10 +207,10 @@ export const automationService = {
     if (automation.sourceListId) {
       const sourceList = await ClientList.findById(automation.sourceListId);
       if (!sourceList) return results;
-      clientIds = sourceList.clients.map(id => id.toString());
+      clientIds = sourceList.clients.map((id) => id.toString());
     } else {
-      const clients = await Client.find({ workspaceId }, '_id');
-      clientIds = clients.map(c => c._id.toString());
+      const clients = await Client.find({ workspaceId }, "_id");
+      clientIds = clients.map((c) => c._id.toString());
     }
 
     if (clientIds.length === 0) return results;
@@ -220,68 +219,77 @@ export const automationService = {
     let matchingClientIds = [];
 
     switch (automation.triggerType) {
-    case 'CLIENT_CREATED':
-      // Tous les clients existants correspondent
-      matchingClientIds = clientIds;
-      break;
+      case "CLIENT_CREATED":
+        // Tous les clients existants correspondent
+        matchingClientIds = clientIds;
+        break;
 
-    case 'INVOICE_PAID': {
-      const paidInvoices = await Invoice.find({
-        workspaceId,
-        status: 'COMPLETED',
-        'client.id': { $in: clientIds },
-      }).distinct('client.id');
-      matchingClientIds = paidInvoices.map(id => id.toString());
-      break;
-    }
+      case "INVOICE_PAID": {
+        const paidInvoices = await Invoice.find({
+          workspaceId,
+          status: "COMPLETED",
+          "client.id": { $in: clientIds },
+        }).distinct("client.id");
+        matchingClientIds = paidInvoices.map((id) => id.toString());
+        break;
+      }
 
-    case 'FIRST_INVOICE_PAID': {
-      // Clients avec exactement 1 facture payée
-      const invoiceAgg = await Invoice.aggregate([
-        { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId), status: 'COMPLETED', 'client.id': { $in: clientIds } } },
-        { $group: { _id: '$client.id', count: { $sum: 1 } } },
-        { $match: { count: 1 } },
-      ]);
-      matchingClientIds = invoiceAgg.map(r => r._id.toString());
-      break;
-    }
+      case "FIRST_INVOICE_PAID": {
+        // Clients avec exactement 1 facture payée
+        const invoiceAgg = await Invoice.aggregate([
+          {
+            $match: {
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              status: "COMPLETED",
+              "client.id": { $in: clientIds },
+            },
+          },
+          { $group: { _id: "$client.id", count: { $sum: 1 } } },
+          { $match: { count: 1 } },
+        ]);
+        matchingClientIds = invoiceAgg.map((r) => r._id.toString());
+        break;
+      }
 
-    case 'QUOTE_ACCEPTED': {
-      const acceptedQuotes = await Quote.find({
-        workspaceId,
-        status: 'ACCEPTED',
-        'client.id': { $in: clientIds },
-      }).distinct('client.id');
-      matchingClientIds = acceptedQuotes.map(id => id.toString());
-      break;
-    }
+      case "QUOTE_ACCEPTED": {
+        const acceptedQuotes = await Quote.find({
+          workspaceId,
+          status: "ACCEPTED",
+          "client.id": { $in: clientIds },
+        }).distinct("client.id");
+        matchingClientIds = acceptedQuotes.map((id) => id.toString());
+        break;
+      }
 
-    case 'INVOICE_OVERDUE': {
-      const now = new Date();
-      const overdueInvoices = await Invoice.find({
-        workspaceId,
-        status: { $in: ['SENT', 'PENDING'] },
-        dueDate: { $lt: now },
-        'client.id': { $in: clientIds },
-      }).distinct('client.id');
-      matchingClientIds = overdueInvoices.map(id => id.toString());
-      break;
-    }
+      case "INVOICE_OVERDUE": {
+        const now = new Date();
+        const overdueInvoices = await Invoice.find({
+          workspaceId,
+          status: { $in: ["SENT", "PENDING"] },
+          dueDate: { $lt: now },
+          "client.id": { $in: clientIds },
+        }).distinct("client.id");
+        matchingClientIds = overdueInvoices.map((id) => id.toString());
+        break;
+      }
 
-    default:
-      return results;
+      default:
+        return results;
     }
 
     // Vérifier le montant minimum si configuré
-    if (automation.triggerConfig?.minAmount && automation.triggerType !== 'CLIENT_CREATED') {
+    if (
+      automation.triggerConfig?.minAmount &&
+      automation.triggerType !== "CLIENT_CREATED"
+    ) {
       const minAmount = automation.triggerConfig.minAmount;
       const invoicesAboveMin = await Invoice.find({
         workspaceId,
-        status: 'COMPLETED',
-        'client.id': { $in: matchingClientIds },
+        status: "COMPLETED",
+        "client.id": { $in: matchingClientIds },
         finalTotalTTC: { $gte: minAmount },
-      }).distinct('client.id');
-      matchingClientIds = invoicesAboveMin.map(id => id.toString());
+      }).distinct("client.id");
+      matchingClientIds = invoicesAboveMin.map((id) => id.toString());
     }
 
     // Exécuter l'action sur chaque client correspondant
@@ -290,7 +298,10 @@ export const automationService = {
         await this.executeAction(automation, clientId);
         results.applied++;
       } catch (error) {
-        console.error(`Erreur application rétroactive pour client ${clientId}:`, error);
+        console.error(
+          `Erreur application rétroactive pour client ${clientId}:`,
+          error,
+        );
         results.errors++;
       }
     }
@@ -298,8 +309,8 @@ export const automationService = {
     // Mettre à jour les statistiques
     if (results.applied > 0) {
       await ClientAutomation.findByIdAndUpdate(automation._id, {
-        $inc: { 'stats.totalExecutions': results.applied },
-        $set: { 'stats.lastExecutedAt': new Date() },
+        $inc: { "stats.totalExecutions": results.applied },
+        $set: { "stats.lastExecutedAt": new Date() },
       });
     }
 
@@ -309,39 +320,37 @@ export const automationService = {
 
 const clientAutomationResolvers = {
   Query: {
-    clientAutomations: requireRead('clients')(
-      async (_, { workspaceId }) => {
-        const automations = await ClientAutomation.find({ workspaceId })
-          .populate('createdBy')
-          .populate('sourceListId')
-          .populate('targetListId')
-          .sort({ createdAt: -1 });
+    clientAutomations: requireRead("clients")(async (_, { workspaceId }) => {
+      const automations = await ClientAutomation.find({ workspaceId })
+        .populate("createdBy")
+        .populate("sourceListId")
+        .populate("targetListId")
+        .sort({ createdAt: -1 })
+        .lean();
 
-        return automations;
+      return automations.map((a) => ({ ...a, id: a._id.toString() }));
+    }),
+
+    clientAutomation: requireRead("clients")(async (_, { workspaceId, id }) => {
+      const automation = await ClientAutomation.findOne({
+        _id: id,
+        workspaceId,
+      })
+        .populate("createdBy")
+        .populate("sourceListId")
+        .populate("targetListId")
+        .lean();
+
+      if (!automation) {
+        throw createNotFoundError("Automatisation");
       }
-    ),
 
-    clientAutomation: requireRead('clients')(
-      async (_, { workspaceId, id }) => {
-        const automation = await ClientAutomation.findOne({
-          _id: id,
-          workspaceId,
-        })
-          .populate('createdBy')
-          .populate('sourceListId')
-          .populate('targetListId');
-
-        if (!automation) {
-          throw createNotFoundError('Automatisation');
-        }
-
-        return automation;
-      }
-    ),
+      return { ...automation, id: automation._id.toString() };
+    }),
   },
 
   Mutation: {
-    createClientAutomation: requireWrite('clients')(
+    createClientAutomation: requireWrite("clients")(
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
 
@@ -352,8 +361,8 @@ const clientAutomationResolvers = {
         });
 
         if (!targetList) {
-          throw createValidationError('La liste cible n\'existe pas', {
-            targetListId: 'Liste cible invalide',
+          throw createValidationError("La liste cible n'existe pas", {
+            targetListId: "Liste cible invalide",
           });
         }
 
@@ -365,8 +374,8 @@ const clientAutomationResolvers = {
           });
 
           if (!sourceList) {
-            throw createValidationError('La liste source n\'existe pas', {
-              sourceListId: 'Liste source invalide',
+            throw createValidationError("La liste source n'existe pas", {
+              sourceListId: "Liste source invalide",
             });
           }
         }
@@ -380,22 +389,27 @@ const clientAutomationResolvers = {
         await automation.save();
 
         // Appliquer rétroactivement aux clients existants (fire-and-forget)
-        automationService.applyToExistingClients(automation, workspaceId).then(result => {
-          if (result.applied > 0) {
-            console.log(`Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`);
-          }
-        }).catch(error => {
-          console.error('Erreur application rétroactive:', error);
-        });
+        automationService
+          .applyToExistingClients(automation, workspaceId)
+          .then((result) => {
+            if (result.applied > 0) {
+              console.log(
+                `Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`,
+              );
+            }
+          })
+          .catch((error) => {
+            console.error("Erreur application rétroactive:", error);
+          });
 
         return await ClientAutomation.findById(automation._id)
-          .populate('createdBy')
-          .populate('sourceListId')
-          .populate('targetListId');
-      }
+          .populate("createdBy")
+          .populate("sourceListId")
+          .populate("targetListId");
+      },
     ),
 
-    updateClientAutomation: requireWrite('clients')(
+    updateClientAutomation: requireWrite("clients")(
       async (_, { workspaceId, id, input }) => {
         const automation = await ClientAutomation.findOne({
           _id: id,
@@ -403,7 +417,7 @@ const clientAutomationResolvers = {
         });
 
         if (!automation) {
-          throw createNotFoundError('Automatisation');
+          throw createNotFoundError("Automatisation");
         }
 
         // Vérifier la liste cible si modifiée
@@ -414,8 +428,8 @@ const clientAutomationResolvers = {
           });
 
           if (!targetList) {
-            throw createValidationError('La liste cible n\'existe pas', {
-              targetListId: 'Liste cible invalide',
+            throw createValidationError("La liste cible n'existe pas", {
+              targetListId: "Liste cible invalide",
             });
           }
         }
@@ -428,8 +442,8 @@ const clientAutomationResolvers = {
           });
 
           if (!sourceList) {
-            throw createValidationError('La liste source n\'existe pas', {
-              sourceListId: 'Liste source invalide',
+            throw createValidationError("La liste source n'existe pas", {
+              sourceListId: "Liste source invalide",
             });
           }
         }
@@ -438,13 +452,13 @@ const clientAutomationResolvers = {
         await automation.save();
 
         return await ClientAutomation.findById(automation._id)
-          .populate('createdBy')
-          .populate('sourceListId')
-          .populate('targetListId');
-      }
+          .populate("createdBy")
+          .populate("sourceListId")
+          .populate("targetListId");
+      },
     ),
 
-    deleteClientAutomation: requireDelete('clients')(
+    deleteClientAutomation: requireDelete("clients")(
       async (_, { workspaceId, id }) => {
         const automation = await ClientAutomation.findOne({
           _id: id,
@@ -452,16 +466,16 @@ const clientAutomationResolvers = {
         });
 
         if (!automation) {
-          throw createNotFoundError('Automatisation');
+          throw createNotFoundError("Automatisation");
         }
 
         await ClientAutomation.deleteOne({ _id: id });
 
         return true;
-      }
+      },
     ),
 
-    applyClientAutomationToExisting: requireWrite('clients')(
+    applyClientAutomationToExisting: requireWrite("clients")(
       async (_, { workspaceId, id }) => {
         const automation = await ClientAutomation.findOne({
           _id: id,
@@ -470,15 +484,18 @@ const clientAutomationResolvers = {
         });
 
         if (!automation) {
-          throw createNotFoundError('Automatisation active');
+          throw createNotFoundError("Automatisation active");
         }
 
-        const result = await automationService.applyToExistingClients(automation, workspaceId);
+        const result = await automationService.applyToExistingClients(
+          automation,
+          workspaceId,
+        );
         return result;
-      }
+      },
     ),
 
-    toggleClientAutomation: requireWrite('clients')(
+    toggleClientAutomation: requireWrite("clients")(
       async (_, { workspaceId, id }) => {
         const automation = await ClientAutomation.findOne({
           _id: id,
@@ -486,17 +503,17 @@ const clientAutomationResolvers = {
         });
 
         if (!automation) {
-          throw createNotFoundError('Automatisation');
+          throw createNotFoundError("Automatisation");
         }
 
         automation.isActive = !automation.isActive;
         await automation.save();
 
         return await ClientAutomation.findById(automation._id)
-          .populate('createdBy')
-          .populate('sourceListId')
-          .populate('targetListId');
-      }
+          .populate("createdBy")
+          .populate("sourceListId")
+          .populate("targetListId");
+      },
     ),
   },
 
