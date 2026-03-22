@@ -28,22 +28,22 @@ const mkdirAsync = promisify(fs.mkdir);
 const deleteFile = async (file) => {
   try {
     // Vérifier si c'est une URL Cloudflare
-    if (file.url && file.url.includes('r2.dev')) {
-      console.log('🗑️ Suppression du fichier Cloudflare:', file.url);
+    if (file.url && file.url.includes("r2.dev")) {
+      console.log("🗑️ Suppression du fichier Cloudflare:", file.url);
       // Extraire la clé du fichier de l'URL
       // Format: https://pub-xxx.r2.dev/{key}
-      const urlParts = file.url.split('/');
-      const key = urlParts.slice(3).join('/');
+      const urlParts = file.url.split("/");
+      const key = urlParts.slice(3).join("/");
       await cloudflareService.deleteImage(key);
-      console.log('✅ Fichier Cloudflare supprimé');
+      console.log("✅ Fichier Cloudflare supprimé");
     } else if (file.path) {
       // Fichier local
-      console.log('🗑️ Suppression du fichier local:', file.path);
+      console.log("🗑️ Suppression du fichier local:", file.path);
       await unlinkAsync(file.path);
-      console.log('✅ Fichier local supprimé');
+      console.log("✅ Fichier local supprimé");
     }
   } catch (error) {
-    console.warn('⚠️ Impossible de supprimer le fichier:', error.message);
+    console.warn("⚠️ Impossible de supprimer le fichier:", error.message);
     // Ne pas bloquer la suppression de la dépense en cas d'erreur
   }
 };
@@ -66,7 +66,7 @@ const checkExpenseAccess = async (expenseId, workspaceId, userId, userRole) => {
   if (!expense) {
     throw new AppError(
       "Dépense non trouvée ou vous n'êtes pas autorisé à y accéder",
-      ERROR_CODES.NOT_FOUND
+      ERROR_CODES.NOT_FOUND,
     );
   }
   return expense;
@@ -79,7 +79,7 @@ const saveUploadedFile = async (file, userId) => {
 
   // Créer un nom de fichier unique
   const uniqueFilename = `${Date.now()}-${Math.round(
-    Math.random() * 1e9
+    Math.random() * 1e9,
   )}-${filename.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
 
   // Créer le dossier de destination s'il n'existe pas
@@ -88,7 +88,7 @@ const saveUploadedFile = async (file, userId) => {
     "public",
     "uploads",
     "expenses",
-    userId.toString()
+    userId.toString(),
   );
   await mkdirAsync(uploadDir, { recursive: true });
 
@@ -135,16 +135,20 @@ const expenseResolvers = {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
         return await checkExpenseAccess(id, workspaceId, user.id, userRole);
-      }
+      },
     ),
 
     // Récupérer une liste paginée de dépenses avec filtres
@@ -163,15 +167,19 @@ const expenseResolvers = {
           page = 1,
           limit = 10,
         },
-        context
+        context,
       ) => {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -185,62 +193,70 @@ const expenseResolvers = {
           query.createdBy = user.id;
         }
 
-      // Appliquer les filtres de date
-      if (startDate || endDate) {
-        query.date = {};
-        if (startDate) query.date.$gte = new Date(startDate);
-        if (endDate) query.date.$lte = new Date(endDate);
-      }
+        // Appliquer les filtres de date
+        if (startDate || endDate) {
+          query.date = {};
+          if (startDate) query.date.$gte = new Date(startDate);
+          if (endDate) query.date.$lte = new Date(endDate);
+        }
 
-      // Filtre par catégorie
-      if (category) query.category = category;
+        // Filtre par catégorie
+        if (category) query.category = category;
 
-      // Filtre par statut
-      if (status) query.status = status;
+        // Filtre par statut
+        if (status) query.status = status;
 
-      // Filtre par tags
-      if (tags && tags.length > 0) {
-        query.tags = { $in: tags };
-      }
+        // Filtre par tags
+        if (tags && tags.length > 0) {
+          query.tags = { $in: tags };
+        }
 
-      // Recherche textuelle
-      if (search) {
-        query.$or = [
-          { title: { $regex: search, $options: "i" } },
-          { description: { $regex: search, $options: "i" } },
-          { vendor: { $regex: search, $options: "i" } },
-          { invoiceNumber: { $regex: search, $options: "i" } },
-        ];
-      }
+        // Recherche textuelle
+        if (search) {
+          query.$or = [
+            { title: { $regex: search, $options: "i" } },
+            { description: { $regex: search, $options: "i" } },
+            { vendor: { $regex: search, $options: "i" } },
+            { invoiceNumber: { $regex: search, $options: "i" } },
+          ];
+        }
 
-      // Calculer le nombre total de résultats
-      const totalCount = await Expense.countDocuments(query);
+        // Calculer le nombre total de résultats
+        const totalCount = await Expense.countDocuments(query);
 
-      // Récupérer les dépenses paginées
-      const expenses = await Expense.find(query)
-        .sort({ date: -1, createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit);
+        // Récupérer les dépenses paginées
+        const expenses = await Expense.find(query)
+          .sort({ date: -1, createdAt: -1 })
+          .skip((page - 1) * limit)
+          .limit(limit);
 
         return {
           expenses,
           totalCount,
           hasNextPage: page * limit < totalCount,
         };
-      }
+      },
     ),
 
     // Récupérer les statistiques des dépenses
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "expenses"
     expenseStats: requireRead("expenses")(
-      async (_, { workspaceId: inputWorkspaceId, startDate, endDate }, context) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, startDate, endDate },
+        context,
+      ) => {
         const { workspaceId: contextWorkspaceId } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -254,138 +270,143 @@ const expenseResolvers = {
         };
         if (startDate || endDate) match.date = dateQuery;
 
-      // Aggrégation pour obtenir les statistiques
-      const stats = await Expense.aggregate([
-        { $match: match },
-        {
-          $facet: {
-            // Statistiques globales
-            totalStats: [
-              {
-                $group: {
-                  _id: null,
-                  totalAmount: { $sum: "$amount" },
-                  totalCount: { $sum: 1 },
-                },
-              },
-            ],
-            // Statistiques par catégorie
-            categoryStats: [
-              {
-                $group: {
-                  _id: "$category",
-                  amount: { $sum: "$amount" },
-                  count: { $sum: 1 },
-                },
-              },
-              { $sort: { amount: -1 } },
-            ],
-            // Statistiques par mois
-            monthStats: [
-              {
-                $group: {
-                  _id: {
-                    year: { $year: "$date" },
-                    month: { $month: "$date" },
+        // Aggrégation pour obtenir les statistiques
+        const stats = await Expense.aggregate([
+          { $match: match },
+          {
+            $facet: {
+              // Statistiques globales
+              totalStats: [
+                {
+                  $group: {
+                    _id: null,
+                    totalAmount: { $sum: "$amount" },
+                    totalCount: { $sum: 1 },
                   },
-                  amount: { $sum: "$amount" },
-                  count: { $sum: 1 },
                 },
-              },
-              {
-                $project: {
-                  _id: 0,
-                  month: {
-                    $concat: [
-                      { $toString: "$_id.year" },
-                      "-",
-                      {
-                        $cond: {
-                          if: { $lt: ["$_id.month", 10] },
-                          then: { $concat: ["0", { $toString: "$_id.month" }] },
-                          else: { $toString: "$_id.month" },
+              ],
+              // Statistiques par catégorie
+              categoryStats: [
+                {
+                  $group: {
+                    _id: "$category",
+                    amount: { $sum: "$amount" },
+                    count: { $sum: 1 },
+                  },
+                },
+                { $sort: { amount: -1 } },
+              ],
+              // Statistiques par mois
+              monthStats: [
+                {
+                  $group: {
+                    _id: {
+                      year: { $year: "$date" },
+                      month: { $month: "$date" },
+                    },
+                    amount: { $sum: "$amount" },
+                    count: { $sum: 1 },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 0,
+                    month: {
+                      $concat: [
+                        { $toString: "$_id.year" },
+                        "-",
+                        {
+                          $cond: {
+                            if: { $lt: ["$_id.month", 10] },
+                            then: {
+                              $concat: ["0", { $toString: "$_id.month" }],
+                            },
+                            else: { $toString: "$_id.month" },
+                          },
                         },
-                      },
-                    ],
+                      ],
+                    },
+                    amount: 1,
+                    count: 1,
                   },
-                  amount: 1,
-                  count: 1,
                 },
-              },
-              { $sort: { month: 1 } },
-            ],
-            // Statistiques par statut
-            statusStats: [
-              {
-                $group: {
-                  _id: "$status",
-                  amount: { $sum: "$amount" },
-                  count: { $sum: 1 },
+                { $sort: { month: 1 } },
+              ],
+              // Statistiques par statut
+              statusStats: [
+                {
+                  $group: {
+                    _id: "$status",
+                    amount: { $sum: "$amount" },
+                    count: { $sum: 1 },
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-      ]);
+        ]);
 
-      const totalStats = stats[0].totalStats[0] || {
-        totalAmount: 0,
-        totalCount: 0,
-      };
+        const totalStats = stats[0].totalStats[0] || {
+          totalAmount: 0,
+          totalCount: 0,
+        };
 
-      return {
-        totalAmount: totalStats.totalAmount || 0,
-        totalCount: totalStats.totalCount || 0,
-        byCategory: stats[0].categoryStats.map((stat) => ({
-          category: stat._id,
-          amount: stat.amount,
-          count: stat.count,
-        })),
-        byMonth: stats[0].monthStats.map((stat) => ({
-          month: stat.month,
-          amount: stat.amount,
-          count: stat.count,
-        })),
+        return {
+          totalAmount: totalStats.totalAmount || 0,
+          totalCount: totalStats.totalCount || 0,
+          byCategory: stats[0].categoryStats.map((stat) => ({
+            category: stat._id,
+            amount: stat.amount,
+            count: stat.count,
+          })),
+          byMonth: stats[0].monthStats.map((stat) => ({
+            month: stat.month,
+            amount: stat.amount,
+            count: stat.count,
+          })),
           byStatus: stats[0].statusStats.map((stat) => ({
             status: stat._id,
             amount: stat.amount,
             count: stat.count,
           })),
         };
-      }
+      },
     ),
   },
 
   Mutation: {
     // Créer une nouvelle dépense
     // ✅ Protégé par RBAC - nécessite la permission "create" sur "expenses"
-    createExpense: requireWrite("expenses")(
-      async (_, { input }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
+    createExpense: requireWrite("expenses")(async (_, { input }, context) => {
+      const { user, workspaceId: contextWorkspaceId } = context;
 
-        // Validation du workspaceId
-        const inputWorkspaceId = input.workspaceId;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+      // Validation du workspaceId
+      const inputWorkspaceId = input.workspaceId;
+      if (
+        inputWorkspaceId &&
+        contextWorkspaceId &&
+        inputWorkspaceId !== contextWorkspaceId
+      ) {
+        throw new AppError(
+          "Organisation invalide. Vous n'avez pas accès à cette organisation.",
+          ERROR_CODES.FORBIDDEN,
+        );
+      }
+      const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        if (!workspaceId) {
-          throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
-        }
+      if (!workspaceId) {
+        throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
+      }
 
-        const expenseData = {
-          ...input,
-          createdBy: user.id,
-          workspaceId: workspaceId,
-          // Gérer expenseType et assignedMember
-          expenseType: input.expenseType || "ORGANIZATION",
-          assignedMember: input.assignedMember || null,
-          taskId: input.taskId || null,
-        };
+      const expenseData = {
+        ...input,
+        createdBy: user.id,
+        workspaceId: workspaceId,
+        // Gérer expenseType et assignedMember
+        expenseType: input.expenseType || "ORGANIZATION",
+        assignedMember: input.assignedMember || null,
+        taskId: input.taskId || null,
+      };
 
       // Convertir les dates avec gestion du format français
       if (input.date) {
@@ -398,7 +419,7 @@ const expenseResolvers = {
           const parsedDate = new Date(input.date);
           if (isNaN(parsedDate.getTime())) {
             throw new UserInputError(
-              `Format de date invalide: ${input.date}. Utilisez le format YYYY-MM-DD`
+              `Format de date invalide: ${input.date}. Utilisez le format YYYY-MM-DD`,
             );
           }
           expenseData.date = parsedDate;
@@ -415,7 +436,7 @@ const expenseResolvers = {
           const parsedPaymentDate = new Date(input.paymentDate);
           if (isNaN(parsedPaymentDate.getTime())) {
             throw new UserInputError(
-              `Format de date de paiement invalide: ${input.paymentDate}. Utilisez le format YYYY-MM-DD`
+              `Format de date de paiement invalide: ${input.paymentDate}. Utilisez le format YYYY-MM-DD`,
             );
           }
           expenseData.paymentDate = parsedPaymentDate;
@@ -432,7 +453,7 @@ const expenseResolvers = {
       } catch (error) {
         console.error(
           "createExpense resolver - message erreur:",
-          error.message
+          error.message,
         );
 
         if (error.name === "ValidationError") {
@@ -456,15 +477,24 @@ const expenseResolvers = {
 
         // Validation du workspaceId depuis l'input si fourni
         const inputWorkspaceId = input.workspaceId;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(id, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          id,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
         // Préparer les données de mise à jour
         const updateData = { ...input };
@@ -472,18 +502,20 @@ const expenseResolvers = {
 
         // Convertir les dates
         if (input.date) updateData.date = new Date(input.date);
-        if (input.paymentDate) updateData.paymentDate = new Date(input.paymentDate);
+        if (input.paymentDate)
+          updateData.paymentDate = new Date(input.paymentDate);
 
         // Gérer expenseType et assignedMember
         if (input.expenseType) updateData.expenseType = input.expenseType;
-        if (input.assignedMember !== undefined) updateData.assignedMember = input.assignedMember;
+        if (input.assignedMember !== undefined)
+          updateData.assignedMember = input.assignedMember;
         if (input.taskId !== undefined) updateData.taskId = input.taskId;
 
         try {
           const updatedExpense = await Expense.findByIdAndUpdate(
             id,
             { $set: updateData },
-            { new: true, runValidators: true }
+            { new: true, runValidators: true },
           );
 
           if (!updatedExpense) {
@@ -492,8 +524,8 @@ const expenseResolvers = {
 
           // Sync Pennylane si le statut a changé vers APPROVED/PAID (fire-and-forget)
           if (input.status && input.status !== expense.status) {
-            syncExpenseIfNeeded(updatedExpense, workspaceId).catch(err =>
-              console.error('Erreur sync Pennylane dépense:', err)
+            syncExpenseIfNeeded(updatedExpense, workspaceId).catch((err) =>
+              console.error("Erreur sync Pennylane dépense:", err),
             );
           }
 
@@ -506,7 +538,7 @@ const expenseResolvers = {
           }
           throw error;
         }
-      }
+      },
     ),
 
     // Supprimer une dépense
@@ -516,15 +548,24 @@ const expenseResolvers = {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(id, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          id,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
         // Supprimer les fichiers associés (locaux et Cloudflare)
         if (expense.files && expense.files.length > 0) {
@@ -535,7 +576,7 @@ const expenseResolvers = {
 
         await Expense.findByIdAndDelete(id);
         return { success: true, message: "Dépense supprimée avec succès" };
-      }
+      },
     ),
 
     // Supprimer plusieurs dépenses
@@ -545,10 +586,14 @@ const expenseResolvers = {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -562,7 +607,12 @@ const expenseResolvers = {
 
         for (const id of ids) {
           try {
-            const expense = await checkExpenseAccess(id, workspaceId, user.id, userRole);
+            const expense = await checkExpenseAccess(
+              id,
+              workspaceId,
+              user.id,
+              userRole,
+            );
 
             // Supprimer les fichiers associés (locaux et Cloudflare)
             if (expense.files && expense.files.length > 0) {
@@ -588,7 +638,7 @@ const expenseResolvers = {
           }`,
           errors,
         };
-      }
+      },
     ),
 
     // Changer le statut d'une dépense
@@ -598,15 +648,24 @@ const expenseResolvers = {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(id, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          id,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
         expense.status = status;
         if (status === "PAID" && !expense.paymentDate) {
@@ -615,146 +674,176 @@ const expenseResolvers = {
 
         await expense.save();
         return expense;
-      }
+      },
     ),
 
     // Ajouter un fichier à une dépense
     // ✅ Protégé par RBAC - nécessite la permission "ocr" sur "expenses"
-    addExpenseFile: requirePermission("expenses", "ocr")(
-      async (_, { expenseId, input, workspaceId: inputWorkspaceId }, context) => {
+    addExpenseFile: requirePermission(
+      "expenses",
+      "ocr",
+    )(
+      async (
+        _,
+        { expenseId, input, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(expenseId, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          expenseId,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
-      try {
-        let fileData;
+        try {
+          let fileData;
 
-        // Cas 1: Fichier déjà uploadé sur Cloudflare
-        if (input.cloudflareUrl) {
-          fileData = {
-            id: new mongoose.Types.ObjectId(),
-            filename: input.fileName || "document.pdf",
-            originalFilename: input.fileName || "document.pdf",
-            mimetype: input.mimeType || "application/pdf",
-            path: input.cloudflareUrl, // Utiliser l'URL Cloudflare comme path
-            url: input.cloudflareUrl,
-            size: input.fileSize || 1, // Taille par défaut à 1 pour éviter l'erreur de validation
-            ocrProcessed: !!input.ocrData,
-            ocrData: input.ocrData ? JSON.parse(input.ocrData) : null,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          };
-        }
-        // Cas 2: Fichier à uploader normalement
-        else if (input.file) {
-          fileData = await saveUploadedFile(input.file, user.id);
-        }
-        // Cas 3: Aucun fichier fourni
-        else {
-          throw new UserInputError(
-            "Vous devez fournir soit un fichier à uploader, soit une URL Cloudflare"
+          // Cas 1: Fichier déjà uploadé sur Cloudflare
+          if (input.cloudflareUrl) {
+            fileData = {
+              id: new mongoose.Types.ObjectId(),
+              filename: input.fileName || "document.pdf",
+              originalFilename: input.fileName || "document.pdf",
+              mimetype: input.mimeType || "application/pdf",
+              path: input.cloudflareUrl, // Utiliser l'URL Cloudflare comme path
+              url: input.cloudflareUrl,
+              size: input.fileSize || 1, // Taille par défaut à 1 pour éviter l'erreur de validation
+              ocrProcessed: !!input.ocrData,
+              ocrData: input.ocrData ? JSON.parse(input.ocrData) : null,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+          }
+          // Cas 2: Fichier à uploader normalement
+          else if (input.file) {
+            fileData = await saveUploadedFile(input.file, user.id);
+          }
+          // Cas 3: Aucun fichier fourni
+          else {
+            throw new UserInputError(
+              "Vous devez fournir soit un fichier à uploader, soit une URL Cloudflare",
+            );
+          }
+
+          // Traiter le fichier avec OCR si demandé ET si ce n'est pas déjà fait
+          if (input.processOCR && !fileData.ocrProcessed && input.file) {
+            try {
+              const ocrResult = await processFileWithOCR(fileData.path);
+              fileData.ocrProcessed = true;
+              fileData.ocrData = ocrResult;
+
+              // Mettre à jour les métadonnées OCR de la dépense si c'est la première fois
+              if (
+                !expense.ocrMetadata ||
+                Object.keys(expense.ocrMetadata).length === 0
+              ) {
+                expense.ocrMetadata = {
+                  vendorName: ocrResult.vendorName,
+                  vendorAddress: ocrResult.vendorAddress,
+                  vendorVatNumber: ocrResult.vendorVatNumber,
+                  invoiceNumber: ocrResult.invoiceNumber,
+                  invoiceDate: ocrResult.invoiceDate
+                    ? new Date(ocrResult.invoiceDate)
+                    : null,
+                  totalAmount: ocrResult.totalAmount,
+                  vatAmount: ocrResult.vatAmount,
+                  currency: ocrResult.currency,
+                  confidenceScore: ocrResult.confidenceScore,
+                  rawExtractedText: ocrResult.rawExtractedText,
+                };
+              }
+            } catch (ocrError) {
+              console.error("Erreur lors du traitement OCR:", ocrError);
+              // Ne pas bloquer l'ajout du fichier en cas d'erreur OCR
+            }
+          }
+
+          // Si nous avons des données OCR déjà traitées (cas Cloudflare), les utiliser
+          if (
+            fileData.ocrData &&
+            (!expense.ocrMetadata ||
+              Object.keys(expense.ocrMetadata).length === 0)
+          ) {
+            const ocrData = fileData.ocrData;
+            expense.ocrMetadata = {
+              vendorName: ocrData.vendorName || "",
+              vendorAddress: ocrData.vendorAddress || "",
+              vendorVatNumber: ocrData.vendorVatNumber || "",
+              invoiceNumber: ocrData.invoiceNumber || "",
+              invoiceDate: ocrData.invoiceDate
+                ? new Date(ocrData.invoiceDate)
+                : null,
+              totalAmount: ocrData.totalAmount || 0,
+              vatAmount: ocrData.vatAmount || 0,
+              currency: ocrData.currency || "EUR",
+              confidenceScore: ocrData.confidenceScore || 0,
+              rawExtractedText: ocrData.rawExtractedText || "",
+            };
+          }
+
+          // Ajouter le fichier à la dépense
+          expense.files.push(fileData);
+          await expense.save();
+
+          return expense;
+        } catch (error) {
+          throw new ApolloError(
+            "Erreur lors de l'ajout du fichier",
+            "FILE_UPLOAD_ERROR",
+            { error },
           );
         }
-
-        // Traiter le fichier avec OCR si demandé ET si ce n'est pas déjà fait
-        if (input.processOCR && !fileData.ocrProcessed && input.file) {
-          try {
-            const ocrResult = await processFileWithOCR(fileData.path);
-            fileData.ocrProcessed = true;
-            fileData.ocrData = ocrResult;
-
-            // Mettre à jour les métadonnées OCR de la dépense si c'est la première fois
-            if (
-              !expense.ocrMetadata ||
-              Object.keys(expense.ocrMetadata).length === 0
-            ) {
-              expense.ocrMetadata = {
-                vendorName: ocrResult.vendorName,
-                vendorAddress: ocrResult.vendorAddress,
-                vendorVatNumber: ocrResult.vendorVatNumber,
-                invoiceNumber: ocrResult.invoiceNumber,
-                invoiceDate: ocrResult.invoiceDate
-                  ? new Date(ocrResult.invoiceDate)
-                  : null,
-                totalAmount: ocrResult.totalAmount,
-                vatAmount: ocrResult.vatAmount,
-                currency: ocrResult.currency,
-                confidenceScore: ocrResult.confidenceScore,
-                rawExtractedText: ocrResult.rawExtractedText,
-              };
-            }
-          } catch (ocrError) {
-            console.error("Erreur lors du traitement OCR:", ocrError);
-            // Ne pas bloquer l'ajout du fichier en cas d'erreur OCR
-          }
-        }
-
-        // Si nous avons des données OCR déjà traitées (cas Cloudflare), les utiliser
-        if (
-          fileData.ocrData &&
-          (!expense.ocrMetadata ||
-            Object.keys(expense.ocrMetadata).length === 0)
-        ) {
-          const ocrData = fileData.ocrData;
-          expense.ocrMetadata = {
-            vendorName: ocrData.vendorName || "",
-            vendorAddress: ocrData.vendorAddress || "",
-            vendorVatNumber: ocrData.vendorVatNumber || "",
-            invoiceNumber: ocrData.invoiceNumber || "",
-            invoiceDate: ocrData.invoiceDate
-              ? new Date(ocrData.invoiceDate)
-              : null,
-            totalAmount: ocrData.totalAmount || 0,
-            vatAmount: ocrData.vatAmount || 0,
-            currency: ocrData.currency || "EUR",
-            confidenceScore: ocrData.confidenceScore || 0,
-            rawExtractedText: ocrData.rawExtractedText || "",
-          };
-        }
-
-        // Ajouter le fichier à la dépense
-        expense.files.push(fileData);
-        await expense.save();
-
-        return expense;
-      } catch (error) {
-        throw new ApolloError(
-          "Erreur lors de l'ajout du fichier",
-          "FILE_UPLOAD_ERROR",
-          { error }
-        );
-      }
-    }),
+      },
+    ),
 
     // Supprimer un fichier d'une dépense
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "expenses"
     removeExpenseFile: requireWrite("expenses")(
-      async (_, { expenseId, fileId, workspaceId: inputWorkspaceId }, context) => {
+      async (
+        _,
+        { expenseId, fileId, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(expenseId, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          expenseId,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
         // Trouver le fichier à supprimer
         const fileIndex = expense.files.findIndex(
-          (file) => file._id.toString() === fileId
+          (file) => file._id.toString() === fileId,
         );
 
         if (fileIndex === -1) {
@@ -771,25 +860,41 @@ const expenseResolvers = {
         await expense.save();
 
         return expense;
-      }
+      },
     ),
 
     // Mettre à jour les métadonnées OCR d'une dépense
     // ✅ Protégé par RBAC - nécessite la permission "ocr" sur "expenses"
-    updateExpenseOCRMetadata: requirePermission("expenses", "ocr")(
-      async (_, { expenseId, metadata, workspaceId: inputWorkspaceId }, context) => {
+    updateExpenseOCRMetadata: requirePermission(
+      "expenses",
+      "ocr",
+    )(
+      async (
+        _,
+        { expenseId, metadata, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(expenseId, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          expenseId,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
         // Mettre à jour les métadonnées OCR
         expense.ocrMetadata = {
@@ -802,29 +907,45 @@ const expenseResolvers = {
 
         await expense.save();
         return expense;
-      }
+      },
     ),
 
     // Déclencher manuellement l'analyse OCR d'un fichier
     // ✅ Protégé par RBAC - nécessite la permission "ocr" sur "expenses"
-    processExpenseFileOCR: requirePermission("expenses", "ocr")(
-      async (_, { expenseId, fileId, workspaceId: inputWorkspaceId }, context) => {
+    processExpenseFileOCR: requirePermission(
+      "expenses",
+      "ocr",
+    )(
+      async (
+        _,
+        { expenseId, fileId, workspaceId: inputWorkspaceId },
+        context,
+      ) => {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(expenseId, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          expenseId,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
         // Trouver le fichier à traiter
         const fileIndex = expense.files.findIndex(
-          (file) => file._id.toString() === fileId
+          (file) => file._id.toString() === fileId,
         );
 
         if (fileIndex === -1) {
@@ -863,10 +984,10 @@ const expenseResolvers = {
           throw new ApolloError(
             "Erreur lors du traitement OCR",
             "OCR_PROCESSING_ERROR",
-            { error }
+            { error },
           );
         }
-      }
+      },
     ),
 
     // Appliquer les données OCR aux champs de la dépense
@@ -876,15 +997,24 @@ const expenseResolvers = {
         const { user, workspaceId: contextWorkspaceId, userRole } = context;
 
         // Validation du workspaceId
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+        if (
+          inputWorkspaceId &&
+          contextWorkspaceId &&
+          inputWorkspaceId !== contextWorkspaceId
+        ) {
           throw new AppError(
             "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
         const workspaceId = inputWorkspaceId || contextWorkspaceId;
 
-        const expense = await checkExpenseAccess(expenseId, workspaceId, user.id, userRole);
+        const expense = await checkExpenseAccess(
+          expenseId,
+          workspaceId,
+          user.id,
+          userRole,
+        );
 
         // Vérifier si des métadonnées OCR sont disponibles
         if (
@@ -892,7 +1022,7 @@ const expenseResolvers = {
           Object.keys(expense.ocrMetadata).length === 0
         ) {
           throw new UserInputError(
-            "Aucune donnée OCR disponible pour cette dépense"
+            "Aucune donnée OCR disponible pour cette dépense",
           );
         }
 
@@ -933,7 +1063,7 @@ const expenseResolvers = {
 
         await expense.save();
         return expense;
-      }
+      },
     ),
   },
 
@@ -947,23 +1077,28 @@ const expenseResolvers = {
 
       // Si les loaders ne sont pas disponibles, utiliser une méthode alternative
       const User = (await import("../models/User.js")).default;
-      return User.findById(expense.createdBy);
+      const user = await User.findById(expense.createdBy).lean();
+      if (!user) return null;
+      return { ...user, id: user._id.toString() };
     },
-    
+
     // Résoudre assignedMember pour retourner null si l'objet est vide ou invalide
     assignedMember: (expense) => {
       const member = expense.assignedMember;
-      
+
       // Si assignedMember n'existe pas ou est null, retourner null
       if (!member) {
         return null;
       }
-      
+
       // Si assignedMember est un objet vide ou n'a pas de userId, retourner null
-      if (typeof member === 'object' && (!member.userId || member.userId === '')) {
+      if (
+        typeof member === "object" &&
+        (!member.userId || member.userId === "")
+      ) {
         return null;
       }
-      
+
       // Sinon, retourner l'objet assignedMember
       return member;
     },

@@ -53,7 +53,6 @@ import {
 
 import Invoice from "../../src/models/Invoice.js";
 import Quote from "../../src/models/Quote.js";
-import CreditNote from "../../src/models/CreditNote.js";
 import DocumentCounter from "../../src/models/DocumentCounter.js";
 
 beforeEach(() => {

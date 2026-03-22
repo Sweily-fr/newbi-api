@@ -62,6 +62,7 @@ import pennylaneResolvers from "./pennylaneResolvers.js";
 import installedAppResolvers from "./installedApp.js";
 import esignatureResolvers from "./esignatureResolvers.js";
 import rgpdResolvers from "./rgpd.js";
+import dashboardAggregationResolvers from "./dashboardAggregation.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -127,6 +128,7 @@ const resolvers = mergeResolvers([
   installedAppResolvers,
   esignatureResolvers,
   rgpdResolvers,
+  dashboardAggregationResolvers,
 ]);
 
 export default resolvers;

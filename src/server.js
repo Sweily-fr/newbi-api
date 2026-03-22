@@ -29,7 +29,10 @@ process.on("uncaughtException", (error) => {
   console.error("⚠️  Uncaught Exception:", error.message);
   // Ne pas process.exit() pour garder le serveur en vie
   // Sauf si l'erreur est vraiment critique (ex: out of memory)
-  if (error.message?.includes("ENOMEM") || error.message?.includes("allocation failed")) {
+  if (
+    error.message?.includes("ENOMEM") ||
+    error.message?.includes("allocation failed")
+  ) {
     process.exit(1);
   }
 });
@@ -40,6 +43,8 @@ import { createServer } from "http";
 import { execute, subscribe } from "graphql";
 import { SubscriptionServer } from "subscriptions-transport-ws";
 import { makeExecutableSchema } from "@graphql-tools/schema";
+import depthLimit from "graphql-depth-limit";
+import { createDataLoaders } from "./dataloaders/index.js";
 import mongoose from "mongoose";
 import { graphqlUploadExpress } from "graphql-upload";
 import fs from "fs";
@@ -137,7 +142,7 @@ const directories = [
 ];
 
 directories.forEach(({ path: dirPath, name }) =>
-  createDirectory(dirPath, name)
+  createDirectory(dirPath, name),
 );
 
 // Configuration du serveur
@@ -148,10 +153,12 @@ async function startServer() {
   app.set("trust proxy", 1);
 
   // Security headers
-  app.use(helmet({
-    contentSecurityPolicy: false, // Managed separately or by frontend
-    crossOriginEmbedderPolicy: false, // Needed for GraphQL playground
-  }));
+  app.use(
+    helmet({
+      contentSecurityPolicy: false, // Managed separately or by frontend
+      crossOriginEmbedderPolicy: false, // Needed for GraphQL playground
+    }),
+  );
 
   // Global rate limiter
   const globalLimiter = rateLimit({
@@ -159,7 +166,7 @@ async function startServer() {
     max: 1000, // limit each IP to 1000 requests per windowMs
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: 'Too many requests, please try again later.' },
+    message: { error: "Too many requests, please try again later." },
   });
   app.use(globalLimiter);
 
@@ -169,9 +176,11 @@ async function startServer() {
     max: 20, // strict limit for auth
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: 'Too many authentication attempts, please try again later.' },
+    message: {
+      error: "Too many authentication attempts, please try again later.",
+    },
   });
-  app.use('/api/auth', authLimiter);
+  app.use("/api/auth", authLimiter);
 
   // Configuration CORS
   const allowedOrigins = [
@@ -193,7 +202,10 @@ async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     app.use((req, res, next) => {
       const origin = req.headers.origin;
-      if (origin && (origin.includes("ngrok") || origin.includes("trycloudflare.com"))) {
+      if (
+        origin &&
+        (origin.includes("ngrok") || origin.includes("trycloudflare.com"))
+      ) {
         allowedOrigins.push(origin);
       }
       next();
@@ -222,14 +234,14 @@ async function startServer() {
         "x-user-role", // Nouveau: Rôle de l'utilisateur
       ],
       exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
-    })
+    }),
   );
 
   // Webhook pour les transferts de fichiers (DOIT être AVANT les autres routes /webhook)
   app.post(
     "/webhook/file-transfer",
     express.raw({ type: "application/json" }),
-    handleFileTransferStripeWebhook
+    handleFileTransferStripeWebhook,
   );
 
   // Routes webhook (avant les middlewares JSON)
@@ -286,11 +298,19 @@ async function startServer() {
   // DEBUG: Log les requêtes GraphQL qui retournent 400
   app.use("/graphql", (req, res, next) => {
     const originalSend = res.send;
-    res.send = function(body) {
+    res.send = function (body) {
       if (res.statusCode === 400) {
         console.error("⚠️ [DEBUG 400] Requête GraphQL retournant 400:");
-        console.error("  Body reçu:", JSON.stringify(req.body)?.substring(0, 500));
-        console.error("  Réponse:", typeof body === 'string' ? body.substring(0, 500) : JSON.stringify(body)?.substring(0, 500));
+        console.error(
+          "  Body reçu:",
+          JSON.stringify(req.body)?.substring(0, 500),
+        );
+        console.error(
+          "  Réponse:",
+          typeof body === "string"
+            ? body.substring(0, 500)
+            : JSON.stringify(body)?.substring(0, 500),
+        );
       }
       return originalSend.call(this, body);
     };
@@ -309,7 +329,12 @@ async function startServer() {
   // Configuration Apollo Server
   const server = new ApolloServer({
     schema,
+    // Limiter la profondeur des queries à 10 niveaux pour protéger le backend
+    validationRules: [depthLimit(10)],
     context: async ({ req }) => {
+      // DataLoaders instanciés par requête (cache per-request, évite les N+1)
+      const loaders = createDataLoaders();
+
       try {
         // Auth unifiée : cookie session (principal) + JWT fallback (WebSocket)
         let user = await betterAuthJWTMiddleware(req);
@@ -323,7 +348,7 @@ async function startServer() {
         logger.debug(
           `GraphQL Context - User: ${
             user ? user._id : "null"
-          }, Organization: ${organizationId}, Role: ${userRole}`
+          }, Organization: ${organizationId}, Role: ${userRole}`,
         );
 
         return {
@@ -333,10 +358,13 @@ async function startServer() {
           organizationId,
           userRole,
           db: mongoose.connection.db,
+          loaders,
         };
       } catch (error) {
-        logger.error("Erreur dans le contexte Apollo (session expirée ou invalide):", error.message);
-        // Retourner un contexte sans utilisateur plutôt que de crasher le serveur
+        logger.error(
+          "Erreur dans le contexte Apollo (session expirée ou invalide):",
+          error.message,
+        );
         return {
           req,
           user: null,
@@ -344,6 +372,7 @@ async function startServer() {
           organizationId: req.headers?.["x-organization-id"] || null,
           userRole: req.headers?.["x-user-role"] || null,
           db: mongoose.connection.db,
+          loaders,
         };
       }
     },
@@ -391,7 +420,7 @@ async function startServer() {
             const workspaceId = user?.workspaceId;
 
             logger.debug(
-              `WebSocket Context - User: ${user ? user._id : "null"}`
+              `WebSocket Context - User: ${user ? user._id : "null"}`,
             );
 
             return {
@@ -407,7 +436,9 @@ async function startServer() {
 
         // Permettre les connexions sans authentification pour les subscriptions publiques
         // Le resolver de la subscription publique vérifiera le token de partage
-        logger.info("ℹ️ [WebSocket] Connexion sans authentification (page publique)");
+        logger.info(
+          "ℹ️ [WebSocket] Connexion sans authentification (page publique)",
+        );
         return {
           user: null,
           workspaceId: null,
@@ -422,7 +453,7 @@ async function startServer() {
     {
       server: httpServer,
       path: "/graphql",
-    }
+    },
   );
 
   // Initialiser Redis PubSub
@@ -432,7 +463,7 @@ async function startServer() {
   } catch (error) {
     logger.warn(
       "⚠️ Redis PubSub non disponible, fallback vers PubSub en mémoire:",
-      error.message
+      error.message,
     );
   }
 
@@ -447,36 +478,47 @@ async function startServer() {
   try {
     const fixSource = await Event.updateMany(
       { source: { $exists: false } },
-      { $set: { source: 'newbi' } }
+      { $set: { source: "newbi" } },
     );
     const fixSourceNull = await Event.updateMany(
       { source: null },
-      { $set: { source: 'newbi' } }
+      { $set: { source: "newbi" } },
     );
-    const totalSource = (fixSource.modifiedCount || 0) + (fixSourceNull.modifiedCount || 0);
+    const totalSource =
+      (fixSource.modifiedCount || 0) + (fixSourceNull.modifiedCount || 0);
     if (totalSource > 0) {
-      logger.info(`Migration calendrier: ${totalSource} evenement(s) corrige(s) (source -> newbi)`);
+      logger.info(
+        `Migration calendrier: ${totalSource} evenement(s) corrige(s) (source -> newbi)`,
+      );
     }
     // Corriger les événements externes sans visibility correcte
     const fixVis = await Event.updateMany(
-      { source: { $in: ['google', 'microsoft', 'apple'] }, visibility: { $nin: ['private', 'workspace'] } },
-      { $set: { visibility: 'private' } }
+      {
+        source: { $in: ["google", "microsoft", "apple"] },
+        visibility: { $nin: ["private", "workspace"] },
+      },
+      { $set: { visibility: "private" } },
     );
     if (fixVis.modifiedCount > 0) {
-      logger.info(`Migration calendrier: ${fixVis.modifiedCount} evenement(s) externe(s) corrige(s) (visibility -> private)`);
+      logger.info(
+        `Migration calendrier: ${fixVis.modifiedCount} evenement(s) externe(s) corrige(s) (visibility -> private)`,
+      );
     }
   } catch (migrationError) {
-    logger.warn('Migration calendrier echouee (non bloquant):', migrationError.message);
+    logger.warn(
+      "Migration calendrier echouee (non bloquant):",
+      migrationError.message,
+    );
   }
 
   // Démarrer le serveur HTTP avec WebSocket
   const PORT = process.env.PORT || 4000;
   httpServer.listen(PORT, () => {
     logger.info(
-      `🚀 Serveur HTTP démarré sur http://localhost:${PORT}${server.graphqlPath}`
+      `🚀 Serveur HTTP démarré sur http://localhost:${PORT}${server.graphqlPath}`,
     );
     logger.info(
-      `🔌 WebSocket subscriptions sur ws://localhost:${PORT}/graphql`
+      `🔌 WebSocket subscriptions sur ws://localhost:${PORT}/graphql`,
     );
     setupScheduledJobs();
 
@@ -634,7 +676,7 @@ async function handleCustomerPortal(req, res) {
   } catch (error) {
     console.error(
       "Erreur lors de la création de la session de portail client:",
-      error
+      error,
     );
     res.status(500).json({
       error: "Erreur lors de la création de la session de portail client",

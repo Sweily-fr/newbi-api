@@ -3,7 +3,11 @@ import PurchaseOrder from "../models/PurchaseOrder.js";
 import Quote from "../models/Quote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
-import { requireWrite, requireRead, requireDelete } from "../middlewares/rbac.js";
+import {
+  requireWrite,
+  requireRead,
+  requireDelete,
+} from "../middlewares/rbac.js";
 import {
   generatePurchaseOrderNumber,
   generateInvoiceNumber,
@@ -15,7 +19,10 @@ import {
   AppError,
   ERROR_CODES,
 } from "../utils/errors.js";
-import { requireCompanyInfo, getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import {
+  requireCompanyInfo,
+  getOrganizationInfo,
+} from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 
@@ -24,7 +31,7 @@ const calculatePurchaseOrderTotals = (
   items,
   discount = 0,
   discountType = "FIXED",
-  shipping = null
+  shipping = null,
 ) => {
   let totalHT = 0;
   let totalVAT = 0;
@@ -33,7 +40,10 @@ const calculatePurchaseOrderTotals = (
     let itemHT = item.quantity * item.unitPrice;
 
     if (item.discount) {
-      if (item.discountType === "PERCENTAGE" || item.discountType === "percentage") {
+      if (
+        item.discountType === "PERCENTAGE" ||
+        item.discountType === "percentage"
+      ) {
         const discountPercent = Math.min(item.discount, 100);
         itemHT = itemHT * (1 - discountPercent / 100);
       } else {
@@ -88,14 +98,27 @@ const purchaseOrderResolvers = {
   PurchaseOrder: {
     companyInfo: async (po) => {
       // Pour les brouillons, toujours résoudre depuis l'organisation (données dynamiques)
-      if (!po.status || po.status === 'DRAFT') {
+      if (!po.status || po.status === "DRAFT") {
         try {
-          const organization = await getOrganizationInfo(po.workspaceId.toString());
+          const organization = await getOrganizationInfo(
+            po.workspaceId.toString(),
+          );
           return mapOrganizationToCompanyInfo(organization);
         } catch (error) {
-          console.error('[PurchaseOrder.companyInfo] Erreur résolution dynamique:', error.message);
+          console.error(
+            "[PurchaseOrder.companyInfo] Erreur résolution dynamique:",
+            error.message,
+          );
           if (po.companyInfo && po.companyInfo.name) return po.companyInfo;
-          return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+          return {
+            name: "",
+            address: {
+              street: "",
+              city: "",
+              postalCode: "",
+              country: "France",
+            },
+          };
         }
       }
       // Pour les documents finalisés, utiliser les données embarquées (snapshot historique)
@@ -104,14 +127,23 @@ const purchaseOrderResolvers = {
       }
       // Fallback : résoudre depuis l'organisation
       try {
-        const organization = await getOrganizationInfo(po.workspaceId.toString());
+        const organization = await getOrganizationInfo(
+          po.workspaceId.toString(),
+        );
         return mapOrganizationToCompanyInfo(organization);
       } catch (error) {
-        console.error('[PurchaseOrder.companyInfo] Erreur résolution fallback:', error.message);
-        return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+        console.error(
+          "[PurchaseOrder.companyInfo] Erreur résolution fallback:",
+          error.message,
+        );
+        return {
+          name: "",
+          address: { street: "", city: "", postalCode: "", country: "France" },
+        };
       }
     },
     createdBy: async (po) => {
+      if (!po.createdBy) return null;
       return await User.findById(po.createdBy);
     },
     sourceQuote: async (po) => {
@@ -127,19 +159,31 @@ const purchaseOrderResolvers = {
   },
 
   Query: {
-    purchaseOrder: requireRead("purchaseOrders")(async (_, { workspaceId, id }, context) => {
-      const po = await PurchaseOrder.findOne({ _id: id, workspaceId })
-        .populate("createdBy");
+    purchaseOrder: requireRead("purchaseOrders")(
+      async (_, { workspaceId, id }, context) => {
+        const po = await PurchaseOrder.findOne({
+          _id: id,
+          workspaceId,
+        }).populate("createdBy");
 
-      if (!po) throw createNotFoundError("Bon de commande");
-      return po;
-    }),
+        if (!po) throw createNotFoundError("Bon de commande");
+        return po;
+      },
+    ),
 
     purchaseOrders: requireRead("purchaseOrders")(
       async (
         _,
-        { workspaceId, startDate, endDate, status, search, page = 1, limit = 10 },
-        { user }
+        {
+          workspaceId,
+          startDate,
+          endDate,
+          status,
+          search,
+          page = 1,
+          limit = 10,
+        },
+        { user },
       ) => {
         const query = { workspaceId };
 
@@ -174,69 +218,71 @@ const purchaseOrderResolvers = {
           totalCount,
           hasNextPage: totalCount > skip + limit,
         };
-      }
+      },
     ),
 
-    purchaseOrderStats: requireRead("purchaseOrders")(async (_, { workspaceId }, context) => {
-      const [stats] = await PurchaseOrder.aggregate([
-        { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
-        {
-          $group: {
-            _id: null,
-            totalCount: { $sum: 1 },
-            draftCount: {
-              $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] },
+    purchaseOrderStats: requireRead("purchaseOrders")(
+      async (_, { workspaceId }, context) => {
+        const [stats] = await PurchaseOrder.aggregate([
+          { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
+          {
+            $group: {
+              _id: null,
+              totalCount: { $sum: 1 },
+              draftCount: {
+                $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] },
+              },
+              confirmedCount: {
+                $sum: { $cond: [{ $eq: ["$status", "CONFIRMED"] }, 1, 0] },
+              },
+              inProgressCount: {
+                $sum: { $cond: [{ $eq: ["$status", "IN_PROGRESS"] }, 1, 0] },
+              },
+              deliveredCount: {
+                $sum: { $cond: [{ $eq: ["$status", "DELIVERED"] }, 1, 0] },
+              },
+              canceledCount: {
+                $sum: { $cond: [{ $eq: ["$status", "CANCELED"] }, 1, 0] },
+              },
+              totalAmount: { $sum: "$finalTotalTTC" },
             },
-            confirmedCount: {
-              $sum: { $cond: [{ $eq: ["$status", "CONFIRMED"] }, 1, 0] },
-            },
-            inProgressCount: {
-              $sum: { $cond: [{ $eq: ["$status", "IN_PROGRESS"] }, 1, 0] },
-            },
-            deliveredCount: {
-              $sum: { $cond: [{ $eq: ["$status", "DELIVERED"] }, 1, 0] },
-            },
-            canceledCount: {
-              $sum: { $cond: [{ $eq: ["$status", "CANCELED"] }, 1, 0] },
-            },
-            totalAmount: { $sum: "$finalTotalTTC" },
           },
-        },
-        {
-          $project: {
-            _id: 0,
-            totalCount: 1,
-            draftCount: 1,
-            confirmedCount: 1,
-            inProgressCount: 1,
-            deliveredCount: 1,
-            canceledCount: 1,
-            totalAmount: 1,
+          {
+            $project: {
+              _id: 0,
+              totalCount: 1,
+              draftCount: 1,
+              confirmedCount: 1,
+              inProgressCount: 1,
+              deliveredCount: 1,
+              canceledCount: 1,
+              totalAmount: 1,
+            },
           },
-        },
-      ]);
+        ]);
 
-      const defaultStats = {
-        totalCount: 0,
-        draftCount: 0,
-        confirmedCount: 0,
-        inProgressCount: 0,
-        deliveredCount: 0,
-        canceledCount: 0,
-        totalAmount: 0,
-      };
+        const defaultStats = {
+          totalCount: 0,
+          draftCount: 0,
+          confirmedCount: 0,
+          inProgressCount: 0,
+          deliveredCount: 0,
+          canceledCount: 0,
+          totalAmount: 0,
+        };
 
-      if (stats) {
-        Object.keys(defaultStats).forEach((key) => {
-          if (stats[key] === null || stats[key] === undefined) {
-            stats[key] = 0;
-          }
-        });
-        return stats;
-      }
+        if (stats) {
+          Object.keys(defaultStats).forEach((key) => {
+            if (stats[key] === null || stats[key] === undefined) {
+              stats[key] = 0;
+            }
+          });
+          return stats;
+        }
 
-      return defaultStats;
-    }),
+        return defaultStats;
+      },
+    ),
 
     nextPurchaseOrderNumber: requireRead("purchaseOrders")(
       async (_, { workspaceId, prefix }, { user }) => {
@@ -244,7 +290,7 @@ const purchaseOrderResolvers = {
           userId: user.id,
           workspaceId,
         });
-      }
+      },
     ),
 
     checkPurchaseOrderNumberExists: requireRead("purchaseOrders")(
@@ -255,7 +301,7 @@ const purchaseOrderResolvers = {
         }
         const count = await PurchaseOrder.countDocuments(query);
         return count > 0;
-      }
+      },
     ),
   },
 
@@ -265,10 +311,14 @@ const purchaseOrderResolvers = {
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
           const { user, workspaceId: contextWorkspaceId } = context;
 
-          if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+          if (
+            inputWorkspaceId &&
+            contextWorkspaceId &&
+            inputWorkspaceId !== contextWorkspaceId
+          ) {
             throw new AppError(
               "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-              ERROR_CODES.FORBIDDEN
+              ERROR_CODES.FORBIDDEN,
             );
           }
           const workspaceId = inputWorkspaceId || contextWorkspaceId;
@@ -276,7 +326,7 @@ const purchaseOrderResolvers = {
           if (!workspaceId) {
             throw new AppError(
               "Aucune organisation spécifiée.",
-              ERROR_CODES.BAD_REQUEST
+              ERROR_CODES.BAD_REQUEST,
             );
           }
 
@@ -285,7 +335,7 @@ const purchaseOrderResolvers = {
           if (!prefix) {
             const lastPO = await PurchaseOrder.findOne({ workspaceId })
               .sort({ createdAt: -1 })
-              .select('prefix')
+              .select("prefix")
               .lean();
 
             if (lastPO && lastPO.prefix) {
@@ -293,7 +343,7 @@ const purchaseOrderResolvers = {
             } else {
               const now = new Date();
               const year = now.getFullYear();
-              const month = String(now.getMonth() + 1).padStart(2, '0');
+              const month = String(now.getMonth() + 1).padStart(2, "0");
               prefix = `BC-${year}${month}`;
             }
           }
@@ -310,7 +360,7 @@ const purchaseOrderResolvers = {
           if (!organization?.companyName) {
             throw new AppError(
               "Les informations de votre entreprise doivent être configurées avant de créer un bon de commande",
-              ERROR_CODES.COMPANY_INFO_REQUIRED
+              ERROR_CODES.COMPANY_INFO_REQUIRED,
             );
           }
 
@@ -319,7 +369,7 @@ const purchaseOrderResolvers = {
             input.items,
             input.discount,
             input.discountType,
-            input.shipping
+            input.shipping,
           );
 
           const clientData = input.client;
@@ -337,7 +387,7 @@ const purchaseOrderResolvers = {
           }
 
           // Créer le bon de commande - companyInfo uniquement pour les documents non-DRAFT
-          const isDraft = !input.status || input.status === 'DRAFT';
+          const isDraft = !input.status || input.status === "DRAFT";
           const purchaseOrder = new PurchaseOrder({
             ...input,
             number,
@@ -370,204 +420,242 @@ const purchaseOrderResolvers = {
           await purchaseOrder.save();
 
           // Automatisations documents partagés (fire-and-forget)
-          const poTriggerMap = { DRAFT: 'PURCHASE_ORDER_DRAFT', CONFIRMED: 'PURCHASE_ORDER_CONFIRMED' };
+          const poTriggerMap = {
+            DRAFT: "PURCHASE_ORDER_DRAFT",
+            CONFIRMED: "PURCHASE_ORDER_CONFIRMED",
+          };
           const poTrigger = poTriggerMap[purchaseOrder.status];
           if (poTrigger) {
-            documentAutomationService.executeAutomations(poTrigger, workspaceId, {
-              documentId: purchaseOrder._id.toString(),
-              documentType: 'purchaseOrder',
-              documentNumber: purchaseOrder.number,
-              prefix: purchaseOrder.prefix || '',
-              clientName: purchaseOrder.client?.name || '',
-              issueDate: purchaseOrder.issueDate || purchaseOrder.createdAt,
-              clientId: purchaseOrder.client?._id || purchaseOrder.clientId || null,
-            }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (PO create):', err));
+            documentAutomationService
+              .executeAutomations(
+                poTrigger,
+                workspaceId,
+                {
+                  documentId: purchaseOrder._id.toString(),
+                  documentType: "purchaseOrder",
+                  documentNumber: purchaseOrder.number,
+                  prefix: purchaseOrder.prefix || "",
+                  clientName: purchaseOrder.client?.name || "",
+                  issueDate: purchaseOrder.issueDate || purchaseOrder.createdAt,
+                  clientId:
+                    purchaseOrder.client?._id || purchaseOrder.clientId || null,
+                },
+                user._id.toString(),
+              )
+              .catch((err) =>
+                console.error(
+                  "Erreur automatisation documents (PO create):",
+                  err,
+                ),
+              );
           }
 
           return await purchaseOrder.populate("createdBy");
-        }
-      )
+        },
+      ),
     ),
 
     updatePurchaseOrder: requireCompanyInfo(
-      requireWrite("purchaseOrders")(async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
-        const { user, workspaceId } = context;
-        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+      requireWrite("purchaseOrders")(
+        async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
+          const { user, workspaceId } = context;
+          const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 
-        if (!po) {
-          throw createNotFoundError("Bon de commande");
-        }
+          if (!po) {
+            throw createNotFoundError("Bon de commande");
+          }
 
-        if (po.status === "DELIVERED") {
-          throw createResourceLockedError(
-            "Bon de commande",
-            "un bon de commande livré ne peut pas être modifié"
-          );
-        }
-
-        // Validation : empêcher le changement d'année de issueDate sur un bon de commande confirmé
-        if (
-          input.issueDate &&
-          po.status !== "DRAFT" &&
-          po.issueDate
-        ) {
-          const oldYear = new Date(po.issueDate).getFullYear();
-          const newYear = new Date(input.issueDate).getFullYear();
-          if (oldYear !== newYear) {
-            throw new AppError(
-              `Impossible de changer l'année d'émission d'un bon de commande confirmé (${oldYear} → ${newYear}). Cela casserait la séquence de numérotation.`,
-              ERROR_CODES.VALIDATION_ERROR
+          if (po.status === "DELIVERED") {
+            throw createResourceLockedError(
+              "Bon de commande",
+              "un bon de commande livré ne peut pas être modifié",
             );
           }
-        }
 
-        // Si des items sont fournis, recalculer les totaux
-        if (input.items) {
-          const totals = calculatePurchaseOrderTotals(
-            input.items,
-            input.discount !== undefined ? input.discount : po.discount,
-            input.discountType || po.discountType,
-            input.shipping !== undefined ? input.shipping : po.shipping
-          );
-          input = { ...input, ...totals };
-        }
+          // Validation : empêcher le changement d'année de issueDate sur un bon de commande confirmé
+          if (input.issueDate && po.status !== "DRAFT" && po.issueDate) {
+            const oldYear = new Date(po.issueDate).getFullYear();
+            const newYear = new Date(input.issueDate).getFullYear();
+            if (oldYear !== newYear) {
+              throw new AppError(
+                `Impossible de changer l'année d'émission d'un bon de commande confirmé (${oldYear} → ${newYear}). Cela casserait la séquence de numérotation.`,
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+          }
 
-        let updateData = { ...input };
+          // Si des items sont fournis, recalculer les totaux
+          if (input.items) {
+            const totals = calculatePurchaseOrderTotals(
+              input.items,
+              input.discount !== undefined ? input.discount : po.discount,
+              input.discountType || po.discountType,
+              input.shipping !== undefined ? input.shipping : po.shipping,
+            );
+            input = { ...input, ...totals };
+          }
 
-        // Ne pas persister companyInfo pour les documents DRAFT
-        delete updateData.companyInfo;
+          let updateData = { ...input };
 
-        Object.assign(po, updateData);
-        await po.save();
-        return await po.populate("createdBy");
-      })
+          // Ne pas persister companyInfo pour les documents DRAFT
+          delete updateData.companyInfo;
+
+          Object.assign(po, updateData);
+          await po.save();
+          return await po.populate("createdBy");
+        },
+      ),
     ),
 
     deletePurchaseOrder: requireCompanyInfo(
-      requireDelete("purchaseOrders")(async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId } = context;
-        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+      requireDelete("purchaseOrders")(
+        async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+          const { user, workspaceId } = context;
+          const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 
-        if (!po) {
-          throw createNotFoundError("Bon de commande");
-        }
+          if (!po) {
+            throw createNotFoundError("Bon de commande");
+          }
 
-        if (po.status === "DELIVERED") {
-          throw createResourceLockedError(
-            "Bon de commande",
-            "un bon de commande livré ne peut pas être supprimé"
-          );
-        }
+          if (po.status === "DELIVERED") {
+            throw createResourceLockedError(
+              "Bon de commande",
+              "un bon de commande livré ne peut pas être supprimé",
+            );
+          }
 
-        if (po.linkedInvoices && po.linkedInvoices.length > 0) {
-          throw createResourceLockedError(
-            "Bon de commande",
-            "un bon de commande avec des factures liées ne peut pas être supprimé"
-          );
-        }
+          if (po.linkedInvoices && po.linkedInvoices.length > 0) {
+            throw createResourceLockedError(
+              "Bon de commande",
+              "un bon de commande avec des factures liées ne peut pas être supprimé",
+            );
+          }
 
-        await PurchaseOrder.deleteOne({ _id: id, workspaceId });
-        return true;
-      })
+          await PurchaseOrder.deleteOne({ _id: id, workspaceId });
+          return true;
+        },
+      ),
     ),
 
     changePurchaseOrderStatus: requireCompanyInfo(
-      requireWrite("purchaseOrders")(async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
-        const { user, workspaceId } = context;
-        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+      requireWrite("purchaseOrders")(
+        async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
+          const { user, workspaceId } = context;
+          const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 
-        if (!po) {
-          throw createNotFoundError("Bon de commande");
-        }
-
-        const allowedTransitions = {
-          DRAFT: ["CONFIRMED"],
-          CONFIRMED: ["IN_PROGRESS", "DRAFT", "CANCELED"],
-          IN_PROGRESS: ["DELIVERED", "CANCELED"],
-          DELIVERED: [],
-          CANCELED: [],
-        };
-
-        if (!allowedTransitions[po.status]?.includes(status)) {
-          throw createStatusTransitionError("Bon de commande", po.status, status);
-        }
-
-        const oldStatus = po.status;
-
-        // Si transition DRAFT → CONFIRMED, snapshot companyInfo et générer un numéro séquentiel
-        if (po.status === "DRAFT" && status === "CONFIRMED") {
-          // Snapshot companyInfo à la finalisation
-          if (!po.companyInfo || !po.companyInfo.name) {
-            const org = await getOrganizationInfo(workspaceId);
-            po.companyInfo = mapOrganizationToCompanyInfo(org);
+          if (!po) {
+            throw createNotFoundError("Bon de commande");
           }
 
-          // Transaction atomique pour éviter les numéros TEMP orphelins
-          const MAX_RETRIES = 3;
-          for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-            const session = await mongoose.startSession();
-            try {
-              await session.withTransaction(async () => {
-                let prefix = po.prefix;
-                if (!prefix) {
-                  const year = (po.issueDate || new Date()).getFullYear();
-                  const month = String((po.issueDate || new Date()).getMonth() + 1).padStart(2, '0');
-                  prefix = `BC-${year}${month}`;
-                }
+          const allowedTransitions = {
+            DRAFT: ["CONFIRMED"],
+            CONFIRMED: ["IN_PROGRESS", "DRAFT", "CANCELED"],
+            IN_PROGRESS: ["DELIVERED", "CANCELED"],
+            DELIVERED: [],
+            CANCELED: [],
+          };
 
-                const newNumber = await generatePurchaseOrderNumber(prefix, {
-                  workspaceId: po.workspaceId,
-                  userId: user.id,
-                  session,
-                });
+          if (!allowedTransitions[po.status]?.includes(status)) {
+            throw createStatusTransitionError(
+              "Bon de commande",
+              po.status,
+              status,
+            );
+          }
 
-                // Utiliser un numéro temporaire pour éviter les conflits d'unicité
-                po.number = `TEMP-${Date.now()}`;
-                await po.save({ session });
+          const oldStatus = po.status;
 
-                po.number = newNumber;
-                po.prefix = prefix;
-                po.status = status;
-                await po.save({ session });
-              });
-              session.endSession();
-              break;
-            } catch (err) {
-              session.endSession();
-              if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
-                console.log(`⚠️ [changePurchaseOrderStatus] E11000 retry attempt ${attempt + 1}`);
-                continue;
-              }
-              throw err;
+          // Si transition DRAFT → CONFIRMED, snapshot companyInfo et générer un numéro séquentiel
+          if (po.status === "DRAFT" && status === "CONFIRMED") {
+            // Snapshot companyInfo à la finalisation
+            if (!po.companyInfo || !po.companyInfo.name) {
+              const org = await getOrganizationInfo(workspaceId);
+              po.companyInfo = mapOrganizationToCompanyInfo(org);
             }
+
+            // Transaction atomique pour éviter les numéros TEMP orphelins
+            const MAX_RETRIES = 3;
+            for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+              const session = await mongoose.startSession();
+              try {
+                await session.withTransaction(async () => {
+                  let prefix = po.prefix;
+                  if (!prefix) {
+                    const year = (po.issueDate || new Date()).getFullYear();
+                    const month = String(
+                      (po.issueDate || new Date()).getMonth() + 1,
+                    ).padStart(2, "0");
+                    prefix = `BC-${year}${month}`;
+                  }
+
+                  const newNumber = await generatePurchaseOrderNumber(prefix, {
+                    workspaceId: po.workspaceId,
+                    userId: user.id,
+                    session,
+                  });
+
+                  // Utiliser un numéro temporaire pour éviter les conflits d'unicité
+                  po.number = `TEMP-${Date.now()}`;
+                  await po.save({ session });
+
+                  po.number = newNumber;
+                  po.prefix = prefix;
+                  po.status = status;
+                  await po.save({ session });
+                });
+                session.endSession();
+                break;
+              } catch (err) {
+                session.endSession();
+                if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
+                  console.log(
+                    `⚠️ [changePurchaseOrderStatus] E11000 retry attempt ${attempt + 1}`,
+                  );
+                  continue;
+                }
+                throw err;
+              }
+            }
+          } else {
+            po.status = status;
+            await po.save();
           }
-        } else {
-          po.status = status;
-          await po.save();
-        }
 
-        // Automatisations documents partagés (fire-and-forget)
-        const statusTriggerMap = {
-          CONFIRMED: 'PURCHASE_ORDER_CONFIRMED',
-          IN_PROGRESS: 'PURCHASE_ORDER_IN_PROGRESS',
-          DELIVERED: 'PURCHASE_ORDER_DELIVERED',
-          CANCELED: 'PURCHASE_ORDER_CANCELED',
-        };
-        const poStatusTrigger = statusTriggerMap[status];
-        if (poStatusTrigger) {
-          documentAutomationService.executeAutomations(poStatusTrigger, workspaceId, {
-            documentId: po._id.toString(),
-            documentType: 'purchaseOrder',
-            documentNumber: po.number,
-            prefix: po.prefix || '',
-            clientName: po.client?.name || '',
-            issueDate: po.issueDate || po.createdAt,
-            clientId: po.client?._id || po.clientId || null,
-          }, user._id.toString()).catch(err => console.error('Erreur automatisation documents (PO status):', err));
-        }
+          // Automatisations documents partagés (fire-and-forget)
+          const statusTriggerMap = {
+            CONFIRMED: "PURCHASE_ORDER_CONFIRMED",
+            IN_PROGRESS: "PURCHASE_ORDER_IN_PROGRESS",
+            DELIVERED: "PURCHASE_ORDER_DELIVERED",
+            CANCELED: "PURCHASE_ORDER_CANCELED",
+          };
+          const poStatusTrigger = statusTriggerMap[status];
+          if (poStatusTrigger) {
+            documentAutomationService
+              .executeAutomations(
+                poStatusTrigger,
+                workspaceId,
+                {
+                  documentId: po._id.toString(),
+                  documentType: "purchaseOrder",
+                  documentNumber: po.number,
+                  prefix: po.prefix || "",
+                  clientName: po.client?.name || "",
+                  issueDate: po.issueDate || po.createdAt,
+                  clientId: po.client?._id || po.clientId || null,
+                },
+                user._id.toString(),
+              )
+              .catch((err) =>
+                console.error(
+                  "Erreur automatisation documents (PO status):",
+                  err,
+                ),
+              );
+          }
 
-        return await po.populate("createdBy");
-      })
+          return await po.populate("createdBy");
+        },
+      ),
     ),
 
     convertQuoteToPurchaseOrder: requireWrite("purchaseOrders")(
@@ -582,7 +670,7 @@ const purchaseOrderResolvers = {
         if (quote.status !== "COMPLETED") {
           throw new AppError(
             "Seuls les devis acceptés peuvent être convertis en bon de commande",
-            ERROR_CODES.RESOURCE_LOCKED
+            ERROR_CODES.RESOURCE_LOCKED,
           );
         }
 
@@ -591,7 +679,7 @@ const purchaseOrderResolvers = {
         // Générer le préfixe et le numéro
         const now = new Date();
         const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const month = String(now.getMonth() + 1).padStart(2, "0");
         const prefix = `BC-${year}${month}`;
 
         const number = await generatePurchaseOrderNumber(prefix, {
@@ -610,10 +698,22 @@ const purchaseOrderResolvers = {
           items: quoteObj.items,
           status: "CONFIRMED",
           issueDate: new Date(),
-          validUntil: (quote.validUntil && new Date(quote.validUntil) >= new Date()) ? quote.validUntil : null,
-          headerNotes: organization.purchaseOrderHeaderNotes || organization.documentHeaderNotes || "",
-          footerNotes: organization.purchaseOrderFooterNotes || organization.documentFooterNotes || "",
-          termsAndConditions: organization.purchaseOrderTermsAndConditions || organization.documentTermsAndConditions || "",
+          validUntil:
+            quote.validUntil && new Date(quote.validUntil) >= new Date()
+              ? quote.validUntil
+              : null,
+          headerNotes:
+            organization.purchaseOrderHeaderNotes ||
+            organization.documentHeaderNotes ||
+            "",
+          footerNotes:
+            organization.purchaseOrderFooterNotes ||
+            organization.documentFooterNotes ||
+            "",
+          termsAndConditions:
+            organization.purchaseOrderTermsAndConditions ||
+            organization.documentTermsAndConditions ||
+            "",
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
           discount: quote.discount,
@@ -630,13 +730,23 @@ const purchaseOrderResolvers = {
           createdBy: user.id,
           sourceQuoteId: quote._id,
           appearance: {
-            textColor: organization.purchaseOrderTextColor || organization.documentTextColor || "#000000",
-            headerTextColor: organization.purchaseOrderHeaderTextColor || organization.documentHeaderTextColor || "#ffffff",
-            headerBgColor: organization.purchaseOrderHeaderBgColor || organization.documentHeaderBgColor || "#5b50FF",
+            textColor:
+              organization.purchaseOrderTextColor ||
+              organization.documentTextColor ||
+              "#000000",
+            headerTextColor:
+              organization.purchaseOrderHeaderTextColor ||
+              organization.documentHeaderTextColor ||
+              "#ffffff",
+            headerBgColor:
+              organization.purchaseOrderHeaderBgColor ||
+              organization.documentHeaderBgColor ||
+              "#5b50FF",
           },
           shipping: quoteObj.shipping,
           isReverseCharge: quote.isReverseCharge || false,
-          clientPositionRight: organization.purchaseOrderClientPositionRight || false,
+          clientPositionRight:
+            organization.purchaseOrderClientPositionRight || false,
           showBankDetails: organization.showBankDetails || false,
           retenueGarantie: quote.retenueGarantie || 0,
           escompte: quote.escompte || 0,
@@ -644,7 +754,7 @@ const purchaseOrderResolvers = {
 
         await purchaseOrder.save();
         return await purchaseOrder.populate("createdBy");
-      }
+      },
     ),
 
     convertPurchaseOrderToInvoice: requireWrite("purchaseOrders")(
@@ -659,7 +769,7 @@ const purchaseOrderResolvers = {
         if (!["CONFIRMED", "IN_PROGRESS", "DELIVERED"].includes(po.status)) {
           throw new AppError(
             "Seuls les bons de commande confirmés, en cours ou livrés peuvent être convertis en facture",
-            ERROR_CODES.RESOURCE_LOCKED
+            ERROR_CODES.RESOURCE_LOCKED,
           );
         }
 
@@ -667,7 +777,7 @@ const purchaseOrderResolvers = {
 
         const now = new Date();
         const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const month = String(now.getMonth() + 1).padStart(2, "0");
         const invoicePrefix = `F-${year}${month}`;
 
         const invoiceNumber = await generateInvoiceNumber(invoicePrefix, {
@@ -688,9 +798,18 @@ const purchaseOrderResolvers = {
           status: "DRAFT",
           issueDate: new Date(),
           dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
-          headerNotes: organization.invoiceHeaderNotes || organization.documentHeaderNotes || "",
-          footerNotes: organization.invoiceFooterNotes || organization.documentFooterNotes || "",
-          termsAndConditions: organization.invoiceTermsAndConditions || organization.documentTermsAndConditions || "",
+          headerNotes:
+            organization.invoiceHeaderNotes ||
+            organization.documentHeaderNotes ||
+            "",
+          footerNotes:
+            organization.invoiceFooterNotes ||
+            organization.documentFooterNotes ||
+            "",
+          termsAndConditions:
+            organization.invoiceTermsAndConditions ||
+            organization.documentTermsAndConditions ||
+            "",
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
           purchaseOrderNumber: `${po.prefix}-${po.number}`,
@@ -709,9 +828,18 @@ const purchaseOrderResolvers = {
           isReverseCharge: po.isReverseCharge || false,
           shipping: poObj.shipping,
           appearance: {
-            textColor: organization.invoiceTextColor || organization.documentTextColor || "#000000",
-            headerTextColor: organization.invoiceHeaderTextColor || organization.documentHeaderTextColor || "#ffffff",
-            headerBgColor: organization.invoiceHeaderBgColor || organization.documentHeaderBgColor || "#5b50FF",
+            textColor:
+              organization.invoiceTextColor ||
+              organization.documentTextColor ||
+              "#000000",
+            headerTextColor:
+              organization.invoiceHeaderTextColor ||
+              organization.documentHeaderTextColor ||
+              "#ffffff",
+            headerBgColor:
+              organization.invoiceHeaderBgColor ||
+              organization.documentHeaderBgColor ||
+              "#5b50FF",
           },
           clientPositionRight: organization.invoiceClientPositionRight || false,
           showBankDetails: false, // Les coordonnées bancaires seront ajoutées lors de l'édition de la facture
@@ -729,20 +857,22 @@ const purchaseOrderResolvers = {
         await po.save();
 
         return await invoice.populate("createdBy");
-      }
+      },
     ),
 
-    sendPurchaseOrder: requireWrite("purchaseOrders")(async (_, { id, workspaceId: inputWorkspaceId, email }, context) => {
-      const { user, workspaceId } = context;
-      const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+    sendPurchaseOrder: requireWrite("purchaseOrders")(
+      async (_, { id, workspaceId: inputWorkspaceId, email }, context) => {
+        const { user, workspaceId } = context;
+        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 
-      if (!po) {
-        throw createNotFoundError("Bon de commande");
-      }
+        if (!po) {
+          throw createNotFoundError("Bon de commande");
+        }
 
-      // TODO: Implémenter l'envoi réel par email
-      return true;
-    }),
+        // TODO: Implémenter l'envoi réel par email
+        return true;
+      },
+    ),
   },
 };
 

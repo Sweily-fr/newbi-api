@@ -49,12 +49,26 @@ const sharedDocumentResolvers = {
      * Récupère les documents partagés d'un workspace (filtrés par visibilité des dossiers)
      */
     sharedDocuments: withOrganization(
-      async (_, { workspaceId, filter, limit = 50, offset = 0, sortBy = "createdAt", sortOrder = "desc" }, { user }) => {
+      async (
+        _,
+        {
+          workspaceId,
+          filter,
+          limit = 50,
+          offset = 0,
+          sortBy = "createdAt",
+          sortOrder = "desc",
+        },
+        { user },
+      ) => {
         try {
           const userId = user._id?.toString() || user.id?.toString();
 
           // Charger tous les dossiers pour vérifier la visibilité
-          const allFolders = await SharedFolder.find({ workspaceId, trashedAt: null });
+          const allFolders = await SharedFolder.find({
+            workspaceId,
+            trashedAt: null,
+          });
           const folderMap = new Map();
           for (const folder of allFolders) {
             folderMap.set(folder._id.toString(), folder);
@@ -75,8 +89,18 @@ const sharedDocumentResolvers = {
           if (filter) {
             if (filter.folderId !== undefined) {
               // Si le dossier demandé est inaccessible, retourner vide
-              if (filter.folderId && inaccessibleFolderIds.some((id) => id.toString() === filter.folderId)) {
-                return { success: true, documents: [], total: 0, hasMore: false };
+              if (
+                filter.folderId &&
+                inaccessibleFolderIds.some(
+                  (id) => id.toString() === filter.folderId,
+                )
+              ) {
+                return {
+                  success: true,
+                  documents: [],
+                  total: 0,
+                  hasMore: false,
+                };
               }
               query.folderId = filter.folderId || null;
             } else if (inaccessibleFolderIds.length > 0) {
@@ -115,8 +139,11 @@ const sharedDocumentResolvers = {
                 query.$and = query.$and || [];
                 query.$and.push({
                   mimeType: {
-                    $not: { $regex: /^image\/|^video\/|^application\/pdf$|word|document|text\/|spreadsheet|excel|csv/ }
-                  }
+                    $not: {
+                      $regex:
+                        /^image\/|^video\/|^application\/pdf$|word|document|text\/|spreadsheet|excel|csv/,
+                    },
+                  },
                 });
               }
             }
@@ -149,7 +176,9 @@ const sharedDocumentResolvers = {
 
           // Construire l'objet de tri
           const validSortFields = ["name", "fileSize", "createdAt"];
-          const sortField = validSortFields.includes(sortBy) ? sortBy : "createdAt";
+          const sortField = validSortFields.includes(sortBy)
+            ? sortBy
+            : "createdAt";
           const sortDirection = sortOrder === "asc" ? 1 : -1;
           const sortOptions = { [sortField]: sortDirection };
 
@@ -188,7 +217,7 @@ const sharedDocumentResolvers = {
             hasMore: false,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -222,7 +251,7 @@ const sharedDocumentResolvers = {
             document: null,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -233,7 +262,10 @@ const sharedDocumentResolvers = {
         const userId = user._id?.toString() || user.id?.toString();
 
         // Exclure les dossiers en corbeille
-        const folders = await SharedFolder.find({ workspaceId, trashedAt: null }).sort({
+        const folders = await SharedFolder.find({
+          workspaceId,
+          trashedAt: null,
+        }).sort({
           order: 1,
           name: 1,
         });
@@ -251,12 +283,20 @@ const sharedDocumentResolvers = {
         });
 
         // Compter les documents en une seule agrégation au lieu de N requêtes
-        const folderIds = accessibleFolders.map(f => f._id);
+        const folderIds = accessibleFolders.map((f) => f._id);
         const countResults = await SharedDocument.aggregate([
-          { $match: { workspaceId, folderId: { $in: folderIds }, trashedAt: null } },
+          {
+            $match: {
+              workspaceId,
+              folderId: { $in: folderIds },
+              trashedAt: null,
+            },
+          },
           { $group: { _id: "$folderId", count: { $sum: 1 } } },
         ]);
-        const countMap = new Map(countResults.map(r => [r._id.toString(), r.count]));
+        const countMap = new Map(
+          countResults.map((r) => [r._id.toString(), r.count]),
+        );
 
         const foldersWithCount = accessibleFolders.map((folder) => ({
           ...folder.toObject(),
@@ -338,23 +378,42 @@ const sharedDocumentResolvers = {
           ] = await Promise.all([
             // Documents actifs (non en corbeille)
             SharedDocument.countDocuments({ workspaceId, trashedAt: null }),
-            SharedDocument.countDocuments({ workspaceId, status: "pending", trashedAt: null }),
+            SharedDocument.countDocuments({
+              workspaceId,
+              status: "pending",
+              trashedAt: null,
+            }),
             SharedDocument.countDocuments({
               workspaceId,
               status: "classified",
               trashedAt: null,
             }),
-            SharedDocument.countDocuments({ workspaceId, status: "archived", trashedAt: null }),
+            SharedDocument.countDocuments({
+              workspaceId,
+              status: "archived",
+              trashedAt: null,
+            }),
             SharedFolder.countDocuments({ workspaceId, trashedAt: null }),
             SharedDocument.aggregate([
               { $match: { workspaceId: workspaceObjectId, trashedAt: null } },
               { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
             ]),
             // Stats corbeille
-            SharedDocument.countDocuments({ workspaceId, trashedAt: { $ne: null } }),
-            SharedFolder.countDocuments({ workspaceId, trashedAt: { $ne: null } }),
+            SharedDocument.countDocuments({
+              workspaceId,
+              trashedAt: { $ne: null },
+            }),
+            SharedFolder.countDocuments({
+              workspaceId,
+              trashedAt: { $ne: null },
+            }),
             SharedDocument.aggregate([
-              { $match: { workspaceId: workspaceObjectId, trashedAt: { $ne: null } } },
+              {
+                $match: {
+                  workspaceId: workspaceObjectId,
+                  trashedAt: { $ne: null },
+                },
+              },
               { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
             ]),
           ]);
@@ -362,7 +421,9 @@ const sharedDocumentResolvers = {
           const totalSize =
             sizeAggregation.length > 0 ? sizeAggregation[0].totalSize : 0;
           const trashedSize =
-            trashedSizeAggregation.length > 0 ? trashedSizeAggregation[0].totalSize : 0;
+            trashedSizeAggregation.length > 0
+              ? trashedSizeAggregation[0].totalSize
+              : 0;
 
           return {
             success: true,
@@ -391,75 +452,83 @@ const sharedDocumentResolvers = {
             trashedSize: 0,
           };
         }
-      }
+      },
     ),
 
     /**
      * Récupère les éléments de la corbeille
      */
-    trashItems: isAuthenticated(
-      async (_, { workspaceId }, { user }) => {
-        try {
-          const workspaceObjectId = new ObjectId(workspaceId);
+    trashItems: isAuthenticated(async (_, { workspaceId }, { user }) => {
+      try {
+        const workspaceObjectId = new ObjectId(workspaceId);
 
-          const [documents, folders, sizeAggregation] = await Promise.all([
-            SharedDocument.find({ workspaceId, trashedAt: { $ne: null } })
-              .sort({ trashedAt: -1 }),
-            SharedFolder.find({ workspaceId, trashedAt: { $ne: null } })
-              .sort({ trashedAt: -1 }),
-            SharedDocument.aggregate([
-              { $match: { workspaceId: workspaceObjectId, trashedAt: { $ne: null } } },
-              { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
-            ]),
-          ]);
+        const [documents, folders, sizeAggregation] = await Promise.all([
+          SharedDocument.find({ workspaceId, trashedAt: { $ne: null } }).sort({
+            trashedAt: -1,
+          }),
+          SharedFolder.find({ workspaceId, trashedAt: { $ne: null } }).sort({
+            trashedAt: -1,
+          }),
+          SharedDocument.aggregate([
+            {
+              $match: {
+                workspaceId: workspaceObjectId,
+                trashedAt: { $ne: null },
+              },
+            },
+            { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
+          ]),
+        ]);
 
-          const totalSize = sizeAggregation.length > 0 ? sizeAggregation[0].totalSize : 0;
+        const totalSize =
+          sizeAggregation.length > 0 ? sizeAggregation[0].totalSize : 0;
 
-          // Transformer les documents avec les jours restants
-          const transformedDocs = documents.map((doc) => {
-            const docObj = doc.toObject();
-            return {
-              ...docObj,
-              id: doc._id,
-              trashedAt: docObj.trashedAt?.toISOString(),
-              createdAt: docObj.createdAt?.toISOString?.() || docObj.createdAt,
-              updatedAt: docObj.updatedAt?.toISOString?.() || docObj.updatedAt,
-            };
-          });
-
-          const transformedFolders = folders.map((folder) => {
-            const folderObj = folder.toObject();
-            return {
-              ...folderObj,
-              id: folder._id,
-              trashedAt: folderObj.trashedAt?.toISOString(),
-              createdAt: folderObj.createdAt?.toISOString?.() || folderObj.createdAt,
-              updatedAt: folderObj.updatedAt?.toISOString?.() || folderObj.updatedAt,
-            };
-          });
-
+        // Transformer les documents avec les jours restants
+        const transformedDocs = documents.map((doc) => {
+          const docObj = doc.toObject();
           return {
-            success: true,
-            documents: transformedDocs,
-            folders: transformedFolders,
-            totalDocuments: documents.length,
-            totalFolders: folders.length,
-            totalSize,
+            ...docObj,
+            id: doc._id,
+            trashedAt: docObj.trashedAt?.toISOString(),
+            createdAt: docObj.createdAt?.toISOString?.() || docObj.createdAt,
+            updatedAt: docObj.updatedAt?.toISOString?.() || docObj.updatedAt,
           };
-        } catch (error) {
-          console.error("❌ Erreur récupération corbeille:", error);
+        });
+
+        const transformedFolders = folders.map((folder) => {
+          const folderObj = folder.toObject();
           return {
-            success: false,
-            message: error.message,
-            documents: [],
-            folders: [],
-            totalDocuments: 0,
-            totalFolders: 0,
-            totalSize: 0,
+            ...folderObj,
+            id: folder._id,
+            trashedAt: folderObj.trashedAt?.toISOString(),
+            createdAt:
+              folderObj.createdAt?.toISOString?.() || folderObj.createdAt,
+            updatedAt:
+              folderObj.updatedAt?.toISOString?.() || folderObj.updatedAt,
           };
-        }
+        });
+
+        return {
+          success: true,
+          documents: transformedDocs,
+          folders: transformedFolders,
+          totalDocuments: documents.length,
+          totalFolders: folders.length,
+          totalSize,
+        };
+      } catch (error) {
+        console.error("❌ Erreur récupération corbeille:", error);
+        return {
+          success: false,
+          message: error.message,
+          documents: [],
+          folders: [],
+          totalDocuments: 0,
+          totalFolders: 0,
+          totalSize: 0,
+        };
       }
-    ),
+    }),
   },
 
   Mutation: {
@@ -470,12 +539,12 @@ const sharedDocumentResolvers = {
       async (
         _,
         { workspaceId, file, folderId, name, description, tags },
-        { user }
+        { user },
       ) => {
         try {
           console.log(
             "📤 Upload document partagé pour workspace:",
-            workspaceId
+            workspaceId,
           );
 
           // Récupérer les informations du fichier
@@ -497,7 +566,7 @@ const sharedDocumentResolvers = {
           const maxSize = isVideo ? 500 * 1024 * 1024 : 50 * 1024 * 1024;
           if (fileSize > maxSize) {
             throw new Error(
-              `Fichier trop volumineux. Taille maximum: ${maxSize / 1024 / 1024}MB`
+              `Fichier trop volumineux. Taille maximum: ${maxSize / 1024 / 1024}MB`,
             );
           }
 
@@ -527,7 +596,7 @@ const sharedDocumentResolvers = {
 
           if (!allowedTypes.includes(mimetype)) {
             throw new Error(
-              "Type de fichier non supporté. Types acceptés: Images, Vidéos, PDF, Word, Excel, CSV, TXT"
+              "Type de fichier non supporté. Types acceptés: Images, Vidéos, PDF, Word, Excel, CSV, TXT",
             );
           }
 
@@ -537,7 +606,7 @@ const sharedDocumentResolvers = {
             filename,
             user.id,
             "sharedDocuments",
-            workspaceId
+            workspaceId,
           );
 
           // Extraire l'extension
@@ -587,7 +656,7 @@ const sharedDocumentResolvers = {
             document: null,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -599,7 +668,7 @@ const sharedDocumentResolvers = {
           const document = await SharedDocument.findOneAndUpdate(
             { _id: id, workspaceId },
             { $set: input },
-            { new: true }
+            { new: true },
           );
 
           if (!document) {
@@ -626,7 +695,7 @@ const sharedDocumentResolvers = {
             document: null,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -656,7 +725,7 @@ const sharedDocumentResolvers = {
                 trashedAt: new Date(),
                 originalFolderId: document.folderId,
               },
-            }
+            },
           );
 
           return {
@@ -670,7 +739,7 @@ const sharedDocumentResolvers = {
             message: error.message,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -703,7 +772,7 @@ const sharedDocumentResolvers = {
                   trashedAt: now,
                   originalFolderId: doc.folderId,
                 },
-              }
+              },
             );
           }
 
@@ -718,7 +787,7 @@ const sharedDocumentResolvers = {
             message: error.message,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -734,7 +803,7 @@ const sharedDocumentResolvers = {
                 folderId: targetFolderId || null,
                 status: targetFolderId ? "classified" : "pending",
               },
-            }
+            },
           );
 
           return {
@@ -750,7 +819,7 @@ const sharedDocumentResolvers = {
             movedCount: 0,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -771,7 +840,7 @@ const sharedDocumentResolvers = {
                 },
               },
             },
-            { new: true }
+            { new: true },
           );
 
           if (!document) {
@@ -798,7 +867,7 @@ const sharedDocumentResolvers = {
             document: null,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -833,7 +902,7 @@ const sharedDocumentResolvers = {
           if (addTags && addTags.length > 0) {
             const addResult = await SharedDocument.updateMany(
               { _id: { $in: ids }, workspaceId },
-              { $addToSet: { tags: { $each: addTags } } }
+              { $addToSet: { tags: { $each: addTags } } },
             );
             updatedCount = addResult.modifiedCount;
           }
@@ -841,7 +910,7 @@ const sharedDocumentResolvers = {
           if (removeTags && removeTags.length > 0) {
             const removeResult = await SharedDocument.updateMany(
               { _id: { $in: ids }, workspaceId },
-              { $pull: { tags: { $in: removeTags } } }
+              { $pull: { tags: { $in: removeTags } } },
             );
             updatedCount = Math.max(updatedCount, removeResult.modifiedCount);
           }
@@ -859,7 +928,7 @@ const sharedDocumentResolvers = {
             updatedCount: 0,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -914,7 +983,7 @@ const sharedDocumentResolvers = {
             folder: null,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -944,7 +1013,7 @@ const sharedDocumentResolvers = {
           const updatedFolder = await SharedFolder.findOneAndUpdate(
             { _id: id, workspaceId },
             { $set: input },
-            { new: true }
+            { new: true },
           );
 
           const documentsCount = await SharedDocument.countDocuments({
@@ -969,7 +1038,7 @@ const sharedDocumentResolvers = {
             folder: null,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -979,7 +1048,11 @@ const sharedDocumentResolvers = {
     deleteSharedFolder: isAuthenticated(
       async (_, { id, workspaceId }, { user }) => {
         try {
-          const folder = await SharedFolder.findOne({ _id: id, workspaceId, trashedAt: null });
+          const folder = await SharedFolder.findOne({
+            _id: id,
+            workspaceId,
+            trashedAt: null,
+          });
 
           if (!folder) {
             return {
@@ -992,8 +1065,12 @@ const sharedDocumentResolvers = {
 
           // Fonction récursive pour collecter tous les IDs de sous-dossiers
           const getAllSubfolderIds = async (parentId) => {
-            const subfolders = await SharedFolder.find({ workspaceId, parentId, trashedAt: null });
-            let allIds = subfolders.map(f => f._id);
+            const subfolders = await SharedFolder.find({
+              workspaceId,
+              parentId,
+              trashedAt: null,
+            });
+            let allIds = subfolders.map((f) => f._id);
 
             for (const subfolder of subfolders) {
               const childIds = await getAllSubfolderIds(subfolder._id);
@@ -1023,7 +1100,7 @@ const sharedDocumentResolvers = {
                   trashedAt: now,
                   originalFolderId: doc.folderId,
                 },
-              }
+              },
             );
           }
 
@@ -1038,7 +1115,7 @@ const sharedDocumentResolvers = {
                     trashedAt: now,
                     originalParentId: subfolder.parentId,
                   },
-                }
+                },
               );
             }
           }
@@ -1051,7 +1128,7 @@ const sharedDocumentResolvers = {
                 trashedAt: now,
                 originalParentId: folder.parentId,
               },
-            }
+            },
           );
 
           return {
@@ -1065,7 +1142,7 @@ const sharedDocumentResolvers = {
             message: error.message,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -1077,21 +1154,35 @@ const sharedDocumentResolvers = {
         try {
           const folder = await SharedFolder.findOne({ _id: id, workspaceId });
           if (!folder) {
-            return { success: false, message: "Dossier non trouvé", folder: null };
+            return {
+              success: false,
+              message: "Dossier non trouvé",
+              folder: null,
+            };
           }
 
           const userId = user._id?.toString() || user.id?.toString();
           if (folder.isSystem) {
             const userRole = context.userRole;
             if (userRole !== "admin" && userRole !== "owner") {
-              return { success: false, message: "Seul un administrateur peut modifier la visibilité des dossiers système", folder: null };
+              return {
+                success: false,
+                message:
+                  "Seul un administrateur peut modifier la visibilité des dossiers système",
+                folder: null,
+              };
             }
           } else if (folder.createdBy?.toString() !== userId) {
-            return { success: false, message: "Seul le créateur peut modifier la visibilité", folder: null };
+            return {
+              success: false,
+              message: "Seul le créateur peut modifier la visibilité",
+              folder: null,
+            };
           }
 
           folder.visibility = visibility;
-          folder.allowedUserIds = visibility === "private" ? (allowedUserIds || []) : [];
+          folder.allowedUserIds =
+            visibility === "private" ? allowedUserIds || [] : [];
           await folder.save();
 
           return {
@@ -1103,7 +1194,7 @@ const sharedDocumentResolvers = {
           console.error("❌ Erreur mise à jour visibilité:", error);
           return { success: false, message: error.message, folder: null };
         }
-      }
+      },
     ),
 
     /**
@@ -1146,7 +1237,7 @@ const sharedDocumentResolvers = {
                       status: targetFolderId ? "classified" : "pending",
                     },
                     $unset: { originalFolderId: "" },
-                  }
+                  },
                 );
                 restoredDocuments++;
               }
@@ -1183,7 +1274,7 @@ const sharedDocumentResolvers = {
                       parentId: targetParentId,
                     },
                     $unset: { originalParentId: "" },
-                  }
+                  },
                 );
                 restoredFolders++;
 
@@ -1204,7 +1295,7 @@ const sharedDocumentResolvers = {
                         status: "classified",
                       },
                       $unset: { originalFolderId: "" },
-                    }
+                    },
                   );
                   restoredDocuments++;
                 }
@@ -1227,55 +1318,56 @@ const sharedDocumentResolvers = {
             restoredFolders: 0,
           };
         }
-      }
+      },
     ),
 
     /**
      * Vide complètement la corbeille (suppression définitive)
      */
-    emptyTrash: isAuthenticated(
-      async (_, { workspaceId }, { user }) => {
-        try {
-          // Récupérer tous les documents en corbeille pour supprimer de R2
-          const trashedDocs = await SharedDocument.find({
-            workspaceId,
-            trashedAt: { $ne: null },
-          });
+    emptyTrash: isAuthenticated(async (_, { workspaceId }, { user }) => {
+      try {
+        // Récupérer tous les documents en corbeille pour supprimer de R2
+        const trashedDocs = await SharedDocument.find({
+          workspaceId,
+          trashedAt: { $ne: null },
+        });
 
-          // Supprimer les fichiers de Cloudflare R2
-          for (const doc of trashedDocs) {
-            try {
-              await cloudflareService.deleteImage(doc.fileKey);
-            } catch (cloudflareError) {
-              console.warn("⚠️ Erreur suppression Cloudflare:", cloudflareError.message);
-            }
+        // Supprimer les fichiers de Cloudflare R2
+        for (const doc of trashedDocs) {
+          try {
+            await cloudflareService.deleteImage(doc.fileKey);
+          } catch (cloudflareError) {
+            console.warn(
+              "⚠️ Erreur suppression Cloudflare:",
+              cloudflareError.message,
+            );
           }
-
-          // Supprimer définitivement les documents
-          const deleteDocsResult = await SharedDocument.deleteMany({
-            workspaceId,
-            trashedAt: { $ne: null },
-          });
-
-          // Supprimer définitivement les dossiers
-          const deleteFoldersResult = await SharedFolder.deleteMany({
-            workspaceId,
-            trashedAt: { $ne: null },
-          });
-
-          return {
-            success: true,
-            message: `Corbeille vidée: ${deleteDocsResult.deletedCount} document(s) et ${deleteFoldersResult.deletedCount} dossier(s) supprimé(s) définitivement`,
-          };
-        } catch (error) {
-          console.error("❌ Erreur vidage corbeille:", error);
-          return {
-            success: false,
-            message: error.message,
-          };
         }
+
+        // Supprimer définitivement les documents
+        const deleteDocsResult = await SharedDocument.deleteMany({
+          workspaceId,
+          trashedAt: { $ne: null },
+        });
+
+        // Supprimer définitivement les dossiers
+        const deleteFoldersResult = await SharedFolder.deleteMany({
+          workspaceId,
+          trashedAt: { $ne: null },
+        });
+
+        return {
+          success: true,
+          message: `Corbeille vidée: ${deleteDocsResult.deletedCount} document(s) et ${deleteFoldersResult.deletedCount} dossier(s) supprimé(s) définitivement`,
+        };
+      } catch (error) {
+        console.error("❌ Erreur vidage corbeille:", error);
+        return {
+          success: false,
+          message: error.message,
+        };
       }
-    ),
+    }),
 
     /**
      * Supprime définitivement des documents (de la corbeille)
@@ -1294,7 +1386,10 @@ const sharedDocumentResolvers = {
             try {
               await cloudflareService.deleteImage(doc.fileKey);
             } catch (cloudflareError) {
-              console.warn("⚠️ Erreur suppression Cloudflare:", cloudflareError.message);
+              console.warn(
+                "⚠️ Erreur suppression Cloudflare:",
+                cloudflareError.message,
+              );
             }
           }
 
@@ -1315,7 +1410,7 @@ const sharedDocumentResolvers = {
             message: error.message,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -1335,7 +1430,10 @@ const sharedDocumentResolvers = {
             try {
               await cloudflareService.deleteImage(doc.fileKey);
             } catch (cloudflareError) {
-              console.warn("⚠️ Erreur suppression Cloudflare:", cloudflareError.message);
+              console.warn(
+                "⚠️ Erreur suppression Cloudflare:",
+                cloudflareError.message,
+              );
             }
           }
 
@@ -1363,7 +1461,7 @@ const sharedDocumentResolvers = {
             message: error.message,
           };
         }
-      }
+      },
     ),
   },
 
@@ -1372,13 +1470,16 @@ const sharedDocumentResolvers = {
     id: (parent) => parent._id || parent.id,
     folder: async (parent) => {
       if (!parent.folderId) return null;
-      return await SharedFolder.findById(parent.folderId);
+      return await SharedFolder.findById(parent.folderId).lean();
     },
-    trashedAt: (parent) => parent.trashedAt?.toISOString?.() || parent.trashedAt,
+    trashedAt: (parent) =>
+      parent.trashedAt?.toISOString?.() || parent.trashedAt,
     daysUntilPermanentDeletion: (parent) => {
       if (!parent.trashedAt) return null;
       const trashedDate = new Date(parent.trashedAt);
-      const deletionDate = new Date(trashedDate.getTime() + 30 * 24 * 60 * 60 * 1000); // +30 jours
+      const deletionDate = new Date(
+        trashedDate.getTime() + 30 * 24 * 60 * 60 * 1000,
+      ); // +30 jours
       const now = new Date();
       const diffMs = deletionDate - now;
       const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
@@ -1390,13 +1491,16 @@ const sharedDocumentResolvers = {
     id: (parent) => parent._id || parent.id,
     parent: async (parent) => {
       if (!parent.parentId) return null;
-      return await SharedFolder.findById(parent.parentId);
+      return await SharedFolder.findById(parent.parentId).lean();
     },
-    trashedAt: (parent) => parent.trashedAt?.toISOString?.() || parent.trashedAt,
+    trashedAt: (parent) =>
+      parent.trashedAt?.toISOString?.() || parent.trashedAt,
     daysUntilPermanentDeletion: (parent) => {
       if (!parent.trashedAt) return null;
       const trashedDate = new Date(parent.trashedAt);
-      const deletionDate = new Date(trashedDate.getTime() + 30 * 24 * 60 * 60 * 1000); // +30 jours
+      const deletionDate = new Date(
+        trashedDate.getTime() + 30 * 24 * 60 * 60 * 1000,
+      ); // +30 jours
       const now = new Date();
       const diffMs = deletionDate - now;
       const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
@@ -1408,7 +1512,8 @@ const sharedDocumentResolvers = {
       if (parent.isSystem) {
         return context.userRole === "admin" || context.userRole === "owner";
       }
-      const userId = context.user._id?.toString() || context.user.id?.toString();
+      const userId =
+        context.user._id?.toString() || context.user.id?.toString();
       return parent.createdBy?.toString() === userId;
     },
   },
