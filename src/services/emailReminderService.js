@@ -1,9 +1,9 @@
-import { Resend } from 'resend';
-import nodemailer from 'nodemailer';
-import logger from '../utils/logger.js';
-import EmailLog from '../models/EmailLog.js';
-import Event from '../models/Event.js';
-import User from '../models/User.js';
+import { Resend } from "resend";
+import nodemailer from "nodemailer";
+import logger from "../utils/logger.js";
+import EmailLog from "../models/EmailLog.js";
+import Event from "../models/Event.js";
+import User from "../models/User.js";
 
 /**
  * Service de gestion des rappels par email
@@ -14,8 +14,9 @@ class EmailReminderService {
     this.resend = null;
     this.transporter = null;
     this.useResend = false;
-    this.fromEmail = process.env.FROM_EMAIL || 'no-reply@newbi.fr';
-    this.resendFromEmail = process.env.RESEND_FROM_EMAIL || 'no-reply@newbi.sweily.fr';
+    this.fromEmail = process.env.FROM_EMAIL || "no-reply@newbi.fr";
+    this.resendFromEmail =
+      process.env.RESEND_FROM_EMAIL || "no-reply@newbi.sweily.fr";
     this.initEmailProvider();
   }
 
@@ -31,9 +32,11 @@ class EmailReminderService {
       try {
         this.resend = new Resend(process.env.RESEND_API_KEY);
         this.useResend = true;
-        logger.info('✅ Service d\'email Resend initialisé (prioritaire pour les rappels)');
+        logger.info(
+          "✅ Service d'email Resend initialisé (prioritaire pour les rappels)",
+        );
       } catch (error) {
-        logger.error('❌ Erreur lors de l\'initialisation de Resend:', error);
+        logger.error("❌ Erreur lors de l'initialisation de Resend:", error);
       }
     }
   }
@@ -44,22 +47,22 @@ class EmailReminderService {
   initTransporter() {
     try {
       const config = {
-        host: process.env.SMTP_HOST || 'smtp.gmail.com',
-        port: parseInt(process.env.SMTP_PORT || '587'),
-        secure: process.env.SMTP_SECURE === 'true',
+        host: process.env.SMTP_HOST || "smtp.gmail.com",
+        port: parseInt(process.env.SMTP_PORT || "587"),
+        secure: process.env.SMTP_SECURE === "true",
         auth: {
           user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS
-        }
+          pass: process.env.SMTP_PASS,
+        },
       };
 
-      logger.info('🔧 Configuration SMTP:', {
+      logger.info("🔧 Configuration SMTP:", {
         host: config.host,
         port: config.port,
         secure: config.secure,
         user: config.auth.user,
         passLength: config.auth.pass ? config.auth.pass.length : 0,
-        fromEmail: this.fromEmail
+        fromEmail: this.fromEmail,
       });
 
       this.transporter = nodemailer.createTransport(config);
@@ -67,9 +70,12 @@ class EmailReminderService {
       // Tester la connexion SMTP
       this.testConnection();
 
-      logger.info('✅ Service d\'email initialisé avec SMTP (fallback)');
+      logger.info("✅ Service d'email initialisé avec SMTP (fallback)");
     } catch (error) {
-      logger.error('❌ Erreur lors de l\'initialisation du service d\'email:', error);
+      logger.error(
+        "❌ Erreur lors de l'initialisation du service d'email:",
+        error,
+      );
     }
   }
 
@@ -79,10 +85,10 @@ class EmailReminderService {
   async testConnection() {
     try {
       await this.transporter.verify();
-      logger.info('✅ Connexion SMTP vérifiée avec succès');
+      logger.info("✅ Connexion SMTP vérifiée avec succès");
     } catch (error) {
-      logger.error('❌ Erreur de connexion SMTP:', error.message);
-      logger.error('🔧 Vérifiez vos paramètres SMTP dans le fichier .env');
+      logger.error("❌ Erreur de connexion SMTP:", error.message);
+      logger.error("🔧 Vérifiez vos paramètres SMTP dans le fichier .env");
     }
   }
 
@@ -95,7 +101,7 @@ class EmailReminderService {
         from: `Newbi <${this.resendFromEmail}>`,
         to: [to],
         subject,
-        html
+        html,
       });
 
       if (error) {
@@ -108,14 +114,14 @@ class EmailReminderService {
 
     // Fallback SMTP
     if (!this.transporter) {
-      throw new Error('Aucun service d\'email configuré (ni Resend, ni SMTP)');
+      throw new Error("Aucun service d'email configuré (ni Resend, ni SMTP)");
     }
 
     const result = await this.transporter.sendMail({
       from: `"Newbi" <${this.fromEmail}>`,
       to,
       subject,
-      html
+      html,
     });
 
     logger.info(`📧 Email envoyé via SMTP à ${to}`);
@@ -130,7 +136,7 @@ class EmailReminderService {
       const user = await User.findById(userId);
 
       if (!user) {
-        return { enabled: false, reason: 'Utilisateur non trouvé' };
+        return { enabled: false, reason: "Utilisateur non trouvé" };
       }
 
       // Vérifier les préférences email
@@ -142,13 +148,16 @@ class EmailReminderService {
       // Seulement bloquer si l'utilisateur a explicitement désactivé les rappels
       // (emailPreferences existe et reminders.enabled est explicitement false)
       if (user.emailPreferences?.reminders && reminders.enabled === false) {
-        return { enabled: false, reason: 'Rappels désactivés par l\'utilisateur' };
+        return {
+          enabled: false,
+          reason: "Rappels désactivés par l'utilisateur",
+        };
       }
 
       return { enabled: true, preferences: reminders };
     } catch (error) {
-      logger.error('Erreur lors de la vérification des préférences:', error);
-      return { enabled: false, reason: 'Erreur de vérification' };
+      logger.error("Erreur lors de la vérification des préférences:", error);
+      return { enabled: false, reason: "Erreur de vérification" };
     }
   }
 
@@ -157,18 +166,26 @@ class EmailReminderService {
    */
   isInDoNotDisturbPeriod(preferences = {}) {
     const now = new Date();
-    const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+    const parisTime = new Date(
+      now.toLocaleString("en-US", { timeZone: "Europe/Paris" }),
+    );
     const hour = parisTime.getHours();
     const day = parisTime.getDay(); // 0 = dimanche, 6 = samedi
     const isWeekend = day === 0 || day === 6;
 
     const doNotDisturb = preferences.doNotDisturb || {};
-    const weekdayPeriod = doNotDisturb.weekday || { start: '22:00', end: '08:00' };
-    const weekendPeriod = doNotDisturb.weekend || { start: '22:00', end: '10:00' };
+    const weekdayPeriod = doNotDisturb.weekday || {
+      start: "22:00",
+      end: "08:00",
+    };
+    const weekendPeriod = doNotDisturb.weekend || {
+      start: "22:00",
+      end: "10:00",
+    };
 
     const period = isWeekend ? weekendPeriod : weekdayPeriod;
-    const startHour = parseInt(period.start.split(':')[0]);
-    const endHour = parseInt(period.end.split(':')[0]);
+    const startHour = parseInt(period.start.split(":")[0]);
+    const endHour = parseInt(period.end.split(":")[0]);
 
     // Si la période traverse minuit (ex: 22h-8h)
     if (startHour > endHour) {
@@ -183,16 +200,24 @@ class EmailReminderService {
    */
   getNextAllowedTime(preferences = {}) {
     const now = new Date();
-    const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+    const parisTime = new Date(
+      now.toLocaleString("en-US", { timeZone: "Europe/Paris" }),
+    );
     const day = parisTime.getDay();
     const isWeekend = day === 0 || day === 6;
 
     const doNotDisturb = preferences.doNotDisturb || {};
-    const weekdayPeriod = doNotDisturb.weekday || { start: '22:00', end: '08:00' };
-    const weekendPeriod = doNotDisturb.weekend || { start: '22:00', end: '10:00' };
+    const weekdayPeriod = doNotDisturb.weekday || {
+      start: "22:00",
+      end: "08:00",
+    };
+    const weekendPeriod = doNotDisturb.weekend || {
+      start: "22:00",
+      end: "10:00",
+    };
 
     const period = isWeekend ? weekendPeriod : weekdayPeriod;
-    const endHour = parseInt(period.end.split(':')[0]);
+    const endHour = parseInt(period.end.split(":")[0]);
 
     const nextAllowed = new Date(parisTime);
     nextAllowed.setHours(endHour, 0, 0, 0);
@@ -209,45 +234,55 @@ class EmailReminderService {
    * Génère le contenu HTML de l'email
    */
   generateEmailContent(event, reminderType, anticipation = null) {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const tz = 'Europe/Paris';
-    const eventDate = new Date(event.start).toLocaleDateString('fr-FR', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      timeZone: tz
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const tz = "Europe/Paris";
+    const eventDate = new Date(event.start).toLocaleDateString("fr-FR", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: tz,
     });
-    const eventTime = event.allDay ? 'Toute la journée' : new Date(event.start).toLocaleTimeString('fr-FR', {
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: tz
-    });
-    const formattedDate = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: tz }).toUpperCase();
+    const eventTime = event.allDay
+      ? "Toute la journée"
+      : new Date(event.start).toLocaleTimeString("fr-FR", {
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: tz,
+        });
+    const formattedDate = new Date()
+      .toLocaleDateString("fr-FR", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: tz,
+      })
+      .toUpperCase();
 
-    let subject = '';
-    let anticipationText = '';
+    let subject = "";
+    let anticipationText = "";
 
-    if (reminderType === 'anticipated') {
+    if (reminderType === "anticipated") {
       const anticipationMap = {
-        '0m': 'quelques instants',
-        '5m': '5 minutes',
-        '10m': '10 minutes',
-        '15m': '15 minutes',
-        '1h': '1 heure',
-        '3h': '3 heures',
-        '1d': '1 jour',
-        '3d': '3 jours'
+        "0m": "quelques instants",
+        "5m": "5 minutes",
+        "10m": "10 minutes",
+        "15m": "15 minutes",
+        "1h": "1 heure",
+        "3h": "3 heures",
+        "1d": "1 jour",
+        "3d": "3 jours",
       };
-      anticipationText = anticipationMap[anticipation] || '';
+      anticipationText = anticipationMap[anticipation] || "";
       subject = `Rappel : ${event.title} dans ${anticipationText}`;
     } else {
       subject = `Rappel : ${event.title} - aujourd'hui`;
     }
 
-    const messageText = reminderType === 'anticipated'
-      ? `Votre événement <strong>${event.title}</strong> arrive dans <strong>${anticipationText}</strong>.`
-      : `Votre événement <strong>${event.title}</strong> est prévu <strong>aujourd'hui</strong>.`;
+    const messageText =
+      reminderType === "anticipated"
+        ? `Votre événement <strong>${event.title}</strong> arrive dans <strong>${anticipationText}</strong>.`
+        : `Votre événement <strong>${event.title}</strong> est prévu <strong>aujourd'hui</strong>.`;
 
     const html = `
     <!DOCTYPE html>
@@ -346,14 +381,22 @@ class EmailReminderService {
                 <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Heure</td>
                 <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${eventTime}</td>
               </tr>
-              ${event.location ? `<tr>
+              ${
+                event.location
+                  ? `<tr>
                 <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Lieu</td>
                 <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${event.location}</td>
-              </tr>` : ''}
-              ${event.description ? `<tr>
+              </tr>`
+                  : ""
+              }
+              ${
+                event.description
+                  ? `<tr>
                 <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Description</td>
                 <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right;">${event.description}</td>
-              </tr>` : ''}
+              </tr>`
+                  : ""
+              }
             </table>
           </div>
 
@@ -382,21 +425,28 @@ class EmailReminderService {
   /**
    * Envoie un email de rappel
    */
-  async sendReminder(eventId, reminderType, anticipation = null, { skipPreferencesCheck = false, reminderField = 'anticipation' } = {}) {
+  async sendReminder(
+    eventId,
+    reminderType,
+    anticipation = null,
+    { skipPreferencesCheck = false, reminderField = "anticipation" } = {},
+  ) {
     try {
       // Récupérer l'événement
-      const event = await Event.findById(eventId).populate('userId');
+      const event = await Event.findById(eventId).populate("userId");
 
       if (!event) {
         logger.error(`Événement ${eventId} non trouvé`);
-        return { success: false, reason: 'Événement non trouvé' };
+        return { success: false, reason: "Événement non trouvé" };
       }
 
       const user = event.userId;
 
       if (!user || !user.email) {
-        logger.error(`Utilisateur ou email non trouvé pour l'événement ${eventId}`);
-        return { success: false, reason: 'Utilisateur ou email non trouvé' };
+        logger.error(
+          `Utilisateur ou email non trouvé pour l'événement ${eventId}`,
+        );
+        return { success: false, reason: "Utilisateur ou email non trouvé" };
       }
 
       // Vérifier les préférences utilisateur (sauf si envoi immédiat depuis création d'événement)
@@ -405,14 +455,20 @@ class EmailReminderService {
         const preferencesCheck = await this.checkUserPreferences(user._id);
 
         if (!preferencesCheck.enabled) {
-          logger.info(`Rappel annulé pour ${user.email}: ${preferencesCheck.reason}`);
+          logger.info(
+            `Rappel annulé pour ${user.email}: ${preferencesCheck.reason}`,
+          );
 
           // Mettre à jour le statut de l'événement
-          event.emailReminder.status = 'cancelled';
+          event.emailReminder.status = "cancelled";
           event.emailReminder.failureReason = preferencesCheck.reason;
           await event.save();
 
-          return { success: false, reason: preferencesCheck.reason, cancelled: true };
+          return {
+            success: false,
+            reason: preferencesCheck.reason,
+            cancelled: true,
+          };
         }
 
         preferences = preferencesCheck.preferences;
@@ -431,7 +487,7 @@ class EmailReminderService {
           recipientUserId: user._id,
           reminderType,
           anticipation,
-          status: 'deferred',
+          status: "deferred",
           sentAt: new Date(),
           scheduledFor: event.emailReminder.scheduledFor || event.start,
           deferredReason: 'Période "Ne pas déranger"',
@@ -439,34 +495,45 @@ class EmailReminderService {
             title: event.title,
             description: event.description,
             start: event.start,
-            end: event.end
-          }
+            end: event.end,
+          },
         });
 
         // Reprogrammer pour plus tard
         event.emailReminder.scheduledFor = nextAllowed;
         await event.save();
 
-        return { success: false, reason: 'Différé (Ne pas déranger)', deferred: true, nextAttempt: nextAllowed };
+        return {
+          success: false,
+          reason: "Différé (Ne pas déranger)",
+          deferred: true,
+          nextAttempt: nextAllowed,
+        };
       }
 
       // Générer le contenu de l'email
-      const { subject, html } = this.generateEmailContent(event, reminderType, anticipation);
+      const { subject, html } = this.generateEmailContent(
+        event,
+        reminderType,
+        anticipation,
+      );
 
       // Envoyer l'email via Resend ou SMTP
       await this.sendEmail({
         to: user.email,
         subject,
-        html
+        html,
       });
 
-      logger.info(`✅ Email de rappel envoyé à ${user.email} pour l'événement "${event.title}"`);
+      logger.info(
+        `✅ Email de rappel envoyé à ${user.email} pour l'événement "${event.title}"`,
+      );
 
       // Mettre à jour l'événement
-      if (reminderField === 'echeance') {
-        event.emailReminder.echeanceStatus = 'sent';
+      if (reminderField === "echeance") {
+        event.emailReminder.echeanceStatus = "sent";
       } else {
-        event.emailReminder.status = 'sent';
+        event.emailReminder.status = "sent";
       }
       event.emailReminder.sentAt = new Date();
       await event.save();
@@ -479,37 +546,44 @@ class EmailReminderService {
         recipientUserId: user._id,
         reminderType,
         anticipation,
-        status: 'sent',
+        status: "sent",
         sentAt: new Date(),
         scheduledFor: event.emailReminder.scheduledFor || event.start,
         eventSnapshot: {
           title: event.title,
           description: event.description,
           start: event.start,
-          end: event.end
-        }
+          end: event.end,
+        },
       });
 
       return { success: true };
     } catch (error) {
-      logger.error(`❌ Erreur lors de l'envoi du rappel pour l'événement ${eventId}:`, error);
+      logger.error(
+        `❌ Erreur lors de l'envoi du rappel pour l'événement ${eventId}:`,
+        error,
+      );
 
       // Enregistrer l'échec
       try {
         const event = await Event.findById(eventId);
         if (event) {
-          event.emailReminder.status = 'failed';
+          if (reminderField === "echeance") {
+            event.emailReminder.echeanceStatus = "failed";
+          } else {
+            event.emailReminder.status = "failed";
+          }
           event.emailReminder.failureReason = error.message;
           await event.save();
 
           await EmailLog.create({
             eventId: event._id,
             workspaceId: event.workspaceId,
-            recipientEmail: event.userId?.email || 'unknown',
+            recipientEmail: event.userId?.email || "unknown",
             recipientUserId: event.userId?._id || event.userId,
             reminderType,
             anticipation,
-            status: 'failed',
+            status: "failed",
             sentAt: new Date(),
             scheduledFor: event.emailReminder.scheduledFor || event.start,
             failureReason: error.message,
@@ -517,12 +591,12 @@ class EmailReminderService {
               title: event.title,
               description: event.description,
               start: event.start,
-              end: event.end
-            }
+              end: event.end,
+            },
           });
         }
       } catch (logError) {
-        logger.error('Erreur lors de l\'enregistrement de l\'échec:', logError);
+        logger.error("Erreur lors de l'enregistrement de l'échec:", logError);
       }
 
       return { success: false, reason: error.message };
@@ -546,28 +620,28 @@ class EmailReminderService {
     }
 
     switch (anticipation) {
-      case '0m':
+      case "0m":
         // Au début de l'événement, pas de soustraction
         break;
-      case '5m':
+      case "5m":
         scheduledTime.setMinutes(scheduledTime.getMinutes() - 5);
         break;
-      case '10m':
+      case "10m":
         scheduledTime.setMinutes(scheduledTime.getMinutes() - 10);
         break;
-      case '15m':
+      case "15m":
         scheduledTime.setMinutes(scheduledTime.getMinutes() - 15);
         break;
-      case '1h':
+      case "1h":
         scheduledTime.setHours(scheduledTime.getHours() - 1);
         break;
-      case '3h':
+      case "3h":
         scheduledTime.setHours(scheduledTime.getHours() - 3);
         break;
-      case '1d':
+      case "1d":
         scheduledTime.setDate(scheduledTime.getDate() - 1);
         break;
-      case '3d':
+      case "3d":
         scheduledTime.setDate(scheduledTime.getDate() - 3);
         break;
     }

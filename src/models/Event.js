@@ -1,183 +1,196 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
-const eventSchema = new mongoose.Schema({
-  // Informations de base
-  title: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  description: {
-    type: String,
-    trim: true
-  },
-  
-  // Dates et horaires
-  start: {
-    type: Date,
-    required: true
-  },
-  end: {
-    type: Date,
-    required: true
-  },
-  allDay: {
-    type: Boolean,
-    default: false
-  },
-  
-  // Apparence
-  color: {
-    type: String,
-    default: 'sky'
-  },
-  
-  // Localisation
-  location: {
-    type: String,
-    trim: true
-  },
-  
-  // Type d'événement
-  type: {
-    type: String,
-    enum: ['MANUAL', 'INVOICE_DUE', 'MEETING', 'DEADLINE', 'REMINDER', 'CREDIT_NOTE_CREATED', 'EXTERNAL'],
-    default: 'MANUAL'
-  },
-
-  // Source de l'événement
-  source: {
-    type: String,
-    enum: ['newbi', 'google', 'microsoft', 'apple'],
-    default: 'newbi'
-  },
-
-  // Visibilité (workspace = tous les membres, private = seulement le propriétaire)
-  visibility: {
-    type: String,
-    enum: ['workspace', 'private'],
-    default: 'workspace'
-  },
-
-  // Événement en lecture seule (provenant d'un calendrier externe)
-  isReadOnly: {
-    type: Boolean,
-    default: false
-  },
-
-  // ID de l'événement dans le calendrier externe
-  externalEventId: {
-    type: String,
-    default: null,
-    sparse: true
-  },
-
-  // Référence vers la connexion calendrier
-  calendarConnectionId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'CalendarConnection',
-    default: null,
-    sparse: true
-  },
-
-  // Liens vers les calendriers externes (quand un événement Newbi est poussé vers un calendrier externe)
-  externalCalendarLinks: [{
-    provider: {
+const eventSchema = new mongoose.Schema(
+  {
+    // Informations de base
+    title: {
       type: String,
-      enum: ['google', 'microsoft', 'apple']
+      required: true,
+      trim: true,
     },
-    externalEventId: String,
+    description: {
+      type: String,
+      trim: true,
+    },
+
+    // Dates et horaires
+    start: {
+      type: Date,
+      required: true,
+    },
+    end: {
+      type: Date,
+      required: true,
+    },
+    allDay: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Apparence
+    color: {
+      type: String,
+      default: "sky",
+    },
+
+    // Localisation
+    location: {
+      type: String,
+      trim: true,
+    },
+
+    // Type d'événement
+    type: {
+      type: String,
+      enum: [
+        "MANUAL",
+        "INVOICE_DUE",
+        "MEETING",
+        "DEADLINE",
+        "REMINDER",
+        "CREDIT_NOTE_CREATED",
+        "EXTERNAL",
+      ],
+      default: "MANUAL",
+    },
+
+    // Source de l'événement
+    source: {
+      type: String,
+      enum: ["newbi", "google", "microsoft", "apple"],
+      default: "newbi",
+    },
+
+    // Visibilité (workspace = tous les membres, private = seulement le propriétaire)
+    visibility: {
+      type: String,
+      enum: ["workspace", "private"],
+      default: "workspace",
+    },
+
+    // Événement en lecture seule (provenant d'un calendrier externe)
+    isReadOnly: {
+      type: Boolean,
+      default: false,
+    },
+
+    // ID de l'événement dans le calendrier externe
+    externalEventId: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+
+    // Référence vers la connexion calendrier
     calendarConnectionId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'CalendarConnection'
-    }
-  }],
-  
-  // Référence vers une facture (si l'événement est lié à une échéance de facture)
-  invoiceId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Invoice',
-    sparse: true // Permet d'avoir des événements sans facture associée
-  },
+      ref: "CalendarConnection",
+      default: null,
+      sparse: true,
+    },
 
-  // Référence vers un client (si l'événement est lié à un client, ex: rappel)
-  clientId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Client',
-    sparse: true
-  },
-  
-  // Référence vers l'organisation/workspace (Better Auth)
-  // Optionnel pour les événements externes (user-scoped)
-  workspaceId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Organization',
-    index: true
-  },
-  
-  // Propriétaire de l'événement (pour audit trail)
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  
-  // Rappel par email
-  emailReminder: {
-    enabled: {
-      type: Boolean,
-      default: false
+    // Liens vers les calendriers externes (quand un événement Newbi est poussé vers un calendrier externe)
+    externalCalendarLinks: [
+      {
+        provider: {
+          type: String,
+          enum: ["google", "microsoft", "apple"],
+        },
+        externalEventId: String,
+        calendarConnectionId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "CalendarConnection",
+        },
+      },
+    ],
+
+    // Référence vers une facture (si l'événement est lié à une échéance de facture)
+    invoiceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Invoice",
+      sparse: true, // Permet d'avoir des événements sans facture associée
     },
-    anticipation: {
-      type: String,
-      enum: [null, '1h', '3h', '1d', '3d'],
-      default: null
+
+    // Référence vers un client (si l'événement est lié à un client, ex: rappel)
+    clientId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Client",
+      sparse: true,
     },
-    echeance: {
-      type: String,
-      enum: [null, '0m', '5m', '10m', '15m'],
-      default: null
+
+    // Référence vers l'organisation/workspace (Better Auth)
+    // Optionnel pour les événements externes (user-scoped)
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+      index: true,
     },
-    sentAt: {
+
+    // Propriétaire de l'événement (pour audit trail)
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    // Rappel par email
+    emailReminder: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+      anticipation: {
+        type: String,
+        enum: [null, "1h", "3h", "1d", "3d"],
+        default: null,
+      },
+      echeance: {
+        type: String,
+        enum: [null, "0m", "5m", "10m", "15m"],
+        default: null,
+      },
+      sentAt: {
+        type: Date,
+        default: null,
+      },
+      status: {
+        type: String,
+        enum: ["pending", "processing", "sent", "failed", "cancelled"],
+        default: "pending",
+      },
+      scheduledFor: {
+        type: Date,
+        default: null,
+      },
+      echeanceScheduledFor: {
+        type: Date,
+        default: null,
+      },
+      echeanceStatus: {
+        type: String,
+        enum: ["pending", "processing", "sent", "failed", "cancelled", null],
+        default: null,
+      },
+      failureReason: {
+        type: String,
+        default: null,
+      },
+    },
+
+    // Métadonnées
+    createdAt: {
       type: Date,
-      default: null
+      default: Date.now,
     },
-    status: {
-      type: String,
-      enum: ['pending', 'sent', 'failed', 'cancelled'],
-      default: 'pending'
-    },
-    scheduledFor: {
+    updatedAt: {
       type: Date,
-      default: null
+      default: Date.now,
     },
-    echeanceScheduledFor: {
-      type: Date,
-      default: null
-    },
-    echeanceStatus: {
-      type: String,
-      enum: ['pending', 'sent', 'failed', 'cancelled', null],
-      default: null
-    },
-    failureReason: {
-      type: String,
-      default: null
-    }
   },
-  
-  // Métadonnées
-  createdAt: {
-    type: Date,
-    default: Date.now
+  {
+    timestamps: true,
   },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
-}, {
-  timestamps: true
-});
+);
 
 // Index pour optimiser les requêtes
 // Index composés workspace + autres champs
@@ -188,24 +201,34 @@ eventSchema.index({ workspaceId: 1, invoiceId: 1 }, { sparse: true });
 eventSchema.index({ userId: 1, start: 1 });
 eventSchema.index({ invoiceId: 1 }, { sparse: true });
 // Index pour les événements externes
-eventSchema.index({ externalEventId: 1, calendarConnectionId: 1 }, { sparse: true });
+eventSchema.index(
+  { externalEventId: 1, calendarConnectionId: 1 },
+  { sparse: true },
+);
 eventSchema.index({ userId: 1, visibility: 1, start: 1 });
 eventSchema.index({ calendarConnectionId: 1 }, { sparse: true });
 // Index standalone pour requêtes par userId seul
 eventSchema.index({ userId: 1 });
 // Index pour le cron emailReminderScheduler (toutes les 5 min)
-eventSchema.index({ 'emailReminder.status': 1, 'emailReminder.scheduledFor': 1 }, { sparse: true });
+eventSchema.index(
+  { "emailReminder.status": 1, "emailReminder.scheduledFor": 1 },
+  { sparse: true },
+);
 
 // Méthodes statiques
-eventSchema.statics.createInvoiceDueEvent = async function(invoice, userId, workspaceId) {
+eventSchema.statics.createInvoiceDueEvent = async function (
+  invoice,
+  userId,
+  workspaceId,
+) {
   try {
     // Vérifier si un événement existe déjà pour cette facture
-    const existingEvent = await this.findOne({ 
+    const existingEvent = await this.findOne({
       invoiceId: invoice._id,
-      type: 'INVOICE_DUE',
-      workspaceId: workspaceId || invoice.workspaceId
+      type: "INVOICE_DUE",
+      workspaceId: workspaceId || invoice.workspaceId,
     });
-    
+
     if (existingEvent) {
       // Mettre à jour l'événement existant
       existingEvent.title = `Échéance facture ${invoice.prefix}${invoice.number}`;
@@ -213,8 +236,8 @@ eventSchema.statics.createInvoiceDueEvent = async function(invoice, userId, work
       existingEvent.start = new Date(invoice.dueDate);
       existingEvent.end = new Date(invoice.dueDate);
       existingEvent.allDay = true;
-      existingEvent.color = invoice.status === 'COMPLETED' ? 'green' : 'amber';
-      
+      existingEvent.color = invoice.status === "COMPLETED" ? "green" : "amber";
+
       return await existingEvent.save();
     } else {
       // Créer un nouvel événement
@@ -224,51 +247,65 @@ eventSchema.statics.createInvoiceDueEvent = async function(invoice, userId, work
         start: new Date(invoice.dueDate),
         end: new Date(invoice.dueDate),
         allDay: true,
-        color: invoice.status === 'COMPLETED' ? 'green' : 'amber',
-        type: 'INVOICE_DUE',
+        color: invoice.status === "COMPLETED" ? "green" : "amber",
+        type: "INVOICE_DUE",
         invoiceId: invoice._id,
         workspaceId: workspaceId || invoice.workspaceId, // ✅ Ajout du workspaceId
-        userId: userId
+        userId: userId,
       });
-      
+
       return await event.save();
     }
   } catch (error) {
-    console.error('Erreur lors de la création de l\'événement de facture:', error);
+    console.error(
+      "Erreur lors de la création de l'événement de facture:",
+      error,
+    );
     throw error;
   }
 };
 
-eventSchema.statics.updateInvoiceEvent = async function(invoice, userId, workspaceId) {
+eventSchema.statics.updateInvoiceEvent = async function (
+  invoice,
+  userId,
+  workspaceId,
+) {
   try {
-    const event = await this.findOne({ 
+    const event = await this.findOne({
       invoiceId: invoice._id,
-      type: 'INVOICE_DUE',
-      workspaceId: workspaceId || invoice.workspaceId
+      type: "INVOICE_DUE",
+      workspaceId: workspaceId || invoice.workspaceId,
     });
-    
+
     if (event) {
       event.title = `Échéance facture ${invoice.prefix}${invoice.number}`;
       event.description = `Facture ${invoice.prefix}${invoice.number} - ${invoice.client.name} - ${invoice.finalTotalTTC}€`;
       event.start = new Date(invoice.dueDate);
       event.end = new Date(invoice.dueDate);
-      event.color = invoice.status === 'COMPLETED' ? 'green' : 'amber';
-      
+      event.color = invoice.status === "COMPLETED" ? "green" : "amber";
+
       return await event.save();
     }
-    
+
     return null;
   } catch (error) {
-    console.error('Erreur lors de la mise à jour de l\'événement de facture:', error);
+    console.error(
+      "Erreur lors de la mise à jour de l'événement de facture:",
+      error,
+    );
     throw error;
   }
 };
 
-eventSchema.statics.deleteInvoiceEvent = async function(invoiceId, userId, workspaceId) {
+eventSchema.statics.deleteInvoiceEvent = async function (
+  invoiceId,
+  userId,
+  workspaceId,
+) {
   try {
     const filter = {
       invoiceId: invoiceId,
-      type: 'INVOICE_DUE'
+      type: "INVOICE_DUE",
     };
     // Préférer workspaceId pour la cohérence avec createInvoiceDueEvent/updateInvoiceEvent
     if (workspaceId) {
@@ -278,10 +315,13 @@ eventSchema.statics.deleteInvoiceEvent = async function(invoiceId, userId, works
     }
     return await this.findOneAndDelete(filter);
   } catch (error) {
-    console.error('Erreur lors de la suppression de l\'événement de facture:', error);
+    console.error(
+      "Erreur lors de la suppression de l'événement de facture:",
+      error,
+    );
     throw error;
   }
 };
 
-const Event = mongoose.model('Event', eventSchema);
+const Event = mongoose.model("Event", eventSchema);
 export default Event;
