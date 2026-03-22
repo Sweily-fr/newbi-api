@@ -1,20 +1,23 @@
-import CreditNote from '../models/CreditNote.js';
-import Invoice from '../models/Invoice.js';
-import User from '../models/User.js';
-import Client from '../models/Client.js';
-import Event from '../models/Event.js';
-import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
-import { requireCompanyInfo, getOrganizationInfo } from '../middlewares/company-info-guard.js';
-import { mapOrganizationToCompanyInfo } from '../utils/companyInfoMapper.js';
-import { generateCreditNoteNumber } from '../utils/documentNumbers.js';
-import mongoose from 'mongoose';
+import CreditNote from "../models/CreditNote.js";
+import Invoice from "../models/Invoice.js";
+import User from "../models/User.js";
+import Client from "../models/Client.js";
+import Event from "../models/Event.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import {
+  requireCompanyInfo,
+  getOrganizationInfo,
+} from "../middlewares/company-info-guard.js";
+import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { generateCreditNoteNumber } from "../utils/documentNumbers.js";
+import mongoose from "mongoose";
 import {
   createNotFoundError,
   createValidationError,
   AppError,
   ERROR_CODES,
-} from '../utils/errors.js';
-import documentAutomationService from '../services/documentAutomationService.js';
+} from "../utils/errors.js";
+import documentAutomationService from "../services/documentAutomationService.js";
 
 // const requiredPermission = 'MANAGE_INVOICES'; // TODO: Implement permission system
 
@@ -28,20 +31,24 @@ const withWorkspace = (resolver) => {
       const contextWorkspaceId = context.workspaceId;
 
       // ✅ FIX: Valider que le workspaceId correspond au contexte
-      if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
+      if (
+        inputWorkspaceId &&
+        contextWorkspaceId &&
+        inputWorkspaceId !== contextWorkspaceId
+      ) {
         throw new AppError(
           "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-          ERROR_CODES.FORBIDDEN
+          ERROR_CODES.FORBIDDEN,
         );
       }
 
       const workspaceId = inputWorkspaceId || contextWorkspaceId;
       if (!workspaceId)
-        throw new AppError('workspaceId requis', ERROR_CODES.BAD_REQUEST);
+        throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
 
       const workspace = {
         id: workspaceId,
-        role: 'owner',
+        role: "owner",
         permissions: {
           canRead: true,
           canWrite: true,
@@ -55,7 +62,7 @@ const withWorkspace = (resolver) => {
 
       return await resolver(parent, args, context, info);
     } catch (error) {
-      console.error('Erreur dans withWorkspace:', error);
+      console.error("Erreur dans withWorkspace:", error);
       throw error;
     }
   });
@@ -65,37 +72,49 @@ const withWorkspace = (resolver) => {
  * Calcule les totaux d'un avoir
  * @param {Boolean} isReverseCharge - Indique si l'avoir est soumis à l'auto-liquidation (TVA = 0)
  */
-const calculateCreditNoteTotals = (items, discount = 0, discountType = 'FIXED', isReverseCharge = false) => {
+const calculateCreditNoteTotals = (
+  items,
+  discount = 0,
+  discountType = "FIXED",
+  isReverseCharge = false,
+) => {
   let totalHT = 0;
   let totalVAT = 0;
 
-  items.forEach(item => {
+  items.forEach((item) => {
     // Prendre en compte le pourcentage d'avancement
-    const progressPercentage = item.progressPercentage !== undefined && item.progressPercentage !== null 
-      ? parseFloat(item.progressPercentage) 
-      : 100;
-    const itemTotal = item.quantity * item.unitPrice * (progressPercentage / 100);
+    const progressPercentage =
+      item.progressPercentage !== undefined && item.progressPercentage !== null
+        ? parseFloat(item.progressPercentage)
+        : 100;
+    const itemTotal =
+      item.quantity * item.unitPrice * (progressPercentage / 100);
     const itemDiscount = item.discount || 0;
-    const itemDiscountType = item.discountType || 'FIXED';
-    
+    const itemDiscountType = item.discountType || "FIXED";
+
     let itemTotalAfterDiscount = itemTotal;
-    if (itemDiscountType === 'PERCENTAGE' || itemDiscountType === 'percentage') {
+    if (
+      itemDiscountType === "PERCENTAGE" ||
+      itemDiscountType === "percentage"
+    ) {
       // Limiter la remise à 100% maximum
       const discountPercent = Math.min(itemDiscount, 100);
       itemTotalAfterDiscount = itemTotal * (1 - discountPercent / 100);
     } else {
       itemTotalAfterDiscount = itemTotal - itemDiscount;
     }
-    
+
     totalHT += itemTotalAfterDiscount;
     // Auto-liquidation : TVA = 0 si isReverseCharge = true
-    const itemVAT = isReverseCharge ? 0 : itemTotalAfterDiscount * (item.vatRate / 100);
+    const itemVAT = isReverseCharge
+      ? 0
+      : itemTotalAfterDiscount * (item.vatRate / 100);
     totalVAT += itemVAT;
   });
 
   // Appliquer la remise globale
   let finalTotalHT = totalHT;
-  if (discountType === 'PERCENTAGE' || discountType === 'percentage') {
+  if (discountType === "PERCENTAGE" || discountType === "percentage") {
     // Limiter la remise à 100% maximum
     const discountPercent = Math.min(discount, 100);
     finalTotalHT = totalHT * (1 - discountPercent / 100);
@@ -129,10 +148,10 @@ const creditNoteResolvers = {
       const creditNote = await CreditNote.findOne({
         _id: id,
         workspaceId: new mongoose.Types.ObjectId(workspaceId),
-      }).populate('originalInvoice');
+      }).populate("originalInvoice");
 
       if (!creditNote) {
-        throw createNotFoundError('Avoir non trouvé');
+        throw createNotFoundError("Avoir non trouvé");
       }
 
       return creditNote;
@@ -168,16 +187,16 @@ const creditNoteResolvers = {
       // Recherche textuelle
       if (search) {
         query.$or = [
-          { number: { $regex: search, $options: 'i' } },
-          { 'client.name': { $regex: search, $options: 'i' } },
-          { reason: { $regex: search, $options: 'i' } },
+          { number: { $regex: search, $options: "i" } },
+          { "client.name": { $regex: search, $options: "i" } },
+          { reason: { $regex: search, $options: "i" } },
         ];
       }
 
       const skip = (page - 1) * limit;
       const totalCount = await CreditNote.countDocuments(query);
       const creditNotes = await CreditNote.find(query)
-        .populate('originalInvoice')
+        .populate("originalInvoice")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
@@ -189,16 +208,18 @@ const creditNoteResolvers = {
       };
     }),
 
-    creditNotesByInvoice: withWorkspace(async (parent, { invoiceId, workspaceId }) => {
-      const creditNotes = await CreditNote.find({
-        originalInvoice: new mongoose.Types.ObjectId(invoiceId),
-        workspaceId: new mongoose.Types.ObjectId(workspaceId),
-      })
-        .populate('originalInvoice')
-        .sort({ createdAt: -1 });
+    creditNotesByInvoice: withWorkspace(
+      async (parent, { invoiceId, workspaceId }) => {
+        const creditNotes = await CreditNote.find({
+          originalInvoice: new mongoose.Types.ObjectId(invoiceId),
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        })
+          .populate("originalInvoice")
+          .sort({ createdAt: -1 });
 
-      return creditNotes;
-    }),
+        return creditNotes;
+      },
+    ),
 
     creditNoteStats: withWorkspace(async (parent, { workspaceId }) => {
       const stats = await CreditNote.aggregate([
@@ -212,27 +233,31 @@ const creditNoteResolvers = {
             _id: null,
             totalCount: { $sum: 1 },
             createdCount: {
-              $sum: { $cond: [{ $eq: ['$status', 'CREATED'] }, 1, 0] },
+              $sum: { $cond: [{ $eq: ["$status", "CREATED"] }, 1, 0] },
             },
-            totalAmount: { $sum: '$finalTotalTTC' },
+            totalAmount: { $sum: "$finalTotalTTC" },
           },
         },
       ]);
 
-      return stats[0] || {
-        totalCount: 0,
-        createdCount: 0,
-        totalAmount: 0,
-      };
+      return (
+        stats[0] || {
+          totalCount: 0,
+          createdCount: 0,
+          totalAmount: 0,
+        }
+      );
     }),
 
-    nextCreditNoteNumber: withWorkspace(async (parent, { workspaceId, prefix, isDraft }) => {
-      const number = await generateCreditNoteNumber(prefix, {
-        workspaceId: new mongoose.Types.ObjectId(workspaceId),
-        isDraft: isDraft || false,
-      });
-      return number;
-    }),
+    nextCreditNoteNumber: withWorkspace(
+      async (parent, { workspaceId, prefix, isDraft }) => {
+        const number = await generateCreditNoteNumber(prefix, {
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          isDraft: isDraft || false,
+        });
+        return number;
+      },
+    ),
   },
 
   Mutation: {
@@ -246,13 +271,17 @@ const creditNoteResolvers = {
           });
 
           if (!originalInvoice) {
-            throw createNotFoundError('Facture originale non trouvée');
+            throw createNotFoundError("Facture originale non trouvée");
           }
 
           // Vérifier que la facture est en attente, terminée ou annulée
-          if (!['PENDING', 'COMPLETED', 'CANCELED'].includes(originalInvoice.status)) {
+          if (
+            !["PENDING", "COMPLETED", "CANCELED"].includes(
+              originalInvoice.status,
+            )
+          ) {
             throw createValidationError(
-              'Un avoir ne peut être créé que pour une facture en attente, terminée ou annulée'
+              "Un avoir ne peut être créé que pour une facture en attente, terminée ou annulée",
             );
           }
 
@@ -261,7 +290,7 @@ const creditNoteResolvers = {
             input.items,
             input.discount,
             input.discountType,
-            originalInvoice.isReverseCharge || false
+            originalInvoice.isReverseCharge || false,
           );
 
           // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture
@@ -271,9 +300,12 @@ const creditNoteResolvers = {
           });
 
           // Calculer la somme des avoirs existants (valeurs absolues car les avoirs sont négatifs)
-          const existingCreditNotesTotal = existingCreditNotes.reduce((sum, creditNote) => {
-            return sum + Math.abs(creditNote.finalTotalTTC || 0);
-          }, 0);
+          const existingCreditNotesTotal = existingCreditNotes.reduce(
+            (sum, creditNote) => {
+              return sum + Math.abs(creditNote.finalTotalTTC || 0);
+            },
+            0,
+          );
 
           // Montant du nouvel avoir (valeur absolue)
           const newCreditNoteAmount = Math.abs(totals.finalTotalTTC);
@@ -282,10 +314,14 @@ const creditNoteResolvers = {
           const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
           // Vérifier que la somme totale ne dépasse pas le montant de la facture
-          if (existingCreditNotesTotal + newCreditNoteAmount > invoiceTotalAmount) {
-            const remainingAmount = invoiceTotalAmount - existingCreditNotesTotal;
+          if (
+            existingCreditNotesTotal + newCreditNoteAmount >
+            invoiceTotalAmount
+          ) {
+            const remainingAmount =
+              invoiceTotalAmount - existingCreditNotesTotal;
             throw createValidationError(
-              `Le montant de cet avoir (${newCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`
+              `Le montant de cet avoir (${newCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`,
             );
           }
 
@@ -297,7 +333,8 @@ const creditNoteResolvers = {
           });
 
           // Toujours snapshot companyInfo pour les avoirs (pas de statut DRAFT)
-          let creditNoteCompanyInfo = input.companyInfo || originalInvoice.companyInfo;
+          let creditNoteCompanyInfo =
+            input.companyInfo || originalInvoice.companyInfo;
           if (!creditNoteCompanyInfo || !creditNoteCompanyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);
             creditNoteCompanyInfo = mapOrganizationToCompanyInfo(org);
@@ -307,7 +344,7 @@ const creditNoteResolvers = {
           const creditNote = new CreditNote({
             ...input,
             number,
-            status: 'CREATED',
+            status: "CREATED",
             companyInfo: creditNoteCompanyInfo,
             originalInvoice: originalInvoice._id,
             originalInvoiceNumber: originalInvoice.number,
@@ -318,21 +355,28 @@ const creditNoteResolvers = {
               // Pour les avoirs, ne pas copier l'adresse de livraison du client
               // car on utilise celle de la facture originale dans le champ shipping
               hasDifferentShippingAddress: false,
-              shippingAddress: undefined
+              shippingAddress: undefined,
             },
             // Copier les informations de livraison depuis la facture originale
-            shipping: originalInvoice.shipping ? {
-              billShipping: originalInvoice.shipping.billShipping,
-              shippingAddress: originalInvoice.shipping.shippingAddress ? {
-                fullName: originalInvoice.shipping.shippingAddress.fullName,
-                street: originalInvoice.shipping.shippingAddress.street,
-                city: originalInvoice.shipping.shippingAddress.city,
-                postalCode: originalInvoice.shipping.shippingAddress.postalCode,
-                country: originalInvoice.shipping.shippingAddress.country
-              } : undefined,
-              shippingAmountHT: originalInvoice.shipping.shippingAmountHT,
-              shippingVatRate: originalInvoice.shipping.shippingVatRate
-            } : undefined,
+            shipping: originalInvoice.shipping
+              ? {
+                  billShipping: originalInvoice.shipping.billShipping,
+                  shippingAddress: originalInvoice.shipping.shippingAddress
+                    ? {
+                        fullName:
+                          originalInvoice.shipping.shippingAddress.fullName,
+                        street: originalInvoice.shipping.shippingAddress.street,
+                        city: originalInvoice.shipping.shippingAddress.city,
+                        postalCode:
+                          originalInvoice.shipping.shippingAddress.postalCode,
+                        country:
+                          originalInvoice.shipping.shippingAddress.country,
+                      }
+                    : undefined,
+                  shippingAmountHT: originalInvoice.shipping.shippingAmountHT,
+                  shippingVatRate: originalInvoice.shipping.shippingVatRate,
+                }
+              : undefined,
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             createdBy: new mongoose.Types.ObjectId(context.user.id),
             ...totals,
@@ -347,8 +391,8 @@ const creditNoteResolvers = {
             start: new Date(),
             end: new Date(),
             allDay: true,
-            color: 'blue',
-            type: 'CREDIT_NOTE_CREATED',
+            color: "blue",
+            type: "CREDIT_NOTE_CREATED",
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             userId: new mongoose.Types.ObjectId(context.user.id),
           });
@@ -363,13 +407,13 @@ const creditNoteResolvers = {
             if (client) {
               client.activity.push({
                 id: new mongoose.Types.ObjectId().toString(),
-                type: 'credit_note_created',
+                type: "credit_note_created",
                 description: `a créé un avoir en référence à la facture ${originalInvoice.prefix}${originalInvoice.number}`,
                 userId: new mongoose.Types.ObjectId(context.user.id),
                 userName: context.user.name || context.user.email,
                 userImage: context.user.image,
                 metadata: {
-                  documentType: 'creditNote',
+                  documentType: "creditNote",
                   documentId: creditNote._id.toString(),
                   documentNumber: `${creditNote.prefix}-${creditNote.number}`,
                   status: creditNote.status,
@@ -379,32 +423,50 @@ const creditNoteResolvers = {
               });
 
               await client.save();
-              console.log(`✅ Activité ajoutée au client ${client.name} pour l'avoir ${creditNote.prefix}${creditNote.number}`);
+              console.log(
+                `✅ Activité ajoutée au client ${client.name} pour l'avoir ${creditNote.prefix}${creditNote.number}`,
+              );
             } else {
-              console.log(`⚠️ Client non trouvé avec l'email ${creditNote.client.email} dans le workspace ${workspaceId}`);
+              console.log(
+                `⚠️ Client non trouvé avec l'email ${creditNote.client.email} dans le workspace ${workspaceId}`,
+              );
             }
           } catch (clientError) {
-            console.error('Erreur lors de l\'ajout de l\'activité au client:', clientError);
+            console.error(
+              "Erreur lors de l'ajout de l'activité au client:",
+              clientError,
+            );
             // Ne pas bloquer la création de l'avoir si l'ajout de l'activité échoue
           }
 
           // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
-          documentAutomationService.executeAutomations('CREDIT_NOTE_CREATED', workspaceId, {
-            documentId: creditNote._id.toString(),
-            documentType: 'creditNote',
-            documentNumber: creditNote.number,
-            prefix: creditNote.prefix || '',
-            clientName: creditNote.client?.name || '',
-            issueDate: creditNote.issueDate || creditNote.createdAt,
-            clientId: creditNote.client?._id || creditNote.clientId || null,
-          }, context.user._id.toString()).catch(err => console.error('Erreur automatisation documents (avoir):', err));
+          documentAutomationService
+            .executeAutomations(
+              "CREDIT_NOTE_CREATED",
+              workspaceId,
+              {
+                documentId: creditNote._id.toString(),
+                documentType: "creditNote",
+                documentNumber: creditNote.number,
+                prefix: creditNote.prefix || "",
+                clientName: creditNote.client?.name || "",
+                issueDate: creditNote.issueDate || creditNote.createdAt,
+                clientId: creditNote.client?._id || creditNote.clientId || null,
+              },
+              context.user._id.toString(),
+            )
+            .catch((err) =>
+              console.error("Erreur automatisation documents (avoir):", err),
+            );
 
-          return await CreditNote.findById(creditNote._id).populate('originalInvoice');
+          return await CreditNote.findById(creditNote._id).populate(
+            "originalInvoice",
+          );
         } catch (error) {
-          console.error('Erreur lors de la création de l\'avoir:', error);
+          console.error("Erreur lors de la création de l'avoir:", error);
           throw error;
         }
-      })
+      }),
     ),
 
     updateCreditNote: requireCompanyInfo(
@@ -416,7 +478,7 @@ const creditNoteResolvers = {
           });
 
           if (!creditNote) {
-            throw createNotFoundError('Avoir non trouvé');
+            throw createNotFoundError("Avoir non trouvé");
           }
 
           // Les avoirs avec statut CREATED peuvent toujours être modifiés
@@ -425,16 +487,18 @@ const creditNoteResolvers = {
           let totals = {};
           if (input.items) {
             // Récupérer la facture originale pour obtenir isReverseCharge
-            const originalInvoice = await Invoice.findById(creditNote.originalInvoice);
+            const originalInvoice = await Invoice.findById(
+              creditNote.originalInvoice,
+            );
             if (!originalInvoice) {
-              throw createNotFoundError('Facture originale non trouvée');
+              throw createNotFoundError("Facture originale non trouvée");
             }
 
             totals = calculateCreditNoteTotals(
               input.items,
               input.discount || creditNote.discount,
               input.discountType || creditNote.discountType,
-              originalInvoice.isReverseCharge || false
+              originalInvoice.isReverseCharge || false,
             );
 
             // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture lors de la modification
@@ -457,10 +521,14 @@ const creditNoteResolvers = {
             const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
             // Vérifier que la somme totale ne dépasse pas le montant de la facture
-            if (otherCreditNotesTotal + updatedCreditNoteAmount > invoiceTotalAmount) {
-              const remainingAmount = invoiceTotalAmount - otherCreditNotesTotal;
+            if (
+              otherCreditNotesTotal + updatedCreditNoteAmount >
+              invoiceTotalAmount
+            ) {
+              const remainingAmount =
+                invoiceTotalAmount - otherCreditNotesTotal;
               throw createValidationError(
-                `Le montant de cet avoir modifié (${updatedCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`
+                `Le montant de cet avoir modifié (${updatedCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`,
               );
             }
           }
@@ -471,8 +539,8 @@ const creditNoteResolvers = {
 
           // Créer un événement
           await Event.create({
-            type: 'CREDIT_NOTE_UPDATED',
-            entityType: 'CreditNote',
+            type: "CREDIT_NOTE_UPDATED",
+            entityType: "CreditNote",
             entityId: creditNote._id,
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             userId: new mongoose.Types.ObjectId(context.user.id),
@@ -481,12 +549,14 @@ const creditNoteResolvers = {
             },
           });
 
-          return await CreditNote.findById(creditNote._id).populate('originalInvoice');
+          return await CreditNote.findById(creditNote._id).populate(
+            "originalInvoice",
+          );
         } catch (error) {
-          console.error('Erreur lors de la mise à jour de l\'avoir:', error);
+          console.error("Erreur lors de la mise à jour de l'avoir:", error);
           throw error;
         }
-      })
+      }),
     ),
 
     deleteCreditNote: requireCompanyInfo(
@@ -498,7 +568,7 @@ const creditNoteResolvers = {
           });
 
           if (!creditNote) {
-            throw createNotFoundError('Avoir non trouvé');
+            throw createNotFoundError("Avoir non trouvé");
           }
 
           // Les avoirs avec statut CREATED peuvent toujours être supprimés
@@ -507,8 +577,8 @@ const creditNoteResolvers = {
 
           // Créer un événement
           await Event.create({
-            type: 'CREDIT_NOTE_DELETED',
-            entityType: 'CreditNote',
+            type: "CREDIT_NOTE_DELETED",
+            entityType: "CreditNote",
             entityId: creditNote._id,
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             userId: new mongoose.Types.ObjectId(context.user.id),
@@ -519,10 +589,10 @@ const creditNoteResolvers = {
 
           return true;
         } catch (error) {
-          console.error('Erreur lors de la suppression de l\'avoir:', error);
+          console.error("Erreur lors de la suppression de l'avoir:", error);
           throw error;
         }
-      })
+      }),
     ),
 
     // changeCreditNoteStatus mutation removed - credit notes only have CREATED status
@@ -534,14 +604,23 @@ const creditNoteResolvers = {
         return creditNote.companyInfo;
       }
       try {
-        const organization = await getOrganizationInfo(creditNote.workspaceId.toString());
+        const organization = await getOrganizationInfo(
+          creditNote.workspaceId.toString(),
+        );
         return mapOrganizationToCompanyInfo(organization);
       } catch (error) {
-        console.error('[CreditNote.companyInfo] Erreur résolution dynamique:', error.message);
-        return { name: '', address: { street: '', city: '', postalCode: '', country: 'France' } };
+        console.error(
+          "[CreditNote.companyInfo] Erreur résolution dynamique:",
+          error.message,
+        );
+        return {
+          name: "",
+          address: { street: "", city: "", postalCode: "", country: "France" },
+        };
       }
     },
     createdBy: async (creditNote) => {
+      if (!creditNote.createdBy) return null;
       return await User.findById(creditNote.createdBy);
     },
   },

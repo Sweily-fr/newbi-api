@@ -1,0 +1,65 @@
+# ===== Dashboard Aggregation Types =====
+
+type DashboardSummary {
+  totalIncome: Float!
+  totalExpenses: Float!
+  bankBalance: Float!
+  transactionCount: Int!
+}
+
+type TreasuryDataPoint {
+  date: String!
+  income: Float!
+  expenses: Float!
+  treasury: Float!
+}
+
+type TreasuryChartData {
+  dataPoints: [TreasuryDataPoint!]!
+  startBalance: Float!
+  endBalance: Float!
+  totalIncome: Float!
+  totalExpenses: Float!
+}
+
+type CategoryBucket {
+  name: String!
+  amount: Float!
+  count: Int!
+  color: String!
+}
+
+type CategoryAggregation {
+  categories: [CategoryBucket!]!
+  total: Float!
+  transactionCount: Int!
+}
+
+input DashboardPeriodInput {
+  """Preset: cumul-month, cumul-quarter, cumul-year, 30d, 90d, 365d, 730d"""
+  preset: String
+  """Custom start date (ISO string). Utilisé si preset est absent."""
+  startDate: String
+  """Custom end date (ISO string). Utilisé si preset est absent."""
+  endDate: String
+}
+
+extend type Query {
+  dashboardSummary(
+    workspaceId: ID!
+    accountId: String
+  ): DashboardSummary!
+
+  dashboardTreasuryChart(
+    workspaceId: ID!
+    period: DashboardPeriodInput!
+    accountId: String
+  ): TreasuryChartData!
+
+  dashboardCategoryAggregation(
+    workspaceId: ID!
+    type: String!
+    period: DashboardPeriodInput!
+    accountId: String
+  ): CategoryAggregation!
+}

@@ -21,7 +21,15 @@ const transactionSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ["payment", "refund", "transfer", "withdrawal", "deposit", "credit", "debit"],
+      enum: [
+        "payment",
+        "refund",
+        "transfer",
+        "withdrawal",
+        "deposit",
+        "credit",
+        "debit",
+      ],
       index: true,
     },
 
@@ -209,7 +217,7 @@ const transactionSchema = new mongoose.Schema(
   {
     timestamps: true,
     collection: "transactions",
-  }
+  },
 );
 
 // Index composés pour les requêtes fréquentes
@@ -218,6 +226,7 @@ transactionSchema.index({ userId: 1, type: 1, createdAt: -1 });
 transactionSchema.index({ provider: 1, externalId: 1 }, { unique: true });
 transactionSchema.index({ fromAccount: 1, createdAt: -1 });
 transactionSchema.index({ toAccount: 1, createdAt: -1 });
+transactionSchema.index({ workspaceId: 1, date: -1, amount: 1 });
 
 // Méthodes d'instance
 transactionSchema.methods.isCompleted = function () {
@@ -235,7 +244,7 @@ transactionSchema.methods.canBeRefunded = function () {
 // Méthodes statiques
 transactionSchema.statics.findByWorkspace = function (
   workspaceId,
-  filters = {}
+  filters = {},
 ) {
   return this.find({ workspaceId, ...filters }).sort({ createdAt: -1 });
 };
@@ -247,7 +256,7 @@ transactionSchema.statics.findByProvider = function (provider, externalId) {
 transactionSchema.statics.getWorkspaceStats = function (
   workspaceId,
   startDate,
-  endDate
+  endDate,
 ) {
   return this.aggregate([
     {

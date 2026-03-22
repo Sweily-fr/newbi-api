@@ -155,29 +155,25 @@ const quoteResolvers = {
       }
     },
     createdBy: async (quote) => {
-      const user = await User.findById(quote.createdBy).lean();
-      if (!user) return null;
-      return { ...user, id: user._id.toString() };
+      if (!quote.createdBy) return null;
+      if (typeof quote.createdBy === "object" && quote.createdBy._id) {
+        return quote.createdBy;
+      }
+      return await User.findById(quote.createdBy);
     },
     convertedToInvoice: async (quote) => {
       if (!quote.convertedToInvoice) return null;
-      return await Invoice.findById(quote.convertedToInvoice).lean();
+      return await Invoice.findById(quote.convertedToInvoice);
     },
     linkedInvoices: async (quote) => {
-      // Trouver toutes les factures liées à ce devis
-      // Cela inclut la facture principale (convertedToInvoice) et potentiellement d'autres factures
-      // comme des factures d'acompte, etc.
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
-        // Si le champ linkedInvoices est déjà rempli, utiliser ces références
         return await Invoice.find({
           _id: { $in: quote.linkedInvoices },
-        }).lean();
+        });
       } else if (quote.convertedToInvoice) {
-        // Pour la compatibilité avec les anciens devis qui n'ont que convertedToInvoice
-        const invoice = await Invoice.findById(quote.convertedToInvoice).lean();
+        const invoice = await Invoice.findById(quote.convertedToInvoice);
         return invoice ? [invoice] : [];
       }
-
       return [];
     },
     // Calculer le total des factures de situation liées à ce devis
