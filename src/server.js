@@ -520,38 +520,49 @@ async function startServer() {
     logger.info(
       `🔌 WebSocket subscriptions sur ws://localhost:${PORT}/graphql`,
     );
-    setupScheduledJobs();
+    // Ne démarrer les crons/schedulers que sur une seule instance PM2
+    // pour éviter les envois d'emails en double/triple
+    const instanceId = parseInt(
+      process.env.NODE_APP_INSTANCE || process.env.pm_id || "0",
+      10,
+    );
+    if (instanceId === 0) {
+      setupScheduledJobs();
 
-    // Démarrer le scheduler de rappels email
-    emailReminderScheduler.start();
+      // Démarrer le scheduler de rappels email
+      emailReminderScheduler.start();
 
-    // Démarrer le cron de relance automatique des factures
-    startInvoiceReminderCron();
-    logger.info("✅ Cron de relance automatique des factures démarré");
+      // Démarrer le cron de relance automatique des factures
+      startInvoiceReminderCron();
+      logger.info("✅ Cron de relance automatique des factures démarré");
 
-    // Démarrer le cron d'automatisation email CRM
-    startCrmEmailAutomationCron();
-    logger.info("✅ Cron d'automatisation email CRM démarré");
+      // Démarrer le cron d'automatisation email CRM
+      startCrmEmailAutomationCron();
+      logger.info("✅ Cron d'automatisation email CRM démarré");
 
-    // Démarrer le service de rappel d'expiration des transferts
-    fileTransferReminderService.start();
-    logger.info("✅ Service de rappel d'expiration des transferts démarré");
+      // Démarrer le service de rappel d'expiration des transferts
+      fileTransferReminderService.start();
+      logger.info("✅ Service de rappel d'expiration des transferts démarré");
 
-    // Démarrer le cron de synchronisation des calendriers externes
-    startCalendarSyncCron();
-    logger.info("✅ Cron de synchronisation des calendriers démarré");
+      // Démarrer le cron de synchronisation des calendriers externes
+      startCalendarSyncCron();
+      logger.info("✅ Cron de synchronisation des calendriers démarré");
+      // Démarrer le cron de renouvellement des webhooks calendrier
+      startCalendarWebhookRenewalCron();
+      logger.info("✅ Cron de renouvellement des webhooks calendrier démarré");
 
-    // Démarrer le cron de renouvellement des webhooks calendrier
-    startCalendarWebhookRenewalCron();
-    logger.info("✅ Cron de renouvellement des webhooks calendrier démarré");
+      // Démarrer le cron de synchronisation Gmail (factures fournisseurs)
+      startGmailSyncCron();
+      logger.info("✅ Cron de synchronisation Gmail démarré");
 
-    // Démarrer le cron de synchronisation Gmail (factures fournisseurs)
-    startGmailSyncCron();
-    logger.info("✅ Cron de synchronisation Gmail démarré");
-
-    // Démarrer le cron de vérification des documents en retard
-    startOverdueAutomationCron();
-    logger.info("✅ Cron de vérification des documents en retard démarré");
+      // Démarrer le cron de vérification des documents en retard
+      startOverdueAutomationCron();
+      logger.info("✅ Cron de vérification des documents en retard démarré");
+    } else {
+      logger.info(
+        `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
+      );
+    }
   });
 
   // Nettoyage propre à l'arrêt
