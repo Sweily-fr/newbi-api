@@ -36,6 +36,7 @@ type CreditNote {
   appearance: Appearance
   clientPositionRight: Boolean
   operationType: String
+  emailTracking: EmailTracking
   createdBy: User!
   createdAt: String!
   updatedAt: String!

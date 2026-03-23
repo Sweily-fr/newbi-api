@@ -1,21 +1,18 @@
-import mongoose from 'mongoose';
-import { applyBankDetailsEncryption } from '../utils/encryption.js';
+import mongoose from "mongoose";
+import { applyBankDetailsEncryption } from "../utils/encryption.js";
 import {
   URL_REGEX,
   isPositiveAmount,
   isValidFooterNotes,
-} from '../utils/validators.js';
+} from "../utils/validators.js";
 
-import clientSchema from './schemas/client.js';
-import creditNoteItemSchema from './schemas/creditNoteItem.js';
-import companyInfoSchema from './schemas/companyInfo.js';
-import customFieldSchema from './schemas/customField.js';
-import bankDetailsSchema from './schemas/bankDetails.js';
-import shippingSchema from './schemas/shipping.js';
-import {
-  CREDIT_NOTE_STATUS,
-  DISCOUNT_TYPE,
-} from './constants/enums.js';
+import clientSchema from "./schemas/client.js";
+import creditNoteItemSchema from "./schemas/creditNoteItem.js";
+import companyInfoSchema from "./schemas/companyInfo.js";
+import customFieldSchema from "./schemas/customField.js";
+import bankDetailsSchema from "./schemas/bankDetails.js";
+import shippingSchema from "./schemas/shipping.js";
+import { CREDIT_NOTE_STATUS, DISCOUNT_TYPE } from "./constants/enums.js";
 
 /**
  * Schéma principal d'avoir (credit note)
@@ -247,6 +244,16 @@ const creditNoteSchema = new mongoose.Schema(
       url: { type: String },
       generatedAt: { type: Date },
     },
+    // Tracking d'ouverture d'email
+    emailTracking: {
+      emailSentAt: { type: Date },
+      emailOpenedAt: { type: Date },
+      emailOpenCount: { type: Number, default: 0 },
+      emailClickedAt: { type: Date },
+      emailClickCount: { type: Number, default: 0 },
+      trackingToken: { type: String, index: true },
+      resendMessageId: { type: String, index: true },
+    },
     // Référence vers l'organisation/workspace (Better Auth)
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -289,7 +296,7 @@ const creditNoteSchema = new mongoose.Schema(
     },
     operationType: {
       type: String,
-      enum: ['LB', 'PS', 'LBPS', null],
+      enum: ["LB", "PS", "LBPS", null],
       default: null,
     },
     // Retenue de garantie (en pourcentage)
@@ -309,7 +316,7 @@ const creditNoteSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index pour améliorer les performances des recherches
@@ -321,12 +328,14 @@ creditNoteSchema.index({ createdBy: 1 });
 creditNoteSchema.index({ issueDate: -1 });
 
 // Ajout d'un champ virtuel pour l'année d'émission
-creditNoteSchema.virtual('issueYear').get(function() {
-  return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+creditNoteSchema.virtual("issueYear").get(function () {
+  return this.issueDate
+    ? this.issueDate.getFullYear()
+    : new Date().getFullYear();
 });
 
 // Middleware pre-save pour définir l'année d'émission
-creditNoteSchema.pre('save', function(next) {
+creditNoteSchema.pre("save", function (next) {
   if (this.issueDate) {
     this.issueYear = this.issueDate.getFullYear();
   } else {
@@ -339,11 +348,13 @@ creditNoteSchema.pre('save', function(next) {
 creditNoteSchema.add({
   issueYear: {
     type: Number,
-    default: function() {
-      return this.issueDate ? this.issueDate.getFullYear() : new Date().getFullYear();
+    default: function () {
+      return this.issueDate
+        ? this.issueDate.getFullYear()
+        : new Date().getFullYear();
     },
-    index: true
-  }
+    index: true,
+  },
 });
 
 // Index composé pour garantir l'unicité des numéros d'avoir par année et organisation
@@ -351,20 +362,20 @@ creditNoteSchema.index(
   {
     number: 1,
     workspaceId: 1,
-    issueYear: 1
+    issueYear: 1,
   },
   {
     unique: true,
     partialFilterExpression: { number: { $exists: true } },
     name: "creditnote_number_workspaceId_year_unique",
-  }
+  },
 );
 
 // Méthode statique pour vérifier si un numéro existe déjà pour une année donnée dans une organisation
 creditNoteSchema.statics.numberExistsForYear = async function (
   number,
   workspaceId,
-  year
+  year,
 ) {
   const count = await this.countDocuments({
     number,
@@ -381,6 +392,9 @@ creditNoteSchema.statics.findByInvoice = async function (invoiceId) {
 };
 
 // AES-256-GCM encryption for IBAN and BIC fields at rest
-applyBankDetailsEncryption(creditNoteSchema, ['bankDetails', 'companyInfo.bankDetails']);
+applyBankDetailsEncryption(creditNoteSchema, [
+  "bankDetails",
+  "companyInfo.bankDetails",
+]);
 
 export default mongoose.model("CreditNote", creditNoteSchema);
