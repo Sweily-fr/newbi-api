@@ -415,7 +415,10 @@ async function sendDocumentEmail({
   // Générer le token de tracking et l'URL du pixel
   const trackingToken = crypto.randomBytes(32).toString("hex");
   const apiBaseUrl =
-    process.env.API_URL || process.env.BACKEND_URL || "http://localhost:4000";
+    process.env.API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.BACKEND_URL ||
+    "http://localhost:4000";
   const trackingPixelUrl = `${apiBaseUrl}/tracking/open/${trackingToken}`;
 
   // Sauvegarder le token de tracking sur le document
