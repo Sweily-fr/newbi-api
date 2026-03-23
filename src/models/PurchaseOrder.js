@@ -235,6 +235,8 @@ const purchaseOrderSchema = new mongoose.Schema(
       emailSentAt: { type: Date },
       emailOpenedAt: { type: Date },
       emailOpenCount: { type: Number, default: 0 },
+      emailClickedAt: { type: Date },
+      emailClickCount: { type: Number, default: 0 },
       trackingToken: { type: String, index: true },
       resendMessageId: { type: String, index: true },
     },

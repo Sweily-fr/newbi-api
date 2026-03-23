@@ -136,6 +136,7 @@ function generateEmailHtml(
   dueDate = null,
   customFooter = null,
   trackingPixelUrl = null,
+  clickTrackingUrl = null,
 ) {
   const labels = DOCUMENT_LABELS[documentType];
   const documentLabel = labels.singular;
@@ -311,6 +312,16 @@ function generateEmailHtml(
           </div>
 
           <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">${pdfNote}</p>
+
+          ${
+            clickTrackingUrl
+              ? `<div style="text-align: center; margin-top: 25px;">
+              <a href="${clickTrackingUrl}" class="btn" style="display: inline-block; background-color: #5b50ff; color: white; font-weight: 600; text-decoration: none; padding: 12px 24px; border-radius: 6px;">
+                Voir ${labels.article}${labels.article.endsWith("'") ? "" : " "}${documentLabel}
+              </a>
+            </div>`
+              : ""
+          }
         </div>
         <div class="footer">
           <p>&copy; ${new Date().getFullYear()} ${variables.companyName}. Tous droits réservés.</p>
@@ -420,6 +431,7 @@ async function sendDocumentEmail({
     process.env.BACKEND_URL ||
     "http://localhost:4000";
   const trackingPixelUrl = `${apiBaseUrl}/tracking/open/${trackingToken}`;
+  const clickTrackingUrl = `${apiBaseUrl}/tracking/click/${trackingToken}`;
 
   // Sauvegarder le token de tracking sur le document
   const ModelMap = {
@@ -438,12 +450,14 @@ async function sendDocumentEmail({
           "emailTracking.emailSentAt": new Date(),
           "emailTracking.emailOpenedAt": null,
           "emailTracking.emailOpenCount": 0,
+          "emailTracking.emailClickedAt": null,
+          "emailTracking.emailClickCount": 0,
         },
       },
     );
   }
 
-  // Générer le HTML avec le pixel de tracking
+  // Générer le HTML avec le pixel de tracking et le bouton cliquable
   const emailHtml = generateEmailHtml(
     finalBody,
     variables,
@@ -451,6 +465,7 @@ async function sendDocumentEmail({
     dueDate,
     customFooter,
     trackingPixelUrl,
+    clickTrackingUrl,
   );
 
   // Utiliser le PDF envoyé depuis le client, sinon essayer de le générer côté serveur

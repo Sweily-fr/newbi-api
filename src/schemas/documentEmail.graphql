@@ -4,6 +4,8 @@ type EmailTracking {
   emailSentAt: String
   emailOpenedAt: String
   emailOpenCount: Int
+  emailClickedAt: String
+  emailClickCount: Int
 }
 
 input SendDocumentEmailInput {

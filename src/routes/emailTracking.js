@@ -89,4 +89,82 @@ router.get("/open/:token", async (req, res) => {
   res.status(200).send(TRANSPARENT_PIXEL);
 });
 
+/**
+ * GET /tracking/click/:token
+ * Endpoint de tracking de clic dans un email.
+ * Enregistre le clic, puis redirige vers le PDF du document.
+ */
+router.get("/click/:token", async (req, res) => {
+  const { token } = req.params;
+  let redirectUrl = null;
+
+  try {
+    for (const { model: Model, type: documentType } of DOCUMENT_MODELS) {
+      const doc = await Model.findOne({ "emailTracking.trackingToken": token });
+
+      if (doc) {
+        const newClickCount = (doc.emailTracking?.emailClickCount || 0) + 1;
+        const now = new Date();
+
+        const updateData = {
+          "emailTracking.emailClickCount": newClickCount,
+        };
+
+        const emailClickedAt = doc.emailTracking?.emailClickedAt || now;
+        if (!doc.emailTracking?.emailClickedAt) {
+          updateData["emailTracking.emailClickedAt"] = now;
+        }
+
+        // Enregistrer aussi comme "ouvert" (un clic implique une ouverture)
+        if (!doc.emailTracking?.emailOpenedAt) {
+          updateData["emailTracking.emailOpenedAt"] = now;
+          updateData["emailTracking.emailOpenCount"] =
+            (doc.emailTracking?.emailOpenCount || 0) + 1;
+        }
+
+        await Model.updateOne({ _id: doc._id }, { $set: updateData });
+
+        logger.info(
+          `[EmailTracking] Lien cliqué pour ${Model.modelName} ${doc._id} (${newClickCount}x)`,
+        );
+
+        // Publier la mise à jour en temps réel
+        publishEmailTrackingUpdate({
+          documentId: doc._id.toString(),
+          documentType,
+          workspaceId: doc.workspaceId.toString(),
+          emailTracking: {
+            emailSentAt: doc.emailTracking?.emailSentAt?.toISOString() || null,
+            emailOpenedAt: (
+              doc.emailTracking?.emailOpenedAt || now
+            ).toISOString(),
+            emailOpenCount: doc.emailTracking?.emailOpenedAt
+              ? doc.emailTracking.emailOpenCount
+              : (doc.emailTracking?.emailOpenCount || 0) + 1,
+            emailClickedAt: emailClickedAt.toISOString(),
+            emailClickCount: newClickCount,
+          },
+        });
+
+        // URL du PDF partagé
+        if (doc.cachedPdf?.url) {
+          redirectUrl = doc.cachedPdf.url;
+        }
+
+        break;
+      }
+    }
+  } catch (error) {
+    logger.warn(`[EmailTracking] Erreur tracking clic: ${error.message}`);
+  }
+
+  if (redirectUrl) {
+    res.redirect(302, redirectUrl);
+  } else {
+    // Fallback : page Newbi
+    const frontendUrl = process.env.FRONTEND_URL || "https://www.newbi.fr";
+    res.redirect(302, frontendUrl);
+  }
+});
+
 export default router;
