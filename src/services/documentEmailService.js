@@ -556,19 +556,23 @@ async function sendDocumentEmail({
 
   if (emailReminderService.useResend && emailReminderService.resend) {
     // Envoi via Resend API
+    // Resend exige un domaine vérifié pour le "from" — on utilise le domaine vérifié
+    // et on met l'email réel de l'expéditeur en replyTo
+    const resendFromEmail = emailReminderService.resendFromEmail;
+    const resendFrom = fromName
+      ? `${fromName} <${resendFromEmail}>`
+      : `Newbi <${resendFromEmail}>`;
+
     const resendPayload = {
-      from: actualSenderEmail,
+      from: resendFrom,
       to: [recipientEmail],
       subject: finalSubject,
       html: emailHtml,
+      replyTo: replyTo || fromEmail,
       headers: {
         "X-Document-Tracking-Token": trackingToken,
       },
     };
-
-    if (replyTo) {
-      resendPayload.reply_to = replyTo;
-    }
 
     if (ccEmails && ccEmails.length > 0) {
       resendPayload.cc = ccEmails.filter((email) => email && email.trim());
@@ -582,8 +586,7 @@ async function sendDocumentEmail({
       resendPayload.attachments = [
         {
           filename: `${documentNumber}.pdf`,
-          content: pdfBuffer.toString("base64"),
-          content_type: "application/pdf",
+          content: pdfBuffer,
         },
       ];
     }

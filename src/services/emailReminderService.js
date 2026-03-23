@@ -15,8 +15,7 @@ class EmailReminderService {
     this.transporter = null;
     this.useResend = false;
     this.fromEmail = process.env.FROM_EMAIL || "no-reply@newbi.fr";
-    this.resendFromEmail =
-      process.env.RESEND_FROM_EMAIL || "no-reply@newbi.sweily.fr";
+    this.resendFromEmail = process.env.RESEND_FROM_EMAIL || "no-reply@newbi.fr";
     this.initEmailProvider();
   }
 
