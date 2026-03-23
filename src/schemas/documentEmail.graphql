@@ -1,5 +1,11 @@
 # Schéma GraphQL pour l'envoi de documents par email
 
+type EmailTracking {
+  emailSentAt: String
+  emailOpenedAt: String
+  emailOpenCount: Int
+}
+
 input SendDocumentEmailInput {
   documentId: ID!
   emailSubject: String!
@@ -16,9 +22,20 @@ type SendDocumentEmailResult {
   recipientEmail: String!
 }
 
+type EmailTrackingUpdate {
+  documentId: ID!
+  documentType: String!
+  workspaceId: ID!
+  emailTracking: EmailTracking!
+}
+
 extend type Mutation {
   sendInvoiceEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
   sendQuoteEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
   sendCreditNoteEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
   sendPurchaseOrderEmail(workspaceId: ID!, input: SendDocumentEmailInput!): SendDocumentEmailResult!
+}
+
+extend type Subscription {
+  emailTrackingUpdated(workspaceId: ID!): EmailTrackingUpdate!
 }

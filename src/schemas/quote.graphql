@@ -40,6 +40,8 @@ type Quote {
   # E-Signature
   signatureStatus: String
   signingUrl: String
+  # Email tracking
+  emailTracking: EmailTracking
   createdAt: String!
   updatedAt: String!
   convertedToInvoice: Invoice

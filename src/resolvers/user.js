@@ -2,13 +2,17 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import User from "../models/User.js";
-import { isAuthenticated, withWorkspace } from "../middlewares/better-auth-jwt.js";
+import {
+  isAuthenticated,
+  withWorkspace,
+} from "../middlewares/better-auth-jwt.js";
 import {
   sendPasswordResetEmail,
   sendVerificationEmail,
   sendPasswordResetConfirmationEmail,
 } from "../utils/mailer.js";
 import { saveBase64Image, deleteFile } from "../utils/fileUpload.js";
+import cloudflareService from "../services/cloudflareService.js";
 import path from "path";
 import CryptoJS from "crypto-js";
 import {
@@ -26,7 +30,7 @@ const generateToken = (user, rememberMe = false) => {
   return jwt.sign(
     { id: user.id, email: user.email, isEmailVerified: user.isEmailVerified },
     process.env.JWT_SECRET,
-    { expiresIn }
+    { expiresIn },
   );
 };
 
@@ -41,14 +45,21 @@ const userResolvers = {
       return await User.findById(user.id);
     }),
     lookupUsersByEmails: isAuthenticated(async (_, { emails }, { db }) => {
-      const normalizedEmails = emails.map(e => e.toLowerCase().trim());
-      const users = await db.collection('user').find({
-        email: { $in: normalizedEmails }
-      }).project({ email: 1, name: 1, image: 1, avatar: 1, profile: 1 }).toArray();
+      const normalizedEmails = emails.map((e) => e.toLowerCase().trim());
+      const users = await db
+        .collection("user")
+        .find({
+          email: { $in: normalizedEmails },
+        })
+        .project({ email: 1, name: 1, image: 1, avatar: 1, profile: 1 })
+        .toArray();
 
-      return users.map(user => ({
+      return users.map((user) => ({
         email: user.email,
-        name: user.name || `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim() || null,
+        name:
+          user.name ||
+          `${user.profile?.firstName || ""} ${user.profile?.lastName || ""}`.trim() ||
+          null,
         image: user.image || user.avatar || null,
       }));
     }),
@@ -100,11 +111,11 @@ const userResolvers = {
           } catch (error) {
             console.error(
               "Erreur lors du déchiffrement du mot de passe:",
-              error
+              error,
             );
             throw new AppError(
               "Erreur lors du traitement de votre demande. Veuillez réessayer.",
-              ERROR_CODES.INTERNAL_ERROR
+              ERROR_CODES.INTERNAL_ERROR,
             );
           }
         }
@@ -112,7 +123,7 @@ const userResolvers = {
         // Générer un token de vérification d'email
         const emailVerificationToken = generateVerificationToken();
         const emailVerificationExpires = new Date(
-          Date.now() + 24 * 60 * 60 * 1000
+          Date.now() + 24 * 60 * 60 * 1000,
         ); // 24 heures
 
         // Créer un nouvel utilisateur avec les données fournies
@@ -142,7 +153,7 @@ const userResolvers = {
         throw new AppError(
           "Une erreur est survenue lors de l'inscription.",
           ERROR_CODES.INTERNAL_ERROR,
-          error.message
+          error.message,
         );
       }
     },
@@ -153,7 +164,7 @@ const userResolvers = {
         if (!user) {
           throw new AppError(
             "L'email n'existe pas",
-            ERROR_CODES.UNAUTHENTICATED
+            ERROR_CODES.UNAUTHENTICATED,
           );
         }
 
@@ -195,11 +206,11 @@ const userResolvers = {
           } catch (error) {
             console.error(
               "Erreur lors du déchiffrement du mot de passe:",
-              error
+              error,
             );
             throw new AppError(
               "Erreur lors du traitement de votre demande. Veuillez réessayer.",
-              ERROR_CODES.INTERNAL_ERROR
+              ERROR_CODES.INTERNAL_ERROR,
             );
           }
         }
@@ -208,7 +219,7 @@ const userResolvers = {
         if (!validPassword) {
           throw new AppError(
             "Le mot de passe ne correspond pas",
-            ERROR_CODES.UNAUTHENTICATED
+            ERROR_CODES.UNAUTHENTICATED,
           );
         }
 
@@ -216,7 +227,7 @@ const userResolvers = {
         if (user.isDisabled) {
           throw new AppError(
             "Ce compte a été désactivé. Utilisez la mutation reactivateAccount pour le réactiver.",
-            ERROR_CODES.ACCOUNT_DISABLED
+            ERROR_CODES.ACCOUNT_DISABLED,
           );
         }
 
@@ -224,7 +235,7 @@ const userResolvers = {
         if (!user.isEmailVerified) {
           throw new AppError(
             "Veuillez vérifier votre adresse email avant de vous connecter. Consultez votre boîte de réception.",
-            ERROR_CODES.EMAIL_NOT_VERIFIED
+            ERROR_CODES.EMAIL_NOT_VERIFIED,
           );
         }
 
@@ -240,7 +251,7 @@ const userResolvers = {
         throw new AppError(
           "Une erreur est survenue lors de la connexion.",
           ERROR_CODES.INTERNAL_ERROR,
-          error.message
+          error.message,
         );
       }
     },
@@ -275,7 +286,7 @@ const userResolvers = {
 
     resetPassword: async (
       _,
-      { input: { token, newPassword, passwordEncrypted } }
+      { input: { token, newPassword, passwordEncrypted } },
     ) => {
       try {
         // Hash le token reçu pour le comparer avec celui stocké dans la base
@@ -293,7 +304,7 @@ const userResolvers = {
         if (!user) {
           throw new AppError(
             "Le lien de réinitialisation est invalide ou a expiré.",
-            ERROR_CODES.INVALID_TOKEN
+            ERROR_CODES.INVALID_TOKEN,
           );
         }
 
@@ -333,11 +344,11 @@ const userResolvers = {
           } catch (error) {
             console.error(
               "Erreur lors du déchiffrement du mot de passe:",
-              error
+              error,
             );
             throw new AppError(
               "Erreur lors du traitement de votre demande. Veuillez réessayer.",
-              ERROR_CODES.INTERNAL_ERROR
+              ERROR_CODES.INTERNAL_ERROR,
             );
           }
         }
@@ -354,7 +365,7 @@ const userResolvers = {
         } catch (emailError) {
           console.error(
             "Erreur lors de l'envoi de l'email de confirmation:",
-            emailError
+            emailError,
           );
           // Continuer même si l'envoi de l'email échoue
         }
@@ -395,7 +406,7 @@ const userResolvers = {
               } catch (err) {
                 console.error(
                   "Erreur lors de la suppression de l'ancienne photo de profil:",
-                  err
+                  err,
                 );
                 // Continuer même si la suppression échoue
               }
@@ -414,7 +425,7 @@ const userResolvers = {
               } catch (err) {
                 console.error(
                   "Erreur lors de la suppression de l'ancienne photo de profil:",
-                  err
+                  err,
                 );
                 // Continuer même si la suppression échoue
               }
@@ -423,7 +434,7 @@ const userResolvers = {
             // Sauvegarder la nouvelle image
             const picturePath = await saveBase64Image(
               input.profilePicture,
-              "profile-pictures"
+              "profile-pictures",
             );
 
             // Mettre à jour le champ profilePicture avec le chemin de la nouvelle image
@@ -455,7 +466,7 @@ const userResolvers = {
         console.error("Erreur lors de la mise à jour du profil:", error);
         throw new AppError(
           "Une erreur est survenue lors de la mise à jour du profil.",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     }),
@@ -541,11 +552,11 @@ const userResolvers = {
 
         console.error(
           "Erreur lors de la mise à jour des informations de l'entreprise:",
-          error
+          error,
         );
         throw new AppError(
           "Une erreur est survenue lors de la mise à jour des informations de l'entreprise.",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     }),
@@ -583,7 +594,7 @@ const userResolvers = {
         console.error("Erreur lors de l'upload du logo:", error);
         throw new AppError(
           "Une erreur est survenue lors de l'upload du logo.",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     }),
@@ -605,7 +616,7 @@ const userResolvers = {
             } catch (err) {
               console.error(
                 "Erreur lors de la suppression de l'ancienne photo de profil:",
-                err
+                err,
               );
               // Continuer même si la suppression échoue
             }
@@ -614,7 +625,7 @@ const userResolvers = {
           // Sauvegarder la nouvelle image dans le dossier profile-pictures
           const picturePath = await saveBase64Image(
             base64Image,
-            "profile-pictures"
+            "profile-pictures",
           );
 
           // Mettre à jour l'utilisateur
@@ -627,14 +638,14 @@ const userResolvers = {
         } catch (error) {
           console.error(
             "Erreur lors de l'upload de la photo de profil:",
-            error
+            error,
           );
           throw new AppError(
             "Une erreur est survenue lors de l'upload de la photo de profil.",
-            ERROR_CODES.INTERNAL_ERROR
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
     ),
 
     deleteCompanyLogo: isAuthenticated(async (_, __, { user }) => {
@@ -668,7 +679,7 @@ const userResolvers = {
         console.error("Erreur lors de la suppression du logo:", error);
         throw new AppError(
           "Une erreur est survenue lors de la suppression du logo.",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     }),
@@ -689,14 +700,14 @@ const userResolvers = {
           } catch (err) {
             console.error(
               "Erreur lors de la suppression de la photo de profil:",
-              err
+              err,
             );
             // Continuer même si la suppression échoue
           }
         } else {
           console.log(
             "Aucune photo de profil à supprimer pour l'utilisateur:",
-            user.id
+            user.id,
           );
         }
 
@@ -709,11 +720,11 @@ const userResolvers = {
       } catch (error) {
         console.error(
           "Erreur lors de la suppression de la photo de profil:",
-          error
+          error,
         );
         throw new AppError(
           "Une erreur est survenue lors de la suppression de la photo de profil.",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     }),
@@ -728,7 +739,7 @@ const userResolvers = {
       if (!user) {
         throw new AppError(
           "Le lien de vérification est invalide ou a expiré",
-          ERROR_CODES.INVALID_TOKEN
+          ERROR_CODES.INVALID_TOKEN,
         );
       }
 
@@ -762,7 +773,7 @@ const userResolvers = {
       // Générer un nouveau token
       const emailVerificationToken = generateVerificationToken();
       const emailVerificationExpires = new Date(
-        Date.now() + 24 * 60 * 60 * 1000
+        Date.now() + 24 * 60 * 60 * 1000,
       ); // 24 heures
 
       // Mettre à jour l'utilisateur avec le nouveau token
@@ -790,7 +801,7 @@ const userResolvers = {
             throw new AppError(
               "Le mot de passe actuel est incorrect",
               ERROR_CODES.INVALID_INPUT,
-              { field: "currentPassword" }
+              { field: "currentPassword" },
             );
           }
 
@@ -806,14 +817,14 @@ const userResolvers = {
 
           console.error(
             "Erreur lors de la mise à jour du mot de passe:",
-            error
+            error,
           );
           throw new AppError(
             "Une erreur est survenue lors de la mise à jour du mot de passe.",
-            ERROR_CODES.INTERNAL_ERROR
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
     ),
 
     disableAccount: isAuthenticated(async (_, { password }, { user }) => {
@@ -830,7 +841,7 @@ const userResolvers = {
           throw new AppError(
             "Le mot de passe est incorrect",
             ERROR_CODES.INVALID_INPUT,
-            { field: "password" }
+            { field: "password" },
           );
         }
 
@@ -848,7 +859,7 @@ const userResolvers = {
         console.error("Erreur lors de la désactivation du compte:", error);
         throw new AppError(
           "Une erreur est survenue lors de la désactivation de votre compte.",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     }),
@@ -876,7 +887,7 @@ const userResolvers = {
           throw new AppError(
             "Le mot de passe est incorrect",
             ERROR_CODES.INVALID_INPUT,
-            { field: "password" }
+            { field: "password" },
           );
         }
 
@@ -895,7 +906,7 @@ const userResolvers = {
         console.error("Erreur lors de la réactivation du compte:", error);
         throw new AppError(
           "Une erreur est survenue lors de la réactivation de votre compte.",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     },
@@ -921,15 +932,15 @@ const userResolvers = {
         } catch (error) {
           console.error(
             "Erreur lors de l'association du Stripe Customer ID:",
-            error
+            error,
           );
           throw new AppError(
             "Erreur lors de l'association du Stripe Customer ID",
             ERROR_CODES.INTERNAL_ERROR,
-            error.message
+            error.message,
           );
         }
-      }
+      },
     ),
 
     /**
@@ -939,31 +950,39 @@ const userResolvers = {
       try {
         // Trouver l'utilisateur par email
         const user = await User.findOne({ email: email.toLowerCase() });
-        
+
         if (!user) {
           throw createNotFoundError("Utilisateur non trouvé");
         }
 
         // Mettre à jour le statut partenaire
         user.isPartner = isPartner;
-        
+
         // Générer un code de parrainage si l'utilisateur devient partenaire et n'en a pas
         if (isPartner && !user.referralCode) {
-          user.referralCode = crypto.randomBytes(8).toString("hex").toUpperCase();
+          user.referralCode = crypto
+            .randomBytes(8)
+            .toString("hex")
+            .toUpperCase();
         }
-        
+
         await user.save();
 
-        console.log(`✅ Utilisateur ${email} mis à jour : isPartner=${isPartner}`);
-        
+        console.log(
+          `✅ Utilisateur ${email} mis à jour : isPartner=${isPartner}`,
+        );
+
         return user;
       } catch (error) {
         if (error.name === "AppError") throw error;
-        
-        console.error("Erreur lors de la mise à jour du statut partenaire:", error);
+
+        console.error(
+          "Erreur lors de la mise à jour du statut partenaire:",
+          error,
+        );
         throw new AppError(
           "Erreur lors de la mise à jour du statut partenaire",
-          ERROR_CODES.INTERNAL_ERROR
+          ERROR_CODES.INTERNAL_ERROR,
         );
       }
     },
@@ -978,19 +997,59 @@ const userResolvers = {
           const db = mongoose.connection.db;
           const organizationCollection = db.collection("organization");
 
+          // Récupérer l'ancien logo avant mise à jour
+          const currentOrg = await organizationCollection.findOne({
+            _id: new mongoose.Types.ObjectId(workspaceId),
+          });
+          const oldLogoUrl = currentOrg?.logo;
+
+          // Si on supprime le logo (logoUrl est null/vide), supprimer l'ancien fichier de Cloudflare R2
+          if (!logoUrl && oldLogoUrl) {
+            try {
+              // Extraire la clé R2 depuis l'URL publique
+              const publicUrl =
+                cloudflareService.companyImagesPublicUrl ||
+                cloudflareService.publicUrl;
+              const bucketName =
+                cloudflareService.companyImagesBucketName ||
+                cloudflareService.bucketName;
+              let fileKey = null;
+
+              if (publicUrl && oldLogoUrl.startsWith(publicUrl)) {
+                fileKey = oldLogoUrl.replace(publicUrl + "/", "");
+              } else if (oldLogoUrl.includes("/")) {
+                // Fallback : extraire la clé depuis l'URL (format: .../orgId/filename)
+                const urlParts = new URL(oldLogoUrl).pathname
+                  .split("/")
+                  .filter(Boolean);
+                fileKey = urlParts.join("/");
+              }
+
+              if (fileKey) {
+                await cloudflareService.deleteImage(fileKey, bucketName);
+                console.log("✅ Logo supprimé de Cloudflare R2:", fileKey);
+              }
+            } catch (err) {
+              console.error(
+                "⚠️ Erreur suppression logo R2 (non bloquant):",
+                err.message,
+              );
+              // Continuer même si la suppression R2 échoue
+            }
+          }
+
           const result = await organizationCollection.findOneAndUpdate(
             { _id: new mongoose.Types.ObjectId(workspaceId) },
             { $set: { logo: logoUrl } },
-            { returnDocument: "after" }
+            { returnDocument: "after" },
           );
 
           if (!result) {
             throw new AppError(
               "Organisation non trouvée",
-              ERROR_CODES.NOT_FOUND
+              ERROR_CODES.NOT_FOUND,
             );
           }
-
 
           // Retourner l'utilisateur avec les informations mises à jour
           const updatedUser = await User.findById(user.id);
@@ -999,10 +1058,10 @@ const userResolvers = {
           console.error("Erreur mise à jour logo:", error);
           throw new AppError(
             "Erreur lors de la mise à jour du logo",
-            ERROR_CODES.INTERNAL_ERROR
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
     ),
   },
 };

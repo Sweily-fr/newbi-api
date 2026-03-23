@@ -87,6 +87,7 @@ import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
+import emailTrackingRoutes from "./routes/emailTracking.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -292,6 +293,9 @@ async function startServer() {
 
   // Routes leads guides (publique, sans auth)
   app.use("/api/leads", guideLeadsRoutes);
+
+  // Routes tracking d'ouverture d'email (publique, sans auth)
+  app.use("/tracking", emailTrackingRoutes);
 
   app.use(graphqlUploadExpress({ maxFileSize: 104857600, maxFiles: 20 }));
 

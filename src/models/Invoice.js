@@ -281,6 +281,13 @@ const invoiceSchema = new mongoose.Schema(
       url: { type: String },
       generatedAt: { type: Date },
     },
+    // Tracking d'ouverture d'email
+    emailTracking: {
+      emailSentAt: { type: Date },
+      emailOpenedAt: { type: Date },
+      emailOpenCount: { type: Number, default: 0 },
+      trackingToken: { type: String, index: true },
+    },
     // Référence vers l'organisation/workspace (Better Auth)
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,

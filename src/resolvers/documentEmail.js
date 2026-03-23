@@ -1,9 +1,37 @@
-import { sendDocumentEmail, DOCUMENT_TYPES } from '../services/documentEmailService.js';
-import { requireWrite } from '../middlewares/rbac.js';
+import {
+  sendDocumentEmail,
+  DOCUMENT_TYPES,
+} from "../services/documentEmailService.js";
+import { requireWrite } from "../middlewares/rbac.js";
+import { getPubSub } from "../config/redis.js";
+
+export const EMAIL_TRACKING_UPDATED = "EMAIL_TRACKING_UPDATED";
+
+export function publishEmailTrackingUpdate(payload) {
+  try {
+    const pubsub = getPubSub();
+    pubsub.publish(`${EMAIL_TRACKING_UPDATED}_${payload.workspaceId}`, {
+      emailTrackingUpdated: payload,
+    });
+  } catch (error) {
+    console.warn(
+      "[EmailTracking] Erreur publication subscription:",
+      error.message,
+    );
+  }
+}
 
 const documentEmailResolvers = {
+  Subscription: {
+    emailTrackingUpdated: {
+      subscribe: (_, { workspaceId }) => {
+        const pubsub = getPubSub();
+        return pubsub.asyncIterator(`${EMAIL_TRACKING_UPDATED}_${workspaceId}`);
+      },
+    },
+  },
   Mutation: {
-    sendInvoiceEmail: requireWrite('invoices')(
+    sendInvoiceEmail: requireWrite("invoices")(
       async (_, { workspaceId, input }) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
@@ -16,12 +44,12 @@ const documentEmailResolvers = {
           bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
         });
-        
+
         return result;
-      }
+      },
     ),
-    
-    sendQuoteEmail: requireWrite('quotes')(
+
+    sendQuoteEmail: requireWrite("quotes")(
       async (_, { workspaceId, input }) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
@@ -34,12 +62,12 @@ const documentEmailResolvers = {
           bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
         });
-        
+
         return result;
-      }
+      },
     ),
-    
-    sendCreditNoteEmail: requireWrite('creditNotes')(
+
+    sendCreditNoteEmail: requireWrite("creditNotes")(
       async (_, { workspaceId, input }) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
@@ -54,10 +82,10 @@ const documentEmailResolvers = {
         });
 
         return result;
-      }
+      },
     ),
 
-    sendPurchaseOrderEmail: requireWrite('purchaseOrders')(
+    sendPurchaseOrderEmail: requireWrite("purchaseOrders")(
       async (_, { workspaceId, input }) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
@@ -72,7 +100,7 @@ const documentEmailResolvers = {
         });
 
         return result;
-      }
+      },
     ),
   },
 };

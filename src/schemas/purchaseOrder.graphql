@@ -43,6 +43,8 @@ type PurchaseOrder {
   operationType: String
   sourceQuote: Quote
   linkedInvoices: [Invoice]
+  # Email tracking
+  emailTracking: EmailTracking
   createdBy: User!
   createdAt: String!
   updatedAt: String!

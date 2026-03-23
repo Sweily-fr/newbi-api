@@ -167,6 +167,7 @@ input UpdateColumnInput {
 
 
 input TimeTrackingInput {
+  totalSeconds: Int
   hourlyRate: Float
   roundingOption: String
 }

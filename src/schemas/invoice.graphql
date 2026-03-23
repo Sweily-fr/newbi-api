@@ -53,6 +53,8 @@ type Invoice {
   # Routing e-invoicing
   eInvoiceFlowType: String
   eInvoiceFlowReason: String
+  # Email tracking
+  emailTracking: EmailTracking
   createdAt: String!
   updatedAt: String!
 }
