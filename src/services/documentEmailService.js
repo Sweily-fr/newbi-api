@@ -550,14 +550,73 @@ async function sendDocumentEmail({
     mailOptions.bcc = bccEmails.filter((email) => email && email.trim());
   }
 
-  // Vérifier que le transporter est initialisé
-  if (!emailReminderService.transporter) {
-    throw new Error("Service SMTP non initialisé");
+  // Envoyer l'email via Resend API (prioritaire) ou SMTP (fallback)
+  let mailResult;
+  let resendMessageId = null;
+
+  if (emailReminderService.useResend && emailReminderService.resend) {
+    // Envoi via Resend API
+    const resendPayload = {
+      from: actualSenderEmail,
+      to: [recipientEmail],
+      subject: finalSubject,
+      html: emailHtml,
+      headers: {
+        "X-Document-Tracking-Token": trackingToken,
+      },
+    };
+
+    if (replyTo) {
+      resendPayload.reply_to = replyTo;
+    }
+
+    if (ccEmails && ccEmails.length > 0) {
+      resendPayload.cc = ccEmails.filter((email) => email && email.trim());
+    }
+
+    if (bccEmails && bccEmails.length > 0) {
+      resendPayload.bcc = bccEmails.filter((email) => email && email.trim());
+    }
+
+    if (pdfBuffer) {
+      resendPayload.attachments = [
+        {
+          filename: `${documentNumber}.pdf`,
+          content: pdfBuffer.toString("base64"),
+          content_type: "application/pdf",
+        },
+      ];
+    }
+
+    const { data, error } =
+      await emailReminderService.resend.emails.send(resendPayload);
+
+    if (error) {
+      throw new Error(`Erreur Resend: ${error.message}`);
+    }
+
+    resendMessageId = data?.id || null;
+    mailResult = { messageId: resendMessageId };
+
+    console.info(
+      `📧 [DocumentEmail] Email envoyé via Resend (id: ${resendMessageId})`,
+    );
+  } else {
+    // Fallback SMTP
+    if (!emailReminderService.transporter) {
+      throw new Error("Service SMTP non initialisé");
+    }
+
+    mailResult = await emailReminderService.transporter.sendMail(mailOptions);
   }
 
-  // Envoyer l'email
-  const mailResult =
-    await emailReminderService.transporter.sendMail(mailOptions);
+  // Sauvegarder le resendMessageId sur le document pour le webhook tracking
+  if (resendMessageId && TrackingModel) {
+    await TrackingModel.updateOne(
+      { _id: documentId },
+      { $set: { "emailTracking.resendMessageId": resendMessageId } },
+    );
+  }
 
   // Ajouter l'activité au client
   try {

@@ -88,6 +88,7 @@ import gmailConnectRoutes from "./routes/gmail-connect.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import emailTrackingRoutes from "./routes/emailTracking.js";
+import resendWebhookRoutes from "./routes/resendWebhook.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -254,6 +255,9 @@ async function startServer() {
 
   // Webhook eSignature
   app.use("/api/esignature/webhook", esignatureWebhookRoutes);
+
+  // Webhook Resend pour le tracking d'ouverture d'email
+  app.use("/webhook/resend", resendWebhookRoutes);
 
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
@@ -643,6 +647,28 @@ function formatError(error) {
       extensions: {
         code: exception.code,
         details: exception.details || null,
+      },
+      path: error.path,
+    };
+  }
+
+  // Cas 3: TypeError sur null/undefined — typiquement context.user est null
+  // car le JWT a expiré et le resolver accède à user._id sans guard.
+  // On reclassifie en UNAUTHENTICATED pour que le frontend retry silencieusement
+  // avec un nouveau JWT au lieu d'afficher un toast d'erreur.
+  // Si c'est un vrai bug (pas lié à l'auth), le retry réauthentifiera le user
+  // et l'erreur remontera normalement au second essai.
+  if (
+    originalError?.name === "TypeError" &&
+    /cannot read properties of (null|undefined)/i.test(originalError?.message)
+  ) {
+    logger.warn(
+      `TypeError reclassifié en UNAUTHENTICATED (probable JWT expiré): ${originalError.message}`,
+    );
+    return {
+      message: "Session expirée, veuillez réessayer",
+      extensions: {
+        code: "UNAUTHENTICATED",
       },
       path: error.path,
     };
