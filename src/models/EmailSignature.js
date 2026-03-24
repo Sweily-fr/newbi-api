@@ -283,6 +283,14 @@ const emailSignatureSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    banner: {
+      type: String,
+      trim: true,
+    },
+    bannerKey: {
+      type: String,
+      trim: true,
+    },
 
     // Taille de l'image de profil (en pixels)
     imageSize: {
@@ -330,82 +338,342 @@ const emailSignatureSchema = new mongoose.Schema(
     // Paddings détaillés pour chaque élément (top, right, bottom, left)
     paddings: {
       photo: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       name: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       position: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       company: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       phone: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       mobile: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       email: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       website: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       address: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       separatorHorizontal: {
-        top: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       separatorVertical: {
-        top: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 4, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 4, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 4,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 4,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       logo: {
-        top: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
       social: {
-        top: { type: Number, default: 8, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        right: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        bottom: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
-        left: { type: Number, default: 0, min: [0, "Padding minimum de 0px"], max: [50, "Padding maximum de 50px"] },
+        top: {
+          type: Number,
+          default: 8,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        right: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        bottom: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
+        left: {
+          type: Number,
+          default: 0,
+          min: [0, "Padding minimum de 0px"],
+          max: [50, "Padding maximum de 50px"],
+        },
       },
     },
 
@@ -513,22 +781,30 @@ const emailSignatureSchema = new mongoose.Schema(
     // Ordre des éléments (drag & drop)
     elementsOrder: {
       type: [String],
-      default: ['photo', 'fullName', 'position', 'separator', 'contact', 'logo', 'social'],
+      default: [
+        "photo",
+        "fullName",
+        "position",
+        "separator",
+        "contact",
+        "logo",
+        "social",
+      ],
     },
 
     // Layout horizontal (3 zones)
     horizontalLayout: {
       leftColumn: {
         type: [String],
-        default: ['photo', 'fullName', 'position'],
+        default: ["photo", "fullName", "position"],
       },
       rightColumn: {
         type: [String],
-        default: ['contact'],
+        default: ["contact"],
       },
       bottomRow: {
         type: [String],
-        default: ['separator', 'logo', 'social'],
+        default: ["separator", "logo", "social"],
       },
     },
 
@@ -827,7 +1103,7 @@ const emailSignatureSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index pour améliorer les performances des recherches
@@ -851,7 +1127,7 @@ emailSignatureSchema.pre("save", async function (next) {
         _id: { $ne: this._id },
         isDefault: true,
       },
-      { isDefault: false }
+      { isDefault: false },
     );
   }
   next();
