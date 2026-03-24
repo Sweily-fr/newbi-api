@@ -12,6 +12,40 @@ import { isAuthenticated } from "./better-auth-jwt.js";
  * basées sur les rôles d'organisation (owner, admin, member, accountant)
  */
 
+// ✅ Cache LRU pour org+member — évite 2-3 queries DB par resolver protégé
+const ORG_CACHE_TTL = 60_000; // 60 secondes (org/member changent rarement)
+const ORG_CACHE_MAX = 500;
+const _orgCache = new Map();
+
+function getCachedOrg(cacheKey) {
+  const entry = _orgCache.get(cacheKey);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > ORG_CACHE_TTL) {
+    _orgCache.delete(cacheKey);
+    return null;
+  }
+  return entry.org;
+}
+
+function setCachedOrg(cacheKey, org) {
+  if (_orgCache.size >= ORG_CACHE_MAX) {
+    const oldestKey = _orgCache.keys().next().value;
+    _orgCache.delete(oldestKey);
+  }
+  _orgCache.set(cacheKey, { org, ts: Date.now() });
+}
+
+// Permet d'invalider le cache org depuis l'extérieur
+export function invalidateOrgCache(userId) {
+  if (userId) {
+    for (const key of _orgCache.keys()) {
+      if (key.startsWith(`${userId}:`)) _orgCache.delete(key);
+    }
+  } else {
+    _orgCache.clear();
+  }
+}
+
 /**
  * Définition des permissions par rôle
  * Aligné avec /newbiv2/src/lib/permissions.js
@@ -292,13 +326,16 @@ async function getActiveOrganization(userId, requestedOrgId = null) {
       return null;
     }
 
-    // Retourner l'ID comme string pour compatibilité
+    // ✅ Retourner le rôle du member directement pour éviter une re-query dans getMemberRole
+    const normalizedRole = (member.role || "member").toLowerCase();
+
     return {
       id: organization._id.toString(),
       name: organization.name,
       slug: organization.slug,
       metadata: organization.metadata,
       createdAt: organization.createdAt,
+      memberRole: normalizedRole,
     };
   } catch (error) {
     logger.error(
@@ -447,17 +484,24 @@ export const withRBAC = (resolver, options = {}) => {
         );
       }
 
-      // 2. Récupérer l'organisation active (en vérifiant que l'utilisateur en est membre)
-      let organization = await getActiveOrganization(userId, requestedOrgId);
+      // 2. Récupérer l'organisation active (avec cache LRU 60s)
+      const cacheKey = `${userId}:${requestedOrgId || "default"}`;
+      let organization = getCachedOrg(cacheKey);
 
-      // ✅ FIX: Si l'utilisateur n'est pas membre de l'org demandée (ex: switch de compte,
-      // le frontend envoie un orgId stale depuis le cache), fallback sur l'org par défaut
-      // du user au lieu de bloquer. Pas de risque sécurité : on accède à SA propre org.
-      if (!organization && requestedOrgId) {
-        logger.warn(
-          `⚠️ RBAC: userId=${userId} n'est pas membre de org=${requestedOrgId}, fallback sur org par défaut`,
-        );
-        organization = await getActiveOrganization(userId, null);
+      if (!organization) {
+        organization = await getActiveOrganization(userId, requestedOrgId);
+
+        // Fallback sur l'org par défaut si l'org demandée n'est pas accessible
+        if (!organization && requestedOrgId) {
+          logger.warn(
+            `⚠️ RBAC: userId=${userId} n'est pas membre de org=${requestedOrgId}, fallback sur org par défaut`,
+          );
+          organization = await getActiveOrganization(userId, null);
+        }
+
+        if (organization) {
+          setCachedOrg(cacheKey, organization);
+        }
       }
 
       if (!organization) {
@@ -467,17 +511,8 @@ export const withRBAC = (resolver, options = {}) => {
         );
       }
 
-      // 3. Récupérer le rôle de l'utilisateur dans l'organisation
-      const member = await getMemberRole(organization.id, userId);
-
-      if (!member) {
-        throw new AppError(
-          "Vous n'êtes pas membre de cette organisation",
-          ERROR_CODES.FORBIDDEN,
-        );
-      }
-
-      const userRole = member.role;
+      // 3. Utiliser le rôle déjà récupéré par getActiveOrganization (évite 1 query DB)
+      const userRole = organization.memberRole;
 
       logger.debug(
         `🔐 RBAC: User ${userId} accède à org ${organization.id} avec rôle ${userRole}`,
