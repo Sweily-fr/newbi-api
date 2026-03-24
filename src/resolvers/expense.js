@@ -17,6 +17,7 @@ import {
   requireDelete,
   requirePermission,
   withOrganization,
+  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { syncExpenseIfNeeded } from "../services/pennylaneSyncHelper.js";
@@ -132,20 +133,11 @@ const expenseResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "expenses"
     expense: requireRead("expenses")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         return await checkExpenseAccess(id, workspaceId, user.id, userRole);
       },
@@ -169,20 +161,11 @@ const expenseResolvers = {
         },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const query = {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -246,20 +229,10 @@ const expenseResolvers = {
         { workspaceId: inputWorkspaceId, startDate, endDate },
         context,
       ) => {
-        const { workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const dateQuery = {};
         if (startDate) dateQuery.$gte = new Date(startDate);
@@ -378,21 +351,11 @@ const expenseResolvers = {
     // Créer une nouvelle dépense
     // ✅ Protégé par RBAC - nécessite la permission "create" sur "expenses"
     createExpense: requireWrite("expenses")(async (_, { input }, context) => {
-      const { user, workspaceId: contextWorkspaceId } = context;
-
-      // Validation du workspaceId
-      const inputWorkspaceId = input.workspaceId;
-      if (
-        inputWorkspaceId &&
-        contextWorkspaceId &&
-        inputWorkspaceId !== contextWorkspaceId
-      ) {
-        throw new AppError(
-          "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-          ERROR_CODES.FORBIDDEN,
-        );
-      }
-      const workspaceId = inputWorkspaceId || contextWorkspaceId;
+      const { user } = context;
+      const workspaceId = resolveWorkspaceId(
+        input.workspaceId,
+        context.workspaceId,
+      );
 
       if (!workspaceId) {
         throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
@@ -473,21 +436,11 @@ const expenseResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "expenses"
     updateExpense: requireWrite("expenses")(
       async (_, { id, input }, context) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId depuis l'input si fourni
-        const inputWorkspaceId = input.workspaceId;
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          input.workspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           id,
@@ -545,20 +498,11 @@ const expenseResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "expenses"
     deleteExpense: requireDelete("expenses")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           id,
@@ -583,20 +527,11 @@ const expenseResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "expenses"
     deleteMultipleExpenses: requireDelete("expenses")(
       async (_, { ids, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         if (!ids || ids.length === 0) {
           throw new UserInputError("Aucun ID de dépense fourni");
@@ -645,20 +580,11 @@ const expenseResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "expenses"
     changeExpenseStatus: requireWrite("expenses")(
       async (_, { id, status, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           id,
@@ -688,20 +614,11 @@ const expenseResolvers = {
         { expenseId, input, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           expenseId,
@@ -819,20 +736,11 @@ const expenseResolvers = {
         { expenseId, fileId, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           expenseId,
@@ -874,20 +782,11 @@ const expenseResolvers = {
         { expenseId, metadata, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           expenseId,
@@ -921,20 +820,11 @@ const expenseResolvers = {
         { expenseId, fileId, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           expenseId,
@@ -994,20 +884,11 @@ const expenseResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "expenses"
     applyOCRDataToExpense: requireWrite("expenses")(
       async (_, { expenseId, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const expense = await checkExpenseAccess(
           expenseId,

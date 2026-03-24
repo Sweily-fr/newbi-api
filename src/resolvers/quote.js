@@ -9,6 +9,7 @@ import {
   requireWrite,
   requireRead,
   requireDelete,
+  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
   generateQuoteNumber,
@@ -460,20 +461,11 @@ const quoteResolvers = {
     createQuote: requireCompanyInfo(
       requireWrite("quotes")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
-          const { user, workspaceId: contextWorkspaceId } = context;
-
-          // ✅ FIX: Valider que le workspaceId correspond au contexte
-          if (
-            inputWorkspaceId &&
-            contextWorkspaceId &&
-            inputWorkspaceId !== contextWorkspaceId
-          ) {
-            throw new AppError(
-              "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-              ERROR_CODES.FORBIDDEN,
-            );
-          }
-          const workspaceId = inputWorkspaceId || contextWorkspaceId;
+          const { user } = context;
+          const workspaceId = resolveWorkspaceId(
+            inputWorkspaceId,
+            context.workspaceId,
+          );
 
           if (!workspaceId) {
             throw new AppError(
