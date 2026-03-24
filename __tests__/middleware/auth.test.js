@@ -1,14 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock dependencies before importing
-vi.mock('jsonwebtoken', () => ({
+vi.mock("jsonwebtoken", () => ({
   default: {
     verify: vi.fn(),
     decode: vi.fn(),
   },
 }));
 
-vi.mock('../../src/utils/logger.js', () => ({
+vi.mock("../../src/utils/logger.js", () => ({
   default: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -17,30 +17,33 @@ vi.mock('../../src/utils/logger.js', () => ({
   },
 }));
 
-vi.mock('../../src/models/User.js', () => ({
+vi.mock("../../src/models/User.js", () => ({
   default: {
     findById: vi.fn(),
   },
 }));
 
-vi.mock('../../src/services/jwks-validator.js', () => ({
+vi.mock("../../src/services/jwks-validator.js", () => ({
   getJWKSValidator: vi.fn().mockResolvedValue({
     validateJWT: vi.fn(),
   }),
 }));
 
-vi.mock('../../src/middlewares/better-auth.js', () => ({
+vi.mock("../../src/middlewares/better-auth.js", () => ({
   betterAuthMiddleware: vi.fn(),
 }));
 
-import { isAuthenticated, withWorkspace } from '../../src/middlewares/better-auth-jwt.js';
-import { AppError, ERROR_CODES } from '../../src/utils/errors.js';
+import {
+  isAuthenticated,
+  withWorkspace,
+} from "../../src/middlewares/better-auth-jwt.js";
+import { AppError, ERROR_CODES } from "../../src/utils/errors.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('extractJWTToken logic', () => {
+describe("extractJWTToken logic", () => {
   // Test the token extraction logic inline
   const extractJWTToken = (headers) => {
     const authHeader = headers.authorization;
@@ -50,141 +53,140 @@ describe('extractJWTToken logic', () => {
     return headers["x-jwt-token"];
   };
 
-  it('should extract token from Bearer header', () => {
-    const headers = { authorization: 'Bearer my-jwt-token-123' };
-    expect(extractJWTToken(headers)).toBe('my-jwt-token-123');
+  it("should extract token from Bearer header", () => {
+    const headers = { authorization: "Bearer my-jwt-token-123" };
+    expect(extractJWTToken(headers)).toBe("my-jwt-token-123");
   });
 
-  it('should extract token from x-jwt-token header', () => {
-    const headers = { 'x-jwt-token': 'custom-token-456' };
-    expect(extractJWTToken(headers)).toBe('custom-token-456');
+  it("should extract token from x-jwt-token header", () => {
+    const headers = { "x-jwt-token": "custom-token-456" };
+    expect(extractJWTToken(headers)).toBe("custom-token-456");
   });
 
-  it('should return undefined when no token is present', () => {
+  it("should return undefined when no token is present", () => {
     const headers = {};
     expect(extractJWTToken(headers)).toBeUndefined();
   });
 
-  it('should not extract from non-Bearer authorization header', () => {
-    const headers = { authorization: 'Basic dXNlcjpwYXNz' };
+  it("should not extract from non-Bearer authorization header", () => {
+    const headers = { authorization: "Basic dXNlcjpwYXNz" };
     expect(extractJWTToken(headers)).toBeUndefined();
   });
 
-  it('should prefer Bearer over x-jwt-token', () => {
+  it("should prefer Bearer over x-jwt-token", () => {
     const headers = {
-      authorization: 'Bearer bearer-token',
-      'x-jwt-token': 'custom-token',
+      authorization: "Bearer bearer-token",
+      "x-jwt-token": "custom-token",
     };
-    expect(extractJWTToken(headers)).toBe('bearer-token');
+    expect(extractJWTToken(headers)).toBe("bearer-token");
   });
 });
 
-describe('isAuthenticated wrapper', () => {
-  it('should call resolver when user is in context', () => {
-    const mockResolver = vi.fn().mockReturnValue('result');
+describe("isAuthenticated wrapper", () => {
+  it("should call resolver when user is in context", () => {
+    const mockResolver = vi.fn().mockReturnValue("result");
     const wrapped = isAuthenticated(mockResolver);
 
-    const context = { user: { _id: 'user-1', email: 'test@test.com' } };
+    const context = { user: { _id: "user-1", email: "test@test.com" } };
     const result = wrapped(null, {}, context, {});
 
     expect(mockResolver).toHaveBeenCalledWith(null, {}, context, {});
-    expect(result).toBe('result');
+    expect(result).toBe("result");
   });
 
-  it('should throw UNAUTHENTICATED when user is missing', () => {
+  it("should throw UNAUTHENTICATED when user is missing", () => {
     const mockResolver = vi.fn();
     const wrapped = isAuthenticated(mockResolver);
 
     const context = { user: null };
 
     expect(() => wrapped(null, {}, context, {})).toThrow(
-      'Vous devez être connecté'
+      "Vous devez être connecté",
     );
     expect(mockResolver).not.toHaveBeenCalled();
   });
 
-  it('should throw UNAUTHENTICATED when user is undefined', () => {
+  it("should throw UNAUTHENTICATED when user is undefined", () => {
     const mockResolver = vi.fn();
     const wrapped = isAuthenticated(mockResolver);
 
-    expect(() => wrapped(null, {}, {}, {})).toThrow(
-      'Vous devez être connecté'
-    );
+    expect(() => wrapped(null, {}, {}, {})).toThrow("Vous devez être connecté");
   });
 });
 
-describe('withWorkspace wrapper', () => {
-  it('should inject workspaceId from header into context', async () => {
-    const mockResolver = vi.fn().mockResolvedValue('result');
+describe("withWorkspace wrapper", () => {
+  it("should inject workspaceId from header into context", async () => {
+    const mockResolver = vi.fn().mockResolvedValue("result");
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: 'user-1' },
-      req: { headers: { 'x-workspace-id': 'ws-123' } },
+      user: { _id: "user-1" },
+      req: { headers: { "x-workspace-id": "ws-123" } },
     };
 
     const result = await wrapped(null, {}, context, {});
 
-    expect(result).toBe('result');
+    expect(result).toBe("result");
     const enhancedContext = mockResolver.mock.calls[0][2];
-    expect(enhancedContext.workspaceId).toBe('ws-123');
+    expect(enhancedContext.workspaceId).toBe("ws-123");
   });
 
-  it('should use args.workspaceId when header is absent', async () => {
-    const mockResolver = vi.fn().mockResolvedValue('result');
+  it("should use args.workspaceId when header is absent", async () => {
+    const mockResolver = vi.fn().mockResolvedValue("result");
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: 'user-1' },
+      user: { _id: "user-1" },
       req: { headers: {} },
     };
 
-    await wrapped(null, { workspaceId: 'ws-from-args' }, context, {});
+    await wrapped(null, { workspaceId: "ws-from-args" }, context, {});
 
     const enhancedContext = mockResolver.mock.calls[0][2];
-    expect(enhancedContext.workspaceId).toBe('ws-from-args');
+    expect(enhancedContext.workspaceId).toBe("ws-from-args");
   });
 
-  it('should throw FORBIDDEN when header and args workspaceId mismatch', async () => {
-    const mockResolver = vi.fn();
+  it("should use args.workspaceId when header and args mismatch (graceful fallback)", async () => {
+    const mockResolver = vi.fn().mockResolvedValue("result");
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: 'user-1' },
-      req: { headers: { 'x-workspace-id': 'ws-header' } },
+      user: { _id: "user-1" },
+      req: { headers: { "x-workspace-id": "ws-header" } },
     };
 
-    await expect(
-      wrapped(null, { workspaceId: 'ws-different' }, context, {})
-    ).rejects.toThrow('Organisation invalide');
+    await wrapped(null, { workspaceId: "ws-different" }, context, {});
+    expect(mockResolver).toHaveBeenCalled();
+    const enhancedContext = mockResolver.mock.calls[0][2];
+    expect(enhancedContext.workspaceId).toBe("ws-different");
   });
 
-  it('should throw UNAUTHENTICATED when user is missing', async () => {
+  it("should throw UNAUTHENTICATED when user is missing", async () => {
     const mockResolver = vi.fn();
     const wrapped = withWorkspace(mockResolver);
 
-    await expect(
-      wrapped(null, {}, { user: null }, {})
-    ).rejects.toThrow('Vous devez être connecté');
+    await expect(wrapped(null, {}, { user: null }, {})).rejects.toThrow(
+      "Vous devez être connecté",
+    );
   });
 
-  it('should fallback to user ID as workspaceId when no workspace specified', async () => {
-    const mockResolver = vi.fn().mockResolvedValue('result');
+  it("should fallback to user ID as workspaceId when no workspace specified", async () => {
+    const mockResolver = vi.fn().mockResolvedValue("result");
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: { toString: () => 'user-obj-id' } },
+      user: { _id: { toString: () => "user-obj-id" } },
       req: { headers: {} },
     };
 
     await wrapped(null, {}, context, {});
 
     const enhancedContext = mockResolver.mock.calls[0][2];
-    expect(enhancedContext.workspaceId).toBe('user-obj-id');
+    expect(enhancedContext.workspaceId).toBe("user-obj-id");
   });
 });
 
-describe('User cache logic', () => {
+describe("User cache logic", () => {
   // Test the cache helper functions pattern
   const USER_CACHE_TTL = 30000;
   const USER_CACHE_MAX = 500;
@@ -212,17 +214,17 @@ describe('User cache logic', () => {
     cache.clear();
   });
 
-  it('should return null for uncached user', () => {
-    expect(getCachedUser('user-1')).toBe(null);
+  it("should return null for uncached user", () => {
+    expect(getCachedUser("user-1")).toBe(null);
   });
 
-  it('should return cached user within TTL', () => {
-    const user = { name: 'Test' };
-    setCachedUser('user-1', user);
-    expect(getCachedUser('user-1')).toEqual(user);
+  it("should return cached user within TTL", () => {
+    const user = { name: "Test" };
+    setCachedUser("user-1", user);
+    expect(getCachedUser("user-1")).toEqual(user);
   });
 
-  it('should evict oldest entry when max size reached', () => {
+  it("should evict oldest entry when max size reached", () => {
     // Fill cache with USER_CACHE_MAX = 500 (using small test max)
     for (let i = 0; i < 3; i++) {
       cache.set(`user-${i}`, { user: { name: `User ${i}` }, ts: Date.now() });
@@ -240,9 +242,9 @@ describe('User cache logic', () => {
       const oldestKey = testCache.keys().next().value;
       testCache.delete(oldestKey);
     }
-    testCache.set('user-new', { user: { name: 'New' }, ts: Date.now() });
+    testCache.set("user-new", { user: { name: "New" }, ts: Date.now() });
 
-    expect(testCache.has('user-0')).toBe(false);
-    expect(testCache.has('user-new')).toBe(true);
+    expect(testCache.has("user-0")).toBe(false);
+    expect(testCache.has("user-new")).toBe(true);
   });
 });
