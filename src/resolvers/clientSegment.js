@@ -1,6 +1,11 @@
 import ClientSegment from "../models/ClientSegment.js";
 import Client from "../models/Client.js";
-import { requireRead, requireWrite, requireDelete } from "../middlewares/rbac.js";
+import {
+  requireRead,
+  requireWrite,
+  requireDelete,
+  resolveWorkspaceId,
+} from "../middlewares/rbac.js";
 import { createNotFoundError, AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
 
@@ -27,7 +32,9 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
       case "contains":
         return { [field]: { $regex: escapeRegex(value), $options: "i" } };
       case "not_contains":
-        return { [field]: { $not: { $regex: escapeRegex(value), $options: "i" } } };
+        return {
+          [field]: { $not: { $regex: escapeRegex(value), $options: "i" } },
+        };
       case "starts_with":
         return { [field]: { $regex: `^${escapeRegex(value)}`, $options: "i" } };
       case "ends_with":
@@ -41,9 +48,21 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
       case "is_false":
         return { $or: [{ [field]: false }, { [field]: { $exists: false } }] };
       case "is_empty":
-        return { $or: [{ [field]: null }, { [field]: "" }, { [field]: { $exists: false } }] };
+        return {
+          $or: [
+            { [field]: null },
+            { [field]: "" },
+            { [field]: { $exists: false } },
+          ],
+        };
       case "is_not_empty":
-        return { $and: [{ [field]: { $exists: true } }, { [field]: { $ne: null } }, { [field]: { $ne: "" } }] };
+        return {
+          $and: [
+            { [field]: { $exists: true } },
+            { [field]: { $ne: null } },
+            { [field]: { $ne: "" } },
+          ],
+        };
       case "before":
         return { [field]: { $lt: new Date(value) } };
       case "after":
@@ -81,25 +100,23 @@ export const clientSegmentResolvers = {
   Query: {
     clientSegments: requireRead("clients")(
       async (_, { workspaceId: inputWorkspaceId }, context) => {
-        const { workspaceId: contextWorkspaceId } = context;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-          throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         return ClientSegment.find({
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
         }).sort({ createdAt: -1 });
-      }
+      },
     ),
 
     clientSegment: requireRead("clients")(
       async (_, { workspaceId: inputWorkspaceId, id }, context) => {
-        const { workspaceId: contextWorkspaceId } = context;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-          throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const segment = await ClientSegment.findOne({
           _id: id,
@@ -107,16 +124,25 @@ export const clientSegmentResolvers = {
         });
         if (!segment) throw createNotFoundError("Segment");
         return segment;
-      }
+      },
     ),
 
     clientsInSegment: requireRead("clients")(
-      async (_, { workspaceId: inputWorkspaceId, segmentId, page = 1, limit = 10, search }, context) => {
-        const { workspaceId: contextWorkspaceId } = context;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-          throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+      async (
+        _,
+        {
+          workspaceId: inputWorkspaceId,
+          segmentId,
+          page = 1,
+          limit = 10,
+          search,
+        },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const segment = await ClientSegment.findOne({
           _id: segmentId,
@@ -124,7 +150,11 @@ export const clientSegmentResolvers = {
         });
         if (!segment) throw createNotFoundError("Segment");
 
-        const query = buildSegmentQuery(segment.rules, segment.matchType, workspaceId);
+        const query = buildSegmentQuery(
+          segment.rules,
+          segment.matchType,
+          workspaceId,
+        );
 
         // Add search if provided
         if (search) {
@@ -151,21 +181,24 @@ export const clientSegmentResolvers = {
           .limit(itemsPerPage);
 
         return { items, totalItems, currentPage, totalPages };
-      }
+      },
     ),
   },
 
   Mutation: {
     createClientSegment: requireWrite("clients")(
       async (_, { workspaceId: inputWorkspaceId, input }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-          throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         if (!input.rules || input.rules.length === 0) {
-          throw new AppError("Au moins une règle est requise", ERROR_CODES.BAD_REQUEST);
+          throw new AppError(
+            "Au moins une règle est requise",
+            ERROR_CODES.BAD_REQUEST,
+          );
         }
 
         const segment = new ClientSegment({
@@ -176,16 +209,15 @@ export const clientSegmentResolvers = {
 
         await segment.save();
         return segment;
-      }
+      },
     ),
 
     updateClientSegment: requireWrite("clients")(
       async (_, { workspaceId: inputWorkspaceId, id, input }, context) => {
-        const { workspaceId: contextWorkspaceId } = context;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-          throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const segment = await ClientSegment.findOne({
           _id: id,
@@ -194,7 +226,10 @@ export const clientSegmentResolvers = {
         if (!segment) throw createNotFoundError("Segment");
 
         if (input.rules && input.rules.length === 0) {
-          throw new AppError("Au moins une règle est requise", ERROR_CODES.BAD_REQUEST);
+          throw new AppError(
+            "Au moins une règle est requise",
+            ERROR_CODES.BAD_REQUEST,
+          );
         }
 
         Object.keys(input).forEach((key) => {
@@ -203,16 +238,15 @@ export const clientSegmentResolvers = {
 
         await segment.save();
         return segment;
-      }
+      },
     ),
 
     deleteClientSegment: requireDelete("clients")(
       async (_, { workspaceId: inputWorkspaceId, id }, context) => {
-        const { workspaceId: contextWorkspaceId } = context;
-        if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-          throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const result = await ClientSegment.deleteOne({
           _id: id,
@@ -221,19 +255,21 @@ export const clientSegmentResolvers = {
 
         if (result.deletedCount === 0) throw createNotFoundError("Segment");
         return true;
-      }
+      },
     ),
   },
 
   ClientSegment: {
     id: (parent) => parent._id || parent.id,
-    createdAt: (parent) => parent.createdAt?.toISOString?.() || parent.createdAt,
-    updatedAt: (parent) => parent.updatedAt?.toISOString?.() || parent.updatedAt,
+    createdAt: (parent) =>
+      parent.createdAt?.toISOString?.() || parent.createdAt,
+    updatedAt: (parent) =>
+      parent.updatedAt?.toISOString?.() || parent.updatedAt,
     clientCount: async (parent) => {
       const query = buildSegmentQuery(
         parent.rules,
         parent.matchType,
-        parent.workspaceId.toString()
+        parent.workspaceId.toString(),
       );
       return Client.countDocuments(query);
     },

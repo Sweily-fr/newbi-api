@@ -9,6 +9,7 @@ import {
   requireRead,
   requireWrite,
   requireDelete,
+  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
@@ -22,17 +23,6 @@ const checkAccess = async (id, workspaceId) => {
     throw new AppError("Facture d'achat non trouvée", ERROR_CODES.NOT_FOUND);
   }
   return doc;
-};
-
-const resolveWorkspaceId = (inputWorkspaceId, contextWorkspaceId) => {
-  if (
-    inputWorkspaceId &&
-    contextWorkspaceId &&
-    inputWorkspaceId !== contextWorkspaceId
-  ) {
-    throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-  }
-  return inputWorkspaceId || contextWorkspaceId;
 };
 
 const purchaseInvoiceResolvers = {

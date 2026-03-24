@@ -4,15 +4,9 @@ import {
   requireRead,
   requireWrite,
   requireDelete,
+  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
-
-const resolveWorkspaceId = (inputWorkspaceId, contextWorkspaceId) => {
-  if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-    throw new AppError("Organisation invalide.", ERROR_CODES.FORBIDDEN);
-  }
-  return inputWorkspaceId || contextWorkspaceId;
-};
 
 // Income categories for filtering
 const INCOME_CATEGORIES = ["SALES", "REFUNDS_RECEIVED", "OTHER_INCOME"];
@@ -35,8 +29,15 @@ const getMonthRange = (startDate, endDate) => {
 const treasuryForecastResolvers = {
   Query: {
     treasuryForecastData: requireRead("expenses")(
-      async (_, { workspaceId: inputWorkspaceId, startDate, endDate, accountId }, context) => {
-        const workspaceId = resolveWorkspaceId(inputWorkspaceId, context.workspaceId);
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, startDate, endDate, accountId },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const wId = new mongoose.Types.ObjectId(workspaceId);
 
         const now = new Date();
@@ -56,7 +57,10 @@ const treasuryForecastResolvers = {
         const accounts = await AccountBanking.find(accountQuery).lean();
         const currentBalance = accounts.reduce((sum, a) => {
           // Use same logic as GraphQL resolver: balance is stored as Number in MongoDB
-          const bal = typeof a.balance === "number" ? a.balance : (a.balance?.current ?? a.balance?.available ?? 0);
+          const bal =
+            typeof a.balance === "number"
+              ? a.balance
+              : (a.balance?.current ?? a.balance?.available ?? 0);
           return sum + bal;
         }, 0);
 
@@ -109,7 +113,9 @@ const treasuryForecastResolvers = {
           { $match: { _effectiveDate: { $gte: txStartDate, $lt: txEndDate } } },
           {
             $group: {
-              _id: { $dateToString: { format: "%Y-%m", date: "$_effectiveDate" } },
+              _id: {
+                $dateToString: { format: "%Y-%m", date: "$_effectiveDate" },
+              },
               total: { $sum: "$amount" },
             },
           },
@@ -127,7 +133,9 @@ const treasuryForecastResolvers = {
           {
             $group: {
               _id: {
-                month: { $dateToString: { format: "%Y-%m", date: "$_effectiveDate" } },
+                month: {
+                  $dateToString: { format: "%Y-%m", date: "$_effectiveDate" },
+                },
                 category: { $ifNull: ["$expenseCategory", "OTHER"] },
               },
               total: { $sum: "$amount" },
@@ -137,34 +145,61 @@ const treasuryForecastResolvers = {
         const expenseMap = {};
         for (const item of bankExpenseTx) {
           const month = item._id.month;
-          if (!expenseMap[month]) expenseMap[month] = { total: 0, byCategory: {} };
+          if (!expenseMap[month])
+            expenseMap[month] = { total: 0, byCategory: {} };
           const absAmount = Math.abs(item.total);
           expenseMap[month].total += absAmount;
           const cat = item._id.category || "OTHER";
-          expenseMap[month].byCategory[cat] = (expenseMap[month].byCategory[cat] || 0) + absAmount;
+          expenseMap[month].byCategory[cat] =
+            (expenseMap[month].byCategory[cat] || 0) + absAmount;
         }
 
         // 5b. Calculate past averages for auto-forecast (future months without manual forecasts)
-        const pastMonthRange = monthRange.filter(m => m < currentMonth);
-        const monthsWithIncome = pastMonthRange.filter(m => (incomeMap[m] || 0) > 0);
-        const avgMonthlyIncome = monthsWithIncome.length > 0
-          ? Math.round(monthsWithIncome.reduce((sum, m) => sum + incomeMap[m], 0) / monthsWithIncome.length)
-          : 0;
+        const pastMonthRange = monthRange.filter((m) => m < currentMonth);
+        const monthsWithIncome = pastMonthRange.filter(
+          (m) => (incomeMap[m] || 0) > 0,
+        );
+        const avgMonthlyIncome =
+          monthsWithIncome.length > 0
+            ? Math.round(
+                monthsWithIncome.reduce((sum, m) => sum + incomeMap[m], 0) /
+                  monthsWithIncome.length,
+              )
+            : 0;
 
         const EXPENSE_CATS = [
-          "RENT", "SUBSCRIPTIONS", "OFFICE_SUPPLIES", "SERVICES", "TRANSPORT",
-          "MEALS", "TELECOMMUNICATIONS", "INSURANCE", "ENERGY", "SOFTWARE",
-          "HARDWARE", "MARKETING", "TRAINING", "MAINTENANCE", "TAXES",
-          "UTILITIES", "SALARIES", "OTHER_EXPENSE",
+          "RENT",
+          "SUBSCRIPTIONS",
+          "OFFICE_SUPPLIES",
+          "SERVICES",
+          "TRANSPORT",
+          "MEALS",
+          "TELECOMMUNICATIONS",
+          "INSURANCE",
+          "ENERGY",
+          "SOFTWARE",
+          "HARDWARE",
+          "MARKETING",
+          "TRAINING",
+          "MAINTENANCE",
+          "TAXES",
+          "UTILITIES",
+          "SALARIES",
+          "OTHER_EXPENSE",
         ];
         const autoExpenseByCategory = {};
         let avgMonthlyExpense = 0;
         for (const cat of EXPENSE_CATS) {
           const mapKey = cat === "OTHER_EXPENSE" ? "OTHER" : cat;
-          const mwc = pastMonthRange.filter(m => (expenseMap[m]?.byCategory[mapKey] || 0) > 0);
+          const mwc = pastMonthRange.filter(
+            (m) => (expenseMap[m]?.byCategory[mapKey] || 0) > 0,
+          );
           if (mwc.length > 0) {
             const avg = Math.round(
-              mwc.reduce((sum, m) => sum + (expenseMap[m].byCategory[mapKey] || 0), 0) / mwc.length
+              mwc.reduce(
+                (sum, m) => sum + (expenseMap[m].byCategory[mapKey] || 0),
+                0,
+              ) / mwc.length,
             );
             autoExpenseByCategory[cat] = avg;
             avgMonthlyExpense += avg;
@@ -193,17 +228,38 @@ const treasuryForecastResolvers = {
         // We build forward and backward from currentMonth
         const monthsData = monthRange.map((month) => {
           const actualIncome = incomeMap[month] || 0;
-          const actualExpenseData = expenseMap[month] || { total: 0, byCategory: {} };
+          const actualExpenseData = expenseMap[month] || {
+            total: 0,
+            byCategory: {},
+          };
           const actualExpense = actualExpenseData.total;
 
-          const manualForecast = forecastMap[month] || { income: {}, expense: {} };
-          let forecastIncome = Object.values(manualForecast.income).reduce((s, v) => s + v, 0);
-          let forecastExpense = Object.values(manualForecast.expense).reduce((s, v) => s + v, 0);
+          const manualForecast = forecastMap[month] || {
+            income: {},
+            expense: {},
+          };
+          let forecastIncome = Object.values(manualForecast.income).reduce(
+            (s, v) => s + v,
+            0,
+          );
+          let forecastExpense = Object.values(manualForecast.expense).reduce(
+            (s, v) => s + v,
+            0,
+          );
 
           // Auto-forecast: only apply to current and future months without manual forecast
-          const needsAutoForecast = forecastIncome === 0 && forecastExpense === 0 && month >= currentMonth;
-          const autoForecastIncome = needsAutoForecast && avgMonthlyIncome > 0 ? { SALES: avgMonthlyIncome } : {};
-          const autoForecastExpense = needsAutoForecast && avgMonthlyExpense > 0 ? { ...autoExpenseByCategory } : {};
+          const needsAutoForecast =
+            forecastIncome === 0 &&
+            forecastExpense === 0 &&
+            month >= currentMonth;
+          const autoForecastIncome =
+            needsAutoForecast && avgMonthlyIncome > 0
+              ? { SALES: avgMonthlyIncome }
+              : {};
+          const autoForecastExpense =
+            needsAutoForecast && avgMonthlyExpense > 0
+              ? { ...autoExpenseByCategory }
+              : {};
 
           if (needsAutoForecast) {
             if (avgMonthlyIncome > 0) forecastIncome = avgMonthlyIncome;
@@ -211,8 +267,14 @@ const treasuryForecastResolvers = {
           }
 
           // Merge manual + auto forecast for category breakdown
-          const mergedForecastIncome = { ...autoForecastIncome, ...manualForecast.income };
-          const mergedForecastExpense = { ...autoForecastExpense, ...manualForecast.expense };
+          const mergedForecastIncome = {
+            ...autoForecastIncome,
+            ...manualForecast.income,
+          };
+          const mergedForecastExpense = {
+            ...autoForecastExpense,
+            ...manualForecast.expense,
+          };
 
           // Build category breakdown
           const categoryBreakdown = [];
@@ -261,7 +323,9 @@ const treasuryForecastResolvers = {
 
         // Calculate cumulative balances anchored on current month
         // Find current month index
-        const currentMonthIdx = monthsData.findIndex((m) => m.month === currentMonth);
+        const currentMonthIdx = monthsData.findIndex(
+          (m) => m.month === currentMonth,
+        );
 
         if (currentMonthIdx >= 0) {
           // Current month: opening = currentBalance, then adjust
@@ -271,7 +335,8 @@ const treasuryForecastResolvers = {
           // currentMonth closing balance ≈ currentBalance
           // So opening of currentMonth = currentBalance - (actual net of current month so far)
           const currentMonthData = monthsData[currentMonthIdx];
-          const currentNet = currentMonthData.actualIncome - currentMonthData.actualExpense;
+          const currentNet =
+            currentMonthData.actualIncome - currentMonthData.actualExpense;
           currentMonthData.openingBalance = currentBalance - currentNet;
           currentMonthData.closingBalance = currentBalance;
 
@@ -288,8 +353,12 @@ const treasuryForecastResolvers = {
             const md = monthsData[i];
             md.openingBalance = monthsData[i - 1].closingBalance;
             const isPast = md.month <= currentMonth;
-            const income = isPast ? md.actualIncome : (md.forecastIncome || md.actualIncome);
-            const expense = isPast ? md.actualExpense : (md.forecastExpense || md.actualExpense);
+            const income = isPast
+              ? md.actualIncome
+              : md.forecastIncome || md.actualIncome;
+            const expense = isPast
+              ? md.actualExpense
+              : md.forecastExpense || md.actualExpense;
             md.closingBalance = md.openingBalance + income - expense;
           }
         } else {
@@ -298,8 +367,12 @@ const treasuryForecastResolvers = {
           for (const md of monthsData) {
             md.openingBalance = runningBalance;
             const isPast = md.month <= currentMonth;
-            const income = isPast ? md.actualIncome : (md.forecastIncome || md.actualIncome);
-            const expense = isPast ? md.actualExpense : (md.forecastExpense || md.actualExpense);
+            const income = isPast
+              ? md.actualIncome
+              : md.forecastIncome || md.actualIncome;
+            const expense = isPast
+              ? md.actualExpense
+              : md.forecastExpense || md.actualExpense;
             md.closingBalance = runningBalance + income - expense;
             runningBalance = md.closingBalance;
           }
@@ -312,7 +385,9 @@ const treasuryForecastResolvers = {
         const targetMonthData = monthsData.find((m) => m.month === targetMonth);
         const projectedBalance3Months = targetMonthData
           ? targetMonthData.closingBalance
-          : (monthsData.length > 0 ? monthsData[monthsData.length - 1].closingBalance : currentBalance);
+          : monthsData.length > 0
+            ? monthsData[monthsData.length - 1].closingBalance
+            : currentBalance;
 
         return {
           kpi: {
@@ -323,26 +398,36 @@ const treasuryForecastResolvers = {
           },
           months: monthsData,
         };
-      }
+      },
     ),
 
     treasuryForecasts: requireRead("expenses")(
-      async (_, { workspaceId: inputWorkspaceId, startMonth, endMonth }, context) => {
-        const workspaceId = resolveWorkspaceId(inputWorkspaceId, context.workspaceId);
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, startMonth, endMonth },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         return await TreasuryForecast.find({
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
           month: { $gte: startMonth, $lte: endMonth },
         })
           .sort({ month: 1, category: 1 })
           .lean();
-      }
+      },
     ),
   },
 
   Mutation: {
     upsertTreasuryForecast: requireWrite("expenses")(
       async (_, { input }, context) => {
-        const workspaceId = resolveWorkspaceId(input.workspaceId, context.workspaceId);
+        const workspaceId = resolveWorkspaceId(
+          input.workspaceId,
+          context.workspaceId,
+        );
 
         const result = await TreasuryForecast.findOneAndUpdate(
           {
@@ -363,11 +448,11 @@ const treasuryForecastResolvers = {
               createdBy: context.user.id,
             },
           },
-          { upsert: true, new: true, lean: true }
+          { upsert: true, new: true, lean: true },
         );
 
         return result;
-      }
+      },
     ),
 
     deleteTreasuryForecast: requireDelete("expenses")(
@@ -384,7 +469,7 @@ const treasuryForecastResolvers = {
 
         await TreasuryForecast.deleteOne({ _id: id });
         return { success: true, message: "Prévision supprimée" };
-      }
+      },
     ),
   },
 
