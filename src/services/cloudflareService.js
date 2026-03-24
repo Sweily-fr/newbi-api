@@ -88,38 +88,38 @@ class CloudflareService {
       "  - Profile Images:",
       this.profileBucketName,
       "→",
-      this.profilePublicUrl
+      this.profilePublicUrl,
     );
     console.log(
       "  - Company Images:",
       this.companyImagesBucketName,
       "→",
-      this.companyImagesPublicUrl
+      this.companyImagesPublicUrl,
     );
     console.log(
       "  - Signatures:",
       this.signatureBucketName,
       "→",
-      this.signaturePublicUrl
+      this.signaturePublicUrl,
     );
     console.log("  - OCR:", this.ocrBucketName, "→", this.ocrPublicUrl);
     console.log(
       "  - Imported Invoices:",
       this.importedInvoicesBucketName,
       "→",
-      this.importedInvoicesPublicUrl
+      this.importedInvoicesPublicUrl,
     );
     console.log(
       "  - Receipts:",
       this.receiptsBucketName,
       "→",
-      this.receiptsPublicUrl
+      this.receiptsPublicUrl,
     );
     console.log(
       "  - Shared Documents:",
       this.sharedDocumentsBucketName,
       "→",
-      this.sharedDocumentsPublicUrl
+      this.sharedDocumentsPublicUrl,
     );
   }
 
@@ -151,7 +151,7 @@ class CloudflareService {
     userId,
     imageType = "profile",
     organizationId = null,
-    signatureId = null
+    signatureId = null,
   ) {
     try {
       // Générer une clé unique pour l'image
@@ -166,7 +166,7 @@ class CloudflareService {
           // Structure : idUser/idSignature/ImgProfil/fichier
           if (!signatureId) {
             throw new Error(
-              "Signature ID requis pour les images de profil de signature"
+              "Signature ID requis pour les images de profil de signature",
             );
           }
           key = `${userId}/${signatureId}/ImgProfil/${uniqueId}${fileExtension}`;
@@ -176,17 +176,25 @@ class CloudflareService {
           // Structure : idUser/idSignature/logoReseau/fichier
           if (!signatureId) {
             throw new Error(
-              "Signature ID requis pour les logos réseaux sociaux"
+              "Signature ID requis pour les logos réseaux sociaux",
             );
           }
           key = `${userId}/${signatureId}/logoReseau/${uniqueId}${fileExtension}`;
+          break;
+        }
+        case "banner": {
+          // Structure : idUser/idSignature/banner/fichier
+          if (!signatureId) {
+            throw new Error("Signature ID requis pour les bandeaux");
+          }
+          key = `${userId}/${signatureId}/banner/${uniqueId}${fileExtension}`;
           break;
         }
         case "imgCompany": {
           // Pour les logos d'entreprise - Structure: image-company/{idOrganisation}/{NomImage}
           if (!organizationId) {
             throw new Error(
-              "Organization ID requis pour les logos d'entreprise"
+              "Organization ID requis pour les logos d'entreprise",
             );
           }
           // Garder le nom original du fichier (nettoyé)
@@ -217,7 +225,7 @@ class CloudflareService {
           // Pour les factures importées, organiser par organisation
           if (!organizationId) {
             throw new Error(
-              "Organization ID requis pour les factures importées"
+              "Organization ID requis pour les factures importées",
             );
           }
           key = `${organizationId}/${uniqueId}${fileExtension}`;
@@ -266,7 +274,11 @@ class CloudflareService {
 
       // Déterminer le bucket et l'URL publique selon le type
       let targetBucket, targetPublicUrl;
-      if (imageType === "imgProfil" || imageType === "logoReseau") {
+      if (
+        imageType === "imgProfil" ||
+        imageType === "logoReseau" ||
+        imageType === "banner"
+      ) {
         targetBucket = this.signatureBucketName;
         targetPublicUrl = this.signaturePublicUrl;
       } else if (imageType === "imgCompany") {
@@ -356,13 +368,14 @@ class CloudflareService {
           const imageType = keyParts[2];
           const filename = keyParts.slice(3).join("/");
 
-          const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+          const baseUrl =
+            process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
           imageUrl = `${baseUrl}/api/images/${userId}/${imageType}/${filename}`;
         } else {
           // Dernier fallback sur URL signée avec le bon bucket
           console.log(
             "🔐 CloudflareService - Fallback URL signée, bucket:",
-            targetBucket
+            targetBucket,
           );
           imageUrl = await this.getSignedUrlForBucket(key, targetBucket, 86400);
         }
@@ -428,7 +441,7 @@ class CloudflareService {
 
       await this.client.send(putCommand);
       console.log(
-        "✅ CloudflareService - Fichier uploadé à la nouvelle location"
+        "✅ CloudflareService - Fichier uploadé à la nouvelle location",
       );
 
       // Supprimer le fichier temporaire
@@ -454,7 +467,7 @@ class CloudflareService {
         imageUrl = await this.getSignedUrlForBucket(
           newKey,
           this.ocrBucketName,
-          86400
+          86400,
         );
       }
 
@@ -484,13 +497,13 @@ class CloudflareService {
     userId,
     signatureId,
     logoType,
-    color = null
+    color = null,
   ) {
     try {
       // Valider les paramètres requis
       if (!userId || !signatureId || !logoType) {
         throw new Error(
-          "userId, signatureId et logoType sont requis pour l'upload de logos sociaux"
+          "userId, signatureId et logoType sont requis pour l'upload de logos sociaux",
         );
       }
 
@@ -498,7 +511,7 @@ class CloudflareService {
       const validLogoTypes = ["facebook", "instagram", "linkedin", "x"];
       if (!validLogoTypes.includes(logoType)) {
         throw new Error(
-          `Type de logo invalide. Types supportés: ${validLogoTypes.join(", ")}`
+          `Type de logo invalide. Types supportés: ${validLogoTypes.join(", ")}`,
         );
       }
 
@@ -552,7 +565,7 @@ class CloudflareService {
     } catch (error) {
       console.error(`❌ Erreur upload logo social ${logoType}:`, error.message);
       throw new Error(
-        `Échec de l'upload du logo social ${logoType}: ${error.message}`
+        `Échec de l'upload du logo social ${logoType}: ${error.message}`,
       );
     }
   }
@@ -568,7 +581,11 @@ class CloudflareService {
 
     // Déterminer l'URL publique selon le type de clé
     let publicUrl = process.env.R2_PUBLIC_URL;
-    if (key.includes("/ImgProfil/") || key.includes("/logoReseau/")) {
+    if (
+      key.includes("/ImgProfil/") ||
+      key.includes("/logoReseau/") ||
+      key.includes("/banner/")
+    ) {
       publicUrl = this.signaturePublicUrl;
     }
 
@@ -578,12 +595,10 @@ class CloudflareService {
     } else {
       // Sinon, générer une URL signée temporaire avec le bon bucket
       console.log("🔐 CloudflareService - Fallback sur URL signée");
-      console.log(
-        "🔍 CloudflareService - targetPublicUrl était:",
-        targetPublicUrl
-      );
+      console.log("🔍 CloudflareService - publicUrl était:", publicUrl);
 
       // Déterminer le bon bucket pour l'URL signée
+      const keyParts = key.split("/");
       let targetBucket = this.bucketName;
       if (keyParts.length >= 2 && keyParts[1] === "image") {
         targetBucket = this.profileBucketName || this.bucketName;
@@ -595,7 +610,7 @@ class CloudflareService {
 
       console.log(
         "🪣 CloudflareService - Bucket pour URL signée:",
-        targetBucket
+        targetBucket,
       );
       return await this.getSignedUrlForBucket(key, targetBucket, expiresIn);
     }
@@ -622,7 +637,11 @@ class CloudflareService {
     try {
       // Déterminer le bucket selon le type de clé
       let targetBucket = this.bucketName;
-      if (key.includes("/ImgProfil/") || key.includes("/logoReseau/")) {
+      if (
+        key.includes("/ImgProfil/") ||
+        key.includes("/logoReseau/") ||
+        key.includes("/banner/")
+      ) {
         targetBucket = this.signatureBucketName;
       }
 
@@ -641,8 +660,8 @@ class CloudflareService {
       console.log(
         `🌐 CloudflareService - URL signée générée: ${signedUrl.substring(
           0,
-          100
-        )}...`
+          100,
+        )}...`,
       );
       return signedUrl;
     } catch (error) {
@@ -731,8 +750,12 @@ class CloudflareService {
       const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
 
       // Convertir le type d'image en nom de dossier correct
-      const folderName =
-        folderType === "imgProfil" ? "ImgProfil" : "logoReseau";
+      const folderNameMap = {
+        imgProfil: "ImgProfil",
+        logoReseau: "logoReseau",
+        banner: "banner",
+      };
+      const folderName = folderNameMap[folderType] || folderType;
       const prefix = `${userId}/${signatureId}/${folderName}/`;
 
       console.log(`🗑️ Suppression du dossier: ${prefix}`);
@@ -751,7 +774,7 @@ class CloudflareService {
       }
 
       console.log(
-        `🗑️ Suppression de ${listResponse.Contents.length} fichier(s)`
+        `🗑️ Suppression de ${listResponse.Contents.length} fichier(s)`,
       );
 
       // Supprimer chaque fichier (y compris les marqueurs de dossiers)
@@ -799,7 +822,7 @@ class CloudflareService {
       }
 
       console.log(
-        `🗑️ Suppression de ${listResponse.Contents.length} logo(s) social(aux)`
+        `🗑️ Suppression de ${listResponse.Contents.length} logo(s) social(aux)`,
       );
 
       // Supprimer chaque fichier
@@ -809,7 +832,7 @@ class CloudflareService {
       });
 
       await Promise.all(deletePromises);
-      console.log(`✅ Logos sociaux supprimés avec succès`);
+      console.log("✅ Logos sociaux supprimés avec succès");
       return true;
     } catch (error) {
       console.warn("⚠️ Erreur suppression logos sociaux:", error.message);
@@ -826,7 +849,7 @@ class CloudflareService {
   async createSocialLogosStructure(userId, signatureId) {
     try {
       console.log(
-        `📁 Création structure logos sociaux pour signature ${signatureId}`
+        `📁 Création structure logos sociaux pour signature ${signatureId}`,
       );
 
       // Créer les dossiers pour chaque réseau social
@@ -837,7 +860,7 @@ class CloudflareService {
         `${userId}/${signatureId}/`,
         `${userId}/${signatureId}/logo/`,
         ...socialNetworks.map(
-          (network) => `${userId}/${signatureId}/logo/${network}/`
+          (network) => `${userId}/${signatureId}/logo/${network}/`,
         ),
       ];
 
@@ -862,11 +885,11 @@ class CloudflareService {
         }
       }
 
-      console.log(`✅ Structure logos sociaux créée`);
+      console.log("✅ Structure logos sociaux créée");
     } catch (error) {
       console.warn(
         "⚠️ Erreur création structure logos sociaux:",
-        error.message
+        error.message,
       );
       // Ne pas faire échouer le processus si la création des dossiers échoue
     }
@@ -880,7 +903,12 @@ class CloudflareService {
    */
   async createSignatureFolders(userId, signatureId, imageType) {
     try {
-      const folderName = imageType === "imgProfil" ? "ImgProfil" : "logoReseau";
+      const folderNameMap = {
+        imgProfil: "ImgProfil",
+        logoReseau: "logoReseau",
+        banner: "banner",
+      };
+      const folderName = folderNameMap[imageType] || imageType;
 
       // Créer des objets "marqueurs" pour les dossiers avec des clés se terminant par /
       // Cela aide Cloudflare R2 à reconnaître la structure de dossiers
@@ -929,23 +957,23 @@ class CloudflareService {
     fileName,
     userId,
     signatureId,
-    imageType
+    imageType,
   ) {
     try {
       console.log(
-        `🚀 Début upload signature - userId: ${userId}, signatureId: ${signatureId}, imageType: ${imageType}`
+        `🚀 Début upload signature - userId: ${userId}, signatureId: ${signatureId}, imageType: ${imageType}`,
       );
 
       // Validation des paramètres
       if (!signatureId) {
         throw new Error(
-          "Signature ID requis pour l'upload d'images de signature"
+          "Signature ID requis pour l'upload d'images de signature",
         );
       }
 
-      if (!["imgProfil", "logoReseau"].includes(imageType)) {
+      if (!["imgProfil", "logoReseau", "banner"].includes(imageType)) {
         throw new Error(
-          "Type d'image invalide. Doit être 'imgProfil' ou 'logoReseau'"
+          "Type d'image invalide. Doit être 'imgProfil', 'logoReseau' ou 'banner'",
         );
       }
 
@@ -955,24 +983,24 @@ class CloudflareService {
 
       // Cloudflare R2 créera automatiquement la structure de dossiers basée sur la clé du fichier
       console.log(
-        "📁 Structure de dossiers sera créée automatiquement par Cloudflare R2"
+        "📁 Structure de dossiers sera créée automatiquement par Cloudflare R2",
       );
 
       // Uploader la nouvelle image
-      console.log(`📤 Upload de la nouvelle image`);
+      console.log("📤 Upload de la nouvelle image");
       const result = await this.uploadImage(
         fileBuffer,
         fileName,
         userId,
         imageType,
         null, // organizationId
-        signatureId
+        signatureId,
       );
 
-      console.log(`✅ Upload terminé avec succès:`, result);
+      console.log("✅ Upload terminé avec succès:", result);
       return result;
     } catch (error) {
-      console.error(`❌ Erreur upload signature:`, error);
+      console.error("❌ Erreur upload signature:", error);
       throw new Error(`Échec de l'upload ${imageType}: ${error.message}`);
     }
   }
@@ -986,9 +1014,14 @@ class CloudflareService {
    * @param {string} workspaceId - ID du workspace (pour le préfixe de destination)
    * @returns {Promise<{key: string, url: string, contentType: string}>}
    */
-  async copyToSharedDocuments(sourceKey, sourceBucketName, destFileName, workspaceId) {
+  async copyToSharedDocuments(
+    sourceKey,
+    sourceBucketName,
+    destFileName,
+    workspaceId,
+  ) {
     const uniqueId = crypto.randomUUID();
-    const fileExtension = path.extname(destFileName).toLowerCase() || '.pdf';
+    const fileExtension = path.extname(destFileName).toLowerCase() || ".pdf";
     const destKey = `shared-documents/${workspaceId}/${uniqueId}${fileExtension}`;
     const contentType = this.getContentType(fileExtension);
 
@@ -999,10 +1032,10 @@ class CloudflareService {
         Key: destKey,
         CopySource: `${sourceBucketName}/${sourceKey}`,
         ContentType: contentType,
-        MetadataDirective: 'REPLACE',
+        MetadataDirective: "REPLACE",
         Metadata: {
           workspaceId,
-          imageType: 'sharedDocuments',
+          imageType: "sharedDocuments",
           copiedAt: new Date().toISOString(),
         },
       });
@@ -1015,7 +1048,9 @@ class CloudflareService {
         Key: sourceKey,
       });
       const response = await this.client.send(getCommand);
-      const fileBuffer = Buffer.from(await response.Body.transformToByteArray());
+      const fileBuffer = Buffer.from(
+        await response.Body.transformToByteArray(),
+      );
 
       const putCommand = new PutObjectCommand({
         Bucket: this.sharedDocumentsBucketName,
@@ -1024,7 +1059,7 @@ class CloudflareService {
         ContentType: contentType,
         Metadata: {
           workspaceId,
-          imageType: 'sharedDocuments',
+          imageType: "sharedDocuments",
           copiedAt: new Date().toISOString(),
         },
       });
@@ -1063,9 +1098,11 @@ class CloudflareService {
       ".tif": "image/tiff",
       ".bmp": "image/bmp",
       ".doc": "application/msword",
-      ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".docx":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       ".xls": "application/vnd.ms-excel",
-      ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ".xlsx":
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       ".txt": "text/plain",
       ".csv": "text/csv",
       ".mp4": "video/mp4",
@@ -1113,12 +1150,12 @@ class CloudflareService {
     signatureId,
     platform,
     svgBuffer,
-    fileName
+    fileName,
   ) {
     try {
       if (!userId || !signatureId || !platform) {
         throw new Error(
-          "userId, signatureId et platform sont requis pour les icônes personnalisées"
+          "userId, signatureId et platform sont requis pour les icônes personnalisées",
         );
       }
 
@@ -1144,7 +1181,7 @@ class CloudflareService {
     } catch (error) {
       console.error("❌ Erreur upload icône personnalisée:", error);
       throw new Error(
-        `Erreur lors de l'upload de l'icône personnalisée: ${error.message}`
+        `Erreur lors de l'upload de l'icône personnalisée: ${error.message}`,
       );
     }
   }
@@ -1165,8 +1202,6 @@ class CloudflareService {
       for (const platform of platforms) {
         try {
           // Supprimer tous les fichiers du dossier de la plateforme
-          const folderKey = `${userId}/${signatureId}/customSocialIcons/${platform}/`;
-
           // Note: En production, il faudrait lister les objets d'abord puis les supprimer
           // Pour simplifier, on supprime les fichiers les plus courants
           const commonFiles = [
@@ -1189,7 +1224,7 @@ class CloudflareService {
               if (deleteError.name !== "NoSuchKey") {
                 console.warn(
                   `⚠️ Erreur suppression ${key}:`,
-                  deleteError.message
+                  deleteError.message,
                 );
               }
             }
@@ -1197,18 +1232,18 @@ class CloudflareService {
         } catch (platformError) {
           console.warn(
             `⚠️ Erreur suppression plateforme ${platform}:`,
-            platformError.message
+            platformError.message,
           );
         }
       }
 
       console.log(
-        `✅ Icônes personnalisées supprimées pour signature ${signatureId}`
+        `✅ Icônes personnalisées supprimées pour signature ${signatureId}`,
       );
     } catch (error) {
       console.error("❌ Erreur suppression icônes personnalisées:", error);
       throw new Error(
-        `Erreur lors de la suppression des icônes personnalisées: ${error.message}`
+        `Erreur lors de la suppression des icônes personnalisées: ${error.message}`,
       );
     }
   }
@@ -1240,15 +1275,15 @@ class CloudflareService {
       }
 
       console.log(
-        `✅ Structure icônes personnalisées créée pour signature ${signatureId}`
+        `✅ Structure icônes personnalisées créée pour signature ${signatureId}`,
       );
     } catch (error) {
       console.error(
         "❌ Erreur création structure icônes personnalisées:",
-        error
+        error,
       );
       throw new Error(
-        `Erreur lors de la création de la structure: ${error.message}`
+        `Erreur lors de la création de la structure: ${error.message}`,
       );
     }
   }
@@ -1262,7 +1297,7 @@ class CloudflareService {
   async listObjects(prefix, filter = "") {
     try {
       console.log(
-        `📋 Listage des objets avec préfixe: ${prefix}, filtre: ${filter}`
+        `📋 Listage des objets avec préfixe: ${prefix}, filtre: ${filter}`,
       );
 
       const command = new ListObjectsV2Command({
@@ -1316,7 +1351,9 @@ class CloudflareService {
   get kanbanPublicUrl() {
     const url = process.env.KANBAN_URL;
     if (!url) {
-      console.warn("⚠️ [KANBAN] KANBAN_URL non défini dans .env, utilisation de l'URL par défaut");
+      console.warn(
+        "⚠️ [KANBAN] KANBAN_URL non défini dans .env, utilisation de l'URL par défaut",
+      );
     }
     return url || "https://pub-kanban.r2.dev";
   }
@@ -1332,17 +1369,30 @@ class CloudflareService {
    * @param {string} commentId - ID du commentaire (optionnel, si imageType === 'comment')
    * @returns {Promise<{key: string, url: string, contentType: string}>}
    */
-  async uploadTaskImage(fileBuffer, fileName, taskId, userId, imageType = 'description', commentId = null) {
+  async uploadTaskImage(
+    fileBuffer,
+    fileName,
+    taskId,
+    userId,
+    imageType = "description",
+    commentId = null,
+  ) {
     try {
-      console.log(`🚀 [KANBAN] Upload image - taskId: ${taskId}, userId: ${userId}, type: ${imageType}`);
+      console.log(
+        `🚀 [KANBAN] Upload image - taskId: ${taskId}, userId: ${userId}, type: ${imageType}`,
+      );
 
       // Validation des paramètres
       if (!taskId || !userId) {
-        throw new Error("taskId et userId sont requis pour l'upload d'images de tâche");
+        throw new Error(
+          "taskId et userId sont requis pour l'upload d'images de tâche",
+        );
       }
 
-      if (!['description', 'comment'].includes(imageType)) {
-        throw new Error("Type d'image invalide. Doit être 'description' ou 'comment'");
+      if (!["description", "comment"].includes(imageType)) {
+        throw new Error(
+          "Type d'image invalide. Doit être 'description' ou 'comment'",
+        );
       }
 
       // Générer une clé unique pour l'image
@@ -1351,7 +1401,7 @@ class CloudflareService {
 
       // Structure de la clé selon le type
       let key;
-      if (imageType === 'comment' && commentId) {
+      if (imageType === "comment" && commentId) {
         // Structure: {taskId}/{userId}/comments/{commentId}/{uniqueId}.{ext}
         key = `${taskId}/${userId}/comments/${commentId}/${uniqueId}${fileExtension}`;
       } else {
@@ -1365,7 +1415,9 @@ class CloudflareService {
       // Nettoyer le nom de fichier pour les headers HTTP
       const sanitizedFileName = this.sanitizeFileName(fileName);
 
-      console.log(`📤 [KANBAN] Upload vers bucket: ${this.kanbanBucketName}, clé: ${key}`);
+      console.log(
+        `📤 [KANBAN] Upload vers bucket: ${this.kanbanBucketName}, clé: ${key}`,
+      );
 
       // Commande d'upload
       const command = new PutObjectCommand({
@@ -1394,7 +1446,11 @@ class CloudflareService {
         imageUrl = `${cleanUrl}/${key}`;
       } else {
         // Fallback sur URL signée si pas d'URL publique configurée
-        imageUrl = await this.getSignedUrlForBucket(key, this.kanbanBucketName, 86400 * 7); // 7 jours
+        imageUrl = await this.getSignedUrlForBucket(
+          key,
+          this.kanbanBucketName,
+          86400 * 7,
+        ); // 7 jours
       }
 
       console.log(`✅ [KANBAN] Image uploadée: ${imageUrl}`);
@@ -1407,8 +1463,10 @@ class CloudflareService {
         fileSize: fileBuffer.length,
       };
     } catch (error) {
-      console.error(`❌ [KANBAN] Erreur upload image:`, error);
-      throw new Error(`Échec de l'upload de l'image de tâche: ${error.message}`);
+      console.error("❌ [KANBAN] Erreur upload image:", error);
+      throw new Error(
+        `Échec de l'upload de l'image de tâche: ${error.message}`,
+      );
     }
   }
 
@@ -1434,7 +1492,7 @@ class CloudflareService {
         console.log(`⚠️ [KANBAN] Image déjà supprimée ou inexistante: ${key}`);
         return true;
       }
-      console.error(`❌ [KANBAN] Erreur suppression image:`, error);
+      console.error("❌ [KANBAN] Erreur suppression image:", error);
       throw new Error(`Échec de la suppression de l'image: ${error.message}`);
     }
   }
@@ -1446,7 +1504,9 @@ class CloudflareService {
    */
   async deleteAllTaskImages(taskId) {
     try {
-      console.log(`🗑️ [KANBAN] Suppression de toutes les images de la tâche: ${taskId}`);
+      console.log(
+        `🗑️ [KANBAN] Suppression de toutes les images de la tâche: ${taskId}`,
+      );
 
       // Lister tous les objets avec le préfixe de la tâche
       const listCommand = new ListObjectsV2Command({
@@ -1457,11 +1517,15 @@ class CloudflareService {
       const listResponse = await this.client.send(listCommand);
 
       if (!listResponse.Contents || listResponse.Contents.length === 0) {
-        console.log(`📋 [KANBAN] Aucune image à supprimer pour la tâche: ${taskId}`);
+        console.log(
+          `📋 [KANBAN] Aucune image à supprimer pour la tâche: ${taskId}`,
+        );
         return true;
       }
 
-      console.log(`🗑️ [KANBAN] Suppression de ${listResponse.Contents.length} image(s)`);
+      console.log(
+        `🗑️ [KANBAN] Suppression de ${listResponse.Contents.length} image(s)`,
+      );
 
       // Supprimer chaque fichier
       const deletePromises = listResponse.Contents.map((object) => {
@@ -1469,11 +1533,15 @@ class CloudflareService {
       });
 
       await Promise.all(deletePromises);
-      console.log(`✅ [KANBAN] Toutes les images de la tâche ${taskId} supprimées`);
+      console.log(
+        `✅ [KANBAN] Toutes les images de la tâche ${taskId} supprimées`,
+      );
       return true;
     } catch (error) {
-      console.error(`❌ [KANBAN] Erreur suppression images tâche:`, error);
-      throw new Error(`Échec de la suppression des images de la tâche: ${error.message}`);
+      console.error("❌ [KANBAN] Erreur suppression images tâche:", error);
+      throw new Error(
+        `Échec de la suppression des images de la tâche: ${error.message}`,
+      );
     }
   }
 
@@ -1485,7 +1553,9 @@ class CloudflareService {
    */
   async deleteCommentImages(taskId, commentId) {
     try {
-      console.log(`🗑️ [KANBAN] Suppression images du commentaire: ${commentId}`);
+      console.log(
+        `🗑️ [KANBAN] Suppression images du commentaire: ${commentId}`,
+      );
 
       // Lister tous les objets avec le préfixe du commentaire
       const listCommand = new ListObjectsV2Command({
@@ -1501,15 +1571,19 @@ class CloudflareService {
 
       // Filtrer les fichiers du commentaire spécifique
       const commentFiles = listResponse.Contents.filter((obj) =>
-        obj.Key.includes(`/comments/${commentId}/`)
+        obj.Key.includes(`/comments/${commentId}/`),
       );
 
       if (commentFiles.length === 0) {
-        console.log(`📋 [KANBAN] Aucune image à supprimer pour le commentaire: ${commentId}`);
+        console.log(
+          `📋 [KANBAN] Aucune image à supprimer pour le commentaire: ${commentId}`,
+        );
         return true;
       }
 
-      console.log(`🗑️ [KANBAN] Suppression de ${commentFiles.length} image(s) du commentaire`);
+      console.log(
+        `🗑️ [KANBAN] Suppression de ${commentFiles.length} image(s) du commentaire`,
+      );
 
       const deletePromises = commentFiles.map((object) => {
         return this.deleteTaskImage(object.Key);
@@ -1519,7 +1593,10 @@ class CloudflareService {
       console.log(`✅ [KANBAN] Images du commentaire ${commentId} supprimées`);
       return true;
     } catch (error) {
-      console.error(`❌ [KANBAN] Erreur suppression images commentaire:`, error);
+      console.error(
+        "❌ [KANBAN] Erreur suppression images commentaire:",
+        error,
+      );
       return false;
     }
   }
@@ -1570,7 +1647,7 @@ class CloudflareService {
       await Promise.all(deletePromises);
       return true;
     } catch (error) {
-      console.error('❌ [VISITOR] Erreur suppression images visiteur:', error);
+      console.error("❌ [VISITOR] Erreur suppression images visiteur:", error);
       return false;
     }
   }
@@ -1592,23 +1669,23 @@ class CloudflareService {
       const result = await this.uploadImage(
         fileBuffer,
         fileName,
-        'visitor', // userId placeholder
-        'visitorImage',
+        "visitor", // userId placeholder
+        "visitorImage",
         null, // organizationId
-        visitorId // signatureId utilisé pour passer le visitorId
+        visitorId, // signatureId utilisé pour passer le visitorId
       );
 
       return {
         success: true,
         url: result.url,
-        key: result.key
+        key: result.key,
       };
     } catch (error) {
-      console.error('❌ [VISITOR] Erreur upload image visiteur:', error);
+      console.error("❌ [VISITOR] Erreur upload image visiteur:", error);
       return {
         success: false,
         url: null,
-        error: error.message
+        error: error.message,
       };
     }
   }
