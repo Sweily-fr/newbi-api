@@ -21,12 +21,12 @@ export const PLAN_QUOTAS = {
     name: "Freelance",
   },
   TPE: {
-    monthlyQuota: parseInt(process.env.OCR_QUOTA_TPE) || 200,
+    monthlyQuota: parseInt(process.env.OCR_QUOTA_TPE) || 999999,
     extraImportPrice: 0.20,
     name: "TPE",
   },
   ENTREPRISE: {
-    monthlyQuota: parseInt(process.env.OCR_QUOTA_ENTREPRISE) || 1000,
+    monthlyQuota: parseInt(process.env.OCR_QUOTA_ENTREPRISE) || 999999,
     extraImportPrice: 0.15,
     name: "Entreprise",
   },
