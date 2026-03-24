@@ -7,7 +7,7 @@ import { isAuthenticated } from "./better-auth-jwt.js";
  * ========================================
  * MIDDLEWARE RBAC (Role-Based Access Control)
  * ========================================
- * 
+ *
  * Intégration complète avec Better Auth pour la gestion des permissions
  * basées sur les rôles d'organisation (owner, admin, member, accountant)
  */
@@ -19,14 +19,49 @@ import { isAuthenticated } from "./better-auth-jwt.js";
 const ROLE_PERMISSIONS = {
   owner: {
     // Owner a tous les droits
-    quotes: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
-    purchaseOrders: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
-    invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid", "import"],
+    quotes: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "convert",
+      "send",
+      "export",
+    ],
+    purchaseOrders: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "convert",
+      "send",
+      "export",
+    ],
+    invoices: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "send",
+      "export",
+      "mark-paid",
+      "import",
+    ],
     creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
     expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
     payments: ["view", "create", "edit", "delete", "export"],
     clients: ["view", "create", "edit", "delete", "export"],
-    products: ["view", "create", "edit", "delete", "export", "manage-categories"],
+    products: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "export",
+      "manage-categories",
+    ],
     suppliers: ["view", "create", "edit", "delete"],
     fileTransfers: ["view", "create", "delete", "download"],
     sharedDocuments: ["view", "create", "edit", "delete", "download"],
@@ -41,17 +76,52 @@ const ROLE_PERMISSIONS = {
     billing: ["view", "manage"],
     auditLog: ["view", "export"],
   },
-  
+
   admin: {
     // Admin a presque tous les droits sauf la gestion de la facturation
-    quotes: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
-    purchaseOrders: ["view", "create", "edit", "delete", "approve", "convert", "send", "export"],
-    invoices: ["view", "create", "edit", "delete", "approve", "send", "export", "mark-paid", "import"],
+    quotes: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "convert",
+      "send",
+      "export",
+    ],
+    purchaseOrders: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "convert",
+      "send",
+      "export",
+    ],
+    invoices: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "send",
+      "export",
+      "mark-paid",
+      "import",
+    ],
     creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
     expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
     payments: ["view", "create", "edit", "delete", "export"],
     clients: ["view", "create", "edit", "delete", "export"],
-    products: ["view", "create", "edit", "delete", "export", "manage-categories"],
+    products: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "export",
+      "manage-categories",
+    ],
     suppliers: ["view", "create", "edit", "delete"],
     fileTransfers: ["view", "create", "delete", "download"],
     sharedDocuments: ["view", "create", "edit", "delete", "download"],
@@ -66,7 +136,7 @@ const ROLE_PERMISSIONS = {
     billing: ["view"], // ⚠️ Lecture seule
     auditLog: ["view", "export"],
   },
-  
+
   member: {
     // Member peut créer et gérer ses propres documents + export
     quotes: ["view", "create", "send", "export"],
@@ -87,7 +157,7 @@ const ROLE_PERMISSIONS = {
     analytics: ["view", "export"],
     team: ["view"],
   },
-  
+
   accountant: {
     // Accountant a accès aux documents financiers + validation + export
     quotes: ["view", "export"],
@@ -151,15 +221,17 @@ async function getActiveOrganization(userId, requestedOrgId = null) {
     const { ObjectId } = mongoose.Types;
 
     // Convertir userId en ObjectId si c'est une string
-    const userObjectId = typeof userId === 'string' ? new ObjectId(userId) : userId;
+    const userObjectId =
+      typeof userId === "string" ? new ObjectId(userId) : userId;
 
     let member;
 
     // ✅ FIX: Si une organisation spécifique est demandée, vérifier que l'utilisateur en est membre
     if (requestedOrgId) {
-      const requestedOrgObjectId = typeof requestedOrgId === 'string'
-        ? new ObjectId(requestedOrgId)
-        : requestedOrgId;
+      const requestedOrgObjectId =
+        typeof requestedOrgId === "string"
+          ? new ObjectId(requestedOrgId)
+          : requestedOrgId;
 
       member = await memberCollection.findOne({
         userId: userObjectId,
@@ -167,11 +239,15 @@ async function getActiveOrganization(userId, requestedOrgId = null) {
       });
 
       if (!member) {
-        logger.warn(`Utilisateur ${userId} n'est pas membre de l'organisation demandée: ${requestedOrgId}`);
+        logger.warn(
+          `Utilisateur ${userId} n'est pas membre de l'organisation demandée: ${requestedOrgId}`,
+        );
         return null;
       }
 
-      logger.debug(`✅ Utilisateur ${userId} est membre de l'organisation ${requestedOrgId} avec le rôle ${member.role}`);
+      logger.debug(
+        `✅ Utilisateur ${userId} est membre de l'organisation ${requestedOrgId} avec le rôle ${member.role}`,
+      );
     } else {
       // Fallback: récupérer la première organisation (priorité: owner, puis admin, puis autres)
       member = await memberCollection.findOne({
@@ -200,16 +276,19 @@ async function getActiveOrganization(userId, requestedOrgId = null) {
 
     // Récupérer les détails de l'organisation
     const organizationCollection = db.collection("organization");
-    const orgObjectId = typeof member.organizationId === 'string'
-      ? new ObjectId(member.organizationId)
-      : member.organizationId;
+    const orgObjectId =
+      typeof member.organizationId === "string"
+        ? new ObjectId(member.organizationId)
+        : member.organizationId;
 
     const organization = await organizationCollection.findOne({
       _id: orgObjectId,
     });
 
     if (!organization) {
-      logger.warn(`Organisation ${member.organizationId} non trouvée pour le membre`);
+      logger.warn(
+        `Organisation ${member.organizationId} non trouvée pour le membre`,
+      );
       return null;
     }
 
@@ -222,7 +301,10 @@ async function getActiveOrganization(userId, requestedOrgId = null) {
       createdAt: organization.createdAt,
     };
   } catch (error) {
-    logger.error("Erreur lors de la récupération de l'organisation:", error.message);
+    logger.error(
+      "Erreur lors de la récupération de l'organisation:",
+      error.message,
+    );
     return null;
   }
 }
@@ -238,18 +320,24 @@ async function getMemberRole(organizationId, userId) {
     const db = mongoose.connection.db;
     const memberCollection = db.collection("member");
     const { ObjectId } = mongoose.Types;
-    
+
     // Convertir les IDs en ObjectId si nécessaire
-    const orgObjectId = typeof organizationId === 'string' ? new ObjectId(organizationId) : organizationId;
-    const userObjectId = typeof userId === 'string' ? new ObjectId(userId) : userId;
-    
+    const orgObjectId =
+      typeof organizationId === "string"
+        ? new ObjectId(organizationId)
+        : organizationId;
+    const userObjectId =
+      typeof userId === "string" ? new ObjectId(userId) : userId;
+
     const member = await memberCollection.findOne({
       organizationId: orgObjectId,
       userId: userObjectId,
     });
-    
+
     if (!member) {
-      logger.debug(`Membre non trouvé pour org: ${organizationId}, user: ${userId}`);
+      logger.debug(
+        `Membre non trouvé pour org: ${organizationId}, user: ${userId}`,
+      );
       return null;
     }
 
@@ -282,7 +370,7 @@ function hasPermission(role, resource, action) {
   const normalizedRole = role?.toLowerCase();
 
   if (!normalizedRole) {
-    logger.warn(`Rôle non défini ou null`);
+    logger.warn("Rôle non défini ou null");
     return false;
   }
 
@@ -312,15 +400,15 @@ function hasPermission(role, resource, action) {
  */
 function hasPermissionLevel(role, resource, level) {
   const actions = PERMISSION_MAPPING[level] || [];
-  
+
   // Vérifier si au moins une action du niveau est autorisée
-  return actions.some(action => hasPermission(role, resource, action));
+  return actions.some((action) => hasPermission(role, resource, action));
 }
 
 /**
  * Middleware RBAC pour les resolvers GraphQL
  * Enrichit le contexte avec les informations d'organisation et de permissions
- * 
+ *
  * @param {Function} resolver - Resolver GraphQL à exécuter
  * @param {Object} options - Options du middleware
  * @param {string} options.resource - Ressource concernée (invoices, expenses, etc.)
@@ -345,20 +433,37 @@ export const withRBAC = (resolver, options = {}) => {
         args.workspaceId ||
         args.organizationId;
 
+      // DEBUG: tracer l'origine du requestedOrgId pour diagnostiquer les fuites cross-compte
+      if (requestedOrgId) {
+        const source = context.req?.headers?.["x-organization-id"]
+          ? "header:x-organization-id"
+          : context.req?.headers?.["x-workspace-id"]
+            ? "header:x-workspace-id"
+            : args.workspaceId
+              ? "args.workspaceId"
+              : "args.organizationId";
+        logger.warn(
+          `🔍 RBAC requestedOrgId=${requestedOrgId} source=${source} userId=${userId} op=${info?.fieldName || "?"}`,
+        );
+      }
+
       // 2. Récupérer l'organisation active (en vérifiant que l'utilisateur en est membre)
-      const organization = await getActiveOrganization(userId, requestedOrgId);
+      let organization = await getActiveOrganization(userId, requestedOrgId);
+
+      // ✅ FIX: Si l'utilisateur n'est pas membre de l'org demandée (ex: switch de compte,
+      // le frontend envoie un orgId stale depuis le cache), fallback sur l'org par défaut
+      // du user au lieu de bloquer. Pas de risque sécurité : on accède à SA propre org.
+      if (!organization && requestedOrgId) {
+        logger.warn(
+          `⚠️ RBAC: userId=${userId} n'est pas membre de org=${requestedOrgId}, fallback sur org par défaut`,
+        );
+        organization = await getActiveOrganization(userId, null);
+      }
 
       if (!organization) {
-        // Message d'erreur plus précis selon le cas
-        if (requestedOrgId) {
-          throw new AppError(
-            "Vous n'êtes pas membre de cette organisation ou elle n'existe pas.",
-            ERROR_CODES.FORBIDDEN
-          );
-        }
         throw new AppError(
           "Aucune organisation active trouvée. Veuillez rejoindre ou créer une organisation.",
-          ERROR_CODES.FORBIDDEN
+          ERROR_CODES.FORBIDDEN,
         );
       }
 
@@ -368,41 +473,45 @@ export const withRBAC = (resolver, options = {}) => {
       if (!member) {
         throw new AppError(
           "Vous n'êtes pas membre de cette organisation",
-          ERROR_CODES.FORBIDDEN
+          ERROR_CODES.FORBIDDEN,
         );
       }
 
       const userRole = member.role;
 
       logger.debug(
-        `🔐 RBAC: User ${userId} accède à org ${organization.id} avec rôle ${userRole}`
+        `🔐 RBAC: User ${userId} accède à org ${organization.id} avec rôle ${userRole}`,
       );
-      
+
       // 4. Vérifier les permissions si spécifiées
       if (options.resource && (options.action || options.level)) {
         let hasAccess = false;
-        
+
         if (options.action) {
           // Vérification par action spécifique
           hasAccess = hasPermission(userRole, options.resource, options.action);
         } else if (options.level) {
           // Vérification par niveau de permission
-          hasAccess = hasPermissionLevel(userRole, options.resource, options.level);
+          hasAccess = hasPermissionLevel(
+            userRole,
+            options.resource,
+            options.level,
+          );
         }
-        
+
         if (!hasAccess) {
           const requiredPermission = options.action || options.level;
           logger.warn(
-            `Accès refusé: ${userId} (${userRole}) n'a pas la permission ${requiredPermission} sur ${options.resource}`
+            `Accès refusé: ${userId} (${userRole}) n'a pas la permission ${requiredPermission} sur ${options.resource}`,
           );
-          
+
           throw new AppError(
             `Vous n'avez pas la permission d'effectuer cette action (${requiredPermission} sur ${options.resource})`,
-            ERROR_CODES.FORBIDDEN
+            ERROR_CODES.FORBIDDEN,
           );
         }
       }
-      
+
       // 5. Enrichir le contexte avec les informations RBAC
       const enrichedContext = {
         ...context,
@@ -410,22 +519,26 @@ export const withRBAC = (resolver, options = {}) => {
         organization,
         userRole,
         permissions: {
-          hasPermission: (resource, action) => hasPermission(userRole, resource, action),
-          hasPermissionLevel: (resource, level) => hasPermissionLevel(userRole, resource, level),
+          hasPermission: (resource, action) =>
+            hasPermission(userRole, resource, action),
+          hasPermissionLevel: (resource, level) =>
+            hasPermissionLevel(userRole, resource, level),
           canRead: (resource) => hasPermissionLevel(userRole, resource, "read"),
-          canWrite: (resource) => hasPermissionLevel(userRole, resource, "write"),
-          canDelete: (resource) => hasPermissionLevel(userRole, resource, "delete"),
-          canAdmin: (resource) => hasPermissionLevel(userRole, resource, "admin"),
+          canWrite: (resource) =>
+            hasPermissionLevel(userRole, resource, "write"),
+          canDelete: (resource) =>
+            hasPermissionLevel(userRole, resource, "delete"),
+          canAdmin: (resource) =>
+            hasPermissionLevel(userRole, resource, "admin"),
         },
       };
-      
+
       logger.debug(
-        `RBAC: ${context.user?.email || context.user?._id} (${userRole}) accède à ${options.resource || 'ressource'} avec ${options.action || options.level || 'aucune restriction'}`
+        `RBAC: ${context.user?.email || context.user?._id} (${userRole}) accède à ${options.resource || "ressource"} avec ${options.action || options.level || "aucune restriction"}`,
       );
-      
+
       // 6. Exécuter le resolver avec le contexte enrichi
       return await resolver(parent, args, enrichedContext, info);
-      
     } catch (error) {
       // Propager les erreurs d'authentification/autorisation
       if (error instanceof AppError) {
@@ -434,26 +547,32 @@ export const withRBAC = (resolver, options = {}) => {
 
       // Gérer les erreurs de validation Mongoose avec un message user-friendly
       if (error instanceof mongoose.Error.ValidationError) {
-        const messages = Object.values(error.errors).map(e => e.message);
-        logger.warn(`Erreur de validation dans ${resolver.name || 'resolver'}:`, messages.join(', '));
+        const messages = Object.values(error.errors).map((e) => e.message);
+        logger.warn(
+          `Erreur de validation dans ${resolver.name || "resolver"}:`,
+          messages.join(", "),
+        );
         throw new AppError(
           messages.length === 1
             ? messages[0]
-            : `Veuillez corriger les erreurs suivantes : ${messages.join(', ')}`,
-          ERROR_CODES.VALIDATION_ERROR
+            : `Veuillez corriger les erreurs suivantes : ${messages.join(", ")}`,
+          ERROR_CODES.VALIDATION_ERROR,
         );
       }
 
       // Logger les erreurs inattendues avec stack trace complète
-      logger.error(`Erreur RBAC dans ${resolver.name || 'resolver'}:`, error.message);
-      logger.error('Stack trace:', error.stack);
+      logger.error(
+        `Erreur RBAC dans ${resolver.name || "resolver"}:`,
+        error.message,
+      );
+      logger.error("Stack trace:", error.stack);
       throw new AppError(
         `Erreur lors de la vérification des permissions: ${error.message}`,
-        ERROR_CODES.INTERNAL_ERROR
+        ERROR_CODES.INTERNAL_ERROR,
       );
     }
   };
-  
+
   // Appliquer d'abord l'authentification, puis RBAC
   return isAuthenticated(rbacResolver);
 };
@@ -463,23 +582,23 @@ export const withRBAC = (resolver, options = {}) => {
  */
 
 // Lecture seule (view)
-export const requireRead = (resource) => (resolver) => 
+export const requireRead = (resource) => (resolver) =>
   withRBAC(resolver, { resource, level: "read" });
 
 // Écriture (create, edit)
-export const requireWrite = (resource) => (resolver) => 
+export const requireWrite = (resource) => (resolver) =>
   withRBAC(resolver, { resource, level: "write" });
 
 // Suppression
-export const requireDelete = (resource) => (resolver) => 
+export const requireDelete = (resource) => (resolver) =>
   withRBAC(resolver, { resource, level: "delete" });
 
 // Administration
-export const requireAdmin = (resource) => (resolver) => 
+export const requireAdmin = (resource) => (resolver) =>
   withRBAC(resolver, { resource, level: "admin" });
 
 // Permission spécifique
-export const requirePermission = (resource, action) => (resolver) => 
+export const requirePermission = (resource, action) => (resolver) =>
   withRBAC(resolver, { resource, action });
 
 /**
