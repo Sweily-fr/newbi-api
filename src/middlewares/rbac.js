@@ -610,6 +610,26 @@ export const withOrganization = (resolver) => {
 };
 
 /**
+ * Résout le workspaceId à utiliser dans un resolver.
+ * En cas de mismatch entre input (args) et context (RBAC), privilégie le context
+ * car il a déjà été validé par le middleware RBAC (appartenance confirmée).
+ * Évite de throw lors d'un switch de compte où le frontend envoie un ID stale.
+ */
+export function resolveWorkspaceId(inputWorkspaceId, contextWorkspaceId) {
+  if (
+    inputWorkspaceId &&
+    contextWorkspaceId &&
+    inputWorkspaceId !== contextWorkspaceId
+  ) {
+    logger.warn(
+      `⚠️ resolveWorkspaceId: mismatch input=${inputWorkspaceId} vs context=${contextWorkspaceId}, utilisation du context (validé par RBAC)`,
+    );
+    return contextWorkspaceId;
+  }
+  return inputWorkspaceId || contextWorkspaceId;
+}
+
+/**
  * Export des fonctions utilitaires pour usage externe
  */
 export {

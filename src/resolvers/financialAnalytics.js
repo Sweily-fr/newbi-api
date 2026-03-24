@@ -1,17 +1,24 @@
-import mongoose from 'mongoose';
-import { requireRead } from '../middlewares/rbac.js';
-import { AppError, ERROR_CODES } from '../utils/errors.js';
-import { Board, Task } from '../models/kanban.js';
+import mongoose from "mongoose";
+import { requireRead, resolveWorkspaceId } from "../middlewares/rbac.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { Board, Task } from "../models/kanban.js";
 
 /**
  * Aggregate time tracked in Kanban tasks by client.
  * Returns a Map<clientIdString, { totalTimeSeconds, totalBillableAmount }>
  */
-const aggregateTimeByClient = async (workspaceId, startDate, endDate, clientIds) => {
+const aggregateTimeByClient = async (
+  workspaceId,
+  startDate,
+  endDate,
+  clientIds,
+) => {
   // Find boards that have a clientId assigned
   const boardQuery = { workspaceId, clientId: { $ne: null } };
   if (clientIds && clientIds.length > 0) {
-    boardQuery.clientId = { $in: clientIds.map(id => new mongoose.Types.ObjectId(id)) };
+    boardQuery.clientId = {
+      $in: clientIds.map((id) => new mongoose.Types.ObjectId(id)),
+    };
   }
   const boards = await Board.find(boardQuery).lean();
   if (boards.length === 0) return new Map();
@@ -24,10 +31,10 @@ const aggregateTimeByClient = async (workspaceId, startDate, endDate, clientIds)
   // Find tasks for those boards that have timeTracking data
   const taskQueryWithRunning = {
     workspaceId,
-    boardId: { $in: boards.map(b => b._id) },
+    boardId: { $in: boards.map((b) => b._id) },
     $or: [
-      { 'timeTracking.totalSeconds': { $gt: 0 } },
-      { 'timeTracking.isRunning': true },
+      { "timeTracking.totalSeconds": { $gt: 0 } },
+      { "timeTracking.isRunning": true },
     ],
   };
   const tasks = await Task.find(taskQueryWithRunning).lean();
@@ -46,7 +53,9 @@ const aggregateTimeByClient = async (workspaceId, startDate, endDate, clientIds)
 
     let totalSeconds = tt.totalSeconds || 0;
     if (tt.isRunning && tt.currentStartTime) {
-      totalSeconds += Math.floor((Date.now() - new Date(tt.currentStartTime).getTime()) / 1000);
+      totalSeconds += Math.floor(
+        (Date.now() - new Date(tt.currentStartTime).getTime()) / 1000,
+      );
     }
     if (totalSeconds <= 0) continue;
 
@@ -54,25 +63,21 @@ const aggregateTimeByClient = async (workspaceId, startDate, endDate, clientIds)
     if (tt.hourlyRate && tt.hourlyRate > 0) {
       const hours = totalSeconds / 3600;
       let billableHours = hours;
-      if (tt.roundingOption === 'up') billableHours = Math.ceil(hours);
-      else if (tt.roundingOption === 'down') billableHours = Math.floor(hours);
+      if (tt.roundingOption === "up") billableHours = Math.ceil(hours);
+      else if (tt.roundingOption === "down") billableHours = Math.floor(hours);
       billableAmount = billableHours * tt.hourlyRate;
     }
 
-    const existing = result.get(clientId) || { totalTimeSeconds: 0, totalBillableAmount: 0 };
+    const existing = result.get(clientId) || {
+      totalTimeSeconds: 0,
+      totalBillableAmount: 0,
+    };
     existing.totalTimeSeconds += totalSeconds;
     existing.totalBillableAmount += billableAmount;
     result.set(clientId, existing);
   }
 
   return result;
-};
-
-const resolveWorkspaceId = (inputWorkspaceId, contextWorkspaceId) => {
-  if (inputWorkspaceId && contextWorkspaceId && inputWorkspaceId !== contextWorkspaceId) {
-    throw new AppError('Organisation invalide.', ERROR_CODES.FORBIDDEN);
-  }
-  return inputWorkspaceId || contextWorkspaceId;
 };
 
 /**
@@ -84,8 +89,8 @@ function generateAlerts(kpi) {
   // Gross margin rate < 20% → danger
   if (kpi.netRevenueHT > 0 && kpi.grossMarginRate < 20) {
     alerts.push({
-      type: 'MARGIN',
-      severity: 'danger',
+      type: "MARGIN",
+      severity: "danger",
       message: `Taux de marge brute faible : ${kpi.grossMarginRate.toFixed(1)}% (seuil : 20%)`,
       value: kpi.grossMarginRate,
       threshold: 20,
@@ -95,16 +100,16 @@ function generateAlerts(kpi) {
   // DSO > 45 days → warning, > 60 → danger
   if (kpi.dso > 60) {
     alerts.push({
-      type: 'DSO',
-      severity: 'danger',
+      type: "DSO",
+      severity: "danger",
       message: `DSO critique : ${Math.round(kpi.dso)} jours (seuil : 60 jours)`,
       value: kpi.dso,
       threshold: 60,
     });
   } else if (kpi.dso > 45) {
     alerts.push({
-      type: 'DSO',
-      severity: 'warning',
+      type: "DSO",
+      severity: "warning",
       message: `DSO élevé : ${Math.round(kpi.dso)} jours (seuil : 45 jours)`,
       value: kpi.dso,
       threshold: 45,
@@ -114,8 +119,8 @@ function generateAlerts(kpi) {
   // Top 3 client concentration > 70% → warning
   if (kpi.topClientConcentration > 70) {
     alerts.push({
-      type: 'CONCENTRATION',
-      severity: 'warning',
+      type: "CONCENTRATION",
+      severity: "warning",
       message: `Concentration clients élevée : ${kpi.topClientConcentration.toFixed(1)}% du CA sur les 3 premiers clients`,
       value: kpi.topClientConcentration,
       threshold: 70,
@@ -124,16 +129,16 @@ function generateAlerts(kpi) {
 
   // Overdue invoices > 0 → danger
   if (kpi.overdueCount > 0) {
-    const formatted = new Intl.NumberFormat('fr-FR', {
-      style: 'currency',
-      currency: 'EUR',
+    const formatted = new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: "EUR",
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(kpi.overdueAmount);
     alerts.push({
-      type: 'OVERDUE',
-      severity: 'danger',
-      message: `${kpi.overdueCount} facture${kpi.overdueCount > 1 ? 's' : ''} en retard pour un total de ${formatted}`,
+      type: "OVERDUE",
+      severity: "danger",
+      message: `${kpi.overdueCount} facture${kpi.overdueCount > 1 ? "s" : ""} en retard pour un total de ${formatted}`,
       value: kpi.overdueAmount,
       threshold: 0,
     });
@@ -156,9 +161,23 @@ function computePreviousPeriod(startDate, endDate) {
 
 const financialAnalyticsResolvers = {
   Query: {
-    financialAnalytics: requireRead('invoices')(
-      async (_, { workspaceId: inputWorkspaceId, startDate, endDate, clientId, clientIds, status }, context) => {
-        const workspaceId = resolveWorkspaceId(inputWorkspaceId, context.workspaceId);
+    financialAnalytics: requireRead("invoices")(
+      async (
+        _,
+        {
+          workspaceId: inputWorkspaceId,
+          startDate,
+          endDate,
+          clientId,
+          clientIds,
+          status,
+        },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const wId = new mongoose.Types.ObjectId(workspaceId);
         const now = new Date();
 
@@ -169,13 +188,13 @@ const financialAnalyticsResolvers = {
         // --- Invoice match ---
         const invoiceMatch = {
           workspaceId: wId,
-          status: { $ne: 'DRAFT' },
+          status: { $ne: "DRAFT" },
         };
         if (startDate || endDate) invoiceMatch.issueDate = dateQuery;
         if (clientIds && clientIds.length > 0) {
-          invoiceMatch['client.id'] = { $in: clientIds };
+          invoiceMatch["client.id"] = { $in: clientIds };
         } else if (clientId) {
-          invoiceMatch['client.id'] = clientId;
+          invoiceMatch["client.id"] = clientId;
         }
         if (status && status.length > 0) invoiceMatch.status = { $in: status };
 
@@ -188,7 +207,7 @@ const financialAnalyticsResolvers = {
         // --- Quote match ---
         const quoteMatch = {
           workspaceId: wId,
-          status: { $in: ['COMPLETED', 'CANCELED', 'PENDING'] },
+          status: { $in: ["COMPLETED", "CANCELED", "PENDING"] },
         };
         if (startDate || endDate) quoteMatch.issueDate = dateQuery;
 
@@ -198,16 +217,25 @@ const financialAnalyticsResolvers = {
         };
         if (startDate || endDate) creditNoteMatch.issueDate = dateQuery;
 
-        const Invoice = mongoose.model('Invoice');
-        const Expense = mongoose.model('Expense');
-        const Quote = mongoose.model('Quote');
-        const CreditNote = mongoose.model('CreditNote');
-        const ImportedInvoice = mongoose.model('ImportedInvoice');
+        const Invoice = mongoose.model("Invoice");
+        const Expense = mongoose.model("Expense");
+        const Quote = mongoose.model("Quote");
+        const CreditNote = mongoose.model("CreditNote");
+        const ImportedInvoice = mongoose.model("ImportedInvoice");
 
         // ==============================
         // MAIN AGGREGATIONS (parallel)
         // ==============================
-        const [invoiceStats, expenseStats, quoteStats, creditNoteStats, monthlyCollectedStats, currentReceivablesStats, importedInvoiceMonthlyStats, importedInvoiceCollectedStats] = await Promise.all([
+        const [
+          invoiceStats,
+          expenseStats,
+          quoteStats,
+          creditNoteStats,
+          monthlyCollectedStats,
+          currentReceivablesStats,
+          importedInvoiceMonthlyStats,
+          importedInvoiceCollectedStats,
+        ] = await Promise.all([
           // 1. Invoice facet aggregation
           Invoice.aggregate([
             { $match: invoiceMatch },
@@ -218,25 +246,27 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        clientId: '$client.id',
+                        clientId: "$client.id",
                         clientName: {
                           $cond: {
-                            if: { $eq: ['$client.type', 'INDIVIDUAL'] },
+                            if: { $eq: ["$client.type", "INDIVIDUAL"] },
                             then: {
                               $concat: [
-                                { $ifNull: ['$client.firstName', ''] },
-                                ' ',
-                                { $ifNull: ['$client.lastName', ''] },
+                                { $ifNull: ["$client.firstName", ""] },
+                                " ",
+                                { $ifNull: ["$client.lastName", ""] },
                               ],
                             },
-                            else: { $ifNull: ['$client.name', 'Client inconnu'] },
+                            else: {
+                              $ifNull: ["$client.name", "Client inconnu"],
+                            },
                           },
                         },
-                        clientType: '$client.type',
+                        clientType: "$client.type",
                       },
-                      totalHT: { $sum: '$finalTotalHT' },
-                      totalTTC: { $sum: '$finalTotalTTC' },
-                      totalVAT: { $sum: '$finalTotalVAT' },
+                      totalHT: { $sum: "$finalTotalHT" },
+                      totalTTC: { $sum: "$finalTotalTTC" },
+                      totalVAT: { $sum: "$finalTotalVAT" },
                       invoiceCount: { $sum: 1 },
                     },
                   },
@@ -244,38 +274,38 @@ const financialAnalyticsResolvers = {
                 ],
                 // Revenue by product (unwind items)
                 revenueByProduct: [
-                  { $unwind: '$items' },
+                  { $unwind: "$items" },
                   {
                     $group: {
-                      _id: '$items.description',
+                      _id: "$items.description",
                       totalHT: {
                         $sum: {
                           $multiply: [
-                            '$items.quantity',
-                            '$items.unitPrice',
+                            "$items.quantity",
+                            "$items.unitPrice",
                             {
                               $divide: [
-                                { $ifNull: ['$items.progressPercentage', 100] },
+                                { $ifNull: ["$items.progressPercentage", 100] },
                                 100,
                               ],
                             },
                           ],
                         },
                       },
-                      totalQuantity: { $sum: '$items.quantity' },
-                      invoiceCount: { $addToSet: '$_id' },
-                      unitPrices: { $push: '$items.unitPrice' },
+                      totalQuantity: { $sum: "$items.quantity" },
+                      invoiceCount: { $addToSet: "$_id" },
+                      unitPrices: { $push: "$items.unitPrice" },
                     },
                   },
                   {
                     $project: {
                       _id: 0,
-                      description: '$_id',
-                      totalHT: { $round: ['$totalHT', 2] },
+                      description: "$_id",
+                      totalHT: { $round: ["$totalHT", 2] },
                       totalQuantity: 1,
-                      invoiceCount: { $size: '$invoiceCount' },
+                      invoiceCount: { $size: "$invoiceCount" },
                       averageUnitPrice: {
-                        $round: [{ $avg: '$unitPrices' }, 2],
+                        $round: [{ $avg: "$unitPrices" }, 2],
                       },
                     },
                   },
@@ -286,12 +316,12 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        year: { $year: '$issueDate' },
-                        month: { $month: '$issueDate' },
+                        year: { $year: "$issueDate" },
+                        month: { $month: "$issueDate" },
                       },
-                      revenueHT: { $sum: '$finalTotalHT' },
-                      revenueTTC: { $sum: '$finalTotalTTC' },
-                      revenueVAT: { $sum: '$finalTotalVAT' },
+                      revenueHT: { $sum: "$finalTotalHT" },
+                      revenueTTC: { $sum: "$finalTotalTTC" },
+                      revenueVAT: { $sum: "$finalTotalVAT" },
                       invoiceCount: { $sum: 1 },
                     },
                   },
@@ -300,13 +330,15 @@ const financialAnalyticsResolvers = {
                       _id: 0,
                       month: {
                         $concat: [
-                          { $toString: '$_id.year' },
-                          '-',
+                          { $toString: "$_id.year" },
+                          "-",
                           {
                             $cond: {
-                              if: { $lt: ['$_id.month', 10] },
-                              then: { $concat: ['0', { $toString: '$_id.month' }] },
-                              else: { $toString: '$_id.month' },
+                              if: { $lt: ["$_id.month", 10] },
+                              then: {
+                                $concat: ["0", { $toString: "$_id.month" }],
+                              },
+                              else: { $toString: "$_id.month" },
                             },
                           },
                         ],
@@ -323,9 +355,9 @@ const financialAnalyticsResolvers = {
                 paymentMethodStats: [
                   {
                     $group: {
-                      _id: '$paymentMethod',
+                      _id: "$paymentMethod",
                       count: { $sum: 1 },
-                      totalTTC: { $sum: '$finalTotalTTC' },
+                      totalTTC: { $sum: "$finalTotalTTC" },
                     },
                   },
                   { $sort: { totalTTC: -1 } },
@@ -334,9 +366,9 @@ const financialAnalyticsResolvers = {
                 statusBreakdown: [
                   {
                     $group: {
-                      _id: '$status',
+                      _id: "$status",
                       count: { $sum: 1 },
-                      totalTTC: { $sum: '$finalTotalTTC' },
+                      totalTTC: { $sum: "$finalTotalTTC" },
                     },
                   },
                 ],
@@ -345,50 +377,54 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        clientId: '$client.id',
+                        clientId: "$client.id",
                         clientName: {
                           $cond: {
-                            if: { $eq: ['$client.type', 'INDIVIDUAL'] },
+                            if: { $eq: ["$client.type", "INDIVIDUAL"] },
                             then: {
                               $concat: [
-                                { $ifNull: ['$client.firstName', ''] },
-                                ' ',
-                                { $ifNull: ['$client.lastName', ''] },
+                                { $ifNull: ["$client.firstName", ""] },
+                                " ",
+                                { $ifNull: ["$client.lastName", ""] },
                               ],
                             },
-                            else: { $ifNull: ['$client.name', 'Client inconnu'] },
+                            else: {
+                              $ifNull: ["$client.name", "Client inconnu"],
+                            },
                           },
                         },
-                        year: { $year: '$issueDate' },
-                        month: { $month: '$issueDate' },
+                        year: { $year: "$issueDate" },
+                        month: { $month: "$issueDate" },
                       },
-                      totalHT: { $sum: '$finalTotalHT' },
-                      totalTTC: { $sum: '$finalTotalTTC' },
-                      totalVAT: { $sum: '$finalTotalVAT' },
+                      totalHT: { $sum: "$finalTotalHT" },
+                      totalTTC: { $sum: "$finalTotalTTC" },
+                      totalVAT: { $sum: "$finalTotalVAT" },
                       invoiceCount: { $sum: 1 },
                     },
                   },
                   {
                     $project: {
                       _id: 0,
-                      clientId: '$_id.clientId',
-                      clientName: '$_id.clientName',
+                      clientId: "$_id.clientId",
+                      clientName: "$_id.clientName",
                       month: {
                         $concat: [
-                          { $toString: '$_id.year' },
-                          '-',
+                          { $toString: "$_id.year" },
+                          "-",
                           {
                             $cond: {
-                              if: { $lt: ['$_id.month', 10] },
-                              then: { $concat: ['0', { $toString: '$_id.month' }] },
-                              else: { $toString: '$_id.month' },
+                              if: { $lt: ["$_id.month", 10] },
+                              then: {
+                                $concat: ["0", { $toString: "$_id.month" }],
+                              },
+                              else: { $toString: "$_id.month" },
                             },
                           },
                         ],
                       },
-                      totalHT: { $round: ['$totalHT', 2] },
-                      totalTTC: { $round: ['$totalTTC', 2] },
-                      totalVAT: { $round: ['$totalVAT', 2] },
+                      totalHT: { $round: ["$totalHT", 2] },
+                      totalTTC: { $round: ["$totalTTC", 2] },
+                      totalVAT: { $round: ["$totalVAT", 2] },
                       invoiceCount: 1,
                     },
                   },
@@ -399,10 +435,10 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: null,
-                      totalRevenueHT: { $sum: '$finalTotalHT' },
-                      totalRevenueTTC: { $sum: '$finalTotalTTC' },
+                      totalRevenueHT: { $sum: "$finalTotalHT" },
+                      totalRevenueTTC: { $sum: "$finalTotalTTC" },
                       invoiceCount: { $sum: 1 },
-                      clients: { $addToSet: '$client.id' },
+                      clients: { $addToSet: "$client.id" },
                     },
                   },
                 ],
@@ -412,17 +448,19 @@ const financialAnalyticsResolvers = {
                 // Collection rate data (excluding CANCELED from denominator)
                 collectionTotals: [
                   {
-                    $match: { status: { $ne: 'CANCELED' } },
+                    $match: { status: { $ne: "CANCELED" } },
                   },
                   {
                     $group: {
                       _id: null,
                       totalInvoices: { $sum: 1 },
                       completedInvoices: {
-                        $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+                        $sum: {
+                          $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0],
+                        },
                       },
                       // Revenue TTC excluding CANCELED (for DSO calculation)
-                      totalRevenueTTCExclCanceled: { $sum: '$finalTotalTTC' },
+                      totalRevenueTTCExclCanceled: { $sum: "$finalTotalTTC" },
                     },
                   },
                 ],
@@ -439,9 +477,9 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: null,
-                      totalExpensesTTC: { $sum: '$amount' },
+                      totalExpensesTTC: { $sum: "$amount" },
                       totalExpensesVAT: {
-                        $sum: { $ifNull: ['$vatAmount', 0] },
+                        $sum: { $ifNull: ["$vatAmount", 0] },
                       },
                       expenseCount: { $sum: 1 },
                     },
@@ -451,11 +489,11 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        year: { $year: '$date' },
-                        month: { $month: '$date' },
+                        year: { $year: "$date" },
+                        month: { $month: "$date" },
                       },
-                      amountTTC: { $sum: '$amount' },
-                      vatAmount: { $sum: { $ifNull: ['$vatAmount', 0] } },
+                      amountTTC: { $sum: "$amount" },
+                      vatAmount: { $sum: { $ifNull: ["$vatAmount", 0] } },
                       count: { $sum: 1 },
                     },
                   },
@@ -464,20 +502,22 @@ const financialAnalyticsResolvers = {
                       _id: 0,
                       month: {
                         $concat: [
-                          { $toString: '$_id.year' },
-                          '-',
+                          { $toString: "$_id.year" },
+                          "-",
                           {
                             $cond: {
-                              if: { $lt: ['$_id.month', 10] },
-                              then: { $concat: ['0', { $toString: '$_id.month' }] },
-                              else: { $toString: '$_id.month' },
+                              if: { $lt: ["$_id.month", 10] },
+                              then: {
+                                $concat: ["0", { $toString: "$_id.month" }],
+                              },
+                              else: { $toString: "$_id.month" },
                             },
                           },
                         ],
                       },
                       amountTTC: 1,
                       vatAmount: 1,
-                      amountHT: { $subtract: ['$amountTTC', '$vatAmount'] },
+                      amountHT: { $subtract: ["$amountTTC", "$vatAmount"] },
                       count: 1,
                     },
                   },
@@ -486,8 +526,8 @@ const financialAnalyticsResolvers = {
                 byCategory: [
                   {
                     $group: {
-                      _id: '$category',
-                      amount: { $sum: '$amount' },
+                      _id: "$category",
+                      amount: { $sum: "$amount" },
                       count: { $sum: 1 },
                     },
                   },
@@ -497,32 +537,34 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        category: '$category',
-                        year: { $year: '$date' },
-                        month: { $month: '$date' },
+                        category: "$category",
+                        year: { $year: "$date" },
+                        month: { $month: "$date" },
                       },
-                      amount: { $sum: '$amount' },
+                      amount: { $sum: "$amount" },
                       count: { $sum: 1 },
                     },
                   },
                   {
                     $project: {
                       _id: 0,
-                      category: { $ifNull: ['$_id.category', 'OTHER'] },
+                      category: { $ifNull: ["$_id.category", "OTHER"] },
                       month: {
                         $concat: [
-                          { $toString: '$_id.year' },
-                          '-',
+                          { $toString: "$_id.year" },
+                          "-",
                           {
                             $cond: {
-                              if: { $lt: ['$_id.month', 10] },
-                              then: { $concat: ['0', { $toString: '$_id.month' }] },
-                              else: { $toString: '$_id.month' },
+                              if: { $lt: ["$_id.month", 10] },
+                              then: {
+                                $concat: ["0", { $toString: "$_id.month" }],
+                              },
+                              else: { $toString: "$_id.month" },
                             },
                           },
                         ],
                       },
-                      amount: { $round: ['$amount', 2] },
+                      amount: { $round: ["$amount", 2] },
                       count: 1,
                     },
                   },
@@ -540,7 +582,7 @@ const financialAnalyticsResolvers = {
                 _id: null,
                 total: { $sum: 1 },
                 completed: {
-                  $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+                  $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] },
                 },
               },
             },
@@ -555,9 +597,9 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: null,
-                      totalHT: { $sum: '$finalTotalHT' },
-                      totalTTC: { $sum: '$finalTotalTTC' },
-                      totalVAT: { $sum: '$finalTotalVAT' },
+                      totalHT: { $sum: "$finalTotalHT" },
+                      totalTTC: { $sum: "$finalTotalTTC" },
+                      totalVAT: { $sum: "$finalTotalVAT" },
                       count: { $sum: 1 },
                     },
                   },
@@ -566,11 +608,11 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        year: { $year: '$issueDate' },
-                        month: { $month: '$issueDate' },
+                        year: { $year: "$issueDate" },
+                        month: { $month: "$issueDate" },
                       },
-                      totalHT: { $sum: '$finalTotalHT' },
-                      totalTTC: { $sum: '$finalTotalTTC' },
+                      totalHT: { $sum: "$finalTotalHT" },
+                      totalTTC: { $sum: "$finalTotalTTC" },
                     },
                   },
                   {
@@ -578,13 +620,15 @@ const financialAnalyticsResolvers = {
                       _id: 0,
                       month: {
                         $concat: [
-                          { $toString: '$_id.year' },
-                          '-',
+                          { $toString: "$_id.year" },
+                          "-",
                           {
                             $cond: {
-                              if: { $lt: ['$_id.month', 10] },
-                              then: { $concat: ['0', { $toString: '$_id.month' }] },
-                              else: { $toString: '$_id.month' },
+                              if: { $lt: ["$_id.month", 10] },
+                              then: {
+                                $concat: ["0", { $toString: "$_id.month" }],
+                              },
+                              else: { $toString: "$_id.month" },
                             },
                           },
                         ],
@@ -609,17 +653,17 @@ const financialAnalyticsResolvers = {
               {
                 $match: {
                   workspaceId: wId,
-                  status: 'COMPLETED',
+                  status: "COMPLETED",
                   paymentDate: paymentDateQuery,
                 },
               },
               {
                 $group: {
                   _id: {
-                    year: { $year: '$paymentDate' },
-                    month: { $month: '$paymentDate' },
+                    year: { $year: "$paymentDate" },
+                    month: { $month: "$paymentDate" },
                   },
-                  collectedTTC: { $sum: '$finalTotalTTC' },
+                  collectedTTC: { $sum: "$finalTotalTTC" },
                   collectedCount: { $sum: 1 },
                 },
               },
@@ -631,7 +675,7 @@ const financialAnalyticsResolvers = {
             {
               $match: {
                 workspaceId: wId,
-                status: { $in: ['PENDING', 'OVERDUE'] },
+                status: { $in: ["PENDING", "OVERDUE"] },
               },
             },
             {
@@ -641,7 +685,7 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: null,
-                      outstandingReceivables: { $sum: '$finalTotalTTC' },
+                      outstandingReceivables: { $sum: "$finalTotalTTC" },
                     },
                   },
                 ],
@@ -654,35 +698,37 @@ const financialAnalyticsResolvers = {
                   },
                   {
                     $project: {
-                      invoiceId: '$_id',
+                      invoiceId: "$_id",
                       invoiceNumber: {
                         $cond: {
-                          if: { $and: [{ $ifNull: ['$prefix', false] }, { $ifNull: ['$number', false] }] },
-                          then: { $concat: ['$prefix', '-', '$number'] },
-                          else: { $ifNull: ['$number', 'N/A'] },
+                          if: {
+                            $and: [
+                              { $ifNull: ["$prefix", false] },
+                              { $ifNull: ["$number", false] },
+                            ],
+                          },
+                          then: { $concat: ["$prefix", "-", "$number"] },
+                          else: { $ifNull: ["$number", "N/A"] },
                         },
                       },
                       clientName: {
                         $cond: {
-                          if: { $eq: ['$client.type', 'INDIVIDUAL'] },
+                          if: { $eq: ["$client.type", "INDIVIDUAL"] },
                           then: {
                             $concat: [
-                              { $ifNull: ['$client.firstName', ''] },
-                              ' ',
-                              { $ifNull: ['$client.lastName', ''] },
+                              { $ifNull: ["$client.firstName", ""] },
+                              " ",
+                              { $ifNull: ["$client.lastName", ""] },
                             ],
                           },
-                          else: { $ifNull: ['$client.name', 'Client inconnu'] },
+                          else: { $ifNull: ["$client.name", "Client inconnu"] },
                         },
                       },
-                      totalTTC: '$finalTotalTTC',
+                      totalTTC: "$finalTotalTTC",
                       dueDate: 1,
                       daysOverdue: {
                         $floor: {
-                          $divide: [
-                            { $subtract: [now, '$dueDate'] },
-                            86400000,
-                          ],
+                          $divide: [{ $subtract: [now, "$dueDate"] }, 86400000],
                         },
                       },
                     },
@@ -700,10 +746,7 @@ const financialAnalyticsResolvers = {
                     $addFields: {
                       daysOverdue: {
                         $floor: {
-                          $divide: [
-                            { $subtract: [now, '$dueDate'] },
-                            86400000,
-                          ],
+                          $divide: [{ $subtract: [now, "$dueDate"] }, 86400000],
                         },
                       },
                     },
@@ -711,12 +754,12 @@ const financialAnalyticsResolvers = {
                   { $match: { daysOverdue: { $gte: 0 } } },
                   {
                     $bucket: {
-                      groupBy: '$daysOverdue',
+                      groupBy: "$daysOverdue",
                       boundaries: [0, 31, 61, 91],
-                      default: '91+',
+                      default: "91+",
                       output: {
                         count: { $sum: 1 },
-                        totalTTC: { $sum: '$finalTotalTTC' },
+                        totalTTC: { $sum: "$finalTotalTTC" },
                       },
                     },
                   },
@@ -729,25 +772,31 @@ const financialAnalyticsResolvers = {
           (() => {
             const importedMatch = {
               workspaceId: wId,
-              status: { $in: ['VALIDATED', 'COMPLETED'] },
+              status: { $in: ["VALIDATED", "COMPLETED"] },
             };
             const pipeline = [
               { $match: importedMatch },
-              { $addFields: { _effectiveDate: { $ifNull: ['$invoiceDate', '$createdAt'] } } },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
+                },
+              },
             ];
             if (startDate || endDate) {
               const effectiveDateFilter = {};
               if (startDate) effectiveDateFilter.$gte = new Date(startDate);
               if (endDate) effectiveDateFilter.$lte = new Date(endDate);
-              pipeline.push({ $match: { _effectiveDate: effectiveDateFilter } });
+              pipeline.push({
+                $match: { _effectiveDate: effectiveDateFilter },
+              });
             }
             pipeline.push({
               $group: {
                 _id: {
-                  year: { $year: '$_effectiveDate' },
-                  month: { $month: '$_effectiveDate' },
+                  year: { $year: "$_effectiveDate" },
+                  month: { $month: "$_effectiveDate" },
                 },
-                invoicedTTC: { $sum: '$totalTTC' },
+                invoicedTTC: { $sum: "$totalTTC" },
                 invoicedCount: { $sum: 1 },
               },
             });
@@ -758,25 +807,31 @@ const financialAnalyticsResolvers = {
           (() => {
             const importedCollectedMatch = {
               workspaceId: wId,
-              status: 'COMPLETED',
+              status: "COMPLETED",
             };
             const pipeline = [
               { $match: importedCollectedMatch },
-              { $addFields: { _effectiveDate: { $ifNull: ['$invoiceDate', '$createdAt'] } } },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
+                },
+              },
             ];
             if (startDate || endDate) {
               const effectiveDateFilter = {};
               if (startDate) effectiveDateFilter.$gte = new Date(startDate);
               if (endDate) effectiveDateFilter.$lte = new Date(endDate);
-              pipeline.push({ $match: { _effectiveDate: effectiveDateFilter } });
+              pipeline.push({
+                $match: { _effectiveDate: effectiveDateFilter },
+              });
             }
             pipeline.push({
               $group: {
                 _id: {
-                  year: { $year: '$_effectiveDate' },
-                  month: { $month: '$_effectiveDate' },
+                  year: { $year: "$_effectiveDate" },
+                  month: { $month: "$_effectiveDate" },
                 },
-                collectedTTC: { $sum: '$totalTTC' },
+                collectedTTC: { $sum: "$totalTTC" },
                 collectedCount: { $sum: 1 },
               },
             });
@@ -796,11 +851,21 @@ const financialAnalyticsResolvers = {
           invoiceCount: 0,
           clients: [],
         };
-        const collectionTotals = invResult.collectionTotals[0] || { totalInvoices: 0, completedInvoices: 0, totalRevenueTTCExclCanceled: 0 };
+        const collectionTotals = invResult.collectionTotals[0] || {
+          totalInvoices: 0,
+          completedInvoices: 0,
+          totalRevenueTTCExclCanceled: 0,
+        };
 
         // Current receivables snapshot (unfiltered by issueDate)
-        const recvResult = currentReceivablesStats[0] || { receivables: [], overdueInvoices: [], agingBuckets: [] };
-        const receivables = recvResult.receivables[0] || { outstandingReceivables: 0 };
+        const recvResult = currentReceivablesStats[0] || {
+          receivables: [],
+          overdueInvoices: [],
+          agingBuckets: [],
+        };
+        const receivables = recvResult.receivables[0] || {
+          outstandingReceivables: 0,
+        };
 
         // Expense results
         const expResult = expenseStats[0];
@@ -814,69 +879,101 @@ const financialAnalyticsResolvers = {
         const quoteResult = quoteStats[0] || { total: 0, completed: 0 };
         const quoteConversionRate =
           quoteResult.total > 0
-            ? Math.round((quoteResult.completed / quoteResult.total) * 10000) / 100
+            ? Math.round((quoteResult.completed / quoteResult.total) * 10000) /
+              100
             : 0;
 
         // CreditNote results
         const cnResult = creditNoteStats[0];
-        const cnTotals = cnResult.totals[0] || { totalHT: 0, totalTTC: 0, totalVAT: 0, count: 0 };
+        const cnTotals = cnResult.totals[0] || {
+          totalHT: 0,
+          totalTTC: 0,
+          totalVAT: 0,
+          count: 0,
+        };
 
         // ==============================
         // COMPUTE DERIVED KPI
         // ==============================
 
         const totalRevenueHT = Math.round(invTotals.totalRevenueHT * 100) / 100;
-        const totalRevenueTTC = Math.round(invTotals.totalRevenueTTC * 100) / 100;
+        const totalRevenueTTC =
+          Math.round(invTotals.totalRevenueTTC * 100) / 100;
         const creditNoteTotalHT = Math.round(cnTotals.totalHT * 100) / 100; // negative
-        const netRevenueHT = Math.round((totalRevenueHT + creditNoteTotalHT) * 100) / 100;
+        const netRevenueHT =
+          Math.round((totalRevenueHT + creditNoteTotalHT) * 100) / 100;
 
-        const totalExpensesTTC = Math.round(expTotals.totalExpensesTTC * 100) / 100;
-        const totalExpensesVAT = Math.round(expTotals.totalExpensesVAT * 100) / 100;
-        const totalExpensesHT = Math.round((totalExpensesTTC - totalExpensesVAT) * 100) / 100;
+        const totalExpensesTTC =
+          Math.round(expTotals.totalExpensesTTC * 100) / 100;
+        const totalExpensesVAT =
+          Math.round(expTotals.totalExpensesVAT * 100) / 100;
+        const totalExpensesHT =
+          Math.round((totalExpensesTTC - totalExpensesVAT) * 100) / 100;
 
-        const grossMargin = Math.round((netRevenueHT - totalExpensesHT) * 100) / 100;
-        const grossMarginRate = netRevenueHT > 0
-          ? Math.round((grossMargin / netRevenueHT) * 10000) / 100
-          : 0;
-        const chargeRate = netRevenueHT > 0
-          ? Math.round((totalExpensesHT / netRevenueHT) * 10000) / 100
-          : 0;
+        const grossMargin =
+          Math.round((netRevenueHT - totalExpensesHT) * 100) / 100;
+        const grossMarginRate =
+          netRevenueHT > 0
+            ? Math.round((grossMargin / netRevenueHT) * 10000) / 100
+            : 0;
+        const chargeRate =
+          netRevenueHT > 0
+            ? Math.round((totalExpensesHT / netRevenueHT) * 10000) / 100
+            : 0;
 
         // Outstanding & overdue
-        const outstandingReceivables = Math.round(receivables.outstandingReceivables * 100) / 100;
+        const outstandingReceivables =
+          Math.round(receivables.outstandingReceivables * 100) / 100;
 
         // Overdue invoices
-        const overdueInvoices = (recvResult.overdueInvoices || []).map((inv) => ({
-          invoiceId: inv.invoiceId.toString(),
-          invoiceNumber: (inv.invoiceNumber || 'N/A').trim(),
-          clientName: (inv.clientName || 'Client inconnu').trim(),
-          totalTTC: Math.round((inv.totalTTC || 0) * 100) / 100,
-          dueDate: inv.dueDate ? inv.dueDate.toISOString().split('T')[0] : '',
-          daysOverdue: Math.max(0, inv.daysOverdue || 0),
-        }));
-        const overdueAmount = overdueInvoices.reduce((sum, inv) => sum + inv.totalTTC, 0);
+        const overdueInvoices = (recvResult.overdueInvoices || []).map(
+          (inv) => ({
+            invoiceId: inv.invoiceId.toString(),
+            invoiceNumber: (inv.invoiceNumber || "N/A").trim(),
+            clientName: (inv.clientName || "Client inconnu").trim(),
+            totalTTC: Math.round((inv.totalTTC || 0) * 100) / 100,
+            dueDate: inv.dueDate ? inv.dueDate.toISOString().split("T")[0] : "",
+            daysOverdue: Math.max(0, inv.daysOverdue || 0),
+          }),
+        );
+        const overdueAmount = overdueInvoices.reduce(
+          (sum, inv) => sum + inv.totalTTC,
+          0,
+        );
         const overdueCount = overdueInvoices.length;
 
         // DSO: (créances en cours TTC / CA TTC hors annulées) × nbJours
         const periodStart = new Date(startDate);
         const periodEnd = new Date(endDate);
-        const nbDays = Math.max(1, Math.ceil((periodEnd - periodStart) / 86400000));
-        const revenueTTCForDso = collectionTotals.totalRevenueTTCExclCanceled || totalRevenueTTC;
-        const dso = revenueTTCForDso > 0
-          ? Math.round((outstandingReceivables / revenueTTCForDso) * nbDays * 100) / 100
-          : 0;
+        const nbDays = Math.max(
+          1,
+          Math.ceil((periodEnd - periodStart) / 86400000),
+        );
+        const revenueTTCForDso =
+          collectionTotals.totalRevenueTTCExclCanceled || totalRevenueTTC;
+        const dso =
+          revenueTTCForDso > 0
+            ? Math.round(
+                (outstandingReceivables / revenueTTCForDso) * nbDays * 100,
+              ) / 100
+            : 0;
 
         // Collection rate: COMPLETED / total non-DRAFT (in count)
-        const collectionRate = collectionTotals.totalInvoices > 0
-          ? Math.round((collectionTotals.completedInvoices / collectionTotals.totalInvoices) * 10000) / 100
-          : 0;
+        const collectionRate =
+          collectionTotals.totalInvoices > 0
+            ? Math.round(
+                (collectionTotals.completedInvoices /
+                  collectionTotals.totalInvoices) *
+                  10000,
+              ) / 100
+            : 0;
 
         // Aging buckets - normalize from MongoDB $bucket output
         const agingBucketsConfig = [
-          { label: '1-30 jours', min: 0, max: 30 },
-          { label: '31-60 jours', min: 31, max: 60 },
-          { label: '61-90 jours', min: 61, max: 90 },
-          { label: '91+ jours', min: 91, max: 9999 },
+          { label: "1-30 jours", min: 0, max: 30 },
+          { label: "31-60 jours", min: 31, max: 60 },
+          { label: "61-90 jours", min: 61, max: 90 },
+          { label: "91+ jours", min: 91, max: 9999 },
         ];
         const rawAgingBuckets = recvResult.agingBuckets || [];
         const agingBucketMap = {};
@@ -888,7 +985,7 @@ const financialAnalyticsResolvers = {
           if (cfg.min === 0) key = 0;
           else if (cfg.min === 31) key = 31;
           else if (cfg.min === 61) key = 61;
-          else key = '91+';
+          else key = "91+";
           const raw = agingBucketMap[key] || {};
           return {
             label: cfg.label,
@@ -902,36 +999,53 @@ const financialAnalyticsResolvers = {
         // Monthly collection - merge invoiced (from monthlyRevenue) + collected (from separate paymentDate query)
         const invoicedMap = {};
         for (const r of invResult.monthlyRevenue) {
-          invoicedMap[r.month] = { invoicedTTC: r.revenueTTC, invoicedCount: r.invoiceCount };
+          invoicedMap[r.month] = {
+            invoicedTTC: r.revenueTTC,
+            invoicedCount: r.invoiceCount,
+          };
         }
         // Merge imported invoices into invoicedMap
-        for (const r of (importedInvoiceMonthlyStats || [])) {
+        for (const r of importedInvoiceMonthlyStats || []) {
           if (!r._id.year || !r._id.month) continue;
-          const m = `${r._id.year}-${String(r._id.month).padStart(2, '0')}`;
+          const m = `${r._id.year}-${String(r._id.month).padStart(2, "0")}`;
           if (invoicedMap[m]) {
             invoicedMap[m].invoicedTTC += r.invoicedTTC;
             invoicedMap[m].invoicedCount += r.invoicedCount;
           } else {
-            invoicedMap[m] = { invoicedTTC: r.invoicedTTC, invoicedCount: r.invoicedCount };
+            invoicedMap[m] = {
+              invoicedTTC: r.invoicedTTC,
+              invoicedCount: r.invoicedCount,
+            };
           }
         }
         const collectedMap = {};
-        for (const r of (monthlyCollectedStats || [])) {
-          const m = `${r._id.year}-${String(r._id.month).padStart(2, '0')}`;
-          collectedMap[m] = { collectedTTC: r.collectedTTC, collectedCount: r.collectedCount };
+        for (const r of monthlyCollectedStats || []) {
+          const m = `${r._id.year}-${String(r._id.month).padStart(2, "0")}`;
+          collectedMap[m] = {
+            collectedTTC: r.collectedTTC,
+            collectedCount: r.collectedCount,
+          };
         }
         // Merge imported invoices into collectedMap
-        for (const r of (importedInvoiceCollectedStats || [])) {
+        for (const r of importedInvoiceCollectedStats || []) {
           if (!r._id.year || !r._id.month) continue;
-          const m = `${r._id.year}-${String(r._id.month).padStart(2, '0')}`;
+          const m = `${r._id.year}-${String(r._id.month).padStart(2, "0")}`;
           if (collectedMap[m]) {
             collectedMap[m].collectedTTC += r.collectedTTC;
             collectedMap[m].collectedCount += r.collectedCount;
           } else {
-            collectedMap[m] = { collectedTTC: r.collectedTTC, collectedCount: r.collectedCount };
+            collectedMap[m] = {
+              collectedTTC: r.collectedTTC,
+              collectedCount: r.collectedCount,
+            };
           }
         }
-        const allCollectionMonths = [...new Set([...Object.keys(invoicedMap), ...Object.keys(collectedMap)])].sort();
+        const allCollectionMonths = [
+          ...new Set([
+            ...Object.keys(invoicedMap),
+            ...Object.keys(collectedMap),
+          ]),
+        ].sort();
         const monthlyCollection = allCollectionMonths.map((m) => {
           const inv = invoicedMap[m] || { invoicedTTC: 0, invoicedCount: 0 };
           const col = collectedMap[m] || { collectedTTC: 0, collectedCount: 0 };
@@ -945,15 +1059,23 @@ const financialAnalyticsResolvers = {
         });
 
         // Top client concentration
-        const revenueByClientSorted = [...invResult.revenueByClient].sort((a, b) => b.totalHT - a.totalHT);
-        const top3HT = revenueByClientSorted.slice(0, 3).reduce((s, c) => s + c.totalHT, 0);
-        const totalHT = revenueByClientSorted.reduce((s, c) => s + c.totalHT, 0);
-        const topClientConcentration = totalHT > 0
-          ? Math.round((top3HT / totalHT) * 10000) / 100
-          : 0;
+        const revenueByClientSorted = [...invResult.revenueByClient].sort(
+          (a, b) => b.totalHT - a.totalHT,
+        );
+        const top3HT = revenueByClientSorted
+          .slice(0, 3)
+          .reduce((s, c) => s + c.totalHT, 0);
+        const totalHT = revenueByClientSorted.reduce(
+          (s, c) => s + c.totalHT,
+          0,
+        );
+        const topClientConcentration =
+          totalHT > 0 ? Math.round((top3HT / totalHT) * 10000) / 100 : 0;
 
         // Client counts
-        const activeClientCount = (invTotals.clients || []).filter(Boolean).length;
+        const activeClientCount = (invTotals.clients || []).filter(
+          Boolean,
+        ).length;
 
         // ==============================
         // MERGE MONTHLY DATA
@@ -976,16 +1098,22 @@ const financialAnalyticsResolvers = {
 
         // Build from invoice months
         const monthlyRevenue = invResult.monthlyRevenue.map((m) => {
-          const exp = expenseMonthlyMap[m.month] || { amountTTC: 0, amountHT: 0, vatAmount: 0, count: 0 };
+          const exp = expenseMonthlyMap[m.month] || {
+            amountTTC: 0,
+            amountHT: 0,
+            vatAmount: 0,
+            count: 0,
+          };
           const cn = cnMonthlyMap[m.month] || { totalHT: 0, totalTTC: 0 };
           delete expenseMonthlyMap[m.month];
           delete cnMonthlyMap[m.month];
 
           const monthNetRevenueHT = m.revenueHT + cn.totalHT;
           const monthGrossMargin = monthNetRevenueHT - exp.amountHT;
-          const monthGrossMarginRate = monthNetRevenueHT > 0
-            ? Math.round((monthGrossMargin / monthNetRevenueHT) * 10000) / 100
-            : 0;
+          const monthGrossMarginRate =
+            monthNetRevenueHT > 0
+              ? Math.round((monthGrossMargin / monthNetRevenueHT) * 10000) / 100
+              : 0;
 
           return {
             month: m.month,
@@ -1006,9 +1134,17 @@ const financialAnalyticsResolvers = {
         });
 
         // Add months that only have expenses or credit notes
-        const remainingMonths = new Set([...Object.keys(expenseMonthlyMap), ...Object.keys(cnMonthlyMap)]);
+        const remainingMonths = new Set([
+          ...Object.keys(expenseMonthlyMap),
+          ...Object.keys(cnMonthlyMap),
+        ]);
         for (const month of remainingMonths) {
-          const exp = expenseMonthlyMap[month] || { amountTTC: 0, amountHT: 0, vatAmount: 0, count: 0 };
+          const exp = expenseMonthlyMap[month] || {
+            amountTTC: 0,
+            amountHT: 0,
+            vatAmount: 0,
+            count: 0,
+          };
           const cn = cnMonthlyMap[month] || { totalHT: 0, totalTTC: 0 };
           const monthNetRevenueHT = cn.totalHT;
           const monthGrossMargin = monthNetRevenueHT - exp.amountHT;
@@ -1039,12 +1175,15 @@ const financialAnalyticsResolvers = {
         let _newClientCount = 0;
         let _retainedClientCount = 0;
         try {
-          const { prevStart, prevEnd } = computePreviousPeriod(startDate, endDate);
+          const { prevStart, prevEnd } = computePreviousPeriod(
+            startDate,
+            endDate,
+          );
 
           const prevDateQuery = { $gte: prevStart, $lte: prevEnd };
           const prevInvoiceMatch = {
             workspaceId: wId,
-            status: { $ne: 'DRAFT' },
+            status: { $ne: "DRAFT" },
             issueDate: prevDateQuery,
           };
           const prevExpenseMatch = {
@@ -1065,43 +1204,53 @@ const financialAnalyticsResolvers = {
                     {
                       $group: {
                         _id: null,
-                        totalRevenueHT: { $sum: '$finalTotalHT' },
-                        totalRevenueTTC: { $sum: '$finalTotalTTC' },
+                        totalRevenueHT: { $sum: "$finalTotalHT" },
+                        totalRevenueTTC: { $sum: "$finalTotalTTC" },
                         invoiceCount: { $sum: 1 },
                         // Count/revenue excluding CANCELED (for collectionRate and DSO)
                         invoiceCountExclCanceled: {
-                          $sum: { $cond: [{ $ne: ['$status', 'CANCELED'] }, 1, 0] },
+                          $sum: {
+                            $cond: [{ $ne: ["$status", "CANCELED"] }, 1, 0],
+                          },
                         },
                         revenueTTCExclCanceled: {
-                          $sum: { $cond: [{ $ne: ['$status', 'CANCELED'] }, '$finalTotalTTC', 0] },
+                          $sum: {
+                            $cond: [
+                              { $ne: ["$status", "CANCELED"] },
+                              "$finalTotalTTC",
+                              0,
+                            ],
+                          },
                         },
-                        clients: { $addToSet: '$client.id' },
+                        clients: { $addToSet: "$client.id" },
                         completedCount: {
-                          $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+                          $sum: {
+                            $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0],
+                          },
                         },
                       },
                     },
                   ],
                   receivables: [
-                    { $match: { status: { $in: ['PENDING', 'OVERDUE'] } } },
+                    { $match: { status: { $in: ["PENDING", "OVERDUE"] } } },
                     {
                       $group: {
                         _id: null,
-                        outstandingReceivables: { $sum: '$finalTotalTTC' },
+                        outstandingReceivables: { $sum: "$finalTotalTTC" },
                       },
                     },
                   ],
                   overdue: [
                     {
                       $match: {
-                        status: { $in: ['PENDING', 'OVERDUE'] },
+                        status: { $in: ["PENDING", "OVERDUE"] },
                         dueDate: { $ne: null, $lt: now },
                       },
                     },
                     {
                       $group: {
                         _id: null,
-                        amount: { $sum: '$finalTotalTTC' },
+                        amount: { $sum: "$finalTotalTTC" },
                         count: { $sum: 1 },
                       },
                     },
@@ -1109,8 +1258,8 @@ const financialAnalyticsResolvers = {
                   revenueByClient: [
                     {
                       $group: {
-                        _id: '$client.id',
-                        totalHT: { $sum: '$finalTotalHT' },
+                        _id: "$client.id",
+                        totalHT: { $sum: "$finalTotalHT" },
                       },
                     },
                     { $sort: { totalHT: -1 } },
@@ -1123,8 +1272,8 @@ const financialAnalyticsResolvers = {
               {
                 $group: {
                   _id: null,
-                  totalExpensesTTC: { $sum: '$amount' },
-                  totalExpensesVAT: { $sum: { $ifNull: ['$vatAmount', 0] } },
+                  totalExpensesTTC: { $sum: "$amount" },
+                  totalExpensesVAT: { $sum: { $ifNull: ["$vatAmount", 0] } },
                 },
               },
             ]),
@@ -1133,7 +1282,7 @@ const financialAnalyticsResolvers = {
               {
                 $group: {
                   _id: null,
-                  totalHT: { $sum: '$finalTotalHT' },
+                  totalHT: { $sum: "$finalTotalHT" },
                 },
               },
             ]),
@@ -1141,7 +1290,7 @@ const financialAnalyticsResolvers = {
               {
                 $match: {
                   workspaceId: wId,
-                  status: { $in: ['COMPLETED', 'CANCELED', 'PENDING'] },
+                  status: { $in: ["COMPLETED", "CANCELED", "PENDING"] },
                   issueDate: prevDateQuery,
                 },
               },
@@ -1150,7 +1299,7 @@ const financialAnalyticsResolvers = {
                   _id: null,
                   total: { $sum: 1 },
                   completed: {
-                    $sum: { $cond: [{ $eq: ['$status', 'COMPLETED'] }, 1, 0] },
+                    $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] },
                   },
                 },
               },
@@ -1159,13 +1308,25 @@ const financialAnalyticsResolvers = {
 
           const prevInvResult = prevInv[0];
           const prevInvTotals = prevInvResult.totals[0] || {
-            totalRevenueHT: 0, totalRevenueTTC: 0, invoiceCount: 0, clients: [], completedCount: 0,
+            totalRevenueHT: 0,
+            totalRevenueTTC: 0,
+            invoiceCount: 0,
+            clients: [],
+            completedCount: 0,
           };
-          const prevExpTotals = prevExp[0] || { totalExpensesTTC: 0, totalExpensesVAT: 0 };
+          const prevExpTotals = prevExp[0] || {
+            totalExpensesTTC: 0,
+            totalExpensesVAT: 0,
+          };
           const prevCnTotals = prevCn[0] || { totalHT: 0 };
           const prevQuoteTotals = prevQuote[0] || { total: 0, completed: 0 };
-          const prevReceivables = prevInvResult.receivables[0] || { outstandingReceivables: 0 };
-          const prevOverdue = prevInvResult.overdue[0] || { amount: 0, count: 0 };
+          const prevReceivables = prevInvResult.receivables[0] || {
+            outstandingReceivables: 0,
+          };
+          const prevOverdue = prevInvResult.overdue[0] || {
+            amount: 0,
+            count: 0,
+          };
 
           const prevTotalRevenueHT = prevInvTotals.totalRevenueHT;
           const prevTotalRevenueTTC = prevInvTotals.totalRevenueTTC;
@@ -1173,38 +1334,67 @@ const financialAnalyticsResolvers = {
           const prevNetRevenueHT = prevTotalRevenueHT + prevCreditNoteTotalHT;
           const prevTotalExpensesTTC = prevExpTotals.totalExpensesTTC;
           const prevTotalExpensesVAT = prevExpTotals.totalExpensesVAT;
-          const prevTotalExpensesHT = prevTotalExpensesTTC - prevTotalExpensesVAT;
+          const prevTotalExpensesHT =
+            prevTotalExpensesTTC - prevTotalExpensesVAT;
           const prevGrossMargin = prevNetRevenueHT - prevTotalExpensesHT;
-          const prevGrossMarginRate = prevNetRevenueHT > 0
-            ? Math.round((prevGrossMargin / prevNetRevenueHT) * 10000) / 100
-            : 0;
-          const prevChargeRate = prevNetRevenueHT > 0
-            ? Math.round((prevTotalExpensesHT / prevNetRevenueHT) * 10000) / 100
-            : 0;
+          const prevGrossMarginRate =
+            prevNetRevenueHT > 0
+              ? Math.round((prevGrossMargin / prevNetRevenueHT) * 10000) / 100
+              : 0;
+          const prevChargeRate =
+            prevNetRevenueHT > 0
+              ? Math.round((prevTotalExpensesHT / prevNetRevenueHT) * 10000) /
+                100
+              : 0;
 
-          const prevInvoiceCountForRate = prevInvTotals.invoiceCountExclCanceled || prevInvTotals.invoiceCount;
-          const prevCollectionRate = prevInvoiceCountForRate > 0
-            ? Math.round((prevInvTotals.completedCount / prevInvoiceCountForRate) * 10000) / 100
-            : 0;
-          const prevNbDays = Math.max(1, Math.ceil((prevEnd - prevStart) / 86400000));
-          const prevRevenueTTCForDso = prevInvTotals.revenueTTCExclCanceled || prevTotalRevenueTTC;
-          const prevDso = prevRevenueTTCForDso > 0
-            ? Math.round((prevReceivables.outstandingReceivables / prevRevenueTTCForDso) * prevNbDays * 100) / 100
-            : 0;
+          const prevInvoiceCountForRate =
+            prevInvTotals.invoiceCountExclCanceled ||
+            prevInvTotals.invoiceCount;
+          const prevCollectionRate =
+            prevInvoiceCountForRate > 0
+              ? Math.round(
+                  (prevInvTotals.completedCount / prevInvoiceCountForRate) *
+                    10000,
+                ) / 100
+              : 0;
+          const prevNbDays = Math.max(
+            1,
+            Math.ceil((prevEnd - prevStart) / 86400000),
+          );
+          const prevRevenueTTCForDso =
+            prevInvTotals.revenueTTCExclCanceled || prevTotalRevenueTTC;
+          const prevDso =
+            prevRevenueTTCForDso > 0
+              ? Math.round(
+                  (prevReceivables.outstandingReceivables /
+                    prevRevenueTTCForDso) *
+                    prevNbDays *
+                    100,
+                ) / 100
+              : 0;
 
-          const prevActiveClientCount = (prevInvTotals.clients || []).filter(Boolean).length;
+          const prevActiveClientCount = (prevInvTotals.clients || []).filter(
+            Boolean,
+          ).length;
 
           // N-1 client concentration
           const prevRBC = prevInvResult.revenueByClient || [];
-          const prevTop3HT = prevRBC.slice(0, 3).reduce((s, c) => s + c.totalHT, 0);
+          const prevTop3HT = prevRBC
+            .slice(0, 3)
+            .reduce((s, c) => s + c.totalHT, 0);
           const prevTotalHT = prevRBC.reduce((s, c) => s + c.totalHT, 0);
-          const prevTopClientConcentration = prevTotalHT > 0
-            ? Math.round((prevTop3HT / prevTotalHT) * 10000) / 100
-            : 0;
+          const prevTopClientConcentration =
+            prevTotalHT > 0
+              ? Math.round((prevTop3HT / prevTotalHT) * 10000) / 100
+              : 0;
 
           // New clients: clients active now but not in N-1
-          const prevClientSet = new Set((prevInvTotals.clients || []).filter(Boolean));
-          const currentClientSet = new Set((invTotals.clients || []).filter(Boolean));
+          const prevClientSet = new Set(
+            (prevInvTotals.clients || []).filter(Boolean),
+          );
+          const currentClientSet = new Set(
+            (invTotals.clients || []).filter(Boolean),
+          );
           let newClientCount = 0;
           for (const cId of currentClientSet) {
             if (!prevClientSet.has(cId)) newClientCount++;
@@ -1215,9 +1405,12 @@ const financialAnalyticsResolvers = {
             if (prevClientSet.has(cId)) retainedClientCount++;
           }
 
-          const prevQuoteConversionRate = prevQuoteTotals.total > 0
-            ? Math.round((prevQuoteTotals.completed / prevQuoteTotals.total) * 10000) / 100
-            : 0;
+          const prevQuoteConversionRate =
+            prevQuoteTotals.total > 0
+              ? Math.round(
+                  (prevQuoteTotals.completed / prevQuoteTotals.total) * 10000,
+                ) / 100
+              : 0;
 
           previousPeriod = {
             totalRevenueHT: Math.round(prevTotalRevenueHT * 100) / 100,
@@ -1225,9 +1418,12 @@ const financialAnalyticsResolvers = {
             grossMargin: Math.round(prevGrossMargin * 100) / 100,
             grossMarginRate: prevGrossMarginRate,
             invoiceCount: prevInvTotals.invoiceCount,
-            averageInvoiceHT: prevInvTotals.invoiceCount > 0
-              ? Math.round((prevTotalRevenueHT / prevInvTotals.invoiceCount) * 100) / 100
-              : 0,
+            averageInvoiceHT:
+              prevInvTotals.invoiceCount > 0
+                ? Math.round(
+                    (prevTotalRevenueHT / prevInvTotals.invoiceCount) * 100,
+                  ) / 100
+                : 0,
             collectionRate: prevCollectionRate,
             dso: prevDso,
             activeClientCount: prevActiveClientCount,
@@ -1237,7 +1433,8 @@ const financialAnalyticsResolvers = {
             creditNoteTotalHT: Math.round(prevCreditNoteTotalHT * 100) / 100,
             overdueAmount: Math.round(prevOverdue.amount * 100) / 100,
             overdueCount: prevOverdue.count,
-            outstandingReceivables: Math.round(prevReceivables.outstandingReceivables * 100) / 100,
+            outstandingReceivables:
+              Math.round(prevReceivables.outstandingReceivables * 100) / 100,
             topClientConcentration: prevTopClientConcentration,
             chargeRate: prevChargeRate,
           };
@@ -1247,13 +1444,18 @@ const financialAnalyticsResolvers = {
           _retainedClientCount = retainedClientCount;
         } catch (err) {
           // If N-1 fails, just continue without it
-          console.error('N-1 period calculation error:', err.message);
+          console.error("N-1 period calculation error:", err.message);
         }
 
         // ==============================
         // AGGREGATE KANBAN TIME
         // ==============================
-        const clientTimeMap = await aggregateTimeByClient(wId, startDate, endDate, clientIds);
+        const clientTimeMap = await aggregateTimeByClient(
+          wId,
+          startDate,
+          endDate,
+          clientIds,
+        );
 
         // Build revenueByClient with time data
         const matchedClientIds = new Set();
@@ -1263,7 +1465,7 @@ const financialAnalyticsResolvers = {
           const timeData = cId ? clientTimeMap.get(cId) : null;
           return {
             clientId: cId,
-            clientName: (c._id.clientName || 'Client inconnu').trim(),
+            clientName: (c._id.clientName || "Client inconnu").trim(),
             clientType: c._id.clientType || null,
             totalHT: Math.round(c.totalHT * 100) / 100,
             totalTTC: Math.round(c.totalTTC * 100) / 100,
@@ -1274,20 +1476,25 @@ const financialAnalyticsResolvers = {
                 ? Math.round((c.totalHT / c.invoiceCount) * 100) / 100
                 : 0,
             totalTimeSeconds: timeData?.totalTimeSeconds || 0,
-            totalBillableAmount: timeData ? Math.round(timeData.totalBillableAmount * 100) / 100 : 0,
-            totalHours: timeData ? Math.round((timeData.totalTimeSeconds / 3600) * 100) / 100 : 0,
+            totalBillableAmount: timeData
+              ? Math.round(timeData.totalBillableAmount * 100) / 100
+              : 0,
+            totalHours: timeData
+              ? Math.round((timeData.totalTimeSeconds / 3600) * 100) / 100
+              : 0,
           };
         });
 
         // Add clients that have time tracked but no invoices
-        const Client = mongoose.model('Client');
+        const Client = mongoose.model("Client");
         for (const [clientIdStr, timeData] of clientTimeMap) {
           if (matchedClientIds.has(clientIdStr)) continue;
           const client = await Client.findById(clientIdStr).lean();
           if (!client) continue;
-          const clientName = client.type === 'INDIVIDUAL'
-            ? `${client.firstName || ''} ${client.lastName || ''}`.trim()
-            : client.name || 'Client inconnu';
+          const clientName =
+            client.type === "INDIVIDUAL"
+              ? `${client.firstName || ""} ${client.lastName || ""}`.trim()
+              : client.name || "Client inconnu";
           revenueByClient.push({
             clientId: clientIdStr,
             clientName,
@@ -1298,8 +1505,10 @@ const financialAnalyticsResolvers = {
             invoiceCount: 0,
             averageInvoiceHT: 0,
             totalTimeSeconds: timeData.totalTimeSeconds,
-            totalBillableAmount: Math.round(timeData.totalBillableAmount * 100) / 100,
-            totalHours: Math.round((timeData.totalTimeSeconds / 3600) * 100) / 100,
+            totalBillableAmount:
+              Math.round(timeData.totalBillableAmount * 100) / 100,
+            totalHours:
+              Math.round((timeData.totalTimeSeconds / 3600) * 100) / 100,
           });
         }
 
@@ -1321,12 +1530,14 @@ const financialAnalyticsResolvers = {
           totalRevenueTTC,
           // Backward compat: totalExpenses = TTC, netResult = HT - TTC (old behavior)
           totalExpenses: totalExpensesTTC,
-          netResult: Math.round((totalRevenueHT - totalExpensesTTC) * 100) / 100,
+          netResult:
+            Math.round((totalRevenueHT - totalExpensesTTC) * 100) / 100,
           invoiceCount: invTotals.invoiceCount,
           expenseCount: expTotals.expenseCount,
           averageInvoiceHT:
             invTotals.invoiceCount > 0
-              ? Math.round((totalRevenueHT / invTotals.invoiceCount) * 100) / 100
+              ? Math.round((totalRevenueHT / invTotals.invoiceCount) * 100) /
+                100
               : 0,
           clientCount: activeClientCount,
           quoteConversionRate,
@@ -1371,7 +1582,7 @@ const financialAnalyticsResolvers = {
           })),
           monthlyRevenue,
           paymentMethodStats: invResult.paymentMethodStats.map((s) => ({
-            method: s._id || 'OTHER',
+            method: s._id || "OTHER",
             count: s.count,
             totalTTC: Math.round(s.totalTTC * 100) / 100,
           })),
@@ -1382,13 +1593,13 @@ const financialAnalyticsResolvers = {
           })),
           topClients,
           expenseByCategory: expResult.byCategory.map((c) => ({
-            category: c._id || 'OTHER',
+            category: c._id || "OTHER",
             amount: Math.round(c.amount * 100) / 100,
             count: c.count,
           })),
           revenueByClientMonthly: invResult.revenueByClientMonthly.map((r) => ({
             clientId: r.clientId || null,
-            clientName: (r.clientName || 'Client inconnu').trim(),
+            clientName: (r.clientName || "Client inconnu").trim(),
             month: r.month,
             totalHT: r.totalHT,
             totalTTC: r.totalTTC,
@@ -1408,7 +1619,7 @@ const financialAnalyticsResolvers = {
           },
           alerts,
         };
-      }
+      },
     ),
   },
 };

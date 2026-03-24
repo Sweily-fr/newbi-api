@@ -9,6 +9,7 @@ import {
   requireRead,
   requireWrite,
   requireDelete,
+  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
   createNotFoundError,
@@ -25,20 +26,10 @@ const clientResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "clients"
     client: requireRead("clients")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: id,
@@ -56,20 +47,10 @@ const clientResolvers = {
         { page = 1, limit = 10, search, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const query = {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -120,20 +101,11 @@ const clientResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "create" sur "clients"
     createClient: requireWrite("clients")(
       async (_, { input, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const existingClient = await Client.findOne({
           email: input.email.toLowerCase(),
@@ -223,20 +195,11 @@ const clientResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     updateClient: requireWrite("clients")(
       async (_, { id, input, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: id,
@@ -429,20 +392,10 @@ const clientResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "clients"
     deleteClient: requireDelete("clients")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: id,
@@ -494,19 +447,11 @@ const clientResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     assignClientMembers: requireWrite("clients")(
       async (_, { id, memberIds, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: id,
@@ -538,19 +483,11 @@ const clientResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     blockClient: requireWrite("clients")(
       async (_, { id, reason, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: id,
@@ -600,19 +537,11 @@ const clientResolvers = {
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
     unblockClient: requireWrite("clients")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: id,
@@ -664,20 +593,11 @@ const clientResolvers = {
         { clientId, input, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: clientId,
@@ -725,20 +645,11 @@ const clientResolvers = {
         { clientId, noteId, content, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: clientId,
@@ -785,20 +696,11 @@ const clientResolvers = {
         { clientId, noteId, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: clientId,
@@ -844,20 +746,11 @@ const clientResolvers = {
         { clientId, input, workspaceId: inputWorkspaceId },
         context,
       ) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-
-        // Validation du workspaceId
-        if (
-          inputWorkspaceId &&
-          contextWorkspaceId &&
-          inputWorkspaceId !== contextWorkspaceId
-        ) {
-          throw new AppError(
-            "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        const workspaceId = inputWorkspaceId || contextWorkspaceId;
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         const client = await Client.findOne({
           _id: clientId,
