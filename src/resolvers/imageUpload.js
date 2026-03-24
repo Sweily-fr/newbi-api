@@ -54,20 +54,22 @@ const imageUploadResolvers = {
 
           // Validation du signatureId
           if (!signatureId) {
-            throw createValidationError("signatureId est requis pour l'upload d'images de signature");
+            throw createValidationError(
+              "signatureId est requis pour l'upload d'images de signature",
+            );
           }
 
           // Validation du type d'image (nouvelle structure)
-          if (!["imgProfil", "logoReseau"].includes(imageType)) {
+          if (!["imgProfil", "logoReseau", "banner"].includes(imageType)) {
             throw createValidationError(
-              'Type d\'image invalide. Utilisez "imgProfil" ou "logoReseau"'
+              'Type d\'image invalide. Utilisez "imgProfil", "logoReseau" ou "banner"',
             );
           }
 
           // Validation du nom de fichier
           if (!cloudflareService.isValidImageFile(filename)) {
             throw createValidationError(
-              "Format d'image non supporté. Utilisez JPG, PNG, GIF ou WebP"
+              "Format d'image non supporté. Utilisez JPG, PNG, GIF ou WebP",
             );
           }
 
@@ -89,11 +91,13 @@ const imageUploadResolvers = {
           // Validation de la taille
           if (!cloudflareService.isValidFileSize(fileBuffer)) {
             throw createValidationError(
-              "L'image est trop volumineuse (max 5MB)"
+              "L'image est trop volumineuse (max 5MB)",
             );
           }
 
-          console.log(`🔄 Upload ${imageType} pour signature ${signatureId} par utilisateur ${user.id}`);
+          console.log(
+            `🔄 Upload ${imageType} pour signature ${signatureId} par utilisateur ${user.id}`,
+          );
 
           // Upload vers Cloudflare avec la nouvelle méthode
           const result = await cloudflareService.uploadSignatureImage(
@@ -101,7 +105,7 @@ const imageUploadResolvers = {
             filename,
             user.id,
             signatureId,
-            imageType
+            imageType,
           );
 
           return {
@@ -114,13 +118,16 @@ const imageUploadResolvers = {
         } catch (error) {
           console.error("Erreur upload image signature:", error);
 
-          if (error.message.includes("Validation") || error.message.includes("requis")) {
+          if (
+            error.message.includes("Validation") ||
+            error.message.includes("requis")
+          ) {
             throw error;
           }
 
           throw createInternalServerError("Erreur lors de l'upload de l'image");
         }
-      }
+      },
     ),
 
     /**
@@ -148,7 +155,7 @@ const imageUploadResolvers = {
       } catch (error) {
         console.error("Erreur suppression image signature:", error);
         throw createInternalServerError(
-          "Erreur lors de la suppression de l'image"
+          "Erreur lors de la suppression de l'image",
         );
       }
     }),
@@ -170,7 +177,7 @@ const imageUploadResolvers = {
 
           const signedUrl = await cloudflareService.getSignedUrl(
             key,
-            expiresIn
+            expiresIn,
           );
 
           return {
@@ -182,10 +189,10 @@ const imageUploadResolvers = {
         } catch (error) {
           console.error("Erreur génération URL signée:", error);
           throw createInternalServerError(
-            "Erreur lors de la récupération de l'URL de l'image"
+            "Erreur lors de la récupération de l'URL de l'image",
           );
         }
-      }
+      },
     ),
 
     /**
@@ -198,7 +205,7 @@ const imageUploadResolvers = {
         // Validation du nom de fichier
         if (!cloudflareService.isValidImageFile(filename)) {
           throw createValidationError(
-            "Format d'image non supporté. Utilisez JPG, PNG, GIF ou WebP"
+            "Format d'image non supporté. Utilisez JPG, PNG, GIF ou WebP",
           );
         }
 
@@ -228,7 +235,7 @@ const imageUploadResolvers = {
           } catch (error) {
             console.warn(
               "Impossible de supprimer l'ancienne image:",
-              error.message
+              error.message,
             );
           }
         }
@@ -238,7 +245,7 @@ const imageUploadResolvers = {
           fileBuffer,
           filename,
           user.id,
-          "profile"
+          "profile",
         );
 
         // Mettre à jour l'utilisateur avec la nouvelle URL dans le champ avatar
@@ -263,7 +270,7 @@ const imageUploadResolvers = {
         }
 
         throw createInternalServerError(
-          "Erreur lors de l'upload de l'image de profil"
+          "Erreur lors de l'upload de l'image de profil",
         );
       }
     }),
@@ -272,8 +279,10 @@ const imageUploadResolvers = {
      * Supprime l'image de profil utilisateur de Cloudflare R2
      */
     deleteUserProfileImage: isAuthenticated(async (_, __, { user }) => {
-      console.log(`🗑️ [DELETE_PROFILE_IMAGE] Début suppression pour utilisateur: ${user.id}`);
-      
+      console.log(
+        `🗑️ [DELETE_PROFILE_IMAGE] Début suppression pour utilisateur: ${user.id}`,
+      );
+
       try {
         // Récupérer l'utilisateur complet depuis la base de données
         const userDoc = await User.findById(user.id);
@@ -285,7 +294,7 @@ const imageUploadResolvers = {
         console.log(`🖼️ [DELETE_PROFILE_IMAGE] URL image trouvée: ${imageUrl}`);
 
         if (!imageUrl) {
-          console.log(`⚠️ [DELETE_PROFILE_IMAGE] Aucune image à supprimer`);
+          console.log("⚠️ [DELETE_PROFILE_IMAGE] Aucune image à supprimer");
           return {
             success: true,
             message: "Aucune image de profil à supprimer",
@@ -299,11 +308,13 @@ const imageUploadResolvers = {
         console.log(`🔑 [DELETE_PROFILE_IMAGE] Clé extraite: ${key}`);
 
         const success = await cloudflareService.deleteImage(key);
-        console.log(`☁️ [DELETE_PROFILE_IMAGE] Suppression Cloudflare: ${success}`);
+        console.log(
+          `☁️ [DELETE_PROFILE_IMAGE] Suppression Cloudflare: ${success}`,
+        );
 
         if (success) {
           // Mettre à jour l'utilisateur pour supprimer le champ avatar
-          const updateResult = await User.findByIdAndUpdate(user.id, {
+          await User.findByIdAndUpdate(user.id, {
             $unset: {
               avatar: 1,
               profilePictureUrl: 1,
@@ -312,10 +323,12 @@ const imageUploadResolvers = {
               "profile.profilePictureKey": 1,
             },
           });
-          console.log(`💾 [DELETE_PROFILE_IMAGE] Base de données mise à jour`);
+          console.log("💾 [DELETE_PROFILE_IMAGE] Base de données mise à jour");
         }
 
-        console.log(`✅ [DELETE_PROFILE_IMAGE] Suppression terminée, succès: ${success}`);
+        console.log(
+          `✅ [DELETE_PROFILE_IMAGE] Suppression terminée, succès: ${success}`,
+        );
         return {
           success,
           message: success
@@ -323,9 +336,9 @@ const imageUploadResolvers = {
             : "Erreur lors de la suppression",
         };
       } catch (error) {
-        console.error(`❌ [DELETE_PROFILE_IMAGE] Erreur:`, error);
+        console.error("❌ [DELETE_PROFILE_IMAGE] Erreur:", error);
         throw createInternalServerError(
-          "Erreur lors de la suppression de l'image de profil"
+          "Erreur lors de la suppression de l'image de profil",
         );
       }
     }),
@@ -341,21 +354,21 @@ const imageUploadResolvers = {
         const validLogoTypes = ["facebook", "linkedin", "twitter", "instagram"];
         if (!validLogoTypes.includes(logoType)) {
           throw createValidationError(
-            "Type de logo invalide. Utilisez facebook, linkedin, twitter ou instagram"
+            "Type de logo invalide. Utilisez facebook, linkedin, twitter ou instagram",
           );
         }
 
         // Validation de la couleur (format hex)
         if (!color || !/^#[0-9A-F]{6}$/i.test(color)) {
           throw createValidationError(
-            "Couleur invalide. Utilisez un format hexadécimal (#RRGGBB)"
+            "Couleur invalide. Utilisez un format hexadécimal (#RRGGBB)",
           );
         }
 
         // Validation du nom de fichier
         if (!cloudflareService.isValidImageFile(filename)) {
           throw createValidationError(
-            "Format d'image non supporté. Utilisez JPG, PNG, GIF ou WebP"
+            "Format d'image non supporté. Utilisez JPG, PNG, GIF ou WebP",
           );
         }
 
@@ -384,7 +397,7 @@ const imageUploadResolvers = {
           fileBuffer,
           filename,
           logoType,
-          color
+          color,
         );
 
         return {
@@ -400,7 +413,7 @@ const imageUploadResolvers = {
         }
 
         throw createInternalServerError(
-          "Erreur lors de l'upload du logo social"
+          "Erreur lors de l'upload du logo social",
         );
       }
     },

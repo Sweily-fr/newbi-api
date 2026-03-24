@@ -18,13 +18,13 @@ import { getPubSub } from "../config/redis.js";
 import logger from "../utils/logger.js";
 
 // Événement de subscription
-const SIGNATURE_UPDATED = 'SIGNATURE_UPDATED';
+const SIGNATURE_UPDATED = "SIGNATURE_UPDATED";
 
 // Fonction utilitaire pour publier en toute sécurité
-const safePublish = (channel, payload, context = '') => {
+const safePublish = (channel, payload, context = "") => {
   try {
     const pubsub = getPubSub();
-    pubsub.publish(channel, payload).catch(error => {
+    pubsub.publish(channel, payload).catch((error) => {
       logger.error(`❌ [Signatures] Erreur publication ${context}:`, error);
     });
     logger.debug(`📢 [Signatures] ${context} publié sur ${channel}`);
@@ -37,39 +37,37 @@ const emailSignatureResolvers = {
   Query: {
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "signatures"
     getMyEmailSignatures: requireRead("signatures")(
-      async (_, {}, context) => {
+      async (_, _args, context) => {
         const { user } = context;
         return EmailSignature.find({
-          createdBy: user.id
+          createdBy: user.id,
         }).sort({
           updatedAt: -1,
         });
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "signatures"
-    getEmailSignature: requireRead("signatures")(
-      async (_, { id }, context) => {
-        const { user } = context;
-        const signature = await EmailSignature.findOne({
-          _id: id,
-          createdBy: user.id,
-        });
-        if (!signature) throw createNotFoundError("Signature email");
-        return signature;
-      }
-    ),
+    getEmailSignature: requireRead("signatures")(async (_, { id }, context) => {
+      const { user } = context;
+      const signature = await EmailSignature.findOne({
+        _id: id,
+        createdBy: user.id,
+      });
+      if (!signature) throw createNotFoundError("Signature email");
+      return signature;
+    }),
 
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "signatures"
     getDefaultEmailSignature: requireRead("signatures")(
-      async (_, {}, context) => {
+      async (_, _args, context) => {
         const { user } = context;
         const signature = await EmailSignature.findOne({
           createdBy: user.id,
           isDefault: true,
         });
         return signature;
-      }
+      },
     ),
   },
 
@@ -94,7 +92,7 @@ const emailSignatureResolvers = {
           throw createAlreadyExistsError(
             "signature email",
             "nom",
-            input.signatureName
+            input.signatureName,
           );
         }
 
@@ -115,72 +113,74 @@ const emailSignatureResolvers = {
         const signature = new EmailSignature(signatureData);
         await signature.save();
         return signature;
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "signatures"
-    updateEmailSignature: requireWrite("signatures")(async (_, { input }, context) => {
-      const { user } = context;
-      const signature = await EmailSignature.findOne({
-        _id: input.id,
-        createdBy: user.id,
-      });
-
-      if (!signature) {
-        throw createNotFoundError("Signature email");
-      }
-
-      // Validation basique - seul le nom de signature est requis
-      if (!input.signatureName || input.signatureName.trim() === "") {
-        throw createValidationError("Le nom de la signature est requis");
-      }
-
-      // Si le nom de la signature est modifié, vérifier qu'il n'existe pas déjà
-      if (
-        input.signatureName &&
-        input.signatureName !== signature.signatureName
-      ) {
-        const existingSignature = await EmailSignature.findOne({
-          signatureName: input.signatureName,
+    updateEmailSignature: requireWrite("signatures")(
+      async (_, { input }, context) => {
+        const { user } = context;
+        const signature = await EmailSignature.findOne({
+          _id: input.id,
           createdBy: user.id,
-          _id: { $ne: input.id },
         });
 
-        if (existingSignature) {
-          throw createAlreadyExistsError(
-            "signature email",
-            "nom",
-            input.signatureName
-          );
+        if (!signature) {
+          throw createNotFoundError("Signature email");
         }
-      }
 
-      // Mettre à jour la signature avec les nouvelles données
-      Object.keys(input).forEach((key) => {
-        if (key !== "id" && input[key] !== undefined) {
-          // Traitement spécial pour les objets imbriqués
-          if (key === "colors" && input[key]) {
-            signature.colors = { ...signature.colors, ...input[key] };
-          } else if (key === "columnWidths" && input[key]) {
-            signature.columnWidths = {
-              ...signature.columnWidths,
-              ...input[key],
-            };
-          } else if (key === "spacings" && input[key]) {
-            signature.spacings = { ...signature.spacings, ...input[key] };
-          } else if (key === "paddings" && input[key]) {
-            signature.paddings = { ...signature.paddings, ...input[key] };
-          } else if (key === "fontSize" && input[key]) {
-            signature.fontSize = { ...signature.fontSize, ...input[key] };
-          } else {
-            signature[key] = input[key];
+        // Validation basique - seul le nom de signature est requis
+        if (!input.signatureName || input.signatureName.trim() === "") {
+          throw createValidationError("Le nom de la signature est requis");
+        }
+
+        // Si le nom de la signature est modifié, vérifier qu'il n'existe pas déjà
+        if (
+          input.signatureName &&
+          input.signatureName !== signature.signatureName
+        ) {
+          const existingSignature = await EmailSignature.findOne({
+            signatureName: input.signatureName,
+            createdBy: user.id,
+            _id: { $ne: input.id },
+          });
+
+          if (existingSignature) {
+            throw createAlreadyExistsError(
+              "signature email",
+              "nom",
+              input.signatureName,
+            );
           }
         }
-      });
 
-      await signature.save();
-      return signature;
-    }),
+        // Mettre à jour la signature avec les nouvelles données
+        Object.keys(input).forEach((key) => {
+          if (key !== "id" && input[key] !== undefined) {
+            // Traitement spécial pour les objets imbriqués
+            if (key === "colors" && input[key]) {
+              signature.colors = { ...signature.colors, ...input[key] };
+            } else if (key === "columnWidths" && input[key]) {
+              signature.columnWidths = {
+                ...signature.columnWidths,
+                ...input[key],
+              };
+            } else if (key === "spacings" && input[key]) {
+              signature.spacings = { ...signature.spacings, ...input[key] };
+            } else if (key === "paddings" && input[key]) {
+              signature.paddings = { ...signature.paddings, ...input[key] };
+            } else if (key === "fontSize" && input[key]) {
+              signature.fontSize = { ...signature.fontSize, ...input[key] };
+            } else {
+              signature[key] = input[key];
+            }
+          }
+        });
+
+        await signature.save();
+        return signature;
+      },
+    ),
 
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "signatures"
     deleteEmailSignature: requireDelete("signatures")(
@@ -209,7 +209,7 @@ const emailSignatureResolvers = {
               await otherSignature.save();
             } else {
               console.log(
-                `ℹ️ [BACKEND] Aucune autre signature trouvée pour définir comme par défaut`
+                "ℹ️ [BACKEND] Aucune autre signature trouvée pour définir comme par défaut",
               );
             }
           }
@@ -224,6 +224,10 @@ const emailSignatureResolvers = {
             filesToDelete.push(signature.logo);
           }
 
+          if (signature.banner) {
+            filesToDelete.push(signature.banner);
+          }
+
           // 4. Suppression des fichiers de manière séquentielle avec gestion d'erreur
           if (filesToDelete.length > 0) {
             for (const filePath of filesToDelete) {
@@ -232,12 +236,12 @@ const emailSignatureResolvers = {
               } catch (error) {
                 console.error(
                   `⚠️ [BACKEND] Échec de la suppression du fichier ${filePath}:`,
-                  error.message
+                  error.message,
                 );
               }
             }
           } else {
-            console.log(`ℹ️ [BACKEND] Aucun fichier à supprimer`);
+            console.log("ℹ️ [BACKEND] Aucun fichier à supprimer");
           }
 
           const deleteResult = await EmailSignature.deleteOne({
@@ -247,21 +251,25 @@ const emailSignatureResolvers = {
 
           if (deleteResult.deletedCount !== 1) {
             console.error(
-              `❌ [BACKEND] Aucun document supprimé, deletedCount: ${deleteResult.deletedCount}`
+              `❌ [BACKEND] Aucun document supprimé, deletedCount: ${deleteResult.deletedCount}`,
             );
             throw new Error("Aucune signature trouvée à supprimer");
           }
 
           // Publier l'événement de suppression
-          safePublish(`${SIGNATURE_UPDATED}_${user.id}`, {
-            type: 'DELETED',
-            signatureId: id,
-            workspaceId: user.activeOrganizationId || user.id,
-          }, `Signature supprimée: ${id}`);
+          safePublish(
+            `${SIGNATURE_UPDATED}_${user.id}`,
+            {
+              type: "DELETED",
+              signatureId: id,
+              workspaceId: user.activeOrganizationId || user.id,
+            },
+            `Signature supprimée: ${id}`,
+          );
 
           return true;
         } catch (error) {
-          console.error(`❌ [BACKEND] Erreur lors de la suppression:`, error);
+          console.error("❌ [BACKEND] Erreur lors de la suppression:", error);
 
           if (error.extensions && error.extensions.code) {
             throw error;
@@ -273,7 +281,7 @@ const emailSignatureResolvers = {
           console.error(`❌ [BACKEND] Erreur technique: ${errorMessage}`);
           throw new Error(errorMessage);
         }
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "signatures"
@@ -282,7 +290,7 @@ const emailSignatureResolvers = {
         const { user } = context;
         try {
           console.log(
-            `🗑️ [BACKEND] Suppression multiple de ${ids.length} signatures pour l'utilisateur ${user.id}`
+            `🗑️ [BACKEND] Suppression multiple de ${ids.length} signatures pour l'utilisateur ${user.id}`,
           );
 
           // 1. Vérifier que toutes les signatures existent et appartiennent à l'utilisateur
@@ -304,6 +312,9 @@ const emailSignatureResolvers = {
             if (signature.logo) {
               filesToDelete.push(signature.logo);
             }
+            if (signature.banner) {
+              filesToDelete.push(signature.banner);
+            }
           });
 
           // 3. Supprimer les fichiers
@@ -314,7 +325,7 @@ const emailSignatureResolvers = {
               } catch (error) {
                 console.error(
                   `⚠️ [BACKEND] Échec de la suppression du fichier ${filePath}:`,
-                  error.message
+                  error.message,
                 );
               }
             }
@@ -327,23 +338,27 @@ const emailSignatureResolvers = {
           });
 
           console.log(
-            `✅ [BACKEND] ${deleteResult.deletedCount} signatures supprimées`
+            `✅ [BACKEND] ${deleteResult.deletedCount} signatures supprimées`,
           );
 
           // 5. Publier les événements de suppression pour chaque signature
           ids.forEach((signatureId) => {
-            safePublish(`${SIGNATURE_UPDATED}_${user.id}`, {
-              type: 'DELETED',
-              signatureId,
-              workspaceId: user.activeOrganizationId || user.id,
-            }, `Signature supprimée: ${signatureId}`);
+            safePublish(
+              `${SIGNATURE_UPDATED}_${user.id}`,
+              {
+                type: "DELETED",
+                signatureId,
+                workspaceId: user.activeOrganizationId || user.id,
+              },
+              `Signature supprimée: ${signatureId}`,
+            );
           });
 
           return deleteResult.deletedCount;
         } catch (error) {
           console.error(
-            `❌ [BACKEND] Erreur lors de la suppression multiple:`,
-            error
+            "❌ [BACKEND] Erreur lors de la suppression multiple:",
+            error,
           );
 
           if (error.extensions && error.extensions.code) {
@@ -355,105 +370,131 @@ const emailSignatureResolvers = {
             "Une erreur est survenue lors de la suppression des signatures";
           throw new Error(errorMessage);
         }
-      }
+      },
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "set-default" sur "signatures"
-    setDefaultEmailSignature: requirePermission("signatures", "set-default")(
-      async (_, { id }, context) => {
-        const { user } = context;
-        const signature = await EmailSignature.findOne({
-          _id: id,
-          createdBy: user.id,
-        });
+    setDefaultEmailSignature: requirePermission(
+      "signatures",
+      "set-default",
+    )(async (_, { id }, context) => {
+      const { user } = context;
+      const signature = await EmailSignature.findOne({
+        _id: id,
+        createdBy: user.id,
+      });
 
-        if (!signature) {
-          throw createNotFoundError("Signature email");
-        }
-
-        // Définir cette signature comme signature par défaut
-        signature.isDefault = true;
-        await signature.save(); // Le middleware pre-save s'occupera de mettre à jour les autres signatures
-
-        return signature;
+      if (!signature) {
+        throw createNotFoundError("Signature email");
       }
-    ),
+
+      // Définir cette signature comme signature par défaut
+      signature.isDefault = true;
+      await signature.save(); // Le middleware pre-save s'occupera de mettre à jour les autres signatures
+
+      return signature;
+    }),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "signatures"
     cleanupTemporaryFiles: requireWrite("signatures")(
       async (_, { userId, newSignatureId }, context) => {
         const { user } = context;
         try {
-          console.log('🗑️ Nettoyage des fichiers temporaires pour utilisateur:', userId);
-          console.log('🆔 Nouveau signatureId:', newSignatureId);
+          console.log(
+            "🗑️ Nettoyage des fichiers temporaires pour utilisateur:",
+            userId,
+          );
+          console.log("🆔 Nouveau signatureId:", newSignatureId);
 
           // Vérifier que l'utilisateur peut nettoyer ses propres fichiers
           if (userId !== user.id) {
-            throw createValidationError('Vous ne pouvez nettoyer que vos propres fichiers');
+            throw createValidationError(
+              "Vous ne pouvez nettoyer que vos propres fichiers",
+            );
           }
 
           let deletedCount = 0;
 
           // Nettoyer les dossiers temporaires pour cet utilisateur
-          const tempFolders = [
-            `${userId}/temp-*`,
-          ];
+          const tempFolders = [`${userId}/temp-*`];
 
           for (const pattern of tempFolders) {
             try {
               // Lister tous les dossiers temporaires
-              const tempFoldersList = await cloudflareService.listObjects(`${userId}/`, 'temp-');
+              const tempFoldersList = await cloudflareService.listObjects(
+                `${userId}/`,
+                "temp-",
+              );
 
               for (const folder of tempFoldersList) {
                 // Supprimer chaque dossier temporaire trouvé
-                const deleteResult = await cloudflareService.deleteSignatureFolder(userId, folder.signatureId, null);
+                const deleteResult =
+                  await cloudflareService.deleteSignatureFolder(
+                    userId,
+                    folder.signatureId,
+                    null,
+                  );
                 if (deleteResult.success) {
                   deletedCount += deleteResult.deletedCount || 1;
-                  console.log(`✅ Dossier temporaire supprimé: ${folder.signatureId}`);
+                  console.log(
+                    `✅ Dossier temporaire supprimé: ${folder.signatureId}`,
+                  );
                 }
               }
             } catch (error) {
-              console.warn(`⚠️ Erreur lors du nettoyage du pattern ${pattern}:`, error.message);
+              console.warn(
+                `⚠️ Erreur lors du nettoyage du pattern ${pattern}:`,
+                error.message,
+              );
             }
           }
 
-          console.log(`✅ Nettoyage terminé. ${deletedCount} éléments supprimés.`);
+          console.log(
+            `✅ Nettoyage terminé. ${deletedCount} éléments supprimés.`,
+          );
 
           return {
             success: true,
             deletedCount,
             message: `${deletedCount} fichiers temporaires supprimés avec succès`,
           };
-
         } catch (error) {
-          console.error('❌ Erreur lors du nettoyage des fichiers temporaires:', error);
+          console.error(
+            "❌ Erreur lors du nettoyage des fichiers temporaires:",
+            error,
+          );
           return {
             success: false,
             deletedCount: 0,
             message: `Erreur lors du nettoyage: ${error.message}`,
           };
         }
-      }
+      },
     ),
   },
 
   Subscription: {
     signatureUpdated: {
-      subscribe: isAuthenticated((_, {}, { user }) => {
+      subscribe: isAuthenticated((_, _args, { user }) => {
         try {
           const pubsub = getPubSub();
           // Chaque utilisateur s'abonne à ses propres mises à jour de signatures
-          return pubsub.asyncIterableIterator([`${SIGNATURE_UPDATED}_${user.id}`]);
+          return pubsub.asyncIterableIterator([
+            `${SIGNATURE_UPDATED}_${user.id}`,
+          ]);
         } catch (error) {
-          logger.error('❌ [Signatures] Erreur subscription signatureUpdated:', error);
-          throw new Error('Subscription failed');
+          logger.error(
+            "❌ [Signatures] Erreur subscription signatureUpdated:",
+            error,
+          );
+          throw new Error("Subscription failed");
         }
       }),
       resolve: (payload) => {
         return payload;
-      }
-    }
-  }
+      },
+    },
+  },
 };
 
 export default emailSignatureResolvers;

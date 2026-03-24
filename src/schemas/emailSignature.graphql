@@ -47,10 +47,12 @@ type EmailSignature {
   photoVisible: Boolean!
   logo: String
   logoKey: String
+  banner: String
+  bannerKey: String
   imageSize: Int!
   imageShape: String!
   logoSize: Int!
-  
+
   # Séparateurs
   separatorVerticalWidth: Int!
   separatorHorizontalWidth: Int!
@@ -224,12 +226,12 @@ input DetailedPaddingsInput {
 input EmailSignatureInput {
   signatureName: String!
   isDefault: Boolean
-  
+
   # Informations personnelles
   firstName: String
   lastName: String
   position: String
-  
+
   # Informations de contact
   email: String
   phone: String
@@ -237,42 +239,44 @@ input EmailSignatureInput {
   website: String
   address: String
   companyName: String
-  
+
   # Réseaux sociaux
   socialNetworks: SocialNetworksInput
   socialColors: SocialColorsInput
   customSocialIcons: CustomSocialIconsInput
   socialGlobalColor: String
   socialSize: Int
-  
+
   # Options d'affichage des icônes
   showPhoneIcon: Boolean
   showMobileIcon: Boolean
   showEmailIcon: Boolean
   showAddressIcon: Boolean
   showWebsiteIcon: Boolean
-  
+
   # Couleurs
   primaryColor: String
   colors: SignatureColorsInput
-  
+
   # Configuration layout
   nameSpacing: Int
   nameAlignment: String
   layout: String
   orientation: String
   columnWidths: ColumnWidthsInput
-  
+
   # Images
   photo: String
   photoKey: String
   photoVisible: Boolean
   logo: String
   logoKey: String
+  banner: String
+  bannerKey: String
   imageSize: Int
   imageShape: String
   logoSize: Int
-  
+
   # Séparateurs
   separatorVerticalWidth: Int
   separatorHorizontalWidth: Int
@@ -441,10 +445,12 @@ input UpdateEmailSignatureInput {
   photoVisible: Boolean
   logo: String
   logoKey: String
+  banner: String
+  bannerKey: String
   imageSize: Int
   imageShape: String
   logoSize: Int
-  
+
   # Séparateurs
   separatorVerticalWidth: Int
   separatorHorizontalWidth: Int
