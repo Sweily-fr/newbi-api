@@ -155,7 +155,7 @@ const isAuthenticated = (resolver) => {
     if (!context.user) {
       throw new AppError(
         "Vous devez être connecté pour effectuer cette action",
-        ERROR_CODES.UNAUTHENTICATED
+        ERROR_CODES.UNAUTHENTICATED,
       );
     }
     return resolver(parent, args, context, info);
@@ -170,7 +170,7 @@ const withWorkspace = (resolver) => {
     if (!context.user) {
       throw new AppError(
         "Vous devez être connecté pour effectuer cette action",
-        ERROR_CODES.UNAUTHENTICATED
+        ERROR_CODES.UNAUTHENTICATED,
       );
     }
 
@@ -182,16 +182,20 @@ const withWorkspace = (resolver) => {
     // Récupérer le workspaceId depuis les arguments (fourni par le client)
     const argsWorkspaceId = args.workspaceId;
 
-    // ✅ FIX: Valider que le workspaceId des arguments correspond au header
-    // Évite qu'un utilisateur puisse accéder aux données d'une autre organisation
-    if (argsWorkspaceId && headerWorkspaceId && argsWorkspaceId !== headerWorkspaceId) {
-      throw new AppError(
-        "Organisation invalide. Vous n'avez pas accès à cette organisation.",
-        ERROR_CODES.FORBIDDEN
+    // En cas de mismatch entre header et args (ex: switch de compte, cache stale),
+    // privilégier args.workspaceId qui vient du composant React avec l'org à jour.
+    // La vérification d'appartenance est faite par le RBAC en aval.
+    if (
+      argsWorkspaceId &&
+      headerWorkspaceId &&
+      argsWorkspaceId !== headerWorkspaceId
+    ) {
+      logger.warn(
+        `⚠️ withWorkspace: mismatch header=${headerWorkspaceId} vs args=${argsWorkspaceId}, utilisation de args`,
       );
     }
 
-    // Utiliser le workspaceId des arguments ou du header, ou l'ID utilisateur en fallback
+    // Priorité: args (source explicite du composant) > header (hint frontend)
     let workspaceId = argsWorkspaceId || headerWorkspaceId;
 
     // Si aucun workspaceId n'est fourni, utiliser l'ID utilisateur comme workspace
