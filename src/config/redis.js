@@ -13,6 +13,7 @@ const redisConfig = {
 
 // Initialiser les clients Redis
 let pubsub;
+let cacheClient = null;
 
 const initializeRedis = async () => {
   try {
@@ -58,7 +59,13 @@ const initializeRedis = async () => {
       subscriber: new Redis(ioredisOptions),
     });
 
-    logger.info("🚀 [Redis] PubSub initialisé avec succès");
+    // Client dédié pour le cache de données (séparé du PubSub)
+    cacheClient = new Redis(ioredisOptions);
+    cacheClient.on("error", (err) => {
+      logger.warn("⚠️ [Redis Cache] Erreur client cache:", err.message);
+    });
+
+    logger.info("🚀 [Redis] PubSub + Cache initialisés avec succès");
     return pubsub;
   } catch (error) {
     logger.error("❌ [Redis] Erreur d'initialisation:", error.message);
@@ -74,6 +81,9 @@ const initializeRedis = async () => {
 // Fonction de nettoyage
 const closeRedis = async () => {
   try {
+    if (cacheClient) {
+      await cacheClient.quit();
+    }
     if (pubsub && pubsub.close) {
       await pubsub.close();
     }
@@ -107,10 +117,45 @@ const checkRedisHealth = async () => {
   }
 };
 
+// --- Cache helpers ---
+// Lecture depuis le cache Redis, retourne null si indisponible
+const cacheGet = async (key) => {
+  if (!cacheClient) return null;
+  try {
+    const data = await cacheClient.get(key);
+    return data ? JSON.parse(data) : null;
+  } catch {
+    return null;
+  }
+};
+
+// Écriture dans le cache Redis avec TTL en secondes
+const cacheSet = async (key, value, ttlSeconds = 30) => {
+  if (!cacheClient) return;
+  try {
+    await cacheClient.set(key, JSON.stringify(value), "EX", ttlSeconds);
+  } catch {
+    // Silencieux - le cache est optionnel
+  }
+};
+
+// Invalidation d'un pattern de clés
+const cacheDel = async (...keys) => {
+  if (!cacheClient) return;
+  try {
+    await cacheClient.del(...keys);
+  } catch {
+    // Silencieux
+  }
+};
+
 export {
   initializeRedis,
   closeRedis,
   getPubSub,
   checkRedisHealth,
   redisConfig,
+  cacheGet,
+  cacheSet,
+  cacheDel,
 };

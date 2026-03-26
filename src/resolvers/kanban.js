@@ -2,7 +2,7 @@
 import { Board, Column, Task } from "../models/kanban.js";
 import { AuthenticationError } from "apollo-server-express";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { getPubSub } from "../config/redis.js";
+import { getPubSub, cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import User from "../models/User.js";
@@ -17,7 +17,17 @@ const BOARD_UPDATED = "BOARD_UPDATED";
 const TASK_UPDATED = "TASK_UPDATED";
 const COLUMN_UPDATED = "COLUMN_UPDATED";
 
+// Clé de cache Redis pour les tâches d'un board
+const boardTasksCacheKey = (boardId, workspaceId) =>
+  `kanban:tasks:${workspaceId}:${boardId}`;
+
+// Invalider le cache des tâches d'un board
+const invalidateBoardTasksCache = async (boardId, workspaceId) => {
+  await cacheDel(boardTasksCacheKey(boardId, workspaceId));
+};
+
 // Fonction utilitaire pour publier en toute sécurité
+// Invalide automatiquement le cache Redis des tâches quand un événement TASK_ ou COLUMN_ est publié
 const safePublish = (channel, payload, context = "") => {
   try {
     const pubsub = getPubSub();
@@ -25,6 +35,18 @@ const safePublish = (channel, payload, context = "") => {
       logger.error(`❌ [Kanban] Erreur publication ${context}:`, error);
     });
     logger.debug(`📢 [Kanban] ${context} publié sur ${channel}`);
+
+    // Invalider le cache des tâches si c'est un événement lié aux tâches ou colonnes
+    const taskPayload = payload?.taskUpdated;
+    const columnPayload = payload?.columnUpdated;
+    if (taskPayload?.boardId && taskPayload?.workspaceId) {
+      invalidateBoardTasksCache(taskPayload.boardId, taskPayload.workspaceId);
+    } else if (columnPayload?.boardId && columnPayload?.workspaceId) {
+      invalidateBoardTasksCache(
+        columnPayload.boardId,
+        columnPayload.workspaceId,
+      );
+    }
   } catch (error) {
     logger.error(`❌ [Kanban] Erreur getPubSub ${context}:`, error);
   }
@@ -3093,13 +3115,54 @@ const resolvers = {
     },
     tasks: async (parent, _, { user }) => {
       if (!user) return [];
+
+      const cacheKey = boardTasksCacheKey(parent.id, parent.workspaceId);
+
+      // Essayer le cache Redis d'abord
+      const cached = await cacheGet(cacheKey);
+      if (cached) {
+        logger.debug(`🎯 [Kanban] Cache hit pour board ${parent.id}`);
+        return cached;
+      }
+
       const tasks = await Task.find({
         boardId: parent.id,
         workspaceId: parent.workspaceId,
       })
         .sort("position")
-        .limit(1000);
-      return await enrichTasksWithUserInfo(tasks);
+        .limit(1000)
+        .lean();
+
+      // Batch-load les clients pour éviter N+1 queries
+      const clientIds = [
+        ...new Set(
+          tasks.filter((t) => t.clientId).map((t) => t.clientId.toString()),
+        ),
+      ];
+      let clientsMap = {};
+      if (clientIds.length > 0) {
+        const clients = await Client.find({
+          _id: { $in: clientIds },
+          workspaceId: parent.workspaceId,
+        }).lean();
+        clientsMap = Object.fromEntries(
+          clients.map((c) => [c._id.toString(), c]),
+        );
+      }
+
+      // Attacher le client pré-chargé à chaque tâche
+      const result = tasks.map((task) => ({
+        ...task,
+        id: task._id?.toString() || task.id,
+        _prefetchedClient: task.clientId
+          ? clientsMap[task.clientId.toString()] || null
+          : null,
+      }));
+
+      // Mettre en cache 30 secondes
+      await cacheSet(cacheKey, result, 30);
+
+      return result;
     },
     client: async (board) => {
       if (!board.clientId) return null;
@@ -3417,9 +3480,14 @@ const resolvers = {
 
   Task: {
     // Résoudre le client assigné à la tâche
+    // Utilise le client pré-chargé par Board.tasks si disponible (évite N+1)
     client: async (task) => {
       if (!task.clientId) return null;
-      const Client = mongoose.model("Client");
+      // Si le client a été pré-chargé par Board.tasks, l'utiliser directement
+      if (task._prefetchedClient !== undefined) {
+        return task._prefetchedClient;
+      }
+      // Fallback: query individuelle (pour les queries task() directes)
       return Client.findOne({
         _id: task.clientId,
         workspaceId: task.workspaceId,
