@@ -26,7 +26,9 @@ const documentEmailResolvers = {
     emailTrackingUpdated: {
       subscribe: (_, { workspaceId }) => {
         const pubsub = getPubSub();
-        return pubsub.asyncIterator(`${EMAIL_TRACKING_UPDATED}_${workspaceId}`);
+        return pubsub.asyncIterableIterator([
+          `${EMAIL_TRACKING_UPDATED}_${workspaceId}`,
+        ]);
       },
     },
   },
