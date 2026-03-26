@@ -100,15 +100,15 @@ import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
-// Connexion à MongoDB avec pool de connexions optimisé pour les opérations concurrentes
+// Connexion à MongoDB — pool réduit car 4 instances PM2 (4 × 5 = 20 connexions max)
 mongoose
   .connect(process.env.MONGODB_URI, {
-    maxPoolSize: 50,
-    minPoolSize: 10,
+    maxPoolSize: 5,
+    minPoolSize: 1,
     maxIdleTimeMS: 30000,
     serverSelectionTimeoutMS: 5000,
   })
-  .then(() => logger.info("Connecté à MongoDB (pool: 10-50 connexions)"))
+  .then(() => logger.info("Connecté à MongoDB (pool: 1-5 connexions)"))
   .catch((err) => logger.error("Erreur de connexion MongoDB:", err));
 
 // Création des dossiers nécessaires
