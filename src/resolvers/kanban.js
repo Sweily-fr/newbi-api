@@ -3151,9 +3151,17 @@ const resolvers = {
       }
 
       // Attacher le client pré-chargé à chaque tâche
+      // Normaliser assignedMembers en tableau de strings (lean() bypasse les casts Mongoose)
       const result = tasks.map((task) => ({
         ...task,
         id: task._id?.toString() || task.id,
+        assignedMembers: Array.isArray(task.assignedMembers)
+          ? task.assignedMembers.map((m) =>
+              typeof m === "string"
+                ? m
+                : m?.userId?.toString() || m?.toString(),
+            )
+          : [],
         _prefetchedClient: task.clientId
           ? clientsMap[task.clientId.toString()] || null
           : null,
