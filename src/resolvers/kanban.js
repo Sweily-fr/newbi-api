@@ -33,47 +33,56 @@ const safePublish = (channel, payload, context = "") => {
 // Fonction utilitaire pour enrichir une tâche avec les infos utilisateur dynamiques
 const enrichTaskWithUserInfo = async (task) => {
   if (!task) return null;
-  
+
   const db = mongoose.connection.db;
   const taskObj = task.toObject ? task.toObject() : task;
-  
+
   // Collecter tous les userIds des commentaires et activités
   const allUserIds = new Set();
   const externalEmails = new Set();
-  
-  (taskObj.comments || []).forEach(c => {
+
+  (taskObj.comments || []).forEach((c) => {
     // Si le commentaire a un userEmail, c'est un commentaire externe (visiteur)
     if (c.userEmail) {
       externalEmails.add(c.userEmail.toLowerCase());
-    } else if (c.userId && !c.userId.startsWith('external_')) {
+    } else if (c.userId && !c.userId.startsWith("external_")) {
       // Sinon, c'est un commentaire d'utilisateur connecté
       allUserIds.add(c.userId);
-    } else if (c.userId?.startsWith('external_')) {
+    } else if (c.userId?.startsWith("external_")) {
       // Commentaire externe sans userEmail - extraire l'email du userId
-      const emailFromUserId = c.userId.replace('external_', '');
-      if (emailFromUserId && emailFromUserId.includes('@')) {
+      const emailFromUserId = c.userId.replace("external_", "");
+      if (emailFromUserId && emailFromUserId.includes("@")) {
         externalEmails.add(emailFromUserId.toLowerCase());
       }
     }
   });
-  (taskObj.activity || []).forEach(a => {
+  (taskObj.activity || []).forEach((a) => {
     if (a.userId) allUserIds.add(a.userId);
   });
-  
+
   // Récupérer les infos des utilisateurs (supporter les IDs string Better Auth ET ObjectId)
   let usersMap = {};
   if (allUserIds.size > 0) {
     try {
       const userStringIds = Array.from(allUserIds);
       const userObjectIds = [];
-      userStringIds.forEach(uid => {
-        try { userObjectIds.push(new mongoose.Types.ObjectId(uid)); } catch {}
+      userStringIds.forEach((uid) => {
+        try {
+          userObjectIds.push(new mongoose.Types.ObjectId(uid));
+        } catch {
+          /* invalid ObjectId */
+        }
       });
-      const users = await db.collection('user').find({ _id: { $in: [...userStringIds, ...userObjectIds] } }).toArray();
-      logger.info(`🔍 [enrichTask] ${users.length} utilisateurs trouvés pour ${userStringIds.length} IDs demandés`);
-      users.forEach(u => {
+      const users = await db
+        .collection("user")
+        .find({ _id: { $in: [...userStringIds, ...userObjectIds] } })
+        .toArray();
+      logger.info(
+        `🔍 [enrichTask] ${users.length} utilisateurs trouvés pour ${userStringIds.length} IDs demandés`,
+      );
+      users.forEach((u) => {
         // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
-        let displayName = '';
+        let displayName = "";
         if (u.name && u.lastName) {
           displayName = `${u.name} ${u.lastName}`;
         } else if (u.name) {
@@ -81,65 +90,84 @@ const enrichTaskWithUserInfo = async (task) => {
         } else if (u.lastName) {
           displayName = u.lastName;
         } else {
-          displayName = u.email?.split('@')[0] || 'Utilisateur';
+          displayName = u.email?.split("@")[0] || "Utilisateur";
         }
         // Prioriser u.image (Better Auth) avant u.avatar (ancien système)
         const userImage = u.image || u.avatar || null;
-        logger.info(`📋 [enrichTask] User ${u._id.toString()}: name=${displayName}, image=${userImage ? 'oui' : 'non'}, u.image=${u.image ? 'oui' : 'non'}, u.avatar=${u.avatar ? 'oui' : 'non'}`);
+        logger.info(
+          `📋 [enrichTask] User ${u._id.toString()}: name=${displayName}, image=${userImage ? "oui" : "non"}, u.image=${u.image ? "oui" : "non"}, u.avatar=${u.avatar ? "oui" : "non"}`,
+        );
         usersMap[u._id.toString()] = { name: displayName, image: userImage };
       });
     } catch (error) {
-      logger.error('❌ [enrichTaskWithUserInfo] Erreur récupération utilisateurs:', error);
+      logger.error(
+        "❌ [enrichTaskWithUserInfo] Erreur récupération utilisateurs:",
+        error,
+      );
     }
   }
-  
+
   // Collecter les visitorIds des commentaires
   const visitorIds = new Set();
-  (taskObj.comments || []).forEach(c => {
+  (taskObj.comments || []).forEach((c) => {
     if (c.visitorId) {
       visitorIds.add(c.visitorId);
     }
   });
-  
+
   // Récupérer les infos des visiteurs externes depuis PublicBoardShare et UserInvited
   let visitorsMap = {};
-  logger.info(`🔍 [enrichTask] externalEmails: ${externalEmails.size}, visitorIds: ${visitorIds.size}, boardId: ${taskObj.boardId}`);
+  logger.info(
+    `🔍 [enrichTask] externalEmails: ${externalEmails.size}, visitorIds: ${visitorIds.size}, boardId: ${taskObj.boardId}`,
+  );
   if ((externalEmails.size > 0 || visitorIds.size > 0) && taskObj.boardId) {
     try {
       // 1. Récupérer depuis PublicBoardShare (ancien système)
-      const PublicBoardShare = mongoose.model('PublicBoardShare');
-      const share = await PublicBoardShare.findOne({ boardId: taskObj.boardId, isActive: true });
-      logger.info(`🔍 [enrichTask] Share trouvé: ${!!share}, visiteurs: ${share?.visitors?.length || 0}`);
+      const PublicBoardShare = mongoose.model("PublicBoardShare");
+      const share = await PublicBoardShare.findOne({
+        boardId: taskObj.boardId,
+        isActive: true,
+      });
+      logger.info(
+        `🔍 [enrichTask] Share trouvé: ${!!share}, visiteurs: ${share?.visitors?.length || 0}`,
+      );
       if (share?.visitors) {
-        share.visitors.forEach(v => {
+        share.visitors.forEach((v) => {
           // Indexer par ID et par email pour supporter les deux méthodes
           const visitorData = {
-            name: v.name || v.firstName || (v.email ? v.email.split('@')[0] : 'Visiteur'),
-            image: v.image || null
+            name:
+              v.name ||
+              v.firstName ||
+              (v.email ? v.email.split("@")[0] : "Visiteur"),
+            image: v.image || null,
           };
           if (v._id) {
             visitorsMap[v._id.toString()] = visitorData;
-            logger.debug(`📋 [enrichTask] Visiteur indexé par ID: ${v._id.toString()} -> ${visitorData.name}, image: ${visitorData.image ? 'oui' : 'non'}`);
+            logger.debug(
+              `📋 [enrichTask] Visiteur indexé par ID: ${v._id.toString()} -> ${visitorData.name}, image: ${visitorData.image ? "oui" : "non"}`,
+            );
           }
           if (v.email) {
             visitorsMap[v.email.toLowerCase()] = visitorData;
           }
         });
       }
-      
+
       // 2. Récupérer depuis UserInvited (nouveau système) pour enrichir/remplacer les données
       if (externalEmails.size > 0) {
         try {
-          const UserInvited = mongoose.model('UserInvited');
-          const invitedUsers = await UserInvited.find({ 
-            email: { $in: Array.from(externalEmails) } 
+          const UserInvited = mongoose.model("UserInvited");
+          const invitedUsers = await UserInvited.find({
+            email: { $in: Array.from(externalEmails) },
           }).lean();
-          
-          logger.info(`🔍 [enrichTask] ${invitedUsers.length} utilisateurs invités trouvés pour ${externalEmails.size} emails`);
-          
-          invitedUsers.forEach(u => {
+
+          logger.info(
+            `🔍 [enrichTask] ${invitedUsers.length} utilisateurs invités trouvés pour ${externalEmails.size} emails`,
+          );
+
+          invitedUsers.forEach((u) => {
             // Construire le nom complet
-            let displayName = '';
+            let displayName = "";
             if (u.firstName && u.lastName) {
               displayName = `${u.firstName} ${u.lastName}`;
             } else if (u.name) {
@@ -149,31 +177,44 @@ const enrichTaskWithUserInfo = async (task) => {
             } else if (u.lastName) {
               displayName = u.lastName;
             } else {
-              displayName = u.email.split('@')[0];
+              displayName = u.email.split("@")[0];
             }
-            
+
             const visitorData = {
               name: displayName,
-              image: u.image || null
+              image: u.image || null,
             };
-            
+
             // Indexer par email (clé primaire dans UserInvited)
             visitorsMap[u.email.toLowerCase()] = visitorData;
-            logger.info(`📋 [enrichTask] UserInvited indexé: ${u.email} -> ${displayName}, image: ${u.image ? 'oui' : 'non'}`);
+            logger.info(
+              `📋 [enrichTask] UserInvited indexé: ${u.email} -> ${displayName}, image: ${u.image ? "oui" : "non"}`,
+            );
           });
         } catch (error) {
-          logger.error('❌ [enrichTask] Erreur récupération UserInvited:', error);
+          logger.error(
+            "❌ [enrichTask] Erreur récupération UserInvited:",
+            error,
+          );
         }
       }
     } catch (error) {
-      logger.error('❌ [enrichTaskWithUserInfo] Erreur récupération visiteurs:', error);
+      logger.error(
+        "❌ [enrichTaskWithUserInfo] Erreur récupération visiteurs:",
+        error,
+      );
     }
   }
-  
+
   // Enrichir les commentaires
-  const enrichedComments = (taskObj.comments || []).map(c => {
+  const enrichedComments = (taskObj.comments || []).map((c) => {
     // Commentaires externes (visiteurs) - TOUJOURS utiliser les infos du visiteur depuis PublicBoardShare
-    if (c.visitorId || c.userId?.startsWith('external_') || c.isExternal || c.userEmail) {
+    if (
+      c.visitorId ||
+      c.userId?.startsWith("external_") ||
+      c.isExternal ||
+      c.userEmail
+    ) {
       // Chercher le visiteur par visitorId en priorité, sinon par email
       let visitorInfo = null;
       if (c.visitorId && visitorsMap[c.visitorId]) {
@@ -181,86 +222,107 @@ const enrichTaskWithUserInfo = async (task) => {
       } else {
         // Fallback: chercher par email
         let visitorEmail = c.userEmail;
-        if (!visitorEmail && c.userId?.startsWith('external_')) {
-          visitorEmail = c.userId.replace('external_', '');
+        if (!visitorEmail && c.userId?.startsWith("external_")) {
+          visitorEmail = c.userId.replace("external_", "");
         }
         if (visitorEmail) {
           visitorInfo = visitorsMap[visitorEmail.toLowerCase()];
         }
       }
-      
+
       // Prioriser les infos du visiteur depuis PublicBoardShare (toujours à jour)
       const enrichedComment = {
         ...c,
         id: c._id?.toString() || c.id,
-        userName: visitorInfo?.name || c.userName || 'Visiteur',
-        userImage: visitorInfo?.image !== undefined ? visitorInfo.image : (c.userImage || null)
+        userName: visitorInfo?.name || c.userName || "Visiteur",
+        userImage:
+          visitorInfo?.image !== undefined
+            ? visitorInfo.image
+            : c.userImage || null,
       };
-      
+
       return enrichedComment;
     }
     // Commentaires utilisateurs connectés
     const userInfo = usersMap[c.userId];
-    return { ...c, id: c._id?.toString() || c.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+    return {
+      ...c,
+      id: c._id?.toString() || c.id,
+      userName: userInfo?.name || "Utilisateur",
+      userImage: userInfo?.image || null,
+    };
   });
-  
+
   // Enrichir l'activité (fallback sur les valeurs stockées si l'utilisateur n'est pas trouvé en DB)
-  const enrichedActivity = (taskObj.activity || []).map(a => {
+  const enrichedActivity = (taskObj.activity || []).map((a) => {
     const userInfo = usersMap[a.userId];
     return {
       ...a,
       id: a._id?.toString() || a.id,
-      userName: userInfo?.name || a.userName || 'Utilisateur',
-      userImage: userInfo?.image !== undefined ? userInfo.image : (a.userImage || null),
+      userName: userInfo?.name || a.userName || "Utilisateur",
+      userImage:
+        userInfo?.image !== undefined ? userInfo.image : a.userImage || null,
     };
   });
 
-  return { ...taskObj, id: taskObj._id?.toString() || taskObj.id, comments: enrichedComments, activity: enrichedActivity };
+  return {
+    ...taskObj,
+    id: taskObj._id?.toString() || taskObj.id,
+    comments: enrichedComments,
+    activity: enrichedActivity,
+  };
 };
 
 // Fonction utilitaire pour enrichir plusieurs tâches
 const enrichTasksWithUserInfo = async (tasks) => {
   if (!tasks || tasks.length === 0) return [];
-  
+
   const db = mongoose.connection.db;
-  
+
   // Collecter tous les userIds et emails externes
   const allUserIds = new Set();
   const externalEmails = new Set();
   const visitorIds = new Set();
   let boardId = null;
-  
-  tasks.forEach(task => {
+
+  tasks.forEach((task) => {
     if (!boardId && task.boardId) boardId = task.boardId;
-    (task.comments || []).forEach(c => {
+    (task.comments || []).forEach((c) => {
       if (c.visitorId) visitorIds.add(c.visitorId);
       if (c.userEmail) {
         externalEmails.add(c.userEmail.toLowerCase());
-      } else if (c.userId?.startsWith('external_')) {
-        const email = c.userId.replace('external_', '');
-        if (email.includes('@')) externalEmails.add(email.toLowerCase());
+      } else if (c.userId?.startsWith("external_")) {
+        const email = c.userId.replace("external_", "");
+        if (email.includes("@")) externalEmails.add(email.toLowerCase());
       } else if (c.userId) {
         allUserIds.add(c.userId);
       }
     });
-    (task.activity || []).forEach(a => {
+    (task.activity || []).forEach((a) => {
       if (a.userId) allUserIds.add(a.userId);
     });
   });
-  
+
   // Récupérer les infos des utilisateurs (supporter les IDs string Better Auth ET ObjectId)
   let usersMap = {};
   if (allUserIds.size > 0) {
     try {
       const userStringIds = Array.from(allUserIds);
       const userObjectIds = [];
-      userStringIds.forEach(uid => {
-        try { userObjectIds.push(new mongoose.Types.ObjectId(uid)); } catch {}
+      userStringIds.forEach((uid) => {
+        try {
+          userObjectIds.push(new mongoose.Types.ObjectId(uid));
+        } catch {
+          /* invalid ObjectId */
+        }
       });
-      const users = await db.collection('user').find({ _id: { $in: [...userStringIds, ...userObjectIds] } }).toArray();
-      users.forEach(u => {
+      const users = await db
+        .collection("user")
+        .find({ _id: { $in: [...userStringIds, ...userObjectIds] } })
+        .toArray();
+      users.forEach((u) => {
         // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
-        let displayName = '';
+        let displayName = "";
         if (u.name && u.lastName) {
           displayName = `${u.name} ${u.lastName}`;
         } else if (u.name) {
@@ -268,45 +330,54 @@ const enrichTasksWithUserInfo = async (tasks) => {
         } else if (u.lastName) {
           displayName = u.lastName;
         } else {
-          displayName = u.email?.split('@')[0] || 'Utilisateur';
+          displayName = u.email?.split("@")[0] || "Utilisateur";
         }
         // Prioriser u.image (Better Auth) avant u.avatar (ancien système)
-        usersMap[u._id.toString()] = { name: displayName, image: u.image || u.avatar || null };
+        usersMap[u._id.toString()] = {
+          name: displayName,
+          image: u.image || u.avatar || null,
+        };
       });
     } catch (error) {
-      logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération utilisateurs:', error);
+      logger.error(
+        "❌ [enrichTasksWithUserInfo] Erreur récupération utilisateurs:",
+        error,
+      );
     }
   }
-  
+
   // Récupérer les infos des visiteurs depuis PublicBoardShare et UserInvited
   let visitorsMap = {};
   if ((externalEmails.size > 0 || visitorIds.size > 0) && boardId) {
     try {
       // 1. Récupérer depuis PublicBoardShare (ancien système)
-      const PublicBoardShare = mongoose.model('PublicBoardShare');
+      const PublicBoardShare = mongoose.model("PublicBoardShare");
       const share = await PublicBoardShare.findOne({ boardId, isActive: true });
       if (share?.visitors) {
-        share.visitors.forEach(v => {
+        share.visitors.forEach((v) => {
           const visitorData = {
-            name: v.name || v.firstName || (v.email ? v.email.split('@')[0] : 'Visiteur'),
-            image: v.image || null
+            name:
+              v.name ||
+              v.firstName ||
+              (v.email ? v.email.split("@")[0] : "Visiteur"),
+            image: v.image || null,
           };
           if (v._id) visitorsMap[v._id.toString()] = visitorData;
           if (v.email) visitorsMap[v.email.toLowerCase()] = visitorData;
         });
       }
-      
+
       // 2. Récupérer depuis UserInvited (nouveau système) pour enrichir/remplacer les données
       if (externalEmails.size > 0) {
         try {
-          const UserInvited = mongoose.model('UserInvited');
-          const invitedUsers = await UserInvited.find({ 
-            email: { $in: Array.from(externalEmails) } 
+          const UserInvited = mongoose.model("UserInvited");
+          const invitedUsers = await UserInvited.find({
+            email: { $in: Array.from(externalEmails) },
           }).lean();
-          
-          invitedUsers.forEach(u => {
+
+          invitedUsers.forEach((u) => {
             // Construire le nom complet
-            let displayName = '';
+            let displayName = "";
             if (u.firstName && u.lastName) {
               displayName = `${u.firstName} ${u.lastName}`;
             } else if (u.name) {
@@ -316,66 +387,91 @@ const enrichTasksWithUserInfo = async (tasks) => {
             } else if (u.lastName) {
               displayName = u.lastName;
             } else {
-              displayName = u.email.split('@')[0];
+              displayName = u.email.split("@")[0];
             }
-            
+
             const visitorData = {
               name: displayName,
-              image: u.image || null
+              image: u.image || null,
             };
-            
+
             // Indexer par email (clé primaire dans UserInvited)
             visitorsMap[u.email.toLowerCase()] = visitorData;
           });
         } catch (error) {
-          logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération UserInvited:', error);
+          logger.error(
+            "❌ [enrichTasksWithUserInfo] Erreur récupération UserInvited:",
+            error,
+          );
         }
       }
     } catch (error) {
-      logger.error('❌ [enrichTasksWithUserInfo] Erreur récupération visiteurs:', error);
+      logger.error(
+        "❌ [enrichTasksWithUserInfo] Erreur récupération visiteurs:",
+        error,
+      );
     }
   }
-  
+
   // Enrichir chaque tâche
-  return tasks.map(task => {
+  return tasks.map((task) => {
     const taskObj = task.toObject ? task.toObject() : task;
-    
-    const enrichedComments = (taskObj.comments || []).map(c => {
+
+    const enrichedComments = (taskObj.comments || []).map((c) => {
       // Commentaires externes (visiteurs)
-      if (c.visitorId || c.userId?.startsWith('external_') || c.isExternal || c.userEmail) {
+      if (
+        c.visitorId ||
+        c.userId?.startsWith("external_") ||
+        c.isExternal ||
+        c.userEmail
+      ) {
         let visitorInfo = null;
         if (c.visitorId && visitorsMap[c.visitorId]) {
           visitorInfo = visitorsMap[c.visitorId];
         } else {
           let email = c.userEmail;
-          if (!email && c.userId?.startsWith('external_')) {
-            email = c.userId.replace('external_', '');
+          if (!email && c.userId?.startsWith("external_")) {
+            email = c.userId.replace("external_", "");
           }
           if (email) visitorInfo = visitorsMap[email.toLowerCase()];
         }
         return {
           ...c,
           id: c._id?.toString() || c.id,
-          userName: visitorInfo?.name || c.userName || 'Visiteur',
-          userImage: visitorInfo?.image !== undefined ? visitorInfo.image : (c.userImage || null)
+          userName: visitorInfo?.name || c.userName || "Visiteur",
+          userImage:
+            visitorInfo?.image !== undefined
+              ? visitorInfo.image
+              : c.userImage || null,
         };
       }
       // Commentaires utilisateurs connectés
       const userInfo = usersMap[c.userId];
-      return { ...c, id: c._id?.toString() || c.id, userName: userInfo?.name || 'Utilisateur', userImage: userInfo?.image || null };
+      return {
+        ...c,
+        id: c._id?.toString() || c.id,
+        userName: userInfo?.name || "Utilisateur",
+        userImage: userInfo?.image || null,
+      };
     });
-    
-    const enrichedActivity = (taskObj.activity || []).map(a => {
+
+    const enrichedActivity = (taskObj.activity || []).map((a) => {
       const userInfo = usersMap[a.userId];
       return {
         ...a,
         id: a._id?.toString() || a.id,
-        userName: userInfo?.name || a.userName || 'Utilisateur',
-        userImage: userInfo?.image !== undefined ? userInfo.image : (a.userImage || null),
+        userName: userInfo?.name || a.userName || "Utilisateur",
+        userImage:
+          userInfo?.image !== undefined ? userInfo.image : a.userImage || null,
       };
     });
-    
-    return { ...taskObj, id: taskObj._id?.toString() || taskObj.id, comments: enrichedComments, activity: enrichedActivity };
+
+    return {
+      ...taskObj,
+      id: taskObj._id?.toString() || taskObj.id,
+      comments: enrichedComments,
+      activity: enrichedActivity,
+    };
   });
 };
 
@@ -387,7 +483,7 @@ const resolvers = {
         return await Board.find({ workspaceId: finalWorkspaceId })
           .sort({ createdAt: -1 })
           .limit(100);
-      }
+      },
     ),
 
     organizationMembers: withWorkspace(
@@ -395,7 +491,7 @@ const resolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         try {
-          logger.info(`🔍 [Kanban] organizationMembers appelé`);
+          logger.info("🔍 [Kanban] organizationMembers appelé");
           logger.info(`🔍 [Kanban] workspaceId (args): ${workspaceId}`);
           logger.info(`🔍 [Kanban] contextWorkspaceId: ${contextWorkspaceId}`);
           logger.info(`🔍 [Kanban] finalWorkspaceId: ${finalWorkspaceId}`);
@@ -411,13 +507,13 @@ const resolvers = {
             logger.info(`✅ [Kanban] orgId converti: ${orgId}`);
           } catch (conversionError) {
             logger.error(
-              `❌ [Kanban] Erreur conversion ObjectId: ${conversionError.message}`
+              `❌ [Kanban] Erreur conversion ObjectId: ${conversionError.message}`,
             );
             return [];
           }
 
           logger.info(
-            `🔍 [Kanban] Recherche membres pour organisation: ${orgId}`
+            `🔍 [Kanban] Recherche membres pour organisation: ${orgId}`,
           );
 
           // 1. Récupérer l'organisation
@@ -428,7 +524,7 @@ const resolvers = {
           logger.info(
             `🔍 [Kanban] Résultat findOne organisation: ${
               organization ? "trouvée" : "non trouvée"
-            }`
+            }`,
           );
 
           if (!organization) {
@@ -442,7 +538,7 @@ const resolvers = {
             logger.info(
               `📋 [Kanban] Organisations en base (premiers 5): ${allOrgs
                 .map((o) => o._id)
-                .join(", ")}`
+                .join(", ")}`,
             );
             return [];
           }
@@ -459,12 +555,12 @@ const resolvers = {
             .toArray();
 
           logger.info(
-            `📋 [Kanban] ${members.length} membres trouvés (incluant owner)`
+            `📋 [Kanban] ${members.length} membres trouvés (incluant owner)`,
           );
 
           if (members.length === 0) {
             logger.warn(
-              `⚠️ [Kanban] Aucun membre trouvé pour l'organisation ${orgId}`
+              `⚠️ [Kanban] Aucun membre trouvé pour l'organisation ${orgId}`,
             );
             return [];
           }
@@ -476,7 +572,7 @@ const resolvers = {
           });
 
           logger.info(
-            `👥 [Kanban] Recherche de ${userIds.length} utilisateurs`
+            `👥 [Kanban] Recherche de ${userIds.length} utilisateurs`,
           );
 
           // 4. Récupérer les informations des utilisateurs
@@ -497,7 +593,7 @@ const resolvers = {
 
               if (!user) {
                 logger.warn(
-                  `⚠️ [Kanban] Utilisateur non trouvé pour member: ${memberUserId}`
+                  `⚠️ [Kanban] Utilisateur non trouvé pour member: ${memberUserId}`,
                 );
                 return null;
               }
@@ -511,7 +607,7 @@ const resolvers = {
                   : null;
 
               // Construire le nom complet
-              let displayName = '';
+              let displayName = "";
               if (user.name && user.lastName) {
                 displayName = `${user.name} ${user.lastName}`;
               } else if (user.name) {
@@ -519,7 +615,7 @@ const resolvers = {
               } else if (user.lastName) {
                 displayName = user.lastName;
               } else {
-                displayName = user.email || 'Utilisateur inconnu';
+                displayName = user.email || "Utilisateur inconnu";
               }
 
               return {
@@ -534,13 +630,13 @@ const resolvers = {
 
           logger.info(`✅ [Kanban] Retour de ${result.length} membres`);
           logger.info(
-            `📋 [Kanban] Détails:`,
+            "📋 [Kanban] Détails:",
             result.map((r) => ({
               email: r.email,
               role: r.role,
               hasImage: !!r.image,
               image: r.image,
-            }))
+            })),
           );
 
           return result;
@@ -549,7 +645,7 @@ const resolvers = {
           logger.error("Stack:", error.stack);
           return [];
         }
-      }
+      },
     ),
 
     usersInfo: async (_, { userIds }, { db }) => {
@@ -583,19 +679,21 @@ const resolvers = {
           .toArray();
 
         logger.info(
-          `✅ [Kanban] Récupéré ${users.length} utilisateurs sur ${userIds.length} demandés`
+          `✅ [Kanban] Récupéré ${users.length} utilisateurs sur ${userIds.length} demandés`,
         );
 
         // Mapper les résultats
         return users.map((user) => {
           // Utiliser image OU avatar (Better Auth stocke dans 'image', ancien système dans 'avatar')
           const avatarUrl =
-            (user.image || user.avatar) && (user.image || user.avatar) !== "null" && (user.image || user.avatar) !== ""
-              ? (user.image || user.avatar)
+            (user.image || user.avatar) &&
+            (user.image || user.avatar) !== "null" &&
+            (user.image || user.avatar) !== ""
+              ? user.image || user.avatar
               : null;
 
           // Construire le nom complet à partir de name (prénom) et lastName (nom de famille)
-          let displayName = '';
+          let displayName = "";
           if (user.name && user.lastName) {
             displayName = `${user.name} ${user.lastName}`;
           } else if (user.name) {
@@ -603,7 +701,7 @@ const resolvers = {
           } else if (user.lastName) {
             displayName = user.lastName;
           } else {
-            displayName = user.email || 'Utilisateur inconnu';
+            displayName = user.email || "Utilisateur inconnu";
           }
 
           return {
@@ -616,7 +714,7 @@ const resolvers = {
       } catch (error) {
         logger.error(
           "❌ [Kanban] Erreur récupération infos utilisateurs:",
-          error
+          error,
         );
         return [];
       }
@@ -631,14 +729,14 @@ const resolvers = {
         });
         if (!board) throw new Error("Board not found");
         return board;
-      }
+      },
     ),
 
     columns: withWorkspace(
       async (
         _,
         { boardId, workspaceId },
-        { workspaceId: contextWorkspaceId }
+        { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         return await Column.find({
@@ -647,43 +745,46 @@ const resolvers = {
         })
           .sort("order")
           .limit(100);
-      }
+      },
     ),
 
     column: withWorkspace(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         return await Column.findOne({ _id: id, workspaceId: finalWorkspaceId });
-      }
+      },
     ),
 
     tasks: withWorkspace(
       async (
         _,
         { boardId, columnId, workspaceId },
-        { workspaceId: contextWorkspaceId }
+        { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const query = { boardId, workspaceId: finalWorkspaceId };
         if (columnId) query.columnId = columnId;
         const tasks = await Task.find(query).sort("position").limit(1000);
         return await enrichTasksWithUserInfo(tasks);
-      }
+      },
     ),
 
     task: withWorkspace(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
+        const task = await Task.findOne({
+          _id: id,
+          workspaceId: finalWorkspaceId,
+        });
         return await enrichTaskWithUserInfo(task);
-      }
+      },
     ),
 
     activeTimers: withWorkspace(
       async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const db = mongoose.connection.db;
-        
+
         // Récupérer toutes les tâches avec un timer actif
         // Filtrer pour n'afficher que les tâches où l'utilisateur est membre assigné
         const tasks = await Task.find({
@@ -720,17 +821,26 @@ const resolvers = {
         let usersMap = {};
         if (allMemberIds.size > 0) {
           try {
-            const objectIds = Array.from(allMemberIds).map((id) => {
-              try { return new mongoose.Types.ObjectId(id); } catch { return null; }
-            }).filter(Boolean);
-            const users = await db.collection('user').find({ _id: { $in: objectIds } }).toArray();
+            const objectIds = Array.from(allMemberIds)
+              .map((id) => {
+                try {
+                  return new mongoose.Types.ObjectId(id);
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean);
+            const users = await db
+              .collection("user")
+              .find({ _id: { $in: objectIds } })
+              .toArray();
             users.forEach((u) => {
               const uid = u._id.toString();
-              let displayName = '';
+              let displayName = "";
               if (u.name && u.lastName) displayName = `${u.name} ${u.lastName}`;
               else if (u.name) displayName = u.name;
               else if (u.lastName) displayName = u.lastName;
-              else displayName = u.email || 'Utilisateur';
+              else displayName = u.email || "Utilisateur";
               usersMap[uid] = {
                 name: displayName,
                 email: u.email,
@@ -738,7 +848,10 @@ const resolvers = {
               };
             });
           } catch (error) {
-            logger.error('❌ [activeTimers] Erreur batch fetch utilisateurs:', error);
+            logger.error(
+              "❌ [activeTimers] Erreur batch fetch utilisateurs:",
+              error,
+            );
           }
         }
 
@@ -759,7 +872,13 @@ const resolvers = {
                 image: userData.image,
               };
             }
-            return { id: memberIdStr, userId: memberIdStr, name: memberIdStr, email: null, image: null };
+            return {
+              id: memberIdStr,
+              userId: memberIdStr,
+              name: memberIdStr,
+              email: null,
+              image: null,
+            };
           });
 
           return {
@@ -769,7 +888,7 @@ const resolvers = {
         });
 
         return enrichedTasks;
-      }
+      },
     ),
   },
 
@@ -779,7 +898,7 @@ const resolvers = {
       async (
         _,
         { input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -826,24 +945,27 @@ const resolvers = {
             board: savedBoard,
             workspaceId: finalWorkspaceId,
           },
-          "Board créé"
+          "Board créé",
         );
 
         return savedBoard;
-      }
+      },
     ),
 
     updateBoard: withWorkspace(
       async (
         _,
         { input, workspaceId },
-        { workspaceId: contextWorkspaceId }
+        { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const { boardMembers, ...rest } = input;
+        const updateData = { ...rest, updatedAt: new Date() };
+        if (boardMembers !== undefined) updateData.members = boardMembers;
         const board = await Board.findOneAndUpdate(
           { _id: input.id, workspaceId: finalWorkspaceId },
-          { ...input, updatedAt: new Date() },
-          { new: true }
+          updateData,
+          { new: true },
         );
         if (!board) throw new Error("Board not found");
 
@@ -855,11 +977,11 @@ const resolvers = {
             board: board,
             workspaceId: finalWorkspaceId,
           },
-          "Board mis à jour"
+          "Board mis à jour",
         );
 
         return board;
-      }
+      },
     ),
 
     deleteBoard: withWorkspace(
@@ -891,7 +1013,7 @@ const resolvers = {
                 boardId: id,
                 workspaceId: finalWorkspaceId,
               },
-              "Board supprimé"
+              "Board supprimé",
             );
           }
 
@@ -900,7 +1022,7 @@ const resolvers = {
           console.error("Error deleting board:", error);
           throw new Error("Failed to delete board");
         }
-      }
+      },
     ),
 
     // Column mutations
@@ -908,7 +1030,7 @@ const resolvers = {
       async (
         _,
         { input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -929,25 +1051,25 @@ const resolvers = {
             boardId: savedColumn.boardId,
             workspaceId: finalWorkspaceId,
           },
-          "Colonne créée"
+          "Colonne créée",
         );
 
         return savedColumn;
-      }
+      },
     ),
 
     updateColumn: withWorkspace(
       async (
         _,
         { input, workspaceId },
-        { workspaceId: contextWorkspaceId }
+        { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { id, ...updates } = input;
         const column = await Column.findOneAndUpdate(
           { _id: id, workspaceId: finalWorkspaceId },
           { ...updates, updatedAt: new Date() },
-          { new: true }
+          { new: true },
         );
         if (!column) throw new Error("Column not found");
 
@@ -960,11 +1082,11 @@ const resolvers = {
             boardId: column.boardId,
             workspaceId: finalWorkspaceId,
           },
-          "Colonne mise à jour"
+          "Colonne mise à jour",
         );
 
         return column;
-      }
+      },
     ),
 
     deleteColumn: withWorkspace(
@@ -1001,7 +1123,7 @@ const resolvers = {
                 boardId: column.boardId,
                 workspaceId: finalWorkspaceId,
               },
-              "Colonne supprimée"
+              "Colonne supprimée",
             );
           }
 
@@ -1010,14 +1132,14 @@ const resolvers = {
           console.error("Error deleting column:", error);
           throw new Error("Failed to delete column");
         }
-      }
+      },
     ),
 
     reorderColumns: withWorkspace(
       async (
         _,
         { columns, workspaceId },
-        { workspaceId: contextWorkspaceId }
+        { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -1032,8 +1154,8 @@ const resolvers = {
           const updatePromises = columns.map((id, index) =>
             Column.updateOne(
               { _id: id, workspaceId: finalWorkspaceId },
-              { $set: { order: index, updatedAt: new Date() } }
-            )
+              { $set: { order: index, updatedAt: new Date() } },
+            ),
           );
 
           await Promise.all(updatePromises);
@@ -1047,7 +1169,7 @@ const resolvers = {
               boardId: firstColumn.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Colonnes réorganisées"
+            "Colonnes réorganisées",
           );
 
           return true;
@@ -1055,7 +1177,7 @@ const resolvers = {
           console.error("Error reordering columns:", error);
           throw new Error("Failed to reorder columns");
         }
-      }
+      },
     ),
 
     // Task mutations
@@ -1063,7 +1185,7 @@ const resolvers = {
       async (
         _,
         { input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -1103,13 +1225,16 @@ const resolvers = {
         try {
           creatorData = await db.collection("user").findOne({ _id: user.id });
           if (!creatorData && /^[0-9a-fA-F]{24}$/.test(user.id)) {
-            creatorData = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+            creatorData = await db
+              .collection("user")
+              .findOne({ _id: new ObjectId(user.id) });
           }
         } catch (e) {
           logger.warn("Could not fetch creator data:", e.message);
         }
         const creatorImage = creatorData?.image || creatorData?.avatar || null;
-        const creatorName = creatorData?.name || user?.name || user?.email || "Utilisateur";
+        const creatorName =
+          creatorData?.name || user?.name || user?.email || "Utilisateur";
 
         const task = new Task({
           ...cleanedInput,
@@ -1142,12 +1267,17 @@ const resolvers = {
             boardId: enrichedTask.boardId,
             workspaceId: finalWorkspaceId,
           },
-          "Tâche créée"
+          "Tâche créée",
         );
 
         // Envoyer des notifications aux membres assignés lors de la création
-        if (cleanedInput.assignedMembers && cleanedInput.assignedMembers.length > 0) {
-          logger.info(`📧 [CreateTask] Envoi notifications pour ${cleanedInput.assignedMembers.length} membres assignés`);
+        if (
+          cleanedInput.assignedMembers &&
+          cleanedInput.assignedMembers.length > 0
+        ) {
+          logger.info(
+            `📧 [CreateTask] Envoi notifications pour ${cleanedInput.assignedMembers.length} membres assignés`,
+          );
 
           // Capturer les données du créateur (déjà récupérées plus haut) pour la closure
           const notifCreatorImage =
@@ -1156,7 +1286,11 @@ const resolvers = {
             creatorData?.profile?.profilePicture ||
             creatorData?.profile?.profilePictureUrl ||
             null;
-          const notifAssignerName = creatorData?.name || user?.name || user?.email || "Un membre de l'équipe";
+          const notifAssignerName =
+            creatorData?.name ||
+            user?.name ||
+            user?.email ||
+            "Un membre de l'équipe";
 
           (async () => {
             try {
@@ -1168,18 +1302,34 @@ const resolvers = {
               const boardName = board?.title || "Tableau sans nom";
               const columnName = column?.title || "Colonne";
 
-              logger.info(`📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${notifAssignerName}`);
+              logger.info(
+                `📧 [CreateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${notifAssignerName}`,
+              );
 
               // Batch fetch : récupérer tous les membres assignés en une seule requête
-              const memberIdsToNotify = cleanedInput.assignedMembers.filter(mid => mid !== user.id);
-              const memberObjectIds = memberIdsToNotify.map(mid => {
-                try { return new mongoose.Types.ObjectId(mid); } catch { return null; }
-              }).filter(Boolean);
-              const allMembersData = memberObjectIds.length > 0
-                ? await db.collection("user").find({ _id: { $in: memberObjectIds } }).toArray()
-                : [];
+              const memberIdsToNotify = cleanedInput.assignedMembers.filter(
+                (mid) => mid !== user.id,
+              );
+              const memberObjectIds = memberIdsToNotify
+                .map((mid) => {
+                  try {
+                    return new mongoose.Types.ObjectId(mid);
+                  } catch {
+                    return null;
+                  }
+                })
+                .filter(Boolean);
+              const allMembersData =
+                memberObjectIds.length > 0
+                  ? await db
+                      .collection("user")
+                      .find({ _id: { $in: memberObjectIds } })
+                      .toArray()
+                  : [];
               const membersDataMap = {};
-              allMembersData.forEach(m => { membersDataMap[m._id.toString()] = m; });
+              allMembersData.forEach((m) => {
+                membersDataMap[m._id.toString()] = m;
+              });
 
               // Envoyer les emails et notifications pour chaque membre assigné
               for (const memberId of memberIdsToNotify) {
@@ -1188,7 +1338,8 @@ const resolvers = {
 
                   if (memberData?.email) {
                     const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${savedTask.boardId}?task=${savedTask._id}`;
-                    const memberPrefs = memberData?.notificationPreferences?.kanban_task_assigned;
+                    const memberPrefs =
+                      memberData?.notificationPreferences?.kanban_task_assigned;
 
                     // Envoyer l'email d'assignation (si la préférence n'est pas désactivée)
                     if (memberPrefs?.email !== false) {
@@ -1203,57 +1354,75 @@ const resolvers = {
                         priority: savedTask.priority || "medium",
                         taskUrl: taskUrl,
                       });
-                      logger.info(`📧 [CreateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${savedTask.title}"`);
+                      logger.info(
+                        `📧 [CreateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${savedTask.title}"`,
+                      );
                     } else {
-                      logger.info(`📧 [CreateTask] Email désactivé par préférences pour ${memberData.email}`);
+                      logger.info(
+                        `📧 [CreateTask] Email désactivé par préférences pour ${memberData.email}`,
+                      );
                     }
 
                     // Créer une notification dans la boîte de réception (si la préférence n'est pas désactivée)
                     if (memberPrefs?.push !== false) {
                       try {
-                        const notification = await Notification.createTaskAssignedNotification({
-                          userId: memberId,
-                          workspaceId: finalWorkspaceId,
-                          taskId: savedTask._id,
-                          taskTitle: savedTask.title || "Sans titre",
-                          boardId: savedTask.boardId,
-                          boardName: boardName,
-                          columnName: columnName,
-                          actorId: user?.id || user?._id,
-                          actorName: notifAssignerName,
-                          actorImage: notifCreatorImage,
-                          url: taskUrl,
-                        });
+                        const notification =
+                          await Notification.createTaskAssignedNotification({
+                            userId: memberId,
+                            workspaceId: finalWorkspaceId,
+                            taskId: savedTask._id,
+                            taskTitle: savedTask.title || "Sans titre",
+                            boardId: savedTask.boardId,
+                            boardName: boardName,
+                            columnName: columnName,
+                            actorId: user?.id || user?._id,
+                            actorName: notifAssignerName,
+                            actorImage: notifCreatorImage,
+                            url: taskUrl,
+                          });
 
                         // Publier la notification en temps réel
                         await publishNotification(notification);
-                        logger.info(`🔔 [CreateTask] Notification créée pour ${memberData.email}`);
+                        logger.info(
+                          `🔔 [CreateTask] Notification créée pour ${memberData.email}`,
+                        );
                       } catch (notifError) {
-                        logger.error(`❌ [CreateTask] Erreur création notification:`, notifError);
+                        logger.error(
+                          "❌ [CreateTask] Erreur création notification:",
+                          notifError,
+                        );
                       }
                     } else {
-                      logger.info(`🔔 [CreateTask] Notification push désactivée par préférences pour ${memberData.email}`);
+                      logger.info(
+                        `🔔 [CreateTask] Notification push désactivée par préférences pour ${memberData.email}`,
+                      );
                     }
                   }
                 } catch (emailError) {
-                  logger.error(`❌ [CreateTask] Erreur envoi email à membre ${memberId}:`, emailError);
+                  logger.error(
+                    `❌ [CreateTask] Erreur envoi email à membre ${memberId}:`,
+                    emailError,
+                  );
                 }
               }
             } catch (error) {
-              logger.error("❌ [CreateTask] Erreur lors de l'envoi des notifications d'assignation:", error);
+              logger.error(
+                "❌ [CreateTask] Erreur lors de l'envoi des notifications d'assignation:",
+                error,
+              );
             }
           })();
         }
 
         return enrichedTask;
-      }
+      },
     ),
 
     updateTask: withWorkspace(
       async (
         _,
         { input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { id, ...updates } = input;
@@ -1271,7 +1440,9 @@ const resolvers = {
         // Fusionner timeTracking avec les valeurs existantes pour ne pas écraser startedBy, isRunning, entries, etc.
         if (updates.timeTracking) {
           updates.timeTracking = {
-            ...(oldTask.timeTracking?.toObject ? oldTask.timeTracking.toObject() : oldTask.timeTracking || {}),
+            ...(oldTask.timeTracking?.toObject
+              ? oldTask.timeTracking.toObject()
+              : oldTask.timeTracking || {}),
             ...updates.timeTracking,
           };
         }
@@ -1352,7 +1523,11 @@ const resolvers = {
         // Fonction utilitaire pour formater une date en français
         const formatDateFr = (dateStr) => {
           const d = new Date(dateStr);
-          return d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+          return d.toLocaleDateString("fr-FR", {
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+          });
         };
 
         // Date de début modifiée
@@ -1367,7 +1542,9 @@ const resolvers = {
             if (!updates.startDate) {
               changes.push("supprimé la date de début");
             } else {
-              changes.push(`la date de début → ${formatDateFr(updates.startDate)}`);
+              changes.push(
+                `la date de début → ${formatDateFr(updates.startDate)}`,
+              );
             }
           }
         }
@@ -1384,7 +1561,9 @@ const resolvers = {
             if (!updates.dueDate) {
               changes.push("supprimé la date d'échéance");
             } else {
-              changes.push(`la date d'échéance → ${formatDateFr(updates.dueDate)}`);
+              changes.push(
+                `la date d'échéance → ${formatDateFr(updates.dueDate)}`,
+              );
             }
           }
         }
@@ -1409,10 +1588,10 @@ const resolvers = {
 
           // Récupérer les objets tag complets (avec couleurs) pour ajoutés/supprimés
           const addedTagObjects = newTags.filter(
-            (tag) => !oldTagNames.includes(getTagName(tag))
+            (tag) => !oldTagNames.includes(getTagName(tag)),
           );
           const removedTagObjects = oldTags.filter(
-            (tag) => !newTagNames.includes(getTagName(tag))
+            (tag) => !newTagNames.includes(getTagName(tag)),
           );
 
           if (addedTagObjects.length > 0 || removedTagObjects.length > 0) {
@@ -1424,7 +1603,7 @@ const resolvers = {
             } else if (removedNames.length > 0 && addedNames.length === 0) {
               tagDescription = `a supprimé ${removedNames.length > 1 ? "les tags" : "le tag"} : ${removedNames.join(", ")}`;
             } else {
-              tagDescription = `a modifié les tags`;
+              tagDescription = "a modifié les tags";
             }
             tagActivity = {
               userId: user?.id,
@@ -1434,15 +1613,33 @@ const resolvers = {
               field: "tags",
               description: tagDescription,
               // Stocker les objets tag complets avec couleurs
-              newValue: addedTagObjects.length > 0 ? addedTagObjects.map(t => ({ name: t.name, bg: t.bg, text: t.text, border: t.border })) : null,
-              oldValue: removedTagObjects.length > 0 ? removedTagObjects.map(t => ({ name: t.name, bg: t.bg, text: t.text, border: t.border })) : null,
+              newValue:
+                addedTagObjects.length > 0
+                  ? addedTagObjects.map((t) => ({
+                      name: t.name,
+                      bg: t.bg,
+                      text: t.text,
+                      border: t.border,
+                    }))
+                  : null,
+              oldValue:
+                removedTagObjects.length > 0
+                  ? removedTagObjects.map((t) => ({
+                      name: t.name,
+                      bg: t.bg,
+                      text: t.text,
+                      border: t.border,
+                    }))
+                  : null,
               createdAt: new Date(),
             };
           }
         }
 
         // Membres assignés modifiés
-        logger.info(`📧 [UpdateTask] updates.assignedMembers reçu: ${JSON.stringify(updates.assignedMembers)}`);
+        logger.info(
+          `📧 [UpdateTask] updates.assignedMembers reçu: ${JSON.stringify(updates.assignedMembers)}`,
+        );
         if (updates.assignedMembers !== undefined) {
           // Normaliser les IDs en strings et trier
           const normalizeMembers = (members) => {
@@ -1465,7 +1662,9 @@ const resolvers = {
           const oldMembers = normalizeMembers(oldTask.assignedMembers);
           const newMembers = normalizeMembers(updates.assignedMembers);
 
-          logger.info(`📧 [UpdateTask] oldMembers: ${JSON.stringify(oldMembers)}, newMembers: ${JSON.stringify(newMembers)}`);
+          logger.info(
+            `📧 [UpdateTask] oldMembers: ${JSON.stringify(oldMembers)}, newMembers: ${JSON.stringify(newMembers)}`,
+          );
 
           // Comparer les tableaux triés
           const hasChanged =
@@ -1476,11 +1675,13 @@ const resolvers = {
 
           if (hasChanged) {
             const addedMembers = newMembers.filter(
-              (m) => !oldMembers.includes(m)
+              (m) => !oldMembers.includes(m),
             );
-            logger.info(`📧 [UpdateTask] addedMembers: ${JSON.stringify(addedMembers)}`);
+            logger.info(
+              `📧 [UpdateTask] addedMembers: ${JSON.stringify(addedMembers)}`,
+            );
             const removedMembers = oldMembers.filter(
-              (m) => !newMembers.includes(m)
+              (m) => !newMembers.includes(m),
             );
 
             if (addedMembers.length > 0) {
@@ -1503,29 +1704,55 @@ const resolvers = {
               ];
 
               // Envoyer des emails de notification aux membres assignés
-              logger.info(`📧 [UpdateTask] Début envoi emails pour ${addedMembers.length} membres assignés: ${addedMembers.join(", ")}`);
+              logger.info(
+                `📧 [UpdateTask] Début envoi emails pour ${addedMembers.length} membres assignés: ${addedMembers.join(", ")}`,
+              );
               (async () => {
                 try {
                   // Récupérer les infos du board et de la colonne
                   const board = await Board.findById(oldTask.boardId);
-                  logger.info(`📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? 'OUI' : 'NON'}, Board name: ${board?.title}`);
-                  logger.info(`📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`);
+                  logger.info(
+                    `📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? "OUI" : "NON"}, Board name: ${board?.title}`,
+                  );
+                  logger.info(
+                    `📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`,
+                  );
                   const column = await Column.findById(oldTask.columnId);
-                  logger.info(`📧 [UpdateTask] Column trouvée: ${column ? 'OUI' : 'NON'}, Column title: ${column?.title}`);
-                  const assignerName = userData?.name || user?.name || user?.email || "Un membre de l'équipe";
+                  logger.info(
+                    `📧 [UpdateTask] Column trouvée: ${column ? "OUI" : "NON"}, Column title: ${column?.title}`,
+                  );
+                  const assignerName =
+                    userData?.name ||
+                    user?.name ||
+                    user?.email ||
+                    "Un membre de l'équipe";
                   const boardName = board?.title || "Tableau sans nom";
                   const columnName = column?.title || "Colonne";
-                  logger.info(`📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`);
+                  logger.info(
+                    `📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`,
+                  );
 
                   // Batch fetch : récupérer tous les membres ajoutés en une seule requête
-                  const addedMemberObjectIds = addedMembers.map(mid => {
-                    try { return new mongoose.Types.ObjectId(mid); } catch { return null; }
-                  }).filter(Boolean);
-                  const allAddedMembersData = addedMemberObjectIds.length > 0
-                    ? await db.collection("user").find({ _id: { $in: addedMemberObjectIds } }).toArray()
-                    : [];
+                  const addedMemberObjectIds = addedMembers
+                    .map((mid) => {
+                      try {
+                        return new mongoose.Types.ObjectId(mid);
+                      } catch {
+                        return null;
+                      }
+                    })
+                    .filter(Boolean);
+                  const allAddedMembersData =
+                    addedMemberObjectIds.length > 0
+                      ? await db
+                          .collection("user")
+                          .find({ _id: { $in: addedMemberObjectIds } })
+                          .toArray()
+                      : [];
                   const addedMembersDataMap = {};
-                  allAddedMembersData.forEach(m => { addedMembersDataMap[m._id.toString()] = m; });
+                  allAddedMembersData.forEach((m) => {
+                    addedMembersDataMap[m._id.toString()] = m;
+                  });
 
                   for (const memberId of addedMembers) {
                     try {
@@ -1533,7 +1760,9 @@ const resolvers = {
 
                       if (memberData?.email) {
                         const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${oldTask.boardId}?task=${id}`;
-                        const memberPrefs = memberData?.notificationPreferences?.kanban_task_assigned;
+                        const memberPrefs =
+                          memberData?.notificationPreferences
+                            ?.kanban_task_assigned;
 
                         // Envoyer l'email d'assignation (si la préférence n'est pas désactivée)
                         if (memberPrefs?.email !== false) {
@@ -1545,47 +1774,69 @@ const resolvers = {
                             assignerName: assignerName,
                             assignerImage: userImage || userData?.image || null,
                             dueDate: oldTask.dueDate || updates.dueDate,
-                            priority: oldTask.priority || updates.priority || "medium",
+                            priority:
+                              oldTask.priority || updates.priority || "medium",
                             taskUrl: taskUrl,
                           });
-                          logger.info(`📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`);
+                          logger.info(
+                            `📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`,
+                          );
                         } else {
-                          logger.info(`📧 [UpdateTask] Email désactivé par préférences pour ${memberData.email}`);
+                          logger.info(
+                            `📧 [UpdateTask] Email désactivé par préférences pour ${memberData.email}`,
+                          );
                         }
 
                         // Créer une notification dans la boîte de réception (si la préférence n'est pas désactivée)
                         if (memberPrefs?.push !== false) {
                           try {
-                            const notification = await Notification.createTaskAssignedNotification({
-                              userId: memberId,
-                              workspaceId: finalWorkspaceId,
-                              taskId: oldTask._id,
-                              taskTitle: oldTask.title || "Sans titre",
-                              boardId: oldTask.boardId,
-                              boardName: boardName,
-                              columnName: columnName,
-                              actorId: user?.id || user?._id,
-                              actorName: assignerName,
-                              actorImage: userImage || userData?.image || null,
-                              url: taskUrl,
-                            });
+                            const notification =
+                              await Notification.createTaskAssignedNotification(
+                                {
+                                  userId: memberId,
+                                  workspaceId: finalWorkspaceId,
+                                  taskId: oldTask._id,
+                                  taskTitle: oldTask.title || "Sans titre",
+                                  boardId: oldTask.boardId,
+                                  boardName: boardName,
+                                  columnName: columnName,
+                                  actorId: user?.id || user?._id,
+                                  actorName: assignerName,
+                                  actorImage:
+                                    userImage || userData?.image || null,
+                                  url: taskUrl,
+                                },
+                              );
 
                             // Publier la notification en temps réel
                             await publishNotification(notification);
-                            logger.info(`🔔 [UpdateTask] Notification créée pour ${memberData.email}`);
+                            logger.info(
+                              `🔔 [UpdateTask] Notification créée pour ${memberData.email}`,
+                            );
                           } catch (notifError) {
-                            logger.error(`❌ [UpdateTask] Erreur création notification:`, notifError);
+                            logger.error(
+                              "❌ [UpdateTask] Erreur création notification:",
+                              notifError,
+                            );
                           }
                         } else {
-                          logger.info(`🔔 [UpdateTask] Notification push désactivée par préférences pour ${memberData.email}`);
+                          logger.info(
+                            `🔔 [UpdateTask] Notification push désactivée par préférences pour ${memberData.email}`,
+                          );
                         }
                       }
                     } catch (emailError) {
-                      logger.error(`❌ [UpdateTask] Erreur envoi email à membre ${memberId}:`, emailError);
+                      logger.error(
+                        `❌ [UpdateTask] Erreur envoi email à membre ${memberId}:`,
+                        emailError,
+                      );
                     }
                   }
                 } catch (error) {
-                  logger.error("❌ [UpdateTask] Erreur lors de l'envoi des emails d'assignation:", error);
+                  logger.error(
+                    "❌ [UpdateTask] Erreur lors de l'envoi des emails d'assignation:",
+                    error,
+                  );
                 }
               })();
             }
@@ -1618,16 +1869,20 @@ const resolvers = {
           const newChecklist = updates.checklist || [];
 
           // Comparer par texte pour détecter ajouts/suppressions
-          const oldTexts = oldChecklist.map(i => i.text);
-          const newTexts = newChecklist.map(i => i.text);
-          const addedItems = newChecklist.filter(i => !oldTexts.includes(i.text));
-          const removedItems = oldChecklist.filter(i => !newTexts.includes(i.text));
+          const oldTexts = oldChecklist.map((i) => i.text);
+          const newTexts = newChecklist.map((i) => i.text);
+          const addedItems = newChecklist.filter(
+            (i) => !oldTexts.includes(i.text),
+          );
+          const removedItems = oldChecklist.filter(
+            (i) => !newTexts.includes(i.text),
+          );
 
           // Détecter les changements de statut (completed/uncompleted)
           const completedItems = [];
           const uncompletedItems = [];
-          newChecklist.forEach(newItem => {
-            const oldItem = oldChecklist.find(o => o.text === newItem.text);
+          newChecklist.forEach((newItem) => {
+            const oldItem = oldChecklist.find((o) => o.text === newItem.text);
             if (oldItem) {
               if (!oldItem.completed && newItem.completed) {
                 completedItems.push(newItem.text);
@@ -1637,21 +1892,33 @@ const resolvers = {
             }
           });
 
-          const hasChanges = addedItems.length > 0 || removedItems.length > 0 || completedItems.length > 0 || uncompletedItems.length > 0;
+          const hasChanges =
+            addedItems.length > 0 ||
+            removedItems.length > 0 ||
+            completedItems.length > 0 ||
+            uncompletedItems.length > 0;
           if (hasChanges) {
             let checklistDescription;
             const parts = [];
             if (addedItems.length > 0) {
-              parts.push(`a ajouté ${addedItems.length > 1 ? "les éléments" : "l'élément"} : ${addedItems.map(i => i.text).join(" ;; ")}`);
+              parts.push(
+                `a ajouté ${addedItems.length > 1 ? "les éléments" : "l'élément"} : ${addedItems.map((i) => i.text).join(" ;; ")}`,
+              );
             }
             if (removedItems.length > 0) {
-              parts.push(`a supprimé ${removedItems.length > 1 ? "les éléments" : "l'élément"} : ${removedItems.map(i => i.text).join(" ;; ")}`);
+              parts.push(
+                `a supprimé ${removedItems.length > 1 ? "les éléments" : "l'élément"} : ${removedItems.map((i) => i.text).join(" ;; ")}`,
+              );
             }
             if (completedItems.length > 0) {
-              parts.push(`a coché ${completedItems.length > 1 ? "les éléments" : "l'élément"} : ${completedItems.join(" ;; ")}`);
+              parts.push(
+                `a coché ${completedItems.length > 1 ? "les éléments" : "l'élément"} : ${completedItems.join(" ;; ")}`,
+              );
             }
             if (uncompletedItems.length > 0) {
-              parts.push(`a décoché ${uncompletedItems.length > 1 ? "les éléments" : "l'élément"} : ${uncompletedItems.join(" ;; ")}`);
+              parts.push(
+                `a décoché ${uncompletedItems.length > 1 ? "les éléments" : "l'élément"} : ${uncompletedItems.join(" ;; ")}`,
+              );
             }
             checklistDescription = parts.join(" et ");
 
@@ -1716,7 +1983,7 @@ const resolvers = {
         const task = await Task.findOneAndUpdate(
           { _id: id, workspaceId: finalWorkspaceId },
           { ...updates, updatedAt: new Date() },
-          { new: true, runValidators: true }
+          { new: true, runValidators: true },
         );
         if (!task) throw new Error("Task not found");
 
@@ -1739,11 +2006,11 @@ const resolvers = {
             boardId: enrichedTask.boardId,
             workspaceId: finalWorkspaceId,
           },
-          "Tâche mise à jour"
+          "Tâche mise à jour",
         );
 
         return enrichedTask;
-      }
+      },
     ),
 
     deleteTask: withWorkspace(
@@ -1765,7 +2032,7 @@ const resolvers = {
         if (result.deletedCount > 0) {
           // Enrichir la tâche avant suppression pour inclure les commentaires avec photos
           const enrichedTask = await enrichTaskWithUserInfo(task);
-          
+
           // Publier l'événement de suppression de tâche
           safePublish(
             `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
@@ -1776,19 +2043,19 @@ const resolvers = {
               boardId: enrichedTask.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Tâche supprimée"
+            "Tâche supprimée",
           );
         }
 
         return result.deletedCount > 0;
-      }
+      },
     ),
 
     moveTask: withWorkspace(
       async (
         _,
         { id, columnId, position, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -1833,7 +2100,7 @@ const resolvers = {
               tasksCount: allTasksBeforeUpdate.length,
               taskIds: allTasksBeforeUpdate.map((t) => t._id.toString()),
               excludedTaskId: id,
-            }
+            },
           );
 
           // Préparer les updates
@@ -1863,7 +2130,7 @@ const resolvers = {
           // Utiliser updateOne pour éviter les problèmes de validation
           await Task.updateOne(
             { _id: id, workspaceId: finalWorkspaceId },
-            { $set: updates, ...(updates.$push && { $push: updates.$push }) }
+            { $set: updates, ...(updates.$push && { $push: updates.$push }) },
           );
 
           // Récupérer la tâche mise à jour
@@ -1893,7 +2160,7 @@ const resolvers = {
           console.log("📊 [moveTask] Après réorganisation:", {
             taskId: id,
             newPosition: reorderedTasks.findIndex(
-              (t) => t._id.toString() === id
+              (t) => t._id.toString() === id,
             ),
             reorderedTaskIds: reorderedTasks.map((t, idx) => ({
               id: t._id.toString(),
@@ -1908,8 +2175,8 @@ const resolvers = {
             updatePromises.push(
               Task.updateOne(
                 { _id: reorderedTasks[i]._id },
-                { $set: { position: i, updatedAt: new Date() } }
-              )
+                { $set: { position: i, updatedAt: new Date() } },
+              ),
             );
           }
 
@@ -1933,8 +2200,8 @@ const resolvers = {
               updatePromises.push(
                 Task.updateOne(
                   { _id: sourceColumnTasks[i]._id },
-                  { $set: { position: i, updatedAt: new Date() } }
-                )
+                  { $set: { position: i, updatedAt: new Date() } },
+                ),
               );
             }
 
@@ -1955,7 +2222,7 @@ const resolvers = {
               taskId: updatedTask._id.toString(),
               position: updatedTask.position,
               columnId: updatedTask.columnId,
-            }
+            },
           );
 
           // Enrichir la tâche déplacée pour inclure les commentaires avec photos
@@ -1969,7 +2236,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Tâche déplacée"
+            "Tâche déplacée",
           );
 
           return task;
@@ -1977,7 +2244,7 @@ const resolvers = {
           console.error("Error moving task:", error);
           throw new Error("Failed to move task");
         }
-      }
+      },
     ),
 
     // Ajouter un commentaire
@@ -1985,7 +2252,7 @@ const resolvers = {
       async (
         _,
         { taskId, input, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2013,7 +2280,7 @@ const resolvers = {
           const mentionedUserIds = input.mentionedUserIds || [];
           const comment = {
             userId: user.id,
-            content: input.content || '',
+            content: input.content || "",
             mentions: mentionedUserIds,
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -2050,18 +2317,24 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Commentaire ajouté"
+            "Commentaire ajouté",
           );
 
           // Envoyer les notifications de mention (en arrière-plan)
           if (mentionedUserIds.length > 0) {
-            logger.info(`📧 [Mention] Début traitement mentions: ${mentionedUserIds.length} mention(s) détectée(s) pour la tâche "${task.title}" (taskId: ${taskId})`);
-            logger.info(`📧 [Mention] IDs mentionnés: ${JSON.stringify(mentionedUserIds)}, auteur: ${user.id}`);
+            logger.info(
+              `📧 [Mention] Début traitement mentions: ${mentionedUserIds.length} mention(s) détectée(s) pour la tâche "${task.title}" (taskId: ${taskId})`,
+            );
+            logger.info(
+              `📧 [Mention] IDs mentionnés: ${JSON.stringify(mentionedUserIds)}, auteur: ${user.id}`,
+            );
             (async () => {
               try {
                 const db = mongoose.connection.db;
                 if (!db) {
-                  logger.error("❌ [Mention] mongoose.connection.db est null/undefined!");
+                  logger.error(
+                    "❌ [Mention] mongoose.connection.db est null/undefined!",
+                  );
                   return;
                 }
 
@@ -2069,100 +2342,158 @@ const resolvers = {
                 const authorData = await db.collection("user").findOne({
                   _id: new mongoose.Types.ObjectId(user.id),
                 });
-                logger.info(`📧 [Mention] Auteur trouvé: ${authorData ? authorData.email : 'NON TROUVÉ'}`);
-                const authorName = authorData?.name || user?.name || user?.email || "Un membre de l'équipe";
-                const authorImage = authorData?.image || authorData?.avatar || authorData?.profile?.profilePicture || null;
+                logger.info(
+                  `📧 [Mention] Auteur trouvé: ${authorData ? authorData.email : "NON TROUVÉ"}`,
+                );
+                const authorName =
+                  authorData?.name ||
+                  user?.name ||
+                  user?.email ||
+                  "Un membre de l'équipe";
+                const authorImage =
+                  authorData?.image ||
+                  authorData?.avatar ||
+                  authorData?.profile?.profilePicture ||
+                  null;
 
                 // Récupérer les infos du board
                 const board = await Board.findById(task.boardId);
                 const boardName = board?.title || "Tableau sans nom";
 
                 // Extraire un extrait du commentaire (texte brut, sans HTML)
-                const commentExcerpt = (input.content || '').replace(/<[^>]*>/g, '').substring(0, 150);
+                const commentExcerpt = (input.content || "")
+                  .replace(/<[^>]*>/g, "")
+                  .substring(0, 150);
 
                 // Batch-load tous les utilisateurs mentionnés en une seule query (au lieu de N queries)
                 const mentionedIds = mentionedUserIds
-                  .filter(id => id !== user.id) // Exclure l'auteur
-                  .map(id => new mongoose.Types.ObjectId(id));
-                const mentionedUsers = mentionedIds.length > 0
-                  ? await db.collection("user").find({ _id: { $in: mentionedIds } }).toArray()
-                  : [];
-                const mentionedUserMap = new Map(mentionedUsers.map(u => [u._id.toString(), u]));
+                  .filter((id) => id !== user.id) // Exclure l'auteur
+                  .map((id) => new mongoose.Types.ObjectId(id));
+                const mentionedUsers =
+                  mentionedIds.length > 0
+                    ? await db
+                        .collection("user")
+                        .find({ _id: { $in: mentionedIds } })
+                        .toArray()
+                    : [];
+                const mentionedUserMap = new Map(
+                  mentionedUsers.map((u) => [u._id.toString(), u]),
+                );
 
                 for (const mentionedUserId of mentionedUserIds) {
                   // Ne pas notifier l'auteur du commentaire
                   if (mentionedUserId === user.id) {
-                    logger.info(`📧 [Mention] Skip notification pour l'auteur ${mentionedUserId}`);
+                    logger.info(
+                      `📧 [Mention] Skip notification pour l'auteur ${mentionedUserId}`,
+                    );
                     continue;
                   }
 
                   try {
                     const memberData = mentionedUserMap.get(mentionedUserId);
-                    logger.info(`📧 [Mention] Utilisateur mentionné trouvé: ${memberData ? memberData.email : 'NON TROUVÉ'}`);
+                    logger.info(
+                      `📧 [Mention] Utilisateur mentionné trouvé: ${memberData ? memberData.email : "NON TROUVÉ"}`,
+                    );
 
                     if (memberData?.email) {
                       const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${task.boardId}?task=${task._id}`;
                       logger.info(`📧 [Mention] URL tâche: ${taskUrl}`);
-                      const memberPrefs = memberData?.notificationPreferences?.kanban_mention;
-                      logger.info(`📧 [Mention] Préférences kanban_mention: ${JSON.stringify(memberPrefs)} (email: ${memberPrefs?.email}, push: ${memberPrefs?.push})`);
+                      const memberPrefs =
+                        memberData?.notificationPreferences?.kanban_mention;
+                      logger.info(
+                        `📧 [Mention] Préférences kanban_mention: ${JSON.stringify(memberPrefs)} (email: ${memberPrefs?.email}, push: ${memberPrefs?.push})`,
+                      );
 
                       // Envoyer l'email de mention (si la préférence n'est pas désactivée)
                       if (memberPrefs?.email !== false) {
-                        logger.info(`📧 [Mention] Envoi email à ${memberData.email}...`);
-                        const emailResult = await sendMentionEmail(memberData.email, {
-                          actorName: authorName,
-                          taskTitle: task.title || "Sans titre",
-                          boardName: boardName,
-                          commentExcerpt: commentExcerpt,
-                          taskUrl: taskUrl,
-                        });
-                        logger.info(`📧 [Mention] Résultat envoi email à ${memberData.email}: ${emailResult ? 'SUCCÈS' : 'ÉCHEC'}`);
+                        logger.info(
+                          `📧 [Mention] Envoi email à ${memberData.email}...`,
+                        );
+                        const emailResult = await sendMentionEmail(
+                          memberData.email,
+                          {
+                            actorName: authorName,
+                            taskTitle: task.title || "Sans titre",
+                            boardName: boardName,
+                            commentExcerpt: commentExcerpt,
+                            taskUrl: taskUrl,
+                          },
+                        );
+                        logger.info(
+                          `📧 [Mention] Résultat envoi email à ${memberData.email}: ${emailResult ? "SUCCÈS" : "ÉCHEC"}`,
+                        );
                       } else {
-                        logger.info(`📧 [Mention] Email désactivé par préférence pour ${memberData.email}`);
+                        logger.info(
+                          `📧 [Mention] Email désactivé par préférence pour ${memberData.email}`,
+                        );
                       }
 
                       // Créer une notification in-app (si la préférence n'est pas désactivée)
                       if (memberPrefs?.push !== false) {
                         try {
-                          logger.info(`🔔 [Mention] Création notification in-app pour ${mentionedUserId} (workspace: ${finalWorkspaceId})...`);
-                          const notification = await Notification.createMentionNotification({
-                            userId: mentionedUserId,
-                            workspaceId: finalWorkspaceId,
-                            taskId: task._id,
-                            taskTitle: task.title || "Sans titre",
-                            boardId: task.boardId,
-                            boardName: boardName,
-                            actorId: user.id,
-                            actorName: authorName,
-                            actorImage: authorImage,
-                            commentExcerpt: commentExcerpt,
-                            url: taskUrl,
-                          });
-                          logger.info(`🔔 [Mention] Notification créée: ${notification?._id} (type: ${notification?.type})`);
+                          logger.info(
+                            `🔔 [Mention] Création notification in-app pour ${mentionedUserId} (workspace: ${finalWorkspaceId})...`,
+                          );
+                          const notification =
+                            await Notification.createMentionNotification({
+                              userId: mentionedUserId,
+                              workspaceId: finalWorkspaceId,
+                              taskId: task._id,
+                              taskTitle: task.title || "Sans titre",
+                              boardId: task.boardId,
+                              boardName: boardName,
+                              actorId: user.id,
+                              actorName: authorName,
+                              actorImage: authorImage,
+                              commentExcerpt: commentExcerpt,
+                              url: taskUrl,
+                            });
+                          logger.info(
+                            `🔔 [Mention] Notification créée: ${notification?._id} (type: ${notification?.type})`,
+                          );
 
                           // Publier la notification en temps réel
                           await publishNotification(notification);
-                          logger.info(`🔔 [Mention] Notification publiée en temps réel pour ${memberData.email}`);
+                          logger.info(
+                            `🔔 [Mention] Notification publiée en temps réel pour ${memberData.email}`,
+                          );
                         } catch (notifError) {
-                          logger.error(`❌ [Mention] Erreur création notification:`, notifError);
+                          logger.error(
+                            "❌ [Mention] Erreur création notification:",
+                            notifError,
+                          );
                         }
                       } else {
-                        logger.info(`🔔 [Mention] Push désactivé par préférence pour ${memberData.email}`);
+                        logger.info(
+                          `🔔 [Mention] Push désactivé par préférence pour ${memberData.email}`,
+                        );
                       }
                     } else {
-                      logger.warn(`⚠️ [Mention] Utilisateur ${mentionedUserId} n'a pas d'email ou non trouvé en base`);
+                      logger.warn(
+                        `⚠️ [Mention] Utilisateur ${mentionedUserId} n'a pas d'email ou non trouvé en base`,
+                      );
                     }
                   } catch (memberError) {
-                    logger.error(`❌ [Mention] Erreur traitement mention pour ${mentionedUserId}:`, memberError);
+                    logger.error(
+                      `❌ [Mention] Erreur traitement mention pour ${mentionedUserId}:`,
+                      memberError,
+                    );
                   }
                 }
-                logger.info(`📧 [Mention] Fin du traitement des mentions pour la tâche "${task.title}"`);
+                logger.info(
+                  `📧 [Mention] Fin du traitement des mentions pour la tâche "${task.title}"`,
+                );
               } catch (error) {
-                logger.error("❌ [Mention] Erreur lors de l'envoi des notifications de mention:", error);
+                logger.error(
+                  "❌ [Mention] Erreur lors de l'envoi des notifications de mention:",
+                  error,
+                );
               }
             })();
           } else {
-            logger.info(`📧 [Mention] Aucune mention dans ce commentaire (mentionedUserIds: ${JSON.stringify(input.mentionedUserIds)})`);
+            logger.info(
+              `📧 [Mention] Aucune mention dans ce commentaire (mentionedUserIds: ${JSON.stringify(input.mentionedUserIds)})`,
+            );
           }
 
           return enrichedTask;
@@ -2170,7 +2501,7 @@ const resolvers = {
           logger.error("Error adding comment:", error);
           throw new Error("Failed to add comment");
         }
-      }
+      },
     ),
 
     // Modifier un commentaire
@@ -2178,7 +2509,7 @@ const resolvers = {
       async (
         _,
         { taskId, commentId, content, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2214,7 +2545,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Commentaire modifié"
+            "Commentaire modifié",
           );
 
           return enrichedTask;
@@ -2222,7 +2553,7 @@ const resolvers = {
           logger.error("Error updating comment:", error);
           throw new Error("Failed to update comment");
         }
-      }
+      },
     ),
 
     // Supprimer un commentaire
@@ -2230,7 +2561,7 @@ const resolvers = {
       async (
         _,
         { taskId, commentId, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2266,7 +2597,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Commentaire supprimé"
+            "Commentaire supprimé",
           );
 
           return enrichedTask;
@@ -2274,7 +2605,7 @@ const resolvers = {
           logger.error("Error deleting comment:", error);
           throw new Error("Failed to delete comment");
         }
-      }
+      },
     ),
 
     // Démarrer le timer
@@ -2282,7 +2613,7 @@ const resolvers = {
       async (
         _,
         { taskId, workspaceId },
-        { user, workspaceId: contextWorkspaceId, db }
+        { user, workspaceId: contextWorkspaceId, db },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2324,9 +2655,13 @@ const resolvers = {
           }
 
           const avatarUrl =
-            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+            userFromDb?.image &&
+            userFromDb.image !== "null" &&
+            userFromDb.image !== ""
               ? userFromDb.image
-              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+              : userFromDb?.avatar &&
+                  userFromDb.avatar !== "null" &&
+                  userFromDb.avatar !== ""
                 ? userFromDb.avatar
                 : null;
 
@@ -2365,7 +2700,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Timer démarré"
+            "Timer démarré",
           );
 
           return task;
@@ -2373,7 +2708,7 @@ const resolvers = {
           logger.error("Error starting timer:", error);
           throw new Error(error.message || "Failed to start timer");
         }
-      }
+      },
     ),
 
     // Arrêter le timer
@@ -2381,7 +2716,7 @@ const resolvers = {
       async (
         _,
         { taskId, workspaceId },
-        { user, workspaceId: contextWorkspaceId, db }
+        { user, workspaceId: contextWorkspaceId, db },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2413,17 +2748,26 @@ const resolvers = {
           try {
             userFromDb = await db.collection("user").findOne({ _id: user.id });
             if (!userFromDb && /^[0-9a-fA-F]{24}$/.test(user.id)) {
-              userFromDb = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+              userFromDb = await db
+                .collection("user")
+                .findOne({ _id: new ObjectId(user.id) });
             }
           } catch (e) {
-            logger.warn("Could not fetch user from db for timer stop:", e.message);
+            logger.warn(
+              "Could not fetch user from db for timer stop:",
+              e.message,
+            );
           }
 
           const userName = userFromDb?.name || user.email;
           const userImage =
-            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+            userFromDb?.image &&
+            userFromDb.image !== "null" &&
+            userFromDb.image !== ""
               ? userFromDb.image
-              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+              : userFromDb?.avatar &&
+                  userFromDb.avatar !== "null" &&
+                  userFromDb.avatar !== ""
                 ? userFromDb.avatar
                 : null;
 
@@ -2431,11 +2775,12 @@ const resolvers = {
           const hours = Math.floor(duration / 3600);
           const minutes = Math.floor((duration % 3600) / 60);
           const seconds = duration % 60;
-          const durationStr = hours > 0
-            ? `${hours}h ${minutes}m ${seconds}s`
-            : minutes > 0
-              ? `${minutes}m ${seconds}s`
-              : `${seconds}s`;
+          const durationStr =
+            hours > 0
+              ? `${hours}h ${minutes}m ${seconds}s`
+              : minutes > 0
+                ? `${minutes}m ${seconds}s`
+                : `${seconds}s`;
 
           // Mettre à jour le timeTracking
           task.timeTracking.isRunning = false;
@@ -2467,7 +2812,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Timer arrêté"
+            "Timer arrêté",
           );
 
           return task;
@@ -2475,7 +2820,7 @@ const resolvers = {
           logger.error("Error stopping timer:", error);
           throw new Error(error.message || "Failed to stop timer");
         }
-      }
+      },
     ),
 
     // Réinitialiser le timer
@@ -2483,7 +2828,7 @@ const resolvers = {
       async (
         _,
         { taskId, workspaceId },
-        { user, workspaceId: contextWorkspaceId, db }
+        { user, workspaceId: contextWorkspaceId, db },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2499,17 +2844,26 @@ const resolvers = {
           try {
             userFromDb = await db.collection("user").findOne({ _id: user.id });
             if (!userFromDb && /^[0-9a-fA-F]{24}$/.test(user.id)) {
-              userFromDb = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+              userFromDb = await db
+                .collection("user")
+                .findOne({ _id: new ObjectId(user.id) });
             }
           } catch (e) {
-            logger.warn("Could not fetch user from db for timer reset:", e.message);
+            logger.warn(
+              "Could not fetch user from db for timer reset:",
+              e.message,
+            );
           }
 
           const userName = userFromDb?.name || user.email;
           const userImage =
-            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+            userFromDb?.image &&
+            userFromDb.image !== "null" &&
+            userFromDb.image !== ""
               ? userFromDb.image
-              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+              : userFromDb?.avatar &&
+                  userFromDb.avatar !== "null" &&
+                  userFromDb.avatar !== ""
                 ? userFromDb.avatar
                 : null;
 
@@ -2547,7 +2901,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Timer réinitialisé"
+            "Timer réinitialisé",
           );
 
           return task;
@@ -2555,7 +2909,7 @@ const resolvers = {
           logger.error("Error resetting timer:", error);
           throw new Error(error.message || "Failed to reset timer");
         }
-      }
+      },
     ),
 
     // Mettre à jour les paramètres du timer
@@ -2563,7 +2917,7 @@ const resolvers = {
       async (
         _,
         { taskId, hourlyRate, roundingOption, workspaceId },
-        { user, workspaceId: contextWorkspaceId }
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2603,7 +2957,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Paramètres du timer mis à jour"
+            "Paramètres du timer mis à jour",
           );
 
           return task;
@@ -2611,7 +2965,7 @@ const resolvers = {
           logger.error("Error updating timer settings:", error);
           throw new Error(error.message || "Failed to update timer settings");
         }
-      }
+      },
     ),
 
     // Ajouter du temps manuellement
@@ -2619,7 +2973,7 @@ const resolvers = {
       async (
         _,
         { taskId, seconds, description, workspaceId },
-        { user, workspaceId: contextWorkspaceId, db }
+        { user, workspaceId: contextWorkspaceId, db },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2648,17 +3002,26 @@ const resolvers = {
           try {
             userFromDb = await db.collection("user").findOne({ _id: user.id });
             if (!userFromDb && /^[0-9a-fA-F]{24}$/.test(user.id)) {
-              userFromDb = await db.collection("user").findOne({ _id: new ObjectId(user.id) });
+              userFromDb = await db
+                .collection("user")
+                .findOne({ _id: new ObjectId(user.id) });
             }
           } catch (e) {
-            logger.warn("Could not fetch user from db for manual time:", e.message);
+            logger.warn(
+              "Could not fetch user from db for manual time:",
+              e.message,
+            );
           }
 
           const userName = userFromDb?.name || user.email;
           const userImage =
-            userFromDb?.image && userFromDb.image !== "null" && userFromDb.image !== ""
+            userFromDb?.image &&
+            userFromDb.image !== "null" &&
+            userFromDb.image !== ""
               ? userFromDb.image
-              : userFromDb?.avatar && userFromDb.avatar !== "null" && userFromDb.avatar !== ""
+              : userFromDb?.avatar &&
+                  userFromDb.avatar !== "null" &&
+                  userFromDb.avatar !== ""
                 ? userFromDb.avatar
                 : null;
 
@@ -2678,9 +3041,10 @@ const resolvers = {
           // Formater la durée pour l'activité
           const hours = Math.floor(seconds / 3600);
           const minutes = Math.floor((seconds % 3600) / 60);
-          const durationStr = hours > 0
-            ? `${hours}h ${minutes > 0 ? minutes + "m" : ""}`
-            : `${minutes}m`;
+          const durationStr =
+            hours > 0
+              ? `${hours}h ${minutes > 0 ? minutes + "m" : ""}`
+              : `${minutes}m`;
 
           // Ajouter l'activité
           if (!task.activity) task.activity = [];
@@ -2705,7 +3069,7 @@ const resolvers = {
               boardId: task.boardId,
               workspaceId: finalWorkspaceId,
             },
-            "Temps manuel ajouté"
+            "Temps manuel ajouté",
           );
 
           return task;
@@ -2713,7 +3077,7 @@ const resolvers = {
           logger.error("Error adding manual time:", error);
           throw new Error(error.message || "Failed to add manual time");
         }
-      }
+      },
     ),
   },
 
@@ -2739,8 +3103,11 @@ const resolvers = {
     },
     client: async (board) => {
       if (!board.clientId) return null;
-      const Client = mongoose.model('Client');
-      return Client.findOne({ _id: board.clientId, workspaceId: board.workspaceId });
+      const Client = mongoose.model("Client");
+      return Client.findOne({
+        _id: board.clientId,
+        workspaceId: board.workspaceId,
+      });
     },
     totalBillableAmount: async (board) => {
       // Utiliser une aggregation pipeline pour calculer côté MongoDB
@@ -2759,7 +3126,9 @@ const resolvers = {
             totalSeconds: { $ifNull: ["$timeTracking.totalSeconds", 0] },
             isRunning: { $ifNull: ["$timeTracking.isRunning", false] },
             currentStartTime: "$timeTracking.currentStartTime",
-            roundingOption: { $ifNull: ["$timeTracking.roundingOption", "none"] },
+            roundingOption: {
+              $ifNull: ["$timeTracking.roundingOption", "none"],
+            },
           },
         },
         {
@@ -2767,11 +3136,26 @@ const resolvers = {
             // Ajouter le temps écoulé si le timer est en cours
             effectiveSeconds: {
               $cond: {
-                if: { $and: [{ $eq: ["$isRunning", true] }, { $ne: ["$currentStartTime", null] }] },
+                if: {
+                  $and: [
+                    { $eq: ["$isRunning", true] },
+                    { $ne: ["$currentStartTime", null] },
+                  ],
+                },
                 then: {
                   $add: [
                     "$totalSeconds",
-                    { $max: [0, { $divide: [{ $subtract: [new Date(), "$currentStartTime"] }, 1000] }] },
+                    {
+                      $max: [
+                        0,
+                        {
+                          $divide: [
+                            { $subtract: [new Date(), "$currentStartTime"] },
+                            1000,
+                          ],
+                        },
+                      ],
+                    },
                   ],
                 },
                 else: "$totalSeconds",
@@ -2790,8 +3174,14 @@ const resolvers = {
             billableHours: {
               $switch: {
                 branches: [
-                  { case: { $eq: ["$roundingOption", "up"] }, then: { $ceil: "$hours" } },
-                  { case: { $eq: ["$roundingOption", "down"] }, then: { $floor: "$hours" } },
+                  {
+                    case: { $eq: ["$roundingOption", "up"] },
+                    then: { $ceil: "$hours" },
+                  },
+                  {
+                    case: { $eq: ["$roundingOption", "down"] },
+                    then: { $floor: "$hours" },
+                  },
                 ],
                 default: "$hours",
               },
@@ -2834,11 +3224,26 @@ const resolvers = {
           $addFields: {
             effectiveSeconds: {
               $cond: {
-                if: { $and: [{ $eq: ["$isRunning", true] }, { $ne: ["$currentStartTime", null] }] },
+                if: {
+                  $and: [
+                    { $eq: ["$isRunning", true] },
+                    { $ne: ["$currentStartTime", null] },
+                  ],
+                },
                 then: {
                   $add: [
                     "$totalSeconds",
-                    { $max: [0, { $divide: [{ $subtract: [new Date(), "$currentStartTime"] }, 1000] }] },
+                    {
+                      $max: [
+                        0,
+                        {
+                          $divide: [
+                            { $subtract: [new Date(), "$currentStartTime"] },
+                            1000,
+                          ],
+                        },
+                      ],
+                    },
                   ],
                 },
                 else: "$totalSeconds",
@@ -2857,6 +3262,9 @@ const resolvers = {
       const total = Math.round(result[0]?.total || 0);
       return total > 0 ? total : null;
     },
+    boardMembers: (board) => {
+      return board.members || [];
+    },
     members: async (board) => {
       try {
         const db = mongoose.connection.db;
@@ -2868,7 +3276,7 @@ const resolvers = {
             : board.workspaceId;
 
         logger.info(
-          `🔍 [Kanban Board.members] Recherche membres pour organisation: ${orgId}`
+          `🔍 [Kanban Board.members] Recherche membres pour organisation: ${orgId}`,
         );
 
         // 1. Récupérer l'organisation
@@ -2878,13 +3286,13 @@ const resolvers = {
 
         if (!organization) {
           logger.warn(
-            `⚠️ [Kanban Board.members] Organisation non trouvée: ${orgId}`
+            `⚠️ [Kanban Board.members] Organisation non trouvée: ${orgId}`,
           );
           return [];
         }
 
         logger.info(
-          `🏢 [Kanban Board.members] Organisation trouvée: ${organization.name}`
+          `🏢 [Kanban Board.members] Organisation trouvée: ${organization.name}`,
         );
 
         // 2. Récupérer TOUS les membres via la collection member (Better Auth)
@@ -2896,11 +3304,11 @@ const resolvers = {
           .toArray();
 
         logger.info(
-          `📋 [Kanban Board.members] ${members.length} membres trouvés`
+          `📋 [Kanban Board.members] ${members.length} membres trouvés`,
         );
 
         if (members.length === 0) {
-          logger.warn(`⚠️ [Kanban Board.members] Aucun membre trouvé`);
+          logger.warn("⚠️ [Kanban Board.members] Aucun membre trouvé");
           return [];
         }
 
@@ -2913,7 +3321,7 @@ const resolvers = {
         });
 
         logger.info(
-          `👥 [Kanban Board.members] Recherche de ${userIds.length} utilisateurs`
+          `👥 [Kanban Board.members] Recherche de ${userIds.length} utilisateurs`,
         );
 
         // 4. Récupérer les informations des utilisateurs avec leurs photos
@@ -2925,7 +3333,7 @@ const resolvers = {
           .toArray();
 
         logger.info(
-          `✅ [Kanban Board.members] ${users.length} utilisateurs trouvés`
+          `✅ [Kanban Board.members] ${users.length} utilisateurs trouvés`,
         );
 
         // 5. Créer le résultat en combinant membres et users
@@ -2936,7 +3344,7 @@ const resolvers = {
 
             if (!user) {
               logger.warn(
-                `⚠️ [Kanban Board.members] Utilisateur non trouvé: ${memberUserId}`
+                `⚠️ [Kanban Board.members] Utilisateur non trouvé: ${memberUserId}`,
               );
               return null;
             }
@@ -2957,11 +3365,11 @@ const resolvers = {
                 profilePicture: user.profile?.profilePicture || "null",
                 profilePictureUrl: user.profile?.profilePictureUrl || "null",
                 finalImage: userImage || "null",
-              }
+              },
             );
 
             // Construire le nom complet
-            let displayName = '';
+            let displayName = "";
             if (user.name && user.lastName) {
               displayName = `${user.name} ${user.lastName}`;
             } else if (user.name) {
@@ -2969,7 +3377,7 @@ const resolvers = {
             } else if (user.lastName) {
               displayName = user.lastName;
             } else {
-              displayName = user.email || 'Utilisateur inconnu';
+              displayName = user.email || "Utilisateur inconnu";
             }
 
             return {
@@ -2984,7 +3392,7 @@ const resolvers = {
           .filter(Boolean); // Retirer les null
 
         logger.info(
-          `✅ [Kanban Board.members] Retour de ${result.length} membres avec photos`
+          `✅ [Kanban Board.members] Retour de ${result.length} membres avec photos`,
         );
 
         return result;
@@ -2998,7 +3406,12 @@ const resolvers = {
 
   Column: {
     tasks: async (parent) => {
-      return await Task.find({ columnId: parent.id, workspaceId: parent.workspaceId }).sort("position").limit(500);
+      return await Task.find({
+        columnId: parent.id,
+        workspaceId: parent.workspaceId,
+      })
+        .sort("position")
+        .limit(500);
     },
   },
 
@@ -3006,56 +3419,64 @@ const resolvers = {
     // Résoudre le client assigné à la tâche
     client: async (task) => {
       if (!task.clientId) return null;
-      const Client = mongoose.model('Client');
-      return Client.findOne({ _id: task.clientId, workspaceId: task.workspaceId });
+      const Client = mongoose.model("Client");
+      return Client.findOne({
+        _id: task.clientId,
+        workspaceId: task.workspaceId,
+      });
     },
 
     // Transformer les images de la tâche pour avoir des IDs corrects
     images: (task) => {
       if (!task.images || task.images.length === 0) return [];
-      return task.images.map(img => {
+      return task.images.map((img) => {
         const image = img.toObject ? img.toObject() : img;
         return {
           ...image,
-          id: image._id?.toString() || image.id
+          id: image._id?.toString() || image.id,
         };
       });
     },
 
     // Enrichir les commentaires avec les infos utilisateur dynamiquement
     comments: async (task) => {
-      logger.info(`🔄 [Task.comments] Enrichissement des commentaires pour la tâche ${task._id || task.id}`);
+      logger.info(
+        `🔄 [Task.comments] Enrichissement des commentaires pour la tâche ${task._id || task.id}`,
+      );
       if (!task.comments || task.comments.length === 0) return [];
-      
+
       const db = mongoose.connection.db;
-      
+
       // Collecter tous les userIds des commentaires (sauf externes)
       const userIds = new Set();
-      task.comments.forEach(c => {
-        if (c.userId && !c.userId.startsWith('external_')) {
+      task.comments.forEach((c) => {
+        if (c.userId && !c.userId.startsWith("external_")) {
           userIds.add(c.userId);
         }
       });
-      
+
       // Récupérer les infos des utilisateurs
       let usersMap = {};
       if (userIds.size > 0) {
         try {
-          const userObjectIds = Array.from(userIds).map(id => {
+          const userObjectIds = Array.from(userIds).map((id) => {
             try {
               return new mongoose.Types.ObjectId(id);
             } catch {
               return id;
             }
           });
-          
-          const users = await db.collection('user').find({
-            _id: { $in: userObjectIds }
-          }).toArray();
-          
-          users.forEach(u => {
+
+          const users = await db
+            .collection("user")
+            .find({
+              _id: { $in: userObjectIds },
+            })
+            .toArray();
+
+          users.forEach((u) => {
             // Construire le nom complet
-            let displayName = '';
+            let displayName = "";
             if (u.name && u.lastName) {
               displayName = `${u.name} ${u.lastName}`;
             } else if (u.name) {
@@ -3063,94 +3484,102 @@ const resolvers = {
             } else if (u.lastName) {
               displayName = u.lastName;
             } else {
-              displayName = u.email?.split('@')[0] || 'Utilisateur';
+              displayName = u.email?.split("@")[0] || "Utilisateur";
             }
             usersMap[u._id.toString()] = {
               name: displayName,
-              image: u.avatar || u.image || null
+              image: u.avatar || u.image || null,
             };
           });
         } catch (error) {
-          logger.error('❌ [Task.comments] Erreur récupération utilisateurs:', error);
+          logger.error(
+            "❌ [Task.comments] Erreur récupération utilisateurs:",
+            error,
+          );
         }
       }
-      
+
       // Enrichir les commentaires
-      return task.comments.map(c => {
+      return task.comments.map((c) => {
         const comment = c.toObject ? c.toObject() : c;
-        
+
         // Pour les commentaires externes, garder les infos stockées
-        if (comment.userId?.startsWith('external_')) {
+        if (comment.userId?.startsWith("external_")) {
           return {
             ...comment,
             id: comment._id?.toString() || comment.id,
-            userName: comment.userName || 'Invité',
+            userName: comment.userName || "Invité",
             userImage: comment.userImage || null,
             // Préserver les images du commentaire externe aussi
-            images: (comment.images || []).map(img => ({
+            images: (comment.images || []).map((img) => ({
               ...img,
-              id: img._id?.toString() || img.id
-            }))
+              id: img._id?.toString() || img.id,
+            })),
           };
         }
-        
+
         // Pour les utilisateurs normaux, TOUJOURS utiliser les infos dynamiques
         const userInfo = usersMap[comment.userId];
-        
+
         // Log pour déboguer
         if (!userInfo) {
-          logger.warn(`⚠️ [Task.comments] Utilisateur non trouvé: ${comment.userId}`);
+          logger.warn(
+            `⚠️ [Task.comments] Utilisateur non trouvé: ${comment.userId}`,
+          );
         }
-        
+
         return {
           ...comment,
           id: comment._id?.toString() || comment.id,
           // IMPORTANT: Toujours utiliser userInfo en priorité, ignorer comment.userName stocké
-          userName: userInfo?.name || 'Utilisateur',
+          userName: userInfo?.name || "Utilisateur",
           userImage: userInfo?.image || null,
           // Préserver les images du commentaire
-          images: (comment.images || []).map(img => {
+          images: (comment.images || []).map((img) => {
             const imgObj = img.toObject ? img.toObject() : img;
             return {
               ...imgObj,
-              id: imgObj._id?.toString() || imgObj.id
+              id: imgObj._id?.toString() || imgObj.id,
             };
-          })
+          }),
         };
       });
     },
-    
+
     // Enrichir l'activité avec les infos utilisateur dynamiquement
     activity: async (task) => {
       if (!task.activity || task.activity.length === 0) return [];
-      
+
       const db = mongoose.connection.db;
-      
+
       // Collecter tous les userIds de l'activité
       const userIds = new Set();
-      task.activity.forEach(a => {
+      task.activity.forEach((a) => {
         if (a.userId) userIds.add(a.userId);
       });
-      
+
       // Récupérer les infos des utilisateurs
       let usersMap = {};
       if (userIds.size > 0) {
         try {
-          const userObjectIds = Array.from(userIds).map(id => {
+          const userObjectIds = Array.from(userIds).map((id) => {
             try {
               return new mongoose.Types.ObjectId(id);
             } catch {
               return id;
             }
           });
-          
-          const users = await db.collection('user').find({
-            _id: { $in: userObjectIds }
-          }).toArray();
-          
-          users.forEach(u => {
+
+          const users = await db
+            .collection("user")
+            .find({
+              _id: { $in: userObjectIds },
+            })
+            .toArray();
+
+          users.forEach((u) => {
             // Construire le nom complet
-            let displayName = '';
+            let displayName = "";
             if (u.name && u.lastName) {
               displayName = `${u.name} ${u.lastName}`;
             } else if (u.name) {
@@ -3158,30 +3587,33 @@ const resolvers = {
             } else if (u.lastName) {
               displayName = u.lastName;
             } else {
-              displayName = u.email?.split('@')[0] || 'Utilisateur';
+              displayName = u.email?.split("@")[0] || "Utilisateur";
             }
             usersMap[u._id.toString()] = {
               name: displayName,
-              image: u.avatar || u.image || null
+              image: u.avatar || u.image || null,
             };
           });
         } catch (error) {
-          logger.error('❌ [Task.activity] Erreur récupération utilisateurs:', error);
+          logger.error(
+            "❌ [Task.activity] Erreur récupération utilisateurs:",
+            error,
+          );
         }
       }
-      
+
       // Enrichir l'activité
-      return task.activity.map(a => {
+      return task.activity.map((a) => {
         const activity = a.toObject ? a.toObject() : a;
         const userInfo = usersMap[activity.userId];
         return {
           ...activity,
           id: activity._id?.toString() || activity.id,
-          userName: userInfo?.name || activity.userName || 'Utilisateur',
-          userImage: userInfo?.image || activity.userImage || null
+          userName: userInfo?.name || activity.userName || "Utilisateur",
+          userImage: userInfo?.image || activity.userImage || null,
         };
       });
-    }
+    },
   },
 
   Comment: {
@@ -3211,16 +3643,16 @@ const resolvers = {
           } catch (error) {
             logger.error(
               "❌ [Kanban] Erreur subscription boardUpdated:",
-              error
+              error,
             );
             throw new Error("Subscription failed");
           }
-        }
+        },
       ),
       resolve: (
         payload,
         { workspaceId },
-        { workspaceId: contextWorkspaceId }
+        { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         // Filtrer les événements par workspace
@@ -3245,18 +3677,18 @@ const resolvers = {
             logger.error("❌ [Kanban] Erreur subscription taskUpdated:", error);
             throw new Error("Subscription failed");
           }
-        }
+        },
       ),
       resolve: (payload) => {
         // Pour les événements VISITOR_PROFILE_UPDATED, retourner le payload avec visitor
-        if (payload.type === 'VISITOR_PROFILE_UPDATED' && payload.visitor) {
+        if (payload.type === "VISITOR_PROFILE_UPDATED" && payload.visitor) {
           return {
             type: payload.type,
             task: null,
             taskId: null,
             boardId: payload.boardId,
             workspaceId: payload.workspaceId,
-            visitor: payload.visitor
+            visitor: payload.visitor,
           };
         }
         // Ignorer les autres événements qui n'ont pas de task
@@ -3282,11 +3714,11 @@ const resolvers = {
           } catch (error) {
             logger.error(
               "❌ [Kanban] Erreur subscription columnUpdated:",
-              error
+              error,
             );
             throw new Error("Subscription failed");
           }
-        }
+        },
       ),
       resolve: (payload) => {
         // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique

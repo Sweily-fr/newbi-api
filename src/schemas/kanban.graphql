@@ -14,6 +14,9 @@ type Board {
   totalTimeSpent: Int
   templateId: ID
   templateName: String
+  priority: String
+  dueDate: DateTime
+  boardMembers: [String]
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -149,6 +152,9 @@ input UpdateBoardInput {
   title: String
   description: String
   clientId: ID
+  priority: String
+  dueDate: DateTime
+  boardMembers: [String]
 }
 
 input CreateColumnInput {
