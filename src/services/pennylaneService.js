@@ -666,11 +666,8 @@ const pennylaneService = {
         invoice_lines: [
           {
             label: expense.title || expense.description || "Dépense",
-            raw_currency_unit_price: String(amountHT.toFixed(2)),
             currency_amount: String(amountTTC.toFixed(2)),
             currency_tax: String(amountVAT.toFixed(2)),
-            quantity: 1,
-            unit: "piece",
             vat_rate: mapVatRate(expense.vatRate),
           },
         ],
@@ -729,6 +726,12 @@ const pennylaneService = {
       const payload = {
         name,
         ...(expense.vendorVatNumber && { vat_number: expense.vendorVatNumber }),
+        address: {
+          address: "Non renseignée",
+          postal_code: "00000",
+          city: "Non renseignée",
+          country_alpha2: "FR",
+        },
       };
 
       const data = await pennylaneRequest(
@@ -826,6 +829,14 @@ const pennylaneService = {
               ...(purchaseInvoice.ocrMetadata?.supplierVatNumber && {
                 vat_number: purchaseInvoice.ocrMetadata.supplierVatNumber,
               }),
+              address: {
+                address:
+                  purchaseInvoice.ocrMetadata?.supplierAddress ||
+                  "Non renseignée",
+                postal_code: "00000",
+                city: "Non renseignée",
+                country_alpha2: "FR",
+              },
             };
             const supplierData = await pennylaneRequest(
               apiToken,
@@ -863,11 +874,8 @@ const pennylaneService = {
         invoice_lines: [
           {
             label: purchaseInvoice.supplierName || "Facture d'achat",
-            raw_currency_unit_price: String(amountHT.toFixed(2)),
             currency_amount: String(amountTTC.toFixed(2)),
             currency_tax: String(amountTVA.toFixed(2)),
-            quantity: 1,
-            unit: "piece",
             vat_rate: mapVatRate(purchaseInvoice.vatRate),
           },
         ],
