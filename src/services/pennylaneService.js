@@ -710,28 +710,27 @@ const pennylaneService = {
       if (!name) return null;
 
       const filter = encodeURIComponent(
-        JSON.stringify([{ field: "name", operator: "eq", value: name }]),
+        JSON.stringify([
+          { field: "name", operator: "start_with", value: name },
+        ]),
       );
       const searchResult = await pennylaneRequest(
         apiToken,
         "GET",
-        `/suppliers?filter=${filter}&limit=1`,
+        `/suppliers?filter=${filter}&limit=5`,
       );
 
-      if (searchResult?.items?.length > 0) {
-        return searchResult.items[0].id;
+      const exactMatch = searchResult?.items?.find(
+        (s) => s.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (exactMatch) {
+        return exactMatch.id;
       }
 
       // Créer le supplier
       const payload = {
         name,
         ...(expense.vendorVatNumber && { vat_number: expense.vendorVatNumber }),
-        address: {
-          address: "Non renseignée",
-          postal_code: "00000",
-          city: "Non renseignée",
-          country_alpha2: "FR",
-        },
       };
 
       const data = await pennylaneRequest(
@@ -810,7 +809,7 @@ const pennylaneService = {
             JSON.stringify([
               {
                 field: "name",
-                operator: "eq",
+                operator: "start_with",
                 value: purchaseInvoice.supplierName,
               },
             ]),
@@ -818,25 +817,23 @@ const pennylaneService = {
           const searchResult = await pennylaneRequest(
             apiToken,
             "GET",
-            `/suppliers?filter=${filter}&limit=1`,
+            `/suppliers?filter=${filter}&limit=5`,
           );
 
-          if (searchResult?.items?.length > 0) {
-            supplierId = searchResult.items[0].id;
+          // Chercher une correspondance exacte dans les résultats
+          const exactMatch = searchResult?.items?.find(
+            (s) =>
+              s.name.toLowerCase() ===
+              purchaseInvoice.supplierName.toLowerCase(),
+          );
+          if (exactMatch) {
+            supplierId = exactMatch.id;
           } else {
             const supplierPayload = {
               name: purchaseInvoice.supplierName,
               ...(purchaseInvoice.ocrMetadata?.supplierVatNumber && {
                 vat_number: purchaseInvoice.ocrMetadata.supplierVatNumber,
               }),
-              address: {
-                address:
-                  purchaseInvoice.ocrMetadata?.supplierAddress ||
-                  "Non renseignée",
-                postal_code: "00000",
-                city: "Non renseignée",
-                country_alpha2: "FR",
-              },
             };
             const supplierData = await pennylaneRequest(
               apiToken,
@@ -847,7 +844,7 @@ const pennylaneService = {
             supplierId = supplierData?.id || null;
           }
         } catch (err) {
-          logger.warn(
+          logger.error(
             "[PENNYLANE] _findOrCreateSupplier (PI) failed:",
             err.message,
           );
