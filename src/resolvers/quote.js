@@ -1084,7 +1084,8 @@ const quoteResolvers = {
 
     changeQuoteStatus: requireCompanyInfo(
       requireWrite("quotes")(async (_, { id, status }, context) => {
-        const { user, workspaceId } = context;
+        const { user } = context;
+        const workspaceId = context.workspaceId || context.organizationId;
         // ✅ FIX: Utiliser workspaceId au lieu de createdBy
         const quote = await Quote.findOne({
           _id: id,
