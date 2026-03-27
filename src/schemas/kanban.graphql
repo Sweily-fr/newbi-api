@@ -17,6 +17,10 @@ type Board {
   priority: String
   dueDate: DateTime
   boardMembers: [String]
+  category: String
+  emoji: String
+  color: String
+  isFavorite: Boolean
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -145,6 +149,8 @@ input CreateBoardInput {
   title: String!
   description: String
   clientId: ID
+  category: String
+  color: String
 }
 
 input UpdateBoardInput {
@@ -155,6 +161,9 @@ input UpdateBoardInput {
   priority: String
   dueDate: DateTime
   boardMembers: [String]
+  category: String
+  emoji: String
+  color: String
 }
 
 input CreateColumnInput {
@@ -277,7 +286,8 @@ type Mutation {
   createBoard(input: CreateBoardInput!, workspaceId: ID): Board!
   updateBoard(input: UpdateBoardInput!, workspaceId: ID): Board!
   deleteBoard(id: ID!, workspaceId: ID): Boolean!
-  
+  toggleBoardFavorite(boardId: ID!, workspaceId: ID): Board!
+
   createColumn(input: CreateColumnInput!, workspaceId: ID): Column!
   updateColumn(input: UpdateColumnInput!, workspaceId: ID): Column!
   deleteColumn(id: ID!, workspaceId: ID): Boolean!

@@ -1047,6 +1047,31 @@ const resolvers = {
       },
     ),
 
+    toggleBoardFavorite: withWorkspace(
+      async (
+        _,
+        { boardId, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const board = await Board.findOne({
+          _id: boardId,
+          workspaceId: finalWorkspaceId,
+        });
+        if (!board) throw new Error("Board not found");
+
+        const favs = board.favoritedBy || [];
+        const isFav = favs.includes(user.id);
+        if (isFav) {
+          board.favoritedBy = favs.filter((uid) => uid !== user.id);
+        } else {
+          board.favoritedBy = [...favs, user.id];
+        }
+        await board.save();
+        return board;
+      },
+    ),
+
     // Column mutations
     createColumn: withWorkspace(
       async (
@@ -3115,6 +3140,10 @@ const resolvers = {
   },
 
   Board: {
+    isFavorite: (board, _, { user }) => {
+      if (!user) return false;
+      return (board.favoritedBy || []).includes(user.id);
+    },
     columns: async (board, _, { user }) => {
       if (!user) throw new AuthenticationError("Not authenticated");
       return await Column.find({
