@@ -26,7 +26,7 @@ const fileSchema = new mongoose.Schema(
     ocrProcessed: { type: Boolean, default: false },
     ocrData: { type: mongoose.Schema.Types.Mixed, default: null },
   },
-  { _id: true, timestamps: true }
+  { _id: true, timestamps: true },
 );
 
 const ocrMetadataSchema = new mongoose.Schema(
@@ -48,7 +48,7 @@ const ocrMetadataSchema = new mongoose.Schema(
     confidenceScore: { type: Number, min: 0, max: 1 },
     rawExtractedText: { type: String },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const PURCHASE_INVOICE_STATUS = {
@@ -225,6 +225,18 @@ const purchaseInvoiceSchema = new mongoose.Schema(
     archivedPdfUrl: {
       type: String,
     },
+    // === PENNYLANE SYNC ===
+    pennylaneId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    pennylaneSyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
+
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
@@ -238,7 +250,7 @@ const purchaseInvoiceSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 purchaseInvoiceSchema.index({ workspaceId: 1, issueDate: -1 });
@@ -247,11 +259,18 @@ purchaseInvoiceSchema.index({ workspaceId: 1, dueDate: 1 });
 purchaseInvoiceSchema.index({ workspaceId: 1, supplierId: 1 });
 purchaseInvoiceSchema.index({ workspaceId: 1, category: 1 });
 purchaseInvoiceSchema.index({ supplierName: "text", invoiceNumber: "text" });
-purchaseInvoiceSchema.index({ workspaceId: 1, superPdpInvoiceId: 1 }, { sparse: true });
+purchaseInvoiceSchema.index(
+  { workspaceId: 1, superPdpInvoiceId: 1 },
+  { sparse: true },
+);
 
 purchaseInvoiceSchema.statics.PURCHASE_INVOICE_STATUS = PURCHASE_INVOICE_STATUS;
-purchaseInvoiceSchema.statics.PURCHASE_INVOICE_CATEGORY = PURCHASE_INVOICE_CATEGORY;
+purchaseInvoiceSchema.statics.PURCHASE_INVOICE_CATEGORY =
+  PURCHASE_INVOICE_CATEGORY;
 purchaseInvoiceSchema.statics.PAYMENT_METHOD = PAYMENT_METHOD;
 
-const PurchaseInvoice = mongoose.model("PurchaseInvoice", purchaseInvoiceSchema);
+const PurchaseInvoice = mongoose.model(
+  "PurchaseInvoice",
+  purchaseInvoiceSchema,
+);
 export default PurchaseInvoice;

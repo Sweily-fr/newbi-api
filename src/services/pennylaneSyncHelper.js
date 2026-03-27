@@ -270,3 +270,93 @@ export async function syncQuoteIfNeeded(quote, workspaceId) {
     logger.error("[PENNYLANE] Erreur auto-sync devis:", error.message);
   }
 }
+
+/**
+ * Sync automatique d'une facture d'achat (PurchaseInvoice) vers Pennylane
+ * Déclenché quand le statut passe à TO_PAY, PAID ou PENDING
+ */
+export async function syncPurchaseInvoiceIfNeeded(
+  purchaseInvoice,
+  workspaceId,
+) {
+  try {
+    logger.info(
+      `[PENNYLANE] syncPurchaseInvoiceIfNeeded appelé — id=${purchaseInvoice?._id}, status=${purchaseInvoice?.status}, workspaceId=${workspaceId}`,
+    );
+
+    if (!purchaseInvoice || !workspaceId) return;
+
+    // Sync pour les statuts validés
+    const syncableStatuses = ["TO_PAY", "PENDING", "PAID", "OVERDUE"];
+    if (!syncableStatuses.includes(purchaseInvoice.status)) return;
+
+    if (purchaseInvoice.pennylaneSyncStatus === "SYNCED") return;
+
+    const orgId = String(workspaceId);
+
+    const account = await PennylaneAccount.findOne({
+      organizationId: orgId,
+      isConnected: true,
+    });
+
+    if (!account) {
+      logger.debug(
+        `[PENNYLANE] syncPurchaseInvoiceIfNeeded: aucun compte Pennylane pour org=${orgId}`,
+      );
+      return;
+    }
+    if (!account.autoSync?.supplierInvoices) {
+      logger.debug(
+        "[PENNYLANE] syncPurchaseInvoiceIfNeeded: autoSync.supplierInvoices désactivé",
+      );
+      return;
+    }
+
+    logger.info(
+      `[PENNYLANE] Auto-sync facture d'achat ${purchaseInvoice.invoiceNumber || purchaseInvoice._id}...`,
+    );
+
+    const result = await pennylaneService.syncPurchaseInvoice(
+      account.apiToken,
+      purchaseInvoice,
+    );
+
+    if (result.success) {
+      const PurchaseInvoice = (await import("../models/PurchaseInvoice.js"))
+        .default;
+      await PurchaseInvoice.updateOne(
+        { _id: purchaseInvoice._id },
+        {
+          $set: {
+            pennylaneSyncStatus: "SYNCED",
+            pennylaneId: result.pennylaneId,
+          },
+        },
+      );
+
+      account.stats.expensesSynced += 1;
+      account.lastSyncAt = new Date();
+      await account.save();
+
+      logger.info(
+        `[PENNYLANE] Auto-sync facture d'achat ${purchaseInvoice.invoiceNumber || purchaseInvoice._id} → OK`,
+      );
+    } else {
+      const PurchaseInvoice = (await import("../models/PurchaseInvoice.js"))
+        .default;
+      await PurchaseInvoice.updateOne(
+        { _id: purchaseInvoice._id },
+        { $set: { pennylaneSyncStatus: "ERROR" } },
+      );
+
+      logger.warn(
+        `[PENNYLANE] Auto-sync facture d'achat ${purchaseInvoice.invoiceNumber || purchaseInvoice._id} → ERREUR: ${result.message}`,
+      );
+    }
+  } catch (error) {
+    logger.error(
+      "[PENNYLANE] Erreur auto-sync facture d'achat:",
+      error.message,
+    );
+  }
+}

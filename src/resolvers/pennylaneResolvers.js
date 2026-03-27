@@ -3,6 +3,7 @@ import PennylaneAccount from "../models/PennylaneAccount.js";
 import Invoice from "../models/Invoice.js";
 import Expense from "../models/Expense.js";
 import Quote from "../models/Quote.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import logger from "../utils/logger.js";
 
 const pennylaneResolvers = {
@@ -432,6 +433,7 @@ const pennylaneResolvers = {
           Invoice,
           Expense,
           Quote,
+          PurchaseInvoice,
         });
 
         return {

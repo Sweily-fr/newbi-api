@@ -777,6 +777,129 @@ const pennylaneService = {
   },
 
   /**
+   * Sync une facture d'achat (PurchaseInvoice) Newbi → Pennylane Supplier Invoice
+   * Endpoint: POST /supplier_invoices/import
+   */
+  async syncPurchaseInvoice(apiToken, purchaseInvoice) {
+    try {
+      // Upload du PDF si disponible
+      let fileAttachmentId = null;
+      if (purchaseInvoice.files && purchaseInvoice.files.length > 0) {
+        const pdfFile =
+          purchaseInvoice.files.find((f) => f.mimetype === "application/pdf") ||
+          purchaseInvoice.files[0];
+
+        if (pdfFile?.url) {
+          const filename = `facture-achat-${purchaseInvoice.invoiceNumber || purchaseInvoice._id}.pdf`;
+          fileAttachmentId = await this.uploadFileAttachment(
+            apiToken,
+            pdfFile.url,
+            filename,
+          );
+        }
+      }
+
+      // Trouver ou créer le supplier
+      let supplierId = null;
+      if (purchaseInvoice.supplierName) {
+        try {
+          const filter = encodeURIComponent(
+            JSON.stringify([
+              {
+                field: "name",
+                operator: "eq",
+                value: purchaseInvoice.supplierName,
+              },
+            ]),
+          );
+          const searchResult = await pennylaneRequest(
+            apiToken,
+            "GET",
+            `/suppliers?filter=${filter}&limit=1`,
+          );
+
+          if (searchResult?.items?.length > 0) {
+            supplierId = searchResult.items[0].id;
+          } else {
+            const supplierPayload = {
+              name: purchaseInvoice.supplierName,
+              ...(purchaseInvoice.ocrMetadata?.supplierVatNumber && {
+                vat_number: purchaseInvoice.ocrMetadata.supplierVatNumber,
+              }),
+            };
+            const supplierData = await pennylaneRequest(
+              apiToken,
+              "POST",
+              "/company_suppliers",
+              supplierPayload,
+            );
+            supplierId = supplierData?.id || null;
+          }
+        } catch (err) {
+          logger.warn(
+            "[PENNYLANE] _findOrCreateSupplier (PI) failed:",
+            err.message,
+          );
+        }
+      }
+
+      const amountHT = purchaseInvoice.amountHT || 0;
+      const amountTVA = purchaseInvoice.amountTVA || 0;
+      const amountTTC = purchaseInvoice.amountTTC || 0;
+      const ref = purchaseInvoice.invoiceNumber || null;
+
+      const payload = {
+        date: formatDate(purchaseInvoice.issueDate),
+        ...(purchaseInvoice.dueDate && {
+          deadline: formatDate(purchaseInvoice.dueDate),
+        }),
+        currency: purchaseInvoice.currency || "EUR",
+        currency_amount_before_tax: String(amountHT.toFixed(2)),
+        currency_amount: String(amountTTC.toFixed(2)),
+        currency_tax: String(amountTVA.toFixed(2)),
+        ...(supplierId && { supplier_id: supplierId }),
+        ...(fileAttachmentId && { file_attachment_id: fileAttachmentId }),
+        ...(ref && { external_reference: ref }),
+        invoice_lines: [
+          {
+            label: purchaseInvoice.supplierName || "Facture d'achat",
+            raw_currency_unit_price: String(amountHT.toFixed(2)),
+            currency_amount: String(amountTTC.toFixed(2)),
+            currency_tax: String(amountTVA.toFixed(2)),
+            quantity: 1,
+            unit: "piece",
+            vat_rate: mapVatRate(purchaseInvoice.vatRate),
+          },
+        ],
+      };
+
+      const data = await pennylaneRequest(
+        apiToken,
+        "POST",
+        "/supplier_invoices/import",
+        payload,
+      );
+
+      return {
+        success: true,
+        pennylaneId: String(data?.id || ""),
+        message: "Facture d'achat synchronisée avec Pennylane",
+      };
+    } catch (error) {
+      if (error.message.includes("already been taken")) {
+        logger.info("[PENNYLANE] Facture d'achat déjà existante sur Pennylane");
+        return {
+          success: true,
+          pennylaneId: "existing",
+          message: "Facture d'achat déjà existante sur Pennylane",
+        };
+      }
+      logger.error("[PENNYLANE] syncPurchaseInvoice failed:", error.message);
+      return { success: false, message: error.message };
+    }
+  },
+
+  /**
    * Sync un produit Newbi → Pennylane Product
    * Endpoint: POST /products
    */
@@ -813,7 +936,7 @@ const pennylaneService = {
   /**
    * Sync complète : factures + dépenses + devis
    */
-  async syncAll(organizationId, { Invoice, Expense, Quote }) {
+  async syncAll(organizationId, { Invoice, Expense, Quote, PurchaseInvoice }) {
     const account = await PennylaneAccount.findOne({ organizationId });
     if (!account || !account.isConnected) {
       return { success: false, message: "Compte Pennylane non connecté" };
@@ -916,6 +1039,36 @@ const pennylaneService = {
             results.quotes.errors++;
             logger.warn(
               `[PENNYLANE] syncAll devis ${quote.prefix || ""}${quote.number || quote._id}: ${result.message}`,
+            );
+          }
+        }
+      }
+
+      // 4. Sync des factures d'achat (PurchaseInvoice)
+      if (account.autoSync.supplierInvoices && PurchaseInvoice) {
+        const purchaseInvoices = await PurchaseInvoice.find({
+          workspaceId: organizationId,
+          status: { $in: ["TO_PAY", "PENDING", "PAID", "OVERDUE"] },
+          pennylaneSyncStatus: { $ne: "SYNCED" },
+        }).limit(50);
+
+        logger.info(
+          `[PENNYLANE] syncAll: ${purchaseInvoices.length} factures d'achat à synchroniser`,
+        );
+
+        for (const pi of purchaseInvoices) {
+          const result = await this.syncPurchaseInvoice(apiToken, pi);
+          if (result.success) {
+            pi.pennylaneSyncStatus = "SYNCED";
+            pi.pennylaneId = result.pennylaneId;
+            await pi.save();
+            results.expenses.synced++;
+          } else {
+            pi.pennylaneSyncStatus = "ERROR";
+            await pi.save();
+            results.expenses.errors++;
+            logger.warn(
+              `[PENNYLANE] syncAll facture d'achat ${pi.invoiceNumber || pi._id}: ${result.message}`,
             );
           }
         }
