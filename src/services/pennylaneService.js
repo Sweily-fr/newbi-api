@@ -737,7 +737,7 @@ const pennylaneService = {
       const data = await pennylaneRequest(
         apiToken,
         "POST",
-        "/company_suppliers",
+        "/suppliers",
         payload,
       );
       return data?.id || null;
@@ -841,7 +841,7 @@ const pennylaneService = {
             const supplierData = await pennylaneRequest(
               apiToken,
               "POST",
-              "/company_suppliers",
+              "/suppliers",
               supplierPayload,
             );
             supplierId = supplierData?.id || null;
@@ -852,6 +852,13 @@ const pennylaneService = {
             err.message,
           );
         }
+      }
+
+      if (!supplierId) {
+        return {
+          success: false,
+          message: "Impossible de créer le fournisseur sur Pennylane",
+        };
       }
 
       const amountHT = purchaseInvoice.amountHT || 0;
@@ -868,7 +875,7 @@ const pennylaneService = {
         currency_amount_before_tax: String(amountHT.toFixed(2)),
         currency_amount: String(amountTTC.toFixed(2)),
         currency_tax: String(amountTVA.toFixed(2)),
-        ...(supplierId && { supplier_id: supplierId }),
+        supplier_id: supplierId,
         ...(fileAttachmentId && { file_attachment_id: fileAttachmentId }),
         ...(ref && { external_reference: ref }),
         invoice_lines: [
