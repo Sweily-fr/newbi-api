@@ -250,6 +250,24 @@ const boardSchema = new mongoose.Schema(
         type: String,
       },
     ],
+    category: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    emoji: {
+      type: String,
+      default: null,
+    },
+    color: {
+      type: String,
+      default: null,
+    },
+    favoritedBy: [
+      {
+        type: String,
+      },
+    ],
   },
   {
     timestamps: true,
