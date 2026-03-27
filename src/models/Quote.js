@@ -304,6 +304,18 @@ const quoteSchema = new mongoose.Schema(
       min: 0,
       max: 100,
     },
+
+    // === PENNYLANE SYNC ===
+    pennylaneId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    pennylaneSyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
   },
   {
     timestamps: true,

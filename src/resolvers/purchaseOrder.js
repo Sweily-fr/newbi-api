@@ -3,6 +3,7 @@ import PurchaseOrder from "../models/PurchaseOrder.js";
 import Quote from "../models/Quote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
+import Client from "../models/Client.js";
 import {
   requireWrite,
   requireRead,
@@ -142,6 +143,38 @@ const purchaseOrderResolvers = {
           address: { street: "", city: "", postalCode: "", country: "France" },
         };
       }
+    },
+    client: async (po) => {
+      // Pour les brouillons, résoudre depuis la collection Client (données à jour)
+      if ((!po.status || po.status === "DRAFT") && po.client?.id) {
+        try {
+          const freshClient = await Client.findById(po.client.id);
+          if (freshClient) {
+            return {
+              id: freshClient._id.toString(),
+              name: freshClient.name,
+              email: freshClient.email,
+              address: freshClient.address,
+              type: freshClient.type,
+              siret: freshClient.siret,
+              vatNumber: freshClient.vatNumber,
+              isInternational: freshClient.isInternational,
+              firstName: freshClient.firstName,
+              lastName: freshClient.lastName,
+              hasDifferentShippingAddress:
+                freshClient.hasDifferentShippingAddress,
+              shippingAddress: freshClient.shippingAddress,
+            };
+          }
+        } catch (error) {
+          console.error(
+            "[PurchaseOrder.client] Erreur résolution dynamique:",
+            error.message,
+          );
+        }
+      }
+      // Pour les documents finalisés ou en fallback, utiliser le snapshot embarqué
+      return po.client;
     },
     createdBy: async (po) => {
       if (!po.createdBy) return null;

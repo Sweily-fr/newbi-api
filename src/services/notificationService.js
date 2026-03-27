@@ -45,7 +45,7 @@ async function isNotificationEnabled(userId, notificationType, channel) {
 
     if (!user) {
       logger.warn(
-        `Utilisateur ${userId} non trouvé pour vérification des préférences`
+        `Utilisateur ${userId} non trouvé pour vérification des préférences`,
       );
       return false;
     }
@@ -62,8 +62,8 @@ async function isNotificationEnabled(userId, notificationType, channel) {
     return defaultNotificationPreferences[notificationType]?.[channel] ?? false;
   } catch (error) {
     logger.error(
-      `Erreur lors de la vérification des préférences de notification:`,
-      error
+      "Erreur lors de la vérification des préférences de notification:",
+      error,
     );
     return false;
   }
@@ -148,7 +148,7 @@ function generatePaymentReceivedHtml({
 
       <!-- Titre -->
       <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
-        Votre paiement a été confirmé
+        Votre facture a été réglée
       </h1>
 
       <!-- Salutation -->
@@ -158,7 +158,7 @@ function generatePaymentReceivedHtml({
 
       <!-- Message -->
       <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
-        Merci pour votre paiement ! La facture <strong style="color: #1a1a1a;">${invoiceNumber}</strong> a été automatiquement marquée comme payée.
+        La facture <strong style="color: #1a1a1a;">${invoiceNumber}</strong> a été automatiquement marquée comme payée.
       </p>
 
       <!-- Détails -->
@@ -198,7 +198,7 @@ function generatePaymentReceivedHtml({
         Votre gestion, simplifiée.
       </p>
       <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
-        Vous recevez cet email suite à votre paiement sur Newbi. • <a href="https://newbi.fr/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+        Vous recevez cet email suite à un règlement sur Newbi. • <a href="https://newbi.fr/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
       </p>
       <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
         <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
@@ -229,12 +229,12 @@ async function sendPaymentReceivedNotification({
     const emailEnabled = await isNotificationEnabled(
       userId,
       "payment_received",
-      "email"
+      "email",
     );
 
     if (!emailEnabled) {
       logger.info(
-        `📧 Notification 'payment_received' désactivée pour l'utilisateur ${userId}`
+        `📧 Notification 'payment_received' désactivée pour l'utilisateur ${userId}`,
       );
       return { success: true, skipped: true, reason: "notification_disabled" };
     }
@@ -254,7 +254,7 @@ async function sendPaymentReceivedNotification({
     const clientName =
       invoice.client?.name || invoice.client?.company || "Client";
     const totalAmount = formatAmount(
-      invoice.finalTotalTTC || invoice.totalTTC || 0
+      invoice.finalTotalTTC || invoice.totalTTC || 0,
     );
     const formattedPaymentDate = formatDate(paymentDate);
     const companyName =
@@ -280,14 +280,14 @@ async function sendPaymentReceivedNotification({
     });
 
     logger.info(
-      `✅ Email 'payment_received' envoyé à ${user.email} pour la facture ${invoiceNumber}`
+      `✅ Email 'payment_received' envoyé à ${user.email} pour la facture ${invoiceNumber}`,
     );
 
     return { success: true, sent: true };
   } catch (error) {
     logger.error(
-      `❌ Erreur lors de l'envoi de la notification 'payment_received':`,
-      error
+      "❌ Erreur lors de l'envoi de la notification 'payment_received':",
+      error,
     );
     return { success: false, error: error.message };
   }
@@ -304,23 +304,23 @@ async function sendInvoiceOverdueNotification({ userId, invoice }) {
     const emailEnabled = await isNotificationEnabled(
       userId,
       "invoice_overdue",
-      "email"
+      "email",
     );
 
     if (!emailEnabled) {
       logger.info(
-        `📧 Notification 'invoice_overdue' désactivée pour l'utilisateur ${userId}`
+        `📧 Notification 'invoice_overdue' désactivée pour l'utilisateur ${userId}`,
       );
       return { success: true, skipped: true, reason: "notification_disabled" };
     }
 
     // TODO: Implémenter le template et l'envoi
-    logger.info(`📧 Notification 'invoice_overdue' à implémenter`);
+    logger.info("📧 Notification 'invoice_overdue' à implémenter");
     return { success: true, skipped: true, reason: "not_implemented" };
   } catch (error) {
     logger.error(
-      `❌ Erreur lors de l'envoi de la notification 'invoice_overdue':`,
-      error
+      "❌ Erreur lors de l'envoi de la notification 'invoice_overdue':",
+      error,
     );
     return { success: false, error: error.message };
   }
@@ -337,23 +337,23 @@ async function sendTrialEndingNotification({ userId, daysRemaining }) {
     const emailEnabled = await isNotificationEnabled(
       userId,
       "trial_ending",
-      "email"
+      "email",
     );
 
     if (!emailEnabled) {
       logger.info(
-        `📧 Notification 'trial_ending' désactivée pour l'utilisateur ${userId}`
+        `📧 Notification 'trial_ending' désactivée pour l'utilisateur ${userId}`,
       );
       return { success: true, skipped: true, reason: "notification_disabled" };
     }
 
     // TODO: Implémenter le template et l'envoi
-    logger.info(`📧 Notification 'trial_ending' à implémenter`);
+    logger.info("📧 Notification 'trial_ending' à implémenter");
     return { success: true, skipped: true, reason: "not_implemented" };
   } catch (error) {
     logger.error(
-      `❌ Erreur lors de l'envoi de la notification 'trial_ending':`,
-      error
+      "❌ Erreur lors de l'envoi de la notification 'trial_ending':",
+      error,
     );
     return { success: false, error: error.message };
   }
@@ -370,23 +370,23 @@ async function sendPaymentFailedNotification({ userId, reason }) {
     const emailEnabled = await isNotificationEnabled(
       userId,
       "payment_failed",
-      "email"
+      "email",
     );
 
     if (!emailEnabled) {
       logger.info(
-        `📧 Notification 'payment_failed' désactivée pour l'utilisateur ${userId}`
+        `📧 Notification 'payment_failed' désactivée pour l'utilisateur ${userId}`,
       );
       return { success: true, skipped: true, reason: "notification_disabled" };
     }
 
     // TODO: Implémenter le template et l'envoi
-    logger.info(`📧 Notification 'payment_failed' à implémenter`);
+    logger.info("📧 Notification 'payment_failed' à implémenter");
     return { success: true, skipped: true, reason: "not_implemented" };
   } catch (error) {
     logger.error(
-      `❌ Erreur lors de l'envoi de la notification 'payment_failed':`,
-      error
+      "❌ Erreur lors de l'envoi de la notification 'payment_failed':",
+      error,
     );
     return { success: false, error: error.message };
   }

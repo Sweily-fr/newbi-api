@@ -2,6 +2,7 @@ import pennylaneService from "../services/pennylaneService.js";
 import PennylaneAccount from "../models/PennylaneAccount.js";
 import Invoice from "../models/Invoice.js";
 import Expense from "../models/Expense.js";
+import Quote from "../models/Quote.js";
 import logger from "../utils/logger.js";
 
 const pennylaneResolvers = {
@@ -11,7 +12,9 @@ const pennylaneResolvers = {
      */
     myPennylaneAccount: async (_, args, { user, organizationId }) => {
       if (!user) {
-        throw new Error("Vous devez être connecté pour accéder à cette ressource");
+        throw new Error(
+          "Vous devez être connecté pour accéder à cette ressource",
+        );
       }
 
       try {
@@ -28,33 +31,10 @@ const pennylaneResolvers = {
     /**
      * Teste la connexion à Pennylane avec un token API (sans sauvegarder)
      */
-    testPennylaneConnection: async (_, { apiToken }, { user, organizationId, userRole }) => {
-      if (!user) {
-        throw new Error("Vous devez être connecté");
-      }
-
-      if (!organizationId) {
-        return { success: false, message: "Aucune organisation active" };
-      }
-
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
-        return {
-          success: false,
-          message: "Seuls les propriétaires et administrateurs peuvent tester la connexion Pennylane",
-        };
-      }
-
-      return pennylaneService.testConnection(apiToken);
-    },
-
-    /**
-     * Connecte Pennylane à l'organisation
-     */
-    connectPennylane: async (
+    testPennylaneConnection: async (
       _,
-      { apiToken, environment },
-      { user, organizationId, userRole }
+      { apiToken },
+      { user, organizationId, userRole },
     ) => {
       if (!user) {
         throw new Error("Vous devez être connecté");
@@ -68,7 +48,36 @@ const pennylaneResolvers = {
       if (normalizedRole !== "owner" && normalizedRole !== "admin") {
         return {
           success: false,
-          message: "Seuls les propriétaires et administrateurs peuvent connecter Pennylane",
+          message:
+            "Seuls les propriétaires et administrateurs peuvent tester la connexion Pennylane",
+        };
+      }
+
+      return pennylaneService.testConnection(apiToken);
+    },
+
+    /**
+     * Connecte Pennylane à l'organisation
+     */
+    connectPennylane: async (
+      _,
+      { apiToken, environment },
+      { user, organizationId, userRole },
+    ) => {
+      if (!user) {
+        throw new Error("Vous devez être connecté");
+      }
+
+      if (!organizationId) {
+        return { success: false, message: "Aucune organisation active" };
+      }
+
+      const normalizedRole = userRole?.toLowerCase();
+      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+        return {
+          success: false,
+          message:
+            "Seuls les propriétaires et administrateurs peuvent connecter Pennylane",
         };
       }
 
@@ -78,7 +87,8 @@ const pennylaneResolvers = {
         if (existing) {
           return {
             success: false,
-            message: "Un compte Pennylane est déjà connecté à cette organisation",
+            message:
+              "Un compte Pennylane est déjà connecté à cette organisation",
             account: existing,
           };
         }
@@ -128,7 +138,11 @@ const pennylaneResolvers = {
     /**
      * Déconnecte Pennylane de l'organisation
      */
-    disconnectPennylane: async (_, args, { user, organizationId, userRole }) => {
+    disconnectPennylane: async (
+      _,
+      args,
+      { user, organizationId, userRole },
+    ) => {
       if (!user) {
         throw new Error("Vous devez être connecté");
       }
@@ -141,7 +155,8 @@ const pennylaneResolvers = {
       if (normalizedRole !== "owner" && normalizedRole !== "admin") {
         return {
           success: false,
-          message: "Seuls les propriétaires et administrateurs peuvent déconnecter Pennylane",
+          message:
+            "Seuls les propriétaires et administrateurs peuvent déconnecter Pennylane",
         };
       }
 
@@ -156,7 +171,9 @@ const pennylaneResolvers = {
 
         await PennylaneAccount.deleteOne({ organizationId });
 
-        logger.info("Pennylane déconnecté pour l'organisation:", { organizationId });
+        logger.info("Pennylane déconnecté pour l'organisation:", {
+          organizationId,
+        });
 
         return {
           success: true,
@@ -177,7 +194,7 @@ const pennylaneResolvers = {
     updatePennylaneAutoSync: async (
       _,
       { autoSync },
-      { user, organizationId, userRole }
+      { user, organizationId, userRole },
     ) => {
       if (!user) {
         throw new Error("Vous devez être connecté");
@@ -191,7 +208,8 @@ const pennylaneResolvers = {
       if (normalizedRole !== "owner" && normalizedRole !== "admin") {
         return {
           success: false,
-          message: "Seuls les propriétaires et administrateurs peuvent modifier ces paramètres",
+          message:
+            "Seuls les propriétaires et administrateurs peuvent modifier ces paramètres",
         };
       }
 
@@ -204,9 +222,11 @@ const pennylaneResolvers = {
           };
         }
 
-        if (autoSync.invoices !== undefined) account.autoSync.invoices = autoSync.invoices;
-        if (autoSync.expenses !== undefined) account.autoSync.expenses = autoSync.expenses;
-        if (autoSync.clients !== undefined) account.autoSync.clients = autoSync.clients;
+        const fields = ["invoices", "supplierInvoices", "quotes"];
+        for (const field of fields) {
+          if (autoSync[field] !== undefined)
+            account.autoSync[field] = autoSync[field];
+        }
 
         await account.save();
 
@@ -227,7 +247,11 @@ const pennylaneResolvers = {
     /**
      * Synchronise une facture spécifique vers Pennylane
      */
-    syncInvoiceToPennylane: async (_, { invoiceId }, { user, organizationId, userRole }) => {
+    syncInvoiceToPennylane: async (
+      _,
+      { invoiceId },
+      { user, organizationId, userRole },
+    ) => {
       if (!user) {
         throw new Error("Vous devez être connecté");
       }
@@ -253,7 +277,7 @@ const pennylaneResolvers = {
 
         const result = await pennylaneService.syncCustomerInvoice(
           account.apiToken,
-          invoice
+          invoice,
         );
 
         if (result.success) {
@@ -278,7 +302,11 @@ const pennylaneResolvers = {
     /**
      * Synchronise une dépense spécifique vers Pennylane
      */
-    syncExpenseToPennylane: async (_, { expenseId }, { user, organizationId, userRole }) => {
+    syncExpenseToPennylane: async (
+      _,
+      { expenseId },
+      { user, organizationId, userRole },
+    ) => {
       if (!user) {
         throw new Error("Vous devez être connecté");
       }
@@ -304,7 +332,7 @@ const pennylaneResolvers = {
 
         const result = await pennylaneService.syncSupplierInvoice(
           account.apiToken,
-          expense
+          expense,
         );
 
         if (result.success) {
@@ -327,6 +355,58 @@ const pennylaneResolvers = {
     },
 
     /**
+     * Synchronise un devis spécifique vers Pennylane
+     */
+    syncQuoteToPennylane: async (
+      _,
+      { quoteId },
+      { user, organizationId, userRole },
+    ) => {
+      if (!user) {
+        throw new Error("Vous devez être connecté");
+      }
+
+      if (!organizationId) {
+        return { success: false, message: "Aucune organisation active" };
+      }
+
+      try {
+        const account = await PennylaneAccount.findOne({ organizationId });
+        if (!account || !account.isConnected) {
+          return { success: false, message: "Pennylane n'est pas connecté" };
+        }
+
+        const quote = await Quote.findOne({
+          _id: quoteId,
+          workspaceId: organizationId,
+        });
+
+        if (!quote) {
+          return { success: false, message: "Devis non trouvé" };
+        }
+
+        const result = await pennylaneService.syncQuote(
+          account.apiToken,
+          quote,
+        );
+
+        if (result.success) {
+          quote.pennylaneSyncStatus = "SYNCED";
+          quote.pennylaneId = result.pennylaneId;
+          await quote.save();
+        } else {
+          quote.pennylaneSyncStatus = "ERROR";
+          await quote.save();
+        }
+
+        return result;
+      } catch (error) {
+        logger.error("Erreur sync devis Pennylane:", error);
+        return { success: false, message: error.message };
+      }
+    },
+
+    /**
      * Lance une synchronisation complète vers Pennylane
      */
     syncAllToPennylane: async (_, args, { user, organizationId, userRole }) => {
@@ -342,7 +422,8 @@ const pennylaneResolvers = {
       if (normalizedRole !== "owner" && normalizedRole !== "admin") {
         return {
           success: false,
-          message: "Seuls les propriétaires et administrateurs peuvent lancer une synchronisation complète",
+          message:
+            "Seuls les propriétaires et administrateurs peuvent lancer une synchronisation complète",
         };
       }
 
@@ -350,6 +431,7 @@ const pennylaneResolvers = {
         const result = await pennylaneService.syncAll(organizationId, {
           Invoice,
           Expense,
+          Quote,
         });
 
         return {
@@ -359,10 +441,10 @@ const pennylaneResolvers = {
           invoicesErrors: result.results?.invoices?.errors || 0,
           expensesSynced: result.results?.expenses?.synced || 0,
           expensesErrors: result.results?.expenses?.errors || 0,
-          clientsSynced: result.results?.clients?.synced || 0,
-          clientsErrors: result.results?.clients?.errors || 0,
-          productsSynced: result.results?.products?.synced || 0,
-          productsErrors: result.results?.products?.errors || 0,
+          clientsSynced: 0,
+          clientsErrors: 0,
+          productsSynced: 0,
+          productsErrors: 0,
         };
       } catch (error) {
         logger.error("Erreur syncAll Pennylane:", error);

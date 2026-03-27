@@ -233,6 +233,41 @@ const invoiceResolvers = {
         };
       }
     },
+    client: async (invoice) => {
+      // Pour les brouillons, résoudre depuis la collection Client (données à jour)
+      if (
+        (!invoice.status || invoice.status === "DRAFT") &&
+        invoice.client?.id
+      ) {
+        try {
+          const freshClient = await Client.findById(invoice.client.id);
+          if (freshClient) {
+            return {
+              id: freshClient._id.toString(),
+              name: freshClient.name,
+              email: freshClient.email,
+              address: freshClient.address,
+              type: freshClient.type,
+              siret: freshClient.siret,
+              vatNumber: freshClient.vatNumber,
+              isInternational: freshClient.isInternational,
+              firstName: freshClient.firstName,
+              lastName: freshClient.lastName,
+              hasDifferentShippingAddress:
+                freshClient.hasDifferentShippingAddress,
+              shippingAddress: freshClient.shippingAddress,
+            };
+          }
+        } catch (error) {
+          console.error(
+            "[Invoice.client] Erreur résolution dynamique:",
+            error.message,
+          );
+        }
+      }
+      // Pour les documents finalisés ou en fallback, utiliser le snapshot embarqué
+      return invoice.client;
+    },
   },
 
   Query: {
@@ -2098,10 +2133,11 @@ const invoiceResolvers = {
             );
         }
 
-        // Sync Pennylane (fire-and-forget)
-        syncInvoiceIfNeeded(invoice, workspaceId).catch((err) =>
-          console.error("Erreur sync Pennylane:", err),
-        );
+        // Sync Pennylane (fire-and-forget) — utiliser organizationId du header pour matcher PennylaneAccount
+        syncInvoiceIfNeeded(
+          invoice,
+          context.organizationId || workspaceId,
+        ).catch((err) => console.error("Erreur sync Pennylane:", err));
 
         return await invoice.populate("createdBy");
       },
@@ -2268,10 +2304,11 @@ const invoiceResolvers = {
             console.error("Erreur automatisation documents (paid):", err),
           );
 
-        // Sync Pennylane (fire-and-forget)
-        syncInvoiceIfNeeded(invoice, workspaceId).catch((err) =>
-          console.error("Erreur sync Pennylane (paid):", err),
-        );
+        // Sync Pennylane (fire-and-forget) — utiliser organizationId du header pour matcher PennylaneAccount
+        syncInvoiceIfNeeded(
+          invoice,
+          context.organizationId || workspaceId,
+        ).catch((err) => console.error("Erreur sync Pennylane (paid):", err));
 
         return await invoice.populate("createdBy");
       },

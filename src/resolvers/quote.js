@@ -29,6 +29,7 @@ import {
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 const calculateQuoteTotals = (
@@ -154,6 +155,38 @@ const quoteResolvers = {
           address: { street: "", city: "", postalCode: "", country: "France" },
         };
       }
+    },
+    client: async (quote) => {
+      // Pour les brouillons, résoudre depuis la collection Client (données à jour)
+      if ((!quote.status || quote.status === "DRAFT") && quote.client?.id) {
+        try {
+          const freshClient = await Client.findById(quote.client.id);
+          if (freshClient) {
+            return {
+              id: freshClient._id.toString(),
+              name: freshClient.name,
+              email: freshClient.email,
+              address: freshClient.address,
+              type: freshClient.type,
+              siret: freshClient.siret,
+              vatNumber: freshClient.vatNumber,
+              isInternational: freshClient.isInternational,
+              firstName: freshClient.firstName,
+              lastName: freshClient.lastName,
+              hasDifferentShippingAddress:
+                freshClient.hasDifferentShippingAddress,
+              shippingAddress: freshClient.shippingAddress,
+            };
+          }
+        } catch (error) {
+          console.error(
+            "[Quote.client] Erreur résolution dynamique:",
+            error.message,
+          );
+        }
+      }
+      // Pour les documents finalisés ou en fallback, utiliser le snapshot embarqué
+      return quote.client;
     },
     createdBy: async (quote) => {
       if (!quote.createdBy) return null;
@@ -1280,6 +1313,13 @@ const quoteResolvers = {
             .catch((err) =>
               console.error("Erreur automatisation documents (devis):", err),
             );
+        }
+
+        // Sync Pennylane (fire-and-forget) — devis accepté → Pennylane Quotes
+        if (status === "COMPLETED") {
+          syncQuoteIfNeeded(quote, context.organizationId || workspaceId).catch(
+            (err) => console.error("Erreur sync Pennylane devis:", err),
+          );
         }
 
         return await quote.populate("createdBy");

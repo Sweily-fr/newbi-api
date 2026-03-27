@@ -2,29 +2,73 @@ import logger from "../utils/logger.js";
 import PennylaneAccount from "../models/PennylaneAccount.js";
 
 const PENNYLANE_API_BASE = "https://app.pennylane.com/api/external/v2";
-const RATE_LIMIT_DELAY = 5000; // 5s on 429
 
 /**
  * Mapping des taux de TVA Newbi → Pennylane
+ * Ref: skill reference/enums.md
  */
 const VAT_RATE_MAP = {
   20: "FR_200",
   10: "FR_100",
-  5.5: "FR_055",
-  2.1: "FR_021",
+  5.5: "FR_55",
+  2.1: "FR_21",
   0: "exempt",
 };
 
 function mapVatRate(rate) {
   if (rate == null || rate === 0) return "exempt";
   const key = parseFloat(rate);
-  return VAT_RATE_MAP[key] || `FR_${String(Math.round(key * 10)).padStart(3, "0")}`;
+  return VAT_RATE_MAP[key] || "FR_200";
 }
 
 /**
- * Appel HTTP vers l'API Pennylane avec gestion du rate limit
+ * Mapping des unités Newbi → Pennylane
+ * Pennylane accepte: piece, hour, day, meter, square_meter, cubic_meter, kilogram, liter, package
  */
-async function pennylaneRequest(apiToken, method, endpoint, body = null, retries = 2) {
+const UNIT_MAP = {
+  "": "piece",
+  unité: "piece",
+  unite: "piece",
+  pièce: "piece",
+  piece: "piece",
+  heure: "hour",
+  h: "hour",
+  hour: "hour",
+  jour: "day",
+  j: "day",
+  day: "day",
+  mètre: "meter",
+  metre: "meter",
+  m: "meter",
+  "m²": "square_meter",
+  m2: "square_meter",
+  "m³": "cubic_meter",
+  m3: "cubic_meter",
+  kg: "kilogram",
+  kilogramme: "kilogram",
+  litre: "liter",
+  l: "liter",
+  lot: "package",
+  forfait: "package",
+  package: "package",
+};
+
+function mapUnit(unit) {
+  if (!unit) return "piece";
+  const normalized = unit.toLowerCase().trim();
+  return UNIT_MAP[normalized] || "piece";
+}
+
+/**
+ * Appel HTTP vers l'API Pennylane avec gestion du rate limit et retry sur 500
+ */
+async function pennylaneRequest(
+  apiToken,
+  method,
+  endpoint,
+  body = null,
+  retries = 3,
+) {
   const url = `${PENNYLANE_API_BASE}${endpoint}`;
   const headers = {
     Authorization: `Bearer ${apiToken}`,
@@ -42,11 +86,20 @@ async function pennylaneRequest(apiToken, method, endpoint, body = null, retries
 
   const response = await fetch(url, options);
 
-  // Rate limit — retry avec backoff
+  // Rate limit (429) — retry avec backoff
   if (response.status === 429 && retries > 0) {
     const retryAfter = parseInt(response.headers.get("retry-after") || "5", 10);
-    logger.warn(`Pennylane rate limit hit, retrying in ${retryAfter}s...`);
+    logger.warn(`[PENNYLANE] Rate limit 429, retry in ${retryAfter}s...`);
     await new Promise((r) => setTimeout(r, retryAfter * 1000));
+    return pennylaneRequest(apiToken, method, endpoint, body, retries - 1);
+  }
+
+  // Server error (500) — retry automatique (API Pennylane peut avoir des erreurs transitoires)
+  if (response.status === 500 && retries > 0) {
+    logger.warn(
+      `[PENNYLANE] Server error 500, retry in 1s... (${retries} left)`,
+    );
+    await new Promise((r) => setTimeout(r, 1000));
     return pennylaneRequest(apiToken, method, endpoint, body, retries - 1);
   }
 
@@ -61,21 +114,72 @@ async function pennylaneRequest(apiToken, method, endpoint, body = null, retries
   return response.json();
 }
 
+/**
+ * Formate une date en YYYY-MM-DD pour l'API Pennylane
+ */
+function formatDate(date) {
+  if (!date) return new Date().toISOString().split("T")[0];
+  const d = new Date(date);
+  return d.toISOString().split("T")[0];
+}
+
+/**
+ * Calcule le HT d'une ligne de facture (même logique que calculateInvoiceTotals dans le resolver)
+ * Tient compte de: quantity, unitPrice, progressPercentage, item discount
+ */
+function computeItemHT(item) {
+  const quantity = item.quantity || 0;
+  const unitPrice = item.unitPrice || 0;
+  let itemHT = quantity * unitPrice;
+
+  // Avancement (factures de situation)
+  const progress =
+    item.progressPercentage != null ? item.progressPercentage : 100;
+  itemHT = itemHT * (progress / 100);
+
+  // Remise par ligne
+  const discount = item.discount || 0;
+  if (discount > 0) {
+    const discountType = item.discountType || "PERCENTAGE";
+    if (discountType === "PERCENTAGE") {
+      itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
+    } else {
+      itemHT = Math.max(0, itemHT - discount);
+    }
+  }
+
+  return itemHT;
+}
+
 const pennylaneService = {
   /**
    * Teste la connexion avec un token API
+   * Endpoint: GET /me
    */
   async testConnection(apiToken) {
     try {
       const data = await pennylaneRequest(apiToken, "GET", "/me");
+
+      // Pennylane peut retourner 200 même si auth échoue — vérifier le body
+      if (data?.status === 401 || data?.error) {
+        return {
+          success: false,
+          message: `Échec de l'authentification: ${data.error || "Token invalide"}`,
+        };
+      }
+
       return {
         success: true,
-        companyName: data?.company?.name || null,
-        companyId: data?.company?.id ? String(data.company.id) : null,
+        companyName: data?.company?.name || data?.current_company?.name || null,
+        companyId: data?.company?.id
+          ? String(data.company.id)
+          : data?.current_company?.id
+            ? String(data.current_company.id)
+            : null,
         message: "Connexion à Pennylane réussie",
       };
     } catch (error) {
-      logger.error("Pennylane testConnection failed:", error.message);
+      logger.error("[PENNYLANE] testConnection failed:", error.message);
       return {
         success: false,
         message: `Échec de la connexion à Pennylane: ${error.message}`,
@@ -85,179 +189,480 @@ const pennylaneService = {
 
   /**
    * Sync un client Newbi → Pennylane Customer
+   * Endpoint: POST /company_customers ou POST /individual_customers
    */
   async syncCustomer(apiToken, client) {
     try {
-      const payload = {
-        customer: {
-          name: client.name,
+      const isIndividual = client.type === "INDIVIDUAL";
+      const endpoint = isIndividual
+        ? "/individual_customers"
+        : "/company_customers";
+
+      let payload;
+      if (isIndividual) {
+        payload = {
+          first_name: client.firstName || "",
+          last_name: client.lastName || client.name || "",
+          ...(client.email && { emails: [client.email] }),
+          ...(client.phone && { phone: client.phone }),
+        };
+      } else {
+        payload = {
+          name: client.name || "Client inconnu",
           ...(client.email && { emails: [client.email] }),
           ...(client.phone && { phone: client.phone }),
           ...(client.vatNumber && { vat_number: client.vatNumber }),
-          ...(client.siret && { reg_no: client.siret }),
-          ...(client.address && {
-            address: client.address.street || "",
-            city: client.address.city || "",
-            postal_code: client.address.postalCode || "",
-            country_alpha2: client.address.country?.toUpperCase()?.slice(0, 2) || "FR",
-          }),
-        },
+          ...(client.siret && { external_reference: client.siret }),
+        };
+      }
+
+      // Adresse de facturation (obligatoire pour Pennylane)
+      const addr = client.address;
+      payload.billing_address = {
+        address: addr?.street || "Non renseignée",
+        postal_code: addr?.postalCode || "00000",
+        city: addr?.city || "Non renseignée",
+        country_alpha2: mapCountryToAlpha2(addr?.country) || "FR",
       };
 
-      const data = await pennylaneRequest(apiToken, "POST", "/customers", payload);
+      const data = await pennylaneRequest(apiToken, "POST", endpoint, payload);
       return {
         success: true,
-        pennylaneId: String(data?.customer?.source_id || data?.customer?.id || ""),
+        pennylaneId: String(data?.id || ""),
         message: "Client synchronisé avec Pennylane",
       };
     } catch (error) {
-      logger.error("Pennylane syncCustomer failed:", error.message);
+      logger.error("[PENNYLANE] syncCustomer failed:", error.message);
       return { success: false, message: error.message };
     }
   },
 
   /**
    * Sync une facture client Newbi → Pennylane Customer Invoice
+   * Endpoint: POST /customer_invoices
+   *
+   * Utilise les totaux pré-calculés (finalTotalHT, finalTotalVAT, finalTotalTTC)
+   * qui tiennent déjà compte des remises ligne, remise globale, shipping, etc.
+   *
+   * Stratégie: on envoie chaque ligne avec son HT réel (après remise ligne + avancement),
+   * puis si remise globale, on ajoute une ligne négative de remise.
+   * Pennylane calcule les totaux lui-même à partir des lignes.
    */
   async syncCustomerInvoice(apiToken, invoice) {
     try {
-      // Construire les lignes de facture
-      const invoiceLines = (invoice.items || []).map((item) => ({
-        label: item.description || item.name || "Article",
-        quantity: item.quantity || 1,
-        ...(item.unit && { unit: item.unit }),
-        raw_currency_unit_price: String(item.unitPrice || item.price || 0),
-        vat_rate: mapVatRate(item.vatRate || item.tva),
-        ...(item.accountingAccount && { plan_item_number: item.accountingAccount }),
-      }));
-
-      if (invoiceLines.length === 0) {
-        return { success: false, message: "La facture n'a aucun article à synchroniser" };
+      const items = invoice.items || [];
+      if (items.length === 0) {
+        return {
+          success: false,
+          message: "La facture n'a aucun article à synchroniser",
+        };
       }
 
+      const isReverseCharge = invoice.isReverseCharge || false;
+
+      // Construire les lignes — chaque ligne = HT réel après remise ligne + avancement
+      const invoiceLines = items.map((item) => {
+        const itemHT = computeItemHT(item);
+        // On envoie quantity=1 avec le HT total comme prix unitaire
+        // Ceci assure que le montant Pennylane = le montant sur notre PDF
+        return {
+          label: item.description || "Article",
+          quantity: 1,
+          unit: mapUnit(item.unit),
+          raw_currency_unit_price: String(itemHT.toFixed(2)),
+          vat_rate: isReverseCharge ? "exempt" : mapVatRate(item.vatRate),
+        };
+      });
+
+      // Frais de livraison
+      if (
+        invoice.shipping?.billShipping &&
+        invoice.shipping.shippingAmountHT > 0
+      ) {
+        invoiceLines.push({
+          label: "Frais de livraison",
+          quantity: 1,
+          unit: "piece",
+          raw_currency_unit_price: String(
+            (invoice.shipping.shippingAmountHT || 0).toFixed(2),
+          ),
+          vat_rate: isReverseCharge
+            ? "exempt"
+            : mapVatRate(invoice.shipping.shippingVatRate || 20),
+        });
+      }
+
+      // Remise globale → ligne négative
+      if (invoice.discount && invoice.discount > 0) {
+        // Calculer le sous-total HT (items + shipping) avant remise globale
+        const subtotalHT = invoice.totalHT || 0;
+        let discountAmount;
+        if (invoice.discountType === "PERCENTAGE") {
+          discountAmount = (subtotalHT * Math.min(invoice.discount, 100)) / 100;
+        } else {
+          discountAmount = invoice.discount;
+        }
+
+        if (discountAmount > 0) {
+          // Déterminer le taux TVA principal (le plus courant dans les items)
+          const mainVatRate = items.length > 0 ? items[0].vatRate || 20 : 20;
+          invoiceLines.push({
+            label:
+              invoice.discountType === "PERCENTAGE"
+                ? `Remise globale (-${invoice.discount}%)`
+                : "Remise globale",
+            quantity: 1,
+            unit: "piece",
+            raw_currency_unit_price: String((-discountAmount).toFixed(2)),
+            vat_rate: isReverseCharge ? "exempt" : mapVatRate(mainVatRate),
+          });
+        }
+      }
+
+      // Trouver ou créer le customer Pennylane
+      let customerId = null;
+      if (invoice.client) {
+        customerId = await this._findOrCreateCustomer(apiToken, invoice.client);
+      }
+
+      if (!customerId) {
+        return {
+          success: false,
+          message: "Impossible de trouver ou créer le client dans Pennylane",
+        };
+      }
+
+      const ref = `${invoice.prefix || ""}${invoice.number || ""}`.trim();
+
       const payload = {
-        create_customer: true,
-        create_products: true,
-        invoice: {
-          date: formatDate(invoice.issueDate),
-          deadline: formatDate(invoice.dueDate),
-          draft: false,
-          currency: invoice.currency || "EUR",
-          invoice_lines: invoiceLines,
-          ...(invoice.pennylaneCustomerId && {
-            customer_id: invoice.pennylaneCustomerId,
-          }),
-          ...(!invoice.pennylaneCustomerId && invoice.client && {
-            customer: {
-              name: invoice.client.name || "Client inconnu",
-              ...(invoice.client.email && { emails: [invoice.client.email] }),
-              ...(invoice.client.vatNumber && { vat_number: invoice.client.vatNumber }),
-              ...(invoice.client.siret && { reg_no: invoice.client.siret }),
-            },
-          }),
-          ...(invoice.number && {
-            external_reference: `${invoice.prefix || ""}${invoice.number}`,
-          }),
-        },
+        customer_id: customerId,
+        date: formatDate(invoice.issueDate),
+        deadline: formatDate(invoice.dueDate),
+        draft: true,
+        currency: invoice.currency || "EUR",
+        invoice_lines: invoiceLines,
       };
+
+      if (ref) {
+        payload.external_reference = ref;
+        payload.pdf_invoice_subject = `Facture ${ref}`;
+      }
+
+      // Mention spéciale pour auto-liquidation
+      if (isReverseCharge) {
+        payload.special_mention =
+          "Autoliquidation - TVA due par le preneur (art. 283-2 du CGI)";
+      }
 
       const data = await pennylaneRequest(
         apiToken,
         "POST",
         "/customer_invoices",
-        payload
+        payload,
       );
 
       return {
         success: true,
-        pennylaneId: String(data?.invoice?.id || data?.invoice?.source_id || ""),
+        pennylaneId: String(data?.id || ""),
         message: "Facture synchronisée avec Pennylane",
       };
     } catch (error) {
-      logger.error("Pennylane syncCustomerInvoice failed:", error.message);
+      // Si le document existe déjà sur Pennylane, on considère comme succès
+      if (error.message.includes("already been taken")) {
+        logger.info("[PENNYLANE] Facture déjà existante sur Pennylane");
+        return {
+          success: true,
+          pennylaneId: "existing",
+          message: "Facture déjà existante sur Pennylane",
+        };
+      }
+      logger.error("[PENNYLANE] syncCustomerInvoice failed:", error.message);
       return { success: false, message: error.message };
     }
   },
 
   /**
-   * Sync une dépense Newbi → Pennylane Supplier Invoice (via PDF upload)
+   * Cherche un customer Pennylane par nom, ou le crée s'il n'existe pas
    */
-  async syncSupplierInvoice(apiToken, expense) {
+  async _findOrCreateCustomer(apiToken, client) {
     try {
-      // Si la dépense a un fichier PDF, on l'upload d'abord
-      let fileAttachmentId = null;
-      if (expense.files && expense.files.length > 0) {
-        const pdfFile = expense.files.find(
-          (f) => f.mimetype === "application/pdf"
-        ) || expense.files[0];
+      const searchName =
+        client.name ||
+        `${client.firstName || ""} ${client.lastName || ""}`.trim();
+      if (!searchName) return null;
 
-        if (pdfFile?.url) {
-          fileAttachmentId = await this.uploadFileAttachment(apiToken, pdfFile.url);
+      // Chercher par nom
+      const filter = encodeURIComponent(
+        JSON.stringify([{ field: "name", operator: "eq", value: searchName }]),
+      );
+      const searchResult = await pennylaneRequest(
+        apiToken,
+        "GET",
+        `/customers?filter=${filter}&limit=1`,
+      );
+
+      if (searchResult?.items?.length > 0) {
+        return searchResult.items[0].id;
+      }
+
+      // Pas trouvé → créer
+      const result = await this.syncCustomer(apiToken, client);
+      if (result.success && result.pennylaneId) {
+        return parseInt(result.pennylaneId, 10) || null;
+      }
+
+      return null;
+    } catch (error) {
+      logger.warn("[PENNYLANE] _findOrCreateCustomer failed:", error.message);
+      return null;
+    }
+  },
+
+  /**
+   * Sync un devis accepté Newbi → Pennylane Quote
+   * Endpoint: POST /quotes
+   */
+  async syncQuote(apiToken, quote) {
+    try {
+      const items = quote.items || [];
+      if (items.length === 0) {
+        return {
+          success: false,
+          message: "Le devis n'a aucun article à synchroniser",
+        };
+      }
+
+      const isReverseCharge = quote.isReverseCharge || false;
+
+      // Construire les lignes
+      const quoteLines = items.map((item) => {
+        const itemHT = computeItemHT(item);
+        return {
+          label: item.description || "Article",
+          quantity: 1,
+          unit: mapUnit(item.unit),
+          raw_currency_unit_price: String(itemHT.toFixed(2)),
+          vat_rate: isReverseCharge ? "exempt" : mapVatRate(item.vatRate),
+        };
+      });
+
+      // Frais de livraison
+      if (quote.shipping?.billShipping && quote.shipping.shippingAmountHT > 0) {
+        quoteLines.push({
+          label: "Frais de livraison",
+          quantity: 1,
+          unit: "piece",
+          raw_currency_unit_price: String(
+            (quote.shipping.shippingAmountHT || 0).toFixed(2),
+          ),
+          vat_rate: isReverseCharge
+            ? "exempt"
+            : mapVatRate(quote.shipping.shippingVatRate || 20),
+        });
+      }
+
+      // Remise globale → ligne négative
+      if (quote.discount && quote.discount > 0) {
+        const subtotalHT = quote.totalHT || 0;
+        let discountAmount;
+        if (quote.discountType === "PERCENTAGE") {
+          discountAmount = (subtotalHT * Math.min(quote.discount, 100)) / 100;
+        } else {
+          discountAmount = quote.discount;
+        }
+        if (discountAmount > 0) {
+          const mainVatRate = items.length > 0 ? items[0].vatRate || 20 : 20;
+          quoteLines.push({
+            label:
+              quote.discountType === "PERCENTAGE"
+                ? `Remise globale (-${quote.discount}%)`
+                : "Remise globale",
+            quantity: 1,
+            unit: "piece",
+            raw_currency_unit_price: String((-discountAmount).toFixed(2)),
+            vat_rate: isReverseCharge ? "exempt" : mapVatRate(mainVatRate),
+          });
         }
       }
 
+      // Trouver ou créer le customer
+      let customerId = null;
+      if (quote.client) {
+        customerId = await this._findOrCreateCustomer(apiToken, quote.client);
+      }
+      if (!customerId) {
+        return {
+          success: false,
+          message: "Impossible de trouver ou créer le client dans Pennylane",
+        };
+      }
+
+      const ref = `${quote.prefix || ""}${quote.number || ""}`.trim();
+
       const payload = {
-        create_supplier: true,
-        supplier_invoice: {
-          date: formatDate(expense.date),
-          ...(expense.paymentDate && {
-            deadline: formatDate(expense.paymentDate),
-          }),
-          currency: expense.currency || "EUR",
-          currency_amount: String(expense.amount || 0),
-          currency_tax: String(expense.vatAmount || 0),
-          currency_amount_before_tax: String(
-            (expense.amount || 0) - (expense.vatAmount || 0)
-          ),
-          ...(fileAttachmentId && { file_attachment_id: fileAttachmentId }),
-          ...(expense.vendor && {
-            supplier: {
-              name: expense.vendor,
-              ...(expense.vendorVatNumber && {
-                vat_number: expense.vendorVatNumber,
-              }),
-            },
-          }),
-          invoice_lines: [
-            {
-              currency_amount: String(expense.amount || 0),
-              currency_tax: String(expense.vatAmount || 0),
-              vat_rate: mapVatRate(expense.vatRate),
-              label: expense.title || expense.description || "Dépense",
-              ...(expense.accountingAccount && {
-                plan_item_number: expense.accountingAccount,
-              }),
-            },
-          ],
-        },
+        customer_id: customerId,
+        date: formatDate(quote.issueDate),
+        deadline: formatDate(quote.validUntil || quote.dueDate),
+        currency: quote.currency || "EUR",
+        invoice_lines: quoteLines,
       };
 
-      const endpoint = fileAttachmentId
-        ? "/supplier_invoices/import"
-        : "/supplier_invoices";
+      if (ref) {
+        payload.external_reference = ref;
+        payload.pdf_invoice_subject = `Devis ${ref}`;
+      }
 
-      const data = await pennylaneRequest(apiToken, "POST", endpoint, payload);
+      const data = await pennylaneRequest(apiToken, "POST", "/quotes", payload);
 
       return {
         success: true,
-        pennylaneId: String(data?.invoice?.id || data?.invoice?.source_id || ""),
-        message: "Dépense synchronisée avec Pennylane",
+        pennylaneId: String(data?.id || ""),
+        message: "Devis synchronisé avec Pennylane",
       };
     } catch (error) {
-      logger.error("Pennylane syncSupplierInvoice failed:", error.message);
+      if (error.message.includes("already been taken")) {
+        logger.info("[PENNYLANE] Devis déjà existant sur Pennylane");
+        return {
+          success: true,
+          pennylaneId: "existing",
+          message: "Devis déjà existant sur Pennylane",
+        };
+      }
+      logger.error("[PENNYLANE] syncQuote failed:", error.message);
       return { success: false, message: error.message };
     }
   },
 
   /**
-   * Upload un fichier (PDF) vers Pennylane et retourne le file_attachment_id
+   * Sync une dépense Newbi → Pennylane Supplier Invoice
+   * Endpoint: POST /supplier_invoices/import (toujours via import)
+   */
+  async syncSupplierInvoice(apiToken, expense) {
+    try {
+      // Upload du PDF si disponible
+      let fileAttachmentId = null;
+      if (expense.files && expense.files.length > 0) {
+        const pdfFile =
+          expense.files.find((f) => f.mimetype === "application/pdf") ||
+          expense.files[0];
+
+        if (pdfFile?.url) {
+          fileAttachmentId = await this.uploadFileAttachment(
+            apiToken,
+            pdfFile.url,
+          );
+        }
+      }
+
+      // Trouver ou créer le supplier
+      let supplierId = null;
+      if (expense.vendor) {
+        supplierId = await this._findOrCreateSupplier(apiToken, expense);
+      }
+
+      const amountTTC = expense.amount || 0;
+      const amountVAT = expense.vatAmount || 0;
+      const amountHT = amountTTC - amountVAT;
+
+      const payload = {
+        date: formatDate(expense.date),
+        ...(expense.paymentDate && {
+          deadline: formatDate(expense.paymentDate),
+        }),
+        currency: expense.currency || "EUR",
+        ...(supplierId && { supplier_id: supplierId }),
+        ...(fileAttachmentId && { file_attachment_id: fileAttachmentId }),
+        invoice_lines: [
+          {
+            label: expense.title || expense.description || "Dépense",
+            raw_currency_unit_price: String(amountHT.toFixed(2)),
+            quantity: 1,
+            unit: "piece",
+            vat_rate: mapVatRate(expense.vatRate),
+          },
+        ],
+      };
+
+      const data = await pennylaneRequest(
+        apiToken,
+        "POST",
+        "/supplier_invoices/import",
+        payload,
+      );
+
+      return {
+        success: true,
+        pennylaneId: String(data?.id || ""),
+        message: "Dépense synchronisée avec Pennylane",
+      };
+    } catch (error) {
+      if (error.message.includes("already been taken")) {
+        logger.info(
+          "[PENNYLANE] Facture fournisseur déjà existante sur Pennylane",
+        );
+        return {
+          success: true,
+          pennylaneId: "existing",
+          message: "Facture fournisseur déjà existante sur Pennylane",
+        };
+      }
+      logger.error("[PENNYLANE] syncSupplierInvoice failed:", error.message);
+      return { success: false, message: error.message };
+    }
+  },
+
+  /**
+   * Cherche un supplier Pennylane par nom, ou le crée s'il n'existe pas
+   */
+  async _findOrCreateSupplier(apiToken, expense) {
+    try {
+      const name = expense.vendor;
+      if (!name) return null;
+
+      const filter = encodeURIComponent(
+        JSON.stringify([{ field: "name", operator: "eq", value: name }]),
+      );
+      const searchResult = await pennylaneRequest(
+        apiToken,
+        "GET",
+        `/suppliers?filter=${filter}&limit=1`,
+      );
+
+      if (searchResult?.items?.length > 0) {
+        return searchResult.items[0].id;
+      }
+
+      // Créer le supplier
+      const payload = {
+        name,
+        ...(expense.vendorVatNumber && { vat_number: expense.vendorVatNumber }),
+      };
+
+      const data = await pennylaneRequest(
+        apiToken,
+        "POST",
+        "/company_suppliers",
+        payload,
+      );
+      return data?.id || null;
+    } catch (error) {
+      logger.warn("[PENNYLANE] _findOrCreateSupplier failed:", error.message);
+      return null;
+    }
+  },
+
+  /**
+   * Upload un fichier (PDF) vers Pennylane
+   * Endpoint: POST /ledger_attachments (multipart/form-data)
    */
   async uploadFileAttachment(apiToken, fileUrl) {
     try {
       // Télécharger le fichier depuis l'URL (R2/S3)
       const fileResponse = await fetch(fileUrl);
       if (!fileResponse.ok) {
-        throw new Error(`Impossible de télécharger le fichier: ${fileResponse.status}`);
+        throw new Error(
+          `Impossible de télécharger le fichier: ${fileResponse.status}`,
+        );
       }
 
       const blob = await fileResponse.blob();
@@ -267,49 +672,55 @@ const pennylaneService = {
       const data = await pennylaneRequest(
         apiToken,
         "POST",
-        "/file_attachments",
-        formData
+        "/ledger_attachments",
+        formData,
       );
 
-      return data?.file_attachment?.id || null;
+      return data?.id || null;
     } catch (error) {
-      logger.warn("Pennylane uploadFileAttachment failed:", error.message);
+      logger.warn("[PENNYLANE] uploadFileAttachment failed:", error.message);
       return null;
     }
   },
 
   /**
    * Sync un produit Newbi → Pennylane Product
+   * Endpoint: POST /products
    */
   async syncProduct(apiToken, product) {
     try {
       const payload = {
-        product: {
-          label: product.name || product.description || "Produit",
-          ...(product.description && { description: product.description }),
-          unit: product.unit || "piece",
-          price: String(product.price || product.unitPrice || 0),
-          vat_rate: mapVatRate(product.vatRate || product.tva),
-          currency: product.currency || "EUR",
-        },
+        label: product.name || product.description || "Produit",
+        ...(product.description && { description: product.description }),
+        unit: mapUnit(product.unit),
+        raw_currency_unit_price: String(
+          (product.price || product.unitPrice || 0).toFixed(2),
+        ),
+        vat_rate: mapVatRate(product.vatRate || product.tva),
+        currency: product.currency || "EUR",
       };
 
-      const data = await pennylaneRequest(apiToken, "POST", "/products", payload);
+      const data = await pennylaneRequest(
+        apiToken,
+        "POST",
+        "/products",
+        payload,
+      );
       return {
         success: true,
-        pennylaneId: String(data?.product?.source_id || data?.product?.id || ""),
+        pennylaneId: String(data?.id || ""),
         message: "Produit synchronisé avec Pennylane",
       };
     } catch (error) {
-      logger.error("Pennylane syncProduct failed:", error.message);
+      logger.error("[PENNYLANE] syncProduct failed:", error.message);
       return { success: false, message: error.message };
     }
   },
 
   /**
-   * Sync complète : factures + dépenses + clients
+   * Sync complète : factures + dépenses + devis
    */
-  async syncAll(organizationId, { Invoice, Expense, Client, Product }) {
+  async syncAll(organizationId, { Invoice, Expense, Quote }) {
     const account = await PennylaneAccount.findOne({ organizationId });
     if (!account || !account.isConnected) {
       return { success: false, message: "Compte Pennylane non connecté" };
@@ -319,8 +730,7 @@ const pennylaneService = {
     const results = {
       invoices: { synced: 0, errors: 0 },
       expenses: { synced: 0, errors: 0 },
-      clients: { synced: 0, errors: 0 },
-      products: { synced: 0, errors: 0 },
+      quotes: { synced: 0, errors: 0 },
     };
 
     // Mettre à jour le statut
@@ -328,13 +738,17 @@ const pennylaneService = {
     await account.save();
 
     try {
-      // 1. Sync des factures non encore synchronisées
+      // 1. Sync des factures clients
       if (account.autoSync.invoices) {
         const invoices = await Invoice.find({
           workspaceId: organizationId,
-          status: { $in: ["SENT", "PAID", "OVERDUE"] },
+          status: { $in: ["PENDING", "COMPLETED", "OVERDUE"] },
           pennylaneSyncStatus: { $ne: "SYNCED" },
         }).limit(50);
+
+        logger.info(
+          `[PENNYLANE] syncAll: ${invoices.length} factures à synchroniser`,
+        );
 
         for (const invoice of invoices) {
           const result = await this.syncCustomerInvoice(apiToken, invoice);
@@ -347,17 +761,24 @@ const pennylaneService = {
             invoice.pennylaneSyncStatus = "ERROR";
             await invoice.save();
             results.invoices.errors++;
+            logger.warn(
+              `[PENNYLANE] syncAll facture ${invoice.prefix || ""}${invoice.number || invoice._id}: ${result.message}`,
+            );
           }
         }
       }
 
-      // 2. Sync des dépenses approuvées
-      if (account.autoSync.expenses) {
+      // 2. Sync des factures fournisseurs (dépenses)
+      if (account.autoSync.supplierInvoices) {
         const expenses = await Expense.find({
           workspaceId: organizationId,
           status: { $in: ["APPROVED", "PAID"] },
           pennylaneSyncStatus: { $ne: "SYNCED" },
         }).limit(50);
+
+        logger.info(
+          `[PENNYLANE] syncAll: ${expenses.length} dépenses à synchroniser`,
+        );
 
         for (const expense of expenses) {
           const result = await this.syncSupplierInvoice(apiToken, expense);
@@ -370,6 +791,39 @@ const pennylaneService = {
             expense.pennylaneSyncStatus = "ERROR";
             await expense.save();
             results.expenses.errors++;
+            logger.warn(
+              `[PENNYLANE] syncAll dépense ${expense.title || expense._id}: ${result.message}`,
+            );
+          }
+        }
+      }
+
+      // 3. Sync des devis acceptés
+      if (account.autoSync.quotes && Quote) {
+        const quotes = await Quote.find({
+          workspaceId: organizationId,
+          status: "COMPLETED",
+          pennylaneSyncStatus: { $ne: "SYNCED" },
+        }).limit(50);
+
+        logger.info(
+          `[PENNYLANE] syncAll: ${quotes.length} devis à synchroniser`,
+        );
+
+        for (const quote of quotes) {
+          const result = await this.syncQuote(apiToken, quote);
+          if (result.success) {
+            quote.pennylaneSyncStatus = "SYNCED";
+            quote.pennylaneId = result.pennylaneId;
+            await quote.save();
+            results.quotes.synced++;
+          } else {
+            quote.pennylaneSyncStatus = "ERROR";
+            await quote.save();
+            results.quotes.errors++;
+            logger.warn(
+              `[PENNYLANE] syncAll devis ${quote.prefix || ""}${quote.number || quote._id}: ${result.message}`,
+            );
           }
         }
       }
@@ -382,29 +836,68 @@ const pennylaneService = {
       account.stats.expensesSynced += results.expenses.synced;
       await account.save();
 
+      const total =
+        results.invoices.synced +
+        results.expenses.synced +
+        results.quotes.synced;
+      const totalErrors =
+        results.invoices.errors +
+        results.expenses.errors +
+        results.quotes.errors;
+
       return {
         success: true,
         results,
-        message: `Synchronisation terminée: ${results.invoices.synced} factures, ${results.expenses.synced} dépenses`,
+        message: `Synchronisation terminée: ${total} éléments synchronisés${totalErrors > 0 ? `, ${totalErrors} erreurs` : ""}`,
       };
     } catch (error) {
       account.syncStatus = "ERROR";
       account.syncError = error.message;
       await account.save();
 
-      logger.error("Pennylane syncAll failed:", error.message);
+      logger.error("[PENNYLANE] syncAll failed:", error.message);
       return { success: false, message: error.message, results };
     }
   },
 };
 
 /**
- * Formate une date en YYYY-MM-DD pour l'API Pennylane
+ * Convertit un nom de pays en code ISO alpha-2
+ * Gère les cas courants français
  */
-function formatDate(date) {
-  if (!date) return new Date().toISOString().split("T")[0];
-  const d = new Date(date);
-  return d.toISOString().split("T")[0];
+function mapCountryToAlpha2(country) {
+  if (!country) return "FR";
+  const upper = country.toUpperCase().trim();
+  // Déjà un code alpha-2
+  if (upper.length === 2) return upper;
+  const map = {
+    FRANCE: "FR",
+    BELGIQUE: "BE",
+    BELGIUM: "BE",
+    SUISSE: "CH",
+    SWITZERLAND: "CH",
+    LUXEMBOURG: "LU",
+    ALLEMAGNE: "DE",
+    GERMANY: "DE",
+    ESPAGNE: "ES",
+    SPAIN: "ES",
+    ITALIE: "IT",
+    ITALY: "IT",
+    "PAYS-BAS": "NL",
+    NETHERLANDS: "NL",
+    PORTUGAL: "PT",
+    "ROYAUME-UNI": "GB",
+    "UNITED KINGDOM": "GB",
+    MONACO: "MC",
+    CANADA: "CA",
+    "ÉTATS-UNIS": "US",
+    "UNITED STATES": "US",
+    MAROC: "MA",
+    MOROCCO: "MA",
+    TUNISIE: "TN",
+    TUNISIA: "TN",
+  };
+  return map[upper] || "FR";
 }
 
 export default pennylaneService;

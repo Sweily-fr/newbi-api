@@ -477,7 +477,10 @@ const expenseResolvers = {
 
           // Sync Pennylane si le statut a changé vers APPROVED/PAID (fire-and-forget)
           if (input.status && input.status !== expense.status) {
-            syncExpenseIfNeeded(updatedExpense, workspaceId).catch((err) =>
+            syncExpenseIfNeeded(
+              updatedExpense,
+              context.organizationId || workspaceId,
+            ).catch((err) =>
               console.error("Erreur sync Pennylane dépense:", err),
             );
           }
@@ -593,12 +596,24 @@ const expenseResolvers = {
           userRole,
         );
 
+        const oldStatus = expense.status;
         expense.status = status;
         if (status === "PAID" && !expense.paymentDate) {
           expense.paymentDate = new Date();
         }
 
         await expense.save();
+
+        // Sync Pennylane (fire-and-forget)
+        if (status !== oldStatus) {
+          syncExpenseIfNeeded(
+            expense,
+            context.organizationId || workspaceId,
+          ).catch((err) =>
+            console.error("Erreur sync Pennylane dépense:", err),
+          );
+        }
+
         return expense;
       },
     ),
