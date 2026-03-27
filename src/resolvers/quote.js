@@ -547,12 +547,12 @@ const quoteResolvers = {
 
             // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
             // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
+            // On ne filtre PAS par createdBy car l'unicité est par workspace + prefix
             const officialQuotes = await Quote.find(
               {
                 status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
                 prefix, // Filtrage par préfixe
                 workspaceId,
-                createdBy: user.id,
                 // Ne considérer que les numéros sans suffixe
                 number: { $regex: /^\d+$/ },
               },
