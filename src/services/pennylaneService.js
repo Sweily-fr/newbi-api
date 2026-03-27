@@ -361,9 +361,45 @@ const pennylaneService = {
         payload,
       );
 
+      const pennylaneId = String(data?.id || "");
+
+      // Tenter de finaliser la facture (PENDING/COMPLETED/OVERDUE ne sont plus des brouillons)
+      if (data?.id && invoice.status !== "DRAFT") {
+        try {
+          await pennylaneRequest(
+            apiToken,
+            "POST",
+            `/customer_invoices/${data.id}/finalize`,
+          );
+          logger.info(`[PENNYLANE] Facture ${ref} finalisée sur Pennylane`);
+
+          // Si payée dans Newbi, marquer comme payée sur Pennylane
+          if (invoice.status === "COMPLETED") {
+            try {
+              await pennylaneRequest(
+                apiToken,
+                "POST",
+                `/customer_invoices/${data.id}/mark_as_paid`,
+              );
+              logger.info(
+                `[PENNYLANE] Facture ${ref} marquée payée sur Pennylane`,
+              );
+            } catch (paidErr) {
+              logger.debug(
+                `[PENNYLANE] mark_as_paid non disponible: ${paidErr.message}`,
+              );
+            }
+          }
+        } catch (finalizeErr) {
+          logger.debug(
+            `[PENNYLANE] Finalisation non disponible (numérotation non configurée?): ${finalizeErr.message}`,
+          );
+        }
+      }
+
       return {
         success: true,
-        pennylaneId: String(data?.id || ""),
+        pennylaneId,
         message: "Facture synchronisée avec Pennylane",
       };
     } catch (error) {
