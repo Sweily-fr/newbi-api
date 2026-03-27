@@ -319,6 +319,8 @@ const pennylaneService = {
         }
       }
 
+      const ref = `${invoice.prefix || ""}${invoice.number || ""}`.trim();
+
       // Trouver ou créer le customer Pennylane
       let customerId = null;
       if (invoice.client) {
@@ -332,74 +334,119 @@ const pennylaneService = {
         };
       }
 
-      const ref = `${invoice.prefix || ""}${invoice.number || ""}`.trim();
+      // Stratégie : si un PDF Newbi est disponible, utiliser /import pour l'attacher
+      // Sinon, créer classiquement en draft
+      const hasPdf = invoice.cachedPdf?.url;
+      let fileAttachmentId = null;
 
-      const payload = {
-        customer_id: customerId,
-        date: formatDate(invoice.issueDate),
-        deadline: formatDate(invoice.dueDate),
-        draft: true,
-        currency: invoice.currency || "EUR",
-        invoice_lines: invoiceLines,
-      };
-
-      if (ref) {
-        payload.external_reference = ref;
-        payload.pdf_invoice_subject = `Facture ${ref}`;
+      if (hasPdf) {
+        fileAttachmentId = await this.uploadFileAttachment(
+          apiToken,
+          invoice.cachedPdf.url,
+          `facture-${ref || invoice._id}.pdf`,
+        );
       }
 
-      // Mention spéciale pour auto-liquidation
-      if (isReverseCharge) {
-        payload.special_mention =
-          "Autoliquidation - TVA due par le preneur (art. 283-2 du CGI)";
-      }
+      let data;
 
-      const data = await pennylaneRequest(
-        apiToken,
-        "POST",
-        "/customer_invoices",
-        payload,
-      );
+      if (fileAttachmentId) {
+        // Import avec PDF attaché — la facture sera directement non-draft avec le PDF Newbi
+        const importLines = invoiceLines.map((line) => {
+          const ht =
+            parseFloat(line.raw_currency_unit_price) * (line.quantity || 1);
+          const vatRate =
+            line.vat_rate === "exempt"
+              ? 0
+              : parseFloat(line.vat_rate?.replace(/[A-Z_]/g, "") || "0") / 10;
+          const tax = ht * (vatRate / 100);
+          return {
+            ...line,
+            currency_amount: String((ht + tax).toFixed(2)),
+            currency_tax: String(tax.toFixed(2)),
+          };
+        });
 
-      const pennylaneId = String(data?.id || "");
+        const importPayload = {
+          file_attachment_id: fileAttachmentId,
+          customer_id: customerId,
+          date: formatDate(invoice.issueDate),
+          deadline: formatDate(invoice.dueDate),
+          currency: invoice.currency || "EUR",
+          currency_amount_before_tax: String(
+            (invoice.finalTotalHT || 0).toFixed(2),
+          ),
+          currency_amount: String((invoice.finalTotalTTC || 0).toFixed(2)),
+          currency_tax: String((invoice.finalTotalVAT || 0).toFixed(2)),
+          invoice_lines: importLines,
+        };
 
-      // Tenter de finaliser la facture (PENDING/COMPLETED/OVERDUE ne sont plus des brouillons)
-      if (data?.id && invoice.status !== "DRAFT") {
-        try {
-          await pennylaneRequest(
-            apiToken,
-            "POST",
-            `/customer_invoices/${data.id}/finalize`,
-          );
-          logger.info(`[PENNYLANE] Facture ${ref} finalisée sur Pennylane`);
+        if (ref) importPayload.external_reference = ref;
 
-          // Si payée dans Newbi, marquer comme payée sur Pennylane
-          if (invoice.status === "COMPLETED") {
-            try {
-              await pennylaneRequest(
-                apiToken,
-                "POST",
-                `/customer_invoices/${data.id}/mark_as_paid`,
-              );
-              logger.info(
-                `[PENNYLANE] Facture ${ref} marquée payée sur Pennylane`,
-              );
-            } catch (paidErr) {
-              logger.debug(
-                `[PENNYLANE] mark_as_paid non disponible: ${paidErr.message}`,
-              );
+        data = await pennylaneRequest(
+          apiToken,
+          "POST",
+          "/customer_invoices/import",
+          importPayload,
+        );
+        logger.info(
+          `[PENNYLANE] Facture ${ref} importée avec PDF sur Pennylane`,
+        );
+      } else {
+        // Création classique sans PDF
+        const payload = {
+          customer_id: customerId,
+          date: formatDate(invoice.issueDate),
+          deadline: formatDate(invoice.dueDate),
+          draft: true,
+          currency: invoice.currency || "EUR",
+          invoice_lines: invoiceLines,
+        };
+
+        if (ref) {
+          payload.external_reference = ref;
+          payload.pdf_invoice_subject = `Facture ${ref}`;
+        }
+
+        if (isReverseCharge) {
+          payload.special_mention =
+            "Autoliquidation - TVA due par le preneur (art. 283-2 du CGI)";
+        }
+
+        data = await pennylaneRequest(
+          apiToken,
+          "POST",
+          "/customer_invoices",
+          payload,
+        );
+
+        // Tenter de finaliser
+        if (data?.id && invoice.status !== "DRAFT") {
+          try {
+            await pennylaneRequest(
+              apiToken,
+              "POST",
+              `/customer_invoices/${data.id}/finalize`,
+            );
+            if (invoice.status === "COMPLETED") {
+              try {
+                await pennylaneRequest(
+                  apiToken,
+                  "POST",
+                  `/customer_invoices/${data.id}/mark_as_paid`,
+                );
+              } catch (_) {
+                /* ignore */
+              }
             }
+          } catch (_) {
+            /* numérotation non configurée */
           }
-        } catch (finalizeErr) {
-          logger.debug(
-            `[PENNYLANE] Finalisation non disponible (numérotation non configurée?): ${finalizeErr.message}`,
-          );
         }
       }
 
       return {
         success: true,
-        pennylaneId,
+        pennylaneId: String(data?.id || ""),
         message: "Facture synchronisée avec Pennylane",
       };
     } catch (error) {
@@ -689,9 +736,9 @@ const pennylaneService = {
 
   /**
    * Upload un fichier (PDF) vers Pennylane
-   * Endpoint: POST /ledger_attachments (multipart/form-data)
+   * Endpoint: POST /file_attachments (multipart/form-data)
    */
-  async uploadFileAttachment(apiToken, fileUrl) {
+  async uploadFileAttachment(apiToken, fileUrl, filename = "document.pdf") {
     try {
       // Télécharger le fichier depuis l'URL (R2/S3)
       const fileResponse = await fetch(fileUrl);
@@ -703,12 +750,12 @@ const pennylaneService = {
 
       const blob = await fileResponse.blob();
       const formData = new FormData();
-      formData.append("file", blob, "document.pdf");
+      formData.append("file", blob, filename);
 
       const data = await pennylaneRequest(
         apiToken,
         "POST",
-        "/ledger_attachments",
+        "/file_attachments",
         formData,
       );
 
