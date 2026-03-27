@@ -630,9 +630,11 @@ const pennylaneService = {
           expense.files[0];
 
         if (pdfFile?.url) {
+          const filename = `facture-achat-${expense.invoiceNumber || expense.title || expense._id}.pdf`;
           fileAttachmentId = await this.uploadFileAttachment(
             apiToken,
             pdfFile.url,
+            filename,
           );
         }
       }
@@ -647,18 +649,26 @@ const pennylaneService = {
       const amountVAT = expense.vatAmount || 0;
       const amountHT = amountTTC - amountVAT;
 
+      const ref = expense.invoiceNumber || expense.documentNumber || null;
+
       const payload = {
         date: formatDate(expense.date),
         ...(expense.paymentDate && {
           deadline: formatDate(expense.paymentDate),
         }),
         currency: expense.currency || "EUR",
+        currency_amount_before_tax: String(amountHT.toFixed(2)),
+        currency_amount: String(amountTTC.toFixed(2)),
+        currency_tax: String(amountVAT.toFixed(2)),
         ...(supplierId && { supplier_id: supplierId }),
         ...(fileAttachmentId && { file_attachment_id: fileAttachmentId }),
+        ...(ref && { external_reference: ref }),
         invoice_lines: [
           {
             label: expense.title || expense.description || "Dépense",
             raw_currency_unit_price: String(amountHT.toFixed(2)),
+            currency_amount: String(amountTTC.toFixed(2)),
+            currency_tax: String(amountVAT.toFixed(2)),
             quantity: 1,
             unit: "piece",
             vat_rate: mapVatRate(expense.vatRate),
