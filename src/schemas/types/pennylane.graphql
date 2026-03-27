@@ -34,8 +34,8 @@ Préférences de synchronisation automatique
 """
 type PennylaneAutoSync {
   invoices: Boolean!
-  expenses: Boolean!
-  clients: Boolean!
+  supplierInvoices: Boolean!
+  quotes: Boolean!
 }
 
 """
@@ -87,8 +87,8 @@ Input pour les préférences de sync automatique
 """
 input PennylaneAutoSyncInput {
   invoices: Boolean
-  expenses: Boolean
-  clients: Boolean
+  supplierInvoices: Boolean
+  quotes: Boolean
 }
 
 # === QUERIES ===
@@ -132,6 +132,11 @@ extend type Mutation {
   Synchroniser une dépense spécifique vers Pennylane
   """
   syncExpenseToPennylane(expenseId: ID!): PennylaneSyncResult!
+
+  """
+  Synchroniser un devis spécifique vers Pennylane
+  """
+  syncQuoteToPennylane(quoteId: ID!): PennylaneSyncResult!
 
   """
   Lancer une synchronisation complète vers Pennylane

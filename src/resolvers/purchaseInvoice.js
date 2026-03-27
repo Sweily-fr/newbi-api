@@ -13,6 +13,7 @@ import {
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { syncPurchaseInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
 
 const checkAccess = async (id, workspaceId) => {
   const doc = await PurchaseInvoice.findOne({
@@ -209,7 +210,7 @@ const purchaseInvoiceResolvers = {
 
     purchaseInvoiceReconciliationMatches: requireRead("expenses")(
       async (_, { purchaseInvoiceId }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
         // Import Transaction model dynamically to avoid circular deps
@@ -268,7 +269,9 @@ const purchaseInvoiceResolvers = {
     supplier: requireRead("expenses")(async (_, { id }, context) => {
       const supplier = await Supplier.findOne({
         _id: id,
-        workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
+        workspaceId: new mongoose.Types.ObjectId(
+          context.workspaceId || context.organizationId,
+        ),
       });
       if (!supplier)
         throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
@@ -387,7 +390,7 @@ const purchaseInvoiceResolvers = {
 
     updatePurchaseInvoice: requireWrite("expenses")(
       async (_, { id, input }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
 
         Object.keys(input).forEach((key) => {
@@ -408,6 +411,16 @@ const purchaseInvoiceResolvers = {
         }
 
         await invoice.save();
+
+        // Sync Pennylane si le statut a changé (fire-and-forget)
+        if (invoice.status !== oldStatus) {
+          syncPurchaseInvoiceIfNeeded(
+            invoice,
+            context.organizationId || workspaceId,
+          ).catch((err) =>
+            console.error("Erreur sync Pennylane facture d'achat:", err),
+          );
+        }
 
         // Automatisations documents partagés si le statut a changé (fire-and-forget)
         if (invoice.status !== oldStatus) {
@@ -454,7 +467,7 @@ const purchaseInvoiceResolvers = {
 
     deletePurchaseInvoice: requireDelete("expenses")(
       async (_, { id }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
 
         // Delete files from Cloudflare
@@ -477,7 +490,7 @@ const purchaseInvoiceResolvers = {
 
     addPurchaseInvoiceFile: requireWrite("expenses")(
       async (_, { purchaseInvoiceId, input }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
         let fileData;
@@ -560,7 +573,7 @@ const purchaseInvoiceResolvers = {
 
     removePurchaseInvoiceFile: requireWrite("expenses")(
       async (_, { purchaseInvoiceId, fileId }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
         const file = invoice.files.id(fileId);
@@ -586,7 +599,7 @@ const purchaseInvoiceResolvers = {
 
     markPurchaseInvoiceAsPaid: requireWrite("expenses")(
       async (_, { id, paymentDate, paymentMethod }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
 
         invoice.status = "PAID";
@@ -594,6 +607,14 @@ const purchaseInvoiceResolvers = {
         if (paymentMethod) invoice.paymentMethod = paymentMethod;
 
         await invoice.save();
+
+        // Sync Pennylane (fire-and-forget)
+        syncPurchaseInvoiceIfNeeded(
+          invoice,
+          context.organizationId || workspaceId,
+        ).catch((err) =>
+          console.error("Erreur sync Pennylane facture d'achat (paid):", err),
+        );
 
         // Automatisations documents partagés (fire-and-forget)
         documentAutomationService
@@ -624,7 +645,9 @@ const purchaseInvoiceResolvers = {
 
     bulkUpdatePurchaseInvoiceStatus: requireWrite("expenses")(
       async (_, { ids, status }, context) => {
-        const workspaceId = new mongoose.Types.ObjectId(context.workspaceId);
+        const workspaceId = new mongoose.Types.ObjectId(
+          context.workspaceId || context.organizationId,
+        );
         const updateData = { status };
         if (status === "PAID") {
           updateData.paymentDate = new Date();
@@ -645,7 +668,9 @@ const purchaseInvoiceResolvers = {
 
     bulkDeletePurchaseInvoices: requireDelete("expenses")(
       async (_, { ids }, context) => {
-        const workspaceId = new mongoose.Types.ObjectId(context.workspaceId);
+        const workspaceId = new mongoose.Types.ObjectId(
+          context.workspaceId || context.organizationId,
+        );
 
         const invoices = await PurchaseInvoice.find({
           _id: { $in: ids },
@@ -682,7 +707,9 @@ const purchaseInvoiceResolvers = {
 
     bulkCategorizePurchaseInvoices: requireWrite("expenses")(
       async (_, { ids, category }, context) => {
-        const workspaceId = new mongoose.Types.ObjectId(context.workspaceId);
+        const workspaceId = new mongoose.Types.ObjectId(
+          context.workspaceId || context.organizationId,
+        );
 
         const result = await PurchaseInvoice.updateMany(
           { _id: { $in: ids }, workspaceId },
@@ -699,7 +726,7 @@ const purchaseInvoiceResolvers = {
 
     reconcilePurchaseInvoice: requireWrite("expenses")(
       async (_, { purchaseInvoiceId, transactionIds }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
         const Transaction = mongoose.model("Transaction");
@@ -764,7 +791,7 @@ const purchaseInvoiceResolvers = {
 
     unreconcilePurchaseInvoice: requireWrite("expenses")(
       async (_, { purchaseInvoiceId }, context) => {
-        const workspaceId = context.workspaceId;
+        const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
         if (invoice.linkedTransactionIds?.length) {
@@ -817,7 +844,9 @@ const purchaseInvoiceResolvers = {
       async (_, { id, input }, context) => {
         const supplier = await Supplier.findOne({
           _id: id,
-          workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
+          workspaceId: new mongoose.Types.ObjectId(
+            context.workspaceId || context.organizationId,
+          ),
         });
         if (!supplier)
           throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
@@ -839,7 +868,9 @@ const purchaseInvoiceResolvers = {
     deleteSupplier: requireDelete("expenses")(async (_, { id }, context) => {
       const supplier = await Supplier.findOne({
         _id: id,
-        workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
+        workspaceId: new mongoose.Types.ObjectId(
+          context.workspaceId || context.organizationId,
+        ),
       });
       if (!supplier)
         throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
@@ -850,7 +881,9 @@ const purchaseInvoiceResolvers = {
 
     mergeSuppliers: requireWrite("expenses")(
       async (_, { targetId, sourceIds }, context) => {
-        const workspaceId = new mongoose.Types.ObjectId(context.workspaceId);
+        const workspaceId = new mongoose.Types.ObjectId(
+          context.workspaceId || context.organizationId,
+        );
 
         const target = await Supplier.findOne({ _id: targetId, workspaceId });
         if (!target)

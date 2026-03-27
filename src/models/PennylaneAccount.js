@@ -21,7 +21,7 @@ const pennylaneSyncLogSchema = new mongoose.Schema(
     },
     error: String,
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 const pennylaneAccountSchema = new mongoose.Schema(
@@ -72,15 +72,15 @@ const pennylaneAccountSchema = new mongoose.Schema(
     // Préférences de sync automatique
     autoSync: {
       invoices: { type: Boolean, default: true },
-      expenses: { type: Boolean, default: true },
-      clients: { type: Boolean, default: true },
+      supplierInvoices: { type: Boolean, default: true },
+      quotes: { type: Boolean, default: false },
     },
     connectedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Un seul compte Pennylane par organisation
@@ -88,7 +88,7 @@ pennylaneAccountSchema.index({ organizationId: 1 }, { unique: true });
 
 const PennylaneAccount = mongoose.model(
   "PennylaneAccount",
-  pennylaneAccountSchema
+  pennylaneAccountSchema,
 );
 
 export default PennylaneAccount;

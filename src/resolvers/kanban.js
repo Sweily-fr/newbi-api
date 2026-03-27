@@ -1258,6 +1258,17 @@ const resolvers = {
         const creatorName =
           creatorData?.name || user?.name || user?.email || "Utilisateur";
 
+        // Décaler les tâches existantes pour faire de la place à la nouvelle position
+        await Task.updateMany(
+          {
+            boardId: input.boardId,
+            columnId: input.columnId,
+            workspaceId: finalWorkspaceId,
+            position: { $gte: position },
+          },
+          { $inc: { position: 1 } },
+        );
+
         const task = new Task({
           ...cleanedInput,
           status: cleanedInput.status || cleanedInput.columnId,
