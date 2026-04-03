@@ -1,4 +1,5 @@
 import Invoice from "../models/Invoice.js";
+import ImportedInvoice from "../models/ImportedInvoice.js";
 import User from "../models/User.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
@@ -403,6 +404,148 @@ const invoiceResolvers = {
         );
       },
     ),
+
+    invoiceBalances: requireRead("invoices")(async (_, { workspaceId }) => {
+      const wid = new mongoose.Types.ObjectId(workspaceId);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Agrégation des factures créées sur Newbi
+      const [invoiceStats] = await Invoice.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalBilled: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["PENDING", "COMPLETED"]] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            totalPaid: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "COMPLETED"] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            overdueAmount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "PENDING"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            overdueCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "PENDING"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]);
+
+      // Agrégation des factures importées
+      const [importedStats] = await ImportedInvoice.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalBilled: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["VALIDATED", "COMPLETED"]] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            totalPaid: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["VALIDATED", "COMPLETED"]] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            overdueAmount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "VALIDATED"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            overdueCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "VALIDATED"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]);
+
+      const inv = invoiceStats || {
+        totalBilled: 0,
+        totalPaid: 0,
+        overdueAmount: 0,
+        overdueCount: 0,
+      };
+      const imp = importedStats || {
+        totalBilled: 0,
+        totalPaid: 0,
+        overdueAmount: 0,
+        overdueCount: 0,
+      };
+
+      return {
+        totalBilled: inv.totalBilled + imp.totalBilled,
+        totalPaid: inv.totalPaid + imp.totalPaid,
+        overdueAmount: inv.overdueAmount + imp.overdueAmount,
+        overdueCount: inv.overdueCount + imp.overdueCount,
+      };
+    }),
 
     nextInvoiceNumber: requireRead("invoices")(
       async (_, { workspaceId, prefix, isDraft }, context) => {

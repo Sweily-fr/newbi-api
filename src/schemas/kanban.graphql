@@ -299,7 +299,7 @@ type Mutation {
   moveTask(id: ID!, columnId: String!, position: Int!, workspaceId: ID): Task!
   
   addComment(taskId: ID!, input: CommentInput!, workspaceId: ID): Task!
-  updateComment(taskId: ID!, commentId: ID!, content: String!, workspaceId: ID): Task!
+  updateComment(taskId: ID!, commentId: ID!, content: String!, mentionedUserIds: [ID!], workspaceId: ID): Task!
   deleteComment(taskId: ID!, commentId: ID!, workspaceId: ID): Task!
   
   startTimer(taskId: ID!, workspaceId: ID): Task!

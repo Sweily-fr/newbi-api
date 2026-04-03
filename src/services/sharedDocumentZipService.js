@@ -5,6 +5,7 @@
 
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import archiver from "archiver";
+import mongoose from "mongoose";
 import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import logger from "../utils/logger.js";
@@ -30,11 +31,15 @@ const SHARED_DOCUMENTS_BUCKET =
  */
 async function getAllSubfolders(folderId, workspaceId) {
   const folders = [];
+  // Cast to ObjectId to avoid string/ObjectId comparison issues
+  const folderObjectId = new mongoose.Types.ObjectId(folderId);
+  const workspaceObjectId = new mongoose.Types.ObjectId(workspaceId);
 
   async function fetchChildren(parentId) {
     const children = await SharedFolder.find({
-      workspaceId,
+      workspaceId: workspaceObjectId,
       parentId,
+      trashedAt: null,
     });
 
     for (const child of children) {
@@ -45,13 +50,14 @@ async function getAllSubfolders(folderId, workspaceId) {
 
   // Ajouter le dossier principal
   const mainFolder = await SharedFolder.findOne({
-    _id: folderId,
-    workspaceId,
+    _id: folderObjectId,
+    workspaceId: workspaceObjectId,
+    trashedAt: null,
   });
 
   if (mainFolder) {
     folders.push(mainFolder);
-    await fetchChildren(folderId);
+    await fetchChildren(mainFolder._id);
   }
 
   return folders;
@@ -105,13 +111,20 @@ async function getDocumentsWithPaths(folderId, workspaceId) {
   const folderMap = new Map();
   folders.forEach((f) => folderMap.set(f._id.toString(), f));
 
-  // Récupérer tous les documents dans ces dossiers
+  // Récupérer le nom du dossier racine
+  const rootFolder = folderMap.get(folderId);
+  const rootFolderName = rootFolder
+    ? sanitizeFileName(rootFolder.name)
+    : "documents";
+
+  // Récupérer tous les documents dans ces dossiers (exclure la corbeille)
   const documents = await SharedDocument.find({
     workspaceId,
     folderId: { $in: folderIds },
+    trashedAt: null,
   });
 
-  // Organiser les documents avec leurs chemins
+  // Organiser les documents avec leurs chemins (inclure le dossier parent racine)
   const documentsWithPaths = documents.map((doc) => {
     const folder = folderMap.get(doc.folderId?.toString());
     const folderPath = folder
@@ -120,20 +133,24 @@ async function getDocumentsWithPaths(folderId, workspaceId) {
 
     return {
       document: doc,
-      path: folderPath,
+      path: folderPath ? `${rootFolderName}/${folderPath}` : rootFolderName,
       fileName: sanitizeFileName(doc.originalName || doc.name),
     };
   });
 
-  // Récupérer le nom du dossier racine
-  const rootFolder = folderMap.get(folderId);
-  const rootFolderName = rootFolder ? sanitizeFileName(rootFolder.name) : "documents";
+  // Construire les chemins de tous les dossiers (pour inclure les dossiers vides)
+  const allFolderPaths = folders.map((folder) => {
+    const relativePath = buildFolderPath(folder, folderMap, folderId);
+    return relativePath ? `${rootFolderName}/${relativePath}` : rootFolderName;
+  });
 
   return {
     documents: documentsWithPaths,
+    folderPaths: allFolderPaths,
     rootFolderName,
     totalSize: documents.reduce((sum, doc) => sum + (doc.fileSize || 0), 0),
     totalFiles: documents.length,
+    totalFolders: folders.length,
   };
 }
 
@@ -145,17 +162,21 @@ async function getDocumentsWithPaths(folderId, workspaceId) {
  */
 async function streamFolderAsZip(folderId, workspaceId, res) {
   // Récupérer les documents avec leurs chemins
-  const { documents, rootFolderName, totalFiles } = await getDocumentsWithPaths(
-    folderId,
-    workspaceId
-  );
+  const { documents, folderPaths, rootFolderName, totalFiles, totalFolders } =
+    await getDocumentsWithPaths(folderId, workspaceId);
 
-  if (totalFiles === 0) {
+  if (totalFiles === 0 && totalFolders <= 1) {
+    logger.warn(`⚠️ Dossier vide ${folderId}`, {
+      folderId,
+      workspaceId,
+      rootFolderName,
+    });
     throw new Error("Aucun document dans ce dossier");
   }
 
   logger.info(`📦 Création ZIP pour dossier ${folderId}`, {
     totalFiles,
+    totalFolders,
     rootFolderName,
   });
 
@@ -163,15 +184,14 @@ async function streamFolderAsZip(folderId, workspaceId, res) {
   res.setHeader("Content-Type", "application/zip");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="${encodeURIComponent(rootFolderName)}.zip"`
+    `attachment; filename="${encodeURIComponent(rootFolderName)}.zip"`,
   );
 
   // Créer l'archive
   const archive = archiver("zip", {
-    zlib: { level: 6 }, // Compression équilibrée
+    zlib: { level: 6 },
   });
 
-  // Gérer les erreurs d'archive
   archive.on("error", (err) => {
     logger.error("❌ Erreur création ZIP:", err);
     throw err;
@@ -188,24 +208,25 @@ async function streamFolderAsZip(folderId, workspaceId, res) {
   // Pipe vers la réponse
   archive.pipe(res);
 
+  // Ajouter tous les dossiers (y compris les vides) comme entrées dans le ZIP
+  for (const folderPath of folderPaths) {
+    archive.append("", { name: `${folderPath}/` });
+  }
+
   // Ajouter chaque fichier à l'archive
   let addedFiles = 0;
   const errors = [];
 
   for (const { document, path, fileName } of documents) {
     try {
-      // Récupérer le fichier depuis R2
       const command = new GetObjectCommand({
         Bucket: SHARED_DOCUMENTS_BUCKET,
         Key: document.fileKey,
       });
 
       const response = await s3Client.send(command);
+      const zipPath = `${path}/${fileName}`;
 
-      // Construire le chemin complet dans le ZIP
-      const zipPath = path ? `${path}/${fileName}` : fileName;
-
-      // Ajouter le stream au ZIP
       archive.append(response.Body, { name: zipPath });
       addedFiles++;
 
@@ -219,9 +240,10 @@ async function streamFolderAsZip(folderId, workspaceId, res) {
   // Finaliser l'archive
   await archive.finalize();
 
-  logger.info(`📦 ZIP créé avec succès`, {
+  logger.info("📦 ZIP créé avec succès", {
     folderId,
     addedFiles,
+    foldersAdded: folderPaths.length,
     errors: errors.length,
   });
 
@@ -252,9 +274,13 @@ async function verifyFolderAccess(folderId, workspaceId) {
  * @param {string} params.workspaceId - ID du workspace
  * @param {Object} res - Response Express pour le streaming
  */
-async function streamSelectionAsZip({ folderIds = [], documentIds = [], excludedFolderIds = [], workspaceId }, res) {
+async function streamSelectionAsZip(
+  { folderIds = [], documentIds = [], excludedFolderIds = [], workspaceId },
+  res,
+) {
   const excludedSet = new Set(excludedFolderIds.map(String));
   const allDocumentsToZip = []; // { document, zipPath }
+  const allFolderPaths = []; // chemins des dossiers (y compris vides)
 
   // 1. Process each selected folder
   for (const folderId of folderIds) {
@@ -267,8 +293,10 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
 
     for (const folder of folders) {
       const fid = folder._id.toString();
-      // If this folder is excluded, or its parent is in an excluded branch, skip it
-      if (excludedSet.has(fid) || excludedBranches.has(folder.parentId?.toString())) {
+      if (
+        excludedSet.has(fid) ||
+        excludedBranches.has(folder.parentId?.toString())
+      ) {
         excludedBranches.add(fid);
         continue;
       }
@@ -279,19 +307,33 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
     const folderMap = new Map();
     filteredFolders.forEach((f) => folderMap.set(f._id.toString(), f));
 
-    // Get documents in the filtered folders
+    // Get documents in the filtered folders (exclure la corbeille)
     const docs = await SharedDocument.find({
       workspaceId,
       folderId: { $in: filteredFolderIds },
+      trashedAt: null,
     });
 
     // Root folder name for this selection item
     const rootFolder = folderMap.get(folderId);
-    const rootFolderName = rootFolder ? sanitizeFileName(rootFolder.name) : "dossier";
+    const rootFolderName = rootFolder
+      ? sanitizeFileName(rootFolder.name)
+      : "dossier";
+
+    // Ajouter tous les dossiers (y compris vides)
+    for (const folder of filteredFolders) {
+      const relativePath = buildFolderPath(folder, folderMap, folderId);
+      const fullPath = relativePath
+        ? `${rootFolderName}/${relativePath}`
+        : rootFolderName;
+      allFolderPaths.push(fullPath);
+    }
 
     for (const doc of docs) {
       const folder = folderMap.get(doc.folderId?.toString());
-      const folderPath = folder ? buildFolderPath(folder, folderMap, folderId) : "";
+      const folderPath = folder
+        ? buildFolderPath(folder, folderMap, folderId)
+        : "";
       const fileName = sanitizeFileName(doc.originalName || doc.name);
       const zipPath = folderPath
         ? `${rootFolderName}/${folderPath}/${fileName}`
@@ -306,6 +348,7 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
     const individualDocs = await SharedDocument.find({
       _id: { $in: documentIds },
       workspaceId,
+      trashedAt: null,
     });
 
     for (const doc of individualDocs) {
@@ -314,15 +357,16 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
     }
   }
 
-  if (allDocumentsToZip.length === 0) {
+  if (allDocumentsToZip.length === 0 && allFolderPaths.length === 0) {
     throw new Error("Aucun document dans la sélection");
   }
 
-  logger.info(`📦 Création ZIP pour sélection`, {
+  logger.info("📦 Création ZIP pour sélection", {
     folderIds,
     documentIds,
     excludedFolderIds,
     totalFiles: allDocumentsToZip.length,
+    totalFolders: allFolderPaths.length,
   });
 
   // Handle duplicate filenames in ZIP by appending (1), (2), etc.
@@ -345,14 +389,15 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
   }
 
   // Configure response headers
-  const zipName = folderIds.length === 1 && documentIds.length === 0
-    ? `${allDocumentsToZip[0]?.zipPath.split("/")[0] || "documents"}.zip`
-    : "documents.zip";
+  const zipName =
+    folderIds.length === 1 && documentIds.length === 0
+      ? `${allFolderPaths[0] || "documents"}.zip`
+      : "documents.zip";
 
   res.setHeader("Content-Type", "application/zip");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="${encodeURIComponent(zipName)}"`
+    `attachment; filename="${encodeURIComponent(zipName)}"`,
   );
 
   // Create archive
@@ -372,6 +417,11 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
   });
 
   archive.pipe(res);
+
+  // Ajouter tous les dossiers (y compris les vides)
+  for (const folderPath of allFolderPaths) {
+    archive.append("", { name: `${folderPath}/` });
+  }
 
   let addedFiles = 0;
   const errors = [];
@@ -393,8 +443,9 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
 
   await archive.finalize();
 
-  logger.info(`📦 ZIP sélection créé avec succès`, {
+  logger.info("📦 ZIP sélection créé avec succès", {
     addedFiles,
+    foldersAdded: allFolderPaths.length,
     errors: errors.length,
   });
 
@@ -405,7 +456,11 @@ async function streamSelectionAsZip({ folderIds = [], documentIds = [], excluded
  * Récupère les informations sur une sélection (sous-dossiers, taille, nombre de fichiers)
  * pour afficher dans le dialog de configuration avant téléchargement
  */
-async function getSelectionInfo({ folderIds = [], documentIds = [], workspaceId }) {
+async function getSelectionInfo({
+  folderIds = [],
+  documentIds = [],
+  workspaceId,
+}) {
   const folderDetails = [];
 
   for (const folderId of folderIds) {
@@ -419,6 +474,7 @@ async function getSelectionInfo({ folderIds = [], documentIds = [], workspaceId 
     const docs = await SharedDocument.find({
       workspaceId,
       folderId: { $in: folderIdsInTree },
+      trashedAt: null,
     });
 
     const totalSize = docs.reduce((sum, d) => sum + (d.fileSize || 0), 0);
@@ -429,6 +485,7 @@ async function getSelectionInfo({ folderIds = [], documentIds = [], workspaceId 
       const subDocs = await SharedDocument.find({
         workspaceId,
         folderId: sub._id,
+        trashedAt: null,
       });
       subfolderInfos.push({
         id: sub._id.toString(),
@@ -454,11 +511,18 @@ async function getSelectionInfo({ folderIds = [], documentIds = [], workspaceId 
     individualDocs = await SharedDocument.find({
       _id: { $in: documentIds },
       workspaceId,
+      trashedAt: null,
     });
   }
 
-  const individualDocsSize = individualDocs.reduce((sum, d) => sum + (d.fileSize || 0), 0);
-  const totalFoldersSize = folderDetails.reduce((sum, f) => sum + f.totalSize, 0);
+  const individualDocsSize = individualDocs.reduce(
+    (sum, d) => sum + (d.fileSize || 0),
+    0,
+  );
+  const totalFoldersSize = folderDetails.reduce(
+    (sum, f) => sum + f.totalSize,
+    0,
+  );
 
   return {
     folders: folderDetails,
@@ -467,7 +531,9 @@ async function getSelectionInfo({ folderIds = [], documentIds = [], workspaceId 
       name: d.originalName || d.name,
       size: d.fileSize || 0,
     })),
-    totalFiles: folderDetails.reduce((sum, f) => sum + f.filesCount, 0) + individualDocs.length,
+    totalFiles:
+      folderDetails.reduce((sum, f) => sum + f.filesCount, 0) +
+      individualDocs.length,
     totalSize: totalFoldersSize + individualDocsSize,
   };
 }

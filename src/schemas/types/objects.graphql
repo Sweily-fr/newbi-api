@@ -67,6 +67,14 @@ type InvoiceStats {
   totalAmount: Float!
 }
 
+# Soldes agrégés (factures créées + importées)
+type InvoiceBalances {
+  totalBilled: Float!
+  totalPaid: Float!
+  overdueAmount: Float!
+  overdueCount: Int!
+}
+
 # Statistiques pour les devis
 type QuoteStats {
   totalCount: Int!
