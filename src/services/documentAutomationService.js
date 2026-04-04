@@ -1,17 +1,17 @@
-import DocumentAutomation from '../models/DocumentAutomation.js';
-import DocumentAutomationLog from '../models/DocumentAutomationLog.js';
-import SharedDocument from '../models/SharedDocument.js';
-import SharedFolder from '../models/SharedFolder.js';
-import Invoice from '../models/Invoice.js';
-import Quote from '../models/Quote.js';
-import CreditNote from '../models/CreditNote.js';
-import ImportedInvoice from '../models/ImportedInvoice.js';
-import ImportedQuote from '../models/ImportedQuote.js';
-import PurchaseOrder from '../models/PurchaseOrder.js';
-import PurchaseInvoice from '../models/PurchaseInvoice.js';
-import Transaction from '../models/Transaction.js';
-import cloudflareService from './cloudflareService.js';
-import axios from 'axios';
+import DocumentAutomation from "../models/DocumentAutomation.js";
+import DocumentAutomationLog from "../models/DocumentAutomationLog.js";
+import SharedDocument from "../models/SharedDocument.js";
+import SharedFolder from "../models/SharedFolder.js";
+import Invoice from "../models/Invoice.js";
+import Quote from "../models/Quote.js";
+import CreditNote from "../models/CreditNote.js";
+import ImportedInvoice from "../models/ImportedInvoice.js";
+import ImportedQuote from "../models/ImportedQuote.js";
+import PurchaseOrder from "../models/PurchaseOrder.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import Transaction from "../models/Transaction.js";
+import cloudflareService from "./cloudflareService.js";
+import axios from "axios";
 
 // Suivi de progression en mémoire pour les automatisations en cours
 const _progressMap = new Map();
@@ -24,37 +24,55 @@ export function getAutomationProgress(automationId) {
  * Cache le PDF d'un document dans R2 et met à jour le champ cachedPdf du document.
  * Permet aux automatisations suivantes d'utiliser une copie R2 serveur-à-serveur.
  */
-async function cacheDocumentPdf(documentId, documentType, pdfBuffer, workspaceId) {
-  const ModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote, purchaseOrder: PurchaseOrder };
+async function cacheDocumentPdf(
+  documentId,
+  documentType,
+  pdfBuffer,
+  workspaceId,
+) {
+  const ModelMap = {
+    invoice: Invoice,
+    quote: Quote,
+    creditNote: CreditNote,
+    purchaseOrder: PurchaseOrder,
+  };
   const Model = ModelMap[documentType];
   if (!Model) return null;
 
   const uploadResult = await cloudflareService.uploadImage(
     pdfBuffer,
     `${documentId}.pdf`,
-    'system',
-    'sharedDocuments',
-    workspaceId
+    "system",
+    "sharedDocuments",
+    workspaceId,
   );
 
   await Model.updateOne(
     { _id: documentId },
-    { $set: { cachedPdf: { key: uploadResult.key, url: uploadResult.url, generatedAt: new Date() } } }
+    {
+      $set: {
+        cachedPdf: {
+          key: uploadResult.key,
+          url: uploadResult.url,
+          generatedAt: new Date(),
+        },
+      },
+    },
   );
 
   return { key: uploadResult.key, url: uploadResult.url };
 }
 
 const DOCUMENT_TYPE_LABELS = {
-  invoice: 'Facture',
-  quote: 'Devis',
-  creditNote: 'Avoir',
-  expense: 'Depense',
-  importedInvoice: 'Facture_importee',
-  importedQuote: 'Devis_importe',
-  purchaseOrder: 'BonCommande',
-  purchaseInvoice: 'Facture_achat',
-  transaction: 'Justificatif',
+  invoice: "Facture",
+  quote: "Devis",
+  creditNote: "Avoir",
+  expense: "Depense",
+  importedInvoice: "Facture_importee",
+  importedQuote: "Devis_importe",
+  purchaseOrder: "BonCommande",
+  purchaseInvoice: "Facture_achat",
+  transaction: "Justificatif",
 };
 
 /**
@@ -62,34 +80,35 @@ const DOCUMENT_TYPE_LABELS = {
  * Réutilise le même pattern que documentEmailService.generateDocumentPdf
  */
 async function generateDocumentPdf(documentId, documentType) {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
 
   const endpointMap = {
-    invoice: '/api/invoices/generate-pdf',
-    quote: '/api/quotes/generate-pdf',
-    creditNote: '/api/credit-notes/generate-pdf',
-    purchaseOrder: '/api/purchase-orders/generate-pdf',
+    invoice: "/api/invoices/generate-pdf",
+    quote: "/api/quotes/generate-pdf",
+    creditNote: "/api/credit-notes/generate-pdf",
+    purchaseOrder: "/api/purchase-orders/generate-pdf",
   };
 
   const endpoint = endpointMap[documentType];
   if (!endpoint) {
-    throw new Error(`Type de document non supporté pour la génération PDF: ${documentType}`);
+    throw new Error(
+      `Type de document non supporté pour la génération PDF: ${documentType}`,
+    );
   }
 
   const bodyKeyMap = {
-    invoice: 'invoiceId',
-    quote: 'quoteId',
-    creditNote: 'creditNoteId',
-    purchaseOrder: 'purchaseOrderId',
+    invoice: "invoiceId",
+    quote: "quoteId",
+    creditNote: "creditNoteId",
+    purchaseOrder: "purchaseOrderId",
   };
 
   const body = { [bodyKeyMap[documentType]]: documentId };
 
-  const response = await axios.post(
-    `${frontendUrl}${endpoint}`,
-    body,
-    { responseType: 'arraybuffer', timeout: 60000 }
-  );
+  const response = await axios.post(`${frontendUrl}${endpoint}`, body, {
+    responseType: "arraybuffer",
+    timeout: 60000,
+  });
 
   return Buffer.from(response.data);
 }
@@ -99,27 +118,29 @@ async function generateDocumentPdf(documentId, documentType) {
  */
 function sanitizeFileName(name) {
   return name
-    .replace(/[/\\?%*:|"<>]/g, '_')
-    .replace(/\s+/g, '_')
-    .replace(/_+/g, '_')
+    .replace(/[/\\?%*:|"<>]/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
     .trim();
 }
 
 /**
  * Construit le nom du fichier à partir du pattern et du contexte
  */
-function buildFileName(pattern, documentContext, extension = 'pdf') {
-  const typeLabel = DOCUMENT_TYPE_LABELS[documentContext.documentType] || documentContext.documentType;
+function buildFileName(pattern, documentContext, extension = "pdf") {
+  const typeLabel =
+    DOCUMENT_TYPE_LABELS[documentContext.documentType] ||
+    documentContext.documentType;
   const number = documentContext.prefix
     ? `${documentContext.prefix}${documentContext.documentNumber}`
     : documentContext.documentNumber;
 
   let fileName = pattern
-    .replace('{documentType}', typeLabel)
-    .replace('{number}', number || '')
-    .replace('{clientName}', documentContext.clientName || 'Sans_client');
+    .replace("{documentType}", typeLabel)
+    .replace("{number}", number || "")
+    .replace("{clientName}", documentContext.clientName || "Sans_client");
 
-  return sanitizeFileName(fileName) + '.' + (extension || 'pdf');
+  return sanitizeFileName(fileName) + "." + (extension || "pdf");
 }
 
 // Cache mémoire pour les sous-dossiers résolus (évite les requêtes DB répétées)
@@ -130,32 +151,49 @@ const FOLDER_CACHE_TTL = 60 * 1000; // 1 minute
  * Résout le dossier cible, en créant les sous-dossiers dynamiques si nécessaire.
  * Utilise un cache mémoire pour éviter les requêtes répétées dans un batch.
  */
-async function resolveTargetFolder(actionConfig, workspaceId, documentContext, userId) {
+async function resolveTargetFolder(
+  actionConfig,
+  workspaceId,
+  documentContext,
+  userId,
+) {
   const createSubfolder = actionConfig.createSubfolder;
   const targetFolderId = actionConfig.targetFolderId;
 
-  console.log(`📁 [resolveTargetFolder] createSubfolder=${createSubfolder}, pattern=${actionConfig.subfolderPattern}, targetFolderId=${targetFolderId}`);
+  console.log(
+    `📁 [resolveTargetFolder] createSubfolder=${createSubfolder}, pattern=${actionConfig.subfolderPattern}, targetFolderId=${targetFolderId}`,
+  );
 
   if (!createSubfolder) {
-    console.log(`📁 [resolveTargetFolder] Pas de sous-dossier, retour targetFolderId=${targetFolderId}`);
+    console.log(
+      `📁 [resolveTargetFolder] Pas de sous-dossier, retour targetFolderId=${targetFolderId}`,
+    );
     return targetFolderId;
   }
 
-  const pattern = actionConfig.subfolderPattern || 'year';
+  const pattern = actionConfig.subfolderPattern || "year";
 
   // Déterminer le nom du sous-dossier selon le type de filtre
   let folderName;
-  if (pattern === 'year') {
-    folderName = actionConfig.filterYear ? String(actionConfig.filterYear) : String(new Date().getFullYear());
-  } else if (pattern === 'client') {
-    folderName = sanitizeFileName(actionConfig.filterClientName || documentContext.clientName || 'Sans_client');
+  if (pattern === "year") {
+    folderName = actionConfig.filterYear
+      ? String(actionConfig.filterYear)
+      : String(new Date().getFullYear());
+  } else if (pattern === "client") {
+    folderName = sanitizeFileName(
+      actionConfig.filterClientName ||
+        documentContext.clientName ||
+        "Sans_client",
+    );
   } else {
     // Fallback : utiliser le pattern comme nom de dossier
     folderName = sanitizeFileName(pattern);
   }
 
   const levels = [folderName];
-  console.log(`📁 [resolveTargetFolder] Pattern: "${pattern}" → dossier: "${folderName}"`);
+  console.log(
+    `📁 [resolveTargetFolder] Pattern: "${pattern}" → dossier: "${folderName}"`,
+  );
 
   let currentParentId = targetFolderId;
 
@@ -165,7 +203,9 @@ async function resolveTargetFolder(actionConfig, workspaceId, documentContext, u
 
     if (cached && Date.now() - cached.ts < FOLDER_CACHE_TTL) {
       currentParentId = cached.id;
-      console.log(`📁 [resolveTargetFolder] Cache hit: "${levelName}" → ${cached.id}`);
+      console.log(
+        `📁 [resolveTargetFolder] Cache hit: "${levelName}" → ${cached.id}`,
+      );
       continue;
     }
 
@@ -185,16 +225,22 @@ async function resolveTargetFolder(actionConfig, workspaceId, documentContext, u
         isSharedWithAccountant: true,
       });
       await folder.save();
-      console.log(`📁 [resolveTargetFolder] Dossier CRÉÉ: "${levelName}" (${folder._id}) sous parentId=${currentParentId}`);
+      console.log(
+        `📁 [resolveTargetFolder] Dossier CRÉÉ: "${levelName}" (${folder._id}) sous parentId=${currentParentId}`,
+      );
     } else {
-      console.log(`📁 [resolveTargetFolder] Dossier existant: "${levelName}" (${folder._id})`);
+      console.log(
+        `📁 [resolveTargetFolder] Dossier existant: "${levelName}" (${folder._id})`,
+      );
     }
 
     _folderCache.set(cacheKey, { id: folder._id, ts: Date.now() });
     currentParentId = folder._id;
   }
 
-  console.log(`📁 [resolveTargetFolder] Résultat final: folderId=${currentParentId}`);
+  console.log(
+    `📁 [resolveTargetFolder] Résultat final: folderId=${currentParentId}`,
+  );
   return currentParentId;
 }
 
@@ -226,13 +272,26 @@ const documentAutomationService = {
           if (ac.filterYear && documentContext.issueDate) {
             const docYear = new Date(documentContext.issueDate).getFullYear();
             if (docYear !== ac.filterYear) {
-              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+              results.push({
+                automationId: automation._id,
+                automationName: automation.name,
+                success: true,
+                skipped: true,
+              });
               continue;
             }
           }
           if (ac.filterClientId && documentContext.clientId) {
-            if (documentContext.clientId.toString() !== ac.filterClientId.toString()) {
-              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+            if (
+              documentContext.clientId.toString() !==
+              ac.filterClientId.toString()
+            ) {
+              results.push({
+                automationId: automation._id,
+                automationName: automation.name,
+                success: true,
+                skipped: true,
+              });
               continue;
             }
           }
@@ -242,7 +301,7 @@ const documentAutomationService = {
             sourceDocumentType: documentContext.documentType,
             sourceDocumentId: documentContext.documentId,
             automationId: automation._id,
-            status: 'SUCCESS',
+            status: "SUCCESS",
           });
 
           if (existingSuccessLog) {
@@ -255,8 +314,8 @@ const documentAutomationService = {
                 },
                 {
                   $set: { trashedAt: null },
-                  $unset: { originalFolderId: '' },
-                }
+                  $unset: { originalFolderId: "" },
+                },
               );
             }
 
@@ -274,7 +333,7 @@ const documentAutomationService = {
             sourceDocumentType: documentContext.documentType,
             sourceDocumentId: documentContext.documentId,
             automationId: automation._id,
-            status: 'FAILED',
+            status: "FAILED",
           });
 
           // Résoudre le dossier cible
@@ -282,49 +341,63 @@ const documentAutomationService = {
             automation.actionConfig,
             workspaceId,
             documentContext,
-            userId
+            userId,
           );
 
           // Construire le nom du fichier (extension par défaut .pdf, corrigée pour les transactions)
           let fileName = buildFileName(
-            automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
-            documentContext
+            automation.actionConfig.documentNaming ||
+              "{documentType}-{number}-{clientName}",
+            documentContext,
           );
 
           // Chercher le PDF en cache pour éviter la regénération Puppeteer
-          const CacheModelMap = { invoice: Invoice, quote: Quote, creditNote: CreditNote, purchaseOrder: PurchaseOrder };
+          const CacheModelMap = {
+            invoice: Invoice,
+            quote: Quote,
+            creditNote: CreditNote,
+            purchaseOrder: PurchaseOrder,
+          };
           const CacheModel = CacheModelMap[documentContext.documentType];
           const cachedDoc = CacheModel
-            ? await CacheModel.findById(documentContext.documentId).select('cachedPdf').lean()
+            ? await CacheModel.findById(documentContext.documentId)
+                .select("cachedPdf")
+                .lean()
             : null;
 
           let uploadResult;
           let fileSize;
-          let fileMimeType = 'application/pdf';
-          let fileExt = 'pdf';
+          let fileMimeType = "application/pdf";
+          let fileExt = "pdf";
 
-          if (documentContext.documentType === 'transaction') {
+          if (documentContext.documentType === "transaction") {
             // Transaction : copier le justificatif existant (image ou PDF)
-            const txn = await Transaction.findById(documentContext.documentId).select('receiptFile').lean();
+            const txn = await Transaction.findById(documentContext.documentId)
+              .select("receiptFile")
+              .lean();
             if (!txn?.receiptFile?.url) {
-              throw new Error('Aucun justificatif pour cette transaction');
+              throw new Error("Aucun justificatif pour cette transaction");
             }
-            const response = await axios.get(txn.receiptFile.url, { responseType: 'arraybuffer', timeout: 30000 });
+            const response = await axios.get(txn.receiptFile.url, {
+              responseType: "arraybuffer",
+              timeout: 30000,
+            });
             const fileBuffer = Buffer.from(response.data);
-            fileMimeType = txn.receiptFile.mimetype || 'application/pdf';
-            fileExt = txn.receiptFile.filename?.split('.').pop() || 'pdf';
+            fileMimeType = txn.receiptFile.mimetype || "application/pdf";
+            fileExt = txn.receiptFile.filename?.split(".").pop() || "pdf";
             // Reconstruire le nom du fichier avec la bonne extension
             fileName = buildFileName(
-              automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
+              automation.actionConfig.documentNaming ||
+                "{documentType}-{number}-{clientName}",
               documentContext,
-              fileExt
+              fileExt,
             );
             uploadResult = await cloudflareService.uploadImage(
               fileBuffer,
               fileName,
               userId,
-              'sharedDocuments',
-              workspaceId
+              "sharedDocuments",
+              workspaceId,
             );
             fileSize = fileBuffer.length;
           } else if (cachedDoc?.cachedPdf?.key) {
@@ -333,7 +406,7 @@ const documentAutomationService = {
               cachedDoc.cachedPdf.key,
               cloudflareService.sharedDocumentsBucketName,
               fileName,
-              workspaceId
+              workspaceId,
             );
             fileSize = 0; // Taille inconnue en copie R2, pas critique
           } else {
@@ -342,35 +415,39 @@ const documentAutomationService = {
             try {
               pdfBuffer = await generateDocumentPdf(
                 documentContext.documentId,
-                documentContext.documentType
+                documentContext.documentType,
               );
             } catch (pdfError) {
               throw new Error(`Erreur génération PDF: ${pdfError.message}`);
             }
 
             if (!pdfBuffer || pdfBuffer.length === 0) {
-              throw new Error('Le PDF généré est vide');
+              throw new Error("Le PDF généré est vide");
             }
 
             uploadResult = await cloudflareService.uploadImage(
               pdfBuffer,
               fileName,
               userId,
-              'sharedDocuments',
-              workspaceId
+              "sharedDocuments",
+              workspaceId,
             );
             fileSize = pdfBuffer.length;
 
             // Cacher le PDF pour les automatisations futures (fire-and-forget)
             if (CacheModel) {
-              cacheDocumentPdf(documentContext.documentId, documentContext.documentType, pdfBuffer, workspaceId)
-                .catch(() => {});
+              cacheDocumentPdf(
+                documentContext.documentId,
+                documentContext.documentType,
+                pdfBuffer,
+                workspaceId,
+              ).catch(() => {});
             }
           }
 
           // Récupérer le nom du dossier cible pour le log
           const targetFolder = await SharedFolder.findById(targetFolderId);
-          const targetFolderName = targetFolder?.name || 'Inconnu';
+          const targetFolderName = targetFolder?.name || "Inconnu";
 
           // Créer le SharedDocument
           const sharedDocument = new SharedDocument({
@@ -385,8 +462,8 @@ const documentAutomationService = {
             workspaceId,
             folderId: targetFolderId,
             uploadedBy: userId,
-            uploadedByName: 'Automatisation',
-            status: automation.actionConfig.documentStatus || 'classified',
+            uploadedByName: "Automatisation",
+            status: automation.actionConfig.documentStatus || "classified",
             isSharedWithAccountant: true,
             tags: automation.actionConfig.tags || [],
           });
@@ -401,21 +478,21 @@ const documentAutomationService = {
             sourceDocumentId: documentContext.documentId,
             sourceDocumentNumber: documentContext.prefix
               ? `${documentContext.prefix}${documentContext.documentNumber}`
-              : documentContext.documentNumber || '',
+              : documentContext.documentNumber || "",
             sharedDocumentId: sharedDocument._id,
             targetFolderId,
             targetFolderName,
-            status: 'SUCCESS',
+            status: "SUCCESS",
             fileName,
             fileSize: fileSize,
           });
 
           // Mettre à jour les stats
           await DocumentAutomation.findByIdAndUpdate(automation._id, {
-            $inc: { 'stats.totalExecutions': 1 },
+            $inc: { "stats.totalExecutions": 1 },
             $set: {
-              'stats.lastExecutedAt': new Date(),
-              'stats.lastDocumentId': sharedDocument._id,
+              "stats.lastExecutedAt": new Date(),
+              "stats.lastDocumentId": sharedDocument._id,
             },
           });
 
@@ -427,7 +504,7 @@ const documentAutomationService = {
         } catch (error) {
           console.error(
             `❌ [DocumentAutomation] Erreur automation "${automation.name}" (${automation._id}):`,
-            error.message
+            error.message,
           );
 
           // Logger l'échec
@@ -439,20 +516,23 @@ const documentAutomationService = {
               sourceDocumentId: documentContext.documentId,
               sourceDocumentNumber: documentContext.prefix
                 ? `${documentContext.prefix}${documentContext.documentNumber}`
-                : documentContext.documentNumber || '',
-              status: 'FAILED',
+                : documentContext.documentNumber || "",
+              status: "FAILED",
               error: error.message,
             });
           } catch (logError) {
             // Erreur de dédoublonnage (déjà loggé) — ignorer
             if (logError.code !== 11000) {
-              console.error('❌ [DocumentAutomation] Erreur log:', logError.message);
+              console.error(
+                "❌ [DocumentAutomation] Erreur log:",
+                logError.message,
+              );
             }
           }
 
           // Incrémenter les stats d'échec
           await DocumentAutomation.findByIdAndUpdate(automation._id, {
-            $inc: { 'stats.failedExecutions': 1 },
+            $inc: { "stats.failedExecutions": 1 },
           }).catch(() => {});
 
           results.push({
@@ -464,9 +544,9 @@ const documentAutomationService = {
         }
       }
 
-      return { executed: results.filter(r => r.success).length, results };
+      return { executed: results.filter((r) => r.success).length, results };
     } catch (error) {
-      console.error('❌ [DocumentAutomation] Erreur globale:', error);
+      console.error("❌ [DocumentAutomation] Erreur globale:", error);
       return { executed: 0, results: [], error: error.message };
     }
   },
@@ -474,7 +554,12 @@ const documentAutomationService = {
   /**
    * Variante pour les dépenses importées (copie le fichier R2 existant)
    */
-  async executeAutomationsForExpense(triggerType, workspaceId, expenseContext, userId) {
+  async executeAutomationsForExpense(
+    triggerType,
+    workspaceId,
+    expenseContext,
+    userId,
+  ) {
     try {
       const automations = await DocumentAutomation.find({
         workspaceId,
@@ -487,7 +572,7 @@ const documentAutomationService = {
       }
 
       // Utiliser le vrai type de document pour les logs (cohérent avec executeAutomationForExistingDocuments)
-      const logDocType = expenseContext.documentType || 'expense';
+      const logDocType = expenseContext.documentType || "expense";
 
       const results = [];
 
@@ -498,13 +583,26 @@ const documentAutomationService = {
           if (ac.filterYear && expenseContext.issueDate) {
             const docYear = new Date(expenseContext.issueDate).getFullYear();
             if (docYear !== ac.filterYear) {
-              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+              results.push({
+                automationId: automation._id,
+                automationName: automation.name,
+                success: true,
+                skipped: true,
+              });
               continue;
             }
           }
           if (ac.filterClientId && expenseContext.clientId) {
-            if (expenseContext.clientId.toString() !== ac.filterClientId.toString()) {
-              results.push({ automationId: automation._id, automationName: automation.name, success: true, skipped: true });
+            if (
+              expenseContext.clientId.toString() !==
+              ac.filterClientId.toString()
+            ) {
+              results.push({
+                automationId: automation._id,
+                automationName: automation.name,
+                success: true,
+                skipped: true,
+              });
               continue;
             }
           }
@@ -512,10 +610,10 @@ const documentAutomationService = {
           // Ne skip que les logs SUCCESS (les FAILED peuvent être réessayés)
           // Vérifier les deux formats pour compatibilité avec les anciens logs
           const existingSuccessLog = await DocumentAutomationLog.findOne({
-            sourceDocumentType: { $in: [logDocType, 'expense'] },
+            sourceDocumentType: { $in: [logDocType, "expense"] },
             sourceDocumentId: expenseContext.documentId,
             automationId: automation._id,
-            status: 'SUCCESS',
+            status: "SUCCESS",
           });
 
           if (existingSuccessLog) {
@@ -528,8 +626,8 @@ const documentAutomationService = {
                 },
                 {
                   $set: { trashedAt: null },
-                  $unset: { originalFolderId: '' },
-                }
+                  $unset: { originalFolderId: "" },
+                },
               );
             }
 
@@ -544,10 +642,10 @@ const documentAutomationService = {
 
           // Supprimer les anciens logs FAILED pour cette dépense (avant de réessayer)
           await DocumentAutomationLog.deleteMany({
-            sourceDocumentType: { $in: [logDocType, 'expense'] },
+            sourceDocumentType: { $in: [logDocType, "expense"] },
             sourceDocumentId: expenseContext.documentId,
             automationId: automation._id,
-            status: 'FAILED',
+            status: "FAILED",
           });
 
           // Récupérer le fichier : copie R2 serveur-à-serveur pour les documents importés,
@@ -556,12 +654,20 @@ const documentAutomationService = {
           let fileSize = 0;
           let r2CopySource = null;
 
-          const isImported = logDocType === 'importedInvoice' || logDocType === 'importedQuote';
+          const isImported =
+            logDocType === "importedInvoice" || logDocType === "importedQuote";
 
           if (isImported) {
             // Copie R2 serveur-à-serveur (plus fiable, pas de téléchargement HTTP)
-            const ImportModel = logDocType === 'importedInvoice' ? ImportedInvoice : ImportedQuote;
-            const sourceDoc = await ImportModel.findById(expenseContext.documentId).select('file').lean();
+            const ImportModel =
+              logDocType === "importedInvoice"
+                ? ImportedInvoice
+                : ImportedQuote;
+            const sourceDoc = await ImportModel.findById(
+              expenseContext.documentId,
+            )
+              .select("file")
+              .lean();
             const sourceKey = sourceDoc?.file?.cloudflareKey;
             if (sourceKey) {
               r2CopySource = {
@@ -575,21 +681,23 @@ const documentAutomationService = {
           // Fallback : téléchargement HTTP si pas de copie R2
           if (!r2CopySource) {
             if (!expenseContext.cloudflareUrl) {
-              throw new Error('Aucune URL source pour le fichier');
+              throw new Error("Aucune URL source pour le fichier");
             }
             try {
               const response = await axios.get(expenseContext.cloudflareUrl, {
-                responseType: 'arraybuffer',
+                responseType: "arraybuffer",
                 timeout: 30000,
               });
               fileBuffer = Buffer.from(response.data);
               fileSize = fileBuffer.length;
             } catch (fetchError) {
-              throw new Error(`Erreur récupération fichier: ${fetchError.message}`);
+              throw new Error(
+                `Erreur récupération fichier: ${fetchError.message}`,
+              );
             }
 
             if (!fileBuffer || fileBuffer.length === 0) {
-              throw new Error('Le fichier source est vide');
+              throw new Error("Le fichier source est vide");
             }
           }
 
@@ -598,33 +706,37 @@ const documentAutomationService = {
             automation.actionConfig,
             workspaceId,
             expenseContext,
-            userId
+            userId,
           );
 
           // Construire le nom du fichier
           const fileName = buildFileName(
-            automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
-            expenseContext
+            automation.actionConfig.documentNaming ||
+              "{documentType}-{number}-{clientName}",
+            expenseContext,
           );
 
           // Upload ou copie vers R2
           let uploadResult;
           if (r2CopySource) {
             uploadResult = await cloudflareService.copyToSharedDocuments(
-              r2CopySource.key, r2CopySource.bucket, fileName, workspaceId
+              r2CopySource.key,
+              r2CopySource.bucket,
+              fileName,
+              workspaceId,
             );
           } else {
             uploadResult = await cloudflareService.uploadImage(
               fileBuffer,
               fileName,
               userId,
-              'sharedDocuments',
-              workspaceId
+              "sharedDocuments",
+              workspaceId,
             );
           }
 
           const targetFolder = await SharedFolder.findById(targetFolderId);
-          const targetFolderName = targetFolder?.name || 'Inconnu';
+          const targetFolderName = targetFolder?.name || "Inconnu";
 
           // Créer le SharedDocument
           const sharedDocument = new SharedDocument({
@@ -633,14 +745,14 @@ const documentAutomationService = {
             description: `Importé automatiquement par l'automatisation "${automation.name}"`,
             fileUrl: uploadResult.url,
             fileKey: uploadResult.key,
-            mimeType: expenseContext.mimeType || 'application/pdf',
+            mimeType: expenseContext.mimeType || "application/pdf",
             fileSize: fileSize,
-            fileExtension: expenseContext.fileExtension || 'pdf',
+            fileExtension: expenseContext.fileExtension || "pdf",
             workspaceId,
             folderId: targetFolderId,
             uploadedBy: userId,
-            uploadedByName: 'Automatisation',
-            status: automation.actionConfig.documentStatus || 'classified',
+            uploadedByName: "Automatisation",
+            status: automation.actionConfig.documentStatus || "classified",
             isSharedWithAccountant: true,
             tags: automation.actionConfig.tags || [],
           });
@@ -652,20 +764,20 @@ const documentAutomationService = {
             workspaceId,
             sourceDocumentType: logDocType,
             sourceDocumentId: expenseContext.documentId,
-            sourceDocumentNumber: expenseContext.documentNumber || '',
+            sourceDocumentNumber: expenseContext.documentNumber || "",
             sharedDocumentId: sharedDocument._id,
             targetFolderId,
             targetFolderName,
-            status: 'SUCCESS',
+            status: "SUCCESS",
             fileName,
             fileSize: fileSize,
           });
 
           await DocumentAutomation.findByIdAndUpdate(automation._id, {
-            $inc: { 'stats.totalExecutions': 1 },
+            $inc: { "stats.totalExecutions": 1 },
             $set: {
-              'stats.lastExecutedAt': new Date(),
-              'stats.lastDocumentId': sharedDocument._id,
+              "stats.lastExecutedAt": new Date(),
+              "stats.lastDocumentId": sharedDocument._id,
             },
           });
 
@@ -677,7 +789,7 @@ const documentAutomationService = {
         } catch (error) {
           console.error(
             `❌ [DocumentAutomation] Erreur automation expense "${automation.name}":`,
-            error.message
+            error.message,
           );
 
           try {
@@ -686,18 +798,21 @@ const documentAutomationService = {
               workspaceId,
               sourceDocumentType: logDocType,
               sourceDocumentId: expenseContext.documentId,
-              sourceDocumentNumber: expenseContext.documentNumber || '',
-              status: 'FAILED',
+              sourceDocumentNumber: expenseContext.documentNumber || "",
+              status: "FAILED",
               error: error.message,
             });
           } catch (logError) {
             if (logError.code !== 11000) {
-              console.error('❌ [DocumentAutomation] Erreur log:', logError.message);
+              console.error(
+                "❌ [DocumentAutomation] Erreur log:",
+                logError.message,
+              );
             }
           }
 
           await DocumentAutomation.findByIdAndUpdate(automation._id, {
-            $inc: { 'stats.failedExecutions': 1 },
+            $inc: { "stats.failedExecutions": 1 },
           }).catch(() => {});
 
           results.push({
@@ -709,9 +824,9 @@ const documentAutomationService = {
         }
       }
 
-      return { executed: results.filter(r => r.success).length, results };
+      return { executed: results.filter((r) => r.success).length, results };
     } catch (error) {
-      console.error('❌ [DocumentAutomation] Erreur globale expense:', error);
+      console.error("❌ [DocumentAutomation] Erreur globale expense:", error);
       return { executed: 0, results: [], error: error.message };
     }
   },
@@ -721,30 +836,99 @@ const documentAutomationService = {
    */
   _getTriggerConfig(triggerType) {
     const TRIGGER_TO_QUERY = {
-      INVOICE_DRAFT:     { model: Invoice,    status: 'DRAFT',     docType: 'invoice' },
-      INVOICE_SENT:      { model: Invoice,    status: 'PENDING',   docType: 'invoice' },
-      INVOICE_PAID:      { model: Invoice,    status: 'COMPLETED', docType: 'invoice' },
-      INVOICE_OVERDUE:   { model: Invoice,    status: 'OVERDUE',   docType: 'invoice' },
-      INVOICE_CANCELED:  { model: Invoice,    status: 'CANCELED',  docType: 'invoice' },
-      QUOTE_DRAFT:       { model: Quote,      status: 'DRAFT',     docType: 'quote' },
-      QUOTE_SENT:        { model: Quote,      status: 'PENDING',   docType: 'quote' },
-      QUOTE_ACCEPTED:    { model: Quote,      status: 'COMPLETED', docType: 'quote' },
-      QUOTE_CANCELED:    { model: Quote,      status: 'CANCELED',  docType: 'quote' },
-      CREDIT_NOTE_CREATED: { model: CreditNote, status: null,      docType: 'creditNote' },
-      INVOICE_IMPORTED:    { model: ImportedInvoice, status: 'VALIDATED', docType: 'importedInvoice' },
-      QUOTE_IMPORTED:      { model: ImportedQuote,   status: 'VALIDATED', docType: 'importedQuote' },
-      PURCHASE_ORDER_DRAFT:       { model: PurchaseOrder,   status: 'DRAFT',       docType: 'purchaseOrder' },
-      PURCHASE_ORDER_CONFIRMED:   { model: PurchaseOrder,   status: 'CONFIRMED',   docType: 'purchaseOrder' },
-      PURCHASE_ORDER_IN_PROGRESS: { model: PurchaseOrder,   status: 'IN_PROGRESS', docType: 'purchaseOrder' },
-      PURCHASE_ORDER_DELIVERED:   { model: PurchaseOrder,   status: 'DELIVERED',   docType: 'purchaseOrder' },
-      PURCHASE_ORDER_CANCELED:    { model: PurchaseOrder,   status: 'CANCELED',    docType: 'purchaseOrder' },
-      PURCHASE_INVOICE_TO_PROCESS: { model: PurchaseInvoice, status: 'TO_PROCESS', docType: 'purchaseInvoice' },
-      PURCHASE_INVOICE_TO_PAY:     { model: PurchaseInvoice, status: 'TO_PAY',     docType: 'purchaseInvoice' },
-      PURCHASE_INVOICE_PENDING:    { model: PurchaseInvoice, status: 'PENDING',    docType: 'purchaseInvoice' },
-      PURCHASE_INVOICE_PAID:       { model: PurchaseInvoice, status: 'PAID',       docType: 'purchaseInvoice' },
-      PURCHASE_INVOICE_OVERDUE:    { model: PurchaseInvoice, status: 'OVERDUE',    docType: 'purchaseInvoice' },
-      PURCHASE_INVOICE_ARCHIVED:   { model: PurchaseInvoice, status: 'ARCHIVED',   docType: 'purchaseInvoice' },
-      TRANSACTION_RECEIPT:         { model: Transaction,     status: null,          docType: 'transaction', customFilter: { 'receiptFile.url': { $exists: true, $ne: null } } },
+      INVOICE_DRAFT: { model: Invoice, status: "DRAFT", docType: "invoice" },
+      INVOICE_SENT: { model: Invoice, status: "PENDING", docType: "invoice" },
+      INVOICE_PAID: { model: Invoice, status: "COMPLETED", docType: "invoice" },
+      INVOICE_OVERDUE: {
+        model: Invoice,
+        status: "OVERDUE",
+        docType: "invoice",
+      },
+      INVOICE_CANCELED: {
+        model: Invoice,
+        status: "CANCELED",
+        docType: "invoice",
+      },
+      QUOTE_DRAFT: { model: Quote, status: "DRAFT", docType: "quote" },
+      QUOTE_SENT: { model: Quote, status: "PENDING", docType: "quote" },
+      QUOTE_ACCEPTED: { model: Quote, status: "COMPLETED", docType: "quote" },
+      QUOTE_CANCELED: { model: Quote, status: "CANCELED", docType: "quote" },
+      CREDIT_NOTE_CREATED: {
+        model: CreditNote,
+        status: null,
+        docType: "creditNote",
+      },
+      INVOICE_IMPORTED: {
+        model: ImportedInvoice,
+        status: "VALIDATED",
+        docType: "importedInvoice",
+      },
+      QUOTE_IMPORTED: {
+        model: ImportedQuote,
+        status: "VALIDATED",
+        docType: "importedQuote",
+      },
+      PURCHASE_ORDER_DRAFT: {
+        model: PurchaseOrder,
+        status: "DRAFT",
+        docType: "purchaseOrder",
+      },
+      PURCHASE_ORDER_CONFIRMED: {
+        model: PurchaseOrder,
+        status: "CONFIRMED",
+        docType: "purchaseOrder",
+      },
+      PURCHASE_ORDER_IN_PROGRESS: {
+        model: PurchaseOrder,
+        status: "IN_PROGRESS",
+        docType: "purchaseOrder",
+      },
+      PURCHASE_ORDER_DELIVERED: {
+        model: PurchaseOrder,
+        status: "DELIVERED",
+        docType: "purchaseOrder",
+      },
+      PURCHASE_ORDER_CANCELED: {
+        model: PurchaseOrder,
+        status: "CANCELED",
+        docType: "purchaseOrder",
+      },
+      PURCHASE_INVOICE_TO_PROCESS: {
+        model: PurchaseInvoice,
+        status: "TO_PROCESS",
+        docType: "purchaseInvoice",
+      },
+      PURCHASE_INVOICE_TO_PAY: {
+        model: PurchaseInvoice,
+        status: "TO_PAY",
+        docType: "purchaseInvoice",
+      },
+      PURCHASE_INVOICE_PENDING: {
+        model: PurchaseInvoice,
+        status: "PENDING",
+        docType: "purchaseInvoice",
+      },
+      PURCHASE_INVOICE_PAID: {
+        model: PurchaseInvoice,
+        status: "PAID",
+        docType: "purchaseInvoice",
+      },
+      PURCHASE_INVOICE_OVERDUE: {
+        model: PurchaseInvoice,
+        status: "OVERDUE",
+        docType: "purchaseInvoice",
+      },
+      PURCHASE_INVOICE_ARCHIVED: {
+        model: PurchaseInvoice,
+        status: "ARCHIVED",
+        docType: "purchaseInvoice",
+      },
+      TRANSACTION_RECEIPT: {
+        model: Transaction,
+        status: null,
+        docType: "transaction",
+        customFilter: { "receiptFile.url": { $exists: true, $ne: null } },
+      },
     };
     return TRIGGER_TO_QUERY[triggerType] || null;
   },
@@ -756,43 +940,62 @@ const documentAutomationService = {
   async _cleanOrphanedLogs(automationId, docType, documentIds) {
     try {
       // Compatibilité avec les anciens logs 'expense'
-      const isExpenseType = ['importedInvoice', 'importedQuote', 'purchaseInvoice'].includes(docType);
-      const typeFilter = isExpenseType ? { $in: [docType, 'expense'] } : docType;
+      const isExpenseType = [
+        "importedInvoice",
+        "importedQuote",
+        "purchaseInvoice",
+      ].includes(docType);
+      const typeFilter = isExpenseType
+        ? { $in: [docType, "expense"] }
+        : docType;
       const successLogs = await DocumentAutomationLog.find({
         automationId,
         sourceDocumentType: typeFilter,
         sourceDocumentId: { $in: documentIds },
-        status: 'SUCCESS',
+        status: "SUCCESS",
         sharedDocumentId: { $ne: null },
       }).lean();
 
       if (successLogs.length === 0) return;
 
       // Vérifier quels SharedDocuments existent encore
-      const sharedDocIds = successLogs.map(l => l.sharedDocumentId).filter(Boolean);
+      const sharedDocIds = successLogs
+        .map((l) => l.sharedDocumentId)
+        .filter(Boolean);
       const existingDocs = await SharedDocument.find({
         _id: { $in: sharedDocIds },
-      }).select('_id').lean();
+      })
+        .select("_id")
+        .lean();
 
-      const existingIds = new Set(existingDocs.map(d => d._id.toString()));
+      const existingIds = new Set(existingDocs.map((d) => d._id.toString()));
 
       // Supprimer les logs dont le SharedDocument n'existe plus
       const orphanedLogIds = successLogs
-        .filter(l => l.sharedDocumentId && !existingIds.has(l.sharedDocumentId.toString()))
-        .map(l => l._id);
+        .filter(
+          (l) =>
+            l.sharedDocumentId &&
+            !existingIds.has(l.sharedDocumentId.toString()),
+        )
+        .map((l) => l._id);
 
       if (orphanedLogIds.length > 0) {
-        await DocumentAutomationLog.deleteMany({ _id: { $in: orphanedLogIds } });
+        await DocumentAutomationLog.deleteMany({
+          _id: { $in: orphanedLogIds },
+        });
 
         // Décrémenter le compteur totalExecutions
         await DocumentAutomation.findByIdAndUpdate(automationId, {
-          $inc: { 'stats.totalExecutions': -orphanedLogIds.length },
+          $inc: { "stats.totalExecutions": -orphanedLogIds.length },
         });
 
         // Orphaned logs cleaned
       }
     } catch (error) {
-      console.error('⚠️ [DocumentAutomation] Erreur nettoyage logs orphelins:', error.message);
+      console.error(
+        "⚠️ [DocumentAutomation] Erreur nettoyage logs orphelins:",
+        error.message,
+      );
     }
   },
 
@@ -804,19 +1007,27 @@ const documentAutomationService = {
   async _restoreTrashedAutomationDocs(automationId, docType, documentIds) {
     try {
       // Compatibilité avec les anciens logs 'expense'
-      const isExpenseType = ['importedInvoice', 'importedQuote', 'purchaseInvoice'].includes(docType);
-      const typeFilter = isExpenseType ? { $in: [docType, 'expense'] } : docType;
+      const isExpenseType = [
+        "importedInvoice",
+        "importedQuote",
+        "purchaseInvoice",
+      ].includes(docType);
+      const typeFilter = isExpenseType
+        ? { $in: [docType, "expense"] }
+        : docType;
       const successLogs = await DocumentAutomationLog.find({
         automationId,
         sourceDocumentType: typeFilter,
         sourceDocumentId: { $in: documentIds },
-        status: 'SUCCESS',
+        status: "SUCCESS",
         sharedDocumentId: { $ne: null },
       }).lean();
 
       if (successLogs.length === 0) return 0;
 
-      const sharedDocIds = successLogs.map(l => l.sharedDocumentId).filter(Boolean);
+      const sharedDocIds = successLogs
+        .map((l) => l.sharedDocumentId)
+        .filter(Boolean);
 
       // Restaurer les SharedDocuments en corbeille (folderId est déjà correct)
       const result = await SharedDocument.updateMany(
@@ -826,13 +1037,16 @@ const documentAutomationService = {
         },
         {
           $set: { trashedAt: null },
-          $unset: { originalFolderId: '' },
-        }
+          $unset: { originalFolderId: "" },
+        },
       );
 
       return result.modifiedCount || 0;
     } catch (error) {
-      console.error('⚠️ [DocumentAutomation] Erreur restauration docs corbeille:', error.message);
+      console.error(
+        "⚠️ [DocumentAutomation] Erreur restauration docs corbeille:",
+        error.message,
+      );
       return 0;
     }
   },
@@ -852,21 +1066,75 @@ const documentAutomationService = {
       Object.assign(query, config.customFilter);
     }
 
-    const documents = await config.model.find(query).select('_id').lean();
+    const documents = await config.model.find(query).select("_id").lean();
     if (documents.length === 0) return 0;
 
     // Nettoyer les logs SUCCESS dont le SharedDocument a été supprimé
-    await this._cleanOrphanedLogs(automation._id, config.docType, documents.map(d => d._id));
+    await this._cleanOrphanedLogs(
+      automation._id,
+      config.docType,
+      documents.map((d) => d._id),
+    );
 
     // Compter ceux qui ont déjà un log SUCCESS valide
     const successLogs = await DocumentAutomationLog.countDocuments({
       automationId: automation._id,
       sourceDocumentType: config.docType,
-      sourceDocumentId: { $in: documents.map(d => d._id) },
-      status: 'SUCCESS',
+      sourceDocumentId: { $in: documents.map((d) => d._id) },
+      status: "SUCCESS",
     });
 
     return documents.length - successLogs;
+  },
+
+  /**
+   * Compte le nombre total de documents sur Newbi correspondant au trigger de l'automatisation.
+   * Inclut les documents déjà traités ET ceux en attente.
+   */
+  async countDocumentsForAutomation(automation) {
+    const config = this._getTriggerConfig(automation.triggerType);
+    if (!config) return 0;
+
+    const query = { workspaceId: automation.workspaceId };
+    if (config.status) {
+      query.status = config.status;
+    }
+    if (config.customFilter) {
+      Object.assign(query, config.customFilter);
+    }
+
+    let count = await config.model.countDocuments(query);
+
+    // Si filtre par année, on doit compter manuellement
+    const filterYear = automation.actionConfig?.filterYear;
+    const filterClientId = automation.actionConfig?.filterClientId;
+
+    if (filterYear || filterClientId) {
+      const documents = await config.model
+        .find(query)
+        .select("issueDate date createdAt client clientId")
+        .lean();
+      let filtered = documents;
+
+      if (filterYear) {
+        filtered = filtered.filter((doc) => {
+          const issueDate = doc.issueDate || doc.date || doc.createdAt;
+          return issueDate && new Date(issueDate).getFullYear() === filterYear;
+        });
+      }
+
+      if (filterClientId) {
+        const filterClientIdStr = filterClientId.toString();
+        filtered = filtered.filter((doc) => {
+          const docClientId = doc.client?._id || doc.clientId;
+          return docClientId && docClientId.toString() === filterClientIdStr;
+        });
+      }
+
+      count = filtered.length;
+    }
+
+    return count;
   },
 
   /**
@@ -890,7 +1158,7 @@ const documentAutomationService = {
     // Filtrer par année si filterYear est défini
     const filterYear = automation.actionConfig?.filterYear;
     if (filterYear) {
-      documents = documents.filter(doc => {
+      documents = documents.filter((doc) => {
         const issueDate = doc.issueDate || doc.date || doc.createdAt;
         return issueDate && new Date(issueDate).getFullYear() === filterYear;
       });
@@ -900,7 +1168,7 @@ const documentAutomationService = {
     const filterClientId = automation.actionConfig?.filterClientId;
     if (filterClientId) {
       const filterClientIdStr = filterClientId.toString();
-      documents = documents.filter(doc => {
+      documents = documents.filter((doc) => {
         const docClientId = doc.client?._id || doc.clientId;
         return docClientId && docClientId.toString() === filterClientIdStr;
       });
@@ -909,37 +1177,46 @@ const documentAutomationService = {
     if (documents.length === 0) return [];
 
     // Nettoyer les logs SUCCESS dont le SharedDocument a été supprimé
-    await this._cleanOrphanedLogs(automation._id, config.docType, documents.map(d => d._id));
+    await this._cleanOrphanedLogs(
+      automation._id,
+      config.docType,
+      documents.map((d) => d._id),
+    );
 
     // Récupérer les IDs qui ont déjà un log SUCCESS valide
     const successLogs = await DocumentAutomationLog.find({
       automationId: automation._id,
       sourceDocumentType: config.docType,
-      sourceDocumentId: { $in: documents.map(d => d._id) },
-      status: 'SUCCESS',
-    }).select('sourceDocumentId').lean();
+      sourceDocumentId: { $in: documents.map((d) => d._id) },
+      status: "SUCCESS",
+    })
+      .select("sourceDocumentId")
+      .lean();
 
-    const successIds = new Set(successLogs.map(l => l.sourceDocumentId.toString()));
+    const successIds = new Set(
+      successLogs.map((l) => l.sourceDocumentId.toString()),
+    );
 
     return documents
-      .filter(d => !successIds.has(d._id.toString()))
-      .map(d => {
-        let clientName = d.client?.name || d.vendor?.name || '';
-        let documentNumber = d.number || d.originalInvoiceNumber || d.originalQuoteNumber || '';
+      .filter((d) => !successIds.has(d._id.toString()))
+      .map((d) => {
+        let clientName = d.client?.name || d.vendor?.name || "";
+        let documentNumber =
+          d.number || d.originalInvoiceNumber || d.originalQuoteNumber || "";
 
-        if (config.docType === 'purchaseInvoice') {
-          clientName = d.supplierName || '';
-          documentNumber = d.invoiceNumber || '';
-        } else if (config.docType === 'transaction') {
-          clientName = d.description || '';
-          documentNumber = d.externalId || '';
+        if (config.docType === "purchaseInvoice") {
+          clientName = d.supplierName || "";
+          documentNumber = d.invoiceNumber || "";
+        } else if (config.docType === "transaction") {
+          clientName = d.description || "";
+          documentNumber = d.externalId || "";
         }
 
         return {
           documentId: d._id.toString(),
           documentType: config.docType,
           documentNumber,
-          prefix: d.prefix || '',
+          prefix: d.prefix || "",
           clientName,
         };
       });
@@ -949,10 +1226,17 @@ const documentAutomationService = {
    * Traite un document avec un PDF généré côté client.
    * Reçoit le PDF en base64, fait l'upload R2, crée le SharedDocument et le log.
    */
-  async processAutomationDocumentWithPDF(automationId, workspaceId, documentId, documentType, pdfBase64, userId) {
+  async processAutomationDocumentWithPDF(
+    automationId,
+    workspaceId,
+    documentId,
+    documentType,
+    pdfBase64,
+    userId,
+  ) {
     const automation = await DocumentAutomation.findById(automationId);
     if (!automation) {
-      throw new Error('Automatisation non trouvée');
+      throw new Error("Automatisation non trouvée");
     }
 
     // Supprimer les anciens logs FAILED pour ce document (avant de réessayer)
@@ -960,13 +1244,15 @@ const documentAutomationService = {
       sourceDocumentType: documentType,
       sourceDocumentId: documentId,
       automationId: automation._id,
-      status: 'FAILED',
+      status: "FAILED",
     });
 
     // Récupérer le document source pour le contexte
     const config = this._getTriggerConfig(automation.triggerType);
     if (!config) {
-      throw new Error(`Type de trigger non supporté: ${automation.triggerType}`);
+      throw new Error(
+        `Type de trigger non supporté: ${automation.triggerType}`,
+      );
     }
 
     const doc = await config.model.findById(documentId).lean();
@@ -976,46 +1262,60 @@ const documentAutomationService = {
 
     // Récupérer le fichier selon le type de document
     let fileBuffer = null;
-    let fileMimeType = 'application/pdf';
-    let fileExt = 'pdf';
+    let fileMimeType = "application/pdf";
+    let fileExt = "pdf";
     let fileSize = 0;
     let r2CopySource = null; // Pour copie serveur-à-serveur R2
 
-    if (documentType === 'importedInvoice' || documentType === 'importedQuote') {
+    if (
+      documentType === "importedInvoice" ||
+      documentType === "importedQuote"
+    ) {
       // Document importé : copie serveur-à-serveur R2 (sans transit par le serveur)
       const sourceKey = doc.file?.cloudflareKey;
-      if (!sourceKey) throw new Error('Clé R2 introuvable pour le document importé');
+      if (!sourceKey)
+        throw new Error("Clé R2 introuvable pour le document importé");
       r2CopySource = {
         key: sourceKey,
         bucket: cloudflareService.importedInvoicesBucketName,
       };
-      fileMimeType = doc.file?.mimeType || 'application/pdf';
-      fileExt = doc.file?.originalFileName?.split('.').pop() || 'pdf';
+      fileMimeType = doc.file?.mimeType || "application/pdf";
+      fileExt = doc.file?.originalFileName?.split(".").pop() || "pdf";
       fileSize = doc.file?.fileSize || 0;
-    } else if (documentType === 'purchaseInvoice') {
+    } else if (documentType === "purchaseInvoice") {
       // Facture d'achat : copie du premier fichier attaché
       const sourceFile = doc.files?.[0];
-      if (!sourceFile?.url) throw new Error('Aucun fichier attaché à la facture d\'achat');
-      const response = await axios.get(sourceFile.url, { responseType: 'arraybuffer', timeout: 30000 });
+      if (!sourceFile?.url)
+        throw new Error("Aucun fichier attaché à la facture d'achat");
+      const response = await axios.get(sourceFile.url, {
+        responseType: "arraybuffer",
+        timeout: 30000,
+      });
       fileBuffer = Buffer.from(response.data);
-      fileMimeType = sourceFile.mimetype || 'application/pdf';
-      fileExt = sourceFile.filename?.split('.').pop() || 'pdf';
+      fileMimeType = sourceFile.mimetype || "application/pdf";
+      fileExt = sourceFile.filename?.split(".").pop() || "pdf";
       fileSize = fileBuffer.length;
-    } else if (documentType === 'transaction') {
+    } else if (documentType === "transaction") {
       // Transaction : copie du justificatif (receiptFile)
       const receiptUrl = doc.receiptFile?.url;
-      if (!receiptUrl) throw new Error('Aucun justificatif pour cette transaction');
-      const response = await axios.get(receiptUrl, { responseType: 'arraybuffer', timeout: 30000 });
+      if (!receiptUrl)
+        throw new Error("Aucun justificatif pour cette transaction");
+      const response = await axios.get(receiptUrl, {
+        responseType: "arraybuffer",
+        timeout: 30000,
+      });
       fileBuffer = Buffer.from(response.data);
-      fileMimeType = doc.receiptFile?.mimetype || 'application/pdf';
-      fileExt = doc.receiptFile?.filename?.split('.').pop() || 'pdf';
+      fileMimeType = doc.receiptFile?.mimetype || "application/pdf";
+      fileExt = doc.receiptFile?.filename?.split(".").pop() || "pdf";
       fileSize = fileBuffer.length;
     } else if (pdfBase64) {
       // PDF fourni par le client
-      fileBuffer = Buffer.from(pdfBase64, 'base64');
+      fileBuffer = Buffer.from(pdfBase64, "base64");
       fileSize = fileBuffer.length;
       // Cacher le PDF pour les automatisations futures (fire-and-forget)
-      cacheDocumentPdf(documentId, documentType, fileBuffer, workspaceId).catch(() => {});
+      cacheDocumentPdf(documentId, documentType, fileBuffer, workspaceId).catch(
+        () => {},
+      );
     } else if (doc.cachedPdf?.key) {
       // Copie R2 serveur-à-serveur depuis le cache (instantanée)
       r2CopySource = {
@@ -1028,29 +1328,35 @@ const documentAutomationService = {
       fileSize = fileBuffer?.length || 0;
       // Cacher le PDF pour les automatisations futures (fire-and-forget)
       if (fileBuffer) {
-        cacheDocumentPdf(documentId, documentType, fileBuffer, workspaceId).catch(() => {});
+        cacheDocumentPdf(
+          documentId,
+          documentType,
+          fileBuffer,
+          workspaceId,
+        ).catch(() => {});
       }
     }
 
     if (!r2CopySource && (!fileBuffer || fileBuffer.length === 0)) {
-      throw new Error('Le fichier généré/récupéré est vide');
+      throw new Error("Le fichier généré/récupéré est vide");
     }
 
-    let contextClientName = doc.client?.name || doc.vendor?.name || '';
-    let contextDocNumber = doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '';
-    if (documentType === 'purchaseInvoice') {
-      contextClientName = doc.supplierName || '';
-      contextDocNumber = doc.invoiceNumber || '';
-    } else if (documentType === 'transaction') {
-      contextClientName = doc.description || '';
-      contextDocNumber = doc.externalId || '';
+    let contextClientName = doc.client?.name || doc.vendor?.name || "";
+    let contextDocNumber =
+      doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || "";
+    if (documentType === "purchaseInvoice") {
+      contextClientName = doc.supplierName || "";
+      contextDocNumber = doc.invoiceNumber || "";
+    } else if (documentType === "transaction") {
+      contextClientName = doc.description || "";
+      contextDocNumber = doc.externalId || "";
     }
 
     const documentContext = {
       documentId: doc._id.toString(),
       documentType,
       documentNumber: contextDocNumber,
-      prefix: doc.prefix || '',
+      prefix: doc.prefix || "",
       clientName: contextClientName,
     };
 
@@ -1059,14 +1365,15 @@ const documentAutomationService = {
       automation.actionConfig,
       workspaceId,
       documentContext,
-      userId
+      userId,
     );
 
     // Construire le nom du fichier
     const fileName = buildFileName(
-      automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
+      automation.actionConfig.documentNaming ||
+        "{documentType}-{number}-{clientName}",
       documentContext,
-      fileExt
+      fileExt,
     );
 
     // Upload ou copie vers R2
@@ -1074,17 +1381,24 @@ const documentAutomationService = {
     if (r2CopySource) {
       // Copie serveur-à-serveur R2 (pas de transit réseau)
       uploadResult = await cloudflareService.copyToSharedDocuments(
-        r2CopySource.key, r2CopySource.bucket, fileName, workspaceId
+        r2CopySource.key,
+        r2CopySource.bucket,
+        fileName,
+        workspaceId,
       );
     } else {
       uploadResult = await cloudflareService.uploadImage(
-        fileBuffer, fileName, userId, 'sharedDocuments', workspaceId
+        fileBuffer,
+        fileName,
+        userId,
+        "sharedDocuments",
+        workspaceId,
       );
     }
 
     // Récupérer le nom du dossier cible
     const targetFolder = await SharedFolder.findById(targetFolderId);
-    const targetFolderName = targetFolder?.name || 'Inconnu';
+    const targetFolderName = targetFolder?.name || "Inconnu";
 
     // Créer le SharedDocument
     const sharedDocument = new SharedDocument({
@@ -1099,8 +1413,8 @@ const documentAutomationService = {
       workspaceId,
       folderId: targetFolderId,
       uploadedBy: userId,
-      uploadedByName: 'Automatisation',
-      status: automation.actionConfig.documentStatus || 'classified',
+      uploadedByName: "Automatisation",
+      status: automation.actionConfig.documentStatus || "classified",
       isSharedWithAccountant: true,
       tags: automation.actionConfig.tags || [],
     });
@@ -1115,21 +1429,21 @@ const documentAutomationService = {
       sourceDocumentId: documentId,
       sourceDocumentNumber: documentContext.prefix
         ? `${documentContext.prefix}${documentContext.documentNumber}`
-        : documentContext.documentNumber || '',
+        : documentContext.documentNumber || "",
       sharedDocumentId: sharedDocument._id,
       targetFolderId,
       targetFolderName,
-      status: 'SUCCESS',
+      status: "SUCCESS",
       fileName,
       fileSize: fileSize,
     });
 
     // Mettre à jour les stats
     await DocumentAutomation.findByIdAndUpdate(automation._id, {
-      $inc: { 'stats.totalExecutions': 1 },
+      $inc: { "stats.totalExecutions": 1 },
       $set: {
-        'stats.lastExecutedAt': new Date(),
-        'stats.lastDocumentId': sharedDocument._id,
+        "stats.lastExecutedAt": new Date(),
+        "stats.lastDocumentId": sharedDocument._id,
       },
     });
 
@@ -1150,7 +1464,13 @@ const documentAutomationService = {
     const config = this._getTriggerConfig(automation.triggerType);
     if (!config) {
       // Trigger non supporté pour le traitement rétroactif
-      return { successCount: 0, skipCount: 0, failCount: 0, restoredCount: 0, total: 0 };
+      return {
+        successCount: 0,
+        skipCount: 0,
+        failCount: 0,
+        restoredCount: 0,
+        total: 0,
+      };
     }
 
     try {
@@ -1167,7 +1487,7 @@ const documentAutomationService = {
       // Filtrer par année si filterYear est défini
       const filterYear = automation.actionConfig.filterYear;
       if (filterYear) {
-        documents = documents.filter(doc => {
+        documents = documents.filter((doc) => {
           const issueDate = doc.issueDate || doc.date || doc.createdAt;
           return issueDate && new Date(issueDate).getFullYear() === filterYear;
         });
@@ -1177,7 +1497,7 @@ const documentAutomationService = {
       const filterClientId = automation.actionConfig.filterClientId;
       if (filterClientId) {
         const filterClientIdStr = filterClientId.toString();
-        documents = documents.filter(doc => {
+        documents = documents.filter((doc) => {
           const docClientId = doc.client?._id || doc.clientId;
           return docClientId && docClientId.toString() === filterClientIdStr;
         });
@@ -1185,15 +1505,27 @@ const documentAutomationService = {
 
       if (documents.length === 0) {
         // Aucun document existant
-        return { successCount: 0, skipCount: 0, failCount: 0, restoredCount: 0, total: 0 };
+        return {
+          successCount: 0,
+          skipCount: 0,
+          failCount: 0,
+          restoredCount: 0,
+          total: 0,
+        };
       }
 
       // Nettoyer les logs SUCCESS dont le SharedDocument a été supprimé définitivement
-      await this._cleanOrphanedLogs(automation._id, config.docType, documents.map(d => d._id));
+      await this._cleanOrphanedLogs(
+        automation._id,
+        config.docType,
+        documents.map((d) => d._id),
+      );
 
       // Restaurer les SharedDocuments en corbeille vers leur dossier d'origine
       const restoredCount = await this._restoreTrashedAutomationDocs(
-        automation._id, config.docType, documents.map(d => d._id)
+        automation._id,
+        config.docType,
+        documents.map((d) => d._id),
       );
 
       let successCount = 0;
@@ -1203,124 +1535,161 @@ const documentAutomationService = {
 
       // Pré-charger TOUS les logs SUCCESS en une seule requête
       // Vérifier les deux formats pour compatibilité avec les anciens logs 'expense'
-      const allDocIds = documents.map(d => d._id);
-      const isExpenseType = ['importedInvoice', 'importedQuote', 'purchaseInvoice'].includes(config.docType);
+      const allDocIds = documents.map((d) => d._id);
+      const isExpenseType = [
+        "importedInvoice",
+        "importedQuote",
+        "purchaseInvoice",
+      ].includes(config.docType);
       const logTypeFilter = isExpenseType
-        ? { $in: [config.docType, 'expense'] }
+        ? { $in: [config.docType, "expense"] }
         : config.docType;
       const existingSuccessLogs = await DocumentAutomationLog.find({
         sourceDocumentType: logTypeFilter,
         sourceDocumentId: { $in: allDocIds },
         automationId: automation._id,
-        status: 'SUCCESS',
-      }).select('sourceDocumentId').lean();
+        status: "SUCCESS",
+      })
+        .select("sourceDocumentId")
+        .lean();
 
       const alreadyProcessedIds = new Set(
-        existingSuccessLogs.map(log => log.sourceDocumentId.toString())
+        existingSuccessLogs.map((log) => log.sourceDocumentId.toString()),
       );
 
       // Filtrer les documents à traiter (exclure ceux déjà traités)
-      const docsToProcess = documents.filter(doc => !alreadyProcessedIds.has(doc._id.toString()));
+      const docsToProcess = documents.filter(
+        (doc) => !alreadyProcessedIds.has(doc._id.toString()),
+      );
       skipCount = documents.length - docsToProcess.length;
 
       if (docsToProcess.length === 0) {
-        return { successCount: 0, skipCount, failCount: 0, restoredCount, total: documents.length };
+        return {
+          successCount: 0,
+          skipCount,
+          failCount: 0,
+          restoredCount,
+          total: documents.length,
+        };
       }
 
       // Supprimer TOUS les logs FAILED en une seule requête
       await DocumentAutomationLog.deleteMany({
-        sourceDocumentType: isExpenseType ? { $in: [config.docType, 'expense'] } : config.docType,
-        sourceDocumentId: { $in: docsToProcess.map(d => d._id) },
+        sourceDocumentType: isExpenseType
+          ? { $in: [config.docType, "expense"] }
+          : config.docType,
+        sourceDocumentId: { $in: docsToProcess.map((d) => d._id) },
         automationId: automation._id,
-        status: 'FAILED',
+        status: "FAILED",
       });
 
       // Pré-résoudre le dossier cible (souvent le même pour tous les docs)
       const sampleContext = {
         documentId: docsToProcess[0]._id.toString(),
         documentType: config.docType,
-        documentNumber: '',
-        prefix: '',
-        clientName: '',
+        documentNumber: "",
+        prefix: "",
+        clientName: "",
       };
       const preResolvedFolderId = await resolveTargetFolder(
-        automation.actionConfig, workspaceId, sampleContext, userId
+        automation.actionConfig,
+        workspaceId,
+        sampleContext,
+        userId,
       );
-      const preResolvedFolder = await SharedFolder.findById(preResolvedFolderId).lean();
-      const preResolvedFolderName = preResolvedFolder?.name || 'Inconnu';
+      const preResolvedFolder =
+        await SharedFolder.findById(preResolvedFolderId).lean();
+      const preResolvedFolderName = preResolvedFolder?.name || "Inconnu";
 
-      const isR2Copy = config.docType === 'importedInvoice' || config.docType === 'importedQuote';
-      const isFileCopy = config.docType === 'purchaseInvoice' || config.docType === 'transaction';
+      const isR2Copy =
+        config.docType === "importedInvoice" ||
+        config.docType === "importedQuote";
+      const isFileCopy =
+        config.docType === "purchaseInvoice" ||
+        config.docType === "transaction";
       const BATCH_SIZE = 5;
       const BATCH_DELAY = 200;
       const automationIdStr = automation._id.toString();
 
       // Initialiser le suivi de progression
-      _progressMap.set(automationIdStr, { current: 0, total: docsToProcess.length });
+      _progressMap.set(automationIdStr, {
+        current: 0,
+        total: docsToProcess.length,
+      });
 
       for (let i = 0; i < docsToProcess.length; i += BATCH_SIZE) {
         const batch = docsToProcess.slice(i, i + BATCH_SIZE);
 
         if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+          await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY));
         }
 
         // Traitement séquentiel document par document
         for (const doc of batch) {
           try {
-            let ctxClientName = doc.client?.name || doc.vendor?.name || '';
-            let ctxDocNumber = doc.number || doc.originalInvoiceNumber || doc.originalQuoteNumber || '';
-            if (config.docType === 'purchaseInvoice') {
-              ctxClientName = doc.supplierName || '';
-              ctxDocNumber = doc.invoiceNumber || '';
-            } else if (config.docType === 'transaction') {
-              ctxClientName = doc.description || '';
-              ctxDocNumber = doc.externalId || '';
+            let ctxClientName = doc.client?.name || doc.vendor?.name || "";
+            let ctxDocNumber =
+              doc.number ||
+              doc.originalInvoiceNumber ||
+              doc.originalQuoteNumber ||
+              "";
+            if (config.docType === "purchaseInvoice") {
+              ctxClientName = doc.supplierName || "";
+              ctxDocNumber = doc.invoiceNumber || "";
+            } else if (config.docType === "transaction") {
+              ctxClientName = doc.description || "";
+              ctxDocNumber = doc.externalId || "";
             }
 
             const documentContext = {
               documentId: doc._id.toString(),
               documentType: config.docType,
               documentNumber: ctxDocNumber,
-              prefix: doc.prefix || '',
+              prefix: doc.prefix || "",
               clientName: ctxClientName,
             };
 
             let fileBuffer = null;
-            let fileMimeType = 'application/pdf';
-            let fileExt = 'pdf';
+            let fileMimeType = "application/pdf";
+            let fileExt = "pdf";
             let fileSize = 0;
             let r2CopySource = null;
 
             if (isR2Copy) {
               const sourceKey = doc.file?.cloudflareKey;
-              if (!sourceKey) throw new Error('Clé R2 introuvable pour la facture importée');
+              if (!sourceKey)
+                throw new Error("Clé R2 introuvable pour la facture importée");
               r2CopySource = {
                 key: sourceKey,
                 bucket: cloudflareService.importedInvoicesBucketName,
               };
-              fileMimeType = doc.file?.mimeType || 'application/pdf';
-              fileExt = doc.file?.originalFileName?.split('.').pop() || 'pdf';
+              fileMimeType = doc.file?.mimeType || "application/pdf";
+              fileExt = doc.file?.originalFileName?.split(".").pop() || "pdf";
               fileSize = doc.file?.fileSize || 0;
             } else if (isFileCopy) {
               // Facture d'achat ou transaction : récupérer le fichier existant via URL
               let sourceUrl, sourceMime, sourceFilename;
-              if (config.docType === 'purchaseInvoice') {
+              if (config.docType === "purchaseInvoice") {
                 const sourceFile = doc.files?.[0];
-                if (!sourceFile?.url) throw new Error('Aucun fichier attaché à la facture d\'achat');
+                if (!sourceFile?.url)
+                  throw new Error("Aucun fichier attaché à la facture d'achat");
                 sourceUrl = sourceFile.url;
-                sourceMime = sourceFile.mimetype || 'application/pdf';
-                sourceFilename = sourceFile.filename || '';
+                sourceMime = sourceFile.mimetype || "application/pdf";
+                sourceFilename = sourceFile.filename || "";
               } else {
-                if (!doc.receiptFile?.url) throw new Error('Aucun justificatif pour cette transaction');
+                if (!doc.receiptFile?.url)
+                  throw new Error("Aucun justificatif pour cette transaction");
                 sourceUrl = doc.receiptFile.url;
-                sourceMime = doc.receiptFile.mimetype || 'application/pdf';
-                sourceFilename = doc.receiptFile.filename || '';
+                sourceMime = doc.receiptFile.mimetype || "application/pdf";
+                sourceFilename = doc.receiptFile.filename || "";
               }
-              const response = await axios.get(sourceUrl, { responseType: 'arraybuffer', timeout: 30000 });
+              const response = await axios.get(sourceUrl, {
+                responseType: "arraybuffer",
+                timeout: 30000,
+              });
               fileBuffer = Buffer.from(response.data);
               fileMimeType = sourceMime;
-              fileExt = sourceFilename.split('.').pop() || 'pdf';
+              fileExt = sourceFilename.split(".").pop() || "pdf";
               fileSize = fileBuffer.length;
             } else if (doc.cachedPdf?.key) {
               // Copie R2 serveur-à-serveur depuis le cache (instantanée)
@@ -1329,45 +1698,69 @@ const documentAutomationService = {
                 bucket: cloudflareService.sharedDocumentsBucketName,
               };
             } else {
-              fileBuffer = await generateDocumentPdf(documentContext.documentId, config.docType);
+              fileBuffer = await generateDocumentPdf(
+                documentContext.documentId,
+                config.docType,
+              );
               fileSize = fileBuffer?.length || 0;
             }
 
             if (!r2CopySource && (!fileBuffer || fileBuffer.length === 0)) {
-              throw new Error('Le fichier généré/récupéré est vide');
+              throw new Error("Le fichier généré/récupéré est vide");
             }
 
             let targetFolderId = preResolvedFolderId;
             let targetFolderName = preResolvedFolderName;
-            if (automation.actionConfig.createSubfolder && automation.actionConfig.subfolderPattern) {
+            if (
+              automation.actionConfig.createSubfolder &&
+              automation.actionConfig.subfolderPattern
+            ) {
               targetFolderId = await resolveTargetFolder(
-                automation.actionConfig, workspaceId, documentContext, userId
+                automation.actionConfig,
+                workspaceId,
+                documentContext,
+                userId,
               );
-              if (targetFolderId.toString() !== preResolvedFolderId.toString()) {
-                const folder = await SharedFolder.findById(targetFolderId).lean();
-                targetFolderName = folder?.name || 'Inconnu';
+              if (
+                targetFolderId.toString() !== preResolvedFolderId.toString()
+              ) {
+                const folder =
+                  await SharedFolder.findById(targetFolderId).lean();
+                targetFolderName = folder?.name || "Inconnu";
               }
             }
 
             const fileName = buildFileName(
-              automation.actionConfig.documentNaming || '{documentType}-{number}-{clientName}',
+              automation.actionConfig.documentNaming ||
+                "{documentType}-{number}-{clientName}",
               documentContext,
-              fileExt
+              fileExt,
             );
 
             let uploadResult;
             if (r2CopySource) {
               uploadResult = await cloudflareService.copyToSharedDocuments(
-                r2CopySource.key, r2CopySource.bucket, fileName, workspaceId
+                r2CopySource.key,
+                r2CopySource.bucket,
+                fileName,
+                workspaceId,
               );
             } else {
               uploadResult = await cloudflareService.uploadImage(
-                fileBuffer, fileName, userId, 'sharedDocuments', workspaceId
+                fileBuffer,
+                fileName,
+                userId,
+                "sharedDocuments",
+                workspaceId,
               );
               // Cacher le PDF pour les prochaines automatisations (fire-and-forget)
               if (!isR2Copy && !isFileCopy && fileBuffer) {
-                cacheDocumentPdf(doc._id.toString(), config.docType, fileBuffer, workspaceId)
-                  .catch(() => {});
+                cacheDocumentPdf(
+                  doc._id.toString(),
+                  config.docType,
+                  fileBuffer,
+                  workspaceId,
+                ).catch(() => {});
               }
             }
 
@@ -1384,8 +1777,8 @@ const documentAutomationService = {
               workspaceId,
               folderId: targetFolderId,
               uploadedBy: userId,
-              uploadedByName: 'Automatisation',
-              status: automation.actionConfig.documentStatus || 'classified',
+              uploadedByName: "Automatisation",
+              status: automation.actionConfig.documentStatus || "classified",
               isSharedWithAccountant: true,
               tags: automation.actionConfig.tags || [],
             });
@@ -1400,11 +1793,11 @@ const documentAutomationService = {
               sourceDocumentId: doc._id,
               sourceDocumentNumber: documentContext.prefix
                 ? `${documentContext.prefix}${documentContext.documentNumber}`
-                : documentContext.documentNumber || '',
+                : documentContext.documentNumber || "",
               sharedDocumentId: sharedDocument._id,
               targetFolderId,
               targetFolderName,
-              status: 'SUCCESS',
+              status: "SUCCESS",
               fileName,
               fileSize,
             });
@@ -1416,29 +1809,49 @@ const documentAutomationService = {
           }
 
           // Mettre à jour la progression après chaque document
-          _progressMap.set(automationIdStr, { current: successCount + failCount, total: docsToProcess.length });
+          _progressMap.set(automationIdStr, {
+            current: successCount + failCount,
+            total: docsToProcess.length,
+          });
         }
       }
 
       // Une seule mise à jour de stats à la fin
       const statsUpdate = {};
       if (successCount > 0) {
-        statsUpdate.$inc = { 'stats.totalExecutions': successCount };
-        statsUpdate.$set = { 'stats.lastExecutedAt': new Date() };
+        statsUpdate.$inc = { "stats.totalExecutions": successCount };
+        statsUpdate.$set = { "stats.lastExecutedAt": new Date() };
       }
       if (failCount > 0) {
         if (!statsUpdate.$inc) statsUpdate.$inc = {};
-        statsUpdate.$inc['stats.failedExecutions'] = failCount;
+        statsUpdate.$inc["stats.failedExecutions"] = failCount;
       }
       if (Object.keys(statsUpdate).length > 0) {
-        await DocumentAutomation.findByIdAndUpdate(automation._id, statsUpdate).catch(() => {});
+        await DocumentAutomation.findByIdAndUpdate(
+          automation._id,
+          statsUpdate,
+        ).catch(() => {});
       }
 
       _progressMap.delete(automationIdStr);
-      return { successCount, skipCount, failCount, restoredCount, total: documents.length, firstError };
+      return {
+        successCount,
+        skipCount,
+        failCount,
+        restoredCount,
+        total: documents.length,
+        firstError,
+      };
     } catch (error) {
       _progressMap.delete(automation._id.toString());
-      return { successCount: 0, skipCount: 0, failCount: 0, restoredCount: 0, total: 0, firstError: error.message };
+      return {
+        successCount: 0,
+        skipCount: 0,
+        failCount: 0,
+        restoredCount: 0,
+        total: 0,
+        firstError: error.message,
+      };
     }
   },
 
@@ -1452,16 +1865,16 @@ const documentAutomationService = {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    console.log('🔍 [OverdueCron] Vérification des documents en retard...');
+    console.log("🔍 [OverdueCron] Vérification des documents en retard...");
 
     // Trouver tous les workspaces ayant des automatisations OVERDUE actives
     const overdueAutomations = await DocumentAutomation.find({
-      triggerType: { $in: ['INVOICE_OVERDUE', 'PURCHASE_INVOICE_OVERDUE'] },
+      triggerType: { $in: ["INVOICE_OVERDUE", "PURCHASE_INVOICE_OVERDUE"] },
       isActive: true,
     }).lean();
 
     if (overdueAutomations.length === 0) {
-      console.log('ℹ️ [OverdueCron] Aucune automatisation OVERDUE active.');
+      console.log("ℹ️ [OverdueCron] Aucune automatisation OVERDUE active.");
       return { processed: 0 };
     }
 
@@ -1478,11 +1891,11 @@ const documentAutomationService = {
     for (const [workspaceId, automations] of Object.entries(byWorkspace)) {
       for (const automation of automations) {
         try {
-          if (automation.triggerType === 'INVOICE_OVERDUE') {
+          if (automation.triggerType === "INVOICE_OVERDUE") {
             // Factures PENDING dont la date d'échéance est dépassée
             const overdueInvoices = await Invoice.find({
               workspaceId,
-              status: 'PENDING',
+              status: "PENDING",
               dueDate: { $lt: today },
             }).lean();
 
@@ -1491,29 +1904,36 @@ const documentAutomationService = {
               const alreadyProcessed = await DocumentAutomationLog.findOne({
                 automationId: automation._id,
                 sourceDocumentId: inv._id,
-                status: 'SUCCESS',
+                status: "SUCCESS",
               });
               if (alreadyProcessed) {
                 // Vérifier que le SharedDocument existe encore
-                const exists = await SharedDocument.findById(alreadyProcessed.sharedDocumentId);
+                const exists = await SharedDocument.findById(
+                  alreadyProcessed.sharedDocumentId,
+                );
                 if (exists) continue;
               }
 
               // Déclencher l'automatisation
-              await this.executeAutomations('INVOICE_OVERDUE', workspaceId, {
-                documentId: inv._id.toString(),
-                documentType: 'invoice',
-                documentNumber: inv.number,
-                prefix: inv.prefix || '',
-                clientName: inv.client?.name || '',
-              }, automation.createdBy.toString());
+              await this.executeAutomations(
+                "INVOICE_OVERDUE",
+                workspaceId,
+                {
+                  documentId: inv._id.toString(),
+                  documentType: "invoice",
+                  documentNumber: inv.number,
+                  prefix: inv.prefix || "",
+                  clientName: inv.client?.name || "",
+                },
+                automation.createdBy.toString(),
+              );
               totalProcessed++;
             }
-          } else if (automation.triggerType === 'PURCHASE_INVOICE_OVERDUE') {
+          } else if (automation.triggerType === "PURCHASE_INVOICE_OVERDUE") {
             // Factures d'achat TO_PAY dont la date d'échéance est dépassée
             const overduePIs = await PurchaseInvoice.find({
               workspaceId: automation.workspaceId,
-              status: 'TO_PAY',
+              status: "TO_PAY",
               dueDate: { $lt: today },
             }).lean();
 
@@ -1521,33 +1941,45 @@ const documentAutomationService = {
               const alreadyProcessed = await DocumentAutomationLog.findOne({
                 automationId: automation._id,
                 sourceDocumentId: pi._id,
-                status: 'SUCCESS',
+                status: "SUCCESS",
               });
               if (alreadyProcessed) {
-                const exists = await SharedDocument.findById(alreadyProcessed.sharedDocumentId);
+                const exists = await SharedDocument.findById(
+                  alreadyProcessed.sharedDocumentId,
+                );
                 if (exists) continue;
               }
 
-              await this.executeAutomationsForExpense('PURCHASE_INVOICE_OVERDUE', workspaceId, {
-                documentId: pi._id.toString(),
-                documentType: 'purchaseInvoice',
-                documentNumber: pi.invoiceNumber || '',
-                supplierName: pi.supplierName || '',
-                fileUrl: pi.files?.[0]?.url || null,
-                fileKey: pi.files?.[0]?.path || null,
-                fileName: pi.files?.[0]?.originalFilename || null,
-                mimeType: pi.files?.[0]?.mimetype || 'application/pdf',
-              }, automation.createdBy.toString());
+              await this.executeAutomationsForExpense(
+                "PURCHASE_INVOICE_OVERDUE",
+                workspaceId,
+                {
+                  documentId: pi._id.toString(),
+                  documentType: "purchaseInvoice",
+                  documentNumber: pi.invoiceNumber || "",
+                  supplierName: pi.supplierName || "",
+                  fileUrl: pi.files?.[0]?.url || null,
+                  fileKey: pi.files?.[0]?.path || null,
+                  fileName: pi.files?.[0]?.originalFilename || null,
+                  mimeType: pi.files?.[0]?.mimetype || "application/pdf",
+                },
+                automation.createdBy.toString(),
+              );
               totalProcessed++;
             }
           }
         } catch (err) {
-          console.error(`❌ [OverdueCron] Erreur automation ${automation._id}:`, err.message);
+          console.error(
+            `❌ [OverdueCron] Erreur automation ${automation._id}:`,
+            err.message,
+          );
         }
       }
     }
 
-    console.log(`✅ [OverdueCron] ${totalProcessed} document(s) en retard traité(s).`);
+    console.log(
+      `✅ [OverdueCron] ${totalProcessed} document(s) en retard traité(s).`,
+    );
     return { processed: totalProcessed };
   },
 };

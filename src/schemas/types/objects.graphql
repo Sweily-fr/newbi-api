@@ -75,6 +75,14 @@ type InvoiceBalances {
   overdueCount: Int!
 }
 
+# Soldes agrégés (devis créés + importés)
+type QuoteBalances {
+  totalQuoted: Float!
+  totalAccepted: Float!
+  pendingAmount: Float!
+  pendingCount: Int!
+}
+
 # Statistiques pour les devis
 type QuoteStats {
   totalCount: Int!

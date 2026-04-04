@@ -20,6 +20,7 @@ input ClientInput {
   id: ID
   name: String!
   email: String!
+  phone: String
   address: AddressInput!
   type: ClientType!
   # Indique si l'adresse de livraison est différente de l'adresse de facturation
@@ -34,6 +35,10 @@ input ClientInput {
   # Champs spécifiques aux particuliers
   firstName: String
   lastName: String
+  # Informations du contact principal
+  contactFunction: String
+  contactDepartment: String
+  contactLocation: String
   # Champs personnalisés
   customFields: [ClientCustomFieldValueInput!]
 }

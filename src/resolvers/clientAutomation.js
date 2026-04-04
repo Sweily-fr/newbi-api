@@ -49,7 +49,12 @@ export const automationService = {
             const sourceList = await ClientList.findById(
               automation.sourceListId,
             );
-            if (!sourceList || !sourceList.clients.includes(clientId)) {
+            if (
+              !sourceList ||
+              !sourceList.clients.some(
+                (id) => id.toString() === clientId.toString(),
+              )
+            ) {
               continue;
             }
           }
@@ -328,7 +333,19 @@ const clientAutomationResolvers = {
         .sort({ createdAt: -1 })
         .lean();
 
-      return automations.map((a) => ({ ...a, id: a._id.toString() }));
+      // Nettoyer et filtrer les automatisations dont la liste cible a été supprimée
+      const orphanIds = automations
+        .filter((a) => a.targetListId == null)
+        .map((a) => a._id);
+      if (orphanIds.length > 0) {
+        ClientAutomation.deleteMany({ _id: { $in: orphanIds } }).catch((err) =>
+          console.error("Erreur nettoyage automatisations orphelines:", err),
+        );
+      }
+
+      return automations
+        .filter((a) => a.targetListId != null)
+        .map((a) => ({ ...a, id: a._id.toString() }));
     }),
 
     clientAutomation: requireRead("clients")(async (_, { workspaceId, id }) => {
@@ -388,19 +405,21 @@ const clientAutomationResolvers = {
 
         await automation.save();
 
-        // Appliquer rétroactivement aux clients existants (fire-and-forget)
-        automationService
-          .applyToExistingClients(automation, workspaceId)
-          .then((result) => {
-            if (result.applied > 0) {
-              console.log(
-                `Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`,
-              );
-            }
-          })
-          .catch((error) => {
-            console.error("Erreur application rétroactive:", error);
-          });
+        // Appliquer rétroactivement aux clients existants
+        try {
+          const result = await automationService.applyToExistingClients(
+            automation,
+            workspaceId,
+          );
+          if (result.applied > 0) {
+            console.log(
+              `Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`,
+            );
+          }
+        } catch (error) {
+          console.error("Erreur application rétroactive:", error);
+          // Ne pas faire échouer la création si l'application rétroactive échoue
+        }
 
         return await ClientAutomation.findById(automation._id)
           .populate("createdBy")

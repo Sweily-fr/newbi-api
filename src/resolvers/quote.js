@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
+import ImportedQuote from "../models/ImportedQuote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
@@ -389,6 +390,116 @@ const quoteResolvers = {
       }
 
       return defaultStats;
+    }),
+
+    quoteBalances: requireRead("quotes")(async (_, { workspaceId }) => {
+      const wid = new mongoose.Types.ObjectId(workspaceId);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Agrégation des devis créés sur Newbi
+      const [quoteStats] = await Quote.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalQuoted: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["PENDING", "COMPLETED"]] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            totalAccepted: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "COMPLETED"] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            pendingAmount: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "PENDING"] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            pendingCount: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0],
+              },
+            },
+          },
+        },
+      ]);
+
+      // Agrégation des devis importés (VALIDATED = accepté/validé)
+      const [importedStats] = await ImportedQuote.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalQuoted: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["VALIDATED", "ARCHIVED"]] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            totalAccepted: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "VALIDATED"] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            pendingAmount: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "PENDING_REVIEW"] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            pendingCount: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "PENDING_REVIEW"] }, 1, 0],
+              },
+            },
+          },
+        },
+      ]);
+
+      const q = quoteStats || {
+        totalQuoted: 0,
+        totalAccepted: 0,
+        pendingAmount: 0,
+        pendingCount: 0,
+      };
+      const imp = importedStats || {
+        totalQuoted: 0,
+        totalAccepted: 0,
+        pendingAmount: 0,
+        pendingCount: 0,
+      };
+
+      return {
+        totalQuoted: q.totalQuoted + imp.totalQuoted,
+        totalAccepted: q.totalAccepted + imp.totalAccepted,
+        pendingAmount: q.pendingAmount + imp.pendingAmount,
+        pendingCount: q.pendingCount + imp.pendingCount,
+      };
     }),
 
     nextQuoteNumber: requireRead("quotes")(

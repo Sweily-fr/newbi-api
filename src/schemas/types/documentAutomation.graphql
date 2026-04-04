@@ -61,6 +61,7 @@ type DocumentAutomation {
   actionConfig: DocumentAutomationActionConfig!
   isActive: Boolean!
   stats: DocumentAutomationStats
+  matchingDocumentsCount: Int
   createdAt: DateTime!
   updatedAt: DateTime!
 }

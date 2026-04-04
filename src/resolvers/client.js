@@ -350,6 +350,9 @@ const clientResolvers = {
                   lastName: "le nom de famille",
                   email: "l'email",
                   phone: "le téléphone",
+                  contactFunction: "la fonction du contact",
+                  contactDepartment: "le service rattaché",
+                  contactLocation: "la localisation du contact",
                   address: "l'adresse de facturation",
                   hasDifferentShippingAddress:
                     "l'option adresse de livraison différente",

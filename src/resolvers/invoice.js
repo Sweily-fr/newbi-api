@@ -1823,12 +1823,24 @@ const invoiceResolvers = {
             const month = String(now.getMonth() + 1).padStart(2, "0");
             const prefix = invoiceData.prefix || `F-${month}${year}`;
 
-            // Utiliser generateInvoiceNumber pour générer le prochain numéro séquentiel
-            // Cela garantit que le numéro est unique et suit la séquence correcte
+            // Sauvegarder le numéro original du brouillon avant de le changer
+            const originalDraftNumber = invoiceData.number;
+            const tempNumber = `TEMP-${Date.now()}`;
+
+            // Changer temporairement le numéro pour éviter les conflits de clé unique
+            await Invoice.findByIdAndUpdate(invoiceData._id, {
+              number: tempNumber,
+            });
+
+            // Utiliser generateInvoiceNumber avec isValidatingDraft pour
+            // préserver le numéro du brouillon quand c'est le premier document finalisé
             const newNumber = await generateInvoiceNumber(prefix, {
+              isValidatingDraft: true,
+              currentDraftNumber: tempNumber,
+              originalDraftNumber: originalDraftNumber,
               workspaceId: workspaceId,
               userId: context.user._id,
-              isPending: true,
+              currentInvoiceId: invoiceData._id,
             });
 
             // Mettre à jour le numéro et le préfixe
