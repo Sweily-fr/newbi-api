@@ -20,6 +20,7 @@ type Board {
   category: String
   emoji: String
   color: String
+  status: String
   isFavorite: Boolean
   createdAt: DateTime!
   updatedAt: DateTime!
@@ -164,6 +165,7 @@ input UpdateBoardInput {
   category: String
   emoji: String
   color: String
+  status: String
 }
 
 input CreateColumnInput {
