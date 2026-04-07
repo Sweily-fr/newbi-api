@@ -1773,25 +1773,72 @@ const invoiceResolvers = {
               );
             }
 
-            updateData.client = {
-              ...invoiceData.client,
-              ...updatedInput.client,
-            };
-
-            // Mettre à jour l'adresse du client si fournie
-            if (updatedInput.client.address) {
-              updateData.client.address = {
-                ...(invoiceData.client.address || {}),
-                ...updatedInput.client.address,
+            // Pour les brouillons, rafraîchir les données client depuis la collection Client
+            const clientId = updatedInput.client?.id || invoiceData.client?.id;
+            if (
+              (!invoiceData.status || invoiceData.status === "DRAFT") &&
+              clientId
+            ) {
+              try {
+                const freshClient = await Client.findById(clientId);
+                if (freshClient) {
+                  updateData.client = {
+                    id: freshClient._id.toString(),
+                    type: freshClient.type,
+                    name: freshClient.name,
+                    firstName: freshClient.firstName,
+                    lastName: freshClient.lastName,
+                    email: freshClient.email,
+                    address: freshClient.address,
+                    hasDifferentShippingAddress:
+                      freshClient.hasDifferentShippingAddress,
+                    shippingAddress: freshClient.shippingAddress,
+                    isInternational: freshClient.isInternational,
+                    siret: freshClient.siret,
+                    vatNumber: freshClient.vatNumber,
+                  };
+                }
+              } catch (error) {
+                console.error(
+                  "[updateInvoice] Erreur rafraîchissement client:",
+                  error.message,
+                );
+                // Fallback : utiliser les données fournies
+                updateData.client = {
+                  ...invoiceData.client,
+                  ...updatedInput.client,
+                };
+                if (updatedInput.client.address) {
+                  updateData.client.address = {
+                    ...(invoiceData.client.address || {}),
+                    ...updatedInput.client.address,
+                  };
+                }
+                if (updatedInput.client.shippingAddress) {
+                  updateData.client.shippingAddress = {
+                    ...(invoiceData.client.shippingAddress || {}),
+                    ...updatedInput.client.shippingAddress,
+                  };
+                }
+              }
+            } else {
+              // Pour les documents finalisés, garder le comportement existant
+              updateData.client = {
+                ...invoiceData.client,
+                ...updatedInput.client,
               };
-            }
-
-            // Mettre à jour l'adresse de livraison du client si fournie
-            if (updatedInput.client.shippingAddress) {
-              updateData.client.shippingAddress = {
-                ...(invoiceData.client.shippingAddress || {}),
-                ...updatedInput.client.shippingAddress,
-              };
+              if (updatedInput.client.address) {
+                updateData.client.address = {
+                  ...(invoiceData.client.address || {}),
+                  ...updatedInput.client.address,
+                };
+              }
+              if (updatedInput.client.shippingAddress) {
+                updateData.client.shippingAddress = {
+                  ...(invoiceData.client.shippingAddress || {}),
+                  ...updatedInput.client.shippingAddress,
+                };
+              }
             }
           }
 
@@ -1816,6 +1863,36 @@ const invoiceResolvers = {
             if (!invoiceData.companyInfo || !invoiceData.companyInfo.name) {
               const org = await getOrganizationInfo(workspaceId);
               updateData.companyInfo = mapOrganizationToCompanyInfo(org);
+            }
+
+            // Snapshot client à la finalisation (si pas déjà rafraîchi)
+            const clientId = updateData.client?.id || invoiceData.client?.id;
+            if (clientId && !updateData.client) {
+              try {
+                const freshClient = await Client.findById(clientId);
+                if (freshClient) {
+                  updateData.client = {
+                    id: freshClient._id.toString(),
+                    type: freshClient.type,
+                    name: freshClient.name,
+                    firstName: freshClient.firstName,
+                    lastName: freshClient.lastName,
+                    email: freshClient.email,
+                    address: freshClient.address,
+                    hasDifferentShippingAddress:
+                      freshClient.hasDifferentShippingAddress,
+                    shippingAddress: freshClient.shippingAddress,
+                    isInternational: freshClient.isInternational,
+                    siret: freshClient.siret,
+                    vatNumber: freshClient.vatNumber,
+                  };
+                }
+              } catch (error) {
+                console.error(
+                  "[updateInvoice] Erreur snapshot client à la finalisation:",
+                  error.message,
+                );
+              }
             }
             // La facture passe de brouillon à finalisée : générer un nouveau numéro séquentiel
             const now = new Date();
@@ -2115,12 +2192,41 @@ const invoiceResolvers = {
 
         const oldStatus = invoice.status;
 
-        // Si la facture passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
+        // Si la facture passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
         if (invoice.status === "DRAFT" && status === "PENDING") {
           // Snapshot companyInfo à la finalisation
           if (!invoice.companyInfo || !invoice.companyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);
             invoice.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
+
+          // Snapshot client à la finalisation (données à jour depuis la collection Client)
+          if (invoice.client?.id) {
+            try {
+              const freshClient = await Client.findById(invoice.client.id);
+              if (freshClient) {
+                invoice.client = {
+                  id: freshClient._id.toString(),
+                  type: freshClient.type,
+                  name: freshClient.name,
+                  firstName: freshClient.firstName,
+                  lastName: freshClient.lastName,
+                  email: freshClient.email,
+                  address: freshClient.address,
+                  hasDifferentShippingAddress:
+                    freshClient.hasDifferentShippingAddress,
+                  shippingAddress: freshClient.shippingAddress,
+                  isInternational: freshClient.isInternational,
+                  siret: freshClient.siret,
+                  vatNumber: freshClient.vatNumber,
+                };
+              }
+            } catch (error) {
+              console.error(
+                "[changeInvoiceStatus] Erreur snapshot client:",
+                error.message,
+              );
+            }
           }
 
           // Transaction atomique pour éviter les numéros TEMP orphelins

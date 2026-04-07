@@ -1088,12 +1088,75 @@ const quoteResolvers = {
         // Ne pas persister companyInfo pour les documents DRAFT
         delete updateData.companyInfo;
 
+        // Pour les brouillons, rafraîchir les données client depuis la collection Client
+        if (
+          (!quote.status || quote.status === "DRAFT") &&
+          (updateData.client?.id || quote.client?.id)
+        ) {
+          const clientId = updateData.client?.id || quote.client?.id;
+          try {
+            const freshClient = await Client.findById(clientId);
+            if (freshClient) {
+              updateData.client = {
+                id: freshClient._id.toString(),
+                type: freshClient.type,
+                name: freshClient.name,
+                firstName: freshClient.firstName,
+                lastName: freshClient.lastName,
+                email: freshClient.email,
+                address: freshClient.address,
+                hasDifferentShippingAddress:
+                  freshClient.hasDifferentShippingAddress,
+                shippingAddress: freshClient.shippingAddress,
+                isInternational: freshClient.isInternational,
+                siret: freshClient.siret,
+                vatNumber: freshClient.vatNumber,
+              };
+            }
+          } catch (error) {
+            console.error(
+              "[updateQuote] Erreur rafraîchissement client:",
+              error.message,
+            );
+          }
+        }
+
         // Gérer la transition DRAFT → PENDING : générer automatiquement le numéro séquentiel
         if (quote.status === "DRAFT" && updateData.status === "PENDING") {
           // Snapshot companyInfo à la finalisation
           if (!quote.companyInfo || !quote.companyInfo.name) {
             const org = await getOrganizationInfo(quote.workspaceId);
             updateData.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
+
+          // Snapshot client à la finalisation (si pas déjà rafraîchi)
+          const clientId = updateData.client?.id || quote.client?.id;
+          if (clientId && !updateData.client) {
+            try {
+              const freshClient = await Client.findById(clientId);
+              if (freshClient) {
+                updateData.client = {
+                  id: freshClient._id.toString(),
+                  type: freshClient.type,
+                  name: freshClient.name,
+                  firstName: freshClient.firstName,
+                  lastName: freshClient.lastName,
+                  email: freshClient.email,
+                  address: freshClient.address,
+                  hasDifferentShippingAddress:
+                    freshClient.hasDifferentShippingAddress,
+                  shippingAddress: freshClient.shippingAddress,
+                  isInternational: freshClient.isInternational,
+                  siret: freshClient.siret,
+                  vatNumber: freshClient.vatNumber,
+                };
+              }
+            } catch (error) {
+              console.error(
+                "[updateQuote] Erreur snapshot client à la finalisation:",
+                error.message,
+              );
+            }
           }
           console.log("🔍 [updateQuote] DRAFT → PENDING transition detected");
           console.log("🔍 [updateQuote] Current number:", quote.number);
@@ -1225,12 +1288,41 @@ const quoteResolvers = {
 
         const oldStatus = quote.status;
 
-        // Si le devis passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
+        // Si le devis passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
         if (quote.status === "DRAFT" && status === "PENDING") {
           // Snapshot companyInfo à la finalisation
           if (!quote.companyInfo || !quote.companyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);
             quote.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
+
+          // Snapshot client à la finalisation (données à jour depuis la collection Client)
+          if (quote.client?.id) {
+            try {
+              const freshClient = await Client.findById(quote.client.id);
+              if (freshClient) {
+                quote.client = {
+                  id: freshClient._id.toString(),
+                  type: freshClient.type,
+                  name: freshClient.name,
+                  firstName: freshClient.firstName,
+                  lastName: freshClient.lastName,
+                  email: freshClient.email,
+                  address: freshClient.address,
+                  hasDifferentShippingAddress:
+                    freshClient.hasDifferentShippingAddress,
+                  shippingAddress: freshClient.shippingAddress,
+                  isInternational: freshClient.isInternational,
+                  siret: freshClient.siret,
+                  vatNumber: freshClient.vatNumber,
+                };
+              }
+            } catch (error) {
+              console.error(
+                "[changeQuoteStatus] Erreur snapshot client:",
+                error.message,
+              );
+            }
           }
 
           // Transaction atomique pour éviter les numéros TEMP orphelins

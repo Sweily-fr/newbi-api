@@ -263,6 +263,11 @@ const boardSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    status: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     favoritedBy: [
       {
         type: String,
