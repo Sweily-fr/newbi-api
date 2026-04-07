@@ -39,7 +39,7 @@ type SharedFolder {
   icon: String!
   createdBy: ID!
   isSharedWithAccountant: Boolean!
-  order: Int!
+  order: Float!
   isSystem: Boolean!
   visibility: FolderVisibility
   allowedUserIds: [ID]
@@ -135,7 +135,7 @@ input UpdateSharedFolderInput {
   color: String
   icon: String
   isSharedWithAccountant: Boolean
-  order: Int
+  order: Float
   visibility: FolderVisibility
   allowedUserIds: [ID]
 }

@@ -9,6 +9,29 @@ import { sendDownloadNotificationEmail } from "../utils/mailer.js";
 
 const router = express.Router();
 
+// Cache mémoire pour les previews HEIC convertis (LRU simple, max 50 entrées, TTL 30 min)
+const heicPreviewCache = new Map();
+const HEIC_CACHE_MAX = 50;
+const HEIC_CACHE_TTL = 30 * 60 * 1000;
+
+function getCachedHeicPreview(key) {
+  const entry = heicPreviewCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > HEIC_CACHE_TTL) {
+    heicPreviewCache.delete(key);
+    return null;
+  }
+  return entry.buffer;
+}
+
+function setCachedHeicPreview(key, buffer) {
+  if (heicPreviewCache.size >= HEIC_CACHE_MAX) {
+    const oldest = heicPreviewCache.keys().next().value;
+    heicPreviewCache.delete(oldest);
+  }
+  heicPreviewCache.set(key, { buffer, ts: Date.now() });
+}
+
 // Configuration R2
 const s3Client = new S3Client({
   region: "auto",
@@ -35,7 +58,7 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
 
     // Trouver le fichier spécifique (vérifie _id ou fileId)
     const file = fileTransfer.files.find(
-      (f) => f._id.toString() === fileId || f.fileId === fileId
+      (f) => f._id.toString() === fileId || f.fileId === fileId,
     );
     if (!file) {
       return res.status(404).json({ error: "Fichier non trouvé" });
@@ -52,7 +75,9 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
     });
 
     if (!file.r2Key) {
-      return res.status(404).json({ error: "Fichier non disponible (clé de stockage manquante)" });
+      return res
+        .status(404)
+        .json({ error: "Fichier non disponible (clé de stockage manquante)" });
     }
 
     // Récupérer le fichier depuis R2
@@ -92,7 +117,7 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
       } catch (emailError) {
         logger.error(
           "❌ Erreur envoi notification téléchargement:",
-          emailError
+          emailError,
         );
         // Ne pas bloquer le téléchargement si l'email échoue
       }
@@ -101,7 +126,7 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
     // Configurer les headers pour forcer le téléchargement
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(file.originalName)}"`
+      `attachment; filename="${encodeURIComponent(file.originalName)}"`,
     );
     res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
     res.setHeader("Content-Length", file.size);
@@ -145,7 +170,7 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
 
     // Trouver le fichier spécifique
     const file = fileTransfer.files.find(
-      (f) => f._id.toString() === fileId || f.fileId === fileId
+      (f) => f._id.toString() === fileId || f.fileId === fileId,
     );
     if (!file) {
       return res.status(404).json({ error: "Fichier non trouvé" });
@@ -157,7 +182,9 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
     });
 
     if (!file.r2Key) {
-      return res.status(404).json({ error: "Fichier non disponible (clé de stockage manquante)" });
+      return res
+        .status(404)
+        .json({ error: "Fichier non disponible (clé de stockage manquante)" });
     }
 
     // Récupérer le fichier depuis R2
@@ -168,41 +195,64 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
 
     const response = await s3Client.send(command);
 
-    const isHeic = ["image/heic", "image/heif"].includes(
-      file.mimeType?.toLowerCase()
-    ) || /\.(heic|heif)$/i.test(file.originalName || "");
+    const isHeic =
+      ["image/heic", "image/heif"].includes(file.mimeType?.toLowerCase()) ||
+      /\.(heic|heif)$/i.test(file.originalName || "");
 
     if (isHeic) {
       // Convertir HEIC → JPEG pour compatibilité navigateur
-      // Sharp nécessite le buffer complet pour décoder le HEIC
-      const chunks = [];
-      for await (const chunk of response.Body) {
-        chunks.push(chunk);
+      const cacheKey = `${transferId}:${fileId}`;
+      let jpegBuffer = getCachedHeicPreview(cacheKey);
+
+      if (!jpegBuffer) {
+        // Sharp nécessite le buffer complet pour décoder le HEIC
+        const chunks = [];
+        for await (const chunk of response.Body) {
+          chunks.push(chunk);
+        }
+        const inputBuffer = Buffer.concat(chunks);
+
+        const rawJpeg = await convert({
+          buffer: inputBuffer,
+          format: "JPEG",
+          quality: 0.85,
+        });
+
+        jpegBuffer = await sharp(rawJpeg)
+          .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 80, progressive: true })
+          .toBuffer();
+
+        setCachedHeicPreview(cacheKey, jpegBuffer);
+        logger.info("🖼️ HEIC converti et mis en cache", {
+          cacheKey,
+          size: jpegBuffer.length,
+        });
+      } else {
+        // Consommer le stream R2 puisqu'on utilise le cache
+        response.Body.destroy();
+        logger.info("🖼️ HEIC servi depuis le cache", { cacheKey });
       }
-      const inputBuffer = Buffer.concat(chunks);
 
-      const rawJpeg = await convert({
-        buffer: inputBuffer,
-        format: "JPEG",
-        quality: 0.85,
-      });
-
-      const jpegBuffer = await sharp(rawJpeg)
-        .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality: 80, progressive: true })
-        .toBuffer();
-
-      const displayName = (file.originalName || "image")
-        .replace(/\.(heic|heif)$/i, ".jpg");
+      const displayName = (file.originalName || "image").replace(
+        /\.(heic|heif)$/i,
+        ".jpg",
+      );
 
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(displayName)}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(displayName)}"`,
+      );
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Content-Length", jpegBuffer.length);
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Content-Security-Policy", `frame-ancestors 'self' ${frontendUrl}`);
+      res.setHeader(
+        "Content-Security-Policy",
+        `frame-ancestors 'self' ${frontendUrl}`,
+      );
       res.removeHeader("X-Frame-Options");
 
       res.end(jpegBuffer);
@@ -211,7 +261,7 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       res.setHeader(
         "Content-Disposition",
-        `inline; filename="${encodeURIComponent(file.originalName)}"`
+        `inline; filename="${encodeURIComponent(file.originalName)}"`,
       );
       // Pour les PDF, forcer le bon Content-Type
       const contentType = file.originalName?.toLowerCase().endsWith(".pdf")
@@ -223,7 +273,10 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       // Headers CORS pour permettre l'affichage dans un iframe
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Content-Security-Policy", `frame-ancestors 'self' ${frontendUrl}`);
+      res.setHeader(
+        "Content-Security-Policy",
+        `frame-ancestors 'self' ${frontendUrl}`,
+      );
       res.removeHeader("X-Frame-Options");
 
       // Streamer le fichier vers le client

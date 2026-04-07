@@ -57,6 +57,8 @@ type ClientCustomFieldValueType {
 type ClientContact {
   id: ID!
   position: String
+  department: String
+  location: String
   firstName: String
   lastName: String
   email: String
@@ -69,6 +71,7 @@ type Client {
   id: ID!
   name: String!
   email: String!
+  phone: String
   address: Address!
   type: ClientType!
   # Champs spécifiques aux entreprises
@@ -79,6 +82,10 @@ type Client {
   # Champs spécifiques aux particuliers
   firstName: String
   lastName: String
+  # Informations du contact principal
+  contactFunction: String
+  contactDepartment: String
+  contactLocation: String
   # Adresse de livraison différente
   hasDifferentShippingAddress: Boolean
   shippingAddress: Address
@@ -127,6 +134,8 @@ type EmbeddedClient {
 input ClientContactInput {
   id: ID
   position: String
+  department: String
+  location: String
   firstName: String
   lastName: String
   email: String
@@ -138,6 +147,7 @@ input ClientInput {
   id: ID
   name: String!
   email: String!
+  phone: String
   address: AddressInput!
   type: ClientType!
   # Champs spécifiques aux entreprises
@@ -148,6 +158,10 @@ input ClientInput {
   # Champs spécifiques aux particuliers
   firstName: String
   lastName: String
+  # Informations du contact principal
+  contactFunction: String
+  contactDepartment: String
+  contactLocation: String
   # Contacts additionnels
   contacts: [ClientContactInput!]
 }

@@ -158,6 +158,7 @@ extend type Query {
     limit: Int
   ): InvoicePagination!
   invoiceStats(workspaceId: ID!): InvoiceStats!
+  invoiceBalances(workspaceId: ID!): InvoiceBalances!
   nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
   situationInvoicesByQuoteRef(
     workspaceId: ID!

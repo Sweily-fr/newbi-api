@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
+import ImportedQuote from "../models/ImportedQuote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
@@ -391,6 +392,116 @@ const quoteResolvers = {
       return defaultStats;
     }),
 
+    quoteBalances: requireRead("quotes")(async (_, { workspaceId }) => {
+      const wid = new mongoose.Types.ObjectId(workspaceId);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Agrégation des devis créés sur Newbi
+      const [quoteStats] = await Quote.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalQuoted: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["PENDING", "COMPLETED"]] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            totalAccepted: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "COMPLETED"] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            pendingAmount: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "PENDING"] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            pendingCount: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0],
+              },
+            },
+          },
+        },
+      ]);
+
+      // Agrégation des devis importés (VALIDATED = accepté/validé)
+      const [importedStats] = await ImportedQuote.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalQuoted: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["VALIDATED", "ARCHIVED"]] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            totalAccepted: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "VALIDATED"] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            pendingAmount: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "PENDING_REVIEW"] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            pendingCount: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "PENDING_REVIEW"] }, 1, 0],
+              },
+            },
+          },
+        },
+      ]);
+
+      const q = quoteStats || {
+        totalQuoted: 0,
+        totalAccepted: 0,
+        pendingAmount: 0,
+        pendingCount: 0,
+      };
+      const imp = importedStats || {
+        totalQuoted: 0,
+        totalAccepted: 0,
+        pendingAmount: 0,
+        pendingCount: 0,
+      };
+
+      return {
+        totalQuoted: q.totalQuoted + imp.totalQuoted,
+        totalAccepted: q.totalAccepted + imp.totalAccepted,
+        pendingAmount: q.pendingAmount + imp.pendingAmount,
+        pendingCount: q.pendingCount + imp.pendingCount,
+      };
+    }),
+
     nextQuoteNumber: requireRead("quotes")(
       async (_, { workspaceId, prefix }, { user }) => {
         // Récupérer le préfixe personnalisé de l'utilisateur ou utiliser le format par défaut
@@ -547,12 +658,12 @@ const quoteResolvers = {
 
             // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
             // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
+            // On ne filtre PAS par createdBy car l'unicité est par workspace + prefix
             const officialQuotes = await Quote.find(
               {
                 status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
                 prefix, // Filtrage par préfixe
                 workspaceId,
-                createdBy: user.id,
                 // Ne considérer que les numéros sans suffixe
                 number: { $regex: /^\d+$/ },
               },
@@ -977,12 +1088,75 @@ const quoteResolvers = {
         // Ne pas persister companyInfo pour les documents DRAFT
         delete updateData.companyInfo;
 
+        // Pour les brouillons, rafraîchir les données client depuis la collection Client
+        if (
+          (!quote.status || quote.status === "DRAFT") &&
+          (updateData.client?.id || quote.client?.id)
+        ) {
+          const clientId = updateData.client?.id || quote.client?.id;
+          try {
+            const freshClient = await Client.findById(clientId);
+            if (freshClient) {
+              updateData.client = {
+                id: freshClient._id.toString(),
+                type: freshClient.type,
+                name: freshClient.name,
+                firstName: freshClient.firstName,
+                lastName: freshClient.lastName,
+                email: freshClient.email,
+                address: freshClient.address,
+                hasDifferentShippingAddress:
+                  freshClient.hasDifferentShippingAddress,
+                shippingAddress: freshClient.shippingAddress,
+                isInternational: freshClient.isInternational,
+                siret: freshClient.siret,
+                vatNumber: freshClient.vatNumber,
+              };
+            }
+          } catch (error) {
+            console.error(
+              "[updateQuote] Erreur rafraîchissement client:",
+              error.message,
+            );
+          }
+        }
+
         // Gérer la transition DRAFT → PENDING : générer automatiquement le numéro séquentiel
         if (quote.status === "DRAFT" && updateData.status === "PENDING") {
           // Snapshot companyInfo à la finalisation
           if (!quote.companyInfo || !quote.companyInfo.name) {
             const org = await getOrganizationInfo(quote.workspaceId);
             updateData.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
+
+          // Snapshot client à la finalisation (si pas déjà rafraîchi)
+          const clientId = updateData.client?.id || quote.client?.id;
+          if (clientId && !updateData.client) {
+            try {
+              const freshClient = await Client.findById(clientId);
+              if (freshClient) {
+                updateData.client = {
+                  id: freshClient._id.toString(),
+                  type: freshClient.type,
+                  name: freshClient.name,
+                  firstName: freshClient.firstName,
+                  lastName: freshClient.lastName,
+                  email: freshClient.email,
+                  address: freshClient.address,
+                  hasDifferentShippingAddress:
+                    freshClient.hasDifferentShippingAddress,
+                  shippingAddress: freshClient.shippingAddress,
+                  isInternational: freshClient.isInternational,
+                  siret: freshClient.siret,
+                  vatNumber: freshClient.vatNumber,
+                };
+              }
+            } catch (error) {
+              console.error(
+                "[updateQuote] Erreur snapshot client à la finalisation:",
+                error.message,
+              );
+            }
           }
           console.log("🔍 [updateQuote] DRAFT → PENDING transition detected");
           console.log("🔍 [updateQuote] Current number:", quote.number);
@@ -1114,12 +1288,41 @@ const quoteResolvers = {
 
         const oldStatus = quote.status;
 
-        // Si le devis passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
+        // Si le devis passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
         if (quote.status === "DRAFT" && status === "PENDING") {
           // Snapshot companyInfo à la finalisation
           if (!quote.companyInfo || !quote.companyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);
             quote.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
+
+          // Snapshot client à la finalisation (données à jour depuis la collection Client)
+          if (quote.client?.id) {
+            try {
+              const freshClient = await Client.findById(quote.client.id);
+              if (freshClient) {
+                quote.client = {
+                  id: freshClient._id.toString(),
+                  type: freshClient.type,
+                  name: freshClient.name,
+                  firstName: freshClient.firstName,
+                  lastName: freshClient.lastName,
+                  email: freshClient.email,
+                  address: freshClient.address,
+                  hasDifferentShippingAddress:
+                    freshClient.hasDifferentShippingAddress,
+                  shippingAddress: freshClient.shippingAddress,
+                  isInternational: freshClient.isInternational,
+                  siret: freshClient.siret,
+                  vatNumber: freshClient.vatNumber,
+                };
+              }
+            } catch (error) {
+              console.error(
+                "[changeQuoteStatus] Erreur snapshot client:",
+                error.message,
+              );
+            }
           }
 
           // Transaction atomique pour éviter les numéros TEMP orphelins

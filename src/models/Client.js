@@ -127,6 +127,25 @@ const clientSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Informations du contact principal (pour les entreprises)
+    contactFunction: {
+      type: String,
+      trim: true,
+      maxlength: [100, "La fonction ne peut pas dépasser 100 caractères"],
+    },
+    contactDepartment: {
+      type: String,
+      trim: true,
+      maxlength: [
+        100,
+        "Le service rattaché ne peut pas dépasser 100 caractères",
+      ],
+    },
+    contactLocation: {
+      type: String,
+      trim: true,
+      maxlength: [200, "La localisation ne peut pas dépasser 200 caractères"],
+    },
     // Pour les particuliers et entreprises (contact)
     firstName: {
       type: String,
@@ -240,6 +259,22 @@ const clientSchema = new mongoose.Schema(
           type: String,
           trim: true,
           maxlength: [100, "Le poste ne peut pas dépasser 100 caractères"],
+        },
+        department: {
+          type: String,
+          trim: true,
+          maxlength: [
+            100,
+            "Le service rattaché ne peut pas dépasser 100 caractères",
+          ],
+        },
+        location: {
+          type: String,
+          trim: true,
+          maxlength: [
+            200,
+            "La localisation ne peut pas dépasser 200 caractères",
+          ],
         },
         firstName: {
           type: String,

@@ -1,5 +1,7 @@
+import mongoose from "mongoose";
 import Event from "../models/Event.js";
 import Invoice from "../models/Invoice.js";
+import Client from "../models/Client.js";
 import CalendarConnection from "../models/CalendarConnection.js";
 import {
   isAuthenticated,
@@ -312,6 +314,35 @@ const eventResolvers = {
           }
 
           await event.save();
+
+          // Ajouter l'activité "reminder_created" sur le client associé
+          if (input.clientId) {
+            try {
+              await Client.findByIdAndUpdate(input.clientId, {
+                $push: {
+                  activity: {
+                    id: new mongoose.Types.ObjectId().toString(),
+                    type: "reminder_created",
+                    description: `a créé un rappel "${event.title}"`,
+                    userId: user.id,
+                    userName: user.name || user.email,
+                    userImage: user.image || null,
+                    metadata: {
+                      eventId: event._id.toString(),
+                      eventTitle: event.title,
+                      eventDate: event.start.toISOString(),
+                    },
+                    createdAt: new Date(),
+                  },
+                },
+              });
+            } catch (activityError) {
+              logger.error(
+                "[createEvent] Erreur lors de l'ajout de l'activité client:",
+                activityError.message,
+              );
+            }
+          }
 
           // Le rappel email sera envoyé par le scheduler (emailReminderScheduler) à l'heure programmée (scheduledFor)
 

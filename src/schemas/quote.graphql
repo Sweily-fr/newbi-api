@@ -115,6 +115,7 @@ extend type Query {
   quote(workspaceId: ID!, id: ID!): Quote!
   quotes(workspaceId: ID!, startDate: String, endDate: String, status: QuoteStatus, search: String, page: Int, limit: Int): QuotePagination!
   quoteStats(workspaceId: ID!): QuoteStats!
+  quoteBalances(workspaceId: ID!): QuoteBalances!
   nextQuoteNumber(workspaceId: ID!, prefix: String): String!
   quoteByNumber(workspaceId: ID!, number: String!): Quote
   checkQuoteNumberExists(workspaceId: ID!, number: String!, prefix: String!, excludeId: ID): Boolean!

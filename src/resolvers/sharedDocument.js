@@ -1003,11 +1003,19 @@ const sharedDocumentResolvers = {
           }
 
           if (folder.isSystem) {
-            return {
-              success: false,
-              message: "Ce dossier système ne peut pas être modifié",
-              folder: null,
-            };
+            // System folders can be moved (parentId, order) but not renamed/modified
+            const allowedKeys = ["parentId", "order"];
+            const inputKeys = Object.keys(input);
+            const hasOnlyAllowed = inputKeys.every((k) =>
+              allowedKeys.includes(k),
+            );
+            if (!hasOnlyAllowed) {
+              return {
+                success: false,
+                message: "Ce dossier système ne peut pas être modifié",
+                folder: null,
+              };
+            }
           }
 
           const updatedFolder = await SharedFolder.findOneAndUpdate(

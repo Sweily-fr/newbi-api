@@ -1,4 +1,5 @@
 import Invoice from "../models/Invoice.js";
+import ImportedInvoice from "../models/ImportedInvoice.js";
 import User from "../models/User.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
@@ -403,6 +404,148 @@ const invoiceResolvers = {
         );
       },
     ),
+
+    invoiceBalances: requireRead("invoices")(async (_, { workspaceId }) => {
+      const wid = new mongoose.Types.ObjectId(workspaceId);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Agrégation des factures créées sur Newbi
+      const [invoiceStats] = await Invoice.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalBilled: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["PENDING", "COMPLETED"]] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            totalPaid: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "COMPLETED"] },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            overdueAmount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "PENDING"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  0,
+                ],
+              },
+            },
+            overdueCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "PENDING"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]);
+
+      // Agrégation des factures importées
+      const [importedStats] = await ImportedInvoice.aggregate([
+        { $match: { workspaceId: wid } },
+        {
+          $group: {
+            _id: null,
+            totalBilled: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["VALIDATED", "COMPLETED"]] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            totalPaid: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", ["VALIDATED", "COMPLETED"]] },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            overdueAmount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "VALIDATED"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  { $ifNull: ["$totalHT", 0] },
+                  0,
+                ],
+              },
+            },
+            overdueCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$status", "VALIDATED"] },
+                      { $ne: ["$dueDate", null] },
+                      { $lt: ["$dueDate", today] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]);
+
+      const inv = invoiceStats || {
+        totalBilled: 0,
+        totalPaid: 0,
+        overdueAmount: 0,
+        overdueCount: 0,
+      };
+      const imp = importedStats || {
+        totalBilled: 0,
+        totalPaid: 0,
+        overdueAmount: 0,
+        overdueCount: 0,
+      };
+
+      return {
+        totalBilled: inv.totalBilled + imp.totalBilled,
+        totalPaid: inv.totalPaid + imp.totalPaid,
+        overdueAmount: inv.overdueAmount + imp.overdueAmount,
+        overdueCount: inv.overdueCount + imp.overdueCount,
+      };
+    }),
 
     nextInvoiceNumber: requireRead("invoices")(
       async (_, { workspaceId, prefix, isDraft }, context) => {
@@ -1630,25 +1773,72 @@ const invoiceResolvers = {
               );
             }
 
-            updateData.client = {
-              ...invoiceData.client,
-              ...updatedInput.client,
-            };
-
-            // Mettre à jour l'adresse du client si fournie
-            if (updatedInput.client.address) {
-              updateData.client.address = {
-                ...(invoiceData.client.address || {}),
-                ...updatedInput.client.address,
+            // Pour les brouillons, rafraîchir les données client depuis la collection Client
+            const clientId = updatedInput.client?.id || invoiceData.client?.id;
+            if (
+              (!invoiceData.status || invoiceData.status === "DRAFT") &&
+              clientId
+            ) {
+              try {
+                const freshClient = await Client.findById(clientId);
+                if (freshClient) {
+                  updateData.client = {
+                    id: freshClient._id.toString(),
+                    type: freshClient.type,
+                    name: freshClient.name,
+                    firstName: freshClient.firstName,
+                    lastName: freshClient.lastName,
+                    email: freshClient.email,
+                    address: freshClient.address,
+                    hasDifferentShippingAddress:
+                      freshClient.hasDifferentShippingAddress,
+                    shippingAddress: freshClient.shippingAddress,
+                    isInternational: freshClient.isInternational,
+                    siret: freshClient.siret,
+                    vatNumber: freshClient.vatNumber,
+                  };
+                }
+              } catch (error) {
+                console.error(
+                  "[updateInvoice] Erreur rafraîchissement client:",
+                  error.message,
+                );
+                // Fallback : utiliser les données fournies
+                updateData.client = {
+                  ...invoiceData.client,
+                  ...updatedInput.client,
+                };
+                if (updatedInput.client.address) {
+                  updateData.client.address = {
+                    ...(invoiceData.client.address || {}),
+                    ...updatedInput.client.address,
+                  };
+                }
+                if (updatedInput.client.shippingAddress) {
+                  updateData.client.shippingAddress = {
+                    ...(invoiceData.client.shippingAddress || {}),
+                    ...updatedInput.client.shippingAddress,
+                  };
+                }
+              }
+            } else {
+              // Pour les documents finalisés, garder le comportement existant
+              updateData.client = {
+                ...invoiceData.client,
+                ...updatedInput.client,
               };
-            }
-
-            // Mettre à jour l'adresse de livraison du client si fournie
-            if (updatedInput.client.shippingAddress) {
-              updateData.client.shippingAddress = {
-                ...(invoiceData.client.shippingAddress || {}),
-                ...updatedInput.client.shippingAddress,
-              };
+              if (updatedInput.client.address) {
+                updateData.client.address = {
+                  ...(invoiceData.client.address || {}),
+                  ...updatedInput.client.address,
+                };
+              }
+              if (updatedInput.client.shippingAddress) {
+                updateData.client.shippingAddress = {
+                  ...(invoiceData.client.shippingAddress || {}),
+                  ...updatedInput.client.shippingAddress,
+                };
+              }
             }
           }
 
@@ -1674,18 +1864,60 @@ const invoiceResolvers = {
               const org = await getOrganizationInfo(workspaceId);
               updateData.companyInfo = mapOrganizationToCompanyInfo(org);
             }
+
+            // Snapshot client à la finalisation (si pas déjà rafraîchi)
+            const clientId = updateData.client?.id || invoiceData.client?.id;
+            if (clientId && !updateData.client) {
+              try {
+                const freshClient = await Client.findById(clientId);
+                if (freshClient) {
+                  updateData.client = {
+                    id: freshClient._id.toString(),
+                    type: freshClient.type,
+                    name: freshClient.name,
+                    firstName: freshClient.firstName,
+                    lastName: freshClient.lastName,
+                    email: freshClient.email,
+                    address: freshClient.address,
+                    hasDifferentShippingAddress:
+                      freshClient.hasDifferentShippingAddress,
+                    shippingAddress: freshClient.shippingAddress,
+                    isInternational: freshClient.isInternational,
+                    siret: freshClient.siret,
+                    vatNumber: freshClient.vatNumber,
+                  };
+                }
+              } catch (error) {
+                console.error(
+                  "[updateInvoice] Erreur snapshot client à la finalisation:",
+                  error.message,
+                );
+              }
+            }
             // La facture passe de brouillon à finalisée : générer un nouveau numéro séquentiel
             const now = new Date();
             const year = now.getFullYear();
             const month = String(now.getMonth() + 1).padStart(2, "0");
             const prefix = invoiceData.prefix || `F-${month}${year}`;
 
-            // Utiliser generateInvoiceNumber pour générer le prochain numéro séquentiel
-            // Cela garantit que le numéro est unique et suit la séquence correcte
+            // Sauvegarder le numéro original du brouillon avant de le changer
+            const originalDraftNumber = invoiceData.number;
+            const tempNumber = `TEMP-${Date.now()}`;
+
+            // Changer temporairement le numéro pour éviter les conflits de clé unique
+            await Invoice.findByIdAndUpdate(invoiceData._id, {
+              number: tempNumber,
+            });
+
+            // Utiliser generateInvoiceNumber avec isValidatingDraft pour
+            // préserver le numéro du brouillon quand c'est le premier document finalisé
             const newNumber = await generateInvoiceNumber(prefix, {
+              isValidatingDraft: true,
+              currentDraftNumber: tempNumber,
+              originalDraftNumber: originalDraftNumber,
               workspaceId: workspaceId,
               userId: context.user._id,
-              isPending: true,
+              currentInvoiceId: invoiceData._id,
             });
 
             // Mettre à jour le numéro et le préfixe
@@ -1960,12 +2192,41 @@ const invoiceResolvers = {
 
         const oldStatus = invoice.status;
 
-        // Si la facture passe de DRAFT à PENDING, snapshot companyInfo et générer un nouveau numéro séquentiel
+        // Si la facture passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
         if (invoice.status === "DRAFT" && status === "PENDING") {
           // Snapshot companyInfo à la finalisation
           if (!invoice.companyInfo || !invoice.companyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);
             invoice.companyInfo = mapOrganizationToCompanyInfo(org);
+          }
+
+          // Snapshot client à la finalisation (données à jour depuis la collection Client)
+          if (invoice.client?.id) {
+            try {
+              const freshClient = await Client.findById(invoice.client.id);
+              if (freshClient) {
+                invoice.client = {
+                  id: freshClient._id.toString(),
+                  type: freshClient.type,
+                  name: freshClient.name,
+                  firstName: freshClient.firstName,
+                  lastName: freshClient.lastName,
+                  email: freshClient.email,
+                  address: freshClient.address,
+                  hasDifferentShippingAddress:
+                    freshClient.hasDifferentShippingAddress,
+                  shippingAddress: freshClient.shippingAddress,
+                  isInternational: freshClient.isInternational,
+                  siret: freshClient.siret,
+                  vatNumber: freshClient.vatNumber,
+                };
+              }
+            } catch (error) {
+              console.error(
+                "[changeInvoiceStatus] Erreur snapshot client:",
+                error.message,
+              );
+            }
           }
 
           // Transaction atomique pour éviter les numéros TEMP orphelins

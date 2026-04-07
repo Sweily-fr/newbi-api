@@ -526,6 +526,39 @@ const purchaseOrderResolvers = {
           // Ne pas persister companyInfo pour les documents DRAFT
           delete updateData.companyInfo;
 
+          // Pour les brouillons, rafraîchir les données client depuis la collection Client
+          if (
+            (!po.status || po.status === "DRAFT") &&
+            (updateData.client?.id || po.client?.id)
+          ) {
+            const clientId = updateData.client?.id || po.client?.id;
+            try {
+              const freshClient = await Client.findById(clientId);
+              if (freshClient) {
+                updateData.client = {
+                  id: freshClient._id.toString(),
+                  type: freshClient.type,
+                  name: freshClient.name,
+                  firstName: freshClient.firstName,
+                  lastName: freshClient.lastName,
+                  email: freshClient.email,
+                  address: freshClient.address,
+                  hasDifferentShippingAddress:
+                    freshClient.hasDifferentShippingAddress,
+                  shippingAddress: freshClient.shippingAddress,
+                  isInternational: freshClient.isInternational,
+                  siret: freshClient.siret,
+                  vatNumber: freshClient.vatNumber,
+                };
+              }
+            } catch (error) {
+              console.error(
+                "[updatePurchaseOrder] Erreur rafraîchissement client:",
+                error.message,
+              );
+            }
+          }
+
           Object.assign(po, updateData);
           await po.save();
           return await po.populate("createdBy");
@@ -591,12 +624,41 @@ const purchaseOrderResolvers = {
 
           const oldStatus = po.status;
 
-          // Si transition DRAFT → CONFIRMED, snapshot companyInfo et générer un numéro séquentiel
+          // Si transition DRAFT → CONFIRMED, snapshot companyInfo + client et générer un numéro séquentiel
           if (po.status === "DRAFT" && status === "CONFIRMED") {
             // Snapshot companyInfo à la finalisation
             if (!po.companyInfo || !po.companyInfo.name) {
               const org = await getOrganizationInfo(workspaceId);
               po.companyInfo = mapOrganizationToCompanyInfo(org);
+            }
+
+            // Snapshot client à la finalisation (données à jour depuis la collection Client)
+            if (po.client?.id) {
+              try {
+                const freshClient = await Client.findById(po.client.id);
+                if (freshClient) {
+                  po.client = {
+                    id: freshClient._id.toString(),
+                    type: freshClient.type,
+                    name: freshClient.name,
+                    firstName: freshClient.firstName,
+                    lastName: freshClient.lastName,
+                    email: freshClient.email,
+                    address: freshClient.address,
+                    hasDifferentShippingAddress:
+                      freshClient.hasDifferentShippingAddress,
+                    shippingAddress: freshClient.shippingAddress,
+                    isInternational: freshClient.isInternational,
+                    siret: freshClient.siret,
+                    vatNumber: freshClient.vatNumber,
+                  };
+                }
+              } catch (error) {
+                console.error(
+                  "[changePurchaseOrderStatus] Erreur snapshot client:",
+                  error.message,
+                );
+              }
             }
 
             // Transaction atomique pour éviter les numéros TEMP orphelins

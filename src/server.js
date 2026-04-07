@@ -108,7 +108,31 @@ mongoose
     maxIdleTimeMS: 30000,
     serverSelectionTimeoutMS: 5000,
   })
-  .then(() => logger.info("Connecté à MongoDB (pool: 1-5 connexions)"))
+  .then(async () => {
+    logger.info("Connecté à MongoDB (pool: 1-5 connexions)");
+
+    // Nettoyage des anciens index obsolètes qui ne sont plus dans les schémas
+    // Mongoose ne supprime pas automatiquement les index retirés du code
+    const legacyIndexes = [
+      { collection: "quotes", index: "workspaceId_1_number_1" },
+      { collection: "quotes", index: "number_1_createdBy_1" },
+    ];
+
+    for (const { collection, index } of legacyIndexes) {
+      try {
+        await mongoose.connection.db.collection(collection).dropIndex(index);
+        logger.info(`Index obsolète supprimé: ${collection}.${index}`);
+      } catch (err) {
+        // L'index n'existe pas ou a déjà été supprimé — on ignore
+        if (err.codeName !== "IndexNotFound") {
+          logger.warn(
+            `Impossible de supprimer l'index ${collection}.${index}:`,
+            err.message,
+          );
+        }
+      }
+    }
+  })
   .catch((err) => logger.error("Erreur de connexion MongoDB:", err));
 
 // Création des dossiers nécessaires

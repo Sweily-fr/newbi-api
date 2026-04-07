@@ -1250,21 +1250,8 @@ const resolvers = {
         }
 
         // Calculer la position correcte en fonction des tâches existantes dans la colonne
+        // Par défaut, ajouter en haut (position 0)
         let position = input.position !== undefined ? input.position : 0;
-
-        // Si pas de position fournie, ajouter à la fin
-        if (input.position === undefined) {
-          // Récupérer TOUTES les tâches de la colonne et les compter
-          // (plutôt que de chercher la dernière, ce qui peut créer des trous)
-          const allTasks = await Task.find({
-            boardId: input.boardId,
-            columnId: input.columnId,
-            workspaceId: finalWorkspaceId,
-          }).sort({ position: 1 });
-
-          // La nouvelle position = nombre de tâches existantes
-          position = allTasks.length;
-        }
 
         // Récupérer les infos utilisateur pour l'activité de création
         const db = mongoose.connection.db;
@@ -2566,7 +2553,7 @@ const resolvers = {
     updateComment: withWorkspace(
       async (
         _,
-        { taskId, commentId, content, workspaceId },
+        { taskId, commentId, content, mentionedUserIds, workspaceId },
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -2586,7 +2573,14 @@ const resolvers = {
             throw new Error("Not authorized to edit this comment");
           }
 
+          // Détecter les nouvelles mentions (pas déjà présentes dans le commentaire)
+          const previousMentions = comment.mentions || [];
+          const newMentionedUserIds = (mentionedUserIds || []).filter(
+            (id) => !previousMentions.includes(id),
+          );
+
           comment.content = content;
+          comment.mentions = mentionedUserIds || [];
           comment.updatedAt = new Date();
           await task.save();
 
@@ -2605,6 +2599,111 @@ const resolvers = {
             },
             "Commentaire modifié",
           );
+
+          // Envoyer les notifications pour les nouvelles mentions uniquement
+          if (newMentionedUserIds.length > 0) {
+            logger.info(
+              `📧 [Mention-Update] ${newMentionedUserIds.length} nouvelle(s) mention(s) dans commentaire modifié pour tâche "${task.title}"`,
+            );
+            (async () => {
+              try {
+                const db = mongoose.connection.db;
+                if (!db) return;
+
+                const authorData = await db.collection("user").findOne({
+                  _id: new mongoose.Types.ObjectId(user.id),
+                });
+                const authorName =
+                  authorData?.name ||
+                  user?.name ||
+                  user?.email ||
+                  "Un membre de l'équipe";
+                const authorImage =
+                  authorData?.image ||
+                  authorData?.avatar ||
+                  authorData?.profile?.profilePicture ||
+                  null;
+
+                const board = await Board.findById(task.boardId);
+                const boardName = board?.title || "Tableau sans nom";
+                const commentExcerpt = (content || "")
+                  .replace(/<[^>]*>/g, "")
+                  .substring(0, 150);
+
+                const mentionedIds = newMentionedUserIds
+                  .filter((id) => id !== user.id)
+                  .map((id) => new mongoose.Types.ObjectId(id));
+                const mentionedUsers =
+                  mentionedIds.length > 0
+                    ? await db
+                        .collection("user")
+                        .find({ _id: { $in: mentionedIds } })
+                        .toArray()
+                    : [];
+                const mentionedUserMap = new Map(
+                  mentionedUsers.map((u) => [u._id.toString(), u]),
+                );
+
+                for (const mentionedUserId of newMentionedUserIds) {
+                  if (mentionedUserId === user.id) continue;
+
+                  try {
+                    const memberData = mentionedUserMap.get(mentionedUserId);
+                    if (memberData?.email) {
+                      const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${task.boardId}?task=${task._id}`;
+                      const memberPrefs =
+                        memberData?.notificationPreferences?.kanban_mention;
+
+                      if (memberPrefs?.email !== false) {
+                        await sendMentionEmail(memberData.email, {
+                          actorName: authorName,
+                          taskTitle: task.title || "Sans titre",
+                          boardName: boardName,
+                          commentExcerpt: commentExcerpt,
+                          taskUrl: taskUrl,
+                        });
+                      }
+
+                      if (memberPrefs?.push !== false) {
+                        try {
+                          const notification =
+                            await Notification.createMentionNotification({
+                              userId: mentionedUserId,
+                              workspaceId: finalWorkspaceId,
+                              taskId: task._id,
+                              taskTitle: task.title || "Sans titre",
+                              boardId: task.boardId,
+                              boardName: boardName,
+                              actorId: user.id,
+                              actorName: authorName,
+                              actorImage: authorImage,
+                              commentExcerpt: commentExcerpt,
+                              url: taskUrl,
+                            });
+                          await publishNotification(notification);
+                        } catch (notifError) {
+                          logger.error(
+                            "❌ [Mention-Update] Erreur notification:",
+                            notifError,
+                          );
+                        }
+                      }
+                    }
+                  } catch (memberError) {
+                    logger.error(
+                      `❌ [Mention-Update] Erreur pour ${mentionedUserId}:`,
+                      memberError,
+                    );
+                  }
+                }
+              } catch (error) {
+                logger.error(
+                  "❌ [Mention-Update] Erreur notifications:",
+                  error,
+                );
+              }
+            })();
+          }
 
           return enrichedTask;
         } catch (error) {

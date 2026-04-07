@@ -350,6 +350,9 @@ const clientResolvers = {
                   lastName: "le nom de famille",
                   email: "l'email",
                   phone: "le téléphone",
+                  contactFunction: "la fonction du contact",
+                  contactDepartment: "le service rattaché",
+                  contactLocation: "la localisation du contact",
                   address: "l'adresse de facturation",
                   hasDifferentShippingAddress:
                     "l'option adresse de livraison différente",
@@ -385,6 +388,66 @@ const clientResolvers = {
         }
 
         await client.save();
+
+        // Synchroniser tous les documents non finalisés qui référencent ce client
+        if (changes.length > 0) {
+          const clientSnapshot = {
+            id: client._id.toString(),
+            type: client.type,
+            name: client.name,
+            firstName: client.firstName,
+            lastName: client.lastName,
+            email: client.email,
+            address: client.address,
+            hasDifferentShippingAddress: client.hasDifferentShippingAddress,
+            shippingAddress: client.shippingAddress,
+            isInternational: client.isInternational,
+            siret: client.siret,
+            vatNumber: client.vatNumber,
+          };
+
+          const wsId = new mongoose.Types.ObjectId(workspaceId);
+          const clientId = client._id.toString();
+          const clientFilter = { "client.id": clientId, workspaceId: wsId };
+
+          // Log pour debug
+          const [quotesCount, invoicesCount, poCount] = await Promise.all([
+            Quote.countDocuments(clientFilter),
+            Invoice.countDocuments(clientFilter),
+            PurchaseOrder.countDocuments(clientFilter),
+          ]);
+          console.log(
+            `[updateClient] Sync documents pour client ${clientId}: ${quotesCount} devis, ${invoicesCount} factures, ${poCount} BC`,
+          );
+
+          const results = await Promise.all([
+            // Devis : tous sauf ACCEPTED (signé = figé)
+            Quote.updateMany(
+              {
+                ...clientFilter,
+                status: { $nin: ["ACCEPTED", "REFUSED", "EXPIRED"] },
+              },
+              { $set: { client: clientSnapshot } },
+            ),
+            // Factures : tous sauf COMPLETED/PAID (envoyé/payé = figé)
+            Invoice.updateMany(
+              {
+                ...clientFilter,
+                status: { $nin: ["COMPLETED", "PAID", "OVERDUE"] },
+              },
+              { $set: { client: clientSnapshot } },
+            ),
+            // Bons de commande : tous sauf DELIVERED (livré = figé)
+            PurchaseOrder.updateMany(
+              { ...clientFilter, status: { $nin: ["DELIVERED"] } },
+              { $set: { client: clientSnapshot } },
+            ),
+          ]);
+          console.log(
+            `[updateClient] Résultat sync: devis=${results[0].modifiedCount}, factures=${results[1].modifiedCount}, BC=${results[2].modifiedCount}`,
+          );
+        }
+
         return client;
       },
     ),
