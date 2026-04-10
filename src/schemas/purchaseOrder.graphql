@@ -129,7 +129,7 @@ extend type Query {
   purchaseOrder(workspaceId: ID!, id: ID!): PurchaseOrder!
   purchaseOrders(workspaceId: ID!, startDate: String, endDate: String, status: PurchaseOrderStatus, search: String, page: Int, limit: Int): PurchaseOrderPagination!
   purchaseOrderStats(workspaceId: ID!): PurchaseOrderStats!
-  nextPurchaseOrderNumber(workspaceId: ID!, prefix: String): String!
+  nextPurchaseOrderNumber(workspaceId: ID!, prefix: String, autoNumbering: Boolean): String!
   checkPurchaseOrderNumberExists(workspaceId: ID!, number: String!, prefix: String!, excludeId: ID): Boolean!
 }
 

@@ -319,11 +319,24 @@ const purchaseOrderResolvers = {
     ),
 
     nextPurchaseOrderNumber: requireRead("purchaseOrders")(
-      async (_, { workspaceId, prefix }, { user }) => {
-        return await generatePurchaseOrderNumber(prefix, {
-          userId: user.id,
-          workspaceId,
-        });
+      async (_, { workspaceId, prefix, autoNumbering }, { user }) => {
+        const wsId = new mongoose.Types.ObjectId(workspaceId);
+        const query = { workspaceId: wsId };
+
+        if (!autoNumbering && prefix) {
+          query.prefix = prefix;
+        }
+
+        const allOrders = await PurchaseOrder.find(query, { number: 1 }).lean();
+
+        let maxNumber = 0;
+        for (const o of allOrders) {
+          if (o.number && /^\d+$/.test(o.number)) {
+            const num = parseInt(o.number, 10);
+            if (num > maxNumber) maxNumber = num;
+          }
+        }
+        return String(maxNumber + 1).padStart(4, "0");
       },
     ),
 
