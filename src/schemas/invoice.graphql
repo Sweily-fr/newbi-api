@@ -159,7 +159,7 @@ extend type Query {
   ): InvoicePagination!
   invoiceStats(workspaceId: ID!): InvoiceStats!
   invoiceBalances(workspaceId: ID!): InvoiceBalances!
-  nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
+  nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean, autoNumbering: Boolean): String!
   situationInvoicesByQuoteRef(
     workspaceId: ID!
     purchaseOrderNumber: String!

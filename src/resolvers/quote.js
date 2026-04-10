@@ -503,14 +503,24 @@ const quoteResolvers = {
     }),
 
     nextQuoteNumber: requireRead("quotes")(
-      async (_, { workspaceId, prefix }, { user }) => {
-        // Récupérer le préfixe personnalisé de l'utilisateur ou utiliser le format par défaut
-        const userObj = await mongoose.model("User").findById(user.id);
-        const customPrefix = prefix || userObj?.settings?.quoteNumberPrefix;
-        return await generateQuoteNumber(customPrefix, {
-          userId: user.id,
-          workspaceId,
-        });
+      async (_, { workspaceId, prefix, autoNumbering }, { user }) => {
+        const wsId = new mongoose.Types.ObjectId(workspaceId);
+        const query = { workspaceId: wsId };
+
+        if (!autoNumbering && prefix) {
+          query.prefix = prefix;
+        }
+
+        const allQuotes = await Quote.find(query, { number: 1 }).lean();
+
+        let maxNumber = 0;
+        for (const q of allQuotes) {
+          if (q.number && /^\d+$/.test(q.number)) {
+            const num = parseInt(q.number, 10);
+            if (num > maxNumber) maxNumber = num;
+          }
+        }
+        return String(maxNumber + 1).padStart(4, "0");
       },
     ),
 

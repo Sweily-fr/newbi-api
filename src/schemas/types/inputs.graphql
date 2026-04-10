@@ -72,6 +72,7 @@ input CompanyInput {
   phone: String
   website: String
   logo: String
+  siren: String
   siret: String
   vatNumber: String
   transactionCategory: TransactionCategory

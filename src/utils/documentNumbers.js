@@ -48,7 +48,7 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
     }
   }
 
-  // Compteur atomique : génération sans race condition
+  // Compteur atomique : génération sans race condition (par préfixe)
   const nextNumber = await DocumentCounter.getNextNumber(
     "invoice",
     prefix || "",
@@ -307,7 +307,7 @@ const generateQuoteSequentialNumber = async (prefix, options = {}) => {
     }
   }
 
-  // Compteur atomique : génération sans race condition
+  // Compteur atomique : génération sans race condition (par préfixe)
   const nextNumber = await DocumentCounter.getNextNumber(
     "quote",
     prefix || "",

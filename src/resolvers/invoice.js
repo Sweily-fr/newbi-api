@@ -419,7 +419,7 @@ const invoiceResolvers = {
             totalBilled: {
               $sum: {
                 $cond: [
-                  { $in: ["$status", ["PENDING", "COMPLETED"]] },
+                  { $in: ["$status", ["PENDING", "OVERDUE", "COMPLETED"]] },
                   { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
                   0,
                 ],
@@ -438,10 +438,15 @@ const invoiceResolvers = {
               $sum: {
                 $cond: [
                   {
-                    $and: [
-                      { $eq: ["$status", "PENDING"] },
-                      { $ne: ["$dueDate", null] },
-                      { $lt: ["$dueDate", today] },
+                    $or: [
+                      { $eq: ["$status", "OVERDUE"] },
+                      {
+                        $and: [
+                          { $eq: ["$status", "PENDING"] },
+                          { $ne: ["$dueDate", null] },
+                          { $lt: ["$dueDate", today] },
+                        ],
+                      },
                     ],
                   },
                   { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
@@ -453,10 +458,15 @@ const invoiceResolvers = {
               $sum: {
                 $cond: [
                   {
-                    $and: [
-                      { $eq: ["$status", "PENDING"] },
-                      { $ne: ["$dueDate", null] },
-                      { $lt: ["$dueDate", today] },
+                    $or: [
+                      { $eq: ["$status", "OVERDUE"] },
+                      {
+                        $and: [
+                          { $eq: ["$status", "PENDING"] },
+                          { $ne: ["$dueDate", null] },
+                          { $lt: ["$dueDate", today] },
+                        ],
+                      },
                     ],
                   },
                   1,
@@ -469,6 +479,7 @@ const invoiceResolvers = {
       ]);
 
       // Agrégation des factures importées
+      // VALIDATED = confirmée mais pas encore payée, COMPLETED = payée
       const [importedStats] = await ImportedInvoice.aggregate([
         { $match: { workspaceId: wid } },
         {
@@ -486,7 +497,7 @@ const invoiceResolvers = {
             totalPaid: {
               $sum: {
                 $cond: [
-                  { $in: ["$status", ["VALIDATED", "COMPLETED"]] },
+                  { $eq: ["$status", "COMPLETED"] },
                   { $ifNull: ["$totalHT", 0] },
                   0,
                 ],
@@ -548,14 +559,13 @@ const invoiceResolvers = {
     }),
 
     nextInvoiceNumber: requireRead("invoices")(
-      async (_, { workspaceId, prefix, isDraft }, context) => {
+      async (_, { workspaceId, prefix, isDraft, autoNumbering }, context) => {
         const { user } = context || {};
         if (!user) {
           throw new Error("User not found in context");
         }
 
         if (isDraft) {
-          // Pour les brouillons : utiliser la même logique que pour les devis
           const userObj = await mongoose.model("User").findById(user._id);
           const customPrefix = prefix || userObj?.settings?.invoiceNumberPrefix;
           return await generateInvoiceNumber(customPrefix, {
@@ -563,15 +573,27 @@ const invoiceResolvers = {
             isDraft: true,
             userId: user._id,
           });
-        } else {
-          // Pour les factures finalisées : générer le prochain numéro séquentiel par workspace
-          const userObj = await mongoose.model("User").findById(user._id);
-          const customPrefix = prefix || userObj?.settings?.invoiceNumberPrefix;
-          return await generateInvoiceNumber(customPrefix, {
-            workspaceId: workspaceId, // ✅ Génération par workspace
-            isPending: true,
-          });
         }
+
+        // Query directe : chercher le max parmi toutes les factures (y compris brouillons)
+        const wsId = new mongoose.Types.ObjectId(workspaceId);
+        const query = { workspaceId: wsId };
+
+        // autoNumbering = tous les préfixes, sinon filtrer par préfixe
+        if (!autoNumbering && prefix) {
+          query.prefix = prefix;
+        }
+
+        const allInvoices = await Invoice.find(query, { number: 1 }).lean();
+
+        let maxNumber = 0;
+        for (const inv of allInvoices) {
+          if (inv.number && /^\d+$/.test(inv.number)) {
+            const num = parseInt(inv.number, 10);
+            if (num > maxNumber) maxNumber = num;
+          }
+        }
+        return String(maxNumber + 1).padStart(4, "0");
       },
     ),
 
