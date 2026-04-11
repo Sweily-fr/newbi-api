@@ -36,13 +36,13 @@ const getFileInfoByTransferId = async (fileId) => {
 
     if (!fileTransfer.files || fileTransfer.files.length === 0) {
       throw new Error(
-        `Transfert trouvé mais sans fichiers pour fileId: ${fileId}`
+        `Transfert trouvé mais sans fichiers pour fileId: ${fileId}`,
       );
     }
 
     // Trouver le fichier spécifique dans le tableau des fichiers par originalName (prioritaire)
     let fileInfo = fileTransfer.files.find(
-      (file) => file.originalName === fileId
+      (file) => file.originalName === fileId,
     );
 
     // Si non trouvé par originalName, essayer par fileName (compatibilité)
@@ -52,7 +52,7 @@ const getFileInfoByTransferId = async (fileId) => {
 
     if (!fileInfo) {
       throw new Error(
-        `Fichier spécifique non trouvé dans le transfert: ${fileId}`
+        `Fichier spécifique non trouvé dans le transfert: ${fileId}`,
       );
     }
 
@@ -60,7 +60,7 @@ const getFileInfoByTransferId = async (fileId) => {
   } catch (error) {
     console.error(
       `Erreur lors de la récupération du fichier ${fileId}:`,
-      error
+      error,
     );
     throw error;
   }
@@ -73,13 +73,13 @@ export default {
       async (
         _,
         { chunk, fileId, chunkIndex, totalChunks, fileName, fileSize },
-        { user }
+        { user },
       ) => {
         try {
           // Vérifier que les paramètres sont valides
           if (!fileId || !fileName) {
             throw new UserInputError(
-              "Identifiant de fichier ou nom de fichier manquant"
+              "Identifiant de fichier ou nom de fichier manquant",
             );
           }
 
@@ -92,13 +92,13 @@ export default {
             chunk,
             fileId,
             chunkIndex,
-            fileName
+            fileName,
           );
 
           // Vérifier si c'était le dernier chunk
           const allChunksReceived = await areAllChunksReceived(
             fileId,
-            totalChunks
+            totalChunks,
           );
 
           // Si tous les chunks sont reçus, reconstruire le fichier
@@ -111,7 +111,7 @@ export default {
               fileId,
               fileName,
               totalChunks,
-              user.id
+              user.id,
             );
 
             // Créer une entrée dans la base de données pour le fichier
@@ -151,7 +151,7 @@ export default {
             } catch (dbError) {
               console.error(
                 "Erreur lors de la création du transfert de fichier:",
-                dbError
+                dbError,
               );
               // Ne pas échouer l'opération complète si la création de l'entrée en base échoue
               // Le fichier est déjà reconstruit et sauvegardé sur le disque
@@ -177,10 +177,10 @@ export default {
           console.error("Erreur lors de l'upload du chunk:", error);
           throw new ApolloError(
             "Une erreur est survenue lors de l'upload du chunk.",
-            "CHUNK_UPLOAD_ERROR"
+            "CHUNK_UPLOAD_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Créer un transfert de fichier à partir des IDs de fichiers déjà uploadés en chunks
@@ -216,17 +216,18 @@ export default {
             } catch (error) {
               console.error(
                 `Erreur lors de la récupération du fichier ${fileId}:`,
-                error
+                error,
               );
               throw new ApolloError(
                 `Impossible de récupérer les informations du fichier ${fileId}`,
-                "FILE_NOT_FOUND"
+                "FILE_NOT_FOUND",
               );
             }
           }
 
           // Définir les options du transfert de fichier
           const expiryDays = input?.expiryDays || 7; // 7 jours par défaut
+          const workspaceId = input?.workspaceId || null;
 
           // Gérer les champs avec alias pour compatibilité avec le frontend
           const isPaymentRequired =
@@ -243,6 +244,7 @@ export default {
             .join("-")}-${recipientEmail || "no-email"}`;
           const recentTransfer = await FileTransfer.findOne({
             userId: user.id,
+            workspaceId,
             totalSize,
             status: "active",
             createdAt: { $gte: new Date(Date.now() - 2 * 60 * 1000) }, // Réduit à 2 minutes
@@ -261,6 +263,7 @@ export default {
           // Créer un nouveau transfert de fichier
           const fileTransfer = new FileTransfer({
             userId: user.id,
+            workspaceId,
             files: filesInfo,
             totalSize,
             status: "active",
@@ -289,7 +292,7 @@ export default {
         } catch (error) {
           console.error(
             "Erreur lors de la création du transfert de fichier:",
-            error
+            error,
           );
 
           if (error instanceof UserInputError) {
@@ -298,10 +301,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors de la création du transfert de fichier.",
-            "FILE_TRANSFER_CREATION_ERROR"
+            "FILE_TRANSFER_CREATION_ERROR",
           );
         }
-      }
+      },
     ),
   },
 };

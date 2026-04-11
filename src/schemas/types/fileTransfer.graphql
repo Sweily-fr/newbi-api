@@ -26,6 +26,7 @@ type File {
 type FileTransfer {
   id: ID!
   userId: ID
+  workspaceId: ID
   files: [File]
   totalSize: Float
   shareLink: String
@@ -87,6 +88,7 @@ type FileTransferAccessResponse {
 
 # Input pour la création d'un transfert de fichiers
 input FileTransferInput {
+  workspaceId: ID
   expiryDays: Int
   isPaymentRequired: Boolean = false
   requirePayment: Boolean = false # Alias pour isPaymentRequired pour compatibilité avec le frontend
@@ -108,6 +110,7 @@ input FileTransferInput {
 extend type Query {
   # Obtenir tous les transferts de fichiers de l'utilisateur connecté avec pagination
   myFileTransfers(
+    workspaceId: ID
     page: Int = 1
     limit: Int = 10
   ): FileTransferPaginatedResponse!

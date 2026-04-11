@@ -11,7 +11,13 @@ import {
   calculateExpiryDate,
   deleteFile,
 } from "../utils/fileTransferUtils.js";
-import { getAllSubfolders, sanitizeFileName, buildFolderPath, sharedDocsS3Client, SHARED_DOCUMENTS_BUCKET } from "../services/sharedDocumentZipService.js";
+import {
+  getAllSubfolders,
+  sanitizeFileName,
+  buildFolderPath,
+  sharedDocsS3Client,
+  SHARED_DOCUMENTS_BUCKET,
+} from "../services/sharedDocumentZipService.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -52,15 +58,13 @@ async function getMaxFileSize(userId) {
 
     // Chercher la subscription active
     const subscription = await db.collection("subscription").findOne({
-      $or: [
-        { referenceId: orgId },
-        { organizationId: orgId },
-      ],
+      $or: [{ referenceId: orgId }, { organizationId: orgId }],
       status: { $in: ["active", "trialing"] },
     });
 
     const plan = subscription?.plan?.toLowerCase() || "freelance";
-    const limitGB = FILE_TRANSFER_LIMITS[plan] || FILE_TRANSFER_LIMITS.freelance;
+    const limitGB =
+      FILE_TRANSFER_LIMITS[plan] || FILE_TRANSFER_LIMITS.freelance;
     return limitGB * 1024 * 1024 * 1024;
   } catch {
     return DEFAULT_MAX_FILE_SIZE;
@@ -71,24 +75,45 @@ export default {
   Query: {
     // Obtenir les transferts de fichiers de l'utilisateur connecté avec pagination
     myFileTransfers: isAuthenticated(
-      async (_, { page = 1, limit = 10 }, { user }) => {
+      async (_, { workspaceId, page = 1, limit = 10 }, { user }) => {
         try {
           // S'assurer que page et limit sont des nombres positifs
           const validPage = Math.max(1, page);
           const validLimit = Math.max(1, Math.min(100, limit)); // Limiter à 100 éléments maximum par page
           const skip = (validPage - 1) * validLimit;
 
-          // Compter le nombre total d'éléments pour la pagination
-          const totalItems = await FileTransfer.find({
+          // Construire le filtre de base
+          const baseFilter = {
             userId: user.id,
             status: { $ne: "deleted" },
-          }).countDocuments();
+          };
+
+          // Isolation par workspace: si un workspaceId est fourni, on ne retourne
+          // que les transferts de ce workspace. Pour garantir la compatibilité
+          // avec les transferts créés avant l'ajout du multi-workspace (sans
+          // workspaceId), on les rattache automatiquement au workspace courant
+          // lors de la première requête, puis on applique le filtre strict.
+          if (workspaceId) {
+            await FileTransfer.updateMany(
+              {
+                userId: user.id,
+                status: { $ne: "deleted" },
+                $or: [
+                  { workspaceId: null },
+                  { workspaceId: { $exists: false } },
+                ],
+              },
+              { $set: { workspaceId } },
+            );
+            baseFilter.workspaceId = workspaceId;
+          }
+
+          // Compter le nombre total d'éléments pour la pagination
+          const totalItems =
+            await FileTransfer.find(baseFilter).countDocuments();
 
           // Récupérer les transferts de fichiers avec pagination
-          const fileTransfers = await FileTransfer.find({
-            userId: user.id,
-            status: { $ne: "deleted" },
-          })
+          const fileTransfers = await FileTransfer.find(baseFilter)
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(validLimit);
@@ -108,14 +133,14 @@ export default {
         } catch (error) {
           console.error(
             "Erreur lors de la récupération des transferts de fichiers:",
-            error
+            error,
           );
           throw new ApolloError(
             "Une erreur est survenue lors de la récupération des transferts de fichiers.",
-            "FILE_TRANSFER_FETCH_ERROR"
+            "FILE_TRANSFER_FETCH_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Obtenir les informations d'un transfert de fichiers par son ID
@@ -139,11 +164,11 @@ export default {
 
         console.error(
           "Erreur lors de la récupération du transfert de fichiers:",
-          error
+          error,
         );
         throw new ApolloError(
           "Une erreur est survenue lors de la récupération du transfert de fichiers.",
-          "FILE_TRANSFER_FETCH_ERROR"
+          "FILE_TRANSFER_FETCH_ERROR",
         );
       }
     }),
@@ -234,11 +259,11 @@ export default {
       } catch (error) {
         console.error(
           "Erreur lors de la récupération du transfert de fichiers:",
-          error
+          error,
         );
         throw new ApolloError(
           "Une erreur est survenue lors de la récupération du transfert de fichiers.",
-          "FILE_TRANSFER_FETCH_ERROR"
+          "FILE_TRANSFER_FETCH_ERROR",
         );
       }
     },
@@ -256,6 +281,7 @@ export default {
 
           // Extraire les options du transfert
           const {
+            workspaceId = null,
             isPaymentRequired = false,
             paymentAmount = 0,
             paymentCurrency = "EUR",
@@ -295,13 +321,14 @@ export default {
             }
 
             throw new UserInputError(
-              `La taille totale des fichiers dépasse la limite autorisée (${Math.round(maxFileSize / (1024 * 1024 * 1024))} Go)`
+              `La taille totale des fichiers dépasse la limite autorisée (${Math.round(maxFileSize / (1024 * 1024 * 1024))} Go)`,
             );
           }
 
           // Créer le transfert de fichiers
           const fileTransfer = new FileTransfer({
             userId: user.id,
+            workspaceId,
             files: uploadedFiles,
             totalSize,
             shareLink,
@@ -329,14 +356,14 @@ export default {
 
           console.error(
             "Erreur lors de la création du transfert de fichiers:",
-            error
+            error,
           );
           throw new ApolloError(
             "Une erreur est survenue lors de la création du transfert de fichiers.",
-            "FILE_TRANSFER_CREATION_ERROR"
+            "FILE_TRANSFER_CREATION_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Supprimer un transfert de fichiers
@@ -368,11 +395,11 @@ export default {
 
         console.error(
           "Erreur lors de la suppression du transfert de fichiers:",
-          error
+          error,
         );
         throw new ApolloError(
           "Une erreur est survenue lors de la suppression du transfert de fichiers.",
-          "FILE_TRANSFER_DELETION_ERROR"
+          "FILE_TRANSFER_DELETION_ERROR",
         );
       }
     }),
@@ -388,6 +415,7 @@ export default {
 
           // Extraire les options du transfert
           const {
+            workspaceId = null,
             expiryDays = 2, // 48 heures par défaut
             isPaymentRequired = false,
             paymentAmount = 0,
@@ -398,13 +426,13 @@ export default {
           // Vérifier les valeurs
           if (expiryDays <= 0) {
             throw new UserInputError(
-              "La durée d'expiration doit être supérieure à 0"
+              "La durée d'expiration doit être supérieure à 0",
             );
           }
 
           if (isPaymentRequired && paymentAmount <= 0) {
             throw new UserInputError(
-              "Le montant du paiement doit être supérieur à 0"
+              "Le montant du paiement doit être supérieur à 0",
             );
           }
 
@@ -429,7 +457,7 @@ export default {
             }
 
             throw new UserInputError(
-              `La taille totale des fichiers dépasse la limite autorisée (${Math.round(maxFileSize / (1024 * 1024 * 1024))} Go)`
+              `La taille totale des fichiers dépasse la limite autorisée (${Math.round(maxFileSize / (1024 * 1024 * 1024))} Go)`,
             );
           }
 
@@ -441,6 +469,7 @@ export default {
           // Créer le transfert de fichiers
           const fileTransfer = new FileTransfer({
             userId: user.id,
+            workspaceId,
             files: uploadedFiles,
             totalSize,
             shareLink,
@@ -471,14 +500,14 @@ export default {
 
           console.error(
             "Erreur lors de la création du transfert de fichiers (base64):",
-            error
+            error,
           );
           throw new ApolloError(
             "Une erreur est survenue lors de la création du transfert de fichiers.",
-            "FILE_TRANSFER_CREATION_ERROR"
+            "FILE_TRANSFER_CREATION_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Générer un lien de paiement pour un transfert de fichiers
@@ -551,22 +580,31 @@ export default {
       } catch (error) {
         console.error(
           "Erreur lors de la génération du lien de paiement:",
-          error
+          error,
         );
         throw new ApolloError(
           "Une erreur est survenue lors de la génération du lien de paiement.",
-          "PAYMENT_LINK_GENERATION_ERROR"
+          "PAYMENT_LINK_GENERATION_ERROR",
         );
       }
     },
 
     // Créer un transfert de fichiers à partir de documents partagés (ZIP unique)
     createFileTransferFromSharedDocuments: isAuthenticated(
-      async (_, { documentIds = [], folderIds = [], workspaceId, input = {} }, { user }) => {
+      async (
+        _,
+        { documentIds = [], folderIds = [], workspaceId, input = {} },
+        { user },
+      ) => {
         try {
           // Valider qu'au moins un document ou dossier est sélectionné
-          if ((!documentIds || documentIds.length === 0) && (!folderIds || folderIds.length === 0)) {
-            throw new UserInputError("Veuillez sélectionner au moins un document ou dossier");
+          if (
+            (!documentIds || documentIds.length === 0) &&
+            (!folderIds || folderIds.length === 0)
+          ) {
+            throw new UserInputError(
+              "Veuillez sélectionner au moins un document ou dossier",
+            );
           }
 
           // 1. Construire la liste de documents avec leurs chemins ZIP
@@ -590,11 +628,15 @@ export default {
               });
 
               const rootFolder = folderMap.get(folderId);
-              const rootFolderName = rootFolder ? sanitizeFileName(rootFolder.name) : "dossier";
+              const rootFolderName = rootFolder
+                ? sanitizeFileName(rootFolder.name)
+                : "dossier";
 
               for (const doc of docs) {
                 const folder = folderMap.get(doc.folderId?.toString());
-                const folderPath = folder ? buildFolderPath(folder, folderMap, folderId) : "";
+                const folderPath = folder
+                  ? buildFolderPath(folder, folderMap, folderId)
+                  : "";
                 const fileName = sanitizeFileName(doc.originalName || doc.name);
                 const zipPath = folderPath
                   ? `${rootFolderName}/${folderPath}/${fileName}`
@@ -675,10 +717,15 @@ export default {
 
           // 4. Déterminer le nom du ZIP
           let zipName;
-          if (folderIds?.length === 1 && (!documentIds || documentIds.length === 0)) {
+          if (
+            folderIds?.length === 1 &&
+            (!documentIds || documentIds.length === 0)
+          ) {
             // Un seul dossier sélectionné → utiliser son nom
             const rootFolder = await SharedFolder.findById(folderIds[0]);
-            zipName = rootFolder ? `${sanitizeFileName(rootFolder.name)}.zip` : "Documents.zip";
+            zipName = rootFolder
+              ? `${sanitizeFileName(rootFolder.name)}.zip`
+              : "Documents.zip";
           } else {
             zipName = "Documents.zip";
           }
@@ -692,21 +739,23 @@ export default {
             transferId,
             fileId,
             zipName,
-            "application/zip"
+            "application/zip",
           );
 
-          const filesInfo = [{
-            originalName: zipName,
-            displayName: zipName,
-            fileName: zipName,
-            filePath: result.url,
-            r2Key: result.key,
-            mimeType: "application/zip",
-            size: result.size,
-            storageType: "r2",
-            fileId,
-            uploadedAt: new Date(),
-          }];
+          const filesInfo = [
+            {
+              originalName: zipName,
+              displayName: zipName,
+              fileName: zipName,
+              filePath: result.url,
+              r2Key: result.key,
+              mimeType: "application/zip",
+              size: result.size,
+              storageType: "r2",
+              fileId,
+              uploadedAt: new Date(),
+            },
+          ];
 
           // 6. Options du transfert (allowPreview toujours false pour les ZIP depuis docs partagés)
           const expiryDays = input?.expiryDays || 7;
@@ -718,13 +767,18 @@ export default {
           const expiryReminderEnabled = input?.expiryReminderEnabled || false;
           const hasWatermark = input?.hasWatermark || false;
           const paymentAmount = input?.paymentAmount || 0;
-          const paymentCurrency = input?.paymentCurrency || input?.currency || "EUR";
+          const paymentCurrency =
+            input?.paymentCurrency || input?.currency || "EUR";
           const isPaymentRequired =
-            paymentAmount > 0 || input?.isPaymentRequired || input?.requirePayment || false;
+            paymentAmount > 0 ||
+            input?.isPaymentRequired ||
+            input?.requirePayment ||
+            false;
 
           // 7. Créer le FileTransfer avec un seul fichier (le ZIP)
           const fileTransfer = new FileTransfer({
             userId: user.id,
+            workspaceId,
             files: filesInfo,
             totalSize: result.size,
             status: "active",
@@ -756,7 +810,8 @@ export default {
             process.env.SMTP_PASS
           ) {
             try {
-              const { sendFileTransferEmail } = await import("../utils/mailer.js");
+              const { sendFileTransferEmail } =
+                await import("../utils/mailer.js");
 
               const transferData = {
                 shareLink: fileTransfer.shareLink,
@@ -771,9 +826,15 @@ export default {
               };
 
               await sendFileTransferEmail(recipientEmail, transferData);
-              console.log("📧 Email de transfert (shared docs ZIP) envoyé à:", recipientEmail);
+              console.log(
+                "📧 Email de transfert (shared docs ZIP) envoyé à:",
+                recipientEmail,
+              );
             } catch (emailError) {
-              console.error("❌ Erreur envoi email transfert (shared docs):", emailError);
+              console.error(
+                "❌ Erreur envoi email transfert (shared docs):",
+                emailError,
+              );
             }
           }
 
@@ -787,13 +848,16 @@ export default {
             throw error;
           }
 
-          console.error("❌ Erreur création transfert ZIP depuis documents partagés:", error);
+          console.error(
+            "❌ Erreur création transfert ZIP depuis documents partagés:",
+            error,
+          );
           throw new ApolloError(
             "Une erreur est survenue lors de la création du transfert depuis les documents partagés.",
-            "FILE_TRANSFER_FROM_SHARED_DOCS_ERROR"
+            "FILE_TRANSFER_FROM_SHARED_DOCS_ERROR",
           );
         }
-      }
+      },
     ),
   },
 };
