@@ -20,10 +20,13 @@ const cacheTimers = new Map();
 function setCacheEntry(key, value) {
   fileMetadataCache.set(key, value);
   if (cacheTimers.has(key)) clearTimeout(cacheTimers.get(key));
-  cacheTimers.set(key, setTimeout(() => {
-    fileMetadataCache.delete(key);
-    cacheTimers.delete(key);
-  }, CACHE_TTL));
+  cacheTimers.set(
+    key,
+    setTimeout(() => {
+      fileMetadataCache.delete(key);
+      cacheTimers.delete(key);
+    }, CACHE_TTL),
+  );
 }
 
 function deleteCacheEntry(key) {
@@ -35,50 +38,44 @@ function deleteCacheEntry(key) {
 }
 
 const getFileInfoByTransferId = async (fileId) => {
-  try {
-    // D'abord, vérifier le cache temporaire
-    if (fileMetadataCache.has(fileId)) {
-      const cachedInfo = fileMetadataCache.get(fileId);
-      return cachedInfo;
-    }
-
-    // Rechercher par fileId dans les fichiers existants
-    let fileTransfer = await FileTransfer.findOne({
-      "files.fileId": fileId,
-      uploadMethod: "chunk",
-      storageType: "r2",
-    });
-
-    if (!fileTransfer) {
-      // Fallback: rechercher par originalName (compatibilité)
-      fileTransfer = await FileTransfer.findOne({
-        "files.originalName": fileId,
-        uploadMethod: "chunk",
-      });
-    }
-
-    if (!fileTransfer) {
-      throw new Error(`Transfert de fichier non trouvé pour fileId: ${fileId}`);
-    }
-
-    // Trouver le fichier spécifique
-    let fileInfo = fileTransfer.files.find((file) => file.fileId === fileId);
-    if (!fileInfo) {
-      fileInfo = fileTransfer.files.find(
-        (file) => file.originalName === fileId
-      );
-    }
-
-    if (!fileInfo) {
-      throw new Error(
-        `Fichier spécifique non trouvé dans le transfert: ${fileId}`
-      );
-    }
-
-    return fileInfo;
-  } catch (error) {
-    throw error;
+  // D'abord, vérifier le cache temporaire
+  if (fileMetadataCache.has(fileId)) {
+    const cachedInfo = fileMetadataCache.get(fileId);
+    return cachedInfo;
   }
+
+  // Rechercher par fileId dans les fichiers existants
+  let fileTransfer = await FileTransfer.findOne({
+    "files.fileId": fileId,
+    uploadMethod: "chunk",
+    storageType: "r2",
+  });
+
+  if (!fileTransfer) {
+    // Fallback: rechercher par originalName (compatibilité)
+    fileTransfer = await FileTransfer.findOne({
+      "files.originalName": fileId,
+      uploadMethod: "chunk",
+    });
+  }
+
+  if (!fileTransfer) {
+    throw new Error(`Transfert de fichier non trouvé pour fileId: ${fileId}`);
+  }
+
+  // Trouver le fichier spécifique
+  let fileInfo = fileTransfer.files.find((file) => file.fileId === fileId);
+  if (!fileInfo) {
+    fileInfo = fileTransfer.files.find((file) => file.originalName === fileId);
+  }
+
+  if (!fileInfo) {
+    throw new Error(
+      `Fichier spécifique non trouvé dans le transfert: ${fileId}`,
+    );
+  }
+
+  return fileInfo;
 };
 
 export default {
@@ -88,18 +85,18 @@ export default {
       async (
         _,
         { transferId, fileId, fileName, fileSize, mimeType, totalParts },
-        { user }
+        { user },
       ) => {
         try {
           if (!transferId || !fileId || !fileName || !fileSize || !totalParts) {
             throw new UserInputError(
-              "Paramètres manquants: transferId, fileId, fileName, fileSize ou totalParts"
+              "Paramètres manquants: transferId, fileId, fileName, fileSize ou totalParts",
             );
           }
 
           if (totalParts < 1 || totalParts > 10000) {
             throw new UserInputError(
-              "Le nombre de parts doit être entre 1 et 10000"
+              "Le nombre de parts doit être entre 1 et 10000",
             );
           }
 
@@ -125,7 +122,7 @@ export default {
               fileSize /
               1024 /
               1024
-            ).toFixed(2)} MB, ${totalParts} parts)`
+            ).toFixed(2)} MB, ${totalParts} parts)`,
           );
 
           const result = await cloudflareTransferService.startMultipartUpload(
@@ -134,7 +131,7 @@ export default {
             fileName,
             fileSize,
             finalMimeType,
-            totalParts
+            totalParts,
           );
 
           return {
@@ -151,10 +148,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors du démarrage du multipart upload.",
-            "MULTIPART_START_ERROR"
+            "MULTIPART_START_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Compléter un multipart upload
@@ -163,19 +160,19 @@ export default {
         try {
           if (!uploadId || !key || !parts || parts.length === 0) {
             throw new UserInputError(
-              "Paramètres manquants: uploadId, key ou parts"
+              "Paramètres manquants: uploadId, key ou parts",
             );
           }
 
           console.log(
-            `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`
+            `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`,
           );
 
           const result =
             await cloudflareTransferService.completeMultipartUpload(
               uploadId,
               key,
-              parts
+              parts,
             );
 
           // ✅ CORRECTION: Extraire le nom original en retirant le préfixe f_fileId_
@@ -183,7 +180,7 @@ export default {
           const cleanOriginalName = keyFileName.replace(/^f_[a-f0-9-]+_/, ""); // Retirer f_fileId_
 
           console.log(
-            `📝 Nettoyage du nom: "${keyFileName}" → "${cleanOriginalName}"`
+            `📝 Nettoyage du nom: "${keyFileName}" → "${cleanOriginalName}"`,
           );
 
           // Stocker les métadonnées dans le cache
@@ -218,7 +215,7 @@ export default {
             try {
               await cloudflareTransferService.abortMultipartUpload(
                 uploadId,
-                key
+                key,
               );
             } catch (abortError) {
               console.error("Erreur annulation multipart:", abortError);
@@ -231,10 +228,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors de la finalisation du multipart upload.",
-            "MULTIPART_COMPLETE_ERROR"
+            "MULTIPART_COMPLETE_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Générer des URLs signées pour upload direct vers R2
@@ -243,13 +240,13 @@ export default {
         try {
           if (!fileId || !fileName || !totalChunks) {
             throw new UserInputError(
-              "Paramètres manquants: fileId, fileName ou totalChunks"
+              "Paramètres manquants: fileId, fileName ou totalChunks",
             );
           }
 
           if (totalChunks < 1 || totalChunks > 10000) {
             throw new UserInputError(
-              "Le nombre de chunks doit être entre 1 et 10000"
+              "Le nombre de chunks doit être entre 1 et 10000",
             );
           }
 
@@ -257,7 +254,7 @@ export default {
           const transferId = `temp_${fileId}`;
 
           console.log(
-            `🔑 Génération de ${totalChunks} URLs signées pour ${fileName}`
+            `🔑 Génération de ${totalChunks} URLs signées pour ${fileName}`,
           );
 
           // Générer toutes les URLs signées en parallèle
@@ -271,7 +268,7 @@ export default {
                     fileId,
                     i,
                     fileName,
-                    3600 // 1 heure de validité
+                    3600, // 1 heure de validité
                   );
 
                 return {
@@ -279,14 +276,14 @@ export default {
                   uploadUrl,
                   key,
                 };
-              })()
+              })(),
             );
           }
 
           const uploadUrls = await Promise.all(urlPromises);
 
           console.log(
-            `✅ ${uploadUrls.length} URLs signées générées pour ${fileName}`
+            `✅ ${uploadUrls.length} URLs signées générées pour ${fileName}`,
           );
 
           return {
@@ -304,10 +301,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors de la génération des URLs signées.",
-            "PRESIGNED_URL_GENERATION_ERROR"
+            "PRESIGNED_URL_GENERATION_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Confirmer qu'un chunk a été uploadé directement vers R2
@@ -315,12 +312,12 @@ export default {
       async (
         _,
         { fileId, chunkIndex, totalChunks, fileName, fileSize },
-        { user }
+        { user },
       ) => {
         try {
           if (!fileId || chunkIndex === undefined || !totalChunks) {
             throw new UserInputError(
-              "Paramètres manquants: fileId, chunkIndex ou totalChunks"
+              "Paramètres manquants: fileId, chunkIndex ou totalChunks",
             );
           }
 
@@ -336,12 +333,12 @@ export default {
             const allChunksReceived = await areAllChunksReceivedOnR2(
               transferId,
               fileId,
-              totalChunks
+              totalChunks,
             );
 
             if (!allChunksReceived) {
               throw new Error(
-                `Tous les chunks ne sont pas présents pour le fichier ${fileId}`
+                `Tous les chunks ne sont pas présents pour le fichier ${fileId}`,
               );
             }
 
@@ -365,7 +362,7 @@ export default {
               fileId,
               fileName,
               totalChunks,
-              mimeType
+              mimeType,
             );
 
             // Stocker les métadonnées dans le cache
@@ -402,10 +399,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors de la confirmation du chunk.",
-            "CHUNK_CONFIRMATION_ERROR"
+            "CHUNK_CONFIRMATION_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Uploader un chunk de fichier vers R2
@@ -413,13 +410,13 @@ export default {
       async (
         _,
         { chunk, fileId, chunkIndex, totalChunks, fileName, fileSize },
-        { user }
+        { user },
       ) => {
         try {
           // Vérifier que les paramètres sont valides
           if (!fileId || !fileName) {
             throw new UserInputError(
-              "Identifiant de fichier ou nom de fichier manquant"
+              "Identifiant de fichier ou nom de fichier manquant",
             );
           }
 
@@ -436,7 +433,7 @@ export default {
             fileId,
             chunkIndex,
             fileName,
-            transferId
+            transferId,
           );
 
           // Vérifier si c'est le dernier chunk (index commence à 0)
@@ -451,12 +448,12 @@ export default {
             const allChunksReceived = await areAllChunksReceivedOnR2(
               transferId,
               fileId,
-              totalChunks
+              totalChunks,
             );
 
             if (!allChunksReceived) {
               throw new Error(
-                `Tous les chunks ne sont pas présents pour le fichier ${fileId}`
+                `Tous les chunks ne sont pas présents pour le fichier ${fileId}`,
               );
             }
             // Déterminer le type MIME
@@ -479,7 +476,7 @@ export default {
               fileId,
               fileName,
               totalChunks,
-              mimeType
+              mimeType,
             );
 
             // Stocker les métadonnées du fichier dans le cache temporaire
@@ -520,10 +517,10 @@ export default {
           console.error("❌ Erreur lors de l'upload du chunk vers R2:", error);
           throw new ApolloError(
             "Une erreur est survenue lors de l'upload du chunk vers R2.",
-            "CHUNK_UPLOAD_R2_ERROR"
+            "CHUNK_UPLOAD_R2_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Créer un transfert de fichier à partir des IDs de fichiers déjà uploadés en chunks sur R2
@@ -563,13 +560,14 @@ export default {
             } catch (error) {
               throw new ApolloError(
                 `Impossible de récupérer les informations du fichier ${fileId}`,
-                "FILE_NOT_FOUND"
+                "FILE_NOT_FOUND",
               );
             }
           }
 
           // Définir les options du transfert de fichier
           const expiryDays = input?.expiryDays || 7;
+          const workspaceId = input?.workspaceId || null;
           const paymentAmount = input?.paymentAmount || 0;
           const paymentCurrency =
             input?.paymentCurrency || input?.currency || "EUR";
@@ -593,6 +591,7 @@ export default {
           // Créer un nouveau transfert de fichier
           const fileTransfer = new FileTransfer({
             userId: user.id,
+            workspaceId,
             files: filesInfo,
             totalSize,
             status: "active",
@@ -644,24 +643,24 @@ export default {
 
               const emailSent = await sendFileTransferEmail(
                 recipientEmail,
-                transferData
+                transferData,
               );
 
               if (emailSent) {
                 console.log(
                   "📧 Email de transfert envoyé avec succès à:",
-                  recipientEmail
+                  recipientEmail,
                 );
               } else {
                 console.warn(
                   "⚠️ Échec de l'envoi de l'email de transfert à:",
-                  recipientEmail
+                  recipientEmail,
                 );
               }
             } catch (emailError) {
               console.error(
                 "❌ Erreur lors de l'envoi de l'email de transfert:",
-                emailError
+                emailError,
               );
               // Ne pas faire échouer la création du transfert si l'email échoue
             }
@@ -672,7 +671,7 @@ export default {
                 process.env.FRONTEND_URL || "http://localhost:3000"
               }/transfer/${fileTransfer.shareLink}?accessKey=${
                 fileTransfer.accessKey
-              }`
+              }`,
             );
           }
 
@@ -685,7 +684,7 @@ export default {
         } catch (error) {
           console.error(
             "❌ Erreur lors de la création du transfert de fichier R2:",
-            error
+            error,
           );
 
           if (error instanceof UserInputError) {
@@ -694,10 +693,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors de la création du transfert de fichier R2.",
-            "FILE_TRANSFER_R2_CREATION_ERROR"
+            "FILE_TRANSFER_R2_CREATION_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Upload direct d'un fichier vers R2
@@ -737,10 +736,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors de l'upload direct vers R2.",
-            "DIRECT_UPLOAD_R2_ERROR"
+            "DIRECT_UPLOAD_R2_ERROR",
           );
         }
-      }
+      },
     ),
 
     // Upload d'un fichier base64 vers R2
@@ -763,7 +762,7 @@ export default {
           const fileInfo = await uploadBase64FileToR2(
             fileInput,
             transferId,
-            fileId
+            fileId,
           );
 
           return {
@@ -784,10 +783,10 @@ export default {
 
           throw new ApolloError(
             "Une erreur est survenue lors de l'upload base64 vers R2.",
-            "BASE64_UPLOAD_R2_ERROR"
+            "BASE64_UPLOAD_R2_ERROR",
           );
         }
-      }
+      },
     ),
   },
 };
