@@ -55,6 +55,13 @@ const FileTransferSchema = new Schema(
       ref: "User",
       required: true,
     },
+    // ID de l'organisation/workspace auquel appartient le transfert
+    // Optionnel pour compatibilité avec les transferts créés avant l'ajout du multi-workspace
+    workspaceId: {
+      type: String,
+      index: true,
+      default: null,
+    },
     files: [fileSchema],
     totalSize: {
       type: Number,
@@ -168,7 +175,7 @@ const FileTransferSchema = new Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Middleware pre-save pour hasher le mot de passe
@@ -176,7 +183,10 @@ FileTransferSchema.pre("save", async function (next) {
   // Ne hasher que si le mot de passe a été modifié et qu'il n'est pas déjà hashé
   if (this.isModified("password") && this.password) {
     // Vérifier si le mot de passe est déjà hashé (commence par $2a$ ou $2b$)
-    if (!this.password.startsWith("$2a$") && !this.password.startsWith("$2b$")) {
+    if (
+      !this.password.startsWith("$2a$") &&
+      !this.password.startsWith("$2b$")
+    ) {
       const salt = await bcrypt.genSalt(10);
       this.password = await bcrypt.hash(this.password, salt);
     }
