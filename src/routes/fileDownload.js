@@ -158,22 +158,31 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       return res.status(404).json({ error: "Transfert non trouvé" });
     }
 
+    // Trouver le fichier spécifique (avant les checks d'autorisation pour
+    // pouvoir appliquer l'exception zip)
+    const file = fileTransfer.files.find(
+      (f) => f._id.toString() === fileId || f.fileId === fileId,
+    );
+    if (!file) {
+      return res.status(404).json({ error: "Fichier non trouvé" });
+    }
+
+    // Exception: les fichiers zip sont toujours fetchables via cette route
+    // car le client les parse avec JSZip pour prévisualiser leurs entrées.
+    // La vérification allowPreview ne s'applique qu'aux types directement
+    // affichables (image, pdf, etc).
+    const isZipFile =
+      file.mimeType === "application/zip" ||
+      /\.zip$/i.test(file.originalName || "");
+
     // Vérifier si la prévisualisation est autorisée
-    if (fileTransfer.allowPreview === false) {
+    if (fileTransfer.allowPreview === false && !isZipFile) {
       return res.status(403).json({ error: "Prévisualisation non autorisée" });
     }
 
     // Vérifier les permissions (paiement si requis)
     if (fileTransfer.isPaymentRequired && !fileTransfer.isPaid) {
       return res.status(402).json({ error: "Paiement requis" });
-    }
-
-    // Trouver le fichier spécifique
-    const file = fileTransfer.files.find(
-      (f) => f._id.toString() === fileId || f.fileId === fileId,
-    );
-    if (!file) {
-      return res.status(404).json({ error: "Fichier non trouvé" });
     }
 
     logger.info("👁️ Prévisualisation du fichier depuis R2", {
@@ -248,6 +257,9 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       res.setHeader("Content-Length", jpegBuffer.length);
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("Access-Control-Allow-Origin", "*");
+      // CRUCIAL: sans CORP cross-origin, les <img>/<object>/<iframe>
+      // cross-origin sont bloques par le navigateur (ERR_BLOCKED_BY_RESPONSE.NotSameOrigin)
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader(
         "Content-Security-Policy",
@@ -272,6 +284,9 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       res.setHeader("Cache-Control", "public, max-age=3600");
       // Headers CORS pour permettre l'affichage dans un iframe
       res.setHeader("Access-Control-Allow-Origin", "*");
+      // CRUCIAL: sans CORP cross-origin, les <img>/<object>/<iframe>
+      // cross-origin sont bloques par le navigateur (ERR_BLOCKED_BY_RESPONSE.NotSameOrigin)
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader(
         "Content-Security-Policy",
