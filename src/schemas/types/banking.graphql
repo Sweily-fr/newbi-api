@@ -11,6 +11,7 @@ type Transaction {
   description: String!
   category: String
   expenseCategory: ExpenseCategory
+  pcgAccount: PCGAccount
   fromAccount: String
   toAccount: String
   workspaceId: String!
@@ -50,6 +51,23 @@ enum ReconciliationStatusEnum {
   SUGGESTED
   MATCHED
   IGNORED
+}
+
+"""
+Compte du Plan Comptable Général (PCG) associé à une transaction
+"""
+type PCGAccount {
+  numero: String
+  intitule: String
+  confidence: PCGConfidence
+  isManual: Boolean
+  manuallySetAt: DateTime
+}
+
+enum PCGConfidence {
+  HIGH
+  MEDIUM
+  LOW
 }
 
 enum ExpenseCategory {
@@ -440,6 +458,10 @@ extend type Query {
   ): ProviderStats
   costComparison(startDate: DateTime!, endDate: DateTime!): [CostComparison!]!
 
+  # PCG (Plan Comptable Général)
+  pcgMappingTable: [PCGMappingEntry!]!
+  pcgAccounts: [PCGAccountEntry!]!
+
   # Historique
   transactionHistory(
     accountId: String!
@@ -473,6 +495,31 @@ input UpdateTransactionInput {
   paymentMethod: String
   notes: String
   tags: [String!]
+  pcgAccountNumero: String
+}
+
+"""
+Entrée dans la table de correspondance Bridge → PCG
+"""
+type PCGMappingEntry {
+  bridgeCategoryId: Int!
+  bridgeLabel: String!
+  parentCategory: String!
+  pcgNumero: String!
+  pcgIntitule: String!
+  confidence: String!
+  alternatives: [PCGAccountSummary!]!
+  rules: String
+}
+
+type PCGAccountSummary {
+  numero: String!
+  intitule: String!
+}
+
+type PCGAccountEntry {
+  numero: String!
+  intitule: String!
 }
 
 # Mutations
@@ -489,6 +536,9 @@ extend type Mutation {
   createTransaction(input: CreateTransactionInput!): Transaction!
   updateTransaction(id: ID!, input: UpdateTransactionInput!): Transaction!
   deleteTransaction(id: ID!): Boolean!
+
+  # Mettre à jour le compte PCG d'une transaction
+  updateTransactionPCG(transactionId: ID!, pcgNumero: String!, workspaceId: ID!): Transaction!
 
   # Upload de justificatif
   uploadTransactionReceipt(transactionId: ID!, workspaceId: ID!, file: Upload!): UploadTransactionReceiptResult!
