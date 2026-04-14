@@ -696,6 +696,96 @@ const treasuryForecastResolvers = {
           .lean();
       },
     ),
+
+    forecastMonthDetails: requireRead("expenses")(
+      async (_, { workspaceId: inputWorkspaceId, month }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        if (!/^\d{4}-\d{2}$/.test(month)) {
+          throw new AppError(
+            "Format de mois invalide (attendu YYYY-MM)",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        const wId = new mongoose.Types.ObjectId(workspaceId);
+        const start = new Date(month + "-01");
+        const end = new Date(start);
+        end.setMonth(end.getMonth() + 1);
+
+        const InvoiceModel = mongoose.model("Invoice");
+        const PurchaseInvoiceModel = mongoose.model("PurchaseInvoice");
+        const QuoteModel = mongoose.model("Quote");
+
+        const [invoices, purchaseInvoices, quotes] = await Promise.all([
+          InvoiceModel.find({
+            workspaceId: wId,
+            status: { $ne: "DRAFT" },
+            issueDate: { $gte: start, $lt: end },
+          })
+            .select("number prefix client finalTotalTTC issueDate status")
+            .sort({ issueDate: 1 })
+            .lean(),
+          PurchaseInvoiceModel.find({
+            workspaceId: wId,
+            issueDate: { $gte: start, $lt: end },
+          })
+            .select("invoiceNumber supplierName amountTTC issueDate status")
+            .sort({ issueDate: 1 })
+            .lean(),
+          QuoteModel.find({
+            workspaceId: wId,
+            status: "COMPLETED",
+            $or: [
+              { convertedToInvoice: { $exists: false } },
+              { convertedToInvoice: null },
+            ],
+            issueDate: { $gte: start, $lt: end },
+          })
+            .select("number prefix client finalTotalTTC issueDate status")
+            .sort({ issueDate: 1 })
+            .lean(),
+        ]);
+
+        const resolveClientName = (client) =>
+          client?.name ||
+          [client?.firstName, client?.lastName].filter(Boolean).join(" ") ||
+          client?.email ||
+          "Client inconnu";
+
+        return {
+          month,
+          invoices: invoices.map((i) => ({
+            id: i._id.toString(),
+            number: [i.prefix, i.number].filter(Boolean).join("-") || null,
+            partyName: resolveClientName(i.client),
+            amountTTC: i.finalTotalTTC || 0,
+            issueDate: i.issueDate?.toISOString(),
+            status: i.status,
+            kind: "INVOICE",
+          })),
+          purchaseInvoices: purchaseInvoices.map((p) => ({
+            id: p._id.toString(),
+            number: p.invoiceNumber || null,
+            partyName: p.supplierName || "Fournisseur inconnu",
+            amountTTC: p.amountTTC || 0,
+            issueDate: p.issueDate?.toISOString(),
+            status: p.status,
+            kind: "PURCHASE_INVOICE",
+          })),
+          signedQuotes: quotes.map((q) => ({
+            id: q._id.toString(),
+            number: [q.prefix, q.number].filter(Boolean).join("-") || null,
+            partyName: resolveClientName(q.client),
+            amountTTC: q.finalTotalTTC || 0,
+            issueDate: q.issueDate?.toISOString(),
+            status: q.status,
+            kind: "QUOTE",
+          })),
+        };
+      },
+    ),
   },
 
   Mutation: {
