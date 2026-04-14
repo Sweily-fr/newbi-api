@@ -160,6 +160,29 @@ extend type Query {
   manualCashflowEntries(workspaceId: ID): [ManualCashflowEntry!]!
 
   detectedRecurrences(workspaceId: ID): [DetectedRecurrence!]!
+
+  # Détails des factures/devis composant un mois donné (format YYYY-MM).
+  forecastMonthDetails(
+    workspaceId: ID
+    month: String!
+  ): ForecastMonthDetails!
+}
+
+type ForecastInvoiceItem {
+  id: ID!
+  number: String
+  partyName: String!
+  amountTTC: Float!
+  issueDate: String!
+  status: String!
+  kind: String!
+}
+
+type ForecastMonthDetails {
+  month: String!
+  invoices: [ForecastInvoiceItem!]!
+  purchaseInvoices: [ForecastInvoiceItem!]!
+  signedQuotes: [ForecastInvoiceItem!]!
 }
 
 extend type Mutation {
