@@ -444,17 +444,18 @@ const treasuryForecastResolvers = {
             0,
           );
 
-          // Auto-forecast: applied to every month (past, current, future) so the
-          // chart always has a projection reference even when there is no actual.
+          // Auto-forecast: only apply to current and future months without manual
+          // forecast. Past months keep their actuals untouched (no projection
+          // overlay on what already happened).
           // Concrete signals (quotes, recurrences) replace the historical average
-          // for the corresponding side (otherwise we'd double-count: the past
-          // invoices that built the average are the same that triggered the
-          // recurrence detection).
+          // for the corresponding side (otherwise we'd double-count).
           const hasConcreteIncomeSignal =
             quoteIncome > 0 || recurrenceIncomeTotal > 0;
           const hasConcreteExpenseSignal = recurrenceExpenseTotal > 0;
           const needsAutoForecast =
-            forecastIncome === 0 && forecastExpense === 0;
+            forecastIncome === 0 &&
+            forecastExpense === 0 &&
+            month >= currentMonth;
           const autoForecastIncome =
             needsAutoForecast &&
             avgMonthlyIncome > 0 &&
