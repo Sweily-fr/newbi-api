@@ -447,33 +447,27 @@ const treasuryForecastResolvers = {
           // Auto-forecast: only apply to current and future months without manual
           // forecast. Past months keep their actuals untouched (no projection
           // overlay on what already happened).
-          // Concrete signals (quotes, recurrences) replace the historical average
-          // for the corresponding side (otherwise we'd double-count).
-          const hasConcreteIncomeSignal =
-            quoteIncome > 0 || recurrenceIncomeTotal > 0;
-          const hasConcreteExpenseSignal = recurrenceExpenseTotal > 0;
+          // Signals (quotes, recurrences, manual entries) STACK ON TOP of the
+          // historical average so their contribution is always additive and
+          // visible on the chart. Quotes alone still replace the SALES auto
+          // (they already represent concrete signed commitments feeding SALES).
           const needsAutoForecast =
             forecastIncome === 0 &&
             forecastExpense === 0 &&
             month >= currentMonth;
           const autoForecastIncome =
-            needsAutoForecast &&
-            avgMonthlyIncome > 0 &&
-            !hasConcreteIncomeSignal
+            needsAutoForecast && avgMonthlyIncome > 0 && quoteIncome === 0
               ? { SALES: avgMonthlyIncome }
               : {};
           const autoForecastExpense =
-            needsAutoForecast &&
-            avgMonthlyExpense > 0 &&
-            !hasConcreteExpenseSignal
+            needsAutoForecast && avgMonthlyExpense > 0
               ? { ...autoExpenseByCategory }
               : {};
 
           if (needsAutoForecast) {
-            if (avgMonthlyIncome > 0 && !hasConcreteIncomeSignal)
+            if (avgMonthlyIncome > 0 && quoteIncome === 0)
               forecastIncome = avgMonthlyIncome;
-            if (avgMonthlyExpense > 0 && !hasConcreteExpenseSignal)
-              forecastExpense = avgMonthlyExpense;
+            if (avgMonthlyExpense > 0) forecastExpense = avgMonthlyExpense;
           }
 
           // Signed quotes: add on top (stacks with manual SALES forecast if any).
