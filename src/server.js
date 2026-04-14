@@ -92,6 +92,7 @@ import resendWebhookRoutes from "./routes/resendWebhook.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
+import { startRecurringInvoiceDetectionCron } from "./cron/recurringInvoiceDetectionCron.js";
 import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
 import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
 import { startCalendarWebhookRenewalCron } from "./cron/calendarWebhookRenewalCron.js";
@@ -590,6 +591,10 @@ async function startServer() {
       // Démarrer le cron de vérification des documents en retard
       startOverdueAutomationCron();
       logger.info("✅ Cron de vérification des documents en retard démarré");
+
+      // Démarrer le cron de détection des factures récurrentes
+      startRecurringInvoiceDetectionCron();
+      logger.info("✅ Cron de détection des factures récurrentes démarré");
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

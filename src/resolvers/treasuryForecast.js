@@ -1,4 +1,10 @@
 import TreasuryForecast from "../models/TreasuryForecast.js";
+import ManualCashflowEntry from "../models/ManualCashflowEntry.js";
+import DetectedRecurrence from "../models/DetectedRecurrence.js";
+import {
+  runRecurringInvoiceDetectionForWorkspace,
+  normalizeParty,
+} from "../cron/recurringInvoiceDetectionCron.js";
 import mongoose from "mongoose";
 import {
   requireRead,
@@ -24,6 +30,51 @@ const getMonthRange = (startDate, endDate) => {
     current.setMonth(current.getMonth() + 1);
   }
   return months;
+};
+
+// Expand a manual entry into occurrence dates within [rangeStart, rangeEnd).
+// frequency: ONCE, WEEKLY, MONTHLY, QUARTERLY, SEMIANNUAL, ANNUAL.
+const expandManualEntry = (entry, rangeStart, rangeEnd) => {
+  const occurrences = [];
+  const start = new Date(entry.startDate);
+  const end = entry.endDate ? new Date(entry.endDate) : null;
+  const upperBound =
+    end && end < rangeEnd ? new Date(end.getTime() + 1) : rangeEnd;
+
+  if (entry.frequency === "ONCE") {
+    if (start >= rangeStart && start < rangeEnd && (!end || start <= end)) {
+      occurrences.push(new Date(start));
+    }
+    return occurrences;
+  }
+
+  const current = new Date(start);
+  // Safety cap to avoid runaway loops on malformed data.
+  let guard = 0;
+  while (current < upperBound && guard < 600) {
+    if (current >= rangeStart) occurrences.push(new Date(current));
+    switch (entry.frequency) {
+      case "WEEKLY":
+        current.setDate(current.getDate() + 7);
+        break;
+      case "MONTHLY":
+        current.setMonth(current.getMonth() + 1);
+        break;
+      case "QUARTERLY":
+        current.setMonth(current.getMonth() + 3);
+        break;
+      case "SEMIANNUAL":
+        current.setMonth(current.getMonth() + 6);
+        break;
+      case "ANNUAL":
+        current.setFullYear(current.getFullYear() + 1);
+        break;
+      default:
+        return occurrences;
+    }
+    guard += 1;
+  }
+  return occurrences;
 };
 
 const treasuryForecastResolvers = {
@@ -223,6 +274,130 @@ const treasuryForecastResolvers = {
           }
         }
 
+        // 6b. Signed quotes not yet converted to invoice — projected as SALES income
+        // on their issueDate month (quote model has no execution date).
+        // Amounts are TTC (aligned with bank transactions).
+        const Quote = mongoose.model("Quote");
+        const signedQuotes = await Quote.find({
+          workspaceId: wId,
+          status: "COMPLETED",
+          $or: [
+            { convertedToInvoice: { $exists: false } },
+            { convertedToInvoice: null },
+          ],
+          issueDate: { $gte: txStartDate, $lt: txEndDate },
+        })
+          .select("issueDate finalTotalTTC")
+          .lean();
+        const quoteIncomeMap = {};
+        for (const q of signedQuotes) {
+          if (!q.issueDate || !q.finalTotalTTC) continue;
+          const d = new Date(q.issueDate);
+          const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          quoteIncomeMap[m] = (quoteIncomeMap[m] || 0) + q.finalTotalTTC;
+        }
+
+        // 6b2. Auto-detected recurrences (from monthly cron) — project active
+        // ones for future months. Skip months where a matching purchase invoice
+        // already exists (deduplication).
+        const activeRecurrences = await DetectedRecurrence.find({
+          workspaceId: wId,
+          isActive: true,
+          isMuted: false,
+        }).lean();
+        const recurrenceIncomeMap = {};
+        const recurrenceExpenseMap = {};
+        if (activeRecurrences.length > 0) {
+          // Fetch future PurchaseInvoice occurrences to dedupe by (supplier, category, month).
+          const PurchaseInvoice = mongoose.model("PurchaseInvoice");
+          const futurePurchaseInvoices = await PurchaseInvoice.find({
+            workspaceId: wId,
+            issueDate: { $gte: new Date(currentMonth + "-01") },
+          })
+            .select("supplierName category issueDate")
+            .lean();
+          const existingPurchaseKeys = new Set();
+          for (const pi of futurePurchaseInvoices) {
+            const d = new Date(pi.issueDate);
+            const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            const key = `${normalizeParty(pi.supplierName)}::${pi.category || "OTHER"}::${m}`;
+            existingPurchaseKeys.add(key);
+          }
+          // Also dedupe INCOME against future client Invoice docs.
+          const InvoiceModel = mongoose.model("Invoice");
+          const futureInvoices = await InvoiceModel.find({
+            workspaceId: wId,
+            issueDate: { $gte: new Date(currentMonth + "-01") },
+          })
+            .select("client issueDate")
+            .lean();
+          const existingInvoiceKeys = new Set();
+          for (const inv of futureInvoices) {
+            const name =
+              inv?.client?.name ||
+              [inv?.client?.firstName, inv?.client?.lastName]
+                .filter(Boolean)
+                .join(" ") ||
+              inv?.client?.email ||
+              "";
+            const d = new Date(inv.issueDate);
+            const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            existingInvoiceKeys.add(`${normalizeParty(name)}::${m}`);
+          }
+
+          for (const rec of activeRecurrences) {
+            for (const month of monthRange) {
+              if (month < currentMonth) continue;
+              // Only project months strictly after the last observed occurrence,
+              // so a streak May→Jul doesn't pollute April (or earlier gaps).
+              if (rec.lastSeenMonth && month <= rec.lastSeenMonth) continue;
+              if (rec.source === "PURCHASE_INVOICE") {
+                const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
+                if (existingPurchaseKeys.has(key)) continue;
+                const cat = rec.category || "OTHER_EXPENSE";
+                if (!recurrenceExpenseMap[month])
+                  recurrenceExpenseMap[month] = {};
+                recurrenceExpenseMap[month][cat] =
+                  (recurrenceExpenseMap[month][cat] || 0) + rec.averageAmount;
+              } else {
+                const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${month}`;
+                if (existingInvoiceKeys.has(key)) continue;
+                if (!recurrenceIncomeMap[month])
+                  recurrenceIncomeMap[month] = {};
+                recurrenceIncomeMap[month].SALES =
+                  (recurrenceIncomeMap[month].SALES || 0) + rec.averageAmount;
+              }
+            }
+          }
+        }
+
+        // 6c. Manual cashflow entries (with recurrence) — expand each entry
+        // into occurrences within the horizon and bucket by month.
+        const manualEntries = await ManualCashflowEntry.find({
+          workspaceId: wId,
+          startDate: { $lt: txEndDate },
+        }).lean();
+        const manualIncomeMap = {};
+        const manualExpenseMap = {};
+        for (const entry of manualEntries) {
+          const occurrences = expandManualEntry(entry, txStartDate, txEndDate);
+          for (const occ of occurrences) {
+            const m = `${occ.getFullYear()}-${String(occ.getMonth() + 1).padStart(2, "0")}`;
+            const cat =
+              entry.category ||
+              (entry.type === "INCOME" ? "OTHER_INCOME" : "OTHER_EXPENSE");
+            if (entry.type === "INCOME") {
+              if (!manualIncomeMap[m]) manualIncomeMap[m] = {};
+              manualIncomeMap[m][cat] =
+                (manualIncomeMap[m][cat] || 0) + entry.amount;
+            } else {
+              if (!manualExpenseMap[m]) manualExpenseMap[m] = {};
+              manualExpenseMap[m][cat] =
+                (manualExpenseMap[m][cat] || 0) + entry.amount;
+            }
+          }
+        }
+
         // 7. Build month-by-month data with cumulative balance
         // Anchor: current month opening balance = currentBalance - current month net
         // We build forward and backward from currentMonth
@@ -238,6 +413,28 @@ const treasuryForecastResolvers = {
             income: {},
             expense: {},
           };
+          const quoteIncome =
+            month >= currentMonth ? quoteIncomeMap[month] || 0 : 0;
+          const manualEntryIncomeByCat =
+            month >= currentMonth ? manualIncomeMap[month] || {} : {};
+          const manualEntryExpenseByCat =
+            month >= currentMonth ? manualExpenseMap[month] || {} : {};
+          const recurrenceIncomeByCat =
+            month >= currentMonth ? recurrenceIncomeMap[month] || {} : {};
+          const recurrenceExpenseByCat =
+            month >= currentMonth ? recurrenceExpenseMap[month] || {} : {};
+          const manualEntryIncomeTotal = Object.values(
+            manualEntryIncomeByCat,
+          ).reduce((s, v) => s + v, 0);
+          const manualEntryExpenseTotal = Object.values(
+            manualEntryExpenseByCat,
+          ).reduce((s, v) => s + v, 0);
+          const recurrenceIncomeTotal = Object.values(
+            recurrenceIncomeByCat,
+          ).reduce((s, v) => s + v, 0);
+          const recurrenceExpenseTotal = Object.values(
+            recurrenceExpenseByCat,
+          ).reduce((s, v) => s + v, 0);
           let forecastIncome = Object.values(manualForecast.income).reduce(
             (s, v) => s + v,
             0,
@@ -247,23 +444,56 @@ const treasuryForecastResolvers = {
             0,
           );
 
-          // Auto-forecast: only apply to current and future months without manual forecast
+          // Auto-forecast: only apply to current and future months without manual forecast.
+          // Concrete signals (quotes, recurrences) replace the historical average
+          // for the corresponding side (otherwise we'd double-count: the past
+          // invoices that built the average are the same that triggered the
+          // recurrence detection).
+          const hasConcreteIncomeSignal =
+            quoteIncome > 0 || recurrenceIncomeTotal > 0;
+          const hasConcreteExpenseSignal = recurrenceExpenseTotal > 0;
           const needsAutoForecast =
             forecastIncome === 0 &&
             forecastExpense === 0 &&
             month >= currentMonth;
           const autoForecastIncome =
-            needsAutoForecast && avgMonthlyIncome > 0
+            needsAutoForecast &&
+            avgMonthlyIncome > 0 &&
+            !hasConcreteIncomeSignal
               ? { SALES: avgMonthlyIncome }
               : {};
           const autoForecastExpense =
-            needsAutoForecast && avgMonthlyExpense > 0
+            needsAutoForecast &&
+            avgMonthlyExpense > 0 &&
+            !hasConcreteExpenseSignal
               ? { ...autoExpenseByCategory }
               : {};
 
           if (needsAutoForecast) {
-            if (avgMonthlyIncome > 0) forecastIncome = avgMonthlyIncome;
-            if (avgMonthlyExpense > 0) forecastExpense = avgMonthlyExpense;
+            if (avgMonthlyIncome > 0 && !hasConcreteIncomeSignal)
+              forecastIncome = avgMonthlyIncome;
+            if (avgMonthlyExpense > 0 && !hasConcreteExpenseSignal)
+              forecastExpense = avgMonthlyExpense;
+          }
+
+          // Signed quotes: add on top (stacks with manual SALES forecast if any).
+          if (quoteIncome > 0) {
+            forecastIncome += quoteIncome;
+          }
+          // Manual cashflow entries (recurrence-expanded) stack on top of
+          // existing forecast for the month, regardless of auto/manual status.
+          if (manualEntryIncomeTotal > 0)
+            forecastIncome += manualEntryIncomeTotal;
+          if (manualEntryExpenseTotal > 0)
+            forecastExpense += manualEntryExpenseTotal;
+          // Auto-detected recurrences stack on top for future months. Auto
+          // historical avg is already suppressed above when a recurrence exists,
+          // so no double-counting on the past-data side.
+          if (recurrenceIncomeTotal > 0) {
+            forecastIncome += recurrenceIncomeTotal;
+          }
+          if (recurrenceExpenseTotal > 0) {
+            forecastExpense += recurrenceExpenseTotal;
           }
 
           // Merge manual + auto forecast for category breakdown
@@ -275,6 +505,24 @@ const treasuryForecastResolvers = {
             ...autoForecastExpense,
             ...manualForecast.expense,
           };
+          if (quoteIncome > 0) {
+            mergedForecastIncome.SALES =
+              (mergedForecastIncome.SALES || 0) + quoteIncome;
+          }
+          for (const [cat, amt] of Object.entries(manualEntryIncomeByCat)) {
+            mergedForecastIncome[cat] = (mergedForecastIncome[cat] || 0) + amt;
+          }
+          for (const [cat, amt] of Object.entries(manualEntryExpenseByCat)) {
+            mergedForecastExpense[cat] =
+              (mergedForecastExpense[cat] || 0) + amt;
+          }
+          for (const [cat, amt] of Object.entries(recurrenceIncomeByCat)) {
+            mergedForecastIncome[cat] = (mergedForecastIncome[cat] || 0) + amt;
+          }
+          for (const [cat, amt] of Object.entries(recurrenceExpenseByCat)) {
+            mergedForecastExpense[cat] =
+              (mergedForecastExpense[cat] || 0) + amt;
+          }
 
           // Build category breakdown
           const categoryBreakdown = [];
@@ -389,12 +637,19 @@ const treasuryForecastResolvers = {
             ? monthsData[monthsData.length - 1].closingBalance
             : currentBalance;
 
+        // Signed quotes not converted (total, independent of horizon filter)
+        const signedQuotesTotal = Object.values(quoteIncomeMap).reduce(
+          (s, v) => s + v,
+          0,
+        );
+
         return {
           kpi: {
             currentBalance,
             projectedBalance3Months,
             pendingReceivables,
             pendingPayables,
+            signedQuotes: signedQuotesTotal,
           },
           months: monthsData,
         };
@@ -416,6 +671,34 @@ const treasuryForecastResolvers = {
           month: { $gte: startMonth, $lte: endMonth },
         })
           .sort({ month: 1, category: 1 })
+          .lean();
+      },
+    ),
+
+    manualCashflowEntries: requireRead("expenses")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        return await ManualCashflowEntry.find({
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        })
+          .sort({ startDate: 1 })
+          .lean();
+      },
+    ),
+
+    detectedRecurrences: requireRead("expenses")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        return await DetectedRecurrence.find({
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        })
+          .sort({ isActive: -1, lastDetectedAt: -1 })
           .lean();
       },
     ),
@@ -471,10 +754,142 @@ const treasuryForecastResolvers = {
         return { success: true, message: "Prévision supprimée" };
       },
     ),
+
+    upsertManualCashflowEntry: requireWrite("expenses")(
+      async (_, { input }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          input.workspaceId,
+          context.workspaceId,
+        );
+        const wObjId = new mongoose.Types.ObjectId(workspaceId);
+
+        const payload = {
+          name: input.name,
+          type: input.type,
+          category: input.category || null,
+          amount: input.amount,
+          startDate: new Date(input.startDate),
+          endDate: input.endDate ? new Date(input.endDate) : null,
+          frequency: input.frequency,
+          notes: input.notes || "",
+        };
+
+        if (input.id) {
+          const updated = await ManualCashflowEntry.findOneAndUpdate(
+            { _id: input.id, workspaceId: wObjId },
+            { $set: payload },
+            { new: true, lean: true },
+          );
+          if (!updated) {
+            throw new AppError(
+              "Entrée manuelle non trouvée",
+              ERROR_CODES.NOT_FOUND,
+            );
+          }
+          return updated;
+        }
+
+        const created = await ManualCashflowEntry.create({
+          ...payload,
+          workspaceId: wObjId,
+          createdBy: context.user.id,
+        });
+        return created.toObject();
+      },
+    ),
+
+    deleteManualCashflowEntry: requireDelete("expenses")(
+      async (_, { id }, context) => {
+        const workspaceId = context.workspaceId;
+        const entry = await ManualCashflowEntry.findOne({
+          _id: id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        });
+        if (!entry) {
+          throw new AppError(
+            "Entrée manuelle non trouvée",
+            ERROR_CODES.NOT_FOUND,
+          );
+        }
+        await ManualCashflowEntry.deleteOne({ _id: id });
+        return { success: true, message: "Entrée supprimée" };
+      },
+    ),
+
+    runRecurrenceDetection: requireWrite("expenses")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        const wId = new mongoose.Types.ObjectId(workspaceId);
+        await runRecurringInvoiceDetectionForWorkspace(wId);
+        const count = await DetectedRecurrence.countDocuments({
+          workspaceId: wId,
+          isActive: true,
+          isMuted: false,
+        });
+        return count;
+      },
+    ),
+
+    muteDetectedRecurrence: requireWrite("expenses")(
+      async (_, { id, muted }, context) => {
+        const workspaceId = context.workspaceId;
+        const updated = await DetectedRecurrence.findOneAndUpdate(
+          {
+            _id: id,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          },
+          {
+            $set: {
+              isMuted: muted,
+              isActive: muted
+                ? false
+                : // Reactivate only if the streak is still valid.
+                  undefined,
+            },
+          },
+          { new: true, lean: true },
+        );
+        if (!updated) {
+          throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+        // If unmuting and the streak is full, flip active back on.
+        if (!muted && updated.consecutiveMonths >= 3 && !updated.isActive) {
+          await DetectedRecurrence.updateOne(
+            { _id: updated._id },
+            { $set: { isActive: true } },
+          );
+          updated.isActive = true;
+        }
+        return updated;
+      },
+    ),
   },
 
   TreasuryForecast: {
     id: (parent) => parent._id?.toString() || parent.id,
+  },
+
+  ManualCashflowEntry: {
+    id: (parent) => parent._id?.toString() || parent.id,
+    startDate: (parent) =>
+      parent.startDate instanceof Date
+        ? parent.startDate.toISOString()
+        : parent.startDate,
+    endDate: (parent) =>
+      parent.endDate instanceof Date
+        ? parent.endDate.toISOString()
+        : parent.endDate,
+  },
+
+  DetectedRecurrence: {
+    id: (parent) => parent._id?.toString() || parent.id,
+    lastDetectedAt: (parent) =>
+      parent.lastDetectedAt instanceof Date
+        ? parent.lastDetectedAt.toISOString()
+        : parent.lastDetectedAt,
   },
 };
 
