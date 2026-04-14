@@ -45,6 +45,7 @@ type TreasuryKPI {
   projectedBalance3Months: Float!
   pendingReceivables: Float!
   pendingPayables: Float!
+  signedQuotes: Float!
 }
 
 type CategoryMonthAmount {
@@ -75,6 +76,64 @@ type TreasuryDeleteResult {
   message: String
 }
 
+enum CashflowFrequency {
+  ONCE
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+type ManualCashflowEntry {
+  id: ID!
+  workspaceId: ID!
+  name: String!
+  type: ForecastType!
+  category: ForecastCategory
+  amount: Float!
+  startDate: String!
+  endDate: String
+  frequency: CashflowFrequency!
+  notes: String
+  createdBy: ID
+  createdAt: String
+  updatedAt: String
+}
+
+input UpsertManualCashflowEntryInput {
+  id: ID
+  workspaceId: ID
+  name: String!
+  type: ForecastType!
+  category: ForecastCategory
+  amount: Float!
+  startDate: String!
+  endDate: String
+  frequency: CashflowFrequency!
+  notes: String
+}
+
+enum RecurrenceSource {
+  PURCHASE_INVOICE
+  INVOICE
+}
+
+type DetectedRecurrence {
+  id: ID!
+  workspaceId: ID!
+  source: RecurrenceSource!
+  type: ForecastType!
+  partyName: String!
+  category: String
+  averageAmount: Float!
+  lastSeenMonth: String!
+  consecutiveMonths: Int!
+  isActive: Boolean!
+  isMuted: Boolean!
+  lastDetectedAt: String
+}
+
 input UpsertTreasuryForecastInput {
   workspaceId: ID
   month: String!
@@ -97,9 +156,47 @@ extend type Query {
     startMonth: String!
     endMonth: String!
   ): [TreasuryForecast!]!
+
+  manualCashflowEntries(workspaceId: ID): [ManualCashflowEntry!]!
+
+  detectedRecurrences(workspaceId: ID): [DetectedRecurrence!]!
+
+  # Détails des factures/devis composant un mois donné (format YYYY-MM).
+  forecastMonthDetails(
+    workspaceId: ID
+    month: String!
+  ): ForecastMonthDetails!
+}
+
+type ForecastInvoiceItem {
+  id: ID!
+  number: String
+  partyName: String!
+  amountTTC: Float!
+  issueDate: String!
+  status: String!
+  kind: String!
+}
+
+type ForecastMonthDetails {
+  month: String!
+  invoices: [ForecastInvoiceItem!]!
+  purchaseInvoices: [ForecastInvoiceItem!]!
+  signedQuotes: [ForecastInvoiceItem!]!
 }
 
 extend type Mutation {
   upsertTreasuryForecast(input: UpsertTreasuryForecastInput!): TreasuryForecast!
   deleteTreasuryForecast(id: ID!): TreasuryDeleteResult!
+
+  upsertManualCashflowEntry(
+    input: UpsertManualCashflowEntryInput!
+  ): ManualCashflowEntry!
+  deleteManualCashflowEntry(id: ID!): TreasuryDeleteResult!
+
+  muteDetectedRecurrence(id: ID!, muted: Boolean!): DetectedRecurrence!
+
+  # Lance la détection des récurrences immédiatement pour le workspace courant
+  # (utile pour tester sans attendre le cron mensuel).
+  runRecurrenceDetection(workspaceId: ID): Int!
 }

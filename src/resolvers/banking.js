@@ -7,9 +7,23 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import {
+  getMappingTable,
+  getAllPCGAccounts,
+  suggestPCGAccount,
+  PCG,
+} from "../utils/pcg-mapping.js";
 
 const bankingResolvers = {
   Upload: GraphQLUpload,
+
+  // Resolver pour convertir confidence minuscule → enum majuscule
+  PCGAccount: {
+    confidence: (parent) => {
+      if (!parent.confidence) return null;
+      return parent.confidence.toUpperCase();
+    },
+  },
 
   Query: {
     // Transactions - workspaceId passé en argument (comme les factures)
@@ -155,6 +169,30 @@ const bankingResolvers = {
       },
     ),
 
+    // Table de correspondance PCG
+    pcgMappingTable: () => {
+      return getMappingTable().map((entry) => ({
+        bridgeCategoryId: entry.bridgeCategoryId,
+        bridgeLabel: entry.bridgeLabel,
+        parentCategory: entry.parentCategory,
+        pcgNumero: entry.pcgAccounts[0]?.numero || "",
+        pcgIntitule: entry.pcgAccounts[0]?.intitule || "",
+        confidence: entry.confidence,
+        alternatives: entry.pcgAccounts
+          .filter((a) => !a.isDefault)
+          .map((a) => ({
+            numero: a.numero,
+            intitule: a.intitule,
+          })),
+        rules: entry.rules,
+      }));
+    },
+
+    // Liste des comptes PCG disponibles
+    pcgAccounts: () => {
+      return getAllPCGAccounts();
+    },
+
     // Historique des transactions
     transactionHistory: withWorkspace(
       async (parent, { accountId, filters = {} }, { user, workspaceId }) => {
@@ -279,6 +317,13 @@ const bankingResolvers = {
         expenseCategory = subcategoryToExpenseCategory[category] || "OTHER";
       }
 
+      // Pré-remplir le compte PCG via suggestion automatique
+      const pcgSuggestion = suggestPCGAccount({
+        amount: input.amount,
+        metadata: { bridgeCategoryId: input.bridgeCategoryId || null },
+        category_id: null,
+      });
+
       const transaction = new Transaction({
         externalId: `manual-${uuidv4()}`,
         provider: "manual",
@@ -292,6 +337,12 @@ const bankingResolvers = {
         date: input.date || new Date(),
         category: category, // Catégorie fine (ex: "parking")
         expenseCategory: expenseCategory, // Catégorie large pour le reporting (ex: "TRAVEL")
+        pcgAccount: {
+          numero: pcgSuggestion.numero,
+          intitule: pcgSuggestion.intitule,
+          confidence: pcgSuggestion.confidence,
+          isManual: false,
+        },
         metadata: {
           vendor: input.vendor,
           paymentMethod: input.paymentMethod || "BANK_TRANSFER",
@@ -424,10 +475,47 @@ const bankingResolvers = {
           updateData["metadata.paymentMethod"] = input.paymentMethod;
         if (input.notes) updateData["metadata.notes"] = input.notes;
         if (input.tags) updateData["metadata.tags"] = input.tags;
+        if (input.pcgAccountNumero) {
+          const intitule =
+            PCG[input.pcgAccountNumero] || input.pcgAccountNumero;
+          updateData["pcgAccount.numero"] = input.pcgAccountNumero;
+          updateData["pcgAccount.intitule"] = intitule;
+          updateData["pcgAccount.confidence"] = "high";
+          updateData["pcgAccount.isManual"] = true;
+          updateData["pcgAccount.manuallySetAt"] = new Date();
+          updateData["pcgAccount.manuallySetBy"] = user._id;
+        }
 
         const transaction = await Transaction.findOneAndUpdate(
           { _id: id, workspaceId },
           { $set: updateData },
+          { new: true },
+        );
+
+        if (!transaction) {
+          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+
+        return transaction;
+      },
+    ),
+
+    // Mettre à jour le compte PCG d'une transaction
+    updateTransactionPCG: withWorkspace(
+      async (parent, { transactionId, pcgNumero }, { user, workspaceId }) => {
+        const intitule = PCG[pcgNumero] || pcgNumero;
+        const transaction = await Transaction.findOneAndUpdate(
+          { _id: transactionId, workspaceId },
+          {
+            $set: {
+              "pcgAccount.numero": pcgNumero,
+              "pcgAccount.intitule": intitule,
+              "pcgAccount.confidence": "high",
+              "pcgAccount.isManual": true,
+              "pcgAccount.manuallySetAt": new Date(),
+              "pcgAccount.manuallySetBy": user._id,
+            },
+          },
           { new: true },
         );
 

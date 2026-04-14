@@ -172,6 +172,30 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
+    // Compte PCG (Plan Comptable Général) associé
+    pcgAccount: {
+      // Numéro du compte PCG (ex: "6251", "706")
+      numero: { type: String, default: null },
+      // Intitulé du compte PCG
+      intitule: { type: String, default: null },
+      // Niveau de confiance de l'attribution automatique
+      confidence: {
+        type: String,
+        enum: ["high", "medium", "low", null],
+        default: null,
+      },
+      // Si le compte a été corrigé manuellement par l'utilisateur
+      isManual: { type: Boolean, default: false },
+      // Date de la dernière modification manuelle
+      manuallySetAt: { type: Date, default: null },
+      // Utilisateur ayant fait la correction
+      manuallySetBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+    },
+
     // Statut de rapprochement
     reconciliationStatus: {
       type: String,
