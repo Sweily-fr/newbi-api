@@ -717,36 +717,65 @@ const treasuryForecastResolvers = {
         const InvoiceModel = mongoose.model("Invoice");
         const PurchaseInvoiceModel = mongoose.model("PurchaseInvoice");
         const QuoteModel = mongoose.model("Quote");
+        const TransactionModel = mongoose.model("Transaction");
 
-        const [invoices, purchaseInvoices, quotes] = await Promise.all([
-          InvoiceModel.find({
-            workspaceId: wId,
-            status: { $ne: "DRAFT" },
-            issueDate: { $gte: start, $lt: end },
-          })
-            .select("number prefix client finalTotalTTC issueDate status")
-            .sort({ issueDate: 1 })
-            .lean(),
-          PurchaseInvoiceModel.find({
-            workspaceId: wId,
-            issueDate: { $gte: start, $lt: end },
-          })
-            .select("invoiceNumber supplierName amountTTC issueDate status")
-            .sort({ issueDate: 1 })
-            .lean(),
-          QuoteModel.find({
-            workspaceId: wId,
-            status: "COMPLETED",
-            $or: [
-              { convertedToInvoice: { $exists: false } },
-              { convertedToInvoice: null },
-            ],
-            issueDate: { $gte: start, $lt: end },
-          })
-            .select("number prefix client finalTotalTTC issueDate status")
-            .sort({ issueDate: 1 })
-            .lean(),
-        ]);
+        const [invoices, purchaseInvoices, quotes, transactions] =
+          await Promise.all([
+            InvoiceModel.find({
+              workspaceId: wId,
+              status: { $ne: "DRAFT" },
+              issueDate: { $gte: start, $lt: end },
+            })
+              .select("number prefix client finalTotalTTC issueDate status")
+              .sort({ issueDate: 1 })
+              .lean(),
+            PurchaseInvoiceModel.find({
+              workspaceId: wId,
+              issueDate: { $gte: start, $lt: end },
+            })
+              .select("invoiceNumber supplierName amountTTC issueDate status")
+              .sort({ issueDate: 1 })
+              .lean(),
+            QuoteModel.find({
+              workspaceId: wId,
+              status: "COMPLETED",
+              $or: [
+                { convertedToInvoice: { $exists: false } },
+                { convertedToInvoice: null },
+              ],
+              issueDate: { $gte: start, $lt: end },
+            })
+              .select("number prefix client finalTotalTTC issueDate status")
+              .sort({ issueDate: 1 })
+              .lean(),
+            // Bank transactions: use same "effective date" fallback as the
+            // main resolver (date → processedAt → createdAt) so amounts line
+            // up with the chart aggregate.
+            TransactionModel.aggregate([
+              {
+                $match: {
+                  workspaceId: workspaceId,
+                  status: "completed",
+                },
+              },
+              {
+                $addFields: {
+                  _effectiveDate: {
+                    $ifNull: [
+                      "$date",
+                      { $ifNull: ["$processedAt", "$createdAt"] },
+                    ],
+                  },
+                },
+              },
+              {
+                $match: {
+                  _effectiveDate: { $gte: start, $lt: end },
+                },
+              },
+              { $sort: { _effectiveDate: 1 } },
+            ]),
+          ]);
 
         const resolveClientName = (client) =>
           client?.name ||
@@ -782,6 +811,17 @@ const treasuryForecastResolvers = {
             issueDate: q.issueDate?.toISOString(),
             status: q.status,
             kind: "QUOTE",
+          })),
+          bankTransactions: transactions.map((t) => ({
+            id: t._id.toString(),
+            description:
+              t.description ||
+              t.cleanDescription ||
+              t.originalDescription ||
+              "Opération bancaire",
+            amount: t.amount || 0,
+            date: (t._effectiveDate || t.date || t.createdAt)?.toISOString?.(),
+            category: t.expenseCategory || null,
           })),
         };
       },

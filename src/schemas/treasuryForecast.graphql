@@ -178,11 +178,20 @@ type ForecastInvoiceItem {
   kind: String!
 }
 
+type ForecastBankTransactionItem {
+  id: ID!
+  description: String!
+  amount: Float!
+  date: String!
+  category: String
+}
+
 type ForecastMonthDetails {
   month: String!
   invoices: [ForecastInvoiceItem!]!
   purchaseInvoices: [ForecastInvoiceItem!]!
   signedQuotes: [ForecastInvoiceItem!]!
+  bankTransactions: [ForecastBankTransactionItem!]!
 }
 
 extend type Mutation {
