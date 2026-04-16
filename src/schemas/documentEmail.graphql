@@ -8,6 +8,12 @@ type EmailTracking {
   emailClickCount: Int
 }
 
+input EmailAttachmentInput {
+  filename: String!
+  content: String!
+  contentType: String
+}
+
 input SendDocumentEmailInput {
   documentId: ID!
   emailSubject: String!
@@ -16,6 +22,7 @@ input SendDocumentEmailInput {
   ccEmails: [String]
   bccEmails: [String]
   pdfBase64: String
+  attachments: [EmailAttachmentInput!]
 }
 
 type SendDocumentEmailResult {

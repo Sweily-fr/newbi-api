@@ -34,7 +34,7 @@ const documentEmailResolvers = {
   },
   Mutation: {
     sendInvoiceEmail: requireWrite("invoices")(
-      async (_, { workspaceId, input }) => {
+      async (_, { workspaceId, input }, context) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
           documentType: DOCUMENT_TYPES.INVOICE,
@@ -45,6 +45,8 @@ const documentEmailResolvers = {
           ccEmails: input.ccEmails || [],
           bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
+          senderEmail: context?.user?.email || null,
+          extraAttachments: input.attachments || [],
         });
 
         return result;
@@ -52,7 +54,7 @@ const documentEmailResolvers = {
     ),
 
     sendQuoteEmail: requireWrite("quotes")(
-      async (_, { workspaceId, input }) => {
+      async (_, { workspaceId, input }, context) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
           documentType: DOCUMENT_TYPES.QUOTE,
@@ -63,6 +65,8 @@ const documentEmailResolvers = {
           ccEmails: input.ccEmails || [],
           bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
+          senderEmail: context?.user?.email || null,
+          extraAttachments: input.attachments || [],
         });
 
         return result;
@@ -70,7 +74,7 @@ const documentEmailResolvers = {
     ),
 
     sendCreditNoteEmail: requireWrite("creditNotes")(
-      async (_, { workspaceId, input }) => {
+      async (_, { workspaceId, input }, context) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
           documentType: DOCUMENT_TYPES.CREDIT_NOTE,
@@ -81,6 +85,8 @@ const documentEmailResolvers = {
           ccEmails: input.ccEmails || [],
           bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
+          senderEmail: context?.user?.email || null,
+          extraAttachments: input.attachments || [],
         });
 
         return result;
@@ -88,7 +94,7 @@ const documentEmailResolvers = {
     ),
 
     sendPurchaseOrderEmail: requireWrite("purchaseOrders")(
-      async (_, { workspaceId, input }) => {
+      async (_, { workspaceId, input }, context) => {
         const result = await sendDocumentEmail({
           documentId: input.documentId,
           documentType: DOCUMENT_TYPES.PURCHASE_ORDER,
@@ -99,6 +105,8 @@ const documentEmailResolvers = {
           ccEmails: input.ccEmails || [],
           bccEmails: input.bccEmails || [],
           pdfBase64: input.pdfBase64 || null,
+          senderEmail: context?.user?.email || null,
+          extraAttachments: input.attachments || [],
         });
 
         return result;

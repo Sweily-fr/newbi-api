@@ -269,6 +269,10 @@ const invoiceResolvers = {
       // Pour les documents finalisés ou en fallback, utiliser le snapshot embarqué
       return invoice.client;
     },
+    paymentDate: (parent) =>
+      parent.paymentDate instanceof Date
+        ? parent.paymentDate.toISOString()
+        : parent.paymentDate || null,
   },
 
   Query: {
@@ -594,6 +598,25 @@ const invoiceResolvers = {
           }
         }
         return String(maxNumber + 1).padStart(4, "0");
+      },
+    ),
+
+    // Récupérer la date d'émission de la dernière facture non-brouillon du workspace
+    // (utilisé côté front pour pré-remplir la date d'émission d'une nouvelle facture
+    // afin d'éviter l'erreur "La date d'émission ne peut pas être antérieure à celle
+    // de la dernière facture existante")
+    latestInvoiceIssueDate: requireRead("invoices")(
+      async (_, { workspaceId }) => {
+        const latestInvoice = await Invoice.findOne({
+          workspaceId,
+          status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+        })
+          .sort({ issueDate: -1 })
+          .select("issueDate")
+          .lean();
+
+        if (!latestInvoice?.issueDate) return null;
+        return new Date(latestInvoice.issueDate).toISOString();
       },
     ),
 
