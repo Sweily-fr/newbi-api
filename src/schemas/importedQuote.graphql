@@ -29,7 +29,11 @@ type ImportedQuoteClient {
   address: String
   city: String
   postalCode: String
+  country: String
   siret: String
+  vatNumber: String
+  email: String
+  phone: String
   clientNumber: String
 }
 
@@ -68,6 +72,7 @@ type ImportedQuote {
   originalQuoteNumber: String
   vendor: ImportedQuoteVendor
   client: ImportedQuoteClient
+  clientId: ID
   quoteDate: String
   validUntil: String
   dueDate: String
