@@ -328,10 +328,128 @@ function generateEmailHtml(
           <p style="margin: 0; font-size: 12px; color: #9ca3af;">${footerText}</p>
         </div>
       </div>
-      ${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />` : ""}
+      ${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" border="0" alt="" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" />` : ""}
     </body>
     </html>
   `;
+}
+
+/**
+ * Génère le HTML de l'email de confirmation d'envoi destiné à l'émetteur
+ */
+function generateSenderConfirmationHtml({
+  documentType,
+  documentNumber,
+  recipientEmail,
+  clientName,
+  totalAmount,
+  sentAt,
+  companyName,
+}) {
+  const labels = DOCUMENT_LABELS[documentType];
+  const docLabel = labels.singular;
+  const article = labels.article;
+  const capitalizedArticle =
+    article.charAt(0).toUpperCase() +
+    article.slice(1) +
+    (article.endsWith("'") ? "" : " ");
+  const verbAccord =
+    documentType === DOCUMENT_TYPES.INVOICE ||
+    documentType === DOCUMENT_TYPES.CREDIT_NOTE
+      ? "envoyée"
+      : "envoyé";
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Confirmation d'envoi</title>
+    </head>
+    <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0eeff; margin: 0; padding: 0;">
+      <div style="max-width: 600px; margin: 40px auto; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <div style="text-align: center; padding: 20px 0; border-bottom: 1px solid #e5e7eb;">
+          <h1 style="margin: 0; font-size: 22px; font-weight: 700; color: #1f2937;">Confirmation d'envoi</h1>
+        </div>
+        <div style="padding: 30px 20px;">
+          <p style="font-size: 15px; color: #4b5563; line-height: 1.6;">
+            ${capitalizedArticle}${docLabel} <strong>${documentNumber}</strong> a bien été ${verbAccord} à <strong>${clientName}</strong> (${recipientEmail}).
+          </p>
+          <div style="background-color: #e6e1ff; padding: 15px; border-radius: 6px; margin-top: 20px;">
+            <h2 style="margin: 0 0 12px 0; font-size: 13px; font-weight: 600; color: #1f2937; text-transform: uppercase; letter-spacing: 0.5px;">Récapitulatif</h2>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Numéro</td>
+                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${documentNumber}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Destinataire</td>
+                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${recipientEmail}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Montant</td>
+                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 600;">${totalAmount}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Envoyé le</td>
+                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${sentAt}</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+        <div style="text-align: center; padding: 20px; color: #6b7280; font-size: 12px; border-top: 1px solid #e5e7eb;">
+          <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${companyName}. Tous droits réservés.</p>
+          <p style="margin: 4px 0 0 0; color: #9ca3af;">Email automatique envoyé par Newbi pour confirmer l'envoi de votre document.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+/**
+ * Envoie un email de confirmation à l'émetteur après un envoi réussi
+ */
+async function sendSenderConfirmationEmail({
+  senderEmail,
+  documentType,
+  documentNumber,
+  recipientEmail,
+  clientName,
+  totalAmount,
+  companyName,
+}) {
+  if (!senderEmail) return;
+
+  const labels = DOCUMENT_LABELS[documentType];
+  const subject = `${labels.singular.charAt(0).toUpperCase() + labels.singular.slice(1)} ${documentNumber} envoyé${
+    documentType === DOCUMENT_TYPES.INVOICE ||
+    documentType === DOCUMENT_TYPES.CREDIT_NOTE
+      ? "e"
+      : ""
+  } à ${clientName}`;
+
+  const sentAt = new Date().toLocaleString("fr-FR", {
+    dateStyle: "long",
+    timeStyle: "short",
+  });
+
+  const html = generateSenderConfirmationHtml({
+    documentType,
+    documentNumber,
+    recipientEmail,
+    clientName,
+    totalAmount,
+    sentAt,
+    companyName,
+  });
+
+  await emailReminderService.sendEmail({
+    to: senderEmail,
+    subject,
+    html,
+  });
 }
 
 /**
@@ -347,6 +465,8 @@ async function sendDocumentEmail({
   ccEmails = [],
   bccEmails = [],
   pdfBase64 = null,
+  senderEmail = null,
+  extraAttachments = [],
 }) {
   // Récupérer le document
   const document = await getDocument(documentId, documentType, workspaceId);
@@ -532,6 +652,17 @@ async function sendDocumentEmail({
       ]
     : [];
 
+  // Ajouter les pièces jointes supplémentaires fournies par l'utilisateur
+  const normalizedExtraAttachments = (extraAttachments || [])
+    .filter((att) => att && att.filename && att.content)
+    .map((att) => ({
+      filename: att.filename,
+      content: Buffer.from(att.content, "base64"),
+      contentType: att.contentType || "application/octet-stream",
+    }));
+
+  attachments.push(...normalizedExtraAttachments);
+
   let fromEmail, fromName, replyTo;
   if (emailSettings?.fromEmail) {
     fromEmail = emailSettings.fromEmail;
@@ -600,13 +731,21 @@ async function sendDocumentEmail({
       resendPayload.bcc = bccEmails.filter((email) => email && email.trim());
     }
 
+    const resendAttachments = [];
     if (pdfBuffer) {
-      resendPayload.attachments = [
-        {
-          filename: `${documentNumber}.pdf`,
-          content: pdfBuffer,
-        },
-      ];
+      resendAttachments.push({
+        filename: `${documentNumber}.pdf`,
+        content: pdfBuffer,
+      });
+    }
+    for (const att of normalizedExtraAttachments) {
+      resendAttachments.push({
+        filename: att.filename,
+        content: att.content,
+      });
+    }
+    if (resendAttachments.length > 0) {
+      resendPayload.attachments = resendAttachments;
     }
 
     const { data, error } =
@@ -679,6 +818,28 @@ async function sendDocumentEmail({
       "⚠️ [DocumentEmail] Erreur ajout activité client:",
       activityError.message,
     );
+  }
+
+  // Envoi de la confirmation à l'émetteur (fire-and-forget)
+  if (senderEmail) {
+    (async () => {
+      try {
+        await sendSenderConfirmationEmail({
+          senderEmail,
+          documentType,
+          documentNumber,
+          recipientEmail,
+          clientName: variables.clientName,
+          totalAmount: variables.totalAmount,
+          companyName: variables.companyName,
+        });
+      } catch (confirmationError) {
+        console.warn(
+          "⚠️ [DocumentEmail] Erreur envoi confirmation émetteur:",
+          confirmationError.message,
+        );
+      }
+    })();
   }
 
   return {

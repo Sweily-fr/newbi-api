@@ -1,6 +1,7 @@
 import TreasuryForecast from "../models/TreasuryForecast.js";
 import ManualCashflowEntry from "../models/ManualCashflowEntry.js";
 import DetectedRecurrence from "../models/DetectedRecurrence.js";
+import ForecastScenario from "../models/ForecastScenario.js";
 import {
   runRecurringInvoiceDetectionForWorkspace,
   normalizeParty,
@@ -16,6 +17,13 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 // Income categories for filtering
 const INCOME_CATEGORIES = ["SALES", "REFUNDS_RECEIVED", "OTHER_INCOME"];
+
+// Map legacy/Bridge category names to forecast category names
+const CATEGORY_ALIAS = {
+  TRAVEL: "TRANSPORT",
+  ACCOMMODATION: "OTHER_EXPENSE",
+};
+const normalizeCat = (cat) => CATEGORY_ALIAS[cat] || cat;
 
 // Helper: generate array of "YYYY-MM" strings between start and end
 const getMonthRange = (startDate, endDate) => {
@@ -82,7 +90,13 @@ const treasuryForecastResolvers = {
     treasuryForecastData: requireRead("expenses")(
       async (
         _,
-        { workspaceId: inputWorkspaceId, startDate, endDate, accountId },
+        {
+          workspaceId: inputWorkspaceId,
+          startDate,
+          endDate,
+          accountId,
+          scenarioId,
+        },
         context,
       ) => {
         const workspaceId = resolveWorkspaceId(
@@ -93,6 +107,15 @@ const treasuryForecastResolvers = {
 
         const now = new Date();
         const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+        // Load scenario multipliers if provided
+        let scenario = null;
+        if (scenarioId) {
+          scenario = await ForecastScenario.findOne({
+            _id: scenarioId,
+            workspaceId: wId,
+          }).lean();
+        }
 
         // Parse start/end as YYYY-MM
         const startMonth = startDate.substring(0, 7);
@@ -200,7 +223,7 @@ const treasuryForecastResolvers = {
             expenseMap[month] = { total: 0, byCategory: {} };
           const absAmount = Math.abs(item.total);
           expenseMap[month].total += absAmount;
-          const cat = item._id.category || "OTHER";
+          const cat = normalizeCat(item._id.category || "OTHER");
           expenseMap[month].byCategory[cat] =
             (expenseMap[month].byCategory[cat] || 0) + absAmount;
         }
@@ -490,6 +513,16 @@ const treasuryForecastResolvers = {
             forecastExpense += recurrenceExpenseTotal;
           }
 
+          // Apply scenario multipliers to future months
+          if (scenario && month >= currentMonth) {
+            forecastIncome = Math.round(
+              forecastIncome * (scenario.incomeMultiplier || 1),
+            );
+            forecastExpense = Math.round(
+              forecastExpense * (scenario.expenseMultiplier || 1),
+            );
+          }
+
           // Merge manual + auto forecast for category breakdown
           const mergedForecastIncome = {
             ...autoForecastIncome,
@@ -516,6 +549,22 @@ const treasuryForecastResolvers = {
           for (const [cat, amt] of Object.entries(recurrenceExpenseByCat)) {
             mergedForecastExpense[cat] =
               (mergedForecastExpense[cat] || 0) + amt;
+          }
+
+          // Apply scenario multipliers to category breakdown
+          if (scenario && month >= currentMonth) {
+            for (const cat of Object.keys(mergedForecastIncome)) {
+              mergedForecastIncome[cat] = Math.round(
+                (mergedForecastIncome[cat] || 0) *
+                  (scenario.incomeMultiplier || 1),
+              );
+            }
+            for (const cat of Object.keys(mergedForecastExpense)) {
+              mergedForecastExpense[cat] = Math.round(
+                (mergedForecastExpense[cat] || 0) *
+                  (scenario.expenseMultiplier || 1),
+              );
+            }
           }
 
           // Build category breakdown
@@ -826,9 +875,79 @@ const treasuryForecastResolvers = {
         };
       },
     ),
+
+    forecastScenarios: requireRead("expenses")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        return ForecastScenario.find({
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        })
+          .sort({ createdAt: 1 })
+          .lean();
+      },
+    ),
   },
 
   Mutation: {
+    upsertForecastScenario: requireWrite("expenses")(
+      async (_, { input }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          input.workspaceId,
+          context.workspaceId,
+        );
+        const wId = new mongoose.Types.ObjectId(workspaceId);
+
+        // Enforce 5-scenario limit for new scenarios
+        if (!input.id) {
+          const count = await ForecastScenario.countDocuments({
+            workspaceId: wId,
+          });
+          if (count >= 5) {
+            throw new AppError(
+              "Vous ne pouvez pas créer plus de 5 scénarios",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+        }
+
+        const result = await ForecastScenario.findOneAndUpdate(
+          input.id
+            ? { _id: input.id, workspaceId: wId }
+            : { workspaceId: wId, name: input.name },
+          {
+            $set: {
+              name: input.name,
+              incomeMultiplier: input.incomeMultiplier,
+              expenseMultiplier: input.expenseMultiplier,
+            },
+            $setOnInsert: {
+              workspaceId: wId,
+              createdBy: new mongoose.Types.ObjectId(context.user.id),
+            },
+          },
+          { upsert: true, new: true, lean: true },
+        );
+        return result;
+      },
+    ),
+
+    deleteForecastScenario: requireDelete("expenses")(
+      async (_, { id }, context) => {
+        const workspaceId = context.workspaceId;
+        const result = await ForecastScenario.findOneAndDelete({
+          _id: id,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        });
+        if (!result) {
+          throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
+        }
+        return { success: true, message: "Scénario supprimé" };
+      },
+    ),
+
     upsertTreasuryForecast: requireWrite("expenses")(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
@@ -1006,6 +1125,10 @@ const treasuryForecastResolvers = {
       parent.endDate instanceof Date
         ? parent.endDate.toISOString()
         : parent.endDate,
+  },
+
+  ForecastScenario: {
+    id: (parent) => parent._id?.toString() || parent.id,
   },
 
   DetectedRecurrence: {

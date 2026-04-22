@@ -62,7 +62,11 @@ Structure JSON attendue:
     "address": "adresse du client",
     "city": "ville du client",
     "postal_code": "code postal du client",
+    "country": "pays du client",
     "siret": "numéro SIRET du client (14 chiffres) - IMPORTANT: différent du SIRET de l'émetteur",
+    "vat_number": "numéro TVA intracommunautaire du client",
+    "email": "email du client",
+    "phone": "téléphone du client",
     "client_number": "numéro client si présent"
   },
 
@@ -145,7 +149,7 @@ class ClaudeVisionOcrService {
 
     if (!this.apiKey) {
       console.warn(
-        "⚠️ ANTHROPIC_API_KEY non définie dans les variables d'environnement"
+        "⚠️ ANTHROPIC_API_KEY non définie dans les variables d'environnement",
       );
     } else {
       this.client = new Anthropic({
@@ -175,7 +179,8 @@ class ClaudeVisionOcrService {
     const lowerUrl = url.toLowerCase();
     if (lowerUrl.endsWith(".pdf")) return "application/pdf";
     if (lowerUrl.endsWith(".png")) return "image/png";
-    if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg")) return "image/jpeg";
+    if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg"))
+      return "image/jpeg";
     if (lowerUrl.endsWith(".webp")) return "image/webp";
     return "application/pdf"; // Default
   }
@@ -202,7 +207,8 @@ class ClaudeVisionOcrService {
     const buffer = Buffer.from(arrayBuffer);
     const base64 = buffer.toString("base64");
     const hash = this.generateHash(buffer);
-    const contentType = response.headers.get("content-type") || this.detectMimeType(url);
+    const contentType =
+      response.headers.get("content-type") || this.detectMimeType(url);
 
     return { base64, mediaType: contentType, hash, sizeBytes: buffer.length };
   }
@@ -214,12 +220,15 @@ class ClaudeVisionOcrService {
    * @returns {Promise<Array>} - Documents téléchargés avec base64
    */
   async batchDownload(documents) {
-    console.log(`📥 Téléchargement en masse de ${documents.length} documents...`);
+    console.log(
+      `📥 Téléchargement en masse de ${documents.length} documents...`,
+    );
     const startTime = Date.now();
 
     const downloadPromises = documents.map(async (doc, index) => {
       try {
-        const { base64, mediaType, hash, sizeBytes } = await this.downloadAndConvertToBase64(doc.url);
+        const { base64, mediaType, hash, sizeBytes } =
+          await this.downloadAndConvertToBase64(doc.url);
         return {
           index,
           url: doc.url,
@@ -231,7 +240,9 @@ class ClaudeVisionOcrService {
           success: true,
         };
       } catch (error) {
-        console.warn(`⚠️ Échec téléchargement ${doc.fileName}: ${error.message}`);
+        console.warn(
+          `⚠️ Échec téléchargement ${doc.fileName}: ${error.message}`,
+        );
         return {
           index,
           url: doc.url,
@@ -246,7 +257,9 @@ class ClaudeVisionOcrService {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const successCount = results.filter((r) => r.success).length;
 
-    console.log(`✅ Téléchargement terminé: ${successCount}/${documents.length} en ${elapsed}s`);
+    console.log(
+      `✅ Téléchargement terminé: ${successCount}/${documents.length} en ${elapsed}s`,
+    );
 
     return results;
   }
@@ -259,7 +272,9 @@ class ClaudeVisionOcrService {
    */
   async batchProcessDocuments(documents, cacheService = null) {
     if (!this.isAvailable()) {
-      throw new Error("Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)");
+      throw new Error(
+        "Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)",
+      );
     }
 
     const startTime = Date.now();
@@ -270,7 +285,9 @@ class ClaudeVisionOcrService {
     const successfulDownloads = downloads.filter((d) => d.success);
     const failedDownloads = downloads.filter((d) => !d.success);
 
-    console.log(`📊 Téléchargements: ${successfulDownloads.length} réussis, ${failedDownloads.length} échoués`);
+    console.log(
+      `📊 Téléchargements: ${successfulDownloads.length} réussis, ${failedDownloads.length} échoués`,
+    );
 
     // Phase 2: Vérification cache (si disponible)
     const toProcess = [];
@@ -299,7 +316,9 @@ class ClaudeVisionOcrService {
       toProcess.push(doc);
     }
 
-    console.log(`📊 À traiter: ${toProcess.length} (${cachedResults.length} depuis cache)`);
+    console.log(
+      `📊 À traiter: ${toProcess.length} (${cachedResults.length} depuis cache)`,
+    );
 
     // Phase 3: Traitement OCR par batch de 40
     const ocrResults = [];
@@ -310,7 +329,9 @@ class ClaudeVisionOcrService {
       const batchNumber = Math.floor(i / batchSize) + 1;
       const totalBatches = Math.ceil(toProcess.length / batchSize);
 
-      console.log(`🔄 Batch ${batchNumber}/${totalBatches}: ${batch.length} factures...`);
+      console.log(
+        `🔄 Batch ${batchNumber}/${totalBatches}: ${batch.length} factures...`,
+      );
 
       const batchResults = await Promise.all(
         batch.map(async (doc) => {
@@ -320,7 +341,7 @@ class ClaudeVisionOcrService {
               doc.mediaType,
               doc.url,
               doc.hash,
-              { useBatchModel: true }
+              { useBatchModel: true },
             );
 
             // Sauvegarder en cache si disponible
@@ -354,7 +375,7 @@ class ClaudeVisionOcrService {
               success: false,
             };
           }
-        })
+        }),
       );
 
       ocrResults.push(...batchResults);
@@ -381,9 +402,13 @@ class ClaudeVisionOcrService {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const successCount = allResults.filter((r) => r.success).length;
 
-    console.log(`✅ Batch terminé: ${successCount}/${documents.length} en ${elapsed}s`);
+    console.log(
+      `✅ Batch terminé: ${successCount}/${documents.length} en ${elapsed}s`,
+    );
     console.log(`   - Depuis cache: ${cachedResults.length}`);
-    console.log(`   - OCR traités: ${ocrResults.filter((r) => r.success).length}`);
+    console.log(
+      `   - OCR traités: ${ocrResults.filter((r) => r.success).length}`,
+    );
     console.log(`   - Échecs: ${allResults.filter((r) => !r.success).length}`);
 
     return allResults;
@@ -393,21 +418,33 @@ class ClaudeVisionOcrService {
    * NOUVELLE MÉTHODE: Traitement depuis base64 déjà téléchargé
    * Avec modèle adaptatif (Haiku/Sonnet)
    */
-  async processFromBase64(base64Data, mimeType, originalUrl, hash = null, { useBatchModel = false } = {}) {
+  async processFromBase64(
+    base64Data,
+    mimeType,
+    originalUrl,
+    hash = null,
+    { useBatchModel = false } = {},
+  ) {
     if (!this.isAvailable()) {
-      throw new Error("Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)");
+      throw new Error(
+        "Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)",
+      );
     }
 
     // Détecter la complexité
     const complexity = this.detectInvoiceComplexity(base64Data);
     // En mode batch, on utilise Haiku pour les documents simples ; sinon toujours Sonnet pour la qualité
-    const model = useBatchModel && complexity === "simple" ? MODELS.HAIKU : MODELS.SONNET;
+    const model =
+      useBatchModel && complexity === "simple" ? MODELS.HAIKU : MODELS.SONNET;
     const maxTokens = 4096;
 
-    console.log(`   📄 ${model.includes("haiku") ? "🐇" : "🎵"} ${originalUrl.split("/").pop()?.substring(0, 30)}... (${model.includes("haiku") ? "Haiku" : "Sonnet"})`);
+    console.log(
+      `   📄 ${model.includes("haiku") ? "🐇" : "🎵"} ${originalUrl.split("/").pop()?.substring(0, 30)}... (${model.includes("haiku") ? "Haiku" : "Sonnet"})`,
+    );
 
     // Construire le message
-    const claudeMediaType = mimeType === "application/pdf" ? "application/pdf" : mimeType;
+    const claudeMediaType =
+      mimeType === "application/pdf" ? "application/pdf" : mimeType;
     const messageContent = [
       {
         type: claudeMediaType === "application/pdf" ? "document" : "image",
@@ -458,7 +495,9 @@ Ne retourne QUE le JSON, rien d'autre.`,
           messages: [{ role: "user", content: messageContent }],
         });
 
-        const textContent = response.content.find((block) => block.type === "text");
+        const textContent = response.content.find(
+          (block) => block.type === "text",
+        );
         if (!textContent) {
           throw new Error("Pas de contenu texte dans la réponse Claude");
         }
@@ -466,15 +505,25 @@ Ne retourne QUE le JSON, rien d'autre.`,
         const extractedData = this.parseJsonResponse(textContent.text);
 
         // Validation: vérifier que les champs critiques sont extraits
-        const hasAmount = extractedData.totals?.total_ttc || extractedData.totals?.total_ht;
+        const hasAmount =
+          extractedData.totals?.total_ttc || extractedData.totals?.total_ht;
         const hasDate = extractedData.invoice_date;
         const hasVendor = extractedData.vendor?.name;
 
         if (!hasAmount || !hasDate) {
-          console.warn(`⚠️ OCR extraction incomplète: amount=${!!hasAmount}, date=${!!hasDate}, vendor=${!!hasVendor}`);
+          console.warn(
+            `⚠️ OCR extraction incomplète: amount=${!!hasAmount}, date=${!!hasDate}, vendor=${!!hasVendor}`,
+          );
           // Si on a seulement le vendor et rien d'autre, retenter avec un prompt plus insistant
-          if (hasVendor && !hasAmount && !hasDate && attempt < this.maxRetries) {
-            console.log(`🔄 Relance OCR car données insuffisantes (seulement vendor: ${extractedData.vendor?.name})`);
+          if (
+            hasVendor &&
+            !hasAmount &&
+            !hasDate &&
+            attempt < this.maxRetries
+          ) {
+            console.log(
+              `🔄 Relance OCR car données insuffisantes (seulement vendor: ${extractedData.vendor?.name})`,
+            );
             lastError = new Error("Extraction incomplète - retry");
             const delay = 1000;
             await new Promise((resolve) => setTimeout(resolve, delay));
@@ -511,24 +560,38 @@ Ne retourne QUE le JSON, rien d'autre.`,
    */
   async processDocument(documentUrl, mimeType) {
     if (!this.isAvailable()) {
-      throw new Error("Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)");
+      throw new Error(
+        "Claude Vision OCR non configuré (ANTHROPIC_API_KEY manquante)",
+      );
     }
 
     let lastError = null;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        console.log(`📄 Claude Vision: Tentative ${attempt + 1}/${this.maxRetries + 1}...`);
+        console.log(
+          `📄 Claude Vision: Tentative ${attempt + 1}/${this.maxRetries + 1}...`,
+        );
 
-        const { base64, mediaType, hash } = await this.downloadAndConvertToBase64(documentUrl);
-        const result = await this.processFromBase64(base64, mediaType, documentUrl, hash);
+        const { base64, mediaType, hash } =
+          await this.downloadAndConvertToBase64(documentUrl);
+        const result = await this.processFromBase64(
+          base64,
+          mediaType,
+          documentUrl,
+          hash,
+        );
 
-        console.log(`✅ Claude Vision: Extraction réussie (confiance: ${result.data?.confidence || "N/A"})`);
+        console.log(
+          `✅ Claude Vision: Extraction réussie (confiance: ${result.data?.confidence || "N/A"})`,
+        );
 
         return result;
       } catch (error) {
         lastError = error;
-        console.warn(`⚠️ Claude Vision tentative ${attempt + 1} échouée: ${error.message}`);
+        console.warn(
+          `⚠️ Claude Vision tentative ${attempt + 1} échouée: ${error.message}`,
+        );
 
         if (attempt === this.maxRetries) break;
 
@@ -537,7 +600,9 @@ Ne retourne QUE le JSON, rien d'autre.`,
       }
     }
 
-    console.error(`❌ Claude Vision: Échec après ${this.maxRetries + 1} tentatives`);
+    console.error(
+      `❌ Claude Vision: Échec après ${this.maxRetries + 1} tentatives`,
+    );
     throw lastError;
   }
 
@@ -589,11 +654,20 @@ Ne retourne QUE le JSON, rien d'autre.`,
         amount: data.totals?.total_ttc || data.totals?.total_ht || 0,
         amount_ht: data.totals?.total_ht,
         tax_amount: data.totals?.total_vat || 0,
-        tax_rate: data.tax_details?.[0]?.rate || (data.totals?.total_vat && data.totals?.total_ht ? Math.round((data.totals.total_vat / data.totals.total_ht) * 100) : null),
+        tax_rate:
+          data.tax_details?.[0]?.rate ||
+          (data.totals?.total_vat && data.totals?.total_ht
+            ? Math.round((data.totals.total_vat / data.totals.total_ht) * 100)
+            : null),
         currency: data.currency || "EUR",
         category: data.category || "OTHER",
         payment_method: data.payment_details?.method?.toLowerCase() || "card",
-        description: data.items?.[0]?.description || data.notes || (data.vendor?.name ? `Achat chez ${data.vendor.name}` : "Document importé via OCR"),
+        description:
+          data.items?.[0]?.description ||
+          data.notes ||
+          (data.vendor?.name
+            ? `Achat chez ${data.vendor.name}`
+            : "Document importé via OCR"),
       },
 
       extracted_fields: {
@@ -614,7 +688,11 @@ Ne retourne QUE le JSON, rien d'autre.`,
         client_address: data.client?.address,
         client_city: data.client?.city,
         client_postal_code: data.client?.postal_code,
+        client_country: data.client?.country,
         client_siret: data.client?.siret,
+        client_vat_number: data.client?.vat_number,
+        client_email: data.client?.email,
+        client_phone: data.client?.phone,
         client_number: data.client?.client_number,
 
         items: (data.items || []).map((item) => ({

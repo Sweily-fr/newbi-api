@@ -143,13 +143,34 @@ input UpsertTreasuryForecastInput {
   notes: String
 }
 
+type ForecastScenario {
+  id: ID!
+  workspaceId: ID!
+  name: String!
+  incomeMultiplier: Float!
+  expenseMultiplier: Float!
+  createdAt: String
+  updatedAt: String
+}
+
+input UpsertForecastScenarioInput {
+  id: ID
+  workspaceId: ID
+  name: String!
+  incomeMultiplier: Float!
+  expenseMultiplier: Float!
+}
+
 extend type Query {
   treasuryForecastData(
     workspaceId: ID
     startDate: String!
     endDate: String!
     accountId: ID
+    scenarioId: ID
   ): TreasuryForecastData!
+
+  forecastScenarios(workspaceId: ID): [ForecastScenario!]!
 
   treasuryForecasts(
     workspaceId: ID
@@ -208,4 +229,7 @@ extend type Mutation {
   # Lance la détection des récurrences immédiatement pour le workspace courant
   # (utile pour tester sans attendre le cron mensuel).
   runRecurrenceDetection(workspaceId: ID): Int!
+
+  upsertForecastScenario(input: UpsertForecastScenarioInput!): ForecastScenario!
+  deleteForecastScenario(id: ID!): TreasuryDeleteResult!
 }

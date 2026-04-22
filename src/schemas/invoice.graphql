@@ -17,6 +17,7 @@ type Invoice {
   status: InvoiceStatus!
   issueDate: String!
   dueDate: String!
+  paymentDate: String
   headerNotes: String
   footerNotes: String
   termsAndConditions: String
@@ -160,6 +161,7 @@ extend type Query {
   invoiceStats(workspaceId: ID!): InvoiceStats!
   invoiceBalances(workspaceId: ID!): InvoiceBalances!
   nextInvoiceNumber(workspaceId: ID!, prefix: String, isDraft: Boolean, autoNumbering: Boolean): String!
+  latestInvoiceIssueDate(workspaceId: ID!): String
   situationInvoicesByQuoteRef(
     workspaceId: ID!
     purchaseOrderNumber: String!
