@@ -3,9 +3,6 @@ import ClientCustomField from "../models/ClientCustomField.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
-import ImportedInvoice from "../models/ImportedInvoice.js";
-import ImportedQuote from "../models/ImportedQuote.js";
-import ImportedPurchaseOrder from "../models/ImportedPurchaseOrder.js";
 import User from "../models/User.js";
 // ✅ Import des wrappers RBAC
 import {
@@ -856,31 +853,13 @@ const clientResolvers = {
       const clientId = parent._id?.toString() || parent.id;
       const workspaceId = parent.workspaceId;
 
-      const [
-        invoiceCount,
-        quoteCount,
-        purchaseOrderCount,
-        importedInvoiceCount,
-        importedQuoteCount,
-        importedPurchaseOrderCount,
-      ] = await Promise.all([
+      const [invoiceCount, quoteCount, purchaseOrderCount] = await Promise.all([
         Invoice.countDocuments({ "client.id": clientId, workspaceId }),
         Quote.countDocuments({ "client.id": clientId, workspaceId }),
         PurchaseOrder.countDocuments({ "client.id": clientId, workspaceId }),
-        ImportedInvoice.countDocuments({ clientId, workspaceId }),
-        ImportedQuote.countDocuments({ clientId, workspaceId }),
-        ImportedPurchaseOrder.countDocuments({ clientId, workspaceId }),
       ]);
 
-      return (
-        invoiceCount +
-          quoteCount +
-          purchaseOrderCount +
-          importedInvoiceCount +
-          importedQuoteCount +
-          importedPurchaseOrderCount >
-        0
-      );
+      return invoiceCount + quoteCount + purchaseOrderCount > 0;
     },
   },
 

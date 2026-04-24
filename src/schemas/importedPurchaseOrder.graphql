@@ -29,11 +29,7 @@ type ImportedPurchaseOrderClient {
   address: String
   city: String
   postalCode: String
-  country: String
   siret: String
-  vatNumber: String
-  email: String
-  phone: String
   clientNumber: String
 }
 
@@ -72,7 +68,6 @@ type ImportedPurchaseOrder {
   originalPurchaseOrderNumber: String
   vendor: ImportedPurchaseOrderVendor
   client: ImportedPurchaseOrderClient
-  clientId: ID
   purchaseOrderDate: String
   deliveryDate: String
   dueDate: String

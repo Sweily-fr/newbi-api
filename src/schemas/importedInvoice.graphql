@@ -56,11 +56,7 @@ type ImportedInvoiceClient {
   address: String
   city: String
   postalCode: String
-  country: String
   siret: String
-  vatNumber: String
-  email: String
-  phone: String
   clientNumber: String
 }
 
@@ -99,7 +95,6 @@ type ImportedInvoice {
   originalInvoiceNumber: String
   vendor: ImportedInvoiceVendor
   client: ImportedInvoiceClient
-  clientId: ID
   invoiceDate: String
   dueDate: String
   paymentDate: String
@@ -352,12 +347,6 @@ extend type Mutation {
     quantity: Int!
     paymentId: String
   ): PurchaseExtraImportsResult!
-
-  """
-  Assigne (ou désassigne si clientId = null) des factures importées à un client CRM.
-  Retourne le nombre de factures mises à jour.
-  """
-  assignImportedInvoicesToClient(ids: [ID!]!, clientId: ID): Int!
 
   """
   Convertit une facture importée en facture d'achat (PurchaseInvoice)

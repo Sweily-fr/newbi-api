@@ -17,10 +17,6 @@ import {
   createInternalServerError,
 } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
-import {
-  findOrCreateClientFromImport,
-  pushImportedDocumentActivity,
-} from "../services/clientImportService.js";
 
 // Cache mémoire pour les plans utilisateurs
 const planCache = new Map();
@@ -72,7 +68,10 @@ async function getUserPlan(userId, workspaceId) {
       subscription = await db.collection("subscription").findOne({
         $and: [
           {
-            $or: [{ referenceId: cacheKey }, { organizationId: cacheKey }],
+            $or: [
+              { referenceId: cacheKey },
+              { organizationId: cacheKey },
+            ],
           },
           { status: { $in: ["active", "trialing"] } },
         ],
@@ -93,23 +92,19 @@ async function getUserPlan(userId, workspaceId) {
 
 async function checkUserOcrQuota(userId, workspaceId, filesCount = 1) {
   const plan = await getUserPlan(userId, workspaceId);
-  const quotaInfo = await UserOcrQuota.checkQuotaAvailable(
-    userId,
-    workspaceId,
-    plan,
-  );
+  const quotaInfo = await UserOcrQuota.checkQuotaAvailable(userId, workspaceId, plan);
 
   if (!quotaInfo.hasQuota) {
     throw createValidationError(
       `Quota OCR épuisé (${quotaInfo.usedThisMonth}/${quotaInfo.monthlyQuota} utilisés ce mois). ` +
-        "Passez à un plan supérieur pour augmenter votre quota.",
+      `Passez à un plan supérieur pour augmenter votre quota.`
     );
   }
 
   if (quotaInfo.remaining < filesCount) {
     throw createValidationError(
       `Quota OCR insuffisant. Vous avez ${quotaInfo.remaining} import(s) disponible(s) mais vous essayez d'en importer ${filesCount}. ` +
-        "Réduisez le nombre de fichiers ou passez à un plan supérieur.",
+      `Réduisez le nombre de fichiers ou passez à un plan supérieur.`
     );
   }
 
@@ -214,11 +209,7 @@ function transformOcrToQuoteData(ocrResult, extractionResult) {
       address: extractedFields.client_address || null,
       city: extractedFields.client_city || null,
       postalCode: extractedFields.client_postal_code || null,
-      country: extractedFields.client_country || null,
       siret: extractedFields.client_siret || null,
-      vatNumber: extractedFields.client_vat_number || null,
-      email: extractedFields.client_email || null,
-      phone: extractedFields.client_phone || null,
       clientNumber:
         extractedFields.client_number || transactionData.client_number || null,
     },
@@ -260,7 +251,7 @@ const importedQuoteResolvers = {
       async (
         _,
         { workspaceId, page = 1, limit = 20, filters = {} },
-        { user },
+        { user }
       ) => {
         const query = { workspaceId };
 
@@ -273,19 +264,13 @@ const importedQuoteResolvers = {
         }
         if (filters.dateFrom || filters.dateTo) {
           query.quoteDate = {};
-          if (filters.dateFrom)
-            query.quoteDate.$gte = new Date(filters.dateFrom);
+          if (filters.dateFrom) query.quoteDate.$gte = new Date(filters.dateFrom);
           if (filters.dateTo) query.quoteDate.$lte = new Date(filters.dateTo);
         }
-        if (
-          filters.minAmount !== undefined ||
-          filters.maxAmount !== undefined
-        ) {
+        if (filters.minAmount !== undefined || filters.maxAmount !== undefined) {
           query.totalTTC = {};
-          if (filters.minAmount !== undefined)
-            query.totalTTC.$gte = filters.minAmount;
-          if (filters.maxAmount !== undefined)
-            query.totalTTC.$lte = filters.maxAmount;
+          if (filters.minAmount !== undefined) query.totalTTC.$gte = filters.minAmount;
+          if (filters.maxAmount !== undefined) query.totalTTC.$lte = filters.maxAmount;
         }
 
         const skip = (page - 1) * limit;
@@ -304,7 +289,7 @@ const importedQuoteResolvers = {
           limit,
           hasMore: skip + quotes.length < total,
         };
-      },
+      }
     ),
 
     importedQuoteStats: isAuthenticated(
@@ -331,7 +316,7 @@ const importedQuoteResolvers = {
         });
 
         return result;
-      },
+      }
     ),
   },
 
@@ -370,33 +355,23 @@ const importedQuoteResolvers = {
             base64Data,
             mimetype,
             filename,
-            contentHash,
+            contentHash
           );
 
           if (!rawResult.success) {
             throw createInternalServerError(
-              `Erreur OCR: ${rawResult.error || rawResult.message}`,
+              `Erreur OCR: ${rawResult.error || rawResult.message}`
             );
           }
 
-          const structuredResult =
-            claudeVisionOcrService.toInvoiceFormat(rawResult);
+          const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
 
           let quoteData;
           if (structuredResult.transaction_data) {
-            quoteData = transformOcrToQuoteData(
-              structuredResult,
-              structuredResult,
-            );
+            quoteData = transformOcrToQuoteData(structuredResult, structuredResult);
           } else {
-            const extractionResult =
-              await invoiceExtractionService.extractInvoiceData(
-                structuredResult,
-              );
-            quoteData = transformOcrToQuoteData(
-              structuredResult,
-              extractionResult,
-            );
+            const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
+            quoteData = transformOcrToQuoteData(structuredResult, extractionResult);
           }
 
           let organizationId = null;
@@ -407,12 +382,9 @@ const importedQuoteResolvers = {
             user.currentOrganizationId;
 
           if (rawOrgId) {
-            organizationId =
-              typeof rawOrgId === "object"
-                ? rawOrgId._id?.toString() ||
-                  rawOrgId.id?.toString() ||
-                  rawOrgId.toString()
-                : rawOrgId.toString();
+            organizationId = typeof rawOrgId === "object"
+              ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
+              : rawOrgId.toString();
           } else {
             try {
               const memberRecord = await mongoose.connection.db
@@ -422,22 +394,17 @@ const importedQuoteResolvers = {
                 organizationId = memberRecord.organizationId.toString();
               }
             } catch (err) {
-              console.warn(
-                "⚠️ Impossible de récupérer organizationId:",
-                err.message,
-              );
+              console.warn("⚠️ Impossible de récupérer organizationId:", err.message);
             }
           }
 
-          console.log(
-            `☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`,
-          );
+          console.log(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
           const uploadResult = await cloudflareService.uploadImage(
             fileBuffer,
             filename,
             user.id,
             "importedQuote",
-            organizationId,
+            organizationId
           );
 
           await recordOcrUsage(user.id, workspaceId, plan, {
@@ -450,23 +417,15 @@ const importedQuoteResolvers = {
             workspaceId,
             quoteData.originalQuoteNumber,
             quoteData.vendor?.name,
-            quoteData.totalTTC,
+            quoteData.totalTTC
           );
 
           const isDuplicate = duplicates.length > 0;
-
-          // Rapprochement / création du client CRM à partir des données OCR
-          const clientId = await findOrCreateClientFromImport({
-            clientInfo: quoteData.client,
-            workspaceId,
-            userId: user.id,
-          });
 
           const importedQuote = new ImportedQuote({
             workspaceId,
             importedBy: user.id,
             ...quoteData,
-            clientId,
             file: {
               url: uploadResult.url,
               cloudflareKey: uploadResult.key,
@@ -480,39 +439,18 @@ const importedQuoteResolvers = {
 
           await importedQuote.save();
 
-          await pushImportedDocumentActivity({
-            clientId: importedQuote.clientId,
-            userId: user.id,
-            documentKind: "quote",
-            documentId: importedQuote._id,
-            documentNumber: importedQuote.originalQuoteNumber,
-            status: importedQuote.status,
-          });
-
           // Déclencher les automatisations QUOTE_IMPORTED (fire-and-forget)
-          documentAutomationService
-            .executeAutomationsForExpense(
-              "QUOTE_IMPORTED",
-              workspaceId,
-              {
-                documentId: importedQuote._id.toString(),
-                documentType: "importedQuote",
-                documentNumber: importedQuote.originalQuoteNumber || "",
-                clientName:
-                  importedQuote.vendor?.name ||
-                  importedQuote.client?.name ||
-                  "",
-                cloudflareUrl: uploadResult.url,
-                mimeType: mimetype,
-                fileExtension: filename?.split(".").pop() || "pdf",
-                issueDate: importedQuote.quoteDate || importedQuote.createdAt,
-                clientId: importedQuote.clientId?.toString() || null,
-              },
-              user.id,
-            )
-            .catch((err) =>
-              console.error("Erreur automatisation devis importé:", err),
-            );
+          documentAutomationService.executeAutomationsForExpense('QUOTE_IMPORTED', workspaceId, {
+            documentId: importedQuote._id.toString(),
+            documentType: 'importedQuote',
+            documentNumber: importedQuote.originalQuoteNumber || '',
+            clientName: importedQuote.vendor?.name || importedQuote.client?.name || '',
+            cloudflareUrl: uploadResult.url,
+            mimeType: mimetype,
+            fileExtension: filename?.split('.').pop() || 'pdf',
+            issueDate: importedQuote.quoteDate || importedQuote.createdAt,
+            clientId: importedQuote.client?._id || null,
+          }, user.id).catch(err => console.error('Erreur automatisation devis importé:', err));
 
           return {
             success: true,
@@ -529,65 +467,48 @@ const importedQuoteResolvers = {
             isDuplicate: false,
           };
         }
-      },
+      }
     ),
 
-    updateImportedQuote: isAuthenticated(async (_, { id, input }, { user }) => {
-      const quote = await checkQuoteAccess(id, user.id);
+    updateImportedQuote: isAuthenticated(
+      async (_, { id, input }, { user }) => {
+        const quote = await checkQuoteAccess(id, user.id);
 
-      if (input.vendorName !== undefined) quote.vendor.name = input.vendorName;
-      if (input.vendorAddress !== undefined)
-        quote.vendor.address = input.vendorAddress;
-      if (input.vendorCity !== undefined) quote.vendor.city = input.vendorCity;
-      if (input.vendorPostalCode !== undefined)
-        quote.vendor.postalCode = input.vendorPostalCode;
-      if (input.vendorCountry !== undefined)
-        quote.vendor.country = input.vendorCountry;
-      if (input.vendorSiret !== undefined)
-        quote.vendor.siret = input.vendorSiret;
-      if (input.vendorVatNumber !== undefined)
-        quote.vendor.vatNumber = input.vendorVatNumber;
+        if (input.vendorName !== undefined) quote.vendor.name = input.vendorName;
+        if (input.vendorAddress !== undefined) quote.vendor.address = input.vendorAddress;
+        if (input.vendorCity !== undefined) quote.vendor.city = input.vendorCity;
+        if (input.vendorPostalCode !== undefined) quote.vendor.postalCode = input.vendorPostalCode;
+        if (input.vendorCountry !== undefined) quote.vendor.country = input.vendorCountry;
+        if (input.vendorSiret !== undefined) quote.vendor.siret = input.vendorSiret;
+        if (input.vendorVatNumber !== undefined) quote.vendor.vatNumber = input.vendorVatNumber;
 
-      if (
-        input.clientName !== undefined ||
-        input.clientSiret !== undefined ||
-        input.clientAddress !== undefined ||
-        input.clientCity !== undefined ||
-        input.clientPostalCode !== undefined
-      ) {
-        if (!quote.client) quote.client = {};
-        if (input.clientName !== undefined)
-          quote.client.name = input.clientName;
-        if (input.clientSiret !== undefined)
-          quote.client.siret = input.clientSiret;
-        if (input.clientAddress !== undefined)
-          quote.client.address = input.clientAddress;
-        if (input.clientCity !== undefined)
-          quote.client.city = input.clientCity;
-        if (input.clientPostalCode !== undefined)
-          quote.client.postalCode = input.clientPostalCode;
+        if (input.clientName !== undefined || input.clientSiret !== undefined ||
+            input.clientAddress !== undefined || input.clientCity !== undefined ||
+            input.clientPostalCode !== undefined) {
+          if (!quote.client) quote.client = {};
+          if (input.clientName !== undefined) quote.client.name = input.clientName;
+          if (input.clientSiret !== undefined) quote.client.siret = input.clientSiret;
+          if (input.clientAddress !== undefined) quote.client.address = input.clientAddress;
+          if (input.clientCity !== undefined) quote.client.city = input.clientCity;
+          if (input.clientPostalCode !== undefined) quote.client.postalCode = input.clientPostalCode;
+        }
+
+        if (input.originalQuoteNumber !== undefined) quote.originalQuoteNumber = input.originalQuoteNumber;
+        if (input.quoteDate !== undefined) quote.quoteDate = input.quoteDate ? new Date(input.quoteDate) : null;
+        if (input.validUntil !== undefined) quote.validUntil = input.validUntil ? new Date(input.validUntil) : null;
+        if (input.dueDate !== undefined) quote.dueDate = input.dueDate ? new Date(input.dueDate) : null;
+        if (input.totalHT !== undefined) quote.totalHT = input.totalHT;
+        if (input.totalVAT !== undefined) quote.totalVAT = input.totalVAT;
+        if (input.totalTTC !== undefined) quote.totalTTC = input.totalTTC;
+        if (input.currency !== undefined) quote.currency = input.currency;
+        if (input.category !== undefined) quote.category = input.category;
+        if (input.paymentMethod !== undefined) quote.paymentMethod = input.paymentMethod;
+        if (input.notes !== undefined) quote.notes = input.notes;
+
+        await quote.save();
+        return quote;
       }
-
-      if (input.originalQuoteNumber !== undefined)
-        quote.originalQuoteNumber = input.originalQuoteNumber;
-      if (input.quoteDate !== undefined)
-        quote.quoteDate = input.quoteDate ? new Date(input.quoteDate) : null;
-      if (input.validUntil !== undefined)
-        quote.validUntil = input.validUntil ? new Date(input.validUntil) : null;
-      if (input.dueDate !== undefined)
-        quote.dueDate = input.dueDate ? new Date(input.dueDate) : null;
-      if (input.totalHT !== undefined) quote.totalHT = input.totalHT;
-      if (input.totalVAT !== undefined) quote.totalVAT = input.totalVAT;
-      if (input.totalTTC !== undefined) quote.totalTTC = input.totalTTC;
-      if (input.currency !== undefined) quote.currency = input.currency;
-      if (input.category !== undefined) quote.category = input.category;
-      if (input.paymentMethod !== undefined)
-        quote.paymentMethod = input.paymentMethod;
-      if (input.notes !== undefined) quote.notes = input.notes;
-
-      await quote.save();
-      return quote;
-    }),
+    ),
 
     validateImportedQuote: isAuthenticated(async (_, { id }, { user }) => {
       const quote = await checkQuoteAccess(id, user.id);
@@ -598,7 +519,7 @@ const importedQuoteResolvers = {
       async (_, { id, reason }, { user }) => {
         const quote = await checkQuoteAccess(id, user.id);
         return quote.reject(reason);
-      },
+      }
     ),
 
     archiveImportedQuote: isAuthenticated(async (_, { id }, { user }) => {
@@ -614,7 +535,7 @@ const importedQuoteResolvers = {
         try {
           await cloudflareService.deleteImage(
             cloudflareKey,
-            cloudflareService.importedInvoicesBucketName,
+            cloudflareService.importedInvoicesBucketName
           );
         } catch (error) {
           console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
@@ -634,7 +555,7 @@ const importedQuoteResolvers = {
           try {
             await cloudflareService.deleteImage(
               cloudflareKey,
-              cloudflareService.importedInvoicesBucketName,
+              cloudflareService.importedInvoicesBucketName
             );
           } catch (error) {
             console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
@@ -651,7 +572,6 @@ const importedQuoteResolvers = {
     id: (parent) => parent._id?.toString() || parent.id,
     workspaceId: (parent) => parent.workspaceId?.toString(),
     importedBy: (parent) => parent.importedBy?.toString(),
-    clientId: (parent) => parent.clientId?.toString() || null,
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
     duplicateOf: (parent) => parent.duplicateOf?.toString() || null,
     quoteDate: (parent) => parent.quoteDate?.toISOString() || null,

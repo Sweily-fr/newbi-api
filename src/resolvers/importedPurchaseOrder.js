@@ -16,10 +16,6 @@ import {
   createNotFoundError,
   createInternalServerError,
 } from "../utils/errors.js";
-import {
-  findOrCreateClientFromImport,
-  pushImportedDocumentActivity,
-} from "../services/clientImportService.js";
 
 // Cache mémoire pour les plans utilisateurs
 const planCache = new Map();
@@ -71,7 +67,10 @@ async function getUserPlan(userId, workspaceId) {
       subscription = await db.collection("subscription").findOne({
         $and: [
           {
-            $or: [{ referenceId: cacheKey }, { organizationId: cacheKey }],
+            $or: [
+              { referenceId: cacheKey },
+              { organizationId: cacheKey },
+            ],
           },
           { status: { $in: ["active", "trialing"] } },
         ],
@@ -92,23 +91,19 @@ async function getUserPlan(userId, workspaceId) {
 
 async function checkUserOcrQuota(userId, workspaceId, filesCount = 1) {
   const plan = await getUserPlan(userId, workspaceId);
-  const quotaInfo = await UserOcrQuota.checkQuotaAvailable(
-    userId,
-    workspaceId,
-    plan,
-  );
+  const quotaInfo = await UserOcrQuota.checkQuotaAvailable(userId, workspaceId, plan);
 
   if (!quotaInfo.hasQuota) {
     throw createValidationError(
       `Quota OCR épuisé (${quotaInfo.usedThisMonth}/${quotaInfo.monthlyQuota} utilisés ce mois). ` +
-        "Passez à un plan supérieur pour augmenter votre quota.",
+      `Passez à un plan supérieur pour augmenter votre quota.`
     );
   }
 
   if (quotaInfo.remaining < filesCount) {
     throw createValidationError(
       `Quota OCR insuffisant. Vous avez ${quotaInfo.remaining} import(s) disponible(s) mais vous essayez d'en importer ${filesCount}. ` +
-        "Réduisez le nombre de fichiers ou passez à un plan supérieur.",
+      `Réduisez le nombre de fichiers ou passez à un plan supérieur.`
     );
   }
 
@@ -213,11 +208,7 @@ function transformOcrToPurchaseOrderData(ocrResult, extractionResult) {
       address: extractedFields.client_address || null,
       city: extractedFields.client_city || null,
       postalCode: extractedFields.client_postal_code || null,
-      country: extractedFields.client_country || null,
       siret: extractedFields.client_siret || null,
-      vatNumber: extractedFields.client_vat_number || null,
-      email: extractedFields.client_email || null,
-      phone: extractedFields.client_phone || null,
       clientNumber:
         extractedFields.client_number || transactionData.client_number || null,
     },
@@ -259,7 +250,7 @@ const importedPurchaseOrderResolvers = {
       async (
         _,
         { workspaceId, page = 1, limit = 20, filters = {} },
-        { user },
+        { user }
       ) => {
         const query = { workspaceId };
 
@@ -272,20 +263,13 @@ const importedPurchaseOrderResolvers = {
         }
         if (filters.dateFrom || filters.dateTo) {
           query.purchaseOrderDate = {};
-          if (filters.dateFrom)
-            query.purchaseOrderDate.$gte = new Date(filters.dateFrom);
-          if (filters.dateTo)
-            query.purchaseOrderDate.$lte = new Date(filters.dateTo);
+          if (filters.dateFrom) query.purchaseOrderDate.$gte = new Date(filters.dateFrom);
+          if (filters.dateTo) query.purchaseOrderDate.$lte = new Date(filters.dateTo);
         }
-        if (
-          filters.minAmount !== undefined ||
-          filters.maxAmount !== undefined
-        ) {
+        if (filters.minAmount !== undefined || filters.maxAmount !== undefined) {
           query.totalTTC = {};
-          if (filters.minAmount !== undefined)
-            query.totalTTC.$gte = filters.minAmount;
-          if (filters.maxAmount !== undefined)
-            query.totalTTC.$lte = filters.maxAmount;
+          if (filters.minAmount !== undefined) query.totalTTC.$gte = filters.minAmount;
+          if (filters.maxAmount !== undefined) query.totalTTC.$lte = filters.maxAmount;
         }
 
         const skip = (page - 1) * limit;
@@ -304,7 +288,7 @@ const importedPurchaseOrderResolvers = {
           limit,
           hasMore: skip + purchaseOrders.length < total,
         };
-      },
+      }
     ),
 
     importedPurchaseOrderStats: isAuthenticated(
@@ -331,7 +315,7 @@ const importedPurchaseOrderResolvers = {
         });
 
         return result;
-      },
+      }
     ),
   },
 
@@ -365,40 +349,28 @@ const importedPurchaseOrderResolvers = {
             .update(fileBuffer)
             .digest("hex");
 
-          console.log(
-            `🔍 importPurchaseOrderDirect: OCR direct pour ${filename}`,
-          );
+          console.log(`🔍 importPurchaseOrderDirect: OCR direct pour ${filename}`);
           const rawResult = await claudeVisionOcrService.processFromBase64(
             base64Data,
             mimetype,
             filename,
-            contentHash,
+            contentHash
           );
 
           if (!rawResult.success) {
             throw createInternalServerError(
-              `Erreur OCR: ${rawResult.error || rawResult.message}`,
+              `Erreur OCR: ${rawResult.error || rawResult.message}`
             );
           }
 
-          const structuredResult =
-            claudeVisionOcrService.toInvoiceFormat(rawResult);
+          const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
 
           let poData;
           if (structuredResult.transaction_data) {
-            poData = transformOcrToPurchaseOrderData(
-              structuredResult,
-              structuredResult,
-            );
+            poData = transformOcrToPurchaseOrderData(structuredResult, structuredResult);
           } else {
-            const extractionResult =
-              await invoiceExtractionService.extractInvoiceData(
-                structuredResult,
-              );
-            poData = transformOcrToPurchaseOrderData(
-              structuredResult,
-              extractionResult,
-            );
+            const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
+            poData = transformOcrToPurchaseOrderData(structuredResult, extractionResult);
           }
 
           let organizationId = null;
@@ -409,12 +381,9 @@ const importedPurchaseOrderResolvers = {
             user.currentOrganizationId;
 
           if (rawOrgId) {
-            organizationId =
-              typeof rawOrgId === "object"
-                ? rawOrgId._id?.toString() ||
-                  rawOrgId.id?.toString() ||
-                  rawOrgId.toString()
-                : rawOrgId.toString();
+            organizationId = typeof rawOrgId === "object"
+              ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
+              : rawOrgId.toString();
           } else {
             try {
               const memberRecord = await mongoose.connection.db
@@ -424,22 +393,17 @@ const importedPurchaseOrderResolvers = {
                 organizationId = memberRecord.organizationId.toString();
               }
             } catch (err) {
-              console.warn(
-                "⚠️ Impossible de récupérer organizationId:",
-                err.message,
-              );
+              console.warn("⚠️ Impossible de récupérer organizationId:", err.message);
             }
           }
 
-          console.log(
-            `☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`,
-          );
+          console.log(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
           const uploadResult = await cloudflareService.uploadImage(
             fileBuffer,
             filename,
             user.id,
             "importedPurchaseOrder",
-            organizationId,
+            organizationId
           );
 
           await recordOcrUsage(user.id, workspaceId, plan, {
@@ -448,28 +412,19 @@ const importedPurchaseOrderResolvers = {
             success: true,
           });
 
-          const duplicates =
-            await ImportedPurchaseOrder.findPotentialDuplicates(
-              workspaceId,
-              poData.originalPurchaseOrderNumber,
-              poData.vendor?.name,
-              poData.totalTTC,
-            );
+          const duplicates = await ImportedPurchaseOrder.findPotentialDuplicates(
+            workspaceId,
+            poData.originalPurchaseOrderNumber,
+            poData.vendor?.name,
+            poData.totalTTC
+          );
 
           const isDuplicate = duplicates.length > 0;
-
-          // Rapprochement / création du client CRM à partir des données OCR
-          const clientId = await findOrCreateClientFromImport({
-            clientInfo: poData.client,
-            workspaceId,
-            userId: user.id,
-          });
 
           const importedPurchaseOrder = new ImportedPurchaseOrder({
             workspaceId,
             importedBy: user.id,
             ...poData,
-            clientId,
             file: {
               url: uploadResult.url,
               cloudflareKey: uploadResult.key,
@@ -482,15 +437,6 @@ const importedPurchaseOrderResolvers = {
           });
 
           await importedPurchaseOrder.save();
-
-          await pushImportedDocumentActivity({
-            clientId: importedPurchaseOrder.clientId,
-            userId: user.id,
-            documentKind: "purchaseOrder",
-            documentId: importedPurchaseOrder._id,
-            documentNumber: importedPurchaseOrder.originalPurchaseOrderNumber,
-            status: importedPurchaseOrder.status,
-          });
 
           return {
             success: true,
@@ -507,7 +453,7 @@ const importedPurchaseOrderResolvers = {
             isDuplicate: false,
           };
         }
-      },
+      }
     ),
 
     updateImportedPurchaseOrder: isAuthenticated(
@@ -515,108 +461,79 @@ const importedPurchaseOrderResolvers = {
         const po = await checkPurchaseOrderAccess(id, user.id);
 
         if (input.vendorName !== undefined) po.vendor.name = input.vendorName;
-        if (input.vendorAddress !== undefined)
-          po.vendor.address = input.vendorAddress;
+        if (input.vendorAddress !== undefined) po.vendor.address = input.vendorAddress;
         if (input.vendorCity !== undefined) po.vendor.city = input.vendorCity;
-        if (input.vendorPostalCode !== undefined)
-          po.vendor.postalCode = input.vendorPostalCode;
-        if (input.vendorCountry !== undefined)
-          po.vendor.country = input.vendorCountry;
-        if (input.vendorSiret !== undefined)
-          po.vendor.siret = input.vendorSiret;
-        if (input.vendorVatNumber !== undefined)
-          po.vendor.vatNumber = input.vendorVatNumber;
+        if (input.vendorPostalCode !== undefined) po.vendor.postalCode = input.vendorPostalCode;
+        if (input.vendorCountry !== undefined) po.vendor.country = input.vendorCountry;
+        if (input.vendorSiret !== undefined) po.vendor.siret = input.vendorSiret;
+        if (input.vendorVatNumber !== undefined) po.vendor.vatNumber = input.vendorVatNumber;
 
-        if (
-          input.clientName !== undefined ||
-          input.clientSiret !== undefined ||
-          input.clientAddress !== undefined ||
-          input.clientCity !== undefined ||
-          input.clientPostalCode !== undefined
-        ) {
+        if (input.clientName !== undefined || input.clientSiret !== undefined ||
+            input.clientAddress !== undefined || input.clientCity !== undefined ||
+            input.clientPostalCode !== undefined) {
           if (!po.client) po.client = {};
           if (input.clientName !== undefined) po.client.name = input.clientName;
-          if (input.clientSiret !== undefined)
-            po.client.siret = input.clientSiret;
-          if (input.clientAddress !== undefined)
-            po.client.address = input.clientAddress;
+          if (input.clientSiret !== undefined) po.client.siret = input.clientSiret;
+          if (input.clientAddress !== undefined) po.client.address = input.clientAddress;
           if (input.clientCity !== undefined) po.client.city = input.clientCity;
-          if (input.clientPostalCode !== undefined)
-            po.client.postalCode = input.clientPostalCode;
+          if (input.clientPostalCode !== undefined) po.client.postalCode = input.clientPostalCode;
         }
 
-        if (input.originalPurchaseOrderNumber !== undefined)
-          po.originalPurchaseOrderNumber = input.originalPurchaseOrderNumber;
-        if (input.purchaseOrderDate !== undefined)
-          po.purchaseOrderDate = input.purchaseOrderDate
-            ? new Date(input.purchaseOrderDate)
-            : null;
-        if (input.deliveryDate !== undefined)
-          po.deliveryDate = input.deliveryDate
-            ? new Date(input.deliveryDate)
-            : null;
-        if (input.dueDate !== undefined)
-          po.dueDate = input.dueDate ? new Date(input.dueDate) : null;
+        if (input.originalPurchaseOrderNumber !== undefined) po.originalPurchaseOrderNumber = input.originalPurchaseOrderNumber;
+        if (input.purchaseOrderDate !== undefined) po.purchaseOrderDate = input.purchaseOrderDate ? new Date(input.purchaseOrderDate) : null;
+        if (input.deliveryDate !== undefined) po.deliveryDate = input.deliveryDate ? new Date(input.deliveryDate) : null;
+        if (input.dueDate !== undefined) po.dueDate = input.dueDate ? new Date(input.dueDate) : null;
         if (input.totalHT !== undefined) po.totalHT = input.totalHT;
         if (input.totalVAT !== undefined) po.totalVAT = input.totalVAT;
         if (input.totalTTC !== undefined) po.totalTTC = input.totalTTC;
         if (input.currency !== undefined) po.currency = input.currency;
         if (input.category !== undefined) po.category = input.category;
-        if (input.paymentMethod !== undefined)
-          po.paymentMethod = input.paymentMethod;
+        if (input.paymentMethod !== undefined) po.paymentMethod = input.paymentMethod;
         if (input.notes !== undefined) po.notes = input.notes;
 
         await po.save();
         return po;
-      },
+      }
     ),
 
-    validateImportedPurchaseOrder: isAuthenticated(
-      async (_, { id }, { user }) => {
-        const po = await checkPurchaseOrderAccess(id, user.id);
-        return po.validate();
-      },
-    ),
+    validateImportedPurchaseOrder: isAuthenticated(async (_, { id }, { user }) => {
+      const po = await checkPurchaseOrderAccess(id, user.id);
+      return po.validate();
+    }),
 
     rejectImportedPurchaseOrder: isAuthenticated(
       async (_, { id, reason }, { user }) => {
         const po = await checkPurchaseOrderAccess(id, user.id);
         return po.reject(reason);
-      },
+      }
     ),
 
-    archiveImportedPurchaseOrder: isAuthenticated(
-      async (_, { id }, { user }) => {
-        const po = await checkPurchaseOrderAccess(id, user.id);
-        return po.archive();
-      },
-    ),
+    archiveImportedPurchaseOrder: isAuthenticated(async (_, { id }, { user }) => {
+      const po = await checkPurchaseOrderAccess(id, user.id);
+      return po.archive();
+    }),
 
-    deleteImportedPurchaseOrder: isAuthenticated(
-      async (_, { id }, { user }) => {
-        const po = await checkPurchaseOrderAccess(id, user.id);
+    deleteImportedPurchaseOrder: isAuthenticated(async (_, { id }, { user }) => {
+      const po = await checkPurchaseOrderAccess(id, user.id);
 
-        const cloudflareKey = po.file?.cloudflareKey;
-        if (cloudflareKey) {
-          try {
-            await cloudflareService.deleteImage(
-              cloudflareKey,
-              cloudflareService.importedInvoicesBucketName,
-            );
-          } catch (error) {
-            console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
-          }
+      const cloudflareKey = po.file?.cloudflareKey;
+      if (cloudflareKey) {
+        try {
+          await cloudflareService.deleteImage(
+            cloudflareKey,
+            cloudflareService.importedInvoicesBucketName
+          );
+        } catch (error) {
+          console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
         }
+      }
 
-        await ImportedPurchaseOrder.findByIdAndDelete(id);
-        return true;
-      },
-    ),
+      await ImportedPurchaseOrder.findByIdAndDelete(id);
+      return true;
+    }),
 
     deleteImportedPurchaseOrders: isAuthenticated(async (_, { ids }) => {
-      const purchaseOrders = await ImportedPurchaseOrder.find({
-        _id: { $in: ids },
-      });
+      const purchaseOrders = await ImportedPurchaseOrder.find({ _id: { $in: ids } });
 
       for (const po of purchaseOrders) {
         const cloudflareKey = po.file?.cloudflareKey;
@@ -624,7 +541,7 @@ const importedPurchaseOrderResolvers = {
           try {
             await cloudflareService.deleteImage(
               cloudflareKey,
-              cloudflareService.importedInvoicesBucketName,
+              cloudflareService.importedInvoicesBucketName
             );
           } catch (error) {
             console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
@@ -632,9 +549,7 @@ const importedPurchaseOrderResolvers = {
         }
       }
 
-      const result = await ImportedPurchaseOrder.deleteMany({
-        _id: { $in: ids },
-      });
+      const result = await ImportedPurchaseOrder.deleteMany({ _id: { $in: ids } });
       return result.deletedCount;
     }),
   },
@@ -643,11 +558,9 @@ const importedPurchaseOrderResolvers = {
     id: (parent) => parent._id?.toString() || parent.id,
     workspaceId: (parent) => parent.workspaceId?.toString(),
     importedBy: (parent) => parent.importedBy?.toString(),
-    clientId: (parent) => parent.clientId?.toString() || null,
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
     duplicateOf: (parent) => parent.duplicateOf?.toString() || null,
-    purchaseOrderDate: (parent) =>
-      parent.purchaseOrderDate?.toISOString() || null,
+    purchaseOrderDate: (parent) => parent.purchaseOrderDate?.toISOString() || null,
     deliveryDate: (parent) => parent.deliveryDate?.toISOString() || null,
     dueDate: (parent) => parent.dueDate?.toISOString() || null,
     createdAt: (parent) => parent.createdAt?.toISOString(),
