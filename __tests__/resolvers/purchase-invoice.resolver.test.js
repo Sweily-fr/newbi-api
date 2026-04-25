@@ -1,41 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import mongoose from "mongoose";
 
-// Mock models and services
-vi.mock("../../src/models/PurchaseInvoice.js", () => {
-  class MockPurchaseInvoice {
-    constructor(data) {
-      Object.assign(this, data);
-      this._id = new mongoose.Types.ObjectId();
-      this.files = data.files || [];
-      this.save = vi.fn().mockResolvedValue(true);
-    }
-  }
-  MockPurchaseInvoice.findOne = vi.fn();
-  MockPurchaseInvoice.find = vi.fn();
-  MockPurchaseInvoice.countDocuments = vi.fn();
-  MockPurchaseInvoice.deleteOne = vi.fn();
-  MockPurchaseInvoice.updateMany = vi.fn();
-  MockPurchaseInvoice.deleteMany = vi.fn();
-  MockPurchaseInvoice.aggregate = vi.fn();
-  return { default: MockPurchaseInvoice };
-});
+import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
+import { seedOrgMembership, buildContext } from "../helpers/auth.js";
+import { buildOrganizationId, buildUserId } from "../factories/index.js";
 
-vi.mock("../../src/models/Supplier.js", () => {
-  const mockSupplier = vi.fn().mockImplementation((data) => ({
-    ...data,
-    _id: new mongoose.Types.ObjectId(),
-    save: vi.fn().mockResolvedValue(true),
-  }));
-  mockSupplier.findOne = vi.fn();
-  mockSupplier.find = vi.fn();
-  mockSupplier.countDocuments = vi.fn();
-  mockSupplier.create = vi.fn();
-  mockSupplier.deleteOne = vi.fn();
-  mockSupplier.deleteMany = vi.fn();
-  return { default: mockSupplier };
-});
-
+// External side effects we don't exercise here
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: {
     deleteImage: vi.fn().mockResolvedValue(true),
@@ -47,191 +25,258 @@ vi.mock("../../src/services/cloudflareService.js", () => ({
       }),
   },
 }));
-
 vi.mock("../../src/services/superPdpService.js", () => ({
   default: {
     getReceivedInvoices: vi.fn(),
     transformReceivedInvoiceToPurchaseInvoice: vi.fn(),
   },
 }));
-
 vi.mock("../../src/services/eInvoicingSettingsService.js", () => ({
   default: { isEInvoicingEnabled: vi.fn() },
 }));
-
 vi.mock("../../src/services/documentAutomationService.js", () => ({
   default: {
     executeAutomationsForExpense: vi.fn().mockResolvedValue(undefined),
   },
 }));
-
-vi.mock("../../src/utils/logger.js", () => ({
-  default: {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  },
+vi.mock("../../src/services/pennylaneSyncHelper.js", () => ({
+  syncPurchaseInvoiceIfNeeded: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../src/middlewares/rbac.js", () => ({
-  requireRead: () => (resolver) => resolver,
-  requireWrite: () => (resolver) => resolver,
-  requireDelete: () => (resolver) => resolver,
-  resolveWorkspaceId: (input, context) =>
-    input && context && input !== context ? context : input || context,
-}));
-
-vi.mock("../../src/middlewares/better-auth-jwt.js", () => ({
-  isAuthenticated: (resolver) => resolver,
-}));
-
+import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import Supplier from "../../src/models/Supplier.js";
-
-// Import the resolvers - must be after all mocks
 import purchaseInvoiceResolvers from "../../src/resolvers/purchaseInvoice.js";
 
-const mockContext = {
-  user: { id: "user-1", name: "Test User" },
-  workspaceId: "507f1f77bcf86cd799439011",
-};
+const userId = buildUserId();
+const organizationId = buildOrganizationId();
 
-beforeEach(() => {
-  vi.clearAllMocks();
+beforeAll(async () => {
+  await startMongo();
 });
 
-describe("PurchaseInvoice Resolver - resolveWorkspaceId helper", () => {
-  it("should use context workspaceId when input is null", () => {
-    // Test the resolveWorkspaceId pattern used throughout purchaseInvoice.js
-    const inputWorkspaceId = null;
-    const contextWorkspaceId = "org-123";
-
-    const result = inputWorkspaceId || contextWorkspaceId;
-    expect(result).toBe("org-123");
-  });
-
-  it("should use context workspaceId when input workspaceId mismatches", () => {
-    const inputWorkspaceId = "org-111";
-    const contextWorkspaceId = "org-222";
-
-    // resolveWorkspaceId now gracefully falls back to context value on mismatch
-    const result = inputWorkspaceId || contextWorkspaceId;
-    expect(result).toBe("org-111");
-  });
+afterAll(async () => {
+  await stopMongo();
 });
+
+beforeEach(async () => {
+  await clearMongo();
+  invalidateOrgCache();
+  await seedOrgMembership({ userId, organizationId, role: "owner" });
+});
+
+const ctx = () => buildContext({ userId, organizationId });
+
+const insertPurchaseInvoice = (overrides = {}) =>
+  PurchaseInvoice.collection.insertOne({
+    workspaceId: organizationId,
+    createdBy: userId,
+    supplierName: "Acme Supplier",
+    invoiceNumber: "PI-001",
+    issueDate: new Date(),
+    amountTTC: 1200,
+    amountHT: 1000,
+    vatAmount: 200,
+    status: "TO_PAY",
+    files: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  });
 
 describe("PurchaseInvoice Resolver - Query.purchaseInvoice", () => {
   const resolver = purchaseInvoiceResolvers.Query.purchaseInvoice;
 
-  it("should return a purchase invoice by id", async () => {
-    const mockDoc = { _id: "pi-1", invoiceNumber: "PI-001", amountTTC: 1200 };
-    PurchaseInvoice.findOne.mockResolvedValue(mockDoc);
+  it("returns a purchase invoice by id", async () => {
+    const { insertedId } = await insertPurchaseInvoice({
+      invoiceNumber: "PI-042",
+    });
 
-    const result = await resolver(null, { id: "pi-1" }, mockContext);
+    const result = await resolver(null, { id: insertedId.toString() }, ctx());
 
-    expect(result).toEqual(mockDoc);
+    expect(result.invoiceNumber).toBe("PI-042");
   });
 
-  it("should throw NOT_FOUND when purchase invoice does not exist", async () => {
-    PurchaseInvoice.findOne.mockResolvedValue(null);
+  it("throws NOT_FOUND when document does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    await expect(resolver(null, { id: fakeId }, ctx())).rejects.toThrow(
+      /non trouvée/i,
+    );
+  });
+
+  it("does not leak across workspaces", async () => {
+    const otherOrg = buildOrganizationId();
+    const { insertedId } = await PurchaseInvoice.collection.insertOne({
+      workspaceId: otherOrg,
+      createdBy: userId,
+      supplierName: "Other Supplier",
+      invoiceNumber: "PI-9999",
+      issueDate: new Date(),
+      amountTTC: 100,
+      status: "TO_PAY",
+      files: [],
+    });
 
     await expect(
-      resolver(null, { id: "nonexistent" }, mockContext),
-    ).rejects.toThrow("non trouvée");
+      resolver(null, { id: insertedId.toString() }, ctx()),
+    ).rejects.toThrow(/non trouvée/i);
   });
 });
 
 describe("PurchaseInvoice Resolver - Query.purchaseInvoices", () => {
   const resolver = purchaseInvoiceResolvers.Query.purchaseInvoices;
 
-  it("should return paginated purchase invoices", async () => {
-    const mockItems = [
-      { invoiceNumber: "PI-001" },
-      { invoiceNumber: "PI-002" },
-    ];
-    PurchaseInvoice.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            lean: vi.fn().mockResolvedValue(mockItems),
-          }),
-        }),
-      }),
-    });
-    PurchaseInvoice.countDocuments.mockResolvedValue(2);
+  it("returns paginated list", async () => {
+    for (let i = 0; i < 25; i++) {
+      await insertPurchaseInvoice({ invoiceNumber: `PI-${i}` });
+    }
 
-    const result = await resolver(null, { page: 1, limit: 20 }, mockContext);
+    const result = await resolver(
+      null,
+      { workspaceId: organizationId.toString(), page: 1, limit: 10 },
+      ctx(),
+    );
 
-    expect(result.items).toEqual(mockItems);
-    expect(result.totalCount).toBe(2);
-    expect(result.currentPage).toBe(1);
-  });
-});
-
-describe("PurchaseInvoice Resolver - Mutation.createPurchaseInvoice", () => {
-  const resolver = purchaseInvoiceResolvers.Mutation.createPurchaseInvoice;
-
-  it("should create a purchase invoice", async () => {
-    Supplier.findOne.mockResolvedValue(null);
-    Supplier.create.mockResolvedValue({
-      _id: "supplier-1",
-      name: "Test Supplier",
-    });
-
-    const input = {
-      supplierName: "Test Supplier",
-      amountTTC: 500,
-      status: "TO_PAY",
-    };
-
-    const result = await resolver(null, { input }, mockContext);
-    expect(result).toBeDefined();
-    expect(result.save).toHaveBeenCalled();
+    expect(result.totalCount).toBe(25);
+    expect(result.totalPages).toBe(3);
+    expect(result.items).toHaveLength(10);
   });
 
-  it("should auto-create supplier if supplierName provided without supplierId", async () => {
-    Supplier.findOne.mockResolvedValue(null);
-    Supplier.create.mockResolvedValue({
-      _id: "new-supplier-id",
-      name: "New Supplier",
+  it("filters by status", async () => {
+    await insertPurchaseInvoice({ status: "TO_PAY" });
+    await insertPurchaseInvoice({ status: "PAID" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        status: "PAID",
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+  });
+
+  it("filters by amount range", async () => {
+    await insertPurchaseInvoice({ amountTTC: 100 });
+    await insertPurchaseInvoice({ amountTTC: 500 });
+    await insertPurchaseInvoice({ amountTTC: 1000 });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        minAmount: 200,
+        maxAmount: 800,
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+  });
+
+  it("supports search on supplierName/invoiceNumber", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "Acme Co",
+      invoiceNumber: "X1",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Beta Inc",
+      invoiceNumber: "Y1",
     });
 
-    const input = {
-      supplierName: "New Supplier",
-      amountTTC: 300,
-    };
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        search: "Acme",
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
 
-    await resolver(null, { input }, mockContext);
-
-    expect(Supplier.create).toHaveBeenCalled();
+    expect(result.totalCount).toBe(1);
   });
 });
 
 describe("PurchaseInvoice Resolver - Mutation.deletePurchaseInvoice", () => {
   const resolver = purchaseInvoiceResolvers.Mutation.deletePurchaseInvoice;
 
-  it("should delete a purchase invoice", async () => {
-    PurchaseInvoice.findOne.mockResolvedValue({
-      _id: "pi-1",
-      files: [],
-    });
-    PurchaseInvoice.deleteOne.mockResolvedValue({ deletedCount: 1 });
+  it("deletes a purchase invoice", async () => {
+    const { insertedId } = await insertPurchaseInvoice();
 
-    const result = await resolver(null, { id: "pi-1" }, mockContext);
+    const result = await resolver(null, { id: insertedId.toString() }, ctx());
 
     expect(result).toEqual({
       success: true,
       message: "Facture d'achat supprimée",
     });
+    expect(
+      await PurchaseInvoice.collection.findOne({ _id: insertedId }),
+    ).toBeNull();
   });
 
-  it("should throw when purchase invoice not found", async () => {
-    PurchaseInvoice.findOne.mockResolvedValue(null);
+  it("throws when document does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    await expect(resolver(null, { id: fakeId }, ctx())).rejects.toThrow(
+      /non trouvée/i,
+    );
+  });
+
+  it("blocks viewer role from deleting", async () => {
+    const viewerUserId = buildUserId();
+    const viewerOrg = buildOrganizationId();
+    await seedOrgMembership({
+      userId: viewerUserId,
+      organizationId: viewerOrg,
+      role: "viewer",
+    });
+    const { insertedId } = await PurchaseInvoice.collection.insertOne({
+      workspaceId: viewerOrg,
+      createdBy: viewerUserId,
+      supplierName: "x",
+      invoiceNumber: "x",
+      issueDate: new Date(),
+      amountTTC: 1,
+      status: "TO_PAY",
+      files: [],
+    });
+
+    const viewerCtx = buildContext({
+      userId: viewerUserId,
+      organizationId: viewerOrg,
+    });
 
     await expect(
-      resolver(null, { id: "nonexistent" }, mockContext),
-    ).rejects.toThrow("non trouvée");
+      resolver(null, { id: insertedId.toString() }, viewerCtx),
+    ).rejects.toThrow(/permission|delete/i);
+  });
+});
+
+describe("PurchaseInvoice Resolver - Mutation.markPurchaseInvoiceAsPaid", () => {
+  const resolver = purchaseInvoiceResolvers.Mutation.markPurchaseInvoiceAsPaid;
+
+  it("marks invoice as paid with payment date and method", async () => {
+    const { insertedId } = await insertPurchaseInvoice({ status: "TO_PAY" });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        paymentDate: "2026-03-10",
+        paymentMethod: "BANK_TRANSFER",
+      },
+      ctx(),
+    );
+
+    expect(result.status).toBe("PAID");
+    expect(result.paymentMethod).toBe("BANK_TRANSFER");
   });
 });
 
@@ -239,40 +284,24 @@ describe("PurchaseInvoice Resolver - Mutation.bulkUpdatePurchaseInvoiceStatus", 
   const resolver =
     purchaseInvoiceResolvers.Mutation.bulkUpdatePurchaseInvoiceStatus;
 
-  it("should bulk update statuses", async () => {
-    PurchaseInvoice.updateMany.mockResolvedValue({ modifiedCount: 3 });
+  it("bulk updates statuses for ids in workspace", async () => {
+    const { insertedId: a } = await insertPurchaseInvoice({ status: "TO_PAY" });
+    const { insertedId: b } = await insertPurchaseInvoice({ status: "TO_PAY" });
+    const { insertedId: c } = await insertPurchaseInvoice({ status: "TO_PAY" });
 
     const result = await resolver(
       null,
-      { ids: ["id1", "id2", "id3"], status: "PAID" },
-      mockContext,
+      { ids: [a.toString(), b.toString(), c.toString()], status: "PAID" },
+      ctx(),
     );
 
     expect(result.success).toBe(true);
     expect(result.updatedCount).toBe(3);
-  });
-});
 
-describe("PurchaseInvoice Resolver - Mutation.markPurchaseInvoiceAsPaid", () => {
-  const resolver = purchaseInvoiceResolvers.Mutation.markPurchaseInvoiceAsPaid;
-
-  it("should mark invoice as paid with payment date", async () => {
-    const mockInvoice = {
-      _id: "pi-1",
-      status: "TO_PAY",
-      files: [],
-      save: vi.fn().mockResolvedValue(true),
-    };
-    PurchaseInvoice.findOne.mockResolvedValue(mockInvoice);
-
-    const result = await resolver(
-      null,
-      { id: "pi-1", paymentDate: "2026-03-10", paymentMethod: "BANK_TRANSFER" },
-      mockContext,
-    );
-
-    expect(result.status).toBe("PAID");
-    expect(result.paymentMethod).toBe("BANK_TRANSFER");
-    expect(result.save).toHaveBeenCalled();
+    const remaining = await PurchaseInvoice.collection.countDocuments({
+      _id: { $in: [a, b, c] },
+      status: "PAID",
+    });
+    expect(remaining).toBe(3);
   });
 });

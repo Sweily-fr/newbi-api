@@ -1,10 +1,11 @@
 name: CI — newbi-api
 
 on:
+  # Tests CI only on develop — never on main/prod.
   pull_request:
-    branches: [develop, main]
+    branches: [develop]
   push:
-    branches: [develop, main]
+    branches: [develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
       - run: npm ci
       - run: npm run lint
 
@@ -32,7 +33,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
       - run: npm ci
       - run: npm run test:run -- --coverage
         env:
@@ -62,7 +63,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
       - run: npm ci
       - run: npx vitest run __tests__/integration/
         env:

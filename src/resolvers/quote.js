@@ -33,7 +33,7 @@ import documentAutomationService from "../services/documentAutomationService.js"
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
-const calculateQuoteTotals = (
+export const calculateQuoteTotals = (
   items,
   discount = 0,
   discountType = "FIXED",

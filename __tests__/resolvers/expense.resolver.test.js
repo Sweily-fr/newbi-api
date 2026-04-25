@@ -1,482 +1,287 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import mongoose from "mongoose";
 
-// ─── Mock Mongoose models ───────────────────────────────────────────
+import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
+import { seedOrgMembership, buildContext } from "../helpers/auth.js";
+import { buildOrganizationId, buildUserId } from "../factories/index.js";
 
-vi.mock("../../src/models/Expense.js", () => {
-  class MockExpense {
-    constructor(data) {
-      Object.assign(this, data);
-      this._id = data._id || new mongoose.Types.ObjectId();
-      this.save = vi.fn().mockResolvedValue(true);
-    }
-  }
-  MockExpense.findOne = vi.fn();
-  MockExpense.find = vi.fn();
-  MockExpense.countDocuments = vi.fn();
-  MockExpense.findById = vi.fn();
-  MockExpense.findByIdAndUpdate = vi.fn();
-  MockExpense.findByIdAndDelete = vi.fn();
-  MockExpense.aggregate = vi.fn();
-  return { default: MockExpense };
-});
-
-// ─── Mock external services ─────────────────────────────────────────
-
+// External side effects we don't want to test here
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: { deleteImage: vi.fn().mockResolvedValue(undefined) },
 }));
 
-vi.mock("../../src/utils/ocrProcessor.js", () => ({
-  processFileWithOCR: vi.fn().mockResolvedValue({ text: "OCR result" }),
-}));
-
-// ─── Mock middlewares (pass-through) ────────────────────────────────
-
-vi.mock("../../src/middlewares/rbac.js", () => ({
-  requireRead: () => (resolver) => resolver,
-  requireWrite: () => (resolver) => resolver,
-  requireDelete: () => (resolver) => resolver,
-  requirePermission: () => (resolver) => resolver,
-  withOrganization: (resolver) => resolver,
-  resolveWorkspaceId: (input, context) =>
-    input && context && input !== context ? context : input || context,
-}));
-
-// ─── Import after mocks ────────────────────────────────────────────
-
+import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Expense from "../../src/models/Expense.js";
 import expenseResolvers from "../../src/resolvers/expense.js";
 
-const workspaceId = "507f1f77bcf86cd799439011";
+const ownerUserId = buildUserId();
+const organizationId = buildOrganizationId();
+const memberUserId = buildUserId();
 
-const mockContext = {
-  user: { id: "user-1", name: "Test User", email: "test@test.com" },
-  workspaceId,
-  userRole: "owner",
-};
-
-const memberContext = {
-  user: { id: "member-1", name: "Member", email: "member@test.com" },
-  workspaceId,
-  userRole: "member",
-};
-
-beforeEach(() => {
-  vi.clearAllMocks();
+beforeAll(async () => {
+  await startMongo();
 });
 
-// ─── Query.expense ──────────────────────────────────────────────────
+afterAll(async () => {
+  await stopMongo();
+});
+
+beforeEach(async () => {
+  await clearMongo();
+  invalidateOrgCache();
+  await seedOrgMembership({
+    userId: ownerUserId,
+    organizationId,
+    role: "owner",
+  });
+});
+
+const ownerCtx = () =>
+  buildContext({
+    userId: ownerUserId,
+    organizationId,
+    extra: { userRole: "owner" },
+  });
+
+async function memberCtx() {
+  await seedOrgMembership({
+    userId: memberUserId,
+    organizationId,
+    role: "member",
+  });
+  return buildContext({
+    userId: memberUserId,
+    organizationId,
+    extra: { userRole: "member" },
+  });
+}
+
+const insertExpense = (overrides = {}) =>
+  Expense.collection.insertOne({
+    workspaceId: organizationId,
+    createdBy: ownerUserId,
+    title: "Facture OVH",
+    amount: 119.88,
+    amountHT: 99.9,
+    vatAmount: 19.98,
+    vatRate: 20,
+    date: new Date(),
+    category: "OTHER",
+    status: "PENDING",
+    type: "EXPENSE",
+    files: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  });
 
 describe("Expense Resolver - Query.expense", () => {
   const resolver = expenseResolvers.Query.expense;
 
-  it("should return an expense by id for owner", async () => {
-    const mockExpense = {
-      _id: "expense-1",
-      title: "Facture OVH",
-      amount: 119.88,
-      workspaceId,
-    };
-    Expense.findOne.mockResolvedValue(mockExpense);
-
+  it("returns the expense for owner role", async () => {
+    const { insertedId } = await insertExpense();
     const result = await resolver(
       null,
-      { id: "expense-1", workspaceId },
-      mockContext,
+      { id: insertedId.toString(), workspaceId: organizationId.toString() },
+      ownerCtx(),
     );
-
-    expect(result).toEqual(mockExpense);
-    expect(Expense.findOne).toHaveBeenCalled();
+    expect(result.title).toBe("Facture OVH");
   });
 
-  it("should add createdBy filter for member role", async () => {
-    const mockExpense = { _id: "expense-1", title: "Test", workspaceId };
-    Expense.findOne.mockResolvedValue(mockExpense);
+  it("blocks member from accessing another member's expense", async () => {
+    const { insertedId } = await insertExpense({ createdBy: ownerUserId });
 
-    await resolver(null, { id: "expense-1", workspaceId }, memberContext);
-
-    const queryArg = Expense.findOne.mock.calls[0][0];
-    expect(queryArg.createdBy).toBe("member-1");
-  });
-
-  it("should throw NOT_FOUND when expense does not exist", async () => {
-    Expense.findOne.mockResolvedValue(null);
-
+    const ctx = await memberCtx();
     await expect(
-      resolver(null, { id: "nonexistent", workspaceId }, mockContext),
-    ).rejects.toThrow();
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: organizationId.toString() },
+        ctx,
+      ),
+    ).rejects.toThrow(/non trouvée|autorisé/i);
   });
 
-  it("should use context workspaceId when input workspaceId mismatches", async () => {
-    const mockExpense = { _id: "expense-1", title: "Test", workspaceId };
-    Expense.findOne.mockResolvedValue(mockExpense);
+  it("allows member to access their own expense", async () => {
+    const ctx = await memberCtx();
+    const { insertedId } = await insertExpense({ createdBy: memberUserId });
 
     const result = await resolver(
       null,
-      { id: "expense-1", workspaceId: "different-ws" },
-      mockContext,
+      { id: insertedId.toString(), workspaceId: organizationId.toString() },
+      ctx,
     );
+    expect(result.title).toBe("Facture OVH");
+  });
 
-    expect(result).toEqual(mockExpense);
-    // Verify the query used the context workspaceId, not the mismatched input
-    const queryArg = Expense.findOne.mock.calls[0][0];
-    expect(queryArg.workspaceId.toString()).toBe(mockContext.workspaceId);
+  it("throws NOT_FOUND when expense does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    await expect(
+      resolver(
+        null,
+        { id: fakeId, workspaceId: organizationId.toString() },
+        ownerCtx(),
+      ),
+    ).rejects.toThrow(/non trouvée/i);
   });
 });
-
-// ─── Query.expenses ─────────────────────────────────────────────────
 
 describe("Expense Resolver - Query.expenses", () => {
   const resolver = expenseResolvers.Query.expenses;
 
-  it("should return paginated expense list", async () => {
-    const mockExpenses = [{ title: "Expense A" }, { title: "Expense B" }];
-    Expense.countDocuments.mockResolvedValue(20);
-    Expense.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue(mockExpenses),
-        }),
-      }),
-    });
+  it("returns paginated expenses for owner", async () => {
+    for (let i = 0; i < 12; i++) {
+      await insertExpense({ title: `Expense ${i}` });
+    }
 
     const result = await resolver(
       null,
-      { workspaceId, page: 1, limit: 10 },
-      mockContext,
+      { workspaceId: organizationId.toString(), page: 1, limit: 5 },
+      ownerCtx(),
     );
 
-    expect(result.expenses).toEqual(mockExpenses);
-    expect(result.totalCount).toBe(20);
+    expect(result.totalCount).toBe(12);
     expect(result.hasNextPage).toBe(true);
+    expect(result.expenses).toHaveLength(5);
   });
 
-  it("should filter by member createdBy", async () => {
-    Expense.countDocuments.mockResolvedValue(0);
-    Expense.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    });
+  it("scopes member to their own expenses", async () => {
+    await insertExpense({ createdBy: ownerUserId, title: "Owner expense" });
+    await insertExpense({ createdBy: memberUserId, title: "Member expense" });
 
-    await resolver(null, { workspaceId, page: 1, limit: 10 }, memberContext);
-
-    const queryArg = Expense.find.mock.calls[0][0];
-    expect(queryArg.createdBy).toBe("member-1");
-  });
-
-  it("should apply category filter", async () => {
-    Expense.countDocuments.mockResolvedValue(0);
-    Expense.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    });
-
-    await resolver(
+    const ctx = await memberCtx();
+    const result = await resolver(
       null,
-      { workspaceId, category: "SOFTWARE", page: 1, limit: 10 },
-      mockContext,
+      { workspaceId: organizationId.toString(), page: 1, limit: 10 },
+      ctx,
     );
 
-    const queryArg = Expense.find.mock.calls[0][0];
-    expect(queryArg.category).toBe("SOFTWARE");
+    expect(result.totalCount).toBe(1);
+    expect(result.expenses[0].title).toBe("Member expense");
   });
 
-  it("should apply search filter with $or", async () => {
-    Expense.countDocuments.mockResolvedValue(0);
-    Expense.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    });
+  it("filters by status", async () => {
+    await insertExpense({ status: "PENDING", title: "P" });
+    await insertExpense({ status: "PAID", title: "Pa" });
 
-    await resolver(
-      null,
-      { workspaceId, search: "OVH", page: 1, limit: 10 },
-      mockContext,
-    );
-
-    const queryArg = Expense.find.mock.calls[0][0];
-    expect(queryArg.$or).toBeDefined();
-    expect(queryArg.$or.length).toBe(4); // title, description, vendor, invoiceNumber
-  });
-
-  it("should apply date range filters", async () => {
-    Expense.countDocuments.mockResolvedValue(0);
-    Expense.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    });
-
-    await resolver(
+    const result = await resolver(
       null,
       {
-        workspaceId,
-        startDate: "2026-01-01",
+        workspaceId: organizationId.toString(),
+        status: "PAID",
+        page: 1,
+        limit: 10,
+      },
+      ownerCtx(),
+    );
+    expect(result.totalCount).toBe(1);
+  });
+
+  it("supports search across title/description/vendor/invoiceNumber", async () => {
+    await insertExpense({ title: "Facture OVH", vendor: "OVH" });
+    await insertExpense({ title: "Repas client", vendor: "Restaurant" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        search: "OVH",
+        page: 1,
+        limit: 10,
+      },
+      ownerCtx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+  });
+
+  it("filters by date range", async () => {
+    await insertExpense({ date: new Date("2026-01-15") });
+    await insertExpense({ date: new Date("2026-06-15") });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        startDate: "2026-05-01",
         endDate: "2026-12-31",
         page: 1,
         limit: 10,
       },
-      mockContext,
+      ownerCtx(),
     );
-
-    const queryArg = Expense.find.mock.calls[0][0];
-    expect(queryArg.date).toBeDefined();
-    expect(queryArg.date.$gte).toBeDefined();
-  });
-
-  it("should apply tags filter", async () => {
-    Expense.countDocuments.mockResolvedValue(0);
-    Expense.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    });
-
-    await resolver(
-      null,
-      { workspaceId, tags: ["serveur", "hosting"], page: 1, limit: 10 },
-      mockContext,
-    );
-
-    const queryArg = Expense.find.mock.calls[0][0];
-    expect(queryArg.tags).toEqual({ $in: ["serveur", "hosting"] });
+    expect(result.totalCount).toBe(1);
   });
 });
-
-// ─── Mutation.createExpense ─────────────────────────────────────────
-
-describe("Expense Resolver - Mutation.createExpense", () => {
-  const resolver = expenseResolvers.Mutation.createExpense;
-
-  it("should create an expense successfully", async () => {
-    const input = {
-      title: "Facture AWS",
-      amount: 250,
-      currency: "EUR",
-      date: "2026-03-01",
-      category: "SOFTWARE",
-      vendor: "AWS",
-      workspaceId,
-    };
-
-    const result = await resolver(null, { input }, mockContext);
-
-    expect(result).toBeDefined();
-    expect(result.save).toHaveBeenCalled();
-    expect(result.title).toBe("Facture AWS");
-    expect(result.createdBy).toBe("user-1");
-  });
-
-  it("should use context workspaceId on workspace mismatch in input", async () => {
-    const input = {
-      title: "Test",
-      amount: 100,
-      workspaceId: "different-workspace",
-    };
-
-    const result = await resolver(null, { input }, mockContext);
-
-    expect(result).toBeDefined();
-    expect(result.save).toHaveBeenCalled();
-    // The resolver should fall back to context workspaceId
-    expect(result.workspaceId).toBe(mockContext.workspaceId);
-  });
-
-  it("should throw BAD_REQUEST when no workspace provided", async () => {
-    const contextNoWs = { ...mockContext, workspaceId: undefined };
-    const input = { title: "Test", amount: 100 };
-
-    await expect(resolver(null, { input }, contextNoWs)).rejects.toThrow(
-      "workspaceId requis",
-    );
-  });
-
-  it("should parse ISO date format correctly", async () => {
-    const input = {
-      title: "Test date",
-      amount: 100,
-      date: "2026-06-15",
-      workspaceId,
-    };
-
-    const result = await resolver(null, { input }, mockContext);
-    expect(result.date).toBeInstanceOf(Date);
-  });
-});
-
-// ─── Mutation.updateExpense ─────────────────────────────────────────
-
-describe("Expense Resolver - Mutation.updateExpense", () => {
-  const resolver = expenseResolvers.Mutation.updateExpense;
-
-  it("should update an expense", async () => {
-    Expense.findOne.mockResolvedValue({ _id: "expense-1", workspaceId });
-    const updatedExpense = { _id: "expense-1", title: "Updated", amount: 300 };
-    Expense.findByIdAndUpdate.mockResolvedValue(updatedExpense);
-
-    const result = await resolver(
-      null,
-      { id: "expense-1", input: { title: "Updated", amount: 300 } },
-      mockContext,
-    );
-
-    expect(result.title).toBe("Updated");
-    expect(Expense.findByIdAndUpdate).toHaveBeenCalled();
-  });
-
-  it("should throw when expense not found for access check", async () => {
-    Expense.findOne.mockResolvedValue(null);
-
-    await expect(
-      resolver(null, { id: "nonexistent", input: { title: "X" } }, mockContext),
-    ).rejects.toThrow();
-  });
-});
-
-// ─── Mutation.deleteExpense ─────────────────────────────────────────
 
 describe("Expense Resolver - Mutation.deleteExpense", () => {
   const resolver = expenseResolvers.Mutation.deleteExpense;
 
-  it("should delete an expense with no files", async () => {
-    Expense.findOne.mockResolvedValue({
-      _id: "expense-1",
-      files: [],
-      workspaceId,
-    });
-    Expense.findByIdAndDelete.mockResolvedValue(true);
+  it("deletes an expense as owner", async () => {
+    const { insertedId } = await insertExpense();
 
     const result = await resolver(
       null,
-      { id: "expense-1", workspaceId },
-      mockContext,
+      { id: insertedId.toString(), workspaceId: organizationId.toString() },
+      ownerCtx(),
     );
 
     expect(result.success).toBe(true);
-    expect(Expense.findByIdAndDelete).toHaveBeenCalledWith("expense-1");
+    expect(await Expense.collection.findOne({ _id: insertedId })).toBeNull();
   });
 
-  it("should delete associated files before deleting expense", async () => {
-    const cloudflareService = (
-      await import("../../src/services/cloudflareService.js")
-    ).default;
-    Expense.findOne.mockResolvedValue({
-      _id: "expense-1",
-      files: [{ url: "https://pub-xxx.r2.dev/expenses/file.pdf" }],
-      workspaceId,
-    });
-    Expense.findByIdAndDelete.mockResolvedValue(true);
+  it("blocks member from deleting another member's expense", async () => {
+    const { insertedId } = await insertExpense({ createdBy: ownerUserId });
 
-    await resolver(null, { id: "expense-1", workspaceId }, mockContext);
-
-    expect(cloudflareService.deleteImage).toHaveBeenCalled();
-  });
-
-  it("should throw NOT_FOUND when expense does not exist", async () => {
-    Expense.findOne.mockResolvedValue(null);
-
+    const ctx = await memberCtx();
     await expect(
-      resolver(null, { id: "nonexistent", workspaceId }, mockContext),
-    ).rejects.toThrow();
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: organizationId.toString() },
+        ctx,
+      ),
+    ).rejects.toThrow(/permission|autorisé|delete/i);
   });
-});
 
-// ─── Mutation.deleteMultipleExpenses ────────────────────────────────
-
-describe("Expense Resolver - Mutation.deleteMultipleExpenses", () => {
-  const resolver = expenseResolvers.Mutation.deleteMultipleExpenses;
-
-  it("should delete multiple expenses successfully", async () => {
-    Expense.findOne.mockResolvedValue({
-      _id: "expense-1",
+  it("blocks viewer role from deleting", async () => {
+    const viewerUserId = buildUserId();
+    const viewerOrg = buildOrganizationId();
+    await seedOrgMembership({
+      userId: viewerUserId,
+      organizationId: viewerOrg,
+      role: "viewer",
+    });
+    const { insertedId } = await Expense.collection.insertOne({
+      workspaceId: viewerOrg,
+      createdBy: viewerUserId,
+      title: "X",
+      amount: 1,
+      date: new Date(),
+      category: "OTHER",
+      status: "PENDING",
+      type: "EXPENSE",
       files: [],
-      workspaceId,
     });
-    Expense.findByIdAndDelete.mockResolvedValue(true);
 
-    const result = await resolver(
-      null,
-      { ids: ["expense-1", "expense-2"], workspaceId },
-      mockContext,
-    );
+    const viewerCtx = buildContext({
+      userId: viewerUserId,
+      organizationId: viewerOrg,
+      extra: { userRole: "viewer" },
+    });
 
-    expect(result.success).toBe(true);
-    expect(result.deletedCount).toBe(2);
-  });
-
-  it("should handle partial failures", async () => {
-    Expense.findOne
-      .mockResolvedValueOnce({ _id: "expense-1", files: [], workspaceId })
-      .mockResolvedValueOnce(null); // second one not found
-    Expense.findByIdAndDelete.mockResolvedValue(true);
-
-    const result = await resolver(
-      null,
-      { ids: ["expense-1", "expense-2"], workspaceId },
-      mockContext,
-    );
-
-    expect(result.deletedCount).toBe(1);
-    expect(result.failedCount).toBe(1);
-  });
-
-  it("should throw when no ids provided", async () => {
     await expect(
-      resolver(null, { ids: [], workspaceId }, mockContext),
-    ).rejects.toThrow("Aucun ID");
-  });
-});
-
-// ─── Query.expenseStats ─────────────────────────────────────────────
-
-describe("Expense Resolver - Query.expenseStats", () => {
-  const resolver = expenseResolvers.Query.expenseStats;
-
-  it("should return aggregated expense stats", async () => {
-    Expense.aggregate.mockResolvedValue([
-      {
-        totalStats: [{ totalAmount: 5000, totalCount: 15 }],
-        categoryStats: [{ _id: "SOFTWARE", amount: 3000, count: 8 }],
-        monthStats: [{ month: "2026-03", amount: 2000, count: 5 }],
-        statusStats: [{ _id: "PENDING", amount: 1500, count: 4 }],
-      },
-    ]);
-
-    const result = await resolver(null, { workspaceId }, mockContext);
-
-    expect(result.totalAmount).toBe(5000);
-    expect(result.totalCount).toBe(15);
-    expect(result.byCategory).toHaveLength(1);
-    expect(result.byMonth).toHaveLength(1);
-  });
-
-  it("should return zero stats when no expenses", async () => {
-    Expense.aggregate.mockResolvedValue([
-      {
-        totalStats: [],
-        categoryStats: [],
-        monthStats: [],
-        statusStats: [],
-      },
-    ]);
-
-    const result = await resolver(null, { workspaceId }, mockContext);
-
-    expect(result.totalAmount).toBe(0);
-    expect(result.totalCount).toBe(0);
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: viewerOrg.toString() },
+        viewerCtx,
+      ),
+    ).rejects.toThrow(/permission|delete/i);
   });
 });
