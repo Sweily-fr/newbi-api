@@ -7,6 +7,7 @@ import {
   cleanupChunks,
 } from "../utils/chunkUploadUtils.js";
 import FileTransfer from "../models/FileTransfer.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 // Fonction utilitaire pour récupérer les informations d'un fichier temporaire par son ID
 const getFileInfoByTransferId = async (fileId) => {
@@ -66,7 +67,7 @@ const getFileInfoByTransferId = async (fileId) => {
   }
 };
 
-export default {
+const chunkUploadResolvers = {
   Mutation: {
     // Uploader un chunk de fichier
     uploadFileChunk: isAuthenticated(
@@ -308,3 +309,14 @@ export default {
     ),
   },
 };
+
+// ✅ Phase A.4 — Subscription check on all chunk upload mutations
+Object.keys(chunkUploadResolvers.Mutation).forEach((name) => {
+  const original = chunkUploadResolvers.Mutation[name];
+  chunkUploadResolvers.Mutation[name] = async (parent, args, context, info) => {
+    await checkSubscriptionActive(context);
+    return original(parent, args, context, info);
+  };
+});
+
+export default chunkUploadResolvers;

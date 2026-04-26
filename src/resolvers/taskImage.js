@@ -1,11 +1,12 @@
 // resolvers/taskImage.js
-import { GraphQLUpload } from 'graphql-upload';
-import { Task } from '../models/kanban.js';
-import { withWorkspace } from '../middlewares/better-auth-jwt.js';
-import cloudflareService from '../services/cloudflareService.js';
-import logger from '../utils/logger.js';
-import mongoose from 'mongoose';
-import { getPubSub } from '../config/redis.js';
+import { GraphQLUpload } from "graphql-upload";
+import { Task } from "../models/kanban.js";
+import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import cloudflareService from "../services/cloudflareService.js";
+import logger from "../utils/logger.js";
+import mongoose from "mongoose";
+import { getPubSub } from "../config/redis.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const TASK_UPDATED = "TASK_UPDATED";
 
@@ -25,7 +26,7 @@ const safePublish = (channel, payload, context = "") => {
 let _enrichTaskWithUserInfo = null;
 const getEnrichFn = async () => {
   if (!_enrichTaskWithUserInfo) {
-    const kanbanModule = await import('./kanban.js');
+    const kanbanModule = await import("./kanban.js");
     _enrichTaskWithUserInfo = kanbanModule.enrichTaskWithUserInfo;
   }
   return _enrichTaskWithUserInfo;
@@ -46,19 +47,29 @@ const taskImageResolvers = {
      * Upload une image pour la description d'une tâche
      */
     uploadTaskImage: withWorkspace(
-      async (_, { taskId, file, imageType = 'description', workspaceId }, { user }) => {
+      async (
+        _,
+        { taskId, file, imageType = "description", workspaceId },
+        { user },
+      ) => {
         try {
-          logger.info(`📤 [TaskImage] Upload image pour tâche ${taskId}, type: ${imageType}, workspaceId: ${workspaceId}`);
+          logger.info(
+            `📤 [TaskImage] Upload image pour tâche ${taskId}, type: ${imageType}, workspaceId: ${workspaceId}`,
+          );
 
           // Vérifier que la tâche existe
           const task = await Task.findOne({ _id: taskId, workspaceId });
-          logger.info(`📤 [TaskImage] Tâche trouvée: ${task ? 'OUI' : 'NON'}, images existantes: ${task?.images?.length || 0}`);
+          logger.info(
+            `📤 [TaskImage] Tâche trouvée: ${task ? "OUI" : "NON"}, images existantes: ${task?.images?.length || 0}`,
+          );
           if (!task) {
-            logger.error(`❌ [TaskImage] Tâche non trouvée - taskId: ${taskId}, workspaceId: ${workspaceId}`);
+            logger.error(
+              `❌ [TaskImage] Tâche non trouvée - taskId: ${taskId}, workspaceId: ${workspaceId}`,
+            );
             return {
               success: false,
               image: null,
-              message: 'Tâche non trouvée'
+              message: "Tâche non trouvée",
             };
           }
 
@@ -66,7 +77,7 @@ const taskImageResolvers = {
           const { createReadStream, filename, mimetype } = await file;
           const stream = createReadStream();
           const chunks = [];
-          
+
           for await (const chunk of stream) {
             chunks.push(chunk);
           }
@@ -74,19 +85,24 @@ const taskImageResolvers = {
 
           // Valider le type de fichier
           const validMimeTypes = [
-            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-            'application/pdf',
-            'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'application/vnd.ms-excel',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'text/plain', 'text/csv'
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/plain",
+            "text/csv",
           ];
           if (!validMimeTypes.includes(mimetype)) {
             return {
               success: false,
               image: null,
-              message: 'Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).'
+              message:
+                "Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).",
             };
           }
 
@@ -96,17 +112,20 @@ const taskImageResolvers = {
             return {
               success: false,
               image: null,
-              message: 'Fichier trop volumineux. Maximum 10MB.'
+              message: "Fichier trop volumineux. Maximum 10MB.",
             };
           }
 
           // Valider la taille totale par tâche (max 50MB)
-          const currentTotalSize = (task.images || []).reduce((sum, img) => sum + (img.fileSize || 0), 0);
+          const currentTotalSize = (task.images || []).reduce(
+            (sum, img) => sum + (img.fileSize || 0),
+            0,
+          );
           if (currentTotalSize + fileBuffer.length > 50 * 1024 * 1024) {
             return {
               success: false,
               image: null,
-              message: 'Limite de stockage atteinte. Maximum 50MB par tâche.'
+              message: "Limite de stockage atteinte. Maximum 50MB par tâche.",
             };
           }
 
@@ -116,7 +135,7 @@ const taskImageResolvers = {
             filename,
             taskId,
             user.id,
-            imageType
+            imageType,
           );
 
           // Créer l'objet image
@@ -128,37 +147,39 @@ const taskImageResolvers = {
             fileSize: uploadResult.fileSize,
             contentType: uploadResult.contentType,
             uploadedBy: user.id,
-            uploadedAt: new Date()
+            uploadedAt: new Date(),
           };
 
           // Activité pour l'ajout d'image
           const imageActivity = {
             _id: new mongoose.Types.ObjectId(),
             userId: user.id,
-            type: 'updated',
-            field: 'images',
-            description: `a ajouté 1 image`,
+            type: "updated",
+            field: "images",
+            description: "a ajouté 1 image",
             newValue: [{ fileName: uploadResult.fileName }],
-            createdAt: new Date()
+            createdAt: new Date(),
           };
 
           // Utiliser findOneAndUpdate avec $push pour garantir la persistance
           const updatedTask = await Task.findOneAndUpdate(
             { _id: taskId, workspaceId },
             { $push: { images: newImage, activity: imageActivity } },
-            { new: true }
+            { new: true },
           );
 
           if (!updatedTask) {
-            logger.error(`❌ [TaskImage] Échec de la mise à jour de la tâche`);
+            logger.error("❌ [TaskImage] Échec de la mise à jour de la tâche");
             return {
               success: false,
               image: null,
-              message: 'Échec de la mise à jour de la tâche'
+              message: "Échec de la mise à jour de la tâche",
             };
           }
 
-          logger.info(`✅ [TaskImage] Total images dans la tâche: ${updatedTask.images?.length || 0}`);
+          logger.info(
+            `✅ [TaskImage] Total images dans la tâche: ${updatedTask.images?.length || 0}`,
+          );
 
           // Publier la mise à jour en temps réel
           try {
@@ -166,14 +187,21 @@ const taskImageResolvers = {
             const enrichedTask = await enrichFn(updatedTask);
             safePublish(
               `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
-              { type: "UPDATED", task: enrichedTask, boardId: enrichedTask.boardId, workspaceId },
-              "Image ajoutée"
+              {
+                type: "UPDATED",
+                task: enrichedTask,
+                boardId: enrichedTask.boardId,
+                workspaceId,
+              },
+              "Image ajoutée",
             );
           } catch (e) {
-            logger.error(`❌ [TaskImage] Erreur publication:`, e);
+            logger.error("❌ [TaskImage] Erreur publication:", e);
           }
 
-          logger.info(`✅ [TaskImage] Image uploadée avec succès: ${newImage.url}`);
+          logger.info(
+            `✅ [TaskImage] Image uploadée avec succès: ${newImage.url}`,
+          );
 
           return {
             success: true,
@@ -185,19 +213,19 @@ const taskImageResolvers = {
               fileSize: newImage.fileSize,
               contentType: newImage.contentType,
               uploadedBy: newImage.uploadedBy,
-              uploadedAt: newImage.uploadedAt
+              uploadedAt: newImage.uploadedAt,
             },
-            message: 'Image uploadée avec succès'
+            message: "Image uploadée avec succès",
           };
         } catch (error) {
-          logger.error(`❌ [TaskImage] Erreur upload:`, error);
+          logger.error("❌ [TaskImage] Erreur upload:", error);
           return {
             success: false,
             image: null,
-            message: `Erreur lors de l'upload: ${error.message}`
+            message: `Erreur lors de l'upload: ${error.message}`,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -206,20 +234,22 @@ const taskImageResolvers = {
     deleteTaskImage: withWorkspace(
       async (_, { taskId, imageId, workspaceId }, { user }) => {
         try {
-          logger.info(`🗑️ [TaskImage] Suppression image ${imageId} de la tâche ${taskId}`);
+          logger.info(
+            `🗑️ [TaskImage] Suppression image ${imageId} de la tâche ${taskId}`,
+          );
 
           const task = await Task.findOne({ _id: taskId, workspaceId });
           if (!task) {
-            throw new Error('Tâche non trouvée');
+            throw new Error("Tâche non trouvée");
           }
 
           // Trouver l'image
           const imageIndex = task.images?.findIndex(
-            img => img._id.toString() === imageId
+            (img) => img._id.toString() === imageId,
           );
 
           if (imageIndex === -1 || imageIndex === undefined) {
-            throw new Error('Image non trouvée');
+            throw new Error("Image non trouvée");
           }
 
           const image = task.images[imageIndex];
@@ -234,16 +264,16 @@ const taskImageResolvers = {
           task.activity.push({
             _id: new mongoose.Types.ObjectId(),
             userId: user.id,
-            type: 'updated',
-            field: 'images',
-            description: `a supprimé 1 image`,
+            type: "updated",
+            field: "images",
+            description: "a supprimé 1 image",
             oldValue: [{ fileName: image.fileName }],
-            createdAt: new Date()
+            createdAt: new Date(),
           });
 
           await task.save();
 
-          logger.info(`✅ [TaskImage] Image supprimée avec succès`);
+          logger.info("✅ [TaskImage] Image supprimée avec succès");
 
           // Publier la mise à jour en temps réel
           try {
@@ -251,19 +281,24 @@ const taskImageResolvers = {
             const enrichedTask = await enrichFn(task);
             safePublish(
               `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
-              { type: "UPDATED", task: enrichedTask, boardId: enrichedTask.boardId, workspaceId },
-              "Image supprimée"
+              {
+                type: "UPDATED",
+                task: enrichedTask,
+                boardId: enrichedTask.boardId,
+                workspaceId,
+              },
+              "Image supprimée",
             );
           } catch (e) {
-            logger.error(`❌ [TaskImage] Erreur publication:`, e);
+            logger.error("❌ [TaskImage] Erreur publication:", e);
           }
 
           return task;
         } catch (error) {
-          logger.error(`❌ [TaskImage] Erreur suppression:`, error);
+          logger.error("❌ [TaskImage] Erreur suppression:", error);
           throw error;
         }
-      }
+      },
     ),
 
     /**
@@ -272,11 +307,13 @@ const taskImageResolvers = {
     addTaskImageFromUrl: withWorkspace(
       async (_, { taskId, input, workspaceId }, { user }) => {
         try {
-          logger.info(`📎 [TaskImage] Ajout image depuis URL pour tâche ${taskId}`);
+          logger.info(
+            `📎 [TaskImage] Ajout image depuis URL pour tâche ${taskId}`,
+          );
 
           const task = await Task.findOne({ _id: taskId, workspaceId });
           if (!task) {
-            throw new Error('Tâche non trouvée');
+            throw new Error("Tâche non trouvée");
           }
 
           const newImage = {
@@ -285,9 +322,9 @@ const taskImageResolvers = {
             url: input.url,
             fileName: input.fileName,
             fileSize: input.fileSize || 0,
-            contentType: input.contentType || 'image/jpeg',
+            contentType: input.contentType || "image/jpeg",
             uploadedBy: user.id,
-            uploadedAt: new Date()
+            uploadedAt: new Date(),
           };
 
           if (!task.images) {
@@ -299,16 +336,16 @@ const taskImageResolvers = {
           task.activity.push({
             _id: new mongoose.Types.ObjectId(),
             userId: user.id,
-            type: 'updated',
-            field: 'images',
-            description: `a ajouté 1 image`,
+            type: "updated",
+            field: "images",
+            description: "a ajouté 1 image",
             newValue: [{ fileName: input.fileName }],
-            createdAt: new Date()
+            createdAt: new Date(),
           });
 
           await task.save();
 
-          logger.info(`✅ [TaskImage] Image ajoutée avec succès`);
+          logger.info("✅ [TaskImage] Image ajoutée avec succès");
 
           // Publier la mise à jour en temps réel
           try {
@@ -316,19 +353,24 @@ const taskImageResolvers = {
             const enrichedTask = await enrichFn(task);
             safePublish(
               `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
-              { type: "UPDATED", task: enrichedTask, boardId: enrichedTask.boardId, workspaceId },
-              "Image ajoutée depuis URL"
+              {
+                type: "UPDATED",
+                task: enrichedTask,
+                boardId: enrichedTask.boardId,
+                workspaceId,
+              },
+              "Image ajoutée depuis URL",
             );
           } catch (e) {
-            logger.error(`❌ [TaskImage] Erreur publication:`, e);
+            logger.error("❌ [TaskImage] Erreur publication:", e);
           }
 
           return task;
         } catch (error) {
-          logger.error(`❌ [TaskImage] Erreur ajout image:`, error);
+          logger.error("❌ [TaskImage] Erreur ajout image:", error);
           throw error;
         }
-      }
+      },
     ),
 
     /**
@@ -337,24 +379,28 @@ const taskImageResolvers = {
     uploadCommentImage: withWorkspace(
       async (_, { taskId, commentId, file, workspaceId }, { user }) => {
         try {
-          logger.info(`📤 [TaskImage] Upload image pour commentaire ${commentId}`);
+          logger.info(
+            `📤 [TaskImage] Upload image pour commentaire ${commentId}`,
+          );
 
           const task = await Task.findOne({ _id: taskId, workspaceId });
           if (!task) {
             return {
               success: false,
               image: null,
-              message: 'Tâche non trouvée'
+              message: "Tâche non trouvée",
             };
           }
 
           // Trouver le commentaire
-          const comment = task.comments?.find(c => c._id.toString() === commentId);
+          const comment = task.comments?.find(
+            (c) => c._id.toString() === commentId,
+          );
           if (!comment) {
             return {
               success: false,
               image: null,
-              message: 'Commentaire non trouvé'
+              message: "Commentaire non trouvé",
             };
           }
 
@@ -362,7 +408,7 @@ const taskImageResolvers = {
           const { createReadStream, filename, mimetype } = await file;
           const stream = createReadStream();
           const chunks = [];
-          
+
           for await (const chunk of stream) {
             chunks.push(chunk);
           }
@@ -370,19 +416,24 @@ const taskImageResolvers = {
 
           // Valider le type de fichier
           const validMimeTypes = [
-            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-            'application/pdf',
-            'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'application/vnd.ms-excel',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'text/plain', 'text/csv'
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/plain",
+            "text/csv",
           ];
           if (!validMimeTypes.includes(mimetype)) {
             return {
               success: false,
               image: null,
-              message: 'Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).'
+              message:
+                "Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).",
             };
           }
 
@@ -392,7 +443,7 @@ const taskImageResolvers = {
             return {
               success: false,
               image: null,
-              message: 'Fichier trop volumineux. Maximum 10MB.'
+              message: "Fichier trop volumineux. Maximum 10MB.",
             };
           }
 
@@ -402,8 +453,8 @@ const taskImageResolvers = {
             filename,
             taskId,
             user.id,
-            'comment',
-            commentId
+            "comment",
+            commentId,
           );
 
           // Créer l'objet image
@@ -415,36 +466,44 @@ const taskImageResolvers = {
             fileSize: uploadResult.fileSize,
             contentType: uploadResult.contentType,
             uploadedBy: user.id,
-            uploadedAt: new Date()
+            uploadedAt: new Date(),
           };
 
           // Utiliser findOneAndUpdate avec $push pour garantir la persistance
           const updatedTask = await Task.findOneAndUpdate(
-            { 
-              _id: taskId, 
+            {
+              _id: taskId,
               workspaceId,
-              'comments._id': new mongoose.Types.ObjectId(commentId)
+              "comments._id": new mongoose.Types.ObjectId(commentId),
             },
-            { 
-              $push: { 'comments.$.images': newImage }
+            {
+              $push: { "comments.$.images": newImage },
             },
-            { new: true }
+            { new: true },
           );
 
           if (!updatedTask) {
-            logger.error(`❌ [TaskImage] Échec de la mise à jour - tâche ou commentaire non trouvé`);
+            logger.error(
+              "❌ [TaskImage] Échec de la mise à jour - tâche ou commentaire non trouvé",
+            );
             return {
               success: false,
               image: null,
-              message: 'Échec de la mise à jour du commentaire'
+              message: "Échec de la mise à jour du commentaire",
             };
           }
 
           // Trouver le commentaire mis à jour pour le log
-          const updatedComment = updatedTask.comments.find(c => c._id.toString() === commentId);
-          logger.info(`✅ [TaskImage] Image ajoutée au commentaire ${commentId}, total images: ${updatedComment?.images?.length || 0}`);
+          const updatedComment = updatedTask.comments.find(
+            (c) => c._id.toString() === commentId,
+          );
+          logger.info(
+            `✅ [TaskImage] Image ajoutée au commentaire ${commentId}, total images: ${updatedComment?.images?.length || 0}`,
+          );
 
-          logger.info(`✅ [TaskImage] Image de commentaire uploadée avec succès`);
+          logger.info(
+            "✅ [TaskImage] Image de commentaire uploadée avec succès",
+          );
 
           return {
             success: true,
@@ -456,19 +515,19 @@ const taskImageResolvers = {
               fileSize: newImage.fileSize,
               contentType: newImage.contentType,
               uploadedBy: newImage.uploadedBy,
-              uploadedAt: newImage.uploadedAt
+              uploadedAt: newImage.uploadedAt,
             },
-            message: 'Image uploadée avec succès'
+            message: "Image uploadée avec succès",
           };
         } catch (error) {
-          logger.error(`❌ [TaskImage] Erreur upload commentaire:`, error);
+          logger.error("❌ [TaskImage] Erreur upload commentaire:", error);
           return {
             success: false,
             image: null,
-            message: `Erreur lors de l'upload: ${error.message}`
+            message: `Erreur lors de l'upload: ${error.message}`,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -477,26 +536,30 @@ const taskImageResolvers = {
     deleteCommentImage: withWorkspace(
       async (_, { taskId, commentId, imageId, workspaceId }, { user }) => {
         try {
-          logger.info(`🗑️ [TaskImage] Suppression image ${imageId} du commentaire ${commentId}`);
+          logger.info(
+            `🗑️ [TaskImage] Suppression image ${imageId} du commentaire ${commentId}`,
+          );
 
           const task = await Task.findOne({ _id: taskId, workspaceId });
           if (!task) {
-            throw new Error('Tâche non trouvée');
+            throw new Error("Tâche non trouvée");
           }
 
           // Trouver le commentaire
-          const comment = task.comments?.find(c => c._id.toString() === commentId);
+          const comment = task.comments?.find(
+            (c) => c._id.toString() === commentId,
+          );
           if (!comment) {
-            throw new Error('Commentaire non trouvé');
+            throw new Error("Commentaire non trouvé");
           }
 
           // Trouver l'image
           const imageIndex = comment.images?.findIndex(
-            img => img._id.toString() === imageId
+            (img) => img._id.toString() === imageId,
           );
 
           if (imageIndex === -1 || imageIndex === undefined) {
-            throw new Error('Image non trouvée');
+            throw new Error("Image non trouvée");
           }
 
           const image = comment.images[imageIndex];
@@ -508,16 +571,27 @@ const taskImageResolvers = {
           comment.images.splice(imageIndex, 1);
           await task.save();
 
-          logger.info(`✅ [TaskImage] Image de commentaire supprimée avec succès`);
+          logger.info(
+            "✅ [TaskImage] Image de commentaire supprimée avec succès",
+          );
 
           return task;
         } catch (error) {
-          logger.error(`❌ [TaskImage] Erreur suppression commentaire:`, error);
+          logger.error("❌ [TaskImage] Erreur suppression commentaire:", error);
           throw error;
         }
-      }
-    )
-  }
+      },
+    ),
+  },
 };
+
+// ✅ Phase A.4 — Subscription check on all task image mutations
+Object.keys(taskImageResolvers.Mutation).forEach((name) => {
+  const original = taskImageResolvers.Mutation[name];
+  taskImageResolvers.Mutation[name] = async (parent, args, context, info) => {
+    await checkSubscriptionActive(context);
+    return original(parent, args, context, info);
+  };
+});
 
 export default taskImageResolvers;

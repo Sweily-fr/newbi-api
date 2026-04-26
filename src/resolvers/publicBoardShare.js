@@ -7,6 +7,7 @@ import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { getPubSub } from "../config/redis.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 // Événements de subscription (même que kanban.js)
 const TASK_UPDATED = "TASK_UPDATED";
@@ -2221,5 +2222,23 @@ const resolvers = {
     },
   },
 };
+
+// ✅ Phase A.4 — Subscription check on public board share mutations (exclude delete/revoke/unban + public mutations)
+const PUBLIC_SHARE_BLOCK = [
+  "createPublicShare",
+  "updatePublicShare",
+  "reactivatePublicShare",
+  "approveAccessRequest",
+  "rejectAccessRequest",
+];
+PUBLIC_SHARE_BLOCK.forEach((name) => {
+  const original = resolvers.Mutation[name];
+  if (original) {
+    resolvers.Mutation[name] = async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return original(parent, args, context, info);
+    };
+  }
+});
 
 export default resolvers;

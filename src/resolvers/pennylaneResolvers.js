@@ -5,6 +5,7 @@ import Expense from "../models/Expense.js";
 import Quote from "../models/Quote.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import logger from "../utils/logger.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const pennylaneResolvers = {
   Query: {
@@ -455,5 +456,25 @@ const pennylaneResolvers = {
     },
   },
 };
+
+// ✅ Phase A.4 — Subscription check (fail-closed) on Pennylane mutations (exclude disconnectPennylane)
+const PENNYLANE_BLOCK = [
+  "testPennylaneConnection",
+  "connectPennylane",
+  "updatePennylaneAutoSync",
+  "syncInvoiceToPennylane",
+  "syncExpenseToPennylane",
+  "syncQuoteToPennylane",
+  "syncAllToPennylane",
+];
+PENNYLANE_BLOCK.forEach((name) => {
+  const original = pennylaneResolvers.Mutation[name];
+  if (original) {
+    pennylaneResolvers.Mutation[name] = async (parent, args, context, info) => {
+      await checkSubscriptionActive(context, { failClosed: true });
+      return original(parent, args, context, info);
+    };
+  }
+});
 
 export default pennylaneResolvers;

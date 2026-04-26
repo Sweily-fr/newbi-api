@@ -10,6 +10,7 @@ import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { withOrganization } from "../middlewares/rbac.js";
 import { GraphQLUpload } from "graphql-upload";
 import path from "path";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const { ObjectId } = mongoose.Types;
 
@@ -1526,5 +1527,24 @@ const sharedDocumentResolvers = {
     },
   },
 };
+
+// ✅ Phase A.4 — Subscription check on shared document mutations (exclude trash cleanup: emptyTrash, permanentlyDeleteDocuments, permanentlyDeleteFolders)
+const SHARED_DOC_EXCLUDE = [
+  "emptyTrash",
+  "permanentlyDeleteDocuments",
+  "permanentlyDeleteFolders",
+];
+const originalSharedDocMutations = sharedDocumentResolvers.Mutation;
+sharedDocumentResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalSharedDocMutations).map(([name, fn]) => [
+    name,
+    SHARED_DOC_EXCLUDE.includes(name)
+      ? fn
+      : async (parent, args, context, info) => {
+          await checkSubscriptionActive(context);
+          return fn(parent, args, context, info);
+        },
+  ]),
+);
 
 export default sharedDocumentResolvers;

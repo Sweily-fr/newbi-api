@@ -1,35 +1,36 @@
-import CalendarConnection from '../models/CalendarConnection.js';
-import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
-import { getCalendarProvider } from '../services/calendar/CalendarProviderFactory.js';
+import CalendarConnection from "../models/CalendarConnection.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { getCalendarProvider } from "../services/calendar/CalendarProviderFactory.js";
 import {
   syncConnection,
   syncAllForUser,
   pushEventToCalendar,
-  disconnectCalendar
-} from '../services/calendar/CalendarSyncService.js';
+  disconnectCalendar,
+} from "../services/calendar/CalendarSyncService.js";
 import {
   publishCalendarEventsChanged,
   cleanupWebhookForConnection,
-  registerWebhookForConnection
-} from '../services/calendar/CalendarWebhookService.js';
-import logger from '../utils/logger.js';
+  registerWebhookForConnection,
+} from "../services/calendar/CalendarWebhookService.js";
+import logger from "../utils/logger.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const calendarConnectionResolvers = {
   Query: {
     getCalendarConnections: async (_, __, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', connections: [] };
+        return { success: false, message: "Non authentifié", connections: [] };
       }
 
       try {
         const connections = await CalendarConnection.find({
           userId: user.id || user._id,
-          status: { $ne: 'disconnected' }
+          status: { $ne: "disconnected" },
         }).sort({ createdAt: -1 });
 
         return {
           success: true,
-          connections: connections.map(c => ({
+          connections: connections.map((c) => ({
             id: c._id.toString(),
             userId: c.userId.toString(),
             provider: c.provider,
@@ -41,29 +42,37 @@ const calendarConnectionResolvers = {
             lastSyncError: c.lastSyncError,
             autoSync: c.autoSync || false,
             createdAt: c.createdAt,
-            updatedAt: c.updatedAt
+            updatedAt: c.updatedAt,
           })),
-          message: `${connections.length} connexion(s) trouvée(s)`
+          message: `${connections.length} connexion(s) trouvée(s)`,
         };
       } catch (error) {
-        logger.error('Erreur getCalendarConnections:', error);
-        return { success: false, message: 'Erreur lors de la récupération des connexions calendrier.', connections: [] };
+        logger.error("Erreur getCalendarConnections:", error);
+        return {
+          success: false,
+          message: "Erreur lors de la récupération des connexions calendrier.",
+          connections: [],
+        };
       }
     },
 
     getAvailableCalendars: async (_, { connectionId }, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', calendars: [] };
+        return { success: false, message: "Non authentifié", calendars: [] };
       }
 
       try {
         const connection = await CalendarConnection.findOne({
           _id: connectionId,
-          userId: user.id || user._id
+          userId: user.id || user._id,
         });
 
         if (!connection) {
-          return { success: false, message: 'Connexion non trouvée', calendars: [] };
+          return {
+            success: false,
+            message: "Connexion non trouvée",
+            calendars: [],
+          };
         }
 
         const provider = getCalendarProvider(connection.provider);
@@ -72,39 +81,48 @@ const calendarConnectionResolvers = {
         return {
           success: true,
           calendars,
-          message: `${calendars.length} calendrier(s) disponible(s)`
+          message: `${calendars.length} calendrier(s) disponible(s)`,
         };
       } catch (error) {
-        logger.error('Erreur getAvailableCalendars:', error);
-        return { success: false, message: 'Erreur lors de la récupération des calendriers disponibles.', calendars: [] };
+        logger.error("Erreur getAvailableCalendars:", error);
+        return {
+          success: false,
+          message:
+            "Erreur lors de la récupération des calendriers disponibles.",
+          calendars: [],
+        };
       }
-    }
+    },
   },
 
   Mutation: {
     connectAppleCalendar: async (_, { input }, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', connection: null };
+        return { success: false, message: "Non authentifié", connection: null };
       }
 
       try {
-        const provider = getCalendarProvider('apple');
+        const provider = getCalendarProvider("apple");
 
         // Validate credentials
         const validation = await provider.validateCredentials(
           input.username,
           input.appPassword,
-          input.calDavUrl
+          input.calDavUrl,
         );
 
         if (!validation.valid) {
-          return { success: false, message: `Identifiants invalides: ${validation.error}`, connection: null };
+          return {
+            success: false,
+            message: `Identifiants invalides: ${validation.error}`,
+            connection: null,
+          };
         }
 
         // Check for existing connection
         let connection = await CalendarConnection.findOne({
           userId: user.id || user._id,
-          provider: 'apple'
+          provider: "apple",
         });
 
         if (connection) {
@@ -113,34 +131,36 @@ const calendarConnectionResolvers = {
           connection.calDavUrl = input.calDavUrl || null;
           connection.accountEmail = validation.email;
           connection.accountName = validation.name;
-          connection.status = 'active';
+          connection.status = "active";
           connection.lastSyncError = null;
           await connection.save();
         } else {
           connection = await CalendarConnection.create({
             userId: user.id || user._id,
-            provider: 'apple',
+            provider: "apple",
             calDavUsername: input.username,
             calDavPassword: input.appPassword,
             calDavUrl: input.calDavUrl || null,
             accountEmail: validation.email,
             accountName: validation.name,
-            status: 'active'
+            status: "active",
           });
         }
 
         // Fetch available calendars and select all
-        let syncMessage = '';
+        let syncMessage = "";
         try {
           const calendars = await provider.listCalendars(connection);
-          logger.info(`[connectAppleCalendar] ${calendars.length} calendrier(s) d'événements trouvé(s)`);
+          logger.info(
+            `[connectAppleCalendar] ${calendars.length} calendrier(s) d'événements trouvé(s)`,
+          );
           // Apple CalDAV : activer tous les calendriers d'événements par défaut
           // (listCalendars filtre déjà les VTODO/rappels)
-          connection.selectedCalendars = calendars.map(cal => ({
+          connection.selectedCalendars = calendars.map((cal) => ({
             calendarId: cal.calendarId,
             name: cal.name,
             color: cal.color,
-            enabled: true
+            enabled: true,
           }));
           await connection.save();
           const syncResult = await syncConnection(connection._id);
@@ -148,12 +168,15 @@ const calendarConnectionResolvers = {
           // Publish real-time update after sync
           publishCalendarEventsChanged(user.id || user._id);
         } catch (syncError) {
-          logger.warn('Initial Apple calendar sync failed:', syncError.message);
-          syncMessage = '. Synchronisation initiale échouée, réessayez depuis le panneau calendrier.';
+          logger.warn("Initial Apple calendar sync failed:", syncError.message);
+          syncMessage =
+            ". Synchronisation initiale échouée, réessayez depuis le panneau calendrier.";
         }
 
         // Re-fetch connection pour avoir lastSyncAt à jour
-        const updatedConnection = await CalendarConnection.findById(connection._id);
+        const updatedConnection = await CalendarConnection.findById(
+          connection._id,
+        );
 
         return {
           success: true,
@@ -165,40 +188,53 @@ const calendarConnectionResolvers = {
             status: (updatedConnection || connection).status,
             accountEmail: (updatedConnection || connection).accountEmail,
             accountName: (updatedConnection || connection).accountName,
-            selectedCalendars: (updatedConnection || connection).selectedCalendars,
+            selectedCalendars: (updatedConnection || connection)
+              .selectedCalendars,
             lastSyncAt: (updatedConnection || connection).lastSyncAt,
             lastSyncError: (updatedConnection || connection).lastSyncError,
             autoSync: (updatedConnection || connection).autoSync || false,
             createdAt: (updatedConnection || connection).createdAt,
-            updatedAt: (updatedConnection || connection).updatedAt
-          }
+            updatedAt: (updatedConnection || connection).updatedAt,
+          },
         };
       } catch (error) {
-        logger.error('Erreur connectAppleCalendar:', error);
-        return { success: false, message: 'Erreur lors de la connexion du calendrier Apple. Veuillez réessayer.', connection: null };
+        logger.error("Erreur connectAppleCalendar:", error);
+        return {
+          success: false,
+          message:
+            "Erreur lors de la connexion du calendrier Apple. Veuillez réessayer.",
+          connection: null,
+        };
       }
     },
 
     disconnectCalendar: async (_, { connectionId }, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', connection: null };
+        return { success: false, message: "Non authentifié", connection: null };
       }
 
       try {
         const connection = await CalendarConnection.findOne({
           _id: connectionId,
-          userId: user.id || user._id
+          userId: user.id || user._id,
         });
 
         if (!connection) {
-          return { success: false, message: 'Connexion non trouvée', connection: null };
+          return {
+            success: false,
+            message: "Connexion non trouvée",
+            connection: null,
+          };
         }
 
         // Cleanup webhook/subscription before disconnecting
         try {
           await cleanupWebhookForConnection(connection);
         } catch (cleanupError) {
-          logger.warn(`[disconnectCalendar] Webhook cleanup failed for ${connectionId}:`, cleanupError.message);
+          logger.warn(
+            `[disconnectCalendar] Webhook cleanup failed for ${connectionId}:`,
+            cleanupError.message,
+          );
         }
 
         const disconnected = await disconnectCalendar(connectionId);
@@ -218,28 +254,37 @@ const calendarConnectionResolvers = {
             lastSyncError: disconnected.lastSyncError,
             autoSync: disconnected.autoSync || false,
             createdAt: disconnected.createdAt,
-            updatedAt: disconnected.updatedAt
-          }
+            updatedAt: disconnected.updatedAt,
+          },
         };
       } catch (error) {
-        logger.error('Erreur disconnectCalendar:', error);
-        return { success: false, message: 'Erreur lors de la déconnexion du calendrier. Veuillez réessayer.', connection: null };
+        logger.error("Erreur disconnectCalendar:", error);
+        return {
+          success: false,
+          message:
+            "Erreur lors de la déconnexion du calendrier. Veuillez réessayer.",
+          connection: null,
+        };
       }
     },
 
     updateSelectedCalendars: async (_, { input }, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', connection: null };
+        return { success: false, message: "Non authentifié", connection: null };
       }
 
       try {
         const connection = await CalendarConnection.findOne({
           _id: input.connectionId,
-          userId: user.id || user._id
+          userId: user.id || user._id,
         });
 
         if (!connection) {
-          return { success: false, message: 'Connexion non trouvée', connection: null };
+          return {
+            success: false,
+            message: "Connexion non trouvée",
+            connection: null,
+          };
         }
 
         connection.selectedCalendars = input.selectedCalendars;
@@ -250,17 +295,23 @@ const calendarConnectionResolvers = {
           await syncConnection(connection._id);
           publishCalendarEventsChanged(user.id || user._id);
         } catch (syncError) {
-          logger.warn('Re-sync after calendar selection update failed:', syncError.message);
+          logger.warn(
+            "Re-sync after calendar selection update failed:",
+            syncError.message,
+          );
         }
 
         // Re-register webhook with possibly new calendar selection
-        registerWebhookForConnection(connection._id).catch(err =>
-          logger.warn('[updateSelectedCalendars] Webhook re-registration failed:', err.message)
+        registerWebhookForConnection(connection._id).catch((err) =>
+          logger.warn(
+            "[updateSelectedCalendars] Webhook re-registration failed:",
+            err.message,
+          ),
         );
 
         return {
           success: true,
-          message: 'Calendriers mis à jour',
+          message: "Calendriers mis à jour",
           connection: {
             id: connection._id.toString(),
             userId: connection.userId.toString(),
@@ -273,41 +324,63 @@ const calendarConnectionResolvers = {
             lastSyncError: connection.lastSyncError,
             autoSync: connection.autoSync || false,
             createdAt: connection.createdAt,
-            updatedAt: connection.updatedAt
-          }
+            updatedAt: connection.updatedAt,
+          },
         };
       } catch (error) {
-        logger.error('Erreur updateSelectedCalendars:', error);
-        return { success: false, message: 'Erreur lors de la mise à jour des calendriers. Veuillez réessayer.', connection: null };
+        logger.error("Erreur updateSelectedCalendars:", error);
+        return {
+          success: false,
+          message:
+            "Erreur lors de la mise à jour des calendriers. Veuillez réessayer.",
+          connection: null,
+        };
       }
     },
 
     syncCalendar: async (_, { connectionId }, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', syncedCount: 0, connection: null };
+        return {
+          success: false,
+          message: "Non authentifié",
+          syncedCount: 0,
+          connection: null,
+        };
       }
 
       try {
         const connection = await CalendarConnection.findOne({
           _id: connectionId,
-          userId: user.id || user._id
+          userId: user.id || user._id,
         });
 
         if (!connection) {
-          return { success: false, message: 'Connexion non trouvée', syncedCount: 0, connection: null };
+          return {
+            success: false,
+            message: "Connexion non trouvée",
+            syncedCount: 0,
+            connection: null,
+          };
         }
 
         const result = await syncConnection(connectionId);
         publishCalendarEventsChanged(user.id || user._id);
 
         // Register webhook if not already active (for existing connections)
-        if (!connection.webhookExpiration || connection.webhookExpiration < new Date()) {
-          registerWebhookForConnection(connectionId).catch(err =>
-            logger.warn(`[syncCalendar] Webhook registration failed for ${connectionId}:`, err.message)
+        if (
+          !connection.webhookExpiration ||
+          connection.webhookExpiration < new Date()
+        ) {
+          registerWebhookForConnection(connectionId).catch((err) =>
+            logger.warn(
+              `[syncCalendar] Webhook registration failed for ${connectionId}:`,
+              err.message,
+            ),
           );
         }
 
-        const updatedConnection = await CalendarConnection.findById(connectionId);
+        const updatedConnection =
+          await CalendarConnection.findById(connectionId);
 
         return {
           success: true,
@@ -325,53 +398,74 @@ const calendarConnectionResolvers = {
             lastSyncError: updatedConnection.lastSyncError,
             autoSync: updatedConnection.autoSync || false,
             createdAt: updatedConnection.createdAt,
-            updatedAt: updatedConnection.updatedAt
-          }
+            updatedAt: updatedConnection.updatedAt,
+          },
         };
       } catch (error) {
-        logger.error('Erreur syncCalendar:', error);
+        logger.error("Erreur syncCalendar:", error);
         // L'erreur est déjà traduite par CalendarSyncService
-        return { success: false, message: error.message || 'Erreur lors de la synchronisation du calendrier.', syncedCount: 0, connection: null };
+        return {
+          success: false,
+          message:
+            error.message || "Erreur lors de la synchronisation du calendrier.",
+          syncedCount: 0,
+          connection: null,
+        };
       }
     },
 
     syncAllCalendars: async (_, __, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', syncedCount: 0, connection: null };
+        return {
+          success: false,
+          message: "Non authentifié",
+          syncedCount: 0,
+          connection: null,
+        };
       }
 
       try {
         const results = await syncAllForUser(user.id || user._id);
         const totalSynced = results.reduce((sum, r) => sum + (r.total || 0), 0);
-        const successCount = results.filter(r => r.success).length;
+        const successCount = results.filter((r) => r.success).length;
         publishCalendarEventsChanged(user.id || user._id);
 
         return {
           success: true,
           message: `${successCount}/${results.length} calendrier(s) synchronisé(s)`,
           syncedCount: totalSynced,
-          connection: null
+          connection: null,
         };
       } catch (error) {
-        logger.error('Erreur syncAllCalendars:', error);
-        return { success: false, message: 'Erreur lors de la synchronisation des calendriers. Veuillez réessayer.', syncedCount: 0, connection: null };
+        logger.error("Erreur syncAllCalendars:", error);
+        return {
+          success: false,
+          message:
+            "Erreur lors de la synchronisation des calendriers. Veuillez réessayer.",
+          syncedCount: 0,
+          connection: null,
+        };
       }
     },
 
     pushEventToCalendar: async (_, { input }, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', connection: null };
+        return { success: false, message: "Non authentifié", connection: null };
       }
 
       try {
         // Verify the connection belongs to the user
         const connection = await CalendarConnection.findOne({
           _id: input.connectionId,
-          userId: user.id || user._id
+          userId: user.id || user._id,
         });
 
         if (!connection) {
-          return { success: false, message: 'Connexion non trouvée', connection: null };
+          return {
+            success: false,
+            message: "Connexion non trouvée",
+            connection: null,
+          };
         }
 
         await pushEventToCalendar(input.eventId, input.connectionId);
@@ -391,28 +485,37 @@ const calendarConnectionResolvers = {
             lastSyncError: connection.lastSyncError,
             autoSync: connection.autoSync || false,
             createdAt: connection.createdAt,
-            updatedAt: connection.updatedAt
-          }
+            updatedAt: connection.updatedAt,
+          },
         };
       } catch (error) {
-        logger.error('Erreur pushEventToCalendar:', error);
-        return { success: false, message: 'Erreur lors de l\'envoi de l\'événement vers le calendrier externe.', connection: null };
+        logger.error("Erreur pushEventToCalendar:", error);
+        return {
+          success: false,
+          message:
+            "Erreur lors de l'envoi de l'événement vers le calendrier externe.",
+          connection: null,
+        };
       }
     },
 
     updateAutoSync: async (_, { input }, { user }) => {
       if (!user) {
-        return { success: false, message: 'Non authentifié', connection: null };
+        return { success: false, message: "Non authentifié", connection: null };
       }
 
       try {
         const connection = await CalendarConnection.findOne({
           _id: input.connectionId,
-          userId: user.id || user._id
+          userId: user.id || user._id,
         });
 
         if (!connection) {
-          return { success: false, message: 'Connexion non trouvée', connection: null };
+          return {
+            success: false,
+            message: "Connexion non trouvée",
+            connection: null,
+          };
         }
 
         connection.autoSync = input.enabled;
@@ -420,7 +523,9 @@ const calendarConnectionResolvers = {
 
         return {
           success: true,
-          message: input.enabled ? 'Synchronisation automatique activée' : 'Synchronisation automatique désactivée',
+          message: input.enabled
+            ? "Synchronisation automatique activée"
+            : "Synchronisation automatique désactivée",
           connection: {
             id: connection._id.toString(),
             userId: connection.userId.toString(),
@@ -433,15 +538,44 @@ const calendarConnectionResolvers = {
             lastSyncError: connection.lastSyncError,
             autoSync: connection.autoSync,
             createdAt: connection.createdAt,
-            updatedAt: connection.updatedAt
-          }
+            updatedAt: connection.updatedAt,
+          },
         };
       } catch (error) {
-        logger.error('Erreur updateAutoSync:', error);
-        return { success: false, message: 'Erreur lors de la mise à jour de la synchronisation automatique.', connection: null };
+        logger.error("Erreur updateAutoSync:", error);
+        return {
+          success: false,
+          message:
+            "Erreur lors de la mise à jour de la synchronisation automatique.",
+          connection: null,
+        };
       }
-    }
-  }
+    },
+  },
 };
+
+// ✅ Phase A.4 — Subscription check on calendar connection mutations (exclude disconnectCalendar)
+const CAL_BLOCK = [
+  "connectAppleCalendar",
+  "updateSelectedCalendars",
+  "syncCalendar",
+  "syncAllCalendars",
+  "pushEventToCalendar",
+  "updateAutoSync",
+];
+CAL_BLOCK.forEach((name) => {
+  const original = calendarConnectionResolvers.Mutation[name];
+  if (original) {
+    calendarConnectionResolvers.Mutation[name] = async (
+      parent,
+      args,
+      context,
+      info,
+    ) => {
+      await checkSubscriptionActive(context);
+      return original(parent, args, context, info);
+    };
+  }
+});
 
 export default calendarConnectionResolvers;
