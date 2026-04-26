@@ -12,6 +12,7 @@ export async function seedOrgMembership({
   role = "owner",
   organizationName = "Test Org",
   withCompanyInfo = true,
+  subscriptionStatus = "active",
 }) {
   const db = mongoose.connection.db;
 
@@ -63,6 +64,30 @@ export async function seedOrgMembership({
     },
     { upsert: true },
   );
+
+  // Seed a subscription so that checkSubscriptionActive allows write mutations.
+  // Tests that need a different status can pass subscriptionStatus: "expired" etc.
+  if (subscriptionStatus) {
+    await db.collection("subscription").updateOne(
+      { referenceId: orgObjectId.toString() },
+      {
+        $setOnInsert: {
+          referenceId: orgObjectId.toString(),
+          status: subscriptionStatus,
+          plan: "pme",
+          seats: 10,
+          periodStart: new Date(),
+          periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          cancelAtPeriodEnd: false,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+  }
 
   return { userId: userObjectId, organizationId: orgObjectId, role };
 }
