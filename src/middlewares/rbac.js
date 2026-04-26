@@ -613,22 +613,209 @@ export const withRBAC = (resolver, options = {}) => {
 };
 
 /**
+ * ========================================
+ * SUBSCRIPTION CHECK MIDDLEWARE
+ * ========================================
+ *
+ * Vérifie que l'abonnement de l'organisation est actif avant d'autoriser
+ * les mutations write/delete. Les queries (read) et les exports restent
+ * toujours accessibles (obligation légale FR 10 ans pour les factures).
+ *
+ * Statuts autorisés : active, trialing, past_due (grace period Stripe)
+ * Statuts bloqués : canceled (period ended), unpaid, incomplete, expired, null
+ *
+ * Options:
+ *   failClosed (default false) — Si true, bloque la mutation quand la DB
+ *   est inaccessible au lieu de laisser passer. À utiliser pour les mutations
+ *   qui appellent des services externes payants (banking, OCR, Pennylane).
+ */
+const ACTIVE_SUBSCRIPTION_STATUSES = ["active", "trialing", "past_due"];
+
+// ✅ Cache LRU pour le statut subscription — évite 1 query DB par mutation protégée
+const SUB_CACHE_TTL = 30_000; // 30 secondes
+const SUB_CACHE_MAX = 500;
+const _subCache = new Map();
+
+function getCachedSub(orgId) {
+  const entry = _subCache.get(orgId);
+  if (!entry) return undefined; // undefined = cache miss
+  if (Date.now() - entry.ts > SUB_CACHE_TTL) {
+    _subCache.delete(orgId);
+    return undefined;
+  }
+  return entry.sub; // peut être null (= pas de subscription trouvée)
+}
+
+function setCachedSub(orgId, sub) {
+  if (_subCache.size >= SUB_CACHE_MAX) {
+    const oldestKey = _subCache.keys().next().value;
+    _subCache.delete(oldestKey);
+  }
+  _subCache.set(orgId, { sub, ts: Date.now() });
+}
+
+// Permet d'invalider le cache subscription depuis l'extérieur (ex: webhook Stripe)
+export function invalidateSubCache(orgId) {
+  if (orgId) {
+    _subCache.delete(orgId);
+  } else {
+    _subCache.clear();
+  }
+}
+
+export async function checkSubscriptionActive(
+  context,
+  { failClosed = false } = {},
+) {
+  const orgId = context.workspaceId || context.organization?.id;
+  if (!orgId) return; // Pas d'org = pas de check (sera bloqué par RBAC)
+
+  try {
+    // Vérifier le cache d'abord
+    let sub = getCachedSub(orgId);
+    if (sub === undefined) {
+      // Cache miss → query DB
+      const Subscription = mongoose.model("subscription");
+      sub = await Subscription.findOne({ referenceId: orgId }).lean();
+      setCachedSub(orgId, sub); // Cache même si null
+      logger.debug(
+        `[SubCache] MISS org=${orgId} status=${sub?.status || "null"}`,
+      );
+    } else {
+      logger.debug(
+        `[SubCache] HIT org=${orgId} status=${sub?.status || "null"}`,
+      );
+    }
+
+    if (!sub) {
+      throw new AppError(
+        "Votre abonnement est inactif. Renouvelez pour effectuer cette action.",
+        ERROR_CODES.SUBSCRIPTION_READ_ONLY,
+      );
+    }
+
+    // Canceled mais encore dans la période payée = OK
+    if (sub.status === "canceled" && sub.periodEnd) {
+      if (new Date(sub.periodEnd) > new Date()) return; // Encore valide
+    }
+
+    if (!ACTIVE_SUBSCRIPTION_STATUSES.includes(sub.status)) {
+      throw new AppError(
+        "Votre abonnement est inactif. Renouvelez pour effectuer cette action.",
+        ERROR_CODES.SUBSCRIPTION_READ_ONLY,
+      );
+    }
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    logger.error("Erreur vérification abonnement:", error.message);
+    if (failClosed) {
+      throw new AppError(
+        "Impossible de vérifier l'abonnement. Réessayez.",
+        ERROR_CODES.SUBSCRIPTION_READ_ONLY,
+      );
+    }
+    // fail-open par défaut pour ne pas bloquer les users sur des erreurs DB transitoires
+  }
+}
+
+/**
+ * Middleware standalone pour les mutations qui n'utilisent pas requireWrite/requireDelete
+ * Usage: requireActiveSubscription(withWorkspace(resolver))
+ * Usage fail-closed: requireActiveSubscription(withWorkspace(resolver), { failClosed: true })
+ */
+export const requireActiveSubscription = (
+  resolver,
+  { failClosed = false } = {},
+) => {
+  return async (parent, args, context, info) => {
+    await checkSubscriptionActive(context, { failClosed });
+    return resolver(parent, args, context, info);
+  };
+};
+
+/**
+ * Middleware Express pour les routes REST qui nécessitent un abonnement actif.
+ * À placer APRÈS betterAuthJWTMiddleware (qui set req.headers["x-workspace-id"]).
+ *
+ * Usage: router.post("/route", requireActiveSubscriptionREST(), handler)
+ * Usage fail-closed: router.post("/route", requireActiveSubscriptionREST({ failClosed: true }), handler)
+ */
+export const requireActiveSubscriptionREST = ({ failClosed = false } = {}) => {
+  return async (req, res, next) => {
+    try {
+      const orgId = req.headers["x-workspace-id"] || req.body?.workspaceId;
+      if (!orgId) {
+        return res.status(400).json({ error: "Workspace ID requis" });
+      }
+      // Build a minimal context object compatible with checkSubscriptionActive
+      await checkSubscriptionActive({ workspaceId: orgId }, { failClosed });
+      next();
+    } catch (error) {
+      if (error.code === ERROR_CODES.SUBSCRIPTION_READ_ONLY) {
+        return res.status(403).json({
+          error: "SUBSCRIPTION_READ_ONLY",
+          message: error.message,
+        });
+      }
+      return res.status(500).json({ error: "Erreur serveur" });
+    }
+  };
+};
+
+/**
  * Helpers pour les cas d'usage courants
  */
 
-// Lecture seule (view)
+// Lecture seule (view) — PAS de check subscription
 export const requireRead = (resource) => (resolver) =>
   withRBAC(resolver, { resource, level: "read" });
 
-// Écriture (create, edit)
-export const requireWrite = (resource) => (resolver) =>
-  withRBAC(resolver, { resource, level: "write" });
+// Écriture (create, edit) — AVEC check subscription
+export const requireWrite =
+  (resource, options = {}) =>
+  (resolver) => {
+    const rbacWrapped = withRBAC(resolver, { resource, level: "write" });
+    if (options.skipSubscriptionCheck) return rbacWrapped;
+    // Wrap pour ajouter le check subscription APRÈS RBAC (context enrichi nécessaire)
+    const original = rbacWrapped;
+    return async (parent, args, context, info) => {
+      // RBAC s'exécute d'abord (enrichit context avec workspaceId)
+      // On intercale le check subscription dans le resolver wrappé
+      const patchedResolver = async (p, a, ctx, i) => {
+        await checkSubscriptionActive(ctx);
+        return resolver(p, a, ctx, i);
+      };
+      return withRBAC(patchedResolver, { resource, level: "write" })(
+        parent,
+        args,
+        context,
+        info,
+      );
+    };
+  };
 
-// Suppression
-export const requireDelete = (resource) => (resolver) =>
-  withRBAC(resolver, { resource, level: "delete" });
+// Suppression — AVEC check subscription
+export const requireDelete =
+  (resource, options = {}) =>
+  (resolver) => {
+    if (options.skipSubscriptionCheck) {
+      return withRBAC(resolver, { resource, level: "delete" });
+    }
+    return async (parent, args, context, info) => {
+      const patchedResolver = async (p, a, ctx, i) => {
+        await checkSubscriptionActive(ctx);
+        return resolver(p, a, ctx, i);
+      };
+      return withRBAC(patchedResolver, { resource, level: "delete" })(
+        parent,
+        args,
+        context,
+        info,
+      );
+    };
+  };
 
-// Administration
+// Administration — PAS de check subscription (gestion org/billing doit rester accessible)
 export const requireAdmin = (resource) => (resolver) =>
   withRBAC(resolver, { resource, level: "admin" });
 

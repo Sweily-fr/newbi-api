@@ -1,21 +1,48 @@
 import express from "express";
+import mongoose from "mongoose";
 import {
   cleanupExpiredFiles,
   markExpiredTransfersAndDeleteR2,
   deleteExpiredLocalFiles,
 } from "../jobs/cleanupExpiredFiles.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
 
 /**
- * Route admin pour déclencher manuellement le nettoyage des fichiers expirés
- * Accessible uniquement aux utilisateurs authentifiés
+ * Middleware pour vérifier que l'utilisateur est un admin interne (Sweily/Newbi).
+ * validateJWT (appliqué au mount dans server.js) set req.user = userId string.
  */
-router.post("/cleanup/run", async (req, res) => {
+async function requireInternalAdmin(req, res, next) {
   try {
-    logger.info("🚀 Déclenchement manuel du job de nettoyage");
+    const userId = req.user;
+    if (!userId) {
+      return res.status(401).json({ error: "Non authentifié" });
+    }
+    const User = mongoose.model("user");
+    const user = await User.findById(userId).select("email").lean();
+    if (
+      !user?.email ||
+      (!user.email.endsWith("@sweily.fr") && !user.email.endsWith("@newbi.fr"))
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Accès réservé aux administrateurs internes" });
+    }
+    next();
+  } catch (error) {
+    logger.error("Erreur vérification admin:", error.message);
+    return res.status(500).json({ error: "Erreur serveur" });
+  }
+}
+
+/**
+ * Route admin pour déclencher manuellement le nettoyage des fichiers expirés
+ * Accessible uniquement aux administrateurs internes (email @sweily.fr ou @newbi.fr)
+ */
+router.post("/cleanup/run", requireInternalAdmin, async (req, res) => {
+  try {
+    logger.info("Déclenchement manuel du job de nettoyage");
 
     const result = await cleanupExpiredFiles();
 
@@ -34,7 +61,7 @@ router.post("/cleanup/run", async (req, res) => {
       },
     });
   } catch (error) {
-    logger.error("❌ Erreur lors du nettoyage manuel:", error);
+    logger.error("Erreur lors du nettoyage manuel:", error);
     res.status(500).json({
       success: false,
       error: "Erreur lors du nettoyage",
@@ -46,9 +73,9 @@ router.post("/cleanup/run", async (req, res) => {
 /**
  * Route admin pour marquer les transferts expirés sans supprimer les fichiers
  */
-router.post("/cleanup/mark-expired", async (req, res) => {
+router.post("/cleanup/mark-expired", requireInternalAdmin, async (req, res) => {
   try {
-    logger.info("🏷️ Marquage des transferts expirés");
+    logger.info("Marquage des transferts expirés");
 
     const result = await markExpiredTransfersAndDeleteR2();
     const markedCount = result.markedCount;
@@ -59,7 +86,7 @@ router.post("/cleanup/mark-expired", async (req, res) => {
       markedCount,
     });
   } catch (error) {
-    logger.error("❌ Erreur lors du marquage:", error);
+    logger.error("Erreur lors du marquage:", error);
     res.status(500).json({
       success: false,
       error: "Erreur lors du marquage",
@@ -71,9 +98,9 @@ router.post("/cleanup/mark-expired", async (req, res) => {
 /**
  * Route admin pour supprimer uniquement les fichiers (sans marquer)
  */
-router.post("/cleanup/delete-files", async (req, res) => {
+router.post("/cleanup/delete-files", requireInternalAdmin, async (req, res) => {
   try {
-    logger.info("🗑️ Suppression des fichiers expirés");
+    logger.info("Suppression des fichiers expirés");
 
     const result = await deleteExpiredLocalFiles();
 
@@ -87,7 +114,7 @@ router.post("/cleanup/delete-files", async (req, res) => {
       },
     });
   } catch (error) {
-    logger.error("❌ Erreur lors de la suppression:", error);
+    logger.error("Erreur lors de la suppression:", error);
     res.status(500).json({
       success: false,
       error: "Erreur lors de la suppression",

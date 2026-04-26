@@ -6,6 +6,7 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import ImportedQuote from "../models/ImportedQuote.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
@@ -586,5 +587,17 @@ const importedQuoteResolvers = {
     }),
   },
 };
+
+// Wrap all mutations with subscription check
+const _origMutations_importedQuoteResolvers = importedQuoteResolvers.Mutation;
+importedQuoteResolvers.Mutation = Object.fromEntries(
+  Object.entries(_origMutations_importedQuoteResolvers).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export default importedQuoteResolvers;

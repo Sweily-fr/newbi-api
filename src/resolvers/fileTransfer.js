@@ -3,6 +3,7 @@ import FileTransfer from "../models/FileTransfer.js";
 import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import {
   saveUploadedFile,
   saveBase64File,
@@ -71,7 +72,7 @@ async function getMaxFileSize(userId) {
   }
 }
 
-export default {
+const fileTransferResolvers = {
   Query: {
     // Obtenir les transferts de fichiers de l'utilisateur connecté avec pagination
     myFileTransfers: isAuthenticated(
@@ -861,3 +862,20 @@ export default {
     ),
   },
 };
+
+// Wrap mutations with subscription check (except generateFileTransferPaymentLink which is public)
+const _origMutFT = fileTransferResolvers.Mutation;
+fileTransferResolvers.Mutation = Object.fromEntries(
+  Object.entries(_origMutFT).map(([name, fn]) => {
+    if (name === "generateFileTransferPaymentLink") return [name, fn];
+    return [
+      name,
+      async (parent, args, context, info) => {
+        await checkSubscriptionActive(context);
+        return fn(parent, args, context, info);
+      },
+    ];
+  }),
+);
+
+export default fileTransferResolvers;

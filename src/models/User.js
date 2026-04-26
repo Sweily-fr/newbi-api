@@ -171,7 +171,7 @@ const userSchema = new mongoose.Schema(
                 this.company.companyStatus &&
                 isFieldRequiredForCompanyStatus(
                   "siret",
-                  this.company.companyStatus
+                  this.company.companyStatus,
                 )
               ) {
                 return false;
@@ -200,7 +200,7 @@ const userSchema = new mongoose.Schema(
                 this.company.companyStatus &&
                 isFieldRequiredForCompanyStatus(
                   "vatNumber",
-                  this.company.companyStatus
+                  this.company.companyStatus,
                 )
               ) {
                 return false;
@@ -258,7 +258,7 @@ const userSchema = new mongoose.Schema(
                 this.company.companyStatus &&
                 isFieldRequiredForCompanyStatus(
                   "capitalSocial",
-                  this.company.companyStatus
+                  this.company.companyStatus,
                 )
               ) {
                 return false;
@@ -287,7 +287,7 @@ const userSchema = new mongoose.Schema(
                 this.company.companyStatus &&
                 isFieldRequiredForCompanyStatus(
                   "rcs",
-                  this.company.companyStatus
+                  this.company.companyStatus,
                 )
               ) {
                 return false;
@@ -321,7 +321,8 @@ const userSchema = new mongoose.Schema(
     // Code partenaire (apporteur d'affaires)
     referralCode: {
       type: String,
-      index: true,
+      default: null,
+      set: (v) => (v === "" ? null : v),
     },
 
     // Code de parrainage utilisé lors de l'inscription (lien vers le partenaire)
@@ -427,7 +428,7 @@ const userSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Pas besoin de définir un index pour email car il est déjà indexé via unique: true
@@ -457,6 +458,6 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
 };
 
 // AES-256-GCM encryption for IBAN and BIC fields at rest
-applyBankDetailsEncryption(userSchema, ['companyInfo.bankDetails']);
+applyBankDetailsEncryption(userSchema, ["companyInfo.bankDetails"]);
 
 export default mongoose.model("User", userSchema, "user");

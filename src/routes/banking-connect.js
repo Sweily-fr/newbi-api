@@ -1,6 +1,7 @@
 import express from "express";
 import { bankingService } from "../services/banking/index.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
+import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 
@@ -49,66 +50,72 @@ router.get("/gocardless/institutions", async (req, res) => {
  * Génère l'URL de connexion bancaire pour GoCardless
  * GET /banking-connect/gocardless/connect
  */
-router.get("/gocardless/connect", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
+router.get(
+  "/gocardless/connect",
+  requireActiveSubscriptionREST({ failClosed: true }),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
 
-    // Vérifier que l'email est vérifié
-    if (!user.isEmailVerified && !user.emailVerified) {
-      return res.status(403).json({
-        error: "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
-        code: "EMAIL_NOT_VERIFIED",
+      // Vérifier que l'email est vérifié
+      if (!user.isEmailVerified && !user.emailVerified) {
+        return res.status(403).json({
+          error:
+            "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
+          code: "EMAIL_NOT_VERIFIED",
+        });
+      }
+
+      const workspaceId =
+        req.headers["x-workspace-id"] || req.query.workspaceId;
+      const institutionId = req.query.institutionId;
+
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      if (!institutionId) {
+        return res
+          .status(400)
+          .json({ error: "InstitutionId requis (banque à connecter)" });
+      }
+
+      console.log(
+        "🔍 Route /gocardless/connect - workspaceId:",
+        workspaceId,
+        "institutionId:",
+        institutionId,
+      );
+
+      await bankingService.initialize("gocardless");
+      const provider = bankingService.currentProvider;
+
+      // Générer l'URL de connexion
+      const connectUrl = await provider.generateConnectUrl(
+        user._id.toString(),
+        workspaceId,
+        institutionId,
+      );
+
+      logger.info(`URL de connexion GoCardless générée pour user ${user._id}`);
+
+      res.json({
+        connectUrl,
+        provider: "gocardless",
+        institutionId,
+      });
+    } catch (error) {
+      logger.error("Erreur génération URL GoCardless:", error);
+      res.status(500).json({
+        error: "Erreur lors de la génération de l'URL de connexion",
+        details: error.message,
       });
     }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    const institutionId = req.query.institutionId;
-
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
-
-    if (!institutionId) {
-      return res
-        .status(400)
-        .json({ error: "InstitutionId requis (banque à connecter)" });
-    }
-
-    console.log(
-      "🔍 Route /gocardless/connect - workspaceId:",
-      workspaceId,
-      "institutionId:",
-      institutionId
-    );
-
-    await bankingService.initialize("gocardless");
-    const provider = bankingService.currentProvider;
-
-    // Générer l'URL de connexion
-    const connectUrl = await provider.generateConnectUrl(
-      user._id.toString(),
-      workspaceId,
-      institutionId
-    );
-
-    logger.info(`URL de connexion GoCardless générée pour user ${user._id}`);
-
-    res.json({
-      connectUrl,
-      provider: "gocardless",
-      institutionId,
-    });
-  } catch (error) {
-    logger.error("Erreur génération URL GoCardless:", error);
-    res.status(500).json({
-      error: "Erreur lors de la génération de l'URL de connexion",
-      details: error.message,
-    });
-  }
-});
+  },
+);
 
 /**
  * Callback GoCardless (redirection après connexion)
@@ -121,13 +128,13 @@ router.get("/gocardless/callback", async (req, res) => {
     if (error) {
       logger.error("Erreur GoCardless callback:", error);
       return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error)}`
+        `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error)}`,
       );
     }
 
     if (!ref) {
       return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?banking_error=missing_reference`
+        `${process.env.FRONTEND_URL}/dashboard?banking_error=missing_reference`,
       );
     }
 
@@ -137,12 +144,12 @@ router.get("/gocardless/callback", async (req, res) => {
     // Rediriger vers le dashboard avec succès
     // La synchronisation sera déclenchée côté frontend
     res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&provider=gocardless&ref=${ref}`
+      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&provider=gocardless&ref=${ref}`,
     );
   } catch (error) {
     logger.error("Erreur callback GoCardless:", error);
     res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error.message)}`
+      `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error.message)}`,
     );
   }
 });
@@ -188,80 +195,89 @@ router.get("/bridge/institutions", async (req, res) => {
  * Génère l'URL de connexion bancaire pour Bridge
  * GET /banking-connect/bridge/connect
  */
-router.get("/bridge/connect", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
+router.get(
+  "/bridge/connect",
+  requireActiveSubscriptionREST({ failClosed: true }),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
 
-    // Vérifier que l'email est vérifié
-    if (!user.isEmailVerified && !user.emailVerified) {
-      return res.status(403).json({
-        error: "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
-        code: "EMAIL_NOT_VERIFIED",
+      // Vérifier que l'email est vérifié
+      if (!user.isEmailVerified && !user.emailVerified) {
+        return res.status(403).json({
+          error:
+            "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
+          code: "EMAIL_NOT_VERIFIED",
+        });
+      }
+
+      const workspaceId =
+        req.headers["x-workspace-id"] || req.query.workspaceId;
+      const providerId = req.query.providerId || req.query.bankId; // Provider pré-sélectionné (optionnel)
+
+      console.log(
+        "🔍 Route /bridge/connect - workspaceId:",
+        workspaceId,
+        "providerId:",
+        providerId,
+      );
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      // Initialiser le service banking avec Bridge
+      await bankingService.initialize("bridge");
+      const provider = bankingService.currentProvider;
+
+      // Vérifier si un utilisateur Bridge existe déjà pour ce workspaceId
+      // Si oui, on génère quand même une URL de connexion pour ajouter un nouveau compte
+      let existingBridgeUser = null;
+      try {
+        existingBridgeUser =
+          await provider.getBridgeUserByExternalId(workspaceId);
+        if (existingBridgeUser) {
+          console.log(
+            "ℹ️ Utilisateur Bridge existant trouvé:",
+            existingBridgeUser.uuid,
+          );
+          // On continue pour permettre d'ajouter un nouveau compte bancaire
+        }
+      } catch (error) {
+        // Si l'utilisateur n'existe pas (erreur 404), continuer normalement
+        if (error.response?.status !== 404) {
+          console.error(
+            "Erreur vérification utilisateur Bridge:",
+            error.message,
+          );
+        }
+      }
+
+      // Générer l'URL de connexion (avec provider pré-sélectionné si fourni)
+      const connectUrl = await provider.generateConnectUrl(
+        user._id.toString(),
+        workspaceId,
+        providerId,
+      );
+
+      logger.info(`URL de connexion Bridge générée pour user ${user._id}`);
+
+      res.json({
+        connectUrl,
+        provider: "bridge",
+        environment: provider.config.environment,
+      });
+    } catch (error) {
+      logger.error("Erreur génération URL Bridge:", error);
+      res.status(500).json({
+        error: "Erreur lors de la génération de l'URL de connexion",
+        details: error.message,
       });
     }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    const providerId = req.query.providerId || req.query.bankId; // Provider pré-sélectionné (optionnel)
-
-    console.log(
-      "🔍 Route /bridge/connect - workspaceId:",
-      workspaceId,
-      "providerId:",
-      providerId
-    );
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
-
-    // Initialiser le service banking avec Bridge
-    await bankingService.initialize("bridge");
-    const provider = bankingService.currentProvider;
-
-    // Vérifier si un utilisateur Bridge existe déjà pour ce workspaceId
-    // Si oui, on génère quand même une URL de connexion pour ajouter un nouveau compte
-    let existingBridgeUser = null;
-    try {
-      existingBridgeUser =
-        await provider.getBridgeUserByExternalId(workspaceId);
-      if (existingBridgeUser) {
-        console.log(
-          "ℹ️ Utilisateur Bridge existant trouvé:",
-          existingBridgeUser.uuid
-        );
-        // On continue pour permettre d'ajouter un nouveau compte bancaire
-      }
-    } catch (error) {
-      // Si l'utilisateur n'existe pas (erreur 404), continuer normalement
-      if (error.response?.status !== 404) {
-        console.error("Erreur vérification utilisateur Bridge:", error.message);
-      }
-    }
-
-    // Générer l'URL de connexion (avec provider pré-sélectionné si fourni)
-    const connectUrl = await provider.generateConnectUrl(
-      user._id.toString(),
-      workspaceId,
-      providerId
-    );
-
-    logger.info(`URL de connexion Bridge générée pour user ${user._id}`);
-
-    res.json({
-      connectUrl,
-      provider: "bridge",
-      environment: provider.config.environment,
-    });
-  } catch (error) {
-    logger.error("Erreur génération URL Bridge:", error);
-    res.status(500).json({
-      error: "Erreur lors de la génération de l'URL de connexion",
-      details: error.message,
-    });
-  }
-});
+  },
+);
 
 /**
  * Callback Bridge v3 (redirection après connexion)
@@ -276,13 +292,13 @@ router.get("/bridge/callback", async (req, res) => {
       return res.redirect(
         `${
           process.env.FRONTEND_URL
-        }/dashboard?banking_error=${encodeURIComponent(error)}`
+        }/dashboard?banking_error=${encodeURIComponent(error)}`,
       );
     }
 
     if (!session_id) {
       return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?banking_error=missing_session_id`
+        `${process.env.FRONTEND_URL}/dashboard?banking_error=missing_session_id`,
       );
     }
 
@@ -292,14 +308,14 @@ router.get("/bridge/callback", async (req, res) => {
 
     // Rediriger vers le dashboard avec succès
     res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&session_id=${session_id}`
+      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&session_id=${session_id}`,
     );
   } catch (error) {
     logger.error("Erreur callback Bridge:", error);
     res.redirect(
       `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(
-        error.message
-      )}`
+        error.message,
+      )}`,
     );
   }
 });
@@ -420,7 +436,9 @@ router.post("/disconnect", async (req, res) => {
         const bridgeProvider = bankingService.currentProvider;
         await bridgeProvider.deleteBridgeItem(bridgeItemId, workspaceId);
       } catch (err) {
-        logger.warn(`Impossible de supprimer l'item Bridge ${bridgeItemId}: ${err.message}`);
+        logger.warn(
+          `Impossible de supprimer l'item Bridge ${bridgeItemId}: ${err.message}`,
+        );
       }
     };
 
@@ -457,7 +475,7 @@ router.post("/disconnect", async (req, res) => {
         });
 
         logger.info(
-          `Suppression de l'item ${accountItemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`
+          `Suppression de l'item ${accountItemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
         );
       } else {
         // Pas d'itemId, supprimer uniquement ce compte
@@ -465,7 +483,7 @@ router.post("/disconnect", async (req, res) => {
         await AccountBanking.findByIdAndDelete(accountId);
 
         logger.info(
-          `Suppression du compte ${accountId} pour workspace ${workspaceId}`
+          `Suppression du compte ${accountId} pour workspace ${workspaceId}`,
         );
       }
 
@@ -496,7 +514,7 @@ router.post("/disconnect", async (req, res) => {
       });
 
       logger.info(
-        `Suppression de l'item ${itemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`
+        `Suppression de l'item ${itemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
       );
 
       return res.json({
@@ -530,11 +548,7 @@ router.post("/disconnect", async (req, res) => {
           provider: "bridge",
         }).select("raw.item_id");
         const uniqueItemIds = [
-          ...new Set(
-            bridgeAccounts
-              .map((a) => a.raw?.item_id)
-              .filter(Boolean)
-          ),
+          ...new Set(bridgeAccounts.map((a) => a.raw?.item_id).filter(Boolean)),
         ];
         for (const bridgeItemId of uniqueItemIds) {
           await deleteBridgeItemSafe(bridgeItemId);
@@ -547,7 +561,7 @@ router.post("/disconnect", async (req, res) => {
     }
 
     logger.info(
-      `Déconnexion bancaire complète pour user ${user._id}, workspace ${workspaceId}, providers: ${providersToDisconnect.join(", ")}`
+      `Déconnexion bancaire complète pour user ${user._id}, workspace ${workspaceId}, providers: ${providersToDisconnect.join(", ")}`,
     );
 
     res.json({
