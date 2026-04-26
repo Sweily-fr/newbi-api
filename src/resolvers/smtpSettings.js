@@ -1,6 +1,7 @@
-import SmtpSettings from '../models/SmtpSettings.js';
-import nodemailer from 'nodemailer';
-import { AuthenticationError, UserInputError } from 'apollo-server-express';
+import SmtpSettings from "../models/SmtpSettings.js";
+import nodemailer from "nodemailer";
+import { AuthenticationError, UserInputError } from "apollo-server-express";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const smtpSettingsResolvers = {
   Query: {
@@ -9,11 +10,11 @@ const smtpSettingsResolvers = {
      */
     getSmtpSettings: async (_, __, { user, workspaceId }) => {
       if (!user) {
-        throw new AuthenticationError('Non authentifié');
+        throw new AuthenticationError("Non authentifié");
       }
 
       if (!workspaceId) {
-        throw new UserInputError('Workspace ID requis');
+        throw new UserInputError("Workspace ID requis");
       }
 
       let settings = await SmtpSettings.findOne({ workspaceId });
@@ -23,13 +24,13 @@ const smtpSettingsResolvers = {
         return {
           workspaceId,
           enabled: false,
-          smtpHost: '',
+          smtpHost: "",
           smtpPort: 587,
           smtpSecure: false,
-          smtpUser: '',
-          fromEmail: '',
-          fromName: '',
-          lastTestStatus: 'PENDING',
+          smtpUser: "",
+          fromEmail: "",
+          fromName: "",
+          lastTestStatus: "PENDING",
         };
       }
 
@@ -47,29 +48,29 @@ const smtpSettingsResolvers = {
      */
     updateSmtpSettings: async (_, { input }, { user, workspaceId }) => {
       if (!user) {
-        throw new AuthenticationError('Non authentifié');
+        throw new AuthenticationError("Non authentifié");
       }
 
       if (!workspaceId) {
-        throw new UserInputError('Workspace ID requis');
+        throw new UserInputError("Workspace ID requis");
       }
 
       // Validation des données
       if (input.enabled) {
         if (!input.smtpHost) {
-          throw new UserInputError('Host SMTP requis');
+          throw new UserInputError("Host SMTP requis");
         }
         if (!input.smtpUser) {
-          throw new UserInputError('Utilisateur SMTP requis');
+          throw new UserInputError("Utilisateur SMTP requis");
         }
         if (!input.fromEmail) {
-          throw new UserInputError('Email expéditeur requis');
+          throw new UserInputError("Email expéditeur requis");
         }
-        
+
         // Validation format email
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(input.fromEmail)) {
-          throw new UserInputError('Format d\'email expéditeur invalide');
+          throw new UserInputError("Format d'email expéditeur invalide");
         }
       }
 
@@ -78,7 +79,7 @@ const smtpSettingsResolvers = {
 
       if (settings) {
         // Mise à jour
-        Object.keys(input).forEach(key => {
+        Object.keys(input).forEach((key) => {
           if (input[key] !== undefined) {
             settings[key] = input[key];
           }
@@ -104,17 +105,17 @@ const smtpSettingsResolvers = {
      */
     testSmtpConnection: async (_, __, { user, workspaceId }) => {
       if (!user) {
-        throw new AuthenticationError('Non authentifié');
+        throw new AuthenticationError("Non authentifié");
       }
 
       if (!workspaceId) {
-        throw new UserInputError('Workspace ID requis');
+        throw new UserInputError("Workspace ID requis");
       }
 
       const settings = await SmtpSettings.findOne({ workspaceId });
 
       if (!settings) {
-        throw new UserInputError('Aucune configuration SMTP trouvée');
+        throw new UserInputError("Aucune configuration SMTP trouvée");
       }
 
       try {
@@ -134,29 +135,41 @@ const smtpSettingsResolvers = {
 
         // Mettre à jour le statut du test
         settings.lastTestedAt = new Date();
-        settings.lastTestStatus = 'SUCCESS';
+        settings.lastTestStatus = "SUCCESS";
         settings.lastTestError = null;
         await settings.save();
 
         return {
           success: true,
-          message: 'Connexion SMTP réussie',
+          message: "Connexion SMTP réussie",
         };
       } catch (error) {
         // Mettre à jour le statut du test
         settings.lastTestedAt = new Date();
-        settings.lastTestStatus = 'FAILED';
+        settings.lastTestStatus = "FAILED";
         settings.lastTestError = error.message;
         await settings.save();
 
         return {
           success: false,
-          message: 'Échec de la connexion SMTP',
+          message: "Échec de la connexion SMTP",
           error: error.message,
         };
       }
     },
   },
 };
+
+// ✅ Phase A.3 — Subscription check sur toutes les mutations SMTP
+const originalSmtpMutations = smtpSettingsResolvers.Mutation;
+smtpSettingsResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalSmtpMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export default smtpSettingsResolvers;

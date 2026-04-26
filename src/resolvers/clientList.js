@@ -1,6 +1,7 @@
 import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 export const clientListResolvers = {
   Query: {
@@ -407,3 +408,15 @@ export const clientListResolvers = {
     },
   },
 };
+
+// ✅ Phase A.3 — Subscription check sur toutes les mutations clientList
+const originalClientListMutations = clientListResolvers.Mutation;
+clientListResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalClientListMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
