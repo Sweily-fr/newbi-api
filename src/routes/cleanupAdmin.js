@@ -12,6 +12,7 @@ const router = express.Router();
 /**
  * Middleware pour vérifier que l'utilisateur est un admin interne (Sweily/Newbi).
  * validateJWT (appliqué au mount dans server.js) set req.user = userId string.
+ * TODO: Replace with proper admin role check from DB (e.g. User.isSystemAdmin flag)
  */
 async function requireInternalAdmin(req, res, next) {
   try {

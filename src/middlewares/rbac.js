@@ -667,7 +667,15 @@ export async function checkSubscriptionActive(
   context,
   { failClosed = false } = {},
 ) {
-  const orgId = context.workspaceId || context.organization?.id;
+  // Lire le workspaceId depuis toutes les sources possibles :
+  // 1. context.workspaceId (set par withWorkspace/withRBAC après enrichissement)
+  // 2. context.organization?.id (set par withOrganization)
+  // 3. context.req headers (disponible AVANT withWorkspace — nécessaire pour les bulk wrappers)
+  const orgId =
+    context.workspaceId ||
+    context.organization?.id ||
+    context.req?.headers?.["x-workspace-id"] ||
+    context.req?.headers?.["x-organization-id"];
   if (!orgId) return; // Pas d'org = pas de check (sera bloqué par RBAC)
 
   try {
