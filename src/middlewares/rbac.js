@@ -678,20 +678,29 @@ export async function checkSubscriptionActive(
     context.req?.headers?.["x-organization-id"];
   if (!orgId) return; // Pas d'org = pas de check (sera bloqué par RBAC)
 
+  logger.debug(
+    `[SubCheck] orgId=${orgId} (from=${context.workspaceId ? "ctx" : "header"})`,
+  );
+
   try {
     // Vérifier le cache d'abord
     let sub = getCachedSub(orgId);
     if (sub === undefined) {
-      // Cache miss → query DB
-      const Subscription = mongoose.model("subscription");
-      sub = await Subscription.findOne({ referenceId: orgId }).lean();
+      // Cache miss → query via driver MongoDB natif (pas Mongoose model)
+      // La collection "subscription" est gérée par Better Auth Stripe plugin,
+      // pas de schéma Mongoose enregistré — mongoose.model("subscription") échoue.
+      const db = mongoose.connection.db;
+      if (!db) {
+        throw new Error("MongoDB connection not ready");
+      }
+      sub = await db.collection("subscription").findOne({ referenceId: orgId });
       setCachedSub(orgId, sub); // Cache même si null
       logger.debug(
-        `[SubCache] MISS org=${orgId} status=${sub?.status || "null"}`,
+        `[SubCheck] MISS orgId=${orgId} status=${sub?.status || "null"}`,
       );
     } else {
       logger.debug(
-        `[SubCache] HIT org=${orgId} status=${sub?.status || "null"}`,
+        `[SubCheck] HIT orgId=${orgId} status=${sub?.status || "null"}`,
       );
     }
 
