@@ -6,14 +6,17 @@ const stripeConnectAccountSchema = new mongoose.Schema(
     organizationId: {
       type: String,
       required: false, // Optionnel pendant la migration
-      index: true,
+      // Note: do not set `index: true` — a unique sparse index is declared via
+      // `stripeConnectAccountSchema.index({ organizationId: 1 }, { unique, sparse })` below.
     },
     // ANCIEN: Gardé pour compatibilité pendant la migration
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: false, // Plus obligatoire car on utilise organizationId
-      index: true,
+      // Note: do not set `index: true` — a single-field sparse index on userId
+      // is declared via `stripeConnectAccountSchema.index({ userId: 1 }, { sparse: true })`.
+      // Setting both produces a duplicate-index warning.
     },
     accountId: {
       type: String,
@@ -33,13 +36,13 @@ const stripeConnectAccountSchema = new mongoose.Schema(
       default: false,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Index unique sur organizationId (un seul compte Stripe par organisation)
 stripeConnectAccountSchema.index(
   { organizationId: 1 },
-  { unique: true, sparse: true }
+  { unique: true, sparse: true },
 );
 
 // ANCIEN: Index sur userId (gardé pour compatibilité)
@@ -47,7 +50,7 @@ stripeConnectAccountSchema.index({ userId: 1 }, { sparse: true });
 
 const StripeConnectAccount = mongoose.model(
   "StripeConnectAccount",
-  stripeConnectAccountSchema
+  stripeConnectAccountSchema,
 );
 
 export default StripeConnectAccount;
