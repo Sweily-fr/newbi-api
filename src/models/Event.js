@@ -86,7 +86,8 @@ const eventSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "CalendarConnection",
       default: null,
-      sparse: true,
+      // Note: sparse goes on the explicit eventSchema.index call below
+      // — setting it here would auto-create a duplicate single-field index.
     },
 
     // Liens vers les calendriers externes (quand un événement Newbi est poussé vers un calendrier externe)
@@ -108,7 +109,8 @@ const eventSchema = new mongoose.Schema(
     invoiceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Invoice",
-      sparse: true, // Permet d'avoir des événements sans facture associée
+      // Note: sparse is declared on the explicit eventSchema.index({ invoiceId: 1 }, { sparse: true })
+      // call further down — leaving it here would create a duplicate index.
     },
 
     // Référence vers un client (si l'événement est lié à un client, ex: rappel)
