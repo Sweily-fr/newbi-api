@@ -6,8 +6,19 @@ let mongoServer;
 export async function startMongo() {
   if (mongoServer) return mongoose.connection;
   mongoServer = await MongoMemoryServer.create();
+  // Use a per-fork unique db name so parallel vitest forks (which each
+  // call startMongo() with their own MongoMemoryServer instance, but
+  // historically all defaulted to db "test") cannot accidentally collide
+  // on documents seeded from constant ObjectIds (e.g. buildUserId() at
+  // module top level). The collision manifested as
+  //   MongoServerError: E11000 duplicate key error collection: test.user
+  // on the apollo-* integration tests under load.
   const uri = mongoServer.getUri();
-  await mongoose.connect(uri);
+  const uniqueDb = `test_${process.pid}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+  const uriWithDb = uri.replace(/\/[^/?]*(\?|$)/, `/${uniqueDb}$1`);
+  await mongoose.connect(uriWithDb);
   return mongoose.connection;
 }
 
