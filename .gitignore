@@ -34,3 +34,8 @@ coverage/
 newbi-462812-e2c47097b174.json
 
 script/
+
+# Internal security tracking — must NOT be committed (lists potential
+# vulnerabilities and proposed fixes; sharing publicly = leaking attack
+# surface). Each finding gets a dedicated commit when fixed.
+SECURITY_FINDINGS.md

@@ -7,6 +7,11 @@ import {
   beforeEach,
   vi,
 } from "vitest";
+
+// Required by getEncryptionKey() — PennylaneAccount.apiToken is encrypted
+// at rest via applyFieldEncryption (see src/models/PennylaneAccount.js).
+process.env.DATA_ENCRYPTION_KEY ||= "test-encryption-key-pennylane";
+
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 

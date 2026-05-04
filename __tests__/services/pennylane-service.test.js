@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
+// Required by getEncryptionKey() — PennylaneAccount.apiToken is encrypted
+// at rest. The service test indirectly imports the model via syncAll.
+process.env.DATA_ENCRYPTION_KEY ||= "test-encryption-key-pennylane";
+
 vi.mock("../../src/utils/logger.js", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));

@@ -278,7 +278,7 @@ const pennylaneResolvers = {
         }
 
         const result = await pennylaneService.syncCustomerInvoice(
-          account.apiToken,
+          account.getDecryptedApiToken(),
           invoice,
         );
 
@@ -333,7 +333,7 @@ const pennylaneResolvers = {
         }
 
         const result = await pennylaneService.syncSupplierInvoice(
-          account.apiToken,
+          account.getDecryptedApiToken(),
           expense,
         );
 
@@ -388,7 +388,7 @@ const pennylaneResolvers = {
         }
 
         const result = await pennylaneService.syncQuote(
-          account.apiToken,
+          account.getDecryptedApiToken(),
           quote,
         );
 

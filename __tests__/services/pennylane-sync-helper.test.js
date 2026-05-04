@@ -7,6 +7,11 @@ import {
   beforeEach,
   vi,
 } from "vitest";
+
+// Required by getEncryptionKey() — PennylaneAccount.apiToken is encrypted
+// at rest. The helper creates accounts via Mongoose in tests.
+process.env.DATA_ENCRYPTION_KEY ||= "test-encryption-key-pennylane";
+
 import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";

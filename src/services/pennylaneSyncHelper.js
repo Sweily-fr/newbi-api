@@ -70,7 +70,7 @@ export async function syncInvoiceIfNeeded(invoice, workspaceId) {
     );
 
     const result = await pennylaneService.syncCustomerInvoice(
-      account.apiToken,
+      account.getDecryptedApiToken(),
       invoice,
     );
 
@@ -154,7 +154,7 @@ export async function syncExpenseIfNeeded(expense, workspaceId) {
     );
 
     const result = await pennylaneService.syncSupplierInvoice(
-      account.apiToken,
+      account.getDecryptedApiToken(),
       expense,
     );
 
@@ -235,7 +235,10 @@ export async function syncQuoteIfNeeded(quote, workspaceId) {
       `[PENNYLANE] Auto-sync devis ${quote.prefix || ""}${quote.number || quote._id}...`,
     );
 
-    const result = await pennylaneService.syncQuote(account.apiToken, quote);
+    const result = await pennylaneService.syncQuote(
+      account.getDecryptedApiToken(),
+      quote,
+    );
 
     if (result.success) {
       const Quote = (await import("../models/Quote.js")).default;
@@ -317,7 +320,7 @@ export async function syncPurchaseInvoiceIfNeeded(
     );
 
     const result = await pennylaneService.syncPurchaseInvoice(
-      account.apiToken,
+      account.getDecryptedApiToken(),
       purchaseInvoice,
     );
 

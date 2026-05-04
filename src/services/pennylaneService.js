@@ -954,7 +954,7 @@ const pennylaneService = {
       return { success: false, message: "Compte Pennylane non connecté" };
     }
 
-    const apiToken = account.apiToken;
+    const apiToken = account.getDecryptedApiToken();
     const results = {
       invoices: { synced: 0, errors: 0 },
       expenses: { synced: 0, errors: 0 },
