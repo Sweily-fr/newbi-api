@@ -328,10 +328,24 @@ const partnerResolvers = {
 
     /**
      * Récupère les coordonnées bancaires de l'organisation
+     * IDOR fix: vérifie que l'utilisateur est membre de l'organisation
      */
-    getOrganizationBankDetails: async (_, { organizationId }) => {
+    getOrganizationBankDetails: async (_, { organizationId }, { user }) => {
+      if (!user) {
+        throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
+      }
+
       try {
         const db = mongoose.connection.db;
+
+        // Vérifier que l'utilisateur est membre de cette organisation
+        const member = await db.collection("member").findOne({
+          userId: new mongoose.Types.ObjectId(user._id || user.id),
+          organizationId: new mongoose.Types.ObjectId(organizationId),
+        });
+        if (!member) {
+          throw new AppError("Accès refusé", ERROR_CODES.FORBIDDEN);
+        }
 
         const organization = await db.collection("organization").findOne({
           _id: new mongoose.Types.ObjectId(organizationId),
@@ -347,6 +361,7 @@ const partnerResolvers = {
           bankBic: organization.bankBic || null,
         };
       } catch (error) {
+        if (error instanceof AppError) throw error;
         logger.error(
           "Erreur lors de la récupération des coordonnées bancaires:",
           error,
