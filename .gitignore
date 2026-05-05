@@ -50,3 +50,6 @@ SECURITY_FINDINGS.md
 # collisions, parallelism issues. Not security-sensitive but tracked
 # locally to avoid noise in git history until a fix lands.
 TEST_INFRA_FINDINGS.md
+
+# Local tooling config
+.gitleaks.toml
