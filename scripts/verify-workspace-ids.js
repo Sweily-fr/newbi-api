@@ -14,7 +14,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Configuration MongoDB pour la production
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://newbiAdmin:newbi2024@localhost:27017/newbi?authSource=admin';
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  console.error("MONGODB_URI environment variable is required");
+  process.exit(1);
+}
 const DB_NAME = 'newbi'; // Base de données de production
 
 // Collections qui doivent avoir un workspaceId

@@ -14,7 +14,11 @@ async function cleanOrphanCommissions() {
   try {
     console.log('🔄 Connexion à MongoDB...');
     
-    const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/invoice-app';
+    const mongoUri = process.env.MONGODB_URI;
+    if (!mongoUri) {
+      console.error("MONGODB_URI environment variable is required");
+      process.exit(1);
+    }
     await mongoose.connect(mongoUri);
     
     console.log('✅ Connecté à MongoDB');

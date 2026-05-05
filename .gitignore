@@ -33,9 +33,20 @@ coverage/
 
 newbi-462812-e2c47097b174.json
 
-script/
+# Scripts perso / ad-hoc / dev-only — à ne PAS versionner
+# (Les scripts utiles à l'équipe vivent dans scripts/ sans préfixe)
+scripts/temp-*
+scripts/local-*
+scripts/dev-*
+scripts/*.local.js
+
 
 # Internal security tracking — must NOT be committed (lists potential
 # vulnerabilities and proposed fixes; sharing publicly = leaking attack
 # surface). Each finding gets a dedicated commit when fixed.
 SECURITY_FINDINGS.md
+
+# Internal test-infrastructure tracking — flake patterns, port
+# collisions, parallelism issues. Not security-sensitive but tracked
+# locally to avoid noise in git history until a fix lands.
+TEST_INFRA_FINDINGS.md
