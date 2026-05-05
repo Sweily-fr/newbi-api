@@ -2,6 +2,7 @@ import DocumentAutomation from "../models/DocumentAutomation.js";
 import DocumentAutomationLog from "../models/DocumentAutomationLog.js";
 import SharedFolder from "../models/SharedFolder.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { createNotFoundError, createValidationError } from "../utils/errors.js";
 import documentAutomationService, {
   getAutomationProgress,
@@ -459,5 +460,17 @@ const documentAutomationResolvers = {
       parent.createdAt ? new Date(parent.createdAt).toISOString() : null,
   },
 };
+
+// ✅ Phase A.3 — Subscription check sur toutes les mutations documentAutomation
+const originalDocAutoMutations = documentAutomationResolvers.Mutation;
+documentAutomationResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalDocAutoMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export default documentAutomationResolvers;

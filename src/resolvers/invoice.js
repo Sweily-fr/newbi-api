@@ -49,7 +49,7 @@ import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
  * @param {Boolean} isReverseCharge - Indique si la facture est soumise à l'auto-liquidation (TVA = 0)
  * @returns {Object} - Totaux calculés
  */
-const calculateInvoiceTotals = (
+export const calculateInvoiceTotals = (
   items,
   discount = 0,
   discountType = "FIXED",

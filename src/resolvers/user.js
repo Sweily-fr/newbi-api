@@ -6,6 +6,7 @@ import {
   isAuthenticated,
   withWorkspace,
 } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import {
   sendPasswordResetEmail,
   sendVerificationEmail,
@@ -1065,5 +1066,23 @@ const userResolvers = {
     ),
   },
 };
+
+// ✅ Phase A.3 — Subscription check SÉLECTIF sur user.js (company mutations only)
+// NE PAS bloquer: updateProfile, updatePassword, uploadProfilePicture, disableAccount, register, login, etc.
+const COMPANY_MUTATIONS = [
+  "updateCompany",
+  "uploadCompanyLogo",
+  "deleteCompanyLogo",
+  "updateCompanyLogo",
+];
+COMPANY_MUTATIONS.forEach((name) => {
+  const original = userResolvers.Mutation[name];
+  if (original) {
+    userResolvers.Mutation[name] = async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return original(parent, args, context, info);
+    };
+  }
+});
 
 export default userResolvers;

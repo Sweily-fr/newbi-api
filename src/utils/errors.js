@@ -3,6 +3,10 @@ const ERROR_CODES = {
   // Erreurs d'authentification
   UNAUTHENTICATED: "UNAUTHENTICATED",
   UNAUTHORIZED: "UNAUTHORIZED",
+  // FORBIDDEN: l'utilisateur est authentifié mais n'a pas la permission RBAC.
+  // Distinct d'UNAUTHORIZED pour permettre au frontend de différencier
+  // "non connecté" (UNAUTHENTICATED) vs "rôle insuffisant" (FORBIDDEN).
+  FORBIDDEN: "FORBIDDEN",
   EMAIL_NOT_VERIFIED: "EMAIL_NOT_VERIFIED",
   ACCOUNT_DISABLED: "ACCOUNT_DISABLED",
 
@@ -21,6 +25,9 @@ const ERROR_CODES = {
   COMPANY_INFO_REQUIRED: "COMPANY_INFO_REQUIRED",
   COMPANY_INFO_INCOMPLETE: "COMPANY_INFO_INCOMPLETE",
   RESOURCE_IN_USE: "RESOURCE_IN_USE",
+
+  // Erreurs d'abonnement
+  SUBSCRIPTION_READ_ONLY: "SUBSCRIPTION_READ_ONLY",
 
   // Erreurs système
   INTERNAL_ERROR: "INTERNAL_ERROR",

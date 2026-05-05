@@ -1,288 +1,343 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import mongoose from "mongoose";
 
-// Mock Mongoose models
-vi.mock("../../src/models/Client.js", () => {
-  class MockClient {
-    constructor(data) {
-      Object.assign(this, data);
-      this._id = new mongoose.Types.ObjectId();
-      this.activity = data.activity || [];
-      this.notes = data.notes || [];
-      this.save = vi.fn().mockResolvedValue(true);
-    }
-  }
-  MockClient.findOne = vi.fn();
-  MockClient.find = vi.fn();
-  MockClient.countDocuments = vi.fn();
-  MockClient.deleteOne = vi.fn();
-  return { default: MockClient };
-});
+import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
+import { seedOrgMembership, buildContext } from "../helpers/auth.js";
+import {
+  buildClientInput,
+  buildClientDoc,
+  buildOrganizationId,
+  buildUserId,
+} from "../factories/index.js";
 
-vi.mock("../../src/models/Invoice.js", () => ({
-  default: { countDocuments: vi.fn() },
-}));
-
-vi.mock("../../src/models/Quote.js", () => ({
-  default: { countDocuments: vi.fn() },
-}));
-
-vi.mock("../../src/models/PurchaseOrder.js", () => ({
-  default: { countDocuments: vi.fn() },
-}));
-
-vi.mock("../../src/models/ClientCustomField.js", () => ({
-  default: { find: vi.fn() },
-}));
-
-vi.mock("../../src/models/User.js", () => ({
-  default: { findById: vi.fn() },
-}));
-
-// Mock RBAC to pass through
-vi.mock("../../src/middlewares/rbac.js", () => ({
-  requireRead: () => (resolver) => resolver,
-  requireWrite: () => (resolver) => resolver,
-  requireDelete: () => (resolver) => resolver,
-  resolveWorkspaceId: (input, context) =>
-    input && context && input !== context ? context : input || context,
-}));
-
-vi.mock("../../src/middlewares/better-auth-jwt.js", () => ({
-  isAuthenticated: (resolver) => resolver,
-}));
-
+// Side-effect we don't want to test here (automation pipeline)
 vi.mock("../../src/resolvers/clientAutomation.js", () => ({
   automationService: {
     executeAutomations: vi.fn().mockResolvedValue(undefined),
   },
+  default: {},
 }));
 
+// invalidateOrgCache imports rbac internals — we must clear the LRU between tests
+import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Client from "../../src/models/Client.js";
 import Invoice from "../../src/models/Invoice.js";
 import Quote from "../../src/models/Quote.js";
 import PurchaseOrder from "../../src/models/PurchaseOrder.js";
 import clientResolvers from "../../src/resolvers/client.js";
 
-const mockContext = {
-  user: { id: "user-1", name: "Test User", email: "test@test.com" },
-  workspaceId: "507f1f77bcf86cd799439011",
-};
+const userId = buildUserId();
+const organizationId = buildOrganizationId();
 
-beforeEach(() => {
-  vi.clearAllMocks();
+beforeAll(async () => {
+  await startMongo();
 });
+
+afterAll(async () => {
+  await stopMongo();
+});
+
+beforeEach(async () => {
+  await clearMongo();
+  invalidateOrgCache();
+  await seedOrgMembership({ userId, organizationId, role: "owner" });
+});
+
+const ctx = () => buildContext({ userId, organizationId });
 
 describe("Client Resolver - Query.client", () => {
   const resolver = clientResolvers.Query.client;
 
-  it("should return a client by id", async () => {
-    const mockClientData = {
-      _id: "507f1f77bcf86cd799439012",
-      name: "Acme Corp",
-      email: "contact@acme.com",
-    };
-    Client.findOne.mockResolvedValue(mockClientData);
-
-    const result = await resolver(
-      null,
-      { id: "507f1f77bcf86cd799439012" },
-      mockContext,
+  it("returns a client by id", async () => {
+    const doc = await Client.create(
+      buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
     );
 
-    expect(result).toEqual(mockClientData);
-    expect(Client.findOne).toHaveBeenCalled();
+    const result = await resolver(null, { id: doc._id.toString() }, ctx());
+
+    expect(result._id.toString()).toBe(doc._id.toString());
+    expect(result.email).toBe(doc.email);
   });
 
-  it("should throw NOT_FOUND when client does not exist", async () => {
-    Client.findOne.mockResolvedValue(null);
+  it("throws NOT_FOUND when client does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    await expect(resolver(null, { id: fakeId }, ctx())).rejects.toThrow(
+      "non trouvé",
+    );
+  });
+
+  it("does not leak clients across workspaces", async () => {
+    const otherOrg = buildOrganizationId();
+    const otherClient = await Client.create(
+      buildClientDoc({ workspaceId: otherOrg, createdBy: userId }),
+    );
 
     await expect(
-      resolver(null, { id: "nonexistent" }, mockContext),
+      resolver(null, { id: otherClient._id.toString() }, ctx()),
     ).rejects.toThrow("non trouvé");
-  });
-
-  it("should use context workspaceId when input workspaceId mismatches", async () => {
-    const mockClientData = {
-      _id: "507f1f77bcf86cd799439012",
-      name: "Acme Corp",
-      email: "contact@acme.com",
-    };
-    Client.findOne.mockResolvedValue(mockClientData);
-
-    const result = await resolver(
-      null,
-      { id: "test", workspaceId: "different-ws" },
-      mockContext,
-    );
-
-    expect(result).toEqual(mockClientData);
-    // Verify the query used the context workspaceId, not the mismatched input
-    const queryArg = Client.findOne.mock.calls[0][0];
-    expect(queryArg.workspaceId.toString()).toBe(mockContext.workspaceId);
   });
 });
 
 describe("Client Resolver - Query.clients", () => {
   const resolver = clientResolvers.Query.clients;
 
-  it("should return paginated client list", async () => {
-    Client.countDocuments.mockResolvedValue(25);
-    const mockItems = [{ name: "Client A" }, { name: "Client B" }];
-    Client.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue(mockItems),
+  it("returns paginated client list", async () => {
+    for (let i = 0; i < 25; i++) {
+      await Client.create(
+        buildClientDoc({
+          workspaceId: organizationId,
+          createdBy: userId,
+          name: `Client ${String(i).padStart(2, "0")}`,
         }),
-      }),
-    });
+      );
+    }
 
-    const result = await resolver(null, { page: 1, limit: 10 }, mockContext);
+    const result = await resolver(null, { page: 1, limit: 10 }, ctx());
 
-    expect(result.items).toEqual(mockItems);
     expect(result.totalItems).toBe(25);
     expect(result.totalPages).toBe(3);
     expect(result.currentPage).toBe(1);
+    expect(result.items).toHaveLength(10);
   });
 
-  it("should apply search filter", async () => {
-    Client.countDocuments.mockResolvedValue(1);
-    Client.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([{ name: "Acme" }]),
-        }),
+  it("applies search filter", async () => {
+    await Client.create(
+      buildClientDoc({
+        workspaceId: organizationId,
+        createdBy: userId,
+        name: "Acme Corp",
       }),
-    });
+    );
+    await Client.create(
+      buildClientDoc({
+        workspaceId: organizationId,
+        createdBy: userId,
+        name: "Beta Inc",
+      }),
+    );
 
-    await resolver(null, { page: 1, limit: 10, search: "Acme" }, mockContext);
+    const result = await resolver(
+      null,
+      { page: 1, limit: 10, search: "Acme" },
+      ctx(),
+    );
 
-    // Verify countDocuments was called with search query containing $or
-    const countCall = Client.countDocuments.mock.calls[0][0];
-    expect(countCall.$or).toBeDefined();
-    expect(countCall.$or.length).toBeGreaterThan(0);
+    expect(result.totalItems).toBe(1);
+    expect(result.items[0].name).toBe("Acme Corp");
+  });
+
+  it("scopes results to the active workspace", async () => {
+    const otherOrg = buildOrganizationId();
+    await Client.create(
+      buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
+    );
+    await Client.create(
+      buildClientDoc({ workspaceId: otherOrg, createdBy: userId }),
+    );
+
+    const result = await resolver(null, { page: 1, limit: 10 }, ctx());
+
+    expect(result.totalItems).toBe(1);
   });
 });
 
 describe("Client Resolver - Mutation.createClient", () => {
   const resolver = clientResolvers.Mutation.createClient;
 
-  it("should create a client successfully", async () => {
-    Client.findOne.mockResolvedValue(null); // no duplicate
+  it("creates a COMPANY client successfully", async () => {
+    const input = buildClientInput({ type: "COMPANY" });
 
-    const input = {
-      name: "New Client",
-      email: "new@client.com",
-      type: "COMPANY",
-      siret: "123456789",
-    };
+    const result = await resolver(null, { input }, ctx());
 
-    const result = await resolver(null, { input }, mockContext);
-
-    expect(result).toBeDefined();
-    expect(result.save).toHaveBeenCalled();
+    expect(result._id).toBeDefined();
+    expect(result.email).toBe(input.email);
+    const persisted = await Client.findById(result._id);
+    expect(persisted).not.toBeNull();
+    expect(persisted.workspaceId.toString()).toBe(organizationId.toString());
   });
 
-  it("should throw when client email already exists", async () => {
-    Client.findOne.mockResolvedValue({ email: "existing@client.com" });
+  it("rejects duplicate email within the same workspace", async () => {
+    const input = buildClientInput({ type: "COMPANY" });
+    await resolver(null, { input }, ctx());
 
-    const input = {
-      name: "Duplicate",
-      email: "existing@client.com",
-      type: "COMPANY",
-      siret: "123456789",
-    };
-
-    await expect(resolver(null, { input }, mockContext)).rejects.toThrow(
-      "existe déjà",
+    await expect(resolver(null, { input }, ctx())).rejects.toThrow(
+      /existe déjà|email/i,
     );
   });
 
-  it("should throw when COMPANY type has no siret", async () => {
-    Client.findOne.mockResolvedValue(null);
+  it("allows the same email in a different workspace", async () => {
+    const otherOrg = buildOrganizationId();
+    const otherUser = buildUserId();
+    await seedOrgMembership({
+      userId: otherUser,
+      organizationId: otherOrg,
+      role: "owner",
+    });
 
-    const input = {
-      name: "Missing Siret",
-      email: "no-siret@client.com",
-      type: "COMPANY",
-      siret: "",
-    };
+    const input = buildClientInput({ type: "COMPANY" });
+    await resolver(null, { input }, ctx());
 
-    await expect(resolver(null, { input }, mockContext)).rejects.toThrow();
+    const otherCtx = buildContext({
+      userId: otherUser,
+      organizationId: otherOrg,
+    });
+    await expect(resolver(null, { input }, otherCtx)).resolves.toBeDefined();
   });
 
-  it("should validate SIREN/SIRET format for French company", async () => {
-    Client.findOne.mockResolvedValue(null);
+  it("rejects COMPANY without siret", async () => {
+    const input = buildClientInput({ type: "COMPANY", siret: "" });
+    await expect(resolver(null, { input }, ctx())).rejects.toThrow();
+  });
 
-    const input = {
-      name: "Bad Format",
-      email: "bad@client.com",
+  it("rejects COMPANY with invalid SIREN/SIRET length (FR)", async () => {
+    const input = buildClientInput({
       type: "COMPANY",
-      siret: "12345", // invalid: neither 9 nor 14 digits
+      siret: "12345",
       isInternational: false,
-    };
-
-    await expect(resolver(null, { input }, mockContext)).rejects.toThrow(
-      "SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
+    });
+    await expect(resolver(null, { input }, ctx())).rejects.toThrow(
+      /SIREN.*9.*chiffres|SIRET.*14/i,
     );
   });
 
-  it("should generate name from firstName/lastName for INDIVIDUAL type", async () => {
-    Client.findOne.mockResolvedValue(null);
-
-    const input = {
-      email: "individual@client.com",
+  it("generates name from firstName+lastName for INDIVIDUAL", async () => {
+    const input = buildClientInput({
       type: "INDIVIDUAL",
       firstName: "Jean",
       lastName: "Dupont",
-    };
+    });
 
-    const result = await resolver(null, { input }, mockContext);
+    const result = await resolver(null, { input }, ctx());
 
     expect(result.name).toBe("Jean Dupont");
   });
 });
 
-describe("Client Resolver - Mutation.deleteClient", () => {
+describe("Client Resolver - Mutation.deleteClient (RBAC enforced)", () => {
   const resolver = clientResolvers.Mutation.deleteClient;
 
-  it("should delete a client with no associated documents", async () => {
-    Client.findOne.mockResolvedValue({ _id: "client-1" });
-    Invoice.countDocuments.mockResolvedValue(0);
-    Quote.countDocuments.mockResolvedValue(0);
-    PurchaseOrder.countDocuments.mockResolvedValue(0);
-    Client.deleteOne.mockResolvedValue({ deletedCount: 1 });
+  it("deletes a client with no associated documents", async () => {
+    const doc = await Client.create(
+      buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
+    );
 
-    const result = await resolver(null, { id: "client-1" }, mockContext);
+    const result = await resolver(null, { id: doc._id.toString() }, ctx());
 
     expect(result).toBe(true);
-    expect(Client.deleteOne).toHaveBeenCalled();
+    expect(await Client.findById(doc._id)).toBeNull();
   });
 
-  it("should throw RESOURCE_IN_USE when client has invoices", async () => {
-    Client.findOne.mockResolvedValue({ _id: "client-1" });
-    Invoice.countDocuments.mockResolvedValue(3);
+  it("throws when client has invoices", async () => {
+    const doc = await Client.create(
+      buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
+    );
+
+    // Insert a minimal invoice referencing the client id, bypassing schema validation
+    // since we only need the count to be > 0. Use the raw collection.
+    await Invoice.collection.insertOne({
+      workspaceId: organizationId,
+      client: { id: doc._id.toString() },
+      createdAt: new Date(),
+    });
 
     await expect(
-      resolver(null, { id: "client-1" }, mockContext),
-    ).rejects.toThrow("factures");
+      resolver(null, { id: doc._id.toString() }, ctx()),
+    ).rejects.toThrow(/factures/i);
   });
 
-  it("should throw RESOURCE_IN_USE when client has quotes", async () => {
-    Client.findOne.mockResolvedValue({ _id: "client-1" });
-    Invoice.countDocuments.mockResolvedValue(0);
-    Quote.countDocuments.mockResolvedValue(2);
+  it("throws when client has quotes", async () => {
+    const doc = await Client.create(
+      buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
+    );
+
+    await Quote.collection.insertOne({
+      workspaceId: organizationId,
+      client: { id: doc._id.toString() },
+      createdAt: new Date(),
+    });
 
     await expect(
-      resolver(null, { id: "client-1" }, mockContext),
-    ).rejects.toThrow("devis");
+      resolver(null, { id: doc._id.toString() }, ctx()),
+    ).rejects.toThrow(/devis/i);
   });
 
-  it("should throw NOT_FOUND when client does not exist", async () => {
-    Client.findOne.mockResolvedValue(null);
+  it("throws when client has purchase orders", async () => {
+    const doc = await Client.create(
+      buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
+    );
+
+    await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      client: { id: doc._id.toString() },
+      createdAt: new Date(),
+    });
 
     await expect(
-      resolver(null, { id: "nonexistent" }, mockContext),
-    ).rejects.toThrow("non trouvé");
+      resolver(null, { id: doc._id.toString() }, ctx()),
+    ).rejects.toThrow(/bons de commande/i);
+  });
+
+  it("throws NOT_FOUND when client does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    await expect(resolver(null, { id: fakeId }, ctx())).rejects.toThrow(
+      "non trouvé",
+    );
+  });
+});
+
+describe("Client Resolver - real RBAC enforcement", () => {
+  it("blocks viewer role from creating a client", async () => {
+    const viewerUserId = buildUserId();
+    const viewerOrgId = buildOrganizationId();
+    await seedOrgMembership({
+      userId: viewerUserId,
+      organizationId: viewerOrgId,
+      role: "viewer",
+    });
+
+    const viewerCtx = buildContext({
+      userId: viewerUserId,
+      organizationId: viewerOrgId,
+    });
+
+    const input = buildClientInput({ type: "COMPANY" });
+    await expect(
+      clientResolvers.Mutation.createClient(null, { input }, viewerCtx),
+    ).rejects.toThrow(/permission|create/i);
+  });
+
+  it("blocks viewer role from deleting a client", async () => {
+    const viewerUserId = buildUserId();
+    const viewerOrgId = buildOrganizationId();
+    await seedOrgMembership({
+      userId: viewerUserId,
+      organizationId: viewerOrgId,
+      role: "viewer",
+    });
+
+    const doc = await Client.create(
+      buildClientDoc({ workspaceId: viewerOrgId, createdBy: viewerUserId }),
+    );
+
+    const viewerCtx = buildContext({
+      userId: viewerUserId,
+      organizationId: viewerOrgId,
+    });
+
+    await expect(
+      clientResolvers.Mutation.deleteClient(
+        null,
+        { id: doc._id.toString() },
+        viewerCtx,
+      ),
+    ).rejects.toThrow(/permission|delete/i);
   });
 });

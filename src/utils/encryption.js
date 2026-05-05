@@ -179,6 +179,55 @@ export function applyBankDetailsEncryption(schema, bankDetailsPaths) {
   });
 }
 
+/**
+ * Apply encryption hooks to top-level string fields on a Mongoose schema.
+ *
+ * Mirrors `applyBankDetailsEncryption` but for plain top-level fields
+ * (e.g. PennylaneAccount.apiToken, vs the nested bankDetails subdoc).
+ *
+ * Decryption is INTENTIONALLY NOT auto-applied via post-find hooks —
+ * callers must use an explicit `getDecryptedX()` instance method declared
+ * on the schema. This makes the decryption boundary visible in code
+ * (no silent magic on every read), at the cost of one extra method call.
+ *
+ * @param {mongoose.Schema} schema - The Mongoose schema to add hooks to
+ * @param {string[]} fieldNames - Array of top-level field names to encrypt
+ */
+export function applyFieldEncryption(schema, fieldNames) {
+  // Pre-save: encrypt fields before writing to DB.
+  // The `!isEncrypted(value)` guard makes the hook idempotent: re-saving
+  // a doc whose field is already ciphertext is a no-op. This also covers
+  // the legacy-data case where the migration script has already encrypted
+  // the value.
+  schema.pre('save', function (next) {
+    for (const fieldName of fieldNames) {
+      const value = this[fieldName];
+      if (value && !isEncrypted(value)) {
+        this[fieldName] = encrypt(value);
+      }
+    }
+    next();
+  });
+
+  // Pre-findOneAndUpdate: encrypt fields in update operations
+  // ($set or top-level update payload). Without this, an update like
+  // `Model.findOneAndUpdate({...}, { apiToken: 'new_plaintext' })` would
+  // bypass the pre-save hook and persist plaintext.
+  schema.pre('findOneAndUpdate', function (next) {
+    const update = this.getUpdate();
+    if (!update) return next();
+    const targets = [update, update.$set].filter(Boolean);
+    for (const target of targets) {
+      for (const fieldName of fieldNames) {
+        if (target[fieldName] && !isEncrypted(target[fieldName])) {
+          target[fieldName] = encrypt(target[fieldName]);
+        }
+      }
+    }
+    next();
+  });
+}
+
 // Helpers for nested property access
 function getNestedValue(obj, path) {
   return path.split('.').reduce((current, key) => {

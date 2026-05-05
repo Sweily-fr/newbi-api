@@ -1,22 +1,25 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
-const colorLabelEntrySchema = new mongoose.Schema({
-  color: {
-    type: String,
-    required: true,
+const colorLabelEntrySchema = new mongoose.Schema(
+  {
+    color: {
+      type: String,
+      required: true,
+    },
+    label: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 30,
+    },
   },
-  label: {
-    type: String,
-    required: true,
-    trim: true,
-    maxlength: 30,
-  },
-}, { _id: false });
+  { _id: false },
+);
 
 const calendarColorLabelSchema = new mongoose.Schema({
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Organization',
+    ref: "Organization",
     required: true,
     unique: true,
   },
@@ -24,7 +27,7 @@ const calendarColorLabelSchema = new mongoose.Schema({
     type: [colorLabelEntrySchema],
     validate: {
       validator: (v) => v.length >= 1 && v.length <= 20,
-      message: 'Entre 1 et 20 étiquettes de couleur sont autorisées.',
+      message: "Entre 1 et 20 étiquettes de couleur sont autorisées.",
     },
   },
   createdAt: {
@@ -37,13 +40,18 @@ const calendarColorLabelSchema = new mongoose.Schema({
   },
 });
 
-calendarColorLabelSchema.pre('save', function(next) {
+calendarColorLabelSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
   next();
 });
 
-calendarColorLabelSchema.index({ workspaceId: 1 });
+// Note: workspaceId already has `unique: true` at the field level, which
+// auto-creates a unique index. A separate calendarColorLabelSchema.index call
+// would be a duplicate.
 
-const CalendarColorLabel = mongoose.model('CalendarColorLabel', calendarColorLabelSchema);
+const CalendarColorLabel = mongoose.model(
+  "CalendarColorLabel",
+  calendarColorLabelSchema,
+);
 
 export default CalendarColorLabel;

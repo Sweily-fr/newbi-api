@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 /**
  * Schéma pour les commissions générées par les partenaires
@@ -7,19 +7,21 @@ const partnerCommissionSchema = new mongoose.Schema(
   {
     partnerId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
       index: true,
     },
     referralId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
-      index: true,
+      // Note: do not set `index: true` here — a single-field index on referralId
+      // is already declared via `partnerCommissionSchema.index({ referralId: 1 })`
+      // below. Both would produce a duplicate-index warning.
     },
     subscriptionId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Subscription',
+      ref: "Subscription",
       required: true,
     },
     // Montant du paiement du filleul
@@ -42,14 +44,14 @@ const partnerCommissionSchema = new mongoose.Schema(
     // Type d'abonnement du filleul
     subscriptionType: {
       type: String,
-      enum: ['monthly', 'annual'],
+      enum: ["monthly", "annual"],
       required: true,
     },
     // Statut de la commission
     status: {
       type: String,
-      enum: ['pending', 'confirmed', 'paid', 'cancelled'],
-      default: 'pending',
+      enum: ["pending", "confirmed", "paid", "cancelled"],
+      default: "pending",
       index: true,
     },
     // Date de génération de la commission
@@ -65,14 +67,14 @@ const partnerCommissionSchema = new mongoose.Schema(
     // ID du retrait associé si payé
     withdrawalId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Withdrawal',
+      ref: "Withdrawal",
     },
     // Notes ou informations supplémentaires
     notes: String,
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index composés pour les requêtes fréquentes
@@ -80,6 +82,9 @@ partnerCommissionSchema.index({ partnerId: 1, status: 1 });
 partnerCommissionSchema.index({ partnerId: 1, generatedAt: -1 });
 partnerCommissionSchema.index({ referralId: 1 });
 
-const PartnerCommission = mongoose.model('PartnerCommission', partnerCommissionSchema);
+const PartnerCommission = mongoose.model(
+  "PartnerCommission",
+  partnerCommissionSchema,
+);
 
 export default PartnerCommission;

@@ -5,6 +5,7 @@
 import cloudflareService from "../services/cloudflareService.js";
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const documentUploadResolvers = {
   Upload: GraphQLUpload,
@@ -15,8 +16,11 @@ const documentUploadResolvers = {
      */
     uploadDocument: async (_, { file, folderType }, { user }) => {
       try {
-        console.log('🚀 DocumentUpload - Début upload avec folderType:', folderType);
-        
+        console.log(
+          "🚀 DocumentUpload - Début upload avec folderType:",
+          folderType,
+        );
+
         // Vérifier l'authentification
         if (!user) {
           throw new Error("Utilisateur non authentifié");
@@ -42,7 +46,7 @@ const documentUploadResolvers = {
           throw new Error(
             `Fichier trop volumineux. Taille maximum: ${
               maxSize / 1024 / 1024
-            }MB`
+            }MB`,
           );
         }
 
@@ -58,7 +62,7 @@ const documentUploadResolvers = {
 
         if (!allowedTypes.includes(mimetype)) {
           throw new Error(
-            "Type de fichier non supporté. Types acceptés: JPEG, PNG, WebP, PDF"
+            "Type de fichier non supporté. Types acceptés: JPEG, PNG, WebP, PDF",
           );
         }
 
@@ -89,64 +93,91 @@ const documentUploadResolvers = {
         // Récupérer l'ID de l'organisation de l'utilisateur
         let organizationId = null;
 
-        if (finalFolderType === "imgCompany" || finalFolderType === "ocr" || finalFolderType === "importedInvoice") {
+        if (
+          finalFolderType === "imgCompany" ||
+          finalFolderType === "ocr" ||
+          finalFolderType === "importedInvoice"
+        ) {
           // Essayer différentes propriétés pour l'organizationId
           const rawOrgId =
             user.organizationId ||
             user.organization?.id ||
             user.organization?._id ||
             user.currentOrganizationId;
-          
+
           // S'assurer que c'est une string et pas un objet
           if (rawOrgId) {
-            organizationId = typeof rawOrgId === 'object' 
-              ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
-              : rawOrgId.toString();
+            organizationId =
+              typeof rawOrgId === "object"
+                ? rawOrgId._id?.toString() ||
+                  rawOrgId.id?.toString() ||
+                  rawOrgId.toString()
+                : rawOrgId.toString();
           }
 
           // Si pas trouvé, chercher dans la collection member
           if (!organizationId) {
             try {
-              const mongoose = await import('mongoose');
+              const mongoose = await import("mongoose");
               const ObjectId = mongoose.default.Types.ObjectId;
-              
+
               // Convertir l'userId en ObjectId si nécessaire
-              const userObjectId = typeof user.id === 'string' ? new ObjectId(user.id) : user.id;
-              
+              const userObjectId =
+                typeof user.id === "string" ? new ObjectId(user.id) : user.id;
+
               const memberRecord = await mongoose.default.connection.db
-                .collection('member')
+                .collection("member")
                 .findOne({ userId: userObjectId });
-              
+
               if (memberRecord && memberRecord.organizationId) {
                 organizationId = memberRecord.organizationId.toString();
-                console.log('🔍 DocumentUpload - Organization trouvée via collection member:', organizationId);
+                console.log(
+                  "🔍 DocumentUpload - Organization trouvée via collection member:",
+                  organizationId,
+                );
               } else {
-                console.log('🔍 DocumentUpload - Aucun member trouvé pour userId:', user.id);
+                console.log(
+                  "🔍 DocumentUpload - Aucun member trouvé pour userId:",
+                  user.id,
+                );
               }
             } catch (memberError) {
-              console.error('❌ Erreur recherche member:', memberError);
+              console.error("❌ Erreur recherche member:", memberError);
             }
           }
 
           if (!organizationId) {
-            if (finalFolderType === "ocr" || finalFolderType === "importedInvoice") {
-              throw new Error("Organization ID requis pour les uploads OCR/factures importées. L'utilisateur doit être associé à une organisation.");
+            if (
+              finalFolderType === "ocr" ||
+              finalFolderType === "importedInvoice"
+            ) {
+              throw new Error(
+                "Organization ID requis pour les uploads OCR/factures importées. L'utilisateur doit être associé à une organisation.",
+              );
             }
             // Utiliser l'userId comme fallback uniquement pour les images d'entreprise
             organizationId = user.id;
           }
-          
-          console.log('🏢 DocumentUpload - Organization ID récupéré:', organizationId, 'pour type:', finalFolderType);
+
+          console.log(
+            "🏢 DocumentUpload - Organization ID récupéré:",
+            organizationId,
+            "pour type:",
+            finalFolderType,
+          );
         }
 
         // Upload vers Cloudflare R2
-        console.log('📤 DocumentUpload - Appel cloudflareService avec finalFolderType:', finalFolderType);
+        console.log(
+          "📤 DocumentUpload - Appel cloudflareService avec finalFolderType:",
+          finalFolderType,
+        );
         const uploadResult = await cloudflareService.uploadImage(
           fileBuffer,
           filename,
           user.id,
           finalFolderType,
-          organizationId
+          organizationId,
         );
 
         return {
@@ -178,8 +209,11 @@ const documentUploadResolvers = {
      */
     promoteTemporaryFile: isAuthenticated(async (_, { tempKey }, { user }) => {
       try {
-        console.log('🚀 DocumentUpload - Promotion du fichier temporaire:', tempKey);
-        
+        console.log(
+          "🚀 DocumentUpload - Promotion du fichier temporaire:",
+          tempKey,
+        );
+
         // Récupérer l'ID de l'organisation de l'utilisateur
         let organizationId = null;
         organizationId =
@@ -191,44 +225,50 @@ const documentUploadResolvers = {
         // Si pas trouvé, chercher dans la collection member
         if (!organizationId) {
           try {
-            const mongoose = await import('mongoose');
+            const mongoose = await import("mongoose");
             const ObjectId = mongoose.default.Types.ObjectId;
-            
-            const userObjectId = typeof user.id === 'string' ? new ObjectId(user.id) : user.id;
-            
+
+            const userObjectId =
+              typeof user.id === "string" ? new ObjectId(user.id) : user.id;
+
             const memberRecord = await mongoose.default.connection.db
-              .collection('member')
+              .collection("member")
               .findOne({ userId: userObjectId });
-            
+
             if (memberRecord && memberRecord.organizationId) {
               organizationId = memberRecord.organizationId.toString();
             }
           } catch (memberError) {
-            console.error('❌ Erreur recherche member:', memberError);
+            console.error("❌ Erreur recherche member:", memberError);
           }
         }
 
         if (!organizationId) {
-          throw new Error('Organization ID requis pour promouvoir un fichier temporaire');
+          throw new Error(
+            "Organization ID requis pour promouvoir un fichier temporaire",
+          );
         }
 
         // Appeler le service pour déplacer le fichier
-        const result = await cloudflareService.promoteTemporaryFile(tempKey, organizationId);
+        const result = await cloudflareService.promoteTemporaryFile(
+          tempKey,
+          organizationId,
+        );
 
         return {
           success: true,
           key: result.key,
           url: result.url,
-          message: 'Fichier promu avec succès',
+          message: "Fichier promu avec succès",
         };
       } catch (error) {
-        console.error('❌ Erreur promotion fichier:', error);
+        console.error("❌ Erreur promotion fichier:", error);
 
         return {
           success: false,
           key: null,
           url: null,
-          message: error.message || 'Erreur lors de la promotion du fichier',
+          message: error.message || "Erreur lors de la promotion du fichier",
         };
       }
     }),
@@ -256,5 +296,19 @@ const documentUploadResolvers = {
     }),
   },
 };
+
+// ✅ Phase A.4 — Subscription check on all document upload mutations
+Object.keys(documentUploadResolvers.Mutation).forEach((name) => {
+  const original = documentUploadResolvers.Mutation[name];
+  documentUploadResolvers.Mutation[name] = async (
+    parent,
+    args,
+    context,
+    info,
+  ) => {
+    await checkSubscriptionActive(context);
+    return original(parent, args, context, info);
+  };
+});
 
 export default documentUploadResolvers;

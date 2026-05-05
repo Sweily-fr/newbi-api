@@ -1,4 +1,7 @@
-import { withOrganization } from "../middlewares/rbac.js";
+import {
+  withOrganization,
+  checkSubscriptionActive,
+} from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
 import logger from "../utils/logger.js";
@@ -10,7 +13,7 @@ const reconciliationResolvers = {
       async (
         parent,
         { workspaceId: argWorkspaceId },
-        { user, workspaceId: ctxWorkspaceId }
+        { user, workspaceId: ctxWorkspaceId },
       ) => {
         try {
           // Utiliser le workspaceId passé en argument ou celui du contexte
@@ -98,7 +101,7 @@ const reconciliationResolvers = {
           logger.error("[RECONCILIATION-GQL] Erreur suggestions:", error);
           throw error;
         }
-      }
+      },
     ),
 
     transactionsForInvoice: withOrganization(
@@ -166,11 +169,11 @@ const reconciliationResolvers = {
         } catch (error) {
           logger.error(
             "[RECONCILIATION-GQL] Erreur transactions pour facture:",
-            error
+            error,
           );
           throw error;
         }
-      }
+      },
     ),
   },
 
@@ -237,7 +240,7 @@ const reconciliationResolvers = {
           // }
 
           logger.info(
-            `[RECONCILIATION-GQL] Rapprochement: Transaction ${transactionId} <-> Facture ${invoiceId}`
+            `[RECONCILIATION-GQL] Rapprochement: Transaction ${transactionId} <-> Facture ${invoiceId}`,
           );
 
           return {
@@ -263,7 +266,7 @@ const reconciliationResolvers = {
           logger.error("[RECONCILIATION-GQL] Erreur rapprochement:", error);
           return { success: false, message: error.message };
         }
-      }
+      },
     ),
 
     unlinkTransactionFromInvoice: withOrganization(
@@ -285,7 +288,7 @@ const reconciliationResolvers = {
             invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
             if (invoice?.linkedTransactionId) {
               transaction = await Transaction.findById(
-                invoice.linkedTransactionId
+                invoice.linkedTransactionId,
               );
             }
           }
@@ -307,7 +310,7 @@ const reconciliationResolvers = {
           }
 
           logger.info(
-            `[RECONCILIATION-GQL] Déliaison: Transaction ${transactionId} <-> Facture ${invoiceId}`
+            `[RECONCILIATION-GQL] Déliaison: Transaction ${transactionId} <-> Facture ${invoiceId}`,
           );
 
           return {
@@ -318,7 +321,7 @@ const reconciliationResolvers = {
           logger.error("[RECONCILIATION-GQL] Erreur déliaison:", error);
           return { success: false, message: error.message };
         }
-      }
+      },
     ),
 
     ignoreTransaction: withOrganization(
@@ -329,7 +332,7 @@ const reconciliationResolvers = {
           const transaction = await Transaction.findOneAndUpdate(
             { _id: transactionId, workspaceId },
             { reconciliationStatus: "ignored" },
-            { new: true }
+            { new: true },
           );
 
           if (!transaction) {
@@ -337,7 +340,7 @@ const reconciliationResolvers = {
           }
 
           logger.info(
-            `[RECONCILIATION-GQL] Transaction ignorée: ${transactionId}`
+            `[RECONCILIATION-GQL] Transaction ignorée: ${transactionId}`,
           );
 
           return {
@@ -348,9 +351,21 @@ const reconciliationResolvers = {
           logger.error("[RECONCILIATION-GQL] Erreur ignorer:", error);
           return { success: false, message: error.message };
         }
-      }
+      },
     ),
   },
 };
+
+// ✅ Phase A.1 — Subscription check sur toutes les mutations reconciliation (fail-closed: modifie statut facture)
+const originalReconciliationMutations = reconciliationResolvers.Mutation;
+reconciliationResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalReconciliationMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context, { failClosed: true });
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export default reconciliationResolvers;

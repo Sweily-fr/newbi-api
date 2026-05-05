@@ -1,260 +1,261 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import mongoose from "mongoose";
 
-// ─── Mock models ────────────────────────────────────────────────────
+import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
+import { seedOrgMembership, buildContext } from "../helpers/auth.js";
+import {
+  buildProductInput,
+  buildOrganizationId,
+  buildUserId,
+} from "../factories/index.js";
 
-vi.mock("../../src/models/Product.js", () => {
-  class MockProduct {
-    constructor(data) {
-      Object.assign(this, data);
-      this._id = data._id || new mongoose.Types.ObjectId();
-      this.save = vi.fn().mockResolvedValue(true);
-    }
-  }
-  MockProduct.findOne = vi.fn();
-  MockProduct.find = vi.fn();
-  MockProduct.countDocuments = vi.fn();
-  MockProduct.findById = vi.fn();
-  MockProduct.findByIdAndUpdate = vi.fn();
-  MockProduct.findByIdAndDelete = vi.fn();
-  MockProduct.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
-  return { default: MockProduct };
-});
-
-// ─── Mock middlewares (pass-through) ────────────────────────────────
-
-vi.mock("../../src/middlewares/rbac.js", () => ({
-  requireRead: () => (resolver) => resolver,
-  requireWrite: () => (resolver) => resolver,
-  requireDelete: () => (resolver) => resolver,
-  resolveWorkspaceId: (input, context) =>
-    input && context && input !== context ? context : input || context,
-}));
-
-vi.mock("../../src/middlewares/better-auth-jwt.js", () => ({
-  isAuthenticated: (resolver) => resolver,
-}));
-
-// ─── Import ─────────────────────────────────────────────────────────
-
+import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Product from "../../src/models/Product.js";
 import productResolvers from "../../src/resolvers/product.js";
 
-const workspaceId = "507f1f77bcf86cd799439011";
+const userId = buildUserId();
+const organizationId = buildOrganizationId();
 
-const mockContext = {
-  user: { id: "user-1", name: "Test User", email: "test@test.com" },
-  workspaceId,
-  userRole: "owner",
-};
-
-beforeEach(() => {
-  vi.clearAllMocks();
+beforeAll(async () => {
+  await startMongo();
 });
 
-// ─── Query.product ──────────────────────────────────────────────────
+afterAll(async () => {
+  await stopMongo();
+});
+
+beforeEach(async () => {
+  await clearMongo();
+  invalidateOrgCache();
+  await seedOrgMembership({ userId, organizationId, role: "owner" });
+});
+
+const ctx = () => buildContext({ userId, organizationId });
+
+const insertProduct = (overrides = {}) =>
+  Product.create({
+    ...buildProductInput(),
+    workspaceId: organizationId,
+    createdBy: userId,
+    ...overrides,
+  });
 
 describe("Product Resolver - Query.product", () => {
   const resolver = productResolvers.Query.product;
 
-  it("should return a product by id", async () => {
-    const mockProduct = { _id: "prod-1", name: "Audit SEO", unitPrice: 1500 };
-    Product.findOne.mockResolvedValue(mockProduct);
+  it("returns a product by id", async () => {
+    const product = await insertProduct({ name: "Audit SEO" });
 
     const result = await resolver(
       null,
-      { id: "prod-1", workspaceId },
-      mockContext,
+      { id: product._id.toString(), workspaceId: organizationId.toString() },
+      ctx(),
     );
 
-    expect(result).toEqual(mockProduct);
-    expect(Product.findOne).toHaveBeenCalled();
+    expect(result.name).toBe("Audit SEO");
   });
 
-  it("should throw NOT_FOUND when product does not exist", async () => {
-    Product.findOne.mockResolvedValue(null);
+  it("throws NOT_FOUND when product does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    await expect(
+      resolver(
+        null,
+        { id: fakeId, workspaceId: organizationId.toString() },
+        ctx(),
+      ),
+    ).rejects.toThrow(/non trouvé|Produit/i);
+  });
+
+  it("does not leak products across workspaces", async () => {
+    const otherOrg = buildOrganizationId();
+    const product = await Product.create({
+      ...buildProductInput(),
+      workspaceId: otherOrg,
+      createdBy: userId,
+    });
 
     await expect(
-      resolver(null, { id: "nonexistent", workspaceId }, mockContext),
-    ).rejects.toThrow();
-  });
-
-  it("should use context workspaceId when input workspaceId mismatches", async () => {
-    const mockProduct = { _id: "prod-1", name: "Audit SEO", unitPrice: 1500 };
-    Product.findOne.mockResolvedValue(mockProduct);
-
-    const result = await resolver(
-      null,
-      { id: "prod-1", workspaceId: "different-ws" },
-      mockContext,
-    );
-
-    expect(result).toEqual(mockProduct);
-    // Verify the query used the context workspaceId, not the mismatched input
-    const queryArg = Product.findOne.mock.calls[0][0];
-    expect(queryArg.workspaceId).toBe(mockContext.workspaceId);
+      resolver(
+        null,
+        { id: product._id.toString(), workspaceId: organizationId.toString() },
+        ctx(),
+      ),
+    ).rejects.toThrow(/non trouvé/i);
   });
 });
-
-// ─── Query.products ─────────────────────────────────────────────────
 
 describe("Product Resolver - Query.products", () => {
   const resolver = productResolvers.Query.products;
 
-  it("should return paginated product list", async () => {
-    const mockProducts = [{ name: "Product A" }, { name: "Product B" }];
-    // Pattern: Promise.all([Product.find(query).sort().skip().limit(), Product.countDocuments(query)])
-    Product.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue(mockProducts),
-        }),
-      }),
-    });
-    Product.countDocuments.mockResolvedValue(15);
+  it("returns paginated product list", async () => {
+    for (let i = 0; i < 15; i++) {
+      await insertProduct({ name: `Product ${String(i).padStart(2, "0")}` });
+    }
 
     const result = await resolver(
       null,
-      { workspaceId, page: 1, limit: 10 },
-      mockContext,
+      { workspaceId: organizationId.toString(), page: 1, limit: 10 },
+      ctx(),
     );
 
-    expect(result.products).toEqual(mockProducts);
     expect(result.totalCount).toBe(15);
+    expect(result.hasNextPage).toBe(true);
+    expect(result.products).toHaveLength(10);
   });
 
-  it("should apply search filter", async () => {
-    Product.find.mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        skip: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    });
-    Product.countDocuments.mockResolvedValue(1);
+  it("applies search filter", async () => {
+    await insertProduct({ name: "SEO Audit", reference: "SEO-001" });
+    await insertProduct({ name: "Site web vitrine", reference: "WEB-001" });
 
-    await resolver(
+    const result = await resolver(
       null,
-      { workspaceId, search: "SEO", page: 1, limit: 10 },
-      mockContext,
+      {
+        workspaceId: organizationId.toString(),
+        search: "SEO",
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
     );
 
-    const queryArg = Product.find.mock.calls[0][0];
-    expect(queryArg.$or).toBeDefined();
+    expect(result.totalCount).toBe(1);
+    expect(result.products[0].name).toBe("SEO Audit");
+  });
+
+  it("filters by category", async () => {
+    await insertProduct({ name: "Audit", category: "Service" });
+    await insertProduct({ name: "Lampe", category: "Product" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        category: "Service",
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+    expect(result.products[0].category).toBe("Service");
   });
 });
-
-// ─── Mutation.createProduct ─────────────────────────────────────────
 
 describe("Product Resolver - Mutation.createProduct", () => {
   const resolver = productResolvers.Mutation.createProduct;
 
-  it("should create a product successfully", async () => {
-    Product.findOne.mockResolvedValue(null); // no duplicate
-
-    const input = {
+  it("creates a product successfully", async () => {
+    const input = buildProductInput({
       name: "Audit technique",
-      unitPrice: 2000,
-      vatRate: 20,
-      unit: "forfait",
-      workspaceId,
-    };
+      workspaceId: organizationId.toString(),
+    });
 
-    const result = await resolver(null, { input }, mockContext);
+    const result = await resolver(null, { input }, ctx());
 
-    expect(result).toBeDefined();
-    expect(result.save).toHaveBeenCalled();
     expect(result.name).toBe("Audit technique");
+    const persisted = await Product.findById(result._id);
+    expect(persisted).not.toBeNull();
+    expect(persisted.workspaceId.toString()).toBe(organizationId.toString());
   });
 
-  it("should throw when product name already exists in workspace", async () => {
-    Product.findOne.mockResolvedValue({ name: "Existing Product" });
+  it("rejects duplicate product name in same workspace", async () => {
+    await insertProduct({ name: "Existing Product" });
 
-    const input = {
+    const input = buildProductInput({
       name: "Existing Product",
-      unitPrice: 100,
-      workspaceId,
-    };
-
-    await expect(resolver(null, { input }, mockContext)).rejects.toThrow();
+      workspaceId: organizationId.toString(),
+    });
+    await expect(resolver(null, { input }, ctx())).rejects.toThrow();
   });
 
-  it("should use context workspaceId on workspace mismatch in input", async () => {
-    Product.findOne.mockResolvedValue(null); // no duplicate
+  it("allows the same name in a different workspace", async () => {
+    const otherUser = buildUserId();
+    const otherOrg = buildOrganizationId();
+    await seedOrgMembership({ userId: otherUser, organizationId: otherOrg });
 
-    const input = {
-      name: "Test",
-      unitPrice: 100,
-      workspaceId: "different-workspace",
-    };
+    await insertProduct({ name: "Shared Name" });
 
-    const result = await resolver(null, { input }, mockContext);
+    const otherCtx = buildContext({
+      userId: otherUser,
+      organizationId: otherOrg,
+    });
+    const input = buildProductInput({
+      name: "Shared Name",
+      workspaceId: otherOrg.toString(),
+    });
 
-    expect(result).toBeDefined();
-    expect(result.save).toHaveBeenCalled();
-    // The resolver should fall back to context workspaceId
-    expect(result.workspaceId).toBe(mockContext.workspaceId);
+    await expect(resolver(null, { input }, otherCtx)).resolves.toBeDefined();
   });
 });
-
-// ─── Mutation.updateProduct ─────────────────────────────────────────
 
 describe("Product Resolver - Mutation.updateProduct", () => {
   const resolver = productResolvers.Mutation.updateProduct;
 
-  it("should update a product", async () => {
-    // updateProduct uses Product.findOne() then modifies and calls product.save()
-    const existingProduct = {
-      _id: "prod-1",
-      name: "Old Name",
-      unitPrice: 1000,
-      workspaceId,
-      save: vi.fn().mockResolvedValue(true),
-    };
-    Product.findOne.mockResolvedValueOnce(existingProduct); // access check
-    Product.findOne.mockResolvedValueOnce(null); // no duplicate name
+  it("updates a product", async () => {
+    const product = await insertProduct({ name: "Old Name", unitPrice: 1000 });
 
     const result = await resolver(
       null,
-      { id: "prod-1", input: { name: "Updated", unitPrice: 3000 } },
-      mockContext,
+      {
+        id: product._id.toString(),
+        input: { name: "Updated", unitPrice: 3000 },
+      },
+      ctx(),
     );
 
     expect(result.name).toBe("Updated");
     expect(result.unitPrice).toBe(3000);
-    expect(result.save).toHaveBeenCalled();
   });
 
-  it("should throw NOT_FOUND when product does not exist", async () => {
-    Product.findOne.mockResolvedValue(null);
-
+  it("throws NOT_FOUND when product does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
     await expect(
-      resolver(null, { id: "nonexistent", input: { name: "X" } }, mockContext),
-    ).rejects.toThrow();
+      resolver(null, { id: fakeId, input: { name: "X" } }, ctx()),
+    ).rejects.toThrow(/non trouvé|Produit/i);
   });
 });
 
-// ─── Mutation.deleteProduct ─────────────────────────────────────────
-
-describe("Product Resolver - Mutation.deleteProduct", () => {
+describe("Product Resolver - Mutation.deleteProduct (RBAC enforced)", () => {
   const resolver = productResolvers.Mutation.deleteProduct;
 
-  it("should delete a product", async () => {
-    // deleteProduct uses Product.findOne() then Product.deleteOne()
-    Product.findOne.mockResolvedValue({ _id: "prod-1", workspaceId });
-    Product.deleteOne.mockResolvedValue({ deletedCount: 1 });
+  it("deletes a product", async () => {
+    const product = await insertProduct();
 
-    const result = await resolver(null, { id: "prod-1" }, mockContext);
+    const result = await resolver(null, { id: product._id.toString() }, ctx());
 
     expect(result).toBe(true);
-    expect(Product.deleteOne).toHaveBeenCalled();
+    expect(await Product.findById(product._id)).toBeNull();
   });
 
-  it("should throw NOT_FOUND when product does not exist", async () => {
-    Product.findOne.mockResolvedValue(null);
+  it("throws NOT_FOUND when product does not exist", async () => {
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    await expect(resolver(null, { id: fakeId }, ctx())).rejects.toThrow(
+      /non trouvé|Produit/i,
+    );
+  });
+
+  it("blocks viewer role from deleting", async () => {
+    const viewerUserId = buildUserId();
+    const viewerOrg = buildOrganizationId();
+    await seedOrgMembership({
+      userId: viewerUserId,
+      organizationId: viewerOrg,
+      role: "viewer",
+    });
+    const product = await Product.create({
+      ...buildProductInput(),
+      workspaceId: viewerOrg,
+      createdBy: viewerUserId,
+    });
+
+    const viewerCtx = buildContext({
+      userId: viewerUserId,
+      organizationId: viewerOrg,
+    });
 
     await expect(
-      resolver(null, { id: "nonexistent" }, mockContext),
-    ).rejects.toThrow();
+      resolver(null, { id: product._id.toString() }, viewerCtx),
+    ).rejects.toThrow(/permission|delete/i);
   });
 });

@@ -128,7 +128,9 @@ node add-demo-documents.js
 ### Variables de Configuration
 ```javascript
 // Dans add-demo-documents.js
-const MONGODB_URI = "mongodb://newbiAdmin:j6FKJHBb39Rdw^kM^2^Fp5ohPfjgy9@localhost:27017/newbi?authSource=admin";
+// MONGODB_URI doit être fourni via la variable d'environnement (pas de fallback hardcodé).
+// Exemple : MONGODB_URI="mongodb://username:password@host:port/dbname" node scripts/add-demo-documents.js
+const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = "newbi";
 const DEMO_EMAIL = "demo@newbi.fr";
 ```

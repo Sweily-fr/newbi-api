@@ -2,6 +2,7 @@
 import { Board, Column, Task } from "../models/kanban.js";
 import { AuthenticationError } from "apollo-server-express";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { getPubSub, cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
@@ -3943,6 +3944,18 @@ const resolvers = {
     },
   },
 };
+
+// Wrap all mutations with subscription check
+const originalMutations = resolvers.Mutation;
+resolvers.Mutation = Object.fromEntries(
+  Object.entries(originalMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export { enrichTaskWithUserInfo };
 export default resolvers;

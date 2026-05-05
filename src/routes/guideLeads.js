@@ -26,7 +26,9 @@ async function checkRateLimit(ip) {
       }
       return count <= RATE_LIMIT_MAX;
     } catch (err) {
-      logger.warn(`[GuideLeads] Erreur Redis rate limit, fallback in-memory: ${err.message}`);
+      logger.warn(
+        `[GuideLeads] Erreur Redis rate limit, fallback in-memory: ${err.message}`,
+      );
     }
   }
 
@@ -61,11 +63,14 @@ async function verifyTurnstileToken(token, ip) {
   }
 
   try {
-    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ secret, response: token, remoteip: ip }),
-    });
+    const res = await fetch(
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ secret, response: token, remoteip: ip }),
+      },
+    );
     const outcome = await res.json();
     return outcome.success === true;
   } catch (err) {
@@ -91,7 +96,7 @@ function isValidEmail(email) {
  */
 router.post("/guide", async (req, res) => {
   try {
-    logger.info(`[GuideLeads] POST /guide reçu`);
+    logger.info("[GuideLeads] POST /guide reçu");
 
     const ip = req.ip || req.connection?.remoteAddress || "unknown";
 
@@ -111,14 +116,31 @@ router.post("/guide", async (req, res) => {
       });
     }
 
-    const { firstName, lastName, companyName, email, phone, source, acceptedTerms, turnstileToken } = req.body;
+    const {
+      firstName,
+      lastName,
+      companyName,
+      email,
+      phone,
+      source,
+      acceptedTerms,
+      turnstileToken,
+    } = req.body;
 
     // 3. Validation des champs requis
-    if (!firstName || !lastName || !companyName || !email || !phone || !acceptedTerms) {
-      logger.warn(`[GuideLeads] Validation échouée — champs manquants`);
+    if (
+      !firstName ||
+      !lastName ||
+      !companyName ||
+      !email ||
+      !phone ||
+      !acceptedTerms
+    ) {
+      logger.warn("[GuideLeads] Validation échouée — champs manquants");
       return res.status(400).json({
         success: false,
-        error: "Les champs prénom, nom, entreprise, email, téléphone et acceptation des conditions sont requis.",
+        error:
+          "Les champs prénom, nom, entreprise, email, téléphone et acceptation des conditions sont requis.",
       });
     }
 
@@ -143,9 +165,14 @@ router.post("/guide", async (req, res) => {
     const guideSlug = "facturation-electronique";
 
     // Vérifier si le lead existe déjà (anti-doublon)
-    const existingLead = await GuideLead.findOne({ email: sanitizedEmail, guideSlug });
+    const existingLead = await GuideLead.findOne({
+      email: sanitizedEmail,
+      guideSlug,
+    });
     if (existingLead) {
-      logger.info(`[GuideLeads] Lead déjà existant: ${sanitizedEmail} — on tente quand même l'intégration CRM`);
+      logger.info(
+        `[GuideLeads] Lead déjà existant: ${sanitizedEmail} — on tente quand même l'intégration CRM`,
+      );
     } else {
       logger.info(`[GuideLeads] Création du lead: ${sanitizedEmail}`);
       // Sauvegarder le lead
@@ -165,13 +192,20 @@ router.post("/guide", async (req, res) => {
     const workspaceId = process.env.LEADS_WORKSPACE_ID;
     const systemUserId = process.env.LEADS_SYSTEM_USER_ID;
 
-    logger.info(`[GuideLeads] Lead sauvegardé. CRM config: workspaceId=${workspaceId || "NON DÉFINI"}, systemUserId=${systemUserId || "NON DÉFINI"}`);
+    logger.info(
+      `[GuideLeads] Lead sauvegardé. CRM config: workspaceId=${workspaceId || "NON DÉFINI"}, systemUserId=${systemUserId || "NON DÉFINI"}`,
+    );
 
     if (workspaceId && systemUserId) {
       try {
         // Vérifier si le client existe déjà dans le CRM
-        let client = await Client.findOne({ email: sanitizedEmail, workspaceId });
-        logger.info(`[GuideLeads] Client existant dans CRM: ${client ? "OUI" : "NON"}`);
+        let client = await Client.findOne({
+          email: sanitizedEmail,
+          workspaceId,
+        });
+        logger.info(
+          `[GuideLeads] Client existant dans CRM: ${client ? "OUI" : "NON"}`,
+        );
 
         if (!client) {
           // Créer le client dans le CRM
@@ -190,12 +224,14 @@ router.post("/guide", async (req, res) => {
             },
             createdBy: systemUserId,
             workspaceId,
-            activity: [{
-              type: "created",
-              description: "Lead créé via le guide facturation électronique",
-              userId: systemUserId,
-              userName: "Système",
-            }],
+            activity: [
+              {
+                type: "created",
+                description: "Lead créé via le guide facturation électronique",
+                userId: systemUserId,
+                userName: "Système",
+              },
+            ],
           });
         }
 
@@ -214,12 +250,32 @@ router.post("/guide", async (req, res) => {
               fieldType: "SELECT",
               description: "Comment le lead a connu Newbi",
               options: [
-                { label: "Recherche Google", value: "Recherche Google", color: "#3b82f6" },
-                { label: "Réseaux sociaux", value: "Réseaux sociaux", color: "#8b5cf6" },
-                { label: "Bouche à oreille", value: "Bouche à oreille", color: "#10b981" },
-                { label: "Blog / Article", value: "Blog / Article", color: "#f59e0b" },
+                {
+                  label: "Recherche Google",
+                  value: "Recherche Google",
+                  color: "#3b82f6",
+                },
+                {
+                  label: "Réseaux sociaux",
+                  value: "Réseaux sociaux",
+                  color: "#8b5cf6",
+                },
+                {
+                  label: "Bouche à oreille",
+                  value: "Bouche à oreille",
+                  color: "#10b981",
+                },
+                {
+                  label: "Blog / Article",
+                  value: "Blog / Article",
+                  color: "#f59e0b",
+                },
                 { label: "Publicité", value: "Publicité", color: "#ef4444" },
-                { label: "Événement / Salon", value: "Événement / Salon", color: "#ec4899" },
+                {
+                  label: "Événement / Salon",
+                  value: "Événement / Salon",
+                  color: "#ec4899",
+                },
                 { label: "Autre", value: "Autre", color: "#6b7280" },
               ],
               workspaceId,
@@ -229,7 +285,7 @@ router.post("/guide", async (req, res) => {
 
           // Ajouter la valeur du champ personnalisé au client
           const existingFieldIndex = client.customFields.findIndex(
-            (cf) => cf.fieldId.toString() === sourceField._id.toString()
+            (cf) => cf.fieldId.toString() === sourceField._id.toString(),
           );
           if (existingFieldIndex === -1) {
             client.customFields.push({
@@ -242,12 +298,16 @@ router.post("/guide", async (req, res) => {
 
         // Find-or-create la liste "Leads Guide Facturation Elec."
         const listName = "Leads Guide Facturation Elec.";
-        let clientList = await ClientList.findOne({ name: listName, workspaceId });
+        let clientList = await ClientList.findOne({
+          name: listName,
+          workspaceId,
+        });
 
         if (!clientList) {
           clientList = await ClientList.create({
             name: listName,
-            description: "Leads ayant téléchargé le guide sur la facturation électronique",
+            description:
+              "Leads ayant téléchargé le guide sur la facturation électronique",
             workspaceId,
             createdBy: systemUserId,
             color: "#6366f1",
@@ -261,10 +321,15 @@ router.post("/guide", async (req, res) => {
           await clientList.save();
         }
 
-        logger.info(`[GuideLeads] Lead CRM créé: ${sanitizedEmail} → liste "${listName}"`);
+        logger.info(
+          `[GuideLeads] Lead CRM créé: ${sanitizedEmail} → liste "${listName}"`,
+        );
       } catch (crmError) {
         // Ne pas bloquer le téléchargement si le CRM échoue
-        logger.error(`[GuideLeads] Erreur CRM (non-bloquante): ${crmError.message}`, { stack: crmError.stack });
+        logger.error(
+          `[GuideLeads] Erreur CRM (non-bloquante): ${crmError.message}`,
+          { stack: crmError.stack },
+        );
       }
     }
 
@@ -275,12 +340,15 @@ router.post("/guide", async (req, res) => {
 
     if (notifyEmails && internalSecret) {
       try {
-        const recipients = notifyEmails.split(",").map((e) => e.trim()).filter(Boolean);
+        const recipients = notifyEmails
+          .split(",")
+          .map((e) => e.trim())
+          .filter(Boolean);
         const notifyRes = await fetch(`${frontendUrl}/api/leads/notify`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-api-secret": internalSecret,
+            "x-internal-secret": internalSecret,
           },
           body: JSON.stringify({
             lead: {
@@ -296,13 +364,19 @@ router.post("/guide", async (req, res) => {
         });
 
         if (notifyRes.ok) {
-          logger.info(`[GuideLeads] Email de notification envoyé via Next.js à ${recipients.join(", ")}`);
+          logger.info(
+            `[GuideLeads] Email de notification envoyé via Next.js à ${recipients.join(", ")}`,
+          );
         } else {
           const errBody = await notifyRes.text();
-          logger.warn(`[GuideLeads] Erreur email Next.js (${notifyRes.status}): ${errBody}`);
+          logger.warn(
+            `[GuideLeads] Erreur email Next.js (${notifyRes.status}): ${errBody}`,
+          );
         }
       } catch (emailError) {
-        logger.warn(`[GuideLeads] Erreur envoi email (non-bloquante): ${emailError.message}`);
+        logger.warn(
+          `[GuideLeads] Erreur envoi email (non-bloquante): ${emailError.message}`,
+        );
       }
     }
 

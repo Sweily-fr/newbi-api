@@ -1,20 +1,23 @@
-import DocumentSettings from '../models/DocumentSettings.js';
-import { UserInputError } from 'apollo-server-express';
-import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
+import DocumentSettings from "../models/DocumentSettings.js";
+import { UserInputError } from "apollo-server-express";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
-export default {
+const documentSettingsResolvers = {
   Query: {
     // Récupérer les paramètres d'un type de document (facture ou devis)
-    getDocumentSettings: isAuthenticated(async (_, { documentType }, { user }) => {
-      // Rechercher les paramètres existants pour ce type de document et cet utilisateur
-      const settings = await DocumentSettings.findOne({
-        documentType,
-        createdBy: user.id || user._id
-      });
+    getDocumentSettings: isAuthenticated(
+      async (_, { documentType }, { user }) => {
+        // Rechercher les paramètres existants pour ce type de document et cet utilisateur
+        const settings = await DocumentSettings.findOne({
+          documentType,
+          createdBy: user.id || user._id,
+        });
 
-      // Si aucun paramètre n'existe, retourner null
-      return settings;
-    })
+        // Si aucun paramètre n'existe, retourner null
+        return settings;
+      },
+    ),
   },
 
   Mutation: {
@@ -28,16 +31,33 @@ export default {
         const settings = await DocumentSettings.findOneAndUpdate(
           { documentType, createdBy: userId },
           { ...settingsData, createdBy: userId },
-          { new: true, upsert: true, runValidators: true }
+          { new: true, upsert: true, runValidators: true },
         );
 
         return settings;
       } catch (error) {
-        console.error('Erreur lors de la sauvegarde des paramètres:', error);
-        throw new UserInputError('Erreur lors de la sauvegarde des paramètres', {
-          invalidArgs: Object.keys(error.errors || {})
-        });
+        console.error("Erreur lors de la sauvegarde des paramètres:", error);
+        throw new UserInputError(
+          "Erreur lors de la sauvegarde des paramètres",
+          {
+            invalidArgs: Object.keys(error.errors || {}),
+          },
+        );
       }
-    })
-  }
+    }),
+  },
 };
+
+// ✅ Phase A.3 — Subscription check sur toutes les mutations documentSettings
+const originalDocSettingsMutations = documentSettingsResolvers.Mutation;
+documentSettingsResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalDocSettingsMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
+
+export default documentSettingsResolvers;

@@ -1,8 +1,9 @@
-import GmailConnection from '../models/GmailConnection.js';
-import ImportedInvoice from '../models/ImportedInvoice.js';
-import { isAuthenticated } from '../middlewares/better-auth-jwt.js';
-import { scanGmailConnection } from '../services/gmail/GmailScannerService.js';
-import logger from '../utils/logger.js';
+import GmailConnection from "../models/GmailConnection.js";
+import ImportedInvoice from "../models/ImportedInvoice.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { scanGmailConnection } from "../services/gmail/GmailScannerService.js";
+import logger from "../utils/logger.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 function formatConnection(c) {
   return {
@@ -27,13 +28,13 @@ const gmailConnectionResolvers = {
         const connection = await GmailConnection.findOne({
           userId: user.id || user._id,
           workspaceId,
-          status: { $ne: 'disconnected' },
+          status: { $ne: "disconnected" },
         });
 
         if (!connection) return null;
         return formatConnection(connection);
       } catch (error) {
-        logger.error('Erreur gmailConnection query:', error);
+        logger.error("Erreur gmailConnection query:", error);
         return null;
       }
     }),
@@ -43,7 +44,7 @@ const gmailConnectionResolvers = {
         const connection = await GmailConnection.findOne({
           userId: user.id || user._id,
           workspaceId,
-          status: { $ne: 'disconnected' },
+          status: { $ne: "disconnected" },
         });
 
         if (!connection) {
@@ -57,8 +58,8 @@ const gmailConnectionResolvers = {
 
         const pendingReview = await ImportedInvoice.countDocuments({
           workspaceId,
-          source: 'GMAIL',
-          status: 'PENDING_REVIEW',
+          source: "GMAIL",
+          status: "PENDING_REVIEW",
         });
 
         return {
@@ -68,7 +69,7 @@ const gmailConnectionResolvers = {
           lastSyncAt: connection.lastSyncAt?.toISOString() || null,
         };
       } catch (error) {
-        logger.error('Erreur gmailSyncStats query:', error);
+        logger.error("Erreur gmailSyncStats query:", error);
         return {
           totalEmailsScanned: 0,
           totalInvoicesFound: 0,
@@ -87,16 +88,18 @@ const gmailConnectionResolvers = {
       });
 
       if (!connection) {
-        throw new Error('Connexion Gmail introuvable');
+        throw new Error("Connexion Gmail introuvable");
       }
 
-      connection.status = 'disconnected';
+      connection.status = "disconnected";
       connection.isActive = false;
       connection.accessToken = null;
       connection.refreshToken = null;
       await connection.save();
 
-      logger.info(`Gmail déconnecté pour user ${user.id || user._id} (${connection.accountEmail})`);
+      logger.info(
+        `Gmail déconnecté pour user ${user.id || user._id} (${connection.accountEmail})`,
+      );
       return formatConnection(connection);
     }),
 
@@ -107,16 +110,16 @@ const gmailConnectionResolvers = {
       });
 
       if (!connection) {
-        throw new Error('Connexion Gmail introuvable');
+        throw new Error("Connexion Gmail introuvable");
       }
 
-      if (connection.status === 'syncing') {
+      if (connection.status === "syncing") {
         return {
           success: false,
           scannedCount: 0,
           invoicesFound: 0,
           skippedCount: 0,
-          message: 'Une synchronisation est déjà en cours',
+          message: "Une synchronisation est déjà en cours",
         };
       }
 
@@ -124,22 +127,44 @@ const gmailConnectionResolvers = {
       return result;
     }),
 
-    updateGmailScanPeriod: isAuthenticated(async (_, { connectionId, scanPeriodMonths }, { user }) => {
-      const connection = await GmailConnection.findOne({
-        _id: connectionId,
-        userId: user.id || user._id,
-      });
+    updateGmailScanPeriod: isAuthenticated(
+      async (_, { connectionId, scanPeriodMonths }, { user }) => {
+        const connection = await GmailConnection.findOne({
+          _id: connectionId,
+          userId: user.id || user._id,
+        });
 
-      if (!connection) {
-        throw new Error('Connexion Gmail introuvable');
-      }
+        if (!connection) {
+          throw new Error("Connexion Gmail introuvable");
+        }
 
-      connection.scanPeriodMonths = Math.min(Math.max(scanPeriodMonths, 1), 12);
-      await connection.save();
+        connection.scanPeriodMonths = Math.min(
+          Math.max(scanPeriodMonths, 1),
+          12,
+        );
+        await connection.save();
 
-      return formatConnection(connection);
-    }),
+        return formatConnection(connection);
+      },
+    ),
   },
 };
+
+// ✅ Phase A.4 — Subscription check on Gmail mutations (exclude disconnectGmail)
+const GMAIL_BLOCK = ["triggerGmailSync", "updateGmailScanPeriod"];
+GMAIL_BLOCK.forEach((name) => {
+  const original = gmailConnectionResolvers.Mutation[name];
+  if (original) {
+    gmailConnectionResolvers.Mutation[name] = async (
+      parent,
+      args,
+      context,
+      info,
+    ) => {
+      await checkSubscriptionActive(context);
+      return original(parent, args, context, info);
+    };
+  }
+});
 
 export default gmailConnectionResolvers;

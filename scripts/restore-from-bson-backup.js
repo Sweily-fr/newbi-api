@@ -12,7 +12,11 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 // Configuration MongoDB pour la production
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://newbiAdmin:j6FKJHBb39Rdw^kM^2^Fp5ohPfjgy9@localhost:27017/newbi?authSource=admin';
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  console.error("MONGODB_URI environment variable is required");
+  process.exit(1);
+}
 const DB_NAME = 'newbi';
 const BACKUP_BASE_PATH = '/home/joaquim/api.newbi.fr/backups';
 

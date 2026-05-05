@@ -1,5 +1,6 @@
 import express from "express";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
+import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
@@ -196,221 +197,236 @@ router.get("/transactions-for-invoice/:invoiceId", async (req, res) => {
 });
 
 // Lier une transaction à une facture
-router.post("/link", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
+router.post(
+  "/link",
+  requireActiveSubscriptionREST({ failClosed: true }),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
 
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
+      const workspaceId =
+        req.headers["x-workspace-id"] || req.query.workspaceId;
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
 
-    const { transactionId, invoiceId } = req.body;
+      const { transactionId, invoiceId } = req.body;
 
-    if (!transactionId || !invoiceId) {
-      return res
-        .status(400)
-        .json({ error: "transactionId et invoiceId requis" });
-    }
+      if (!transactionId || !invoiceId) {
+        return res
+          .status(400)
+          .json({ error: "transactionId et invoiceId requis" });
+      }
 
-    const { default: Transaction } = await import("../models/Transaction.js");
-    const { default: Invoice } = await import("../models/Invoice.js");
+      const { default: Transaction } = await import("../models/Transaction.js");
+      const { default: Invoice } = await import("../models/Invoice.js");
 
-    // Vérifier que la transaction existe et appartient au workspace
-    const transaction = await Transaction.findOne({
-      _id: transactionId,
-      workspaceId,
-    });
-    if (!transaction) {
-      return res.status(404).json({ error: "Transaction non trouvée" });
-    }
-
-    // Vérifier que la facture existe et appartient au workspace
-    const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
-    if (!invoice) {
-      return res.status(404).json({ error: "Facture non trouvée" });
-    }
-
-    // Vérifier que la transaction n'est pas déjà liée
-    if (transaction.linkedInvoiceId) {
-      return res
-        .status(400)
-        .json({ error: "Cette transaction est déjà liée à une facture" });
-    }
-
-    // Vérifier que la facture n'est pas déjà liée
-    if (invoice.linkedTransactionId) {
-      return res
-        .status(400)
-        .json({ error: "Cette facture est déjà liée à une transaction" });
-    }
-
-    // Mettre à jour la transaction
-    transaction.linkedInvoiceId = invoiceId;
-    transaction.reconciliationStatus = "matched";
-    transaction.reconciliationDate = new Date();
-    await transaction.save();
-
-    // Mettre à jour la facture (passer en COMPLETED)
-    invoice.linkedTransactionId = transactionId;
-    invoice.status = "COMPLETED";
-    invoice.paymentDate = transaction.date;
-    await invoice.save();
-
-    // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
-    // try {
-    //   if (evaluatePaymentReporting(invoice, transaction.date)) {
-    //     await invoice.save();
-    //   }
-    // } catch (eReportingError) {
-    //   logger.error("Erreur e-reporting payment (rapprochement REST):", eReportingError);
-    // }
-
-    logger.info(
-      `Rapprochement effectué: Transaction ${transactionId} <-> Facture ${invoiceId}`
-    );
-
-    res.json({
-      success: true,
-      message: "Rapprochement effectué avec succès",
-      transaction: {
-        _id: transaction._id,
-        reconciliationStatus: transaction.reconciliationStatus,
-      },
-      invoice: {
-        _id: invoice._id,
-        number: invoice.number,
-        status: invoice.status,
-      },
-    });
-  } catch (error) {
-    logger.error("Erreur rapprochement:", error);
-    res.status(500).json({
-      error: "Erreur lors du rapprochement",
-      details: error.message,
-    });
-  }
-});
-
-// Délier une transaction d'une facture
-router.post("/unlink", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
-
-    const { transactionId, invoiceId } = req.body;
-
-    if (!transactionId && !invoiceId) {
-      return res
-        .status(400)
-        .json({ error: "transactionId ou invoiceId requis" });
-    }
-
-    const { default: Transaction } = await import("../models/Transaction.js");
-    const { default: Invoice } = await import("../models/Invoice.js");
-
-    let transaction, invoice;
-
-    if (transactionId) {
-      transaction = await Transaction.findOne({
+      // Vérifier que la transaction existe et appartient au workspace
+      const transaction = await Transaction.findOne({
         _id: transactionId,
         workspaceId,
       });
-      if (transaction?.linkedInvoiceId) {
-        invoice = await Invoice.findById(transaction.linkedInvoiceId);
+      if (!transaction) {
+        return res.status(404).json({ error: "Transaction non trouvée" });
       }
-    } else if (invoiceId) {
-      invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
-      if (invoice?.linkedTransactionId) {
-        transaction = await Transaction.findById(invoice.linkedTransactionId);
-      }
-    }
 
-    // Délier la transaction
-    if (transaction) {
-      transaction.linkedInvoiceId = null;
-      transaction.reconciliationStatus = "unmatched";
-      transaction.reconciliationDate = null;
+      // Vérifier que la facture existe et appartient au workspace
+      const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
+      if (!invoice) {
+        return res.status(404).json({ error: "Facture non trouvée" });
+      }
+
+      // Vérifier que la transaction n'est pas déjà liée
+      if (transaction.linkedInvoiceId) {
+        return res
+          .status(400)
+          .json({ error: "Cette transaction est déjà liée à une facture" });
+      }
+
+      // Vérifier que la facture n'est pas déjà liée
+      if (invoice.linkedTransactionId) {
+        return res
+          .status(400)
+          .json({ error: "Cette facture est déjà liée à une transaction" });
+      }
+
+      // Mettre à jour la transaction
+      transaction.linkedInvoiceId = invoiceId;
+      transaction.reconciliationStatus = "matched";
+      transaction.reconciliationDate = new Date();
       await transaction.save();
-    }
 
-    // Délier la facture (repasser en PENDING)
-    if (invoice) {
-      invoice.linkedTransactionId = null;
-      invoice.status = "PENDING";
-      invoice.paymentDate = null;
+      // Mettre à jour la facture (passer en COMPLETED)
+      invoice.linkedTransactionId = transactionId;
+      invoice.status = "COMPLETED";
+      invoice.paymentDate = transaction.date;
       await invoice.save();
+
+      // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
+      // try {
+      //   if (evaluatePaymentReporting(invoice, transaction.date)) {
+      //     await invoice.save();
+      //   }
+      // } catch (eReportingError) {
+      //   logger.error("Erreur e-reporting payment (rapprochement REST):", eReportingError);
+      // }
+
+      logger.info(
+        `Rapprochement effectué: Transaction ${transactionId} <-> Facture ${invoiceId}`,
+      );
+
+      res.json({
+        success: true,
+        message: "Rapprochement effectué avec succès",
+        transaction: {
+          _id: transaction._id,
+          reconciliationStatus: transaction.reconciliationStatus,
+        },
+        invoice: {
+          _id: invoice._id,
+          number: invoice.number,
+          status: invoice.status,
+        },
+      });
+    } catch (error) {
+      logger.error("Erreur rapprochement:", error);
+      res.status(500).json({
+        error: "Erreur lors du rapprochement",
+        details: error.message,
+      });
     }
+  },
+);
 
-    logger.info(
-      `Déliaison effectuée: Transaction ${transactionId} <-> Facture ${invoiceId}`
-    );
+// Délier une transaction d'une facture
+router.post(
+  "/unlink",
+  requireActiveSubscriptionREST({ failClosed: true }),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
 
-    res.json({
-      success: true,
-      message: "Déliaison effectuée avec succès",
-    });
-  } catch (error) {
-    logger.error("Erreur déliaison:", error);
-    res.status(500).json({
-      error: "Erreur lors de la déliaison",
-      details: error.message,
-    });
-  }
-});
+      const workspaceId =
+        req.headers["x-workspace-id"] || req.query.workspaceId;
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      const { transactionId, invoiceId } = req.body;
+
+      if (!transactionId && !invoiceId) {
+        return res
+          .status(400)
+          .json({ error: "transactionId ou invoiceId requis" });
+      }
+
+      const { default: Transaction } = await import("../models/Transaction.js");
+      const { default: Invoice } = await import("../models/Invoice.js");
+
+      let transaction, invoice;
+
+      if (transactionId) {
+        transaction = await Transaction.findOne({
+          _id: transactionId,
+          workspaceId,
+        });
+        if (transaction?.linkedInvoiceId) {
+          invoice = await Invoice.findById(transaction.linkedInvoiceId);
+        }
+      } else if (invoiceId) {
+        invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
+        if (invoice?.linkedTransactionId) {
+          transaction = await Transaction.findById(invoice.linkedTransactionId);
+        }
+      }
+
+      // Délier la transaction
+      if (transaction) {
+        transaction.linkedInvoiceId = null;
+        transaction.reconciliationStatus = "unmatched";
+        transaction.reconciliationDate = null;
+        await transaction.save();
+      }
+
+      // Délier la facture (repasser en PENDING)
+      if (invoice) {
+        invoice.linkedTransactionId = null;
+        invoice.status = "PENDING";
+        invoice.paymentDate = null;
+        await invoice.save();
+      }
+
+      logger.info(
+        `Déliaison effectuée: Transaction ${transactionId} <-> Facture ${invoiceId}`,
+      );
+
+      res.json({
+        success: true,
+        message: "Déliaison effectuée avec succès",
+      });
+    } catch (error) {
+      logger.error("Erreur déliaison:", error);
+      res.status(500).json({
+        error: "Erreur lors de la déliaison",
+        details: error.message,
+      });
+    }
+  },
+);
 
 // Ignorer une transaction (ne plus la suggérer)
-router.post("/ignore", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
+router.post(
+  "/ignore",
+  requireActiveSubscriptionREST({ failClosed: true }),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
+
+      const workspaceId =
+        req.headers["x-workspace-id"] || req.query.workspaceId;
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      const { transactionId } = req.body;
+
+      if (!transactionId) {
+        return res.status(400).json({ error: "transactionId requis" });
+      }
+
+      const { default: Transaction } = await import("../models/Transaction.js");
+
+      const transaction = await Transaction.findOneAndUpdate(
+        { _id: transactionId, workspaceId },
+        { reconciliationStatus: "ignored" },
+        { new: true },
+      );
+
+      if (!transaction) {
+        return res.status(404).json({ error: "Transaction non trouvée" });
+      }
+
+      res.json({
+        success: true,
+        message: "Transaction ignorée",
+      });
+    } catch (error) {
+      logger.error("Erreur ignorer transaction:", error);
+      res.status(500).json({
+        error: "Erreur lors de l'ignorance de la transaction",
+        details: error.message,
+      });
     }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
-
-    const { transactionId } = req.body;
-
-    if (!transactionId) {
-      return res.status(400).json({ error: "transactionId requis" });
-    }
-
-    const { default: Transaction } = await import("../models/Transaction.js");
-
-    const transaction = await Transaction.findOneAndUpdate(
-      { _id: transactionId, workspaceId },
-      { reconciliationStatus: "ignored" },
-      { new: true }
-    );
-
-    if (!transaction) {
-      return res.status(404).json({ error: "Transaction non trouvée" });
-    }
-
-    res.json({
-      success: true,
-      message: "Transaction ignorée",
-    });
-  } catch (error) {
-    logger.error("Erreur ignorer transaction:", error);
-    res.status(500).json({
-      error: "Erreur lors de l'ignorance de la transaction",
-      details: error.message,
-    });
-  }
-});
+  },
+);
 
 export default router;

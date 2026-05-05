@@ -1,9 +1,9 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const emailSettingsSchema = new mongoose.Schema({
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Organization',
+    ref: "Organization",
     required: true,
     unique: true,
   },
@@ -15,34 +15,34 @@ const emailSettingsSchema = new mongoose.Schema({
   },
   fromName: {
     type: String,
-    default: '',
+    default: "",
     trim: true,
   },
   replyTo: {
     type: String,
-    default: '',
+    default: "",
     trim: true,
     lowercase: true,
   },
   // Templates d'email par type de document
   invoiceEmailTemplate: {
     type: String,
-    default: '',
+    default: "",
     trim: true,
   },
   quoteEmailTemplate: {
     type: String,
-    default: '',
+    default: "",
     trim: true,
   },
   creditNoteEmailTemplate: {
     type: String,
-    default: '',
+    default: "",
     trim: true,
   },
   purchaseOrderEmailTemplate: {
     type: String,
-    default: '',
+    default: "",
     trim: true,
   },
   // Personnalisation du bas de l'email
@@ -52,7 +52,7 @@ const emailSettingsSchema = new mongoose.Schema({
   },
   customEmailFooter: {
     type: String,
-    default: '',
+    default: "",
     trim: true,
   },
   // Pour vérification future (optionnel)
@@ -79,14 +79,15 @@ const emailSettingsSchema = new mongoose.Schema({
 });
 
 // Mettre à jour updatedAt avant chaque sauvegarde
-emailSettingsSchema.pre('save', function(next) {
+emailSettingsSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
   next();
 });
 
-// Index pour recherche rapide par workspace
-emailSettingsSchema.index({ workspaceId: 1 });
+// Note: workspaceId already has `unique: true` at the field level, which
+// auto-creates a unique index. A separate emailSettingsSchema.index call
+// would be a duplicate.
 
-const EmailSettings = mongoose.model('EmailSettings', emailSettingsSchema);
+const EmailSettings = mongoose.model("EmailSettings", emailSettingsSchema);
 
 export default EmailSettings;

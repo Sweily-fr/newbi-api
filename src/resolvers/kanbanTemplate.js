@@ -2,6 +2,7 @@
 import { Board, Column, Task } from "../models/kanban.js";
 import KanbanTemplate from "../models/kanbanTemplate.js";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { getPubSub } from "../config/redis.js";
 import logger from "../utils/logger.js";
 
@@ -23,22 +24,37 @@ const kanbanTemplateResolvers = {
     kanbanTemplates: withWorkspace(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        return KanbanTemplate.find({ workspaceId: finalWorkspaceId }).sort({ createdAt: -1 });
-      }
+        return KanbanTemplate.find({ workspaceId: finalWorkspaceId }).sort({
+          createdAt: -1,
+        });
+      },
     ),
   },
 
   Mutation: {
     saveBoardAsTemplate: withWorkspace(
-      async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      async (
+        _,
+        { input, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { boardId, name, description } = input;
 
-        const board = await Board.findOne({ _id: boardId, workspaceId: finalWorkspaceId });
+        const board = await Board.findOne({
+          _id: boardId,
+          workspaceId: finalWorkspaceId,
+        });
         if (!board) throw new Error("Board not found");
 
-        const columns = await Column.find({ boardId, workspaceId: finalWorkspaceId }).sort({ order: 1 });
-        const tasks = await Task.find({ boardId, workspaceId: finalWorkspaceId }).sort({ position: 1 });
+        const columns = await Column.find({
+          boardId,
+          workspaceId: finalWorkspaceId,
+        }).sort({ order: 1 });
+        const tasks = await Task.find({
+          boardId,
+          workspaceId: finalWorkspaceId,
+        }).sort({ position: 1 });
 
         // Build column index map: columnId -> index
         const columnIndexMap = {};
@@ -83,17 +99,26 @@ const kanbanTemplateResolvers = {
         });
 
         const saved = await template.save();
-        logger.info(`[KanbanTemplate] Template "${name}" created from board ${boardId}`);
+        logger.info(
+          `[KanbanTemplate] Template "${name}" created from board ${boardId}`,
+        );
         return saved;
-      }
+      },
     ),
 
     createBoardFromTemplate: withWorkspace(
-      async (_, { input, workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      async (
+        _,
+        { input, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { title, description, templateId, clientId } = input;
 
-        const template = await KanbanTemplate.findOne({ _id: templateId, workspaceId: finalWorkspaceId });
+        const template = await KanbanTemplate.findOne({
+          _id: templateId,
+          workspaceId: finalWorkspaceId,
+        });
         if (!template) throw new Error("Template not found");
 
         // Create the board
@@ -155,24 +180,41 @@ const kanbanTemplateResolvers = {
             board: savedBoard,
             workspaceId: finalWorkspaceId,
           },
-          "Board created from template"
+          "Board created from template",
         );
 
-        logger.info(`[KanbanTemplate] Board "${title}" created from template ${templateId}`);
+        logger.info(
+          `[KanbanTemplate] Board "${title}" created from template ${templateId}`,
+        );
         return savedBoard;
-      }
+      },
     ),
 
     deleteKanbanTemplate: withWorkspace(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const result = await KanbanTemplate.findOneAndDelete({ _id: id, workspaceId: finalWorkspaceId });
+        const result = await KanbanTemplate.findOneAndDelete({
+          _id: id,
+          workspaceId: finalWorkspaceId,
+        });
         if (!result) throw new Error("Template not found");
         logger.info(`[KanbanTemplate] Template ${id} deleted`);
         return true;
-      }
+      },
     ),
   },
 };
+
+// ✅ Phase A.2 — Subscription check sur toutes les mutations template kanban
+const originalKanbanTemplateMutations = kanbanTemplateResolvers.Mutation;
+kanbanTemplateResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalKanbanTemplateMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export default kanbanTemplateResolvers;

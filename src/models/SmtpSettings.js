@@ -1,10 +1,10 @@
-import mongoose from 'mongoose';
-import crypto from 'crypto';
+import mongoose from "mongoose";
+import crypto from "crypto";
 
 const smtpSettingsSchema = new mongoose.Schema({
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Organization',
+    ref: "Organization",
     required: true,
     unique: true,
   },
@@ -39,7 +39,7 @@ const smtpSettingsSchema = new mongoose.Schema({
   },
   fromName: {
     type: String,
-    default: '',
+    default: "",
   },
   // Pour tester la connexion
   lastTestedAt: {
@@ -48,8 +48,8 @@ const smtpSettingsSchema = new mongoose.Schema({
   },
   lastTestStatus: {
     type: String,
-    enum: ['SUCCESS', 'FAILED', 'PENDING'],
-    default: 'PENDING',
+    enum: ["SUCCESS", "FAILED", "PENDING"],
+    default: "PENDING",
   },
   lastTestError: {
     type: String,
@@ -67,46 +67,59 @@ const smtpSettingsSchema = new mongoose.Schema({
 
 const ENCRYPTION_KEY = process.env.SMTP_ENCRYPTION_KEY;
 if (!ENCRYPTION_KEY) {
-  throw new Error('SMTP_ENCRYPTION_KEY environment variable is required');
+  throw new Error("SMTP_ENCRYPTION_KEY environment variable is required");
 }
-const ALGORITHM = 'aes-256-cbc';
+const ALGORITHM = "aes-256-cbc";
 
 // Chiffrer le mot de passe avant de sauvegarder
-smtpSettingsSchema.pre('save', function(next) {
+smtpSettingsSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
-  
+
   // Chiffrer le mot de passe s'il a été modifié
-  if (this.isModified('smtpPassword') && !this.smtpPassword.startsWith('encrypted:')) {
+  if (
+    this.isModified("smtpPassword") &&
+    !this.smtpPassword.startsWith("encrypted:")
+  ) {
     const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY.slice(0, 32)), iv);
-    let encrypted = cipher.update(this.smtpPassword, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    this.smtpPassword = `encrypted:${iv.toString('hex')}:${encrypted}`;
+    const cipher = crypto.createCipheriv(
+      ALGORITHM,
+      Buffer.from(ENCRYPTION_KEY.slice(0, 32)),
+      iv,
+    );
+    let encrypted = cipher.update(this.smtpPassword, "utf8", "hex");
+    encrypted += cipher.final("hex");
+    this.smtpPassword = `encrypted:${iv.toString("hex")}:${encrypted}`;
   }
-  
+
   next();
 });
 
 // Méthode pour déchiffrer le mot de passe
-smtpSettingsSchema.methods.getDecryptedPassword = function() {
-  if (!this.smtpPassword.startsWith('encrypted:')) {
+smtpSettingsSchema.methods.getDecryptedPassword = function () {
+  if (!this.smtpPassword.startsWith("encrypted:")) {
     return this.smtpPassword;
   }
-  
-  const parts = this.smtpPassword.split(':');
-  const iv = Buffer.from(parts[1], 'hex');
+
+  const parts = this.smtpPassword.split(":");
+  const iv = Buffer.from(parts[1], "hex");
   const encryptedText = parts[2];
-  
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY.slice(0, 32)), iv);
-  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  
+
+  const decipher = crypto.createDecipheriv(
+    ALGORITHM,
+    Buffer.from(ENCRYPTION_KEY.slice(0, 32)),
+    iv,
+  );
+  let decrypted = decipher.update(encryptedText, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+
   return decrypted;
 };
 
 // Index pour recherche rapide par workspace
-smtpSettingsSchema.index({ workspaceId: 1 });
+// Note: workspaceId already has `unique: true` at the field level, which
+// auto-creates a unique index. Declaring another smtpSettingsSchema.index
+// would be a duplicate.
 
-const SmtpSettings = mongoose.model('SmtpSettings', smtpSettingsSchema);
+const SmtpSettings = mongoose.model("SmtpSettings", smtpSettingsSchema);
 
 export default SmtpSettings;

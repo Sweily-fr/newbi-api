@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { applyFieldEncryption, decrypt } from "../utils/encryption.js";
 
 const pennylaneSyncLogSchema = new mongoose.Schema(
   {
@@ -85,6 +86,19 @@ const pennylaneAccountSchema = new mongoose.Schema(
 
 // Un seul compte Pennylane par organisation
 pennylaneAccountSchema.index({ organizationId: 1 }, { unique: true });
+
+// Explicit decryption — callers MUST use this method to access the
+// plaintext token; reading `account.apiToken` directly returns the
+// ciphertext stored in DB. This makes the decryption boundary visible
+// in code (no silent magic on every find).
+pennylaneAccountSchema.methods.getDecryptedApiToken = function () {
+  return decrypt(this.apiToken);
+};
+
+// Encrypt apiToken at rest using AES-256-GCM. See src/utils/encryption.js
+// for the centralized helper. Existing accounts that predate this change
+// must be migrated via scripts/migrations/encrypt-pennylane-tokens.js.
+applyFieldEncryption(pennylaneAccountSchema, ["apiToken"]);
 
 const PennylaneAccount = mongoose.model(
   "PennylaneAccount",

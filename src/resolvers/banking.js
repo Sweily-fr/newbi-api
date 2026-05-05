@@ -1,5 +1,6 @@
 import { bankingService } from "../services/banking/BankingService.js";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
 import ApiMetric from "../models/ApiMetric.js";
@@ -1158,5 +1159,17 @@ const bankingResolvers = {
     CLOSED: "closed",
   },
 };
+
+// ✅ Phase A.1 — Subscription check sur toutes les mutations banking (fail-closed: coûts Bridge/GoCardless)
+const originalBankingMutations = bankingResolvers.Mutation;
+bankingResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalBankingMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context, { failClosed: true });
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export default bankingResolvers;

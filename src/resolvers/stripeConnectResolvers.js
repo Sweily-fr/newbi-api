@@ -2,6 +2,7 @@ import stripeConnectService from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const stripeConnectResolvers = {
   Query: {
@@ -11,14 +12,14 @@ const stripeConnectResolvers = {
     myStripeConnectAccount: async (_, args, { user, organizationId }) => {
       if (!user) {
         throw new Error(
-          "Vous devez être connecté pour accéder à cette ressource"
+          "Vous devez être connecté pour accéder à cette ressource",
         );
       }
 
       try {
         console.log(
           "🔍 Recherche compte Stripe Connect pour organizationId:",
-          organizationId
+          organizationId,
         );
         console.log("👤 User email:", user.email);
 
@@ -47,7 +48,7 @@ const stripeConnectResolvers = {
           // Mettre à jour le statut depuis Stripe pour avoir les dernières informations
           console.log("🔄 Mise à jour du statut depuis Stripe...");
           const statusUpdate = await stripeConnectService.checkAccountStatus(
-            account.accountId
+            account.accountId,
           );
 
           if (statusUpdate.success) {
@@ -67,10 +68,10 @@ const stripeConnectResolvers = {
       } catch (error) {
         logger.error(
           "Erreur lors de la récupération du compte Stripe Connect:",
-          error
+          error,
         );
         throw new Error(
-          `Erreur lors de la récupération du compte Stripe Connect: ${error.message}`
+          `Erreur lors de la récupération du compte Stripe Connect: ${error.message}`,
         );
       }
     },
@@ -84,11 +85,11 @@ const stripeConnectResolvers = {
     createStripeConnectAccount: async (
       _,
       args,
-      { user, organizationId, userRole }
+      { user, organizationId, userRole },
     ) => {
       if (!user) {
         throw new Error(
-          "Vous devez être connecté pour créer un compte Stripe Connect"
+          "Vous devez être connecté pour créer un compte Stripe Connect",
         );
       }
 
@@ -113,12 +114,12 @@ const stripeConnectResolvers = {
       try {
         return await stripeConnectService.createConnectAccount(
           organizationId,
-          user._id
+          user._id,
         );
       } catch (error) {
         logger.error(
           "Erreur lors de la création du compte Stripe Connect:",
-          error
+          error,
         );
         return {
           success: false,
@@ -134,11 +135,11 @@ const stripeConnectResolvers = {
     generateStripeOnboardingLink: async (
       _,
       { accountId, returnUrl },
-      { user, organizationId, userRole }
+      { user, organizationId, userRole },
     ) => {
       if (!user) {
         throw new Error(
-          "Vous devez être connecté pour générer un lien d'onboarding"
+          "Vous devez être connecté pour générer un lien d'onboarding",
         );
       }
 
@@ -183,12 +184,12 @@ const stripeConnectResolvers = {
 
         return await stripeConnectService.generateOnboardingLink(
           accountId,
-          returnUrl
+          returnUrl,
         );
       } catch (error) {
         logger.error(
           "Erreur lors de la génération du lien d'onboarding:",
-          error
+          error,
         );
         return {
           success: false,
@@ -204,11 +205,11 @@ const stripeConnectResolvers = {
     checkStripeConnectAccountStatus: async (
       _,
       { accountId },
-      { user, organizationId, userRole }
+      { user, organizationId, userRole },
     ) => {
       if (!user) {
         throw new Error(
-          "Vous devez être connecté pour vérifier le statut d'un compte"
+          "Vous devez être connecté pour vérifier le statut d'un compte",
         );
       }
 
@@ -262,7 +263,7 @@ const stripeConnectResolvers = {
       } catch (error) {
         logger.error(
           "Erreur lors de la vérification du statut du compte:",
-          error
+          error,
         );
         return {
           success: false,
@@ -278,7 +279,7 @@ const stripeConnectResolvers = {
     generateStripeDashboardLink: async (
       _,
       { accountId },
-      { user, organizationId, userRole }
+      { user, organizationId, userRole },
     ) => {
       if (!user) {
         throw new Error("Vous devez être connecté");
@@ -326,7 +327,7 @@ const stripeConnectResolvers = {
       } catch (error) {
         logger.error(
           "Erreur lors de la génération du lien de tableau de bord:",
-          error
+          error,
         );
         return {
           success: false,
@@ -402,7 +403,7 @@ const stripeConnectResolvers = {
     createPaymentSessionForFileTransfer: async (
       _,
       { transferId },
-      { origin }
+      { origin },
     ) => {
       try {
         // Récupérer le transfert de fichiers
@@ -445,7 +446,7 @@ const stripeConnectResolvers = {
           fileTransfer,
           stripeConnectAccount.accountId,
           successUrl,
-          cancelUrl
+          cancelUrl,
         );
 
         // Si la création de la session a réussi, mettre à jour le transfert avec l'ID de session
@@ -459,7 +460,7 @@ const stripeConnectResolvers = {
       } catch (error) {
         logger.error(
           "Erreur lors de la création de la session de paiement:",
-          error
+          error,
         );
         return {
           success: false,
@@ -469,5 +470,25 @@ const stripeConnectResolvers = {
     },
   },
 };
+
+// ✅ Phase A.4 — Subscription check on Stripe Connect mutations (exclude disconnect/status/dashboard/payment)
+const STRIPE_CONNECT_BLOCK = [
+  "createStripeConnectAccount",
+  "generateStripeOnboardingLink",
+];
+STRIPE_CONNECT_BLOCK.forEach((name) => {
+  const original = stripeConnectResolvers.Mutation[name];
+  if (original) {
+    stripeConnectResolvers.Mutation[name] = async (
+      parent,
+      args,
+      context,
+      info,
+    ) => {
+      await checkSubscriptionActive(context);
+      return original(parent, args, context, info);
+    };
+  }
+});
 
 export default stripeConnectResolvers;

@@ -11,6 +11,7 @@ import {
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import FileTransfer from "../models/FileTransfer.js";
 import { v4 as uuidv4 } from "uuid";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 // Cache temporaire pour stocker les métadonnées des fichiers uploadés (avec TTL)
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
@@ -78,7 +79,7 @@ const getFileInfoByTransferId = async (fileId) => {
   return fileInfo;
 };
 
-export default {
+const chunkUploadR2Resolvers = {
   Mutation: {
     // Démarrer un multipart upload natif S3/R2
     startMultipartUpload: isAuthenticated(
@@ -790,3 +791,19 @@ export default {
     ),
   },
 };
+
+// ✅ Phase A.4 — Subscription check on all chunk upload R2 mutations
+Object.keys(chunkUploadR2Resolvers.Mutation).forEach((name) => {
+  const original = chunkUploadR2Resolvers.Mutation[name];
+  chunkUploadR2Resolvers.Mutation[name] = async (
+    parent,
+    args,
+    context,
+    info,
+  ) => {
+    await checkSubscriptionActive(context);
+    return original(parent, args, context, info);
+  };
+});
+
+export default chunkUploadR2Resolvers;

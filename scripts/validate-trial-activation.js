@@ -35,8 +35,12 @@ async function loadConfig() {
 
   // Fallback vers les variables d'environnement
   if (!MONGODB_URI) {
-    MONGODB_URI = process.env.MONGODB_URI || 'mongodb://newbiAdmin:Sweily2024!@localhost:27017/newbi?authSource=admin';
+    MONGODB_URI = process.env.MONGODB_URI;
     MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'newbi';
+  }
+  if (!MONGODB_URI) {
+    console.error("MONGODB_URI environment variable is required (none found in ecosystem.config.cjs nor env)");
+    process.exit(1);
   }
 }
 

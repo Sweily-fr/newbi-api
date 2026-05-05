@@ -8,6 +8,7 @@ import {
   requireCompanyInfo,
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { generateCreditNoteNumber } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
@@ -252,6 +253,7 @@ const creditNoteResolvers = {
   Mutation: {
     createCreditNote: requireCompanyInfo(
       withWorkspace(async (parent, { workspaceId, input }, context) => {
+        await checkSubscriptionActive(context);
         try {
           // Vérifier que la facture originale existe
           const originalInvoice = await Invoice.findOne({
@@ -460,6 +462,7 @@ const creditNoteResolvers = {
 
     updateCreditNote: requireCompanyInfo(
       withWorkspace(async (parent, { id, workspaceId, input }, context) => {
+        await checkSubscriptionActive(context);
         try {
           const creditNote = await CreditNote.findOne({
             _id: id,
@@ -550,6 +553,7 @@ const creditNoteResolvers = {
 
     deleteCreditNote: requireCompanyInfo(
       withWorkspace(async (parent, { id, workspaceId }, context) => {
+        await checkSubscriptionActive(context);
         try {
           const creditNote = await CreditNote.findOne({
             _id: id,

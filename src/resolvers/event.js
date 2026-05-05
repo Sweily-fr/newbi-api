@@ -3,6 +3,7 @@ import Event from "../models/Event.js";
 import Invoice from "../models/Invoice.js";
 import Client from "../models/Client.js";
 import CalendarConnection from "../models/CalendarConnection.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import {
   isAuthenticated,
   withWorkspace,
@@ -696,5 +697,17 @@ const eventResolvers = {
     },
   },
 };
+
+// ✅ Phase A.3 — Subscription check sur toutes les mutations event
+const originalEventMutations = eventResolvers.Mutation;
+eventResolvers.Mutation = Object.fromEntries(
+  Object.entries(originalEventMutations).map(([name, fn]) => [
+    name,
+    async (parent, args, context, info) => {
+      await checkSubscriptionActive(context);
+      return fn(parent, args, context, info);
+    },
+  ]),
+);
 
 export default eventResolvers;
