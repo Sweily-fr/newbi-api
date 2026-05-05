@@ -107,7 +107,11 @@ const reconciliationResolvers = {
     transactionsForInvoice: withOrganization(
       async (parent, { invoiceId }, { user, workspaceId }) => {
         try {
-          const invoice = await Invoice.findById(invoiceId);
+          // IDOR fix: filtre par workspaceId pour empêcher l'accès cross-tenant
+          const invoice = await Invoice.findOne({
+            _id: invoiceId,
+            workspaceId,
+          });
           if (!invoice) {
             throw new Error("Facture non trouvée");
           }

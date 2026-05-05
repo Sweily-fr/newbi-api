@@ -5,7 +5,10 @@
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import {
+  isAuthenticated,
+  withWorkspace,
+} from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
@@ -83,10 +86,7 @@ async function getUserPlan(userId, workspaceId) {
       subscription = await db.collection("subscription").findOne({
         $and: [
           {
-            $or: [
-              { referenceId: cacheKey },
-              { organizationId: cacheKey },
-            ],
+            $or: [{ referenceId: cacheKey }, { organizationId: cacheKey }],
           },
           { status: { $in: ["active", "trialing"] } },
         ],
@@ -97,7 +97,9 @@ async function getUserPlan(userId, workspaceId) {
       ? PLAN_NAME_MAP[subscription.plan] || defaultPlan
       : defaultPlan;
 
-    console.log(`📋 getUserPlan: workspace=${cacheKey}, subscription=${subscription?.plan || "none"}, plan=${plan}`);
+    console.log(
+      `📋 getUserPlan: workspace=${cacheKey}, subscription=${subscription?.plan || "none"}, plan=${plan}`,
+    );
 
     // Mettre en cache
     planCache.set(cacheKey, { plan, timestamp: Date.now() });
@@ -115,19 +117,23 @@ async function getUserPlan(userId, workspaceId) {
  */
 async function checkUserOcrQuota(userId, workspaceId, filesCount = 1) {
   const plan = await getUserPlan(userId, workspaceId);
-  const quotaInfo = await UserOcrQuota.checkQuotaAvailable(userId, workspaceId, plan);
+  const quotaInfo = await UserOcrQuota.checkQuotaAvailable(
+    userId,
+    workspaceId,
+    plan,
+  );
 
   if (!quotaInfo.hasQuota) {
     throw createValidationError(
       `Quota OCR épuisé (${quotaInfo.usedThisMonth}/${quotaInfo.monthlyQuota} utilisés ce mois). ` +
-      `Passez à un plan supérieur pour augmenter votre quota.`
+        "Passez à un plan supérieur pour augmenter votre quota.",
     );
   }
 
   if (quotaInfo.remaining < filesCount) {
     throw createValidationError(
       `Quota OCR insuffisant. Vous avez ${quotaInfo.remaining} import(s) disponible(s) mais vous essayez d'en importer ${filesCount}. ` +
-      `Réduisez le nombre de fichiers ou passez à un plan supérieur.`
+        "Réduisez le nombre de fichiers ou passez à un plan supérieur.",
     );
   }
 
@@ -147,10 +153,13 @@ async function recordOcrUsage(userId, workspaceId, plan, documentInfo) {
 }
 
 /**
- * Vérifie l'accès à une facture importée
+ * Vérifie l'accès à une facture importée (IDOR fix: filtre par workspaceId)
  */
-async function checkInvoiceAccess(invoiceId, userId) {
-  const invoice = await ImportedInvoice.findById(invoiceId);
+async function checkInvoiceAccess(invoiceId, workspaceId) {
+  const invoice = await ImportedInvoice.findOne({
+    _id: invoiceId,
+    workspaceId,
+  });
   if (!invoice) {
     throw createNotFoundError("Facture importée non trouvée");
   }
@@ -274,14 +283,14 @@ async function processInvoiceWithOcr(
   cloudflareUrl,
   fileName,
   mimeType,
-  workspaceId = null
+  workspaceId = null,
 ) {
   // Étape 1: OCR avec le service hybride (Mindee > Google Document AI > Mistral)
   const ocrResult = await hybridOcrService.processDocumentFromUrl(
     cloudflareUrl,
     fileName,
     mimeType,
-    workspaceId
+    workspaceId,
   );
 
   if (!ocrResult.success) {
@@ -471,7 +480,10 @@ async function findOrCreateSupplier(vendor, workspaceId, userId) {
 
   // Search by siret first
   if (vendor.siret) {
-    const bySiret = await Supplier.findOne({ workspaceId: wsId, siret: vendor.siret });
+    const bySiret = await Supplier.findOne({
+      workspaceId: wsId,
+      siret: vendor.siret,
+    });
     if (bySiret) return bySiret;
   }
 
@@ -505,7 +517,7 @@ async function convertSingleImportedInvoice(importedInvoice, userId) {
   const supplier = await findOrCreateSupplier(
     importedInvoice.vendor,
     importedInvoice.workspaceId,
-    userId
+    userId,
   );
 
   const file = importedInvoice.file;
@@ -528,7 +540,9 @@ async function convertSingleImportedInvoice(importedInvoice, userId) {
     supplierSiret: importedInvoice.vendor?.siret || null,
     supplierVatNumber: importedInvoice.vendor?.vatNumber || null,
     invoiceNumber: importedInvoice.originalInvoiceNumber || null,
-    invoiceDate: importedInvoice.invoiceDate ? new Date(importedInvoice.invoiceDate) : null,
+    invoiceDate: importedInvoice.invoiceDate
+      ? new Date(importedInvoice.invoiceDate)
+      : null,
     dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
     amountHT: importedInvoice.totalHT || null,
     amountTVA: importedInvoice.totalVAT || null,
@@ -540,7 +554,9 @@ async function convertSingleImportedInvoice(importedInvoice, userId) {
     supplierName: importedInvoice.vendor?.name || "Fournisseur inconnu",
     supplierId: supplier?._id || null,
     invoiceNumber: importedInvoice.originalInvoiceNumber || null,
-    issueDate: importedInvoice.invoiceDate ? new Date(importedInvoice.invoiceDate) : new Date(),
+    issueDate: importedInvoice.invoiceDate
+      ? new Date(importedInvoice.invoiceDate)
+      : new Date(),
     dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
     amountHT: importedInvoice.totalHT || 0,
     amountTVA: importedInvoice.totalVAT || 0,
@@ -571,8 +587,8 @@ const importedInvoiceResolvers = {
     /**
      * Récupère une facture importée par ID
      */
-    importedInvoice: isAuthenticated(async (_, { id }, { user }) => {
-      const invoice = await checkInvoiceAccess(id, user.id);
+    importedInvoice: withWorkspace(async (_, { id }, { workspaceId }) => {
+      const invoice = await checkInvoiceAccess(id, workspaceId);
       return invoice;
     }),
 
@@ -583,7 +599,7 @@ const importedInvoiceResolvers = {
       async (
         _,
         { workspaceId, page = 1, limit = 20, filters = {} },
-        { user }
+        { user },
       ) => {
         const query = { workspaceId };
 
@@ -638,7 +654,7 @@ const importedInvoiceResolvers = {
           limit,
           hasMore: skip + invoices.length < total,
         };
-      }
+      },
     ),
 
     /**
@@ -669,7 +685,7 @@ const importedInvoiceResolvers = {
         });
 
         return result;
-      }
+      },
     ),
 
     /**
@@ -690,7 +706,11 @@ const importedInvoiceResolvers = {
       }
 
       return {
-        claudeVision: stats["claude-vision"] || { used: 0, limit: 999999, available: 999999 },
+        claudeVision: stats["claude-vision"] || {
+          used: 0,
+          limit: 999999,
+          available: 999999,
+        },
         mindee: stats.mindee,
         googleDocumentAi: stats["google-document-ai"],
         mistral: stats.mistral,
@@ -738,7 +758,7 @@ const importedInvoiceResolvers = {
           fileSize,
           cloudflareKey,
         },
-        { user }
+        { user },
       ) => {
         try {
           // Vérifier le quota utilisateur avant l'import
@@ -749,7 +769,7 @@ const importedInvoiceResolvers = {
             cloudflareUrl,
             fileName,
             mimeType,
-            workspaceId
+            workspaceId,
           );
 
           // OPTIMISATION: Enregistrer usage OCR + détecter doublons en parallèle
@@ -758,7 +778,7 @@ const importedInvoiceResolvers = {
               workspaceId,
               invoiceData.originalInvoiceNumber,
               invoiceData.vendor?.name,
-              invoiceData.totalTTC
+              invoiceData.totalTTC,
             ),
             recordOcrUsage(user.id, workspaceId, plan, {
               fileName,
@@ -788,17 +808,30 @@ const importedInvoiceResolvers = {
           await importedInvoice.save();
 
           // Déclencher les automatisations (fire-and-forget, pas de await)
-          documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
-            documentId: importedInvoice._id.toString(),
-            documentType: 'importedInvoice',
-            documentNumber: importedInvoice.originalInvoiceNumber || '',
-            clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
-            cloudflareUrl: cloudflareUrl,
-            mimeType: mimeType,
-            fileExtension: fileName?.split('.').pop() || 'pdf',
-            issueDate: importedInvoice.invoiceDate || importedInvoice.createdAt,
-            clientId: importedInvoice.client?._id || null,
-          }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
+          documentAutomationService
+            .executeAutomationsForExpense(
+              "INVOICE_IMPORTED",
+              workspaceId,
+              {
+                documentId: importedInvoice._id.toString(),
+                documentType: "importedInvoice",
+                documentNumber: importedInvoice.originalInvoiceNumber || "",
+                clientName:
+                  importedInvoice.vendor?.name ||
+                  importedInvoice.client?.name ||
+                  "",
+                cloudflareUrl: cloudflareUrl,
+                mimeType: mimeType,
+                fileExtension: fileName?.split(".").pop() || "pdf",
+                issueDate:
+                  importedInvoice.invoiceDate || importedInvoice.createdAt,
+                clientId: importedInvoice.client?._id || null,
+              },
+              user.id,
+            )
+            .catch((err) =>
+              console.error("Erreur automatisation facture importée:", err),
+            );
 
           return {
             success: true,
@@ -815,7 +848,7 @@ const importedInvoiceResolvers = {
             isDuplicate: false,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -858,9 +891,12 @@ const importedInvoiceResolvers = {
             user.currentOrganizationId;
 
           if (rawOrgId) {
-            organizationId = typeof rawOrgId === "object"
-              ? (rawOrgId._id?.toString() || rawOrgId.id?.toString() || rawOrgId.toString())
-              : rawOrgId.toString();
+            organizationId =
+              typeof rawOrgId === "object"
+                ? rawOrgId._id?.toString() ||
+                  rawOrgId.id?.toString() ||
+                  rawOrgId.toString()
+                : rawOrgId.toString();
           } else {
             try {
               const memberRecord = await mongoose.connection.db
@@ -870,13 +906,18 @@ const importedInvoiceResolvers = {
                 organizationId = memberRecord.organizationId.toString();
               }
             } catch (err) {
-              console.warn("⚠️ Impossible de récupérer organizationId:", err.message);
+              console.warn(
+                "⚠️ Impossible de récupérer organizationId:",
+                err.message,
+              );
             }
           }
 
           // OPTIMISATION: Lancer l'upload Cloudflare et l'OCR en parallèle
           // L'OCR Claude Vision utilise le base64 (pas l'URL), donc les deux sont indépendants
-          console.log(`⚡ importInvoiceDirect: Upload + OCR en parallèle pour ${filename}`);
+          console.log(
+            `⚡ importInvoiceDirect: Upload + OCR en parallèle pour ${filename}`,
+          );
 
           let invoiceData;
           let ocrProvider = "claude-vision";
@@ -897,13 +938,13 @@ const importedInvoiceResolvers = {
                 filename,
                 user.id,
                 "importedInvoice",
-                organizationId
+                organizationId,
               ),
               claudeVisionOcrService.processFromBase64(
                 base64Data,
                 mimetype,
                 filename,
-                contentHash
+                contentHash,
               ),
             ]);
 
@@ -911,17 +952,27 @@ const importedInvoiceResolvers = {
 
             if (!rawResult.success) {
               throw createInternalServerError(
-                `Erreur OCR: ${rawResult.error || rawResult.message}`
+                `Erreur OCR: ${rawResult.error || rawResult.message}`,
               );
             }
 
-            const structuredResult = claudeVisionOcrService.toInvoiceFormat(rawResult);
+            const structuredResult =
+              claudeVisionOcrService.toInvoiceFormat(rawResult);
 
             if (structuredResult.transaction_data) {
-              invoiceData = transformOcrToInvoiceDataV2(structuredResult, structuredResult);
+              invoiceData = transformOcrToInvoiceDataV2(
+                structuredResult,
+                structuredResult,
+              );
             } else {
-              const extractionResult = await invoiceExtractionService.extractInvoiceData(structuredResult);
-              invoiceData = transformOcrToInvoiceDataV2(structuredResult, extractionResult);
+              const extractionResult =
+                await invoiceExtractionService.extractInvoiceData(
+                  structuredResult,
+                );
+              invoiceData = transformOcrToInvoiceDataV2(
+                structuredResult,
+                extractionResult,
+              );
             }
 
             ocrProvider = rawResult.provider || "claude-vision";
@@ -932,14 +983,16 @@ const importedInvoiceResolvers = {
               filename,
               user.id,
               "importedInvoice",
-              organizationId
+              organizationId,
             );
-            console.log(`🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`);
+            console.log(
+              `🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`,
+            );
             invoiceData = await processInvoiceWithOcr(
               uploadResult.url,
               filename,
               mimetype,
-              workspaceId
+              workspaceId,
             );
             ocrProvider = invoiceData.ocrData?.provider || "hybrid";
           }
@@ -950,7 +1003,7 @@ const importedInvoiceResolvers = {
               workspaceId,
               invoiceData.originalInvoiceNumber,
               invoiceData.vendor?.name,
-              invoiceData.totalTTC
+              invoiceData.totalTTC,
             ),
             recordOcrUsage(user.id, workspaceId, plan, {
               fileName: filename,
@@ -980,17 +1033,30 @@ const importedInvoiceResolvers = {
           await importedInvoice.save();
 
           // Déclencher les automatisations (fire-and-forget, pas de await)
-          documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
-            documentId: importedInvoice._id.toString(),
-            documentType: 'importedInvoice',
-            documentNumber: importedInvoice.originalInvoiceNumber || '',
-            clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
-            cloudflareUrl: uploadResult.url,
-            mimeType: mimetype,
-            fileExtension: filename?.split('.').pop() || 'pdf',
-            issueDate: importedInvoice.invoiceDate || importedInvoice.createdAt,
-            clientId: importedInvoice.client?._id || null,
-          }, user.id).catch(err => console.error('Erreur automatisation facture importée:', err));
+          documentAutomationService
+            .executeAutomationsForExpense(
+              "INVOICE_IMPORTED",
+              workspaceId,
+              {
+                documentId: importedInvoice._id.toString(),
+                documentType: "importedInvoice",
+                documentNumber: importedInvoice.originalInvoiceNumber || "",
+                clientName:
+                  importedInvoice.vendor?.name ||
+                  importedInvoice.client?.name ||
+                  "",
+                cloudflareUrl: uploadResult.url,
+                mimeType: mimetype,
+                fileExtension: filename?.split(".").pop() || "pdf",
+                issueDate:
+                  importedInvoice.invoiceDate || importedInvoice.createdAt,
+                clientId: importedInvoice.client?._id || null,
+              },
+              user.id,
+            )
+            .catch((err) =>
+              console.error("Erreur automatisation facture importée:", err),
+            );
 
           return {
             success: true,
@@ -1007,7 +1073,7 @@ const importedInvoiceResolvers = {
             isDuplicate: false,
           };
         }
-      }
+      },
     ),
 
     /**
@@ -1026,13 +1092,19 @@ const importedInvoiceResolvers = {
 
         if (files.length > MAX_BATCH_IMPORT) {
           throw createValidationError(
-            `Maximum ${MAX_BATCH_IMPORT} factures par import`
+            `Maximum ${MAX_BATCH_IMPORT} factures par import`,
           );
         }
 
         // ========== PHASE 0: Vérification quota utilisateur ==========
-        const { plan, quotaInfo } = await checkUserOcrQuota(user.id, workspaceId, files.length);
-        console.log(`📊 Quota OCR: ${quotaInfo.remaining} imports disponibles, ${files.length} demandés`);
+        const { plan, quotaInfo } = await checkUserOcrQuota(
+          user.id,
+          workspaceId,
+          files.length,
+        );
+        console.log(
+          `📊 Quota OCR: ${quotaInfo.remaining} imports disponibles, ${files.length} demandés`,
+        );
 
         const results = [];
         const errors = [];
@@ -1042,7 +1114,10 @@ const importedInvoiceResolvers = {
         // ========== PHASE 1: Batch OCR optimisé ==========
         console.log(`🚀 Démarrage import batch de ${files.length} factures...`);
 
-        const ocrResults = await hybridOcrService.batchProcessDocuments(files, workspaceId);
+        const ocrResults = await hybridOcrService.batchProcessDocuments(
+          files,
+          workspaceId,
+        );
 
         // Séparer succès et échecs
         const successfulOcr = ocrResults.filter((r) => r.success);
@@ -1060,7 +1135,9 @@ const importedInvoiceResolvers = {
           });
         });
 
-        console.log(`📊 OCR: ${successfulOcr.length} réussis, ${failedOcr.length} échoués`);
+        console.log(
+          `📊 OCR: ${successfulOcr.length} réussis, ${failedOcr.length} échoués`,
+        );
 
         // ========== PHASE 2: Extraction + Sauvegarde en parallèle (optimisé) ==========
         const SAVE_BATCH_SIZE = 40; // Augmenté de 20 à 40 grâce au pool MongoDB élargi
@@ -1071,17 +1148,28 @@ const importedInvoiceResolvers = {
           const batchResults = await Promise.all(
             batch.map(async (ocrResult, batchIndex) => {
               const fileIndex = i + batchIndex;
-              const file = files.find((f) => f.cloudflareUrl === ocrResult.url) || files[fileIndex];
+              const file =
+                files.find((f) => f.cloudflareUrl === ocrResult.url) ||
+                files[fileIndex];
 
               try {
                 // Extraire les données avec le service d'extraction
                 let invoiceData;
 
                 if (ocrResult.result?.transaction_data) {
-                  invoiceData = transformOcrToInvoiceDataV2(ocrResult.result, ocrResult.result);
+                  invoiceData = transformOcrToInvoiceDataV2(
+                    ocrResult.result,
+                    ocrResult.result,
+                  );
                 } else {
-                  const extractionResult = await invoiceExtractionService.extractInvoiceData(ocrResult.result);
-                  invoiceData = transformOcrToInvoiceDataV2(ocrResult.result, extractionResult);
+                  const extractionResult =
+                    await invoiceExtractionService.extractInvoiceData(
+                      ocrResult.result,
+                    );
+                  invoiceData = transformOcrToInvoiceDataV2(
+                    ocrResult.result,
+                    extractionResult,
+                  );
                 }
 
                 // Doublons + enregistrement OCR en parallèle
@@ -1090,7 +1178,7 @@ const importedInvoiceResolvers = {
                     workspaceId,
                     invoiceData.originalInvoiceNumber,
                     invoiceData.vendor?.name,
-                    invoiceData.totalTTC
+                    invoiceData.totalTTC,
                   ),
                   recordOcrUsage(user.id, workspaceId, plan, {
                     documentId: null,
@@ -1120,17 +1208,35 @@ const importedInvoiceResolvers = {
                 await importedInvoice.save();
 
                 // Automatisations fire-and-forget
-                documentAutomationService.executeAutomationsForExpense('INVOICE_IMPORTED', workspaceId, {
-                  documentId: importedInvoice._id.toString(),
-                  documentType: 'importedInvoice',
-                  documentNumber: importedInvoice.originalInvoiceNumber || '',
-                  clientName: importedInvoice.vendor?.name || importedInvoice.client?.name || '',
-                  cloudflareUrl: file.cloudflareUrl,
-                  mimeType: file.mimeType,
-                  fileExtension: file.fileName?.split('.').pop() || 'pdf',
-                  issueDate: importedInvoice.invoiceDate || importedInvoice.createdAt,
-                  clientId: importedInvoice.client?._id || null,
-                }, user.id).catch(err => console.error('Erreur automatisation facture importée (batch):', err));
+                documentAutomationService
+                  .executeAutomationsForExpense(
+                    "INVOICE_IMPORTED",
+                    workspaceId,
+                    {
+                      documentId: importedInvoice._id.toString(),
+                      documentType: "importedInvoice",
+                      documentNumber:
+                        importedInvoice.originalInvoiceNumber || "",
+                      clientName:
+                        importedInvoice.vendor?.name ||
+                        importedInvoice.client?.name ||
+                        "",
+                      cloudflareUrl: file.cloudflareUrl,
+                      mimeType: file.mimeType,
+                      fileExtension: file.fileName?.split(".").pop() || "pdf",
+                      issueDate:
+                        importedInvoice.invoiceDate ||
+                        importedInvoice.createdAt,
+                      clientId: importedInvoice.client?._id || null,
+                    },
+                    user.id,
+                  )
+                  .catch((err) =>
+                    console.error(
+                      "Erreur automatisation facture importée (batch):",
+                      err,
+                    ),
+                  );
 
                 return {
                   success: true,
@@ -1147,7 +1253,7 @@ const importedInvoiceResolvers = {
                   isDuplicate: false,
                 };
               }
-            })
+            }),
           );
 
           // Compiler les résultats du batch
@@ -1179,15 +1285,15 @@ const importedInvoiceResolvers = {
           results,
           errors,
         };
-      }
+      },
     ),
 
     /**
      * Met à jour une facture importée
      */
-    updateImportedInvoice: isAuthenticated(
-      async (_, { id, input }, { user }) => {
-        const invoice = await checkInvoiceAccess(id, user.id);
+    updateImportedInvoice: withWorkspace(
+      async (_, { id, input }, { workspaceId }) => {
+        const invoice = await checkInvoiceAccess(id, workspaceId);
 
         // Mettre à jour les champs du vendor si fournis
         if (input.vendorName !== undefined)
@@ -1206,9 +1312,13 @@ const importedInvoiceResolvers = {
           invoice.vendor.vatNumber = input.vendorVatNumber;
 
         // Mettre à jour les champs du client si fournis
-        if (input.clientName !== undefined || input.clientSiret !== undefined ||
-            input.clientAddress !== undefined || input.clientCity !== undefined ||
-            input.clientPostalCode !== undefined) {
+        if (
+          input.clientName !== undefined ||
+          input.clientSiret !== undefined ||
+          input.clientAddress !== undefined ||
+          input.clientCity !== undefined ||
+          input.clientPostalCode !== undefined
+        ) {
           if (!invoice.client) invoice.client = {};
           if (input.clientName !== undefined)
             invoice.client.name = input.clientName;
@@ -1246,40 +1356,44 @@ const importedInvoiceResolvers = {
 
         await invoice.save();
         return invoice;
-      }
+      },
     ),
 
     /**
      * Valide une facture importée
      */
-    validateImportedInvoice: isAuthenticated(async (_, { id }, { user }) => {
-      const invoice = await checkInvoiceAccess(id, user.id);
-      return invoice.validate();
-    }),
+    validateImportedInvoice: withWorkspace(
+      async (_, { id }, { workspaceId }) => {
+        const invoice = await checkInvoiceAccess(id, workspaceId);
+        return invoice.validate();
+      },
+    ),
 
     /**
      * Rejette une facture importée
      */
-    rejectImportedInvoice: isAuthenticated(
-      async (_, { id, reason }, { user }) => {
-        const invoice = await checkInvoiceAccess(id, user.id);
+    rejectImportedInvoice: withWorkspace(
+      async (_, { id, reason }, { workspaceId }) => {
+        const invoice = await checkInvoiceAccess(id, workspaceId);
         return invoice.reject(reason);
-      }
+      },
     ),
 
     /**
      * Archive une facture importée
      */
-    archiveImportedInvoice: isAuthenticated(async (_, { id }, { user }) => {
-      const invoice = await checkInvoiceAccess(id, user.id);
-      return invoice.archive();
-    }),
+    archiveImportedInvoice: withWorkspace(
+      async (_, { id }, { workspaceId }) => {
+        const invoice = await checkInvoiceAccess(id, workspaceId);
+        return invoice.archive();
+      },
+    ),
 
     /**
      * Supprime une facture importée (et son fichier PDF sur Cloudflare)
      */
-    deleteImportedInvoice: isAuthenticated(async (_, { id }, { user }) => {
-      const invoice = await checkInvoiceAccess(id, user.id);
+    deleteImportedInvoice: withWorkspace(async (_, { id }, { workspaceId }) => {
+      const invoice = await checkInvoiceAccess(id, workspaceId);
 
       // Supprimer le fichier PDF sur Cloudflare si présent
       const cloudflareKey = invoice.file?.cloudflareKey;
@@ -1287,7 +1401,7 @@ const importedInvoiceResolvers = {
         try {
           await cloudflareService.deleteImage(
             cloudflareKey,
-            cloudflareService.importedInvoicesBucketName
+            cloudflareService.importedInvoicesBucketName,
           );
           console.log(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
         } catch (error) {
@@ -1303,30 +1417,40 @@ const importedInvoiceResolvers = {
     /**
      * Supprime plusieurs factures importées (et leurs fichiers PDF sur Cloudflare)
      */
-    deleteImportedInvoices: isAuthenticated(async (_, { ids }) => {
-      // Récupérer les factures pour avoir les cloudflareKeys
-      const invoices = await ImportedInvoice.find({ _id: { $in: ids } }).lean();
+    deleteImportedInvoices: withWorkspace(
+      async (_, { ids }, { workspaceId }) => {
+        // Récupérer les factures pour avoir les cloudflareKeys (IDOR fix: filtre par workspaceId)
+        const invoices = await ImportedInvoice.find({
+          _id: { $in: ids },
+          workspaceId,
+        }).lean();
 
-      // Supprimer les fichiers PDF sur Cloudflare
-      for (const invoice of invoices) {
-        const cloudflareKey = invoice.file?.cloudflareKey;
-        if (cloudflareKey) {
-          try {
-            await cloudflareService.deleteImage(
-              cloudflareKey,
-              cloudflareService.importedInvoicesBucketName
-            );
-            console.log(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
-          } catch (error) {
-            console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
-            // On continue même si Cloudflare échoue
+        // Supprimer les fichiers PDF sur Cloudflare
+        for (const invoice of invoices) {
+          const cloudflareKey = invoice.file?.cloudflareKey;
+          if (cloudflareKey) {
+            try {
+              await cloudflareService.deleteImage(
+                cloudflareKey,
+                cloudflareService.importedInvoicesBucketName,
+              );
+              console.log(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
+            } catch (error) {
+              console.error(
+                `⚠️ Erreur suppression Cloudflare: ${error.message}`,
+              );
+              // On continue même si Cloudflare échoue
+            }
           }
         }
-      }
 
-      const result = await ImportedInvoice.deleteMany({ _id: { $in: ids } });
-      return result.deletedCount;
-    }),
+        const result = await ImportedInvoice.deleteMany({
+          _id: { $in: ids },
+          workspaceId,
+        });
+        return result.deletedCount;
+      },
+    ),
 
     /**
      * Achète des imports OCR supplémentaires
@@ -1337,7 +1461,7 @@ const importedInvoiceResolvers = {
       async (_, { workspaceId, quantity, paymentId }, { user }) => {
         if (quantity < 1 || quantity > 1000) {
           throw createValidationError(
-            "Quantité invalide. Minimum 1, maximum 1000 imports."
+            "Quantité invalide. Minimum 1, maximum 1000 imports.",
           );
         }
 
@@ -1349,7 +1473,7 @@ const importedInvoiceResolvers = {
           workspaceId,
           plan,
           quantity,
-          paymentId
+          paymentId,
         );
 
         return {
@@ -1359,42 +1483,48 @@ const importedInvoiceResolvers = {
           totalSpent: result.totalSpent,
           message: `${quantity} import(s) supplémentaire(s) ajouté(s) avec succès.`,
         };
-      }
+      },
     ),
 
     /**
      * Convertit une facture importée en facture d'achat (PurchaseInvoice)
      */
-    convertImportedInvoiceToPurchaseInvoice: isAuthenticated(
-      async (_, { id }, { user }) => {
-        const importedInvoice = await ImportedInvoice.findById(id);
+    convertImportedInvoiceToPurchaseInvoice: withWorkspace(
+      async (_, { id }, { user, workspaceId }) => {
+        const importedInvoice = await ImportedInvoice.findOne({
+          _id: id,
+          workspaceId,
+        });
         if (!importedInvoice) {
           throw createNotFoundError("Facture importée introuvable");
         }
         if (importedInvoice.status !== "PENDING_REVIEW") {
           throw createValidationError(
-            `Impossible de convertir : statut actuel "${importedInvoice.status}" (attendu PENDING_REVIEW)`
+            `Impossible de convertir : statut actuel "${importedInvoice.status}" (attendu PENDING_REVIEW)`,
           );
         }
         return convertSingleImportedInvoice(importedInvoice, user.id);
-      }
+      },
     ),
 
     /**
      * Convertit plusieurs factures importées en factures d'achat
      */
-    convertImportedInvoicesToPurchaseInvoices: isAuthenticated(
-      async (_, { ids }, { user }) => {
+    convertImportedInvoicesToPurchaseInvoices: withWorkspace(
+      async (_, { ids }, { user, workspaceId }) => {
         let converted = 0;
         let skipped = 0;
         let errors = 0;
 
-        // Batch-load toutes les factures importées en une seule query
+        // Batch-load toutes les factures importées en une seule query (IDOR fix: filtre par workspaceId)
         const importedInvoices = await ImportedInvoice.find({
           _id: { $in: ids },
           status: "PENDING_REVIEW",
+          workspaceId,
         });
-        const invoiceMap = new Map(importedInvoices.map(inv => [inv._id.toString(), inv]));
+        const invoiceMap = new Map(
+          importedInvoices.map((inv) => [inv._id.toString(), inv]),
+        );
 
         for (const id of ids) {
           try {
@@ -1406,7 +1536,10 @@ const importedInvoiceResolvers = {
             await convertSingleImportedInvoice(importedInvoice, user.id);
             converted++;
           } catch (err) {
-            console.error(`Erreur conversion facture importée ${id}:`, err.message);
+            console.error(
+              `Erreur conversion facture importée ${id}:`,
+              err.message,
+            );
             errors++;
           }
         }
@@ -1418,7 +1551,7 @@ const importedInvoiceResolvers = {
           errors,
           message: `${converted} convertie(s), ${skipped} ignorée(s), ${errors} erreur(s)`,
         };
-      }
+      },
     ),
   },
 
