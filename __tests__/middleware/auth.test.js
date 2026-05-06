@@ -33,10 +33,15 @@ vi.mock("../../src/middlewares/better-auth.js", () => ({
   betterAuthMiddleware: vi.fn(),
 }));
 
+vi.mock("../../src/middlewares/org-resolver.js", () => ({
+  getActiveOrganization: vi.fn(),
+}));
+
 import {
   isAuthenticated,
   withWorkspace,
 } from "../../src/middlewares/better-auth-jwt.js";
+import { getActiveOrganization } from "../../src/middlewares/org-resolver.js";
 import { AppError, ERROR_CODES } from "../../src/utils/errors.js";
 
 beforeEach(() => {
@@ -115,50 +120,67 @@ describe("isAuthenticated wrapper", () => {
 });
 
 describe("withWorkspace wrapper", () => {
-  it("should inject workspaceId from header into context", async () => {
+  it("should inject verified workspaceId after membership check", async () => {
+    getActiveOrganization.mockResolvedValue({
+      id: "org-verified",
+      memberRole: "member",
+    });
     const mockResolver = vi.fn().mockResolvedValue("result");
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: "user-1" },
-      req: { headers: { "x-workspace-id": "ws-123" } },
+      user: { _id: { toString: () => "user-1" } },
+      req: { headers: { "x-workspace-id": "org-verified" } },
     };
 
     const result = await wrapped(null, {}, context, {});
 
     expect(result).toBe("result");
+    expect(getActiveOrganization).toHaveBeenCalledWith(
+      "user-1",
+      "org-verified",
+    );
     const enhancedContext = mockResolver.mock.calls[0][2];
-    expect(enhancedContext.workspaceId).toBe("ws-123");
+    expect(enhancedContext.workspaceId).toBe("org-verified");
   });
 
-  it("should use args.workspaceId when header is absent", async () => {
+  it("should prefer args.workspaceId over header", async () => {
+    getActiveOrganization.mockResolvedValue({
+      id: "org-from-args",
+      memberRole: "owner",
+    });
     const mockResolver = vi.fn().mockResolvedValue("result");
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: "user-1" },
-      req: { headers: {} },
+      user: { _id: { toString: () => "user-1" } },
+      req: { headers: { "x-workspace-id": "org-header" } },
     };
 
-    await wrapped(null, { workspaceId: "ws-from-args" }, context, {});
+    await wrapped(null, { workspaceId: "org-from-args" }, context, {});
 
+    expect(getActiveOrganization).toHaveBeenCalledWith(
+      "user-1",
+      "org-from-args",
+    );
     const enhancedContext = mockResolver.mock.calls[0][2];
-    expect(enhancedContext.workspaceId).toBe("ws-from-args");
+    expect(enhancedContext.workspaceId).toBe("org-from-args");
   });
 
-  it("should use args.workspaceId when header and args mismatch (graceful fallback)", async () => {
-    const mockResolver = vi.fn().mockResolvedValue("result");
+  it("should throw FORBIDDEN when user is not member of requested org", async () => {
+    getActiveOrganization.mockResolvedValue(null);
+    const mockResolver = vi.fn();
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: "user-1" },
-      req: { headers: { "x-workspace-id": "ws-header" } },
+      user: { _id: { toString: () => "user-1" } },
+      req: { headers: { "x-workspace-id": "org-not-mine" } },
     };
 
-    await wrapped(null, { workspaceId: "ws-different" }, context, {});
-    expect(mockResolver).toHaveBeenCalled();
-    const enhancedContext = mockResolver.mock.calls[0][2];
-    expect(enhancedContext.workspaceId).toBe("ws-different");
+    await expect(wrapped(null, {}, context, {})).rejects.toThrow(
+      "Accès non autorisé à cette organisation",
+    );
+    expect(mockResolver).not.toHaveBeenCalled();
   });
 
   it("should throw UNAUTHENTICATED when user is missing", async () => {
@@ -170,19 +192,40 @@ describe("withWorkspace wrapper", () => {
     );
   });
 
-  it("should fallback to user ID as workspaceId when no workspace specified", async () => {
+  it("should fallback to user default org when no workspaceId provided", async () => {
+    getActiveOrganization.mockResolvedValue({
+      id: "default-org",
+      memberRole: "owner",
+    });
     const mockResolver = vi.fn().mockResolvedValue("result");
     const wrapped = withWorkspace(mockResolver);
 
     const context = {
-      user: { _id: { toString: () => "user-obj-id" } },
+      user: { _id: { toString: () => "user-1" } },
       req: { headers: {} },
     };
 
     await wrapped(null, {}, context, {});
 
+    expect(getActiveOrganization).toHaveBeenCalledWith("user-1", null);
     const enhancedContext = mockResolver.mock.calls[0][2];
-    expect(enhancedContext.workspaceId).toBe("user-obj-id");
+    expect(enhancedContext.workspaceId).toBe("default-org");
+  });
+
+  it("should throw FORBIDDEN when no default org found", async () => {
+    getActiveOrganization.mockResolvedValue(null);
+    const mockResolver = vi.fn();
+    const wrapped = withWorkspace(mockResolver);
+
+    const context = {
+      user: { _id: { toString: () => "orphan-user" } },
+      req: { headers: {} },
+    };
+
+    await expect(wrapped(null, {}, context, {})).rejects.toThrow(
+      "Aucune organisation active trouvée",
+    );
+    expect(mockResolver).not.toHaveBeenCalled();
   });
 });
 

@@ -4,6 +4,7 @@ import logger from "../utils/logger.js";
 import User from "../models/User.js";
 import { getJWKSValidator } from "../services/jwks-validator.js";
 import { betterAuthMiddleware } from "./better-auth.js";
+import { getActiveOrganization } from "./org-resolver.js";
 
 // Cache LRU en mémoire pour User.findById — évite une query DB par requête authentifiée
 const USER_CACHE_TTL = 30_000; // 30 secondes
@@ -174,38 +175,43 @@ const withWorkspace = (resolver) => {
       );
     }
 
-    // Récupérer le workspaceId depuis les headers (source de confiance)
-    const headerWorkspaceId =
-      context.req?.headers["x-workspace-id"] ||
-      context.req?.headers["x-organization-id"];
+    const userId = context.user._id.toString();
 
-    // Récupérer le workspaceId depuis les arguments (fourni par le client)
-    const argsWorkspaceId = args.workspaceId;
+    const requestedOrgId =
+      args.workspaceId ||
+      context.req?.headers?.["x-workspace-id"] ||
+      context.req?.headers?.["x-organization-id"];
 
-    // En cas de mismatch entre header et args (ex: switch de compte, cache stale),
-    // privilégier args.workspaceId qui vient du composant React avec l'org à jour.
-    // La vérification d'appartenance est faite par le RBAC en aval.
-    if (
-      argsWorkspaceId &&
-      headerWorkspaceId &&
-      argsWorkspaceId !== headerWorkspaceId
-    ) {
-      logger.warn(
-        `⚠️ withWorkspace: mismatch header=${headerWorkspaceId} vs args=${argsWorkspaceId}, utilisation de args`,
-      );
-    }
+    let organization;
 
-    // Priorité: args (source explicite du composant) > header (hint frontend)
-    let workspaceId = argsWorkspaceId || headerWorkspaceId;
+    if (requestedOrgId) {
+      // Explicit org request: verify membership
+      organization = await getActiveOrganization(userId, requestedOrgId);
 
-    // Si aucun workspaceId n'est fourni, utiliser l'ID utilisateur comme workspace
-    if (!workspaceId) {
-      workspaceId = context.user._id.toString();
+      if (!organization) {
+        logger.warn(
+          `withWorkspace: user ${userId} requested org ${requestedOrgId} without membership`,
+        );
+        throw new AppError(
+          "Accès non autorisé à cette organisation",
+          ERROR_CODES.FORBIDDEN,
+        );
+      }
+    } else {
+      // No org explicitly requested: use user's default org
+      organization = await getActiveOrganization(userId, null);
+
+      if (!organization) {
+        throw new AppError(
+          "Aucune organisation active trouvée",
+          ERROR_CODES.FORBIDDEN,
+        );
+      }
     }
 
     const enhancedContext = {
       ...context,
-      workspaceId,
+      workspaceId: organization.id,
     };
 
     return resolver(parent, args, enhancedContext, info);
