@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import stripeConnectService from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
@@ -435,11 +436,26 @@ const stripeConnectResolvers = {
           };
         }
 
-        // Construire les URLs de succès et d'annulation
+        // Generate single-use opaque return token (credentials stay out of Stripe logs)
+        const paymentReturnToken = crypto.randomBytes(16).toString("hex");
+        await FileTransfer.updateOne(
+          { _id: fileTransfer._id },
+          {
+            $set: {
+              paymentReturnToken,
+              paymentReturnTokenExpiresAt: new Date(
+                Date.now() + 60 * 60 * 1000,
+              ),
+              paymentReturnTokenConsumed: false,
+            },
+          },
+        );
+
+        // Build URLs with opaque token instead of shareLink+accessKey
         const baseUrl =
           origin || process.env.FRONTEND_URL || "http://localhost:3000";
-        const successUrl = `${baseUrl}/transfer/${fileTransfer.shareLink}?key=${fileTransfer.accessKey}&payment_status=success`;
-        const cancelUrl = `${baseUrl}/transfer/${fileTransfer.shareLink}?key=${fileTransfer.accessKey}&payment_status=canceled`;
+        const successUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=success`;
+        const cancelUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=cancel`;
 
         // Créer la session de paiement
         const result = await stripeConnectService.createPaymentSession(
@@ -466,6 +482,45 @@ const stripeConnectResolvers = {
           success: false,
           message: `Erreur lors de la création de la session de paiement: ${error.message}`,
         };
+      }
+    },
+
+    /**
+     * Consume a single-use payment return token and return transfer info
+     */
+    consumePaymentReturnToken: async (_, { token }) => {
+      try {
+        const fileTransfer = await FileTransfer.findOne({
+          paymentReturnToken: token,
+          paymentReturnTokenConsumed: { $ne: true },
+        });
+
+        if (!fileTransfer) {
+          return { success: false, message: "Invalid or already used token" };
+        }
+
+        if (
+          fileTransfer.paymentReturnTokenExpiresAt &&
+          new Date() > fileTransfer.paymentReturnTokenExpiresAt
+        ) {
+          return { success: false, message: "Token expired" };
+        }
+
+        // Mark token as consumed (single-use)
+        await FileTransfer.updateOne(
+          { _id: fileTransfer._id },
+          { $set: { paymentReturnTokenConsumed: true } },
+        );
+
+        return {
+          success: true,
+          shareLink: fileTransfer.shareLink,
+          accessKey: fileTransfer.accessKey,
+          paymentStatus: fileTransfer.isPaid ? "paid" : "pending",
+        };
+      } catch (error) {
+        logger.error("Error consuming payment return token:", error);
+        return { success: false, message: "Internal error" };
       }
     },
   },

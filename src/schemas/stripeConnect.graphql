@@ -73,4 +73,17 @@ extend type Mutation {
   createPaymentSessionForFileTransfer(
     transferId: ID!
   ): StripePaymentSessionResponse!
+
+  # Consume a single-use payment return token (Stripe redirect callback)
+  consumePaymentReturnToken(
+    token: String!
+  ): PaymentReturnTokenResponse!
+}
+
+type PaymentReturnTokenResponse {
+  success: Boolean!
+  message: String
+  shareLink: String
+  accessKey: String
+  paymentStatus: String
 }

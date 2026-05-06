@@ -172,6 +172,17 @@ const FileTransferSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    // Opaque token for Stripe return URLs (single-use, 1h TTL)
+    paymentReturnToken: {
+      type: String,
+    },
+    paymentReturnTokenExpiresAt: {
+      type: Date,
+    },
+    paymentReturnTokenConsumed: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
