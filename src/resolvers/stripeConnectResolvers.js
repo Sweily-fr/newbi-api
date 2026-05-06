@@ -5,6 +5,25 @@ import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
+// In-memory rate limit for payment session creation
+const RATE_LIMIT_IP_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_IP_MAX = 10;
+const RATE_LIMIT_TRANSFER_WINDOW = 60 * 60 * 1000; // 1 hour
+const RATE_LIMIT_TRANSFER_MAX = 5;
+const rateLimitIpMap = new Map();
+const rateLimitTransferMap = new Map();
+
+function isRateLimited(map, key, windowMs, max) {
+  const now = Date.now();
+  const entry = map.get(key);
+  if (!entry || now - entry.windowStart > windowMs) {
+    map.set(key, { windowStart: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  return entry.count > max;
+}
+
 const stripeConnectResolvers = {
   Query: {
     /**
@@ -407,6 +426,35 @@ const stripeConnectResolvers = {
       { origin },
     ) => {
       try {
+        // Rate limit: per-IP and per-transfer
+        const clientIp = origin || "unknown";
+        if (
+          isRateLimited(
+            rateLimitIpMap,
+            clientIp,
+            RATE_LIMIT_IP_WINDOW,
+            RATE_LIMIT_IP_MAX,
+          )
+        ) {
+          return {
+            success: false,
+            message: "Too many requests, try again later",
+          };
+        }
+        if (
+          isRateLimited(
+            rateLimitTransferMap,
+            transferId,
+            RATE_LIMIT_TRANSFER_WINDOW,
+            RATE_LIMIT_TRANSFER_MAX,
+          )
+        ) {
+          return {
+            success: false,
+            message: "Too many requests, try again later",
+          };
+        }
+
         // Récupérer le transfert de fichiers
         const fileTransfer = await FileTransfer.findById(transferId);
         if (!fileTransfer) {
