@@ -77,9 +77,7 @@ const FileTransferSchema = new Schema(
       type: String,
       unique: true,
       default: function () {
-        return `dl-${this.shareLink}-${Date.now()}-${Math.random()
-          .toString(36)
-          .substring(2, 15)}`;
+        return crypto.randomBytes(16).toString("hex");
       },
     },
     accessKey: {
