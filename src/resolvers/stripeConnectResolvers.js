@@ -1,8 +1,28 @@
+import crypto from "crypto";
 import stripeConnectService from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+
+// In-memory rate limit for payment session creation
+const RATE_LIMIT_IP_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_IP_MAX = 10;
+const RATE_LIMIT_TRANSFER_WINDOW = 60 * 60 * 1000; // 1 hour
+const RATE_LIMIT_TRANSFER_MAX = 5;
+const rateLimitIpMap = new Map();
+const rateLimitTransferMap = new Map();
+
+function isRateLimited(map, key, windowMs, max) {
+  const now = Date.now();
+  const entry = map.get(key);
+  if (!entry || now - entry.windowStart > windowMs) {
+    map.set(key, { windowStart: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  return entry.count > max;
+}
 
 const stripeConnectResolvers = {
   Query: {
@@ -402,10 +422,39 @@ const stripeConnectResolvers = {
      */
     createPaymentSessionForFileTransfer: async (
       _,
-      { transferId },
+      { transferId, accessKey },
       { origin },
     ) => {
       try {
+        // Rate limit: per-IP and per-transfer
+        const clientIp = origin || "unknown";
+        if (
+          isRateLimited(
+            rateLimitIpMap,
+            clientIp,
+            RATE_LIMIT_IP_WINDOW,
+            RATE_LIMIT_IP_MAX,
+          )
+        ) {
+          return {
+            success: false,
+            message: "Too many requests, try again later",
+          };
+        }
+        if (
+          isRateLimited(
+            rateLimitTransferMap,
+            transferId,
+            RATE_LIMIT_TRANSFER_WINDOW,
+            RATE_LIMIT_TRANSFER_MAX,
+          )
+        ) {
+          return {
+            success: false,
+            message: "Too many requests, try again later",
+          };
+        }
+
         // Récupérer le transfert de fichiers
         const fileTransfer = await FileTransfer.findById(transferId);
         if (!fileTransfer) {
@@ -413,6 +462,46 @@ const stripeConnectResolvers = {
             success: false,
             message: "Transfert de fichiers non trouvé",
           };
+        }
+
+        // Reject expired transfers
+        if (fileTransfer.isExpired()) {
+          return {
+            success: false,
+            message: "Transfer expired",
+          };
+        }
+
+        // Verify accessKey if provided (timing-safe comparison)
+        if (accessKey) {
+          if (!fileTransfer.accessKey) {
+            logger.warn("accessKey provided but transfer has none", {
+              transferId,
+            });
+            return {
+              success: false,
+              message: "Invalid credentials",
+            };
+          }
+
+          const provided = Buffer.from(accessKey);
+          const expected = Buffer.from(fileTransfer.accessKey);
+
+          if (
+            provided.length !== expected.length ||
+            !crypto.timingSafeEqual(provided, expected)
+          ) {
+            logger.warn("accessKey mismatch", { transferId });
+            return {
+              success: false,
+              message: "Invalid credentials",
+            };
+          }
+        } else {
+          // accessKey absent: log to prepare required-mode rollout
+          logger.info("paymentSession called without accessKey", {
+            transferId,
+          });
         }
 
         if (!fileTransfer.isPaymentRequired || fileTransfer.isPaid) {
@@ -435,11 +524,26 @@ const stripeConnectResolvers = {
           };
         }
 
-        // Construire les URLs de succès et d'annulation
+        // Generate single-use opaque return token (credentials stay out of Stripe logs)
+        const paymentReturnToken = crypto.randomBytes(16).toString("hex");
+        await FileTransfer.updateOne(
+          { _id: fileTransfer._id },
+          {
+            $set: {
+              paymentReturnToken,
+              paymentReturnTokenExpiresAt: new Date(
+                Date.now() + 60 * 60 * 1000,
+              ),
+              paymentReturnTokenConsumed: false,
+            },
+          },
+        );
+
+        // Build URLs with opaque token instead of shareLink+accessKey
         const baseUrl =
           origin || process.env.FRONTEND_URL || "http://localhost:3000";
-        const successUrl = `${baseUrl}/transfer/${fileTransfer.shareLink}?key=${fileTransfer.accessKey}&payment_status=success`;
-        const cancelUrl = `${baseUrl}/transfer/${fileTransfer.shareLink}?key=${fileTransfer.accessKey}&payment_status=canceled`;
+        const successUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=success`;
+        const cancelUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=cancel`;
 
         // Créer la session de paiement
         const result = await stripeConnectService.createPaymentSession(
@@ -466,6 +570,45 @@ const stripeConnectResolvers = {
           success: false,
           message: `Erreur lors de la création de la session de paiement: ${error.message}`,
         };
+      }
+    },
+
+    /**
+     * Consume a single-use payment return token and return transfer info
+     */
+    consumePaymentReturnToken: async (_, { token }) => {
+      try {
+        const fileTransfer = await FileTransfer.findOne({
+          paymentReturnToken: token,
+          paymentReturnTokenConsumed: { $ne: true },
+        });
+
+        if (!fileTransfer) {
+          return { success: false, message: "Invalid or already used token" };
+        }
+
+        if (
+          fileTransfer.paymentReturnTokenExpiresAt &&
+          new Date() > fileTransfer.paymentReturnTokenExpiresAt
+        ) {
+          return { success: false, message: "Token expired" };
+        }
+
+        // Mark token as consumed (single-use)
+        await FileTransfer.updateOne(
+          { _id: fileTransfer._id },
+          { $set: { paymentReturnTokenConsumed: true } },
+        );
+
+        return {
+          success: true,
+          shareLink: fileTransfer.shareLink,
+          accessKey: fileTransfer.accessKey,
+          paymentStatus: fileTransfer.isPaid ? "paid" : "pending",
+        };
+      } catch (error) {
+        logger.error("Error consuming payment return token:", error);
+        return { success: false, message: "Internal error" };
       }
     },
   },
