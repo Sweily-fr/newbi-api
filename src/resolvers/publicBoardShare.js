@@ -2,6 +2,7 @@
 import PublicBoardShare, {
   hasPasswordProtection,
 } from "../models/PublicBoardShare.js";
+import { timingSafeStringEqual } from "../utils/timing-safe.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
@@ -2119,11 +2120,14 @@ const resolvers = {
         }
       },
       resolve: (payload, { token, email }) => {
-        // Filtrer pour ne retourner que si c'est le bon token et email
-        if (
-          payload.accessApproved.token === token &&
-          payload.accessApproved.email === email.toLowerCase()
-        ) {
+        // Evaluate both conditions independently (no short-circuit timing leak)
+        const tokenMatches = timingSafeStringEqual(
+          payload.accessApproved.token,
+          token,
+        );
+        const emailMatches =
+          payload.accessApproved.email === email.toLowerCase();
+        if (tokenMatches && emailMatches) {
           logger.info(
             `✅ [PublicShare] Notification accès approuvé envoyée à ${email}`,
           );
@@ -2153,11 +2157,14 @@ const resolvers = {
         }
       },
       resolve: (payload, { token, email }) => {
-        // Filtrer pour ne retourner que si c'est le bon token et email
-        if (
-          payload.accessRevoked.token === token &&
-          payload.accessRevoked.email === email.toLowerCase()
-        ) {
+        // Evaluate both conditions independently (no short-circuit timing leak)
+        const tokenMatches = timingSafeStringEqual(
+          payload.accessRevoked.token,
+          token,
+        );
+        const emailMatches =
+          payload.accessRevoked.email === email.toLowerCase();
+        if (tokenMatches && emailMatches) {
           logger.info(
             `🚫 [PublicShare] Notification accès révoqué envoyée à ${email}`,
           );
