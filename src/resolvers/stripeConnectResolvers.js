@@ -415,6 +415,14 @@ const stripeConnectResolvers = {
           };
         }
 
+        // Reject expired transfers
+        if (fileTransfer.isExpired()) {
+          return {
+            success: false,
+            message: "Transfer expired",
+          };
+        }
+
         if (!fileTransfer.isPaymentRequired || fileTransfer.isPaid) {
           return {
             success: false,
