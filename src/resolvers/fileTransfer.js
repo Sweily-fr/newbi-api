@@ -482,7 +482,7 @@ const fileTransferResolvers = {
             isPaid: false,
             status: "active",
             recipientEmail,
-            downloadLink: `${shareLink}-${Date.now()}`, // Ajout d'un downloadLink unique pour éviter l'erreur d'index
+            downloadLink: crypto.randomBytes(16).toString("hex"),
           });
 
           await fileTransfer.save();

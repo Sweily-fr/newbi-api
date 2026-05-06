@@ -1,5 +1,8 @@
 // resolvers/publicBoardShare.js
-import PublicBoardShare from "../models/PublicBoardShare.js";
+import PublicBoardShare, {
+  hasPasswordProtection,
+} from "../models/PublicBoardShare.js";
+import { timingSafeStringEqual } from "../utils/timing-safe.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
@@ -50,7 +53,7 @@ const resolvers = {
           return {
             ...shareObj,
             id: share._id.toString(),
-            hasPassword: !!share.password,
+            hasPassword: hasPasswordProtection(share),
             shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
             // S'assurer que chaque visiteur a un id
             visitors: (shareObj.visitors || []).map((v) => ({
@@ -98,7 +101,7 @@ const resolvers = {
         }
 
         // Vérifier le mot de passe si nécessaire
-        if (share.password && share.password !== password) {
+        if (share.hasPasswordSet && !(await share.verifyPassword(password))) {
           return {
             success: false,
             message: "Mot de passe incorrect",
@@ -475,7 +478,7 @@ const resolvers = {
           share: {
             ...share.toObject(),
             id: share._id.toString(),
-            hasPassword: !!share.password,
+            hasPassword: hasPasswordProtection(share),
             shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
           },
           visitorEmail: email,
@@ -541,8 +544,11 @@ const resolvers = {
             canViewAttachments: input.permissions?.canViewAttachments ?? true,
           },
           expiresAt: input.expiresAt,
-          password: input.password,
         });
+
+        if (input.password) {
+          await share.setPassword(input.password);
+        }
 
         await share.save();
 
@@ -553,7 +559,7 @@ const resolvers = {
         return {
           ...share.toObject(),
           id: share._id.toString(),
-          hasPassword: !!share.password,
+          hasPassword: hasPasswordProtection(share),
           shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
         };
       },
@@ -568,29 +574,31 @@ const resolvers = {
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const updates = {};
-        if (input.name !== undefined) updates.name = input.name;
-        if (input.isActive !== undefined) updates.isActive = input.isActive;
-        if (input.expiresAt !== undefined) updates.expiresAt = input.expiresAt;
-        if (input.password !== undefined) updates.password = input.password;
-        if (input.permissions) {
-          updates.permissions = input.permissions;
-        }
-
-        const share = await PublicBoardShare.findOneAndUpdate(
-          { _id: input.id, workspaceId: finalWorkspaceId },
-          { ...updates, updatedAt: new Date() },
-          { new: true },
-        );
+        const share = await PublicBoardShare.findOne({
+          _id: input.id,
+          workspaceId: finalWorkspaceId,
+        });
 
         if (!share) {
           throw new Error("Lien de partage non trouvé");
         }
 
+        if (input.name !== undefined) share.name = input.name;
+        if (input.isActive !== undefined) share.isActive = input.isActive;
+        if (input.expiresAt !== undefined) share.expiresAt = input.expiresAt;
+        if (input.password !== undefined) {
+          await share.setPassword(input.password);
+        }
+        if (input.permissions) {
+          share.permissions = input.permissions;
+        }
+
+        await share.save();
+
         return {
           ...share.toObject(),
           id: share._id.toString(),
-          hasPassword: !!share.password,
+          hasPassword: hasPasswordProtection(share),
           shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
         };
       },
@@ -706,7 +714,7 @@ const resolvers = {
         return {
           ...share.toObject(),
           id: share._id.toString(),
-          hasPassword: !!share.password,
+          hasPassword: hasPasswordProtection(share),
           bannedEmails: share.bannedEmails || [],
           accessRequests: (share.accessRequests || []).map((r) => ({
             ...(r.toObject ? r.toObject() : r),
@@ -750,7 +758,7 @@ const resolvers = {
         return {
           ...share.toObject(),
           id: share._id.toString(),
-          hasPassword: !!share.password,
+          hasPassword: hasPasswordProtection(share),
           bannedEmails: share.bannedEmails || [],
           accessRequests: (share.accessRequests || []).map((r) => ({
             ...(r.toObject ? r.toObject() : r),
@@ -912,7 +920,7 @@ const resolvers = {
         return {
           ...share.toObject(),
           id: share._id.toString(),
-          hasPassword: !!share.password,
+          hasPassword: hasPasswordProtection(share),
           bannedEmails: share.bannedEmails || [],
           accessRequests: (share.accessRequests || []).map((r) => ({
             ...(r.toObject ? r.toObject() : r),
@@ -960,7 +968,7 @@ const resolvers = {
         return {
           ...share.toObject(),
           id: share._id.toString(),
-          hasPassword: !!share.password,
+          hasPassword: hasPasswordProtection(share),
           bannedEmails: share.bannedEmails || [],
           accessRequests: (share.accessRequests || []).map((r) => ({
             ...(r.toObject ? r.toObject() : r),
@@ -1808,7 +1816,7 @@ const resolvers = {
   // Resolvers de type pour PublicBoardShare
   PublicBoardShare: {
     id: (parent) => parent._id?.toString() || parent.id,
-    hasPassword: (parent) => !!parent.password,
+    hasPassword: (parent) => hasPasswordProtection(parent),
     shareUrl: (parent) => `${getBaseUrl()}/public/kanban/${parent.token}`,
   },
 
@@ -2112,11 +2120,14 @@ const resolvers = {
         }
       },
       resolve: (payload, { token, email }) => {
-        // Filtrer pour ne retourner que si c'est le bon token et email
-        if (
-          payload.accessApproved.token === token &&
-          payload.accessApproved.email === email.toLowerCase()
-        ) {
+        // Evaluate both conditions independently (no short-circuit timing leak)
+        const tokenMatches = timingSafeStringEqual(
+          payload.accessApproved.token,
+          token,
+        );
+        const emailMatches =
+          payload.accessApproved.email === email.toLowerCase();
+        if (tokenMatches && emailMatches) {
           logger.info(
             `✅ [PublicShare] Notification accès approuvé envoyée à ${email}`,
           );
@@ -2146,11 +2157,14 @@ const resolvers = {
         }
       },
       resolve: (payload, { token, email }) => {
-        // Filtrer pour ne retourner que si c'est le bon token et email
-        if (
-          payload.accessRevoked.token === token &&
-          payload.accessRevoked.email === email.toLowerCase()
-        ) {
+        // Evaluate both conditions independently (no short-circuit timing leak)
+        const tokenMatches = timingSafeStringEqual(
+          payload.accessRevoked.token,
+          token,
+        );
+        const emailMatches =
+          payload.accessRevoked.email === email.toLowerCase();
+        if (tokenMatches && emailMatches) {
           logger.info(
             `🚫 [PublicShare] Notification accès révoqué envoyée à ${email}`,
           );
