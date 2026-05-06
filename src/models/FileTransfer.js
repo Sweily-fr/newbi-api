@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 const { Schema } = mongoose;
 
@@ -230,16 +231,9 @@ FileTransferSchema.methods.markAsPaid = function (paymentId) {
 
 // Méthode pour générer les identifiants de partage (shareLink et accessKey)
 FileTransferSchema.methods.generateShareCredentials = function () {
-  const timestamp = Date.now();
-  const randomString = Math.random().toString(36).substring(2, 15);
-
-  this.shareLink = `share-${timestamp}-${randomString}`;
-  this.accessKey = `key-${timestamp}-${Math.random()
-    .toString(36)
-    .substring(2, 15)}`;
-  this.downloadLink = `dl-${this._id}-${timestamp}-${Math.random()
-    .toString(36)
-    .substring(2, 15)}`;
+  this.shareLink = crypto.randomBytes(16).toString("hex");
+  this.accessKey = crypto.randomBytes(16).toString("hex");
+  this.downloadLink = crypto.randomBytes(16).toString("hex");
 
   // Définir la date d'expiration (par défaut 7 jours)
   if (!this.expiryDate) {
