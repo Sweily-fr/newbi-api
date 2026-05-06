@@ -72,5 +72,6 @@ extend type Mutation {
   # Créer une session de paiement pour un transfert de fichiers
   createPaymentSessionForFileTransfer(
     transferId: ID!
+    accessKey: String
   ): StripePaymentSessionResponse!
 }
