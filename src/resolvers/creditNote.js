@@ -3,7 +3,10 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import Event from "../models/Event.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import {
+  isAuthenticated,
+  withWorkspace,
+} from "../middlewares/better-auth-jwt.js";
 import {
   requireCompanyInfo,
   getOrganizationInfo,
@@ -19,44 +22,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
-import { resolveWorkspaceId } from "../middlewares/rbac.js";
-
-// const requiredPermission = 'MANAGE_INVOICES'; // TODO: Implement permission system
-
-/**
- * Wrapper pour les resolvers nécessitant un workspace
- */
-const withWorkspace = (resolver) => {
-  return isAuthenticated(async (parent, args, context, info) => {
-    try {
-      const workspaceId = resolveWorkspaceId(
-        args.workspaceId,
-        context.workspaceId,
-      );
-      if (!workspaceId)
-        throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
-
-      const workspace = {
-        id: workspaceId,
-        role: "owner",
-        permissions: {
-          canRead: true,
-          canWrite: true,
-          canDelete: true,
-          canAdmin: true,
-        },
-      };
-
-      context.workspace = workspace;
-      context.workspaceId = workspaceId;
-
-      return await resolver(parent, args, context, info);
-    } catch (error) {
-      console.error("Erreur dans withWorkspace:", error);
-      throw error;
-    }
-  });
-};
+// withWorkspace imported from better-auth-jwt.js (centralized, with membership verification)
 
 /**
  * Calcule les totaux d'un avoir

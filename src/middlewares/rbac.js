@@ -2,6 +2,7 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { isAuthenticated } from "./better-auth-jwt.js";
+import { getActiveOrganization } from "./org-resolver.js";
 
 /**
  * ========================================
@@ -242,109 +243,7 @@ const PERMISSION_MAPPING = {
   admin: ["manage", "approve", "change-role", "invite", "remove"],
 };
 
-/**
- * Récupère l'organisation active de l'utilisateur depuis Better Auth
- * @param {string} userId - ID de l'utilisateur
- * @param {string} [requestedOrgId] - ID de l'organisation demandée (depuis le header x-organization-id)
- * @returns {Object|null} - Organisation ou null
- */
-async function getActiveOrganization(userId, requestedOrgId = null) {
-  try {
-    const db = mongoose.connection.db;
-    const memberCollection = db.collection("member");
-    const { ObjectId } = mongoose.Types;
-
-    // Convertir userId en ObjectId si c'est une string
-    const userObjectId =
-      typeof userId === "string" ? new ObjectId(userId) : userId;
-
-    let member;
-
-    // ✅ FIX: Si une organisation spécifique est demandée, vérifier que l'utilisateur en est membre
-    if (requestedOrgId) {
-      const requestedOrgObjectId =
-        typeof requestedOrgId === "string"
-          ? new ObjectId(requestedOrgId)
-          : requestedOrgId;
-
-      member = await memberCollection.findOne({
-        userId: userObjectId,
-        organizationId: requestedOrgObjectId,
-      });
-
-      if (!member) {
-        logger.warn(
-          `Utilisateur ${userId} n'est pas membre de l'organisation demandée: ${requestedOrgId}`,
-        );
-        return null;
-      }
-
-      logger.debug(
-        `✅ Utilisateur ${userId} est membre de l'organisation ${requestedOrgId} avec le rôle ${member.role}`,
-      );
-    } else {
-      // Fallback: récupérer la première organisation (priorité: owner, puis admin, puis autres)
-      member = await memberCollection.findOne({
-        userId: userObjectId,
-        role: "owner",
-      });
-
-      if (!member) {
-        member = await memberCollection.findOne({
-          userId: userObjectId,
-          role: "admin",
-        });
-      }
-
-      if (!member) {
-        member = await memberCollection.findOne({
-          userId: userObjectId,
-        });
-      }
-    }
-
-    if (!member) {
-      logger.debug(`Aucune organisation trouvée pour l'utilisateur: ${userId}`);
-      return null;
-    }
-
-    // Récupérer les détails de l'organisation
-    const organizationCollection = db.collection("organization");
-    const orgObjectId =
-      typeof member.organizationId === "string"
-        ? new ObjectId(member.organizationId)
-        : member.organizationId;
-
-    const organization = await organizationCollection.findOne({
-      _id: orgObjectId,
-    });
-
-    if (!organization) {
-      logger.warn(
-        `Organisation ${member.organizationId} non trouvée pour le membre`,
-      );
-      return null;
-    }
-
-    // ✅ Retourner le rôle du member directement pour éviter une re-query dans getMemberRole
-    const normalizedRole = (member.role || "member").toLowerCase();
-
-    return {
-      id: organization._id.toString(),
-      name: organization.name,
-      slug: organization.slug,
-      metadata: organization.metadata,
-      createdAt: organization.createdAt,
-      memberRole: normalizedRole,
-    };
-  } catch (error) {
-    logger.error(
-      "Erreur lors de la récupération de l'organisation:",
-      error.message,
-    );
-    return null;
-  }
-}
+// getActiveOrganization is imported from ./org-resolver.js (extracted to break circular dep)
 
 /**
  * Récupère le rôle de l'utilisateur dans l'organisation
