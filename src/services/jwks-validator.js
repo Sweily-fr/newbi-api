@@ -5,7 +5,8 @@ import logger from "../utils/logger.js";
 class JWKSValidator {
   constructor() {
     this.keyCache = new Map(); // Cache des clés publiques
-    this.cacheExpiry = 5 * 60 * 1000; // 5 minutes
+    this.cacheExpiry = 5 * 60 * 1000; // 5 minutes (hot cache)
+    this.extendedCacheExpiry = 24 * 60 * 60 * 1000; // 24 hours (JWKS-down fallback, still crypto-strict)
     this.jwksUrl = process.env.FRONTEND_URL
       ? `${process.env.FRONTEND_URL}/api/auth/jwks`
       : "http://localhost:3000/api/auth/jwks";
@@ -42,7 +43,6 @@ class JWKSValidator {
         logger.debug("🔑 Utilisation du bypass token Vercel");
       }
 
-
       const response = await fetch(this.jwksUrl, {
         method: "GET",
         headers: headers,
@@ -55,7 +55,7 @@ class JWKSValidator {
 
       if (!response.ok) {
         throw new Error(
-          `Erreur HTTP ${response.status} lors de la récupération JWKS`
+          `Erreur HTTP ${response.status} lors de la récupération JWKS`,
         );
       }
 
@@ -91,7 +91,27 @@ class JWKSValidator {
       this.cacheMisses++;
 
       // Récupérer les clés JWKS
-      const jwks = await this.fetchJWKS();
+      let jwks;
+      try {
+        jwks = await this.fetchJWKS();
+      } catch (fetchError) {
+        // JWKS endpoint unreachable — use extended cache (24h) if available
+        if (
+          cached &&
+          Date.now() - cached.timestamp < this.extendedCacheExpiry
+        ) {
+          logger.warn(
+            `JWKS fetch failed, using extended cache for kid: ${kid} (age: ${Math.round((Date.now() - cached.timestamp) / 60000)}min)`,
+          );
+          this.cacheHits++;
+          return cached.key;
+        }
+        logger.error(
+          `JWKS fetch failed and no valid cache for kid ${kid}:`,
+          fetchError.message,
+        );
+        return null;
+      }
 
       // Trouver la clé correspondant au kid
       const jwk = jwks.keys.find((key) => key.kid === kid);
@@ -112,12 +132,12 @@ class JWKSValidator {
         algorithm: jwk.alg || "EdDSA",
       });
 
-      logger.info(` Clé JWKS mise en cache pour kid: ${kid}`);
+      logger.info(`Clé JWKS mise en cache pour kid: ${kid}`);
       return keyLike;
     } catch (error) {
       logger.error(
-        ` Erreur récupération clé publique pour kid ${kid}:`,
-        error.message
+        `Erreur récupération clé publique pour kid ${kid}:`,
+        error.message,
       );
       return null;
     }
@@ -184,7 +204,7 @@ class JWKSValidator {
 
     if (current.count >= this.maxFailedAttempts) {
       logger.error(
-        `IP bloquée pour tentatives suspectes: ${clientIP} (${reason})`
+        `IP bloquée pour tentatives suspectes: ${clientIP} (${reason})`,
       );
     }
   }
@@ -224,7 +244,9 @@ class JWKSValidator {
       const header = decoded.header;
       const payload = decoded.payload;
 
-      logger.debug(`JWT Claims - iss: ${payload.iss}, aud: ${payload.aud}, exp: ${payload.exp}, sub: ${payload.sub}`);
+      logger.debug(
+        `JWT Claims - iss: ${payload.iss}, aud: ${payload.aud}, exp: ${payload.exp}, sub: ${payload.sub}`,
+      );
 
       // Vérifier que le kid est présent
       if (!header.kid) {
@@ -246,8 +268,11 @@ class JWKSValidator {
       try {
         const { jwtVerify } = await import("jose");
 
-        const expectedIssuer = process.env.FRONTEND_URL || "http://localhost:3000";
-        logger.debug(`Expected issuer: ${expectedIssuer}, Token issuer: ${payload.iss}`);
+        const expectedIssuer =
+          process.env.FRONTEND_URL || "http://localhost:3000";
+        logger.debug(
+          `Expected issuer: ${expectedIssuer}, Token issuer: ${payload.iss}`,
+        );
 
         const { payload: verifiedPayload } = await jwtVerify(token, publicKey, {
           algorithms: ["EdDSA"],
@@ -256,50 +281,19 @@ class JWKSValidator {
         });
 
         logger.info(
-          `✓ JWT validé avec succès (crypto complète) pour l'utilisateur ${verifiedPayload.sub}`
+          `✓ JWT validé avec succès (crypto complète) pour l'utilisateur ${verifiedPayload.sub}`,
         );
         // Reset les tentatives échouées après une validation réussie
         this.failedAttempts.delete(clientIP);
         return verifiedPayload;
       } catch (verifyError) {
-        logger.warn(
-          "Échec de la vérification cryptographique JWT:",
-          verifyError.message
-        );
-        logger.debug(`Détails erreur: ${verifyError.code || 'unknown'}`);
-        
-        // MODE DÉGRADÉ : Si l'erreur est liée à l'issuer/audience mais que le token est valide
-        const now = Math.floor(Date.now() / 1000);
-        if (payload.exp && payload.exp < now) {
-          logger.warn("JWT expiré, rejet même en mode dégradé");
-          this.recordFailedAttempt(clientIP, "JWT expiré");
-          return null;
-        }
+        logger.warn("JWT crypto verification failed:", verifyError.message);
+        logger.debug(`Détails erreur: ${verifyError.code || "unknown"}`);
 
-        // Vérifier si l'issuer correspond au moins partiellement (prod vs staging vs localhost)
-        const issuerMatch = payload.iss && (
-          payload.iss === (process.env.FRONTEND_URL || "http://localhost:3000") ||
-          payload.iss.includes('newbi.fr') ||
-          payload.iss.includes('localhost') ||
-          payload.iss.includes('vercel.app') ||
-          payload.iss.includes('ngrok') ||
-          (process.env.FRONTEND_URL && (
-            process.env.FRONTEND_URL.includes('newbi.fr') ||
-            process.env.FRONTEND_URL.includes('vercel.app')
-          ))
-        );
-
-        if (issuerMatch && payload.sub) {
-          logger.warn(`⚠️  MODE DÉGRADÉ: JWT accepté sans vérification crypto complète (issuer: ${payload.iss} vs expected: ${process.env.FRONTEND_URL || 'localhost:3000'})`);
-          // Reset les tentatives échouées après une validation réussie
-          this.failedAttempts.delete(clientIP);
-          return payload;
-        }
-
-        this.recordFailedAttempt(
-          clientIP,
-          "Échec de la vérification cryptographique"
-        );
+        // Strict mode: no issuer-based bypass. If crypto fails, reject.
+        // The JWKS key cache (5 min hot + 24h extended) ensures availability
+        // even if the JWKS endpoint is temporarily unreachable.
+        this.recordFailedAttempt(clientIP, "JWT crypto verification failed");
         return null;
       }
     } catch (error) {
