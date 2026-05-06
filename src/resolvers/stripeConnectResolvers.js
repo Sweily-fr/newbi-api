@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import stripeConnectService from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
@@ -402,7 +403,7 @@ const stripeConnectResolvers = {
      */
     createPaymentSessionForFileTransfer: async (
       _,
-      { transferId },
+      { transferId, accessKey },
       { origin },
     ) => {
       try {
@@ -413,6 +414,38 @@ const stripeConnectResolvers = {
             success: false,
             message: "Transfert de fichiers non trouvé",
           };
+        }
+
+        // Verify accessKey if provided (timing-safe comparison)
+        if (accessKey) {
+          if (!fileTransfer.accessKey) {
+            logger.warn("accessKey provided but transfer has none", {
+              transferId,
+            });
+            return {
+              success: false,
+              message: "Invalid credentials",
+            };
+          }
+
+          const provided = Buffer.from(accessKey);
+          const expected = Buffer.from(fileTransfer.accessKey);
+
+          if (
+            provided.length !== expected.length ||
+            !crypto.timingSafeEqual(provided, expected)
+          ) {
+            logger.warn("accessKey mismatch", { transferId });
+            return {
+              success: false,
+              message: "Invalid credentials",
+            };
+          }
+        } else {
+          // accessKey absent: log to prepare required-mode rollout
+          logger.info("paymentSession called without accessKey", {
+            transferId,
+          });
         }
 
         if (!fileTransfer.isPaymentRequired || fileTransfer.isPaid) {
