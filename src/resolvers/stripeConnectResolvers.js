@@ -13,6 +13,22 @@ const RATE_LIMIT_TRANSFER_MAX = 5;
 const rateLimitIpMap = new Map();
 const rateLimitTransferMap = new Map();
 
+// Periodic cleanup of expired rate limit entries (every 5 min)
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitIpMap) {
+      if (now - entry.windowStart > RATE_LIMIT_IP_WINDOW)
+        rateLimitIpMap.delete(key);
+    }
+    for (const [key, entry] of rateLimitTransferMap) {
+      if (now - entry.windowStart > RATE_LIMIT_TRANSFER_WINDOW)
+        rateLimitTransferMap.delete(key);
+    }
+  },
+  5 * 60 * 1000,
+).unref();
+
 function isRateLimited(map, key, windowMs, max) {
   const now = Date.now();
   const entry = map.get(key);
@@ -22,6 +38,17 @@ function isRateLimited(map, key, windowMs, max) {
   }
   entry.count++;
   return entry.count > max;
+}
+
+function getClientIp(req) {
+  if (!req) return "unknown";
+  return (
+    req.headers?.["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.headers?.["x-real-ip"] ||
+    req.ip ||
+    req.connection?.remoteAddress ||
+    "unknown"
+  );
 }
 
 const stripeConnectResolvers = {
@@ -423,11 +450,11 @@ const stripeConnectResolvers = {
     createPaymentSessionForFileTransfer: async (
       _,
       { transferId, accessKey },
-      { origin },
+      { req },
     ) => {
       try {
         // Rate limit: per-IP and per-transfer
-        const clientIp = origin || "unknown";
+        const clientIp = getClientIp(req);
         if (
           isRateLimited(
             rateLimitIpMap,
@@ -540,8 +567,7 @@ const stripeConnectResolvers = {
         );
 
         // Build URLs with opaque token instead of shareLink+accessKey
-        const baseUrl =
-          origin || process.env.FRONTEND_URL || "http://localhost:3000";
+        const baseUrl = process.env.FRONTEND_URL || "http://localhost:3000";
         const successUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=success`;
         const cancelUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=cancel`;
 
