@@ -587,7 +587,7 @@ const importedPurchaseOrderResolvers = {
           }
         }
 
-        await ImportedPurchaseOrder.findByIdAndDelete(id);
+        await ImportedPurchaseOrder.findOneAndDelete({ _id: id, workspaceId });
         return true;
       },
     ),
