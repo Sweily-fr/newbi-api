@@ -1410,7 +1410,7 @@ const importedInvoiceResolvers = {
         }
       }
 
-      await ImportedInvoice.findByIdAndDelete(id);
+      await ImportedInvoice.findOneAndDelete({ _id: id, workspaceId });
       return true;
     }),
 
