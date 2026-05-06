@@ -1,4 +1,6 @@
 import express from "express";
+import crypto from "crypto";
+import Stripe from "stripe";
 import { bankingService } from "../services/banking/BankingService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
@@ -7,52 +9,146 @@ import logger from "../utils/logger.js";
 const router = express.Router();
 
 /**
+ * Timing-safe HMAC-SHA256 signature verification (shared by Bridge and PayPal).
+ */
+function verifyHmacSignature(
+  payload,
+  signature,
+  secret,
+  { uppercase = false, prefix = "" } = {},
+) {
+  try {
+    const actualSig =
+      prefix && signature.startsWith(prefix)
+        ? signature.slice(prefix.length)
+        : signature;
+
+    let expected = crypto
+      .createHmac("sha256", secret)
+      .update(payload)
+      .digest("hex");
+    let provided = actualSig;
+
+    if (uppercase) {
+      expected = expected.toUpperCase();
+      provided = provided.toUpperCase();
+    }
+
+    const expectedBuf = Buffer.from(expected);
+    const providedBuf = Buffer.from(provided);
+
+    return (
+      expectedBuf.length === providedBuf.length &&
+      crypto.timingSafeEqual(expectedBuf, providedBuf)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Routes pour les webhooks des providers bancaires
+ * Each route validates the provider-specific signature before processing.
  */
 
-// Webhook Bridge
+// Webhook Bridge — HMAC-SHA256 with bridgeapi-signature header
 router.post(
   "/webhook/bridge",
   express.raw({ type: "application/json" }),
   async (req, res) => {
     try {
-      const result = await bankingService.handleWebhook("bridge", req.body);
+      const secret = process.env.BRIDGE_WEBHOOK_SECRET;
+      if (!secret) {
+        logger.error("BRIDGE_WEBHOOK_SECRET not configured");
+        return res.status(500).json({ error: "Webhook not configured" });
+      }
+
+      const signature = req.headers["bridgeapi-signature"];
+      if (
+        !signature ||
+        !verifyHmacSignature(req.body, signature, secret, {
+          uppercase: true,
+          prefix: "v1=",
+        })
+      ) {
+        logger.warn("Bridge webhook signature rejected", { ip: req.ip });
+        return res.status(401).json({ error: "Invalid signature" });
+      }
+
+      const payload = JSON.parse(req.body.toString());
+      const result = await bankingService.handleWebhook("bridge", payload);
       res.status(200).json({ received: true, processed: result });
     } catch (error) {
-      console.error("Erreur webhook Bridge:", error);
-      res.status(400).json({ error: error.message });
+      logger.error("Bridge webhook processing error:", error.message);
+      res.status(400).json({ error: "Processing error" });
     }
-  }
+  },
 );
 
-// Webhook Stripe Banking
+// Webhook Stripe Banking — stripe.webhooks.constructEvent
 router.post(
   "/webhook/stripe-banking",
   express.raw({ type: "application/json" }),
   async (req, res) => {
     try {
-      const result = await bankingService.handleWebhook("stripe", req.body);
+      const secret = process.env.STRIPE_BANKING_WEBHOOK_SECRET;
+      if (!secret) {
+        logger.error("STRIPE_BANKING_WEBHOOK_SECRET not configured");
+        return res.status(500).json({ error: "Webhook not configured" });
+      }
+
+      const signature = req.headers["stripe-signature"];
+      if (!signature) {
+        logger.warn("Stripe Banking webhook missing signature", { ip: req.ip });
+        return res.status(401).json({ error: "Missing signature" });
+      }
+
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+      let event;
+      try {
+        event = stripe.webhooks.constructEvent(req.body, signature, secret);
+      } catch {
+        logger.warn("Stripe Banking webhook signature rejected", {
+          ip: req.ip,
+        });
+        return res.status(401).json({ error: "Invalid signature" });
+      }
+
+      const result = await bankingService.handleWebhook("stripe", event);
       res.status(200).json({ received: true, processed: result });
     } catch (error) {
-      console.error("Erreur webhook Stripe Banking:", error);
-      res.status(400).json({ error: error.message });
+      logger.error("Stripe Banking webhook processing error:", error.message);
+      res.status(400).json({ error: "Processing error" });
     }
-  }
+  },
 );
 
-// Webhook PayPal
+// Webhook PayPal — HMAC-SHA256 with paypal-transmission-sig header
 router.post(
   "/webhook/paypal",
   express.raw({ type: "application/json" }),
   async (req, res) => {
     try {
-      const result = await bankingService.handleWebhook("paypal", req.body);
+      const secret = process.env.PAYPAL_WEBHOOK_SECRET;
+      if (!secret) {
+        logger.error("PAYPAL_WEBHOOK_SECRET not configured");
+        return res.status(500).json({ error: "Webhook not configured" });
+      }
+
+      const signature = req.headers["paypal-transmission-sig"];
+      if (!signature || !verifyHmacSignature(req.body, signature, secret)) {
+        logger.warn("PayPal webhook signature rejected", { ip: req.ip });
+        return res.status(401).json({ error: "Invalid signature" });
+      }
+
+      const payload = JSON.parse(req.body.toString());
+      const result = await bankingService.handleWebhook("paypal", payload);
       res.status(200).json({ received: true, processed: result });
     } catch (error) {
-      console.error("Erreur webhook PayPal:", error);
-      res.status(400).json({ error: error.message });
+      logger.error("PayPal webhook processing error:", error.message);
+      res.status(400).json({ error: "Processing error" });
     }
-  }
+  },
 );
 
 /**
@@ -83,7 +179,7 @@ router.post(
       console.error("Erreur switch provider:", error);
       res.status(500).json({ error: error.message });
     }
-  }
+  },
 );
 
 // Statut du service banking
@@ -124,7 +220,7 @@ router.get("/accounts", async (req, res) => {
       const cached = await bankingCacheService.getAccounts(workspaceId);
       if (cached.fromCache && cached.data) {
         logger.info(
-          ` Cache HIT: ${cached.data.length} comptes pour workspace ${workspaceId}`
+          ` Cache HIT: ${cached.data.length} comptes pour workspace ${workspaceId}`,
         );
         return res.json({
           success: true,
@@ -148,7 +244,7 @@ router.get("/accounts", async (req, res) => {
     await bankingCacheService.setAccounts(workspaceId, accounts);
 
     logger.info(
-      ` BDD: ${accounts.length} comptes pour workspace ${workspaceId}`
+      ` BDD: ${accounts.length} comptes pour workspace ${workspaceId}`,
     );
 
     res.json({
@@ -194,11 +290,11 @@ router.get("/transactions", async (req, res) => {
     if (!skipCache) {
       const cached = await bankingCacheService.getTransactions(
         workspaceId,
-        cacheOptions
+        cacheOptions,
       );
       if (cached.fromCache && cached.data) {
         logger.info(
-          `🎯 Cache HIT: ${cached.data.transactions?.length || 0} transactions pour workspace ${workspaceId}`
+          `🎯 Cache HIT: ${cached.data.transactions?.length || 0} transactions pour workspace ${workspaceId}`,
         );
         return res.json({
           ...cached.data,
@@ -246,11 +342,11 @@ router.get("/transactions", async (req, res) => {
     await bankingCacheService.setTransactions(
       workspaceId,
       responseData,
-      cacheOptions
+      cacheOptions,
     );
 
     logger.info(
-      `📊 BDD: ${transactions.length} transactions pour workspace ${workspaceId}`
+      `📊 BDD: ${transactions.length} transactions pour workspace ${workspaceId}`,
     );
 
     res.json({
@@ -288,7 +384,7 @@ router.delete("/user", async (req, res) => {
 
     logger.info(
       `Utilisateur Bridge supprimé pour workspace ${workspaceId}:`,
-      result
+      result,
     );
 
     res.json({
