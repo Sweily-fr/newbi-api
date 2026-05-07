@@ -64,6 +64,7 @@ const ROLE_PERMISSIONS = {
       "send",
       "export",
     ],
+    importedQuotes: ["view", "create", "edit", "delete", "approve", "import"],
     purchaseOrders: [
       "view",
       "create",
@@ -124,6 +125,7 @@ const ROLE_PERMISSIONS = {
       "send",
       "export",
     ],
+    importedQuotes: ["view", "create", "edit", "delete", "approve", "import"],
     purchaseOrders: [
       "view",
       "create",
@@ -175,6 +177,7 @@ const ROLE_PERMISSIONS = {
   member: {
     // Member peut créer et gérer ses propres documents + export
     quotes: ["view", "create", "send", "export"],
+    importedQuotes: ["view", "create", "edit", "import"],
     purchaseOrders: ["view", "create", "send", "export"],
     invoices: ["view", "create", "send", "export", "import"],
     creditNotes: ["view", "create", "export"],
@@ -196,6 +199,7 @@ const ROLE_PERMISSIONS = {
   accountant: {
     // Accountant a accès aux documents financiers + validation + export
     quotes: ["view", "export"],
+    importedQuotes: ["view", "create", "edit", "approve", "import", "export"],
     purchaseOrders: ["view", "export"],
     invoices: ["view", "export", "mark-paid", "import"],
     creditNotes: ["view", "export"],
@@ -215,6 +219,7 @@ const ROLE_PERMISSIONS = {
     // Viewer a un accès en lecture seule à toutes les ressources
     // Idéal pour les consultants, auditeurs, ou parties prenantes externes
     quotes: ["view"],
+    importedQuotes: ["view"],
     purchaseOrders: ["view"],
     invoices: ["view"],
     creditNotes: ["view"],
