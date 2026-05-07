@@ -117,10 +117,6 @@ const chunkUploadResolvers = {
 
             // Créer une entrée dans la base de données pour le fichier
             try {
-              // Créer un nouveau transfert de fichier dans la base de données
-              const timestamp = Date.now();
-              const randomString = Math.random().toString(36).substring(2, 15);
-
               const fileTransfer = new FileTransfer({
                 userId: user.id,
                 files: [

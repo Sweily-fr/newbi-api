@@ -16,7 +16,7 @@ Each sprint focuses on a specific category of access control or input validation
 | 11A          | Webhook signature verification + JWT strict                         | ✅ Done        | ✅ Prod  |
 | 11B          | Public board share password hashing + timing-safe comparison        | ✅ Done        | ✅ Prod  |
 | 11C          | Workspace scope on remaining resolvers                              | 🟡 In Progress | ❌       |
-| 11D          | Replace Math.random with crypto.randomBytes (residual)              | ⏸️ Planned     | ❌       |
+| 11D          | Replace Math.random with crypto.randomBytes (residual)              | 🟡 Committed   | ❌       |
 | 11E+         | High/Medium findings from Pass 1                                    | ⏸️ Planned     | ❌       |
 | Audit Pass 2 | Input validation, data exposure, rate limiting                      | ⏸️ Not started | -        |
 | Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                       | ⏸️ Not started | -        |
@@ -231,19 +231,30 @@ Status: Under analysis, pending decision on Plan A/B/C.
 
 ---
 
-## Sprint 11D — Math.random residuals (PLANNED)
+## Sprint 11D — Math.random residuals
 
-**Status**: ⏸️ Planned, not started
+**Status**: 🟡 Committed, pending merge to develop
 
-### Targets
+### Patches applied
 
-- chunkUpload.js:122 — file ID
-- expense.js:83 — filename
-- GoCardlessProvider.js:434 — externalId
+- `chunkUpload.js` (line 122): removed dead code (timestamp + randomString unused after previous refactor)
+- `expense.js` (line 83): filename uniqueness now uses crypto.randomBytes(8)
+- `GoCardlessProvider.js` (line 434): external transaction ID fallback now uses crypto.randomBytes(8)
 
-### Pattern to apply
+### Patterns intentionally preserved
 
-Replace `Math.random()...` with `crypto.randomBytes(16).toString("hex")`.
+- `documentNumbers.js`, `quote.js`, `invoice.js`: Math.random for anti-collision timing offset (0-999ms) — non-identifying
+- `MockProvider.js`: Math.random for test fixtures and failure simulation — non-production
+
+### Commits
+
+- 86c13af — use crypto.randomBytes for non-cryptographic random IDs
+
+### Files changed
+
+- src/resolvers/chunkUpload.js (3 lines removed — dead code)
+- src/resolvers/expense.js (1 import + 1 line refactored)
+- src/services/banking/providers/GoCardlessProvider.js (1 import + 1 line refactored)
 
 ---
 
@@ -313,4 +324,5 @@ Categories to audit:
 | 2026-05-07 | 11C-1       | importedQuote.js migrated to RBAC (10 resolvers) — db5a3c4                    |
 | 2026-05-07 | 11C-4       | clientAutomation defense-in-depth (4 lines)                                   |
 | 2026-05-07 | Conventions | docs/SECURITY-CONVENTIONS.md created                                          |
+| 2026-05-07 | 11D         | Math.random replaced with crypto.randomBytes (3 files) — 86c13af              |
 | 2026-05-06 | CRITICAL    | withWorkspace wrapper lacks membership verification — ~120 resolvers affected |
