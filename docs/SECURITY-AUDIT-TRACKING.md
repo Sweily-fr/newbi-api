@@ -15,6 +15,7 @@ Each sprint focuses on a specific category of access control or input validation
 | 10           | File transfer payment session hardening                             | ✅ Done        | ✅ Prod  |
 | 11A          | Webhook signature verification + JWT strict                         | ✅ Done        | ✅ Prod  |
 | 11B          | Public board share password hashing + timing-safe comparison        | ✅ Done        | ✅ Prod  |
+| 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)     | ✅ Done        | ✅ Prod  |
 | 11C          | Workspace scope on remaining resolvers                              | 🟡 In Progress | ❌       |
 | 11D          | Replace Math.random with crypto.randomBytes (residual)              | 🟡 Committed   | ❌       |
 | 11E+         | High/Medium findings from Pass 1                                    | ⏸️ Planned     | ❌       |
@@ -124,6 +125,58 @@ Each sprint focuses on a specific category of access control or input validation
 
 ---
 
+## Sprint 11-CRITICAL — withWorkspace membership verification
+
+**Status**: ✅ Done, deployed in prod (2026-05-06)
+
+### Patches applied
+
+- Rewrote withWorkspace middleware to call getActiveOrganization (Plan C+)
+- Removed silent fallback: now throws FORBIDDEN when user is not member of requested org
+- Extracted getActiveOrganization to src/middlewares/org-resolver.js (breaks circular dep)
+- Removed duplicate local withWorkspace definition in creditNote.js
+- Updated auth.test.js: 4 tests rewritten + 1 new FORBIDDEN test
+
+### Files changed
+
+- NEW: src/middlewares/org-resolver.js
+- EDIT: src/middlewares/rbac.js (-95 lines, +1 import)
+- EDIT: src/middlewares/better-auth-jwt.js (rewrote withWorkspace)
+- EDIT: src/resolvers/creditNote.js (removed local copy)
+- EDIT: \_\_tests\_\_/middleware/auth.test.js (4 updated + 1 new test)
+
+### Commits
+
+- 858ca1e — verify org membership in withWorkspace middleware
+- b77310a — tracking update
+
+### Affected resolvers (now protected)
+
+~120 resolvers across 14 files automatically secured:
+
+- banking.js (24), kanban.js (31), publicBoardShare.js (11)
+- creditNote.js (8), event.js (6), taskImage.js (5)
+- kanbanTemplate.js (4), dashboardAggregation.js (3)
+- quoteTemplate.js (3), invoiceTemplate.js (3)
+- purchaseOrderTemplate.js (3), calendarColorLabels.js (2)
+- importedInvoice.js (10), importedPurchaseOrder.js (8), user.js (1)
+
+### Tests
+
+- 377 tests pass (vs 376 before patch)
+- +1 new test: "should throw FORBIDDEN when no default org found"
+- 0 regressions
+
+### Validation
+
+- [x] Unit tests pass
+- [x] Smoke test in staging
+- [x] Deployed in prod, monitored 1h post-deploy
+- [x] Manual test: kanban subscription (websocket flow)
+- [x] Manual test: cross-org access attempt rejected with FORBIDDEN
+
+---
+
 ## Sprint 11C — Workspace scope on remaining resolvers (IN PROGRESS)
 
 **Status**: 🟡 In progress
@@ -227,7 +280,9 @@ Recommended action: rewrite `withWorkspace` internally to call
 `getActiveOrganization` (Plan C), protecting all 120 resolvers with a
 single middleware change. No resolver code changes required.
 
-Status: Under analysis, pending decision on Plan A/B/C.
+**Status**: ✅ Patched (Plan C+) — Deployed in prod (2026-05-06)
+**Resolution commit**: 858ca1e
+**Resolution sprint**: 11-CRITICAL (see section above)
 
 ---
 
@@ -314,6 +369,17 @@ Categories to audit:
 
 ---
 
+## Pending work branches (not pushed)
+
+### chore/test-factories-phase1
+
+**Status**: 🟡 Local only, awaits Phase 1 resume
+**Commit**: c4f60f5 (factories) + 9d75842 (tracking) + ec263d2 (test orphan rapatrié)
+**Content**: buildUserDoc, buildAccountDoc, buildSessionDoc factories + dev:e2e script + factory tests
+**To resume**: `git checkout chore/test-factories-phase1` when starting Phase 1 tests
+
+---
+
 ## Update log
 
 | Date       | Sprint      | Action                                                                        |
@@ -326,3 +392,4 @@ Categories to audit:
 | 2026-05-07 | Conventions | docs/SECURITY-CONVENTIONS.md created                                          |
 | 2026-05-07 | 11D         | Math.random replaced with crypto.randomBytes (3 files) — 86c13af              |
 | 2026-05-06 | CRITICAL    | withWorkspace wrapper lacks membership verification — ~120 resolvers affected |
+| 2026-05-06 | 11-CRITICAL | withWorkspace membership verification (858ca1e) — 120 resolvers protected     |
