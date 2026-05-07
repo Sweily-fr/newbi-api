@@ -7,6 +7,7 @@ import {
 import mongoose from "mongoose";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { promisify } from "util";
 import { processFileWithOCR } from "../utils/ocrProcessor.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -79,9 +80,7 @@ const saveUploadedFile = async (file, userId) => {
   const stream = createReadStream();
 
   // Créer un nom de fichier unique
-  const uniqueFilename = `${Date.now()}-${Math.round(
-    Math.random() * 1e9,
-  )}-${filename.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+  const uniqueFilename = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}-${filename.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
 
   // Créer le dossier de destination s'il n'existe pas
   const uploadDir = path.join(

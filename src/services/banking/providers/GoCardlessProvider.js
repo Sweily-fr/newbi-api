@@ -1,5 +1,6 @@
 import { BankingProvider } from "../interfaces/BankingProvider.js";
 import axios from "axios";
+import crypto from "crypto";
 
 /**
  * Provider GoCardless Bank Account Data (anciennement Nordigen)
@@ -43,7 +44,7 @@ export class GoCardlessProvider extends BankingProvider {
       // Vérifier que les credentials sont configurés
       if (!this.secretId || !this.secretKey) {
         throw new Error(
-          "Credentials GoCardless non configurés (GOCARDLESS_SECRET_ID, GOCARDLESS_SECRET_KEY)"
+          "Credentials GoCardless non configurés (GOCARDLESS_SECRET_ID, GOCARDLESS_SECRET_KEY)",
         );
       }
 
@@ -81,7 +82,7 @@ export class GoCardlessProvider extends BankingProvider {
     } catch (error) {
       console.error(
         "❌ Erreur authentification GoCardless:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Authentification GoCardless échouée: ${error.message}`);
     }
@@ -140,7 +141,7 @@ export class GoCardlessProvider extends BankingProvider {
     } catch (error) {
       console.error(
         "❌ Erreur liste institutions:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Erreur récupération institutions: ${error.message}`);
     }
@@ -173,7 +174,7 @@ export class GoCardlessProvider extends BankingProvider {
     } catch (error) {
       console.error(
         "❌ Erreur création agreement:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Erreur création agreement: ${error.message}`);
     }
@@ -213,7 +214,7 @@ export class GoCardlessProvider extends BankingProvider {
     } catch (error) {
       console.error(
         "❌ Erreur création requisition:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Erreur création requisition: ${error.message}`);
     }
@@ -228,7 +229,7 @@ export class GoCardlessProvider extends BankingProvider {
       "🔍 generateConnectUrl GoCardless - workspaceId:",
       workspaceId,
       "institutionId:",
-      institutionId
+      institutionId,
     );
 
     try {
@@ -240,7 +241,7 @@ export class GoCardlessProvider extends BankingProvider {
       const requisition = await this.createRequisition(
         institutionId,
         workspaceId,
-        agreement.id
+        agreement.id,
       );
       console.log("✅ Requisition créée:", requisition.id);
 
@@ -280,7 +281,7 @@ export class GoCardlessProvider extends BankingProvider {
     } catch (error) {
       console.error(
         "❌ Erreur statut requisition:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Erreur récupération statut: ${error.message}`);
     }
@@ -335,7 +336,7 @@ export class GoCardlessProvider extends BankingProvider {
     } catch (error) {
       console.error(
         "❌ Erreur détails compte:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Erreur récupération détails compte: ${error.message}`);
     }
@@ -349,7 +350,7 @@ export class GoCardlessProvider extends BankingProvider {
 
     try {
       const response = await this.client.get(
-        `/accounts/${accountId}/balances/`
+        `/accounts/${accountId}/balances/`,
       );
 
       const balances = response.data.balances || [];
@@ -357,7 +358,8 @@ export class GoCardlessProvider extends BankingProvider {
       const mainBalance =
         balances.find(
           (b) =>
-            b.balanceType === "expected" || b.balanceType === "interimAvailable"
+            b.balanceType === "expected" ||
+            b.balanceType === "interimAvailable",
         ) || balances[0];
 
       return {
@@ -371,7 +373,7 @@ export class GoCardlessProvider extends BankingProvider {
     } catch (error) {
       console.error(
         "❌ Erreur solde compte:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Erreur récupération solde: ${error.message}`);
     }
@@ -390,7 +392,7 @@ export class GoCardlessProvider extends BankingProvider {
 
       const response = await this.client.get(
         `/accounts/${accountId}/transactions/`,
-        { params }
+        { params },
       );
 
       const bookedTransactions = response.data.transactions?.booked || [];
@@ -398,10 +400,10 @@ export class GoCardlessProvider extends BankingProvider {
 
       const transactions = [
         ...bookedTransactions.map((t) =>
-          this._mapTransaction(t, accountId, workspaceId, "completed")
+          this._mapTransaction(t, accountId, workspaceId, "completed"),
         ),
         ...pendingTransactions.map((t) =>
-          this._mapTransaction(t, accountId, workspaceId, "pending")
+          this._mapTransaction(t, accountId, workspaceId, "pending"),
         ),
       ];
 
@@ -409,13 +411,13 @@ export class GoCardlessProvider extends BankingProvider {
       await this._saveTransactionsToDatabase(transactions, workspaceId);
 
       console.log(
-        `✅ ${transactions.length} transactions synchronisées pour compte ${accountId}`
+        `✅ ${transactions.length} transactions synchronisées pour compte ${accountId}`,
       );
       return transactions;
     } catch (error) {
       console.error(
         "❌ Erreur transactions:",
-        error.response?.data || error.message
+        error.response?.data || error.message,
       );
       throw new Error(`Erreur récupération transactions: ${error.message}`);
     }
@@ -431,7 +433,7 @@ export class GoCardlessProvider extends BankingProvider {
       externalId:
         transaction.transactionId ||
         transaction.internalTransactionId ||
-        `gc-${Date.now()}-${Math.random()}`,
+        `gc-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`,
       amount: Math.abs(amount),
       currency: transaction.transactionAmount?.currency || "EUR",
       description:
@@ -441,7 +443,7 @@ export class GoCardlessProvider extends BankingProvider {
         transaction.debtorName ||
         "Transaction",
       date: new Date(
-        transaction.bookingDate || transaction.valueDate || new Date()
+        transaction.bookingDate || transaction.valueDate || new Date(),
       ),
       type: amount >= 0 ? "credit" : "debit",
       status,
@@ -450,7 +452,7 @@ export class GoCardlessProvider extends BankingProvider {
       toAccount: null,
       workspaceId,
       processedAt: new Date(
-        transaction.valueDate || transaction.bookingDate || new Date()
+        transaction.valueDate || transaction.bookingDate || new Date(),
       ),
       metadata: {
         gocardlessTransactionId: transaction.transactionId,
@@ -481,13 +483,13 @@ export class GoCardlessProvider extends BankingProvider {
       if (!accountIds) {
         const requisitionInfo = await this._getRequisitionInfo(
           userId,
-          workspaceId
+          workspaceId,
         );
         if (!requisitionInfo) {
           throw new Error("Aucune requisition trouvée pour ce workspace");
         }
         const requisition = await this.getRequisitionStatus(
-          requisitionInfo.requisitionId
+          requisitionInfo.requisitionId,
         );
         accountIds = requisition.accounts;
       }
@@ -533,7 +535,7 @@ export class GoCardlessProvider extends BankingProvider {
       await this._saveAccountsToDatabase(accounts, workspaceId);
 
       console.log(
-        `✅ ${accounts.length} comptes synchronisés pour workspace ${workspaceId}`
+        `✅ ${accounts.length} comptes synchronisés pour workspace ${workspaceId}`,
       );
       return accounts;
     } catch (error) {
@@ -556,19 +558,19 @@ export class GoCardlessProvider extends BankingProvider {
             account.externalId,
             userId,
             workspaceId,
-            options
+            options,
           );
           totalTransactions += transactions.length;
         } catch (error) {
           console.error(
             `❌ Erreur sync transactions compte ${account.name}:`,
-            error.message
+            error.message,
           );
         }
       }
 
       console.log(
-        `✅ Synchronisation terminée: ${totalTransactions} transactions pour ${accounts.length} comptes`
+        `✅ Synchronisation terminée: ${totalTransactions} transactions pour ${accounts.length} comptes`,
       );
       return { accounts: accounts.length, transactions: totalTransactions };
     } catch (error) {
@@ -587,10 +589,10 @@ export class GoCardlessProvider extends BankingProvider {
       if (requisitionInfo?.requisitionId) {
         await this._ensureValidToken();
         await this.client.delete(
-          `/requisitions/${requisitionInfo.requisitionId}/`
+          `/requisitions/${requisitionInfo.requisitionId}/`,
         );
         console.log(
-          `✅ Requisition ${requisitionInfo.requisitionId} supprimée`
+          `✅ Requisition ${requisitionInfo.requisitionId} supprimée`,
         );
       }
 
@@ -683,7 +685,7 @@ export class GoCardlessProvider extends BankingProvider {
         status: "disconnected",
       }).select("externalId");
       const disconnectedExternalIds = new Set(
-        disconnectedAccounts.map((a) => a.externalId)
+        disconnectedAccounts.map((a) => a.externalId),
       );
 
       for (const accountData of accounts) {
@@ -703,7 +705,7 @@ export class GoCardlessProvider extends BankingProvider {
             workspaceId: workspaceStringId,
             provider: this.name,
           },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
+          { upsert: true, new: true, setDefaultsOnInsert: true },
         );
       }
     } catch (error) {
@@ -733,7 +735,7 @@ export class GoCardlessProvider extends BankingProvider {
             workspaceId: workspaceStringId,
             provider: this.name,
           },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
+          { upsert: true, new: true, setDefaultsOnInsert: true },
         );
       }
     } catch (error) {
@@ -751,7 +753,7 @@ export class GoCardlessProvider extends BankingProvider {
 
     if (missing.length > 0) {
       console.warn(
-        `⚠️ Configuration GoCardless manquante: ${missing.join(", ")}`
+        `⚠️ Configuration GoCardless manquante: ${missing.join(", ")}`,
       );
       return false;
     }
