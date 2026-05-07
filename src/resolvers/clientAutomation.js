@@ -13,6 +13,16 @@ import mongoose from "mongoose";
 
 /**
  * Service pour exécuter les automatisations
+ *
+ * SECURITY NOTE: Some methods in this service use findById/findByIdAndUpdate
+ * without an explicit workspaceId filter. This is currently safe because all
+ * callers pass IDs that come from documents already filtered by workspaceId
+ * in the resolver layer (RBAC).
+ *
+ * Defense-in-depth hardening (adding explicit workspaceId filters to all
+ * service queries) is tracked in SECURITY-AUDIT-TRACKING.md under Sprint 11E.
+ *
+ * Convention reference: docs/SECURITY-CONVENTIONS.md
  */
 export const automationService = {
   /**
@@ -421,7 +431,10 @@ const clientAutomationResolvers = {
           // Ne pas faire échouer la création si l'application rétroactive échoue
         }
 
-        return await ClientAutomation.findById(automation._id)
+        return await ClientAutomation.findOne({
+          _id: automation._id,
+          workspaceId,
+        })
           .populate("createdBy")
           .populate("sourceListId")
           .populate("targetListId");
@@ -470,7 +483,10 @@ const clientAutomationResolvers = {
         Object.assign(automation, input);
         await automation.save();
 
-        return await ClientAutomation.findById(automation._id)
+        return await ClientAutomation.findOne({
+          _id: automation._id,
+          workspaceId,
+        })
           .populate("createdBy")
           .populate("sourceListId")
           .populate("targetListId");
@@ -488,7 +504,7 @@ const clientAutomationResolvers = {
           throw createNotFoundError("Automatisation");
         }
 
-        await ClientAutomation.deleteOne({ _id: id });
+        await ClientAutomation.deleteOne({ _id: id, workspaceId });
 
         return true;
       },
@@ -528,7 +544,10 @@ const clientAutomationResolvers = {
         automation.isActive = !automation.isActive;
         await automation.save();
 
-        return await ClientAutomation.findById(automation._id)
+        return await ClientAutomation.findOne({
+          _id: automation._id,
+          workspaceId,
+        })
           .populate("createdBy")
           .populate("sourceListId")
           .populate("targetListId");

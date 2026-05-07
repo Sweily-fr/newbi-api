@@ -135,7 +135,7 @@ Each sprint focuses on a specific category of access control or input validation
 | 2   | importedInvoice.js:1413      | findByIdAndDelete without workspace filter (defense in depth)                      | ✅ Committed (53b6ea4) |
 | 3   | importedPurchaseOrder.js:590 | Same pattern                                                                       | ✅ Committed (82a1765) |
 | 1   | importedQuote.js             | 10 resolvers migrated to requireRead/Write/Delete + helper filtered by workspaceId | ✅ Committed (db5a3c4) |
-| 4   | clientAutomation.js          | 13 occurrences without workspace filter                                            | ⏸️ Pending             |
+| 4   | clientAutomation.js          | 1 real defense-in-depth fix + 3 cosmetic hardenings (resolver layer already RBAC)  | ✅ Committed           |
 
 ### Notes
 
@@ -165,6 +165,37 @@ Each sprint focuses on a specific category of access control or input validation
 - accountant: view, create, edit, approve, import, export (no delete — accounting traceability)
 - member: view, create, edit, import (no approve — Xero "Invoice Only - Drafts" pattern)
 - viewer: view only
+
+### Sprint 11C-4 details
+
+**Status**: ✅ Committed, pending merge to develop
+
+#### Audit findings vs reality
+
+The Pass 1 audit reported 13 occurrences in clientAutomation.js. After
+exhaustive read:
+
+- 7 top-level resolvers were ALREADY using requireRead/Write/Delete (clients resource)
+- Only 1 real defense-in-depth fix needed: deleteOne without workspaceId filter
+- 3 cosmetic hardenings: findById in return paths after create/update/toggle
+- 9 occurrences in internal automationService — tracked for Sprint 11E
+
+#### Patches applied
+
+- Line 491 (deleteClientAutomation): deleteOne now filtered by workspaceId
+- Line 424 (createClientAutomation): findById return → findOne with workspaceId
+- Line 473 (updateClientAutomation): findById return → findOne with workspaceId
+- Line 531 (toggleClientAutomation): findById return → findOne with workspaceId
+- Service hardening tracked for Sprint 11E (TODO comment added)
+
+#### New documentation
+
+- docs/SECURITY-CONVENTIONS.md (multi-tenant query conventions)
+
+#### Files changed
+
+- src/resolvers/clientAutomation.js (4 lines + 1 comment block)
+- docs/SECURITY-CONVENTIONS.md (NEW)
 
 ---
 
@@ -216,6 +247,30 @@ Replace `Math.random()...` with `crypto.randomBytes(16).toString("hex")`.
 
 ---
 
+## Sprint 11E — Service-layer hardening (PLANNED)
+
+**Status**: ⏸️ Planned, not started
+
+### Targets
+
+#### automationService (~9 occurrences in clientAutomation.js)
+
+Internal service used by clientAutomation.js resolvers. Current state:
+findById/findByIdAndUpdate without workspaceId filter. Currently safe
+because callers pass IDs from already-filtered documents, but adds defense
+in depth and avoids future regressions if new callers are added.
+
+Estimated effort: 30-45 min + caller audit.
+
+### Other potential targets
+
+To be audited:
+
+- Other internal services that take IDs without workspaceId
+- Cron / scheduled jobs that don't go through GraphQL resolvers
+
+---
+
 ## Pass 1 audit — Remaining HIGH findings (BACKLOG)
 
 10 files with field resolver patterns to harden:
@@ -250,10 +305,12 @@ Categories to audit:
 
 ## Update log
 
-| Date       | Sprint   | Action                                                                        |
-| ---------- | -------- | ----------------------------------------------------------------------------- |
-| 2026-05-06 | Tracking | Tracking file created                                                         |
-| 2026-05-06 | 11C-2    | importedInvoice.js findByIdAndDelete scoped (53b6ea4)                         |
-| 2026-05-06 | 11C-3    | importedPurchaseOrder.js findByIdAndDelete scoped (82a1765)                   |
-| 2026-05-07 | 11C-1    | importedQuote.js migrated to RBAC (10 resolvers) — db5a3c4                    |
-| 2026-05-06 | CRITICAL | withWorkspace wrapper lacks membership verification — ~120 resolvers affected |
+| Date       | Sprint      | Action                                                                        |
+| ---------- | ----------- | ----------------------------------------------------------------------------- |
+| 2026-05-06 | Tracking    | Tracking file created                                                         |
+| 2026-05-06 | 11C-2       | importedInvoice.js findByIdAndDelete scoped (53b6ea4)                         |
+| 2026-05-06 | 11C-3       | importedPurchaseOrder.js findByIdAndDelete scoped (82a1765)                   |
+| 2026-05-07 | 11C-1       | importedQuote.js migrated to RBAC (10 resolvers) — db5a3c4                    |
+| 2026-05-07 | 11C-4       | clientAutomation defense-in-depth (4 lines)                                   |
+| 2026-05-07 | Conventions | docs/SECURITY-CONVENTIONS.md created                                          |
+| 2026-05-06 | CRITICAL    | withWorkspace wrapper lacks membership verification — ~120 resolvers affected |
