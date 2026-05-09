@@ -194,7 +194,11 @@ const purchaseOrderResolvers = {
 
   Query: {
     purchaseOrder: requireRead("purchaseOrders")(
-      async (_, { workspaceId, id }, context) => {
+      async (_, { workspaceId: inputWorkspaceId, id }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const po = await PurchaseOrder.findOne({
           _id: id,
           workspaceId,
@@ -209,7 +213,7 @@ const purchaseOrderResolvers = {
       async (
         _,
         {
-          workspaceId,
+          workspaceId: inputWorkspaceId,
           startDate,
           endDate,
           status,
@@ -217,8 +221,12 @@ const purchaseOrderResolvers = {
           page = 1,
           limit = 10,
         },
-        { user },
+        context,
       ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId };
 
         if (startDate || endDate) {
@@ -256,7 +264,11 @@ const purchaseOrderResolvers = {
     ),
 
     purchaseOrderStats: requireRead("purchaseOrders")(
-      async (_, { workspaceId }, context) => {
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const [stats] = await PurchaseOrder.aggregate([
           { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
           {
@@ -319,7 +331,16 @@ const purchaseOrderResolvers = {
     ),
 
     nextPurchaseOrderNumber: requireRead("purchaseOrders")(
-      async (_, { workspaceId, prefix, autoNumbering }, { user }) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, prefix, autoNumbering },
+        context,
+      ) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const wsId = new mongoose.Types.ObjectId(workspaceId);
         const query = { workspaceId: wsId };
 
@@ -341,7 +362,15 @@ const purchaseOrderResolvers = {
     ),
 
     checkPurchaseOrderNumberExists: requireRead("purchaseOrders")(
-      async (_, { workspaceId, number, prefix, excludeId }) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, number, prefix, excludeId },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId, number, prefix, status: { $ne: "DRAFT" } };
         if (excludeId) {
           query._id = { $ne: excludeId };
