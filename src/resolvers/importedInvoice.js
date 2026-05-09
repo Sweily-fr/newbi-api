@@ -5,11 +5,13 @@
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
+import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+  requireRead,
+  requireWrite,
+  checkSubscriptionActive,
+  resolveWorkspaceId,
+} from "../middlewares/rbac.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
 import hybridOcrService from "../services/hybridOcrService.js";
@@ -595,12 +597,16 @@ const importedInvoiceResolvers = {
     /**
      * Liste les factures importées avec pagination et filtres
      */
-    importedInvoices: isAuthenticated(
+    importedInvoices: requireRead("importedInvoices")(
       async (
         _,
-        { workspaceId, page = 1, limit = 20, filters = {} },
-        { user },
+        { workspaceId: inputWorkspaceId, page = 1, limit = 20, filters = {} },
+        context,
       ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId };
 
         // Appliquer les filtres
@@ -660,8 +666,12 @@ const importedInvoiceResolvers = {
     /**
      * Statistiques des factures importées
      */
-    importedInvoiceStats: isAuthenticated(
-      async (_, { workspaceId }, { user }) => {
+    importedInvoiceStats: requireRead("importedInvoices")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const stats = await ImportedInvoice.getStats(workspaceId);
 
         const result = {
@@ -691,75 +701,97 @@ const importedInvoiceResolvers = {
     /**
      * Statistiques d'usage OCR (quotas Mindee, Google, Mistral)
      */
-    ocrUsageStats: isAuthenticated(async (_, { workspaceId }, { user }) => {
-      const OcrUsage = (await import("../models/OcrUsage.js")).default;
-      const stats = await OcrUsage.getUsageStats(workspaceId);
+    ocrUsageStats: requireRead("importedInvoices")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        const OcrUsage = (await import("../models/OcrUsage.js")).default;
+        const stats = await OcrUsage.getUsageStats(workspaceId);
 
-      // Déterminer le provider actuel (Claude Vision par défaut)
-      let currentProvider = process.env.OCR_PROVIDER || "claude-vision";
-      if (stats["claude-vision"]?.used > 0) {
-        currentProvider = "claude-vision";
-      } else if (stats.mindee?.available > 0) {
-        currentProvider = "mindee";
-      } else if (stats["google-document-ai"]?.available > 0) {
-        currentProvider = "google-document-ai";
-      }
+        // Déterminer le provider actuel (Claude Vision par défaut)
+        let currentProvider = process.env.OCR_PROVIDER || "claude-vision";
+        if (stats["claude-vision"]?.used > 0) {
+          currentProvider = "claude-vision";
+        } else if (stats.mindee?.available > 0) {
+          currentProvider = "mindee";
+        } else if (stats["google-document-ai"]?.available > 0) {
+          currentProvider = "google-document-ai";
+        }
 
-      return {
-        claudeVision: stats["claude-vision"] || {
-          used: 0,
-          limit: 999999,
-          available: 999999,
-        },
-        mindee: stats.mindee,
-        googleDocumentAi: stats["google-document-ai"],
-        mistral: stats.mistral,
-        currentProvider,
-      };
-    }),
+        return {
+          claudeVision: stats["claude-vision"] || {
+            used: 0,
+            limit: 999999,
+            available: 999999,
+          },
+          mindee: stats.mindee,
+          googleDocumentAi: stats["google-document-ai"],
+          mistral: stats.mistral,
+          currentProvider,
+        };
+      },
+    ),
 
     /**
      * Quota OCR de l'utilisateur courant
      */
-    userOcrQuota: isAuthenticated(async (_, { workspaceId }, { user }) => {
-      const plan = await getUserPlan(user.id, workspaceId);
-      const stats = await UserOcrQuota.getUserStats(user.id, workspaceId, plan);
+    userOcrQuota: requireRead("importedInvoices")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        const plan = await getUserPlan(user.id, workspaceId);
+        const stats = await UserOcrQuota.getUserStats(
+          user.id,
+          workspaceId,
+          plan,
+        );
 
-      return {
-        plan: stats.plan,
-        monthlyQuota: stats.monthlyQuota,
-        usedQuota: stats.usedQuota,
-        remainingQuota: stats.remainingQuota,
-        extraImportsPurchased: stats.extraImportsPurchased,
-        extraImportsUsed: stats.extraImportsUsed,
-        extraImportsAvailable: stats.extraImportsAvailable,
-        extraImportPrice: stats.extraImportPrice,
-        totalUsedThisMonth: stats.totalUsedThisMonth,
-        totalAvailable: stats.totalAvailable,
-        month: stats.month,
-        resetDate: stats.resetDate?.toISOString() || null,
-        lastImports: stats.lastImports || [],
-      };
-    }),
+        return {
+          plan: stats.plan,
+          monthlyQuota: stats.monthlyQuota,
+          usedQuota: stats.usedQuota,
+          remainingQuota: stats.remainingQuota,
+          extraImportsPurchased: stats.extraImportsPurchased,
+          extraImportsUsed: stats.extraImportsUsed,
+          extraImportsAvailable: stats.extraImportsAvailable,
+          extraImportPrice: stats.extraImportPrice,
+          totalUsedThisMonth: stats.totalUsedThisMonth,
+          totalAvailable: stats.totalAvailable,
+          month: stats.month,
+          resetDate: stats.resetDate?.toISOString() || null,
+          lastImports: stats.lastImports || [],
+        };
+      },
+    ),
   },
 
   Mutation: {
     /**
      * Importe une facture avec OCR
      */
-    importInvoice: isAuthenticated(
+    importInvoice: requireWrite("importedInvoices")(
       async (
         _,
         {
-          workspaceId,
+          workspaceId: inputWorkspaceId,
           cloudflareUrl,
           fileName,
           mimeType,
           fileSize,
           cloudflareKey,
         },
-        { user },
+        context,
       ) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         try {
           // Vérifier le quota utilisateur avant l'import
           const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
@@ -856,8 +888,13 @@ const importedInvoiceResolvers = {
      * Le fichier est envoyé directement au backend, OCR via Claude Vision en base64,
      * puis upload serveur-à-serveur vers Cloudflare (attendu car besoin de l'URL).
      */
-    importInvoiceDirect: isAuthenticated(
-      async (_, { file, workspaceId }, { user }) => {
+    importInvoiceDirect: requireWrite("importedInvoices")(
+      async (_, { file, workspaceId: inputWorkspaceId }, context) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         try {
           // Vérifier le quota utilisateur avant l'import
           const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
@@ -1086,8 +1123,13 @@ const importedInvoiceResolvers = {
      *
      * Performances: 100 factures en 25-35s (vs 90-120s avant)
      */
-    batchImportInvoices: isAuthenticated(
-      async (_, { workspaceId, files }, { user }) => {
+    batchImportInvoices: requireWrite("importedInvoices")(
+      async (_, { workspaceId: inputWorkspaceId, files }, context) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const startTime = Date.now();
 
         if (files.length > MAX_BATCH_IMPORT) {
@@ -1410,7 +1452,7 @@ const importedInvoiceResolvers = {
         }
       }
 
-      await ImportedInvoice.findByIdAndDelete(id);
+      await ImportedInvoice.findOneAndDelete({ _id: id, workspaceId });
       return true;
     }),
 
@@ -1457,8 +1499,17 @@ const importedInvoiceResolvers = {
      * Note: Cette mutation enregistre l'achat. L'intégration Stripe est à implémenter
      * selon votre configuration de paiement existante.
      */
-    purchaseExtraOcrImports: isAuthenticated(
-      async (_, { workspaceId, quantity, paymentId }, { user }) => {
+    purchaseExtraOcrImports: requireWrite("importedInvoices")(
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, quantity, paymentId },
+        context,
+      ) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         if (quantity < 1 || quantity > 1000) {
           throw createValidationError(
             "Quantité invalide. Minimum 1, maximum 1000 imports.",

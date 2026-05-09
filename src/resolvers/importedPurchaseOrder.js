@@ -5,11 +5,13 @@
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
+import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+  requireRead,
+  requireWrite,
+  checkSubscriptionActive,
+  resolveWorkspaceId,
+} from "../middlewares/rbac.js";
 import ImportedPurchaseOrder from "../models/ImportedPurchaseOrder.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
@@ -251,12 +253,16 @@ const importedPurchaseOrderResolvers = {
       return po;
     }),
 
-    importedPurchaseOrders: isAuthenticated(
+    importedPurchaseOrders: requireRead("importedPurchaseOrders")(
       async (
         _,
-        { workspaceId, page = 1, limit = 20, filters = {} },
-        { user },
+        { workspaceId: inputWorkspaceId, page = 1, limit = 20, filters = {} },
+        context,
       ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId };
 
         if (filters.status) query.status = filters.status;
@@ -303,8 +309,12 @@ const importedPurchaseOrderResolvers = {
       },
     ),
 
-    importedPurchaseOrderStats: isAuthenticated(
-      async (_, { workspaceId }, { user }) => {
+    importedPurchaseOrderStats: requireRead("importedPurchaseOrders")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const stats = await ImportedPurchaseOrder.getStats(workspaceId);
 
         const result = {
@@ -332,8 +342,13 @@ const importedPurchaseOrderResolvers = {
   },
 
   Mutation: {
-    importPurchaseOrderDirect: isAuthenticated(
-      async (_, { file, workspaceId }, { user }) => {
+    importPurchaseOrderDirect: requireWrite("importedPurchaseOrders")(
+      async (_, { file, workspaceId: inputWorkspaceId }, context) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         try {
           const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
 
@@ -587,7 +602,7 @@ const importedPurchaseOrderResolvers = {
           }
         }
 
-        await ImportedPurchaseOrder.findByIdAndDelete(id);
+        await ImportedPurchaseOrder.findOneAndDelete({ _id: id, workspaceId });
         return true;
       },
     ),

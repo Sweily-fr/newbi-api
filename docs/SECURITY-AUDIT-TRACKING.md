@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-07 (Sprint 11C + 11D deployed in prod)
+Last updated: 2026-05-09 (Sprint 11C-5 committed)
 
 ## Overview
 
@@ -9,18 +9,19 @@ Each sprint focuses on a specific category of access control or input validation
 
 ## Sprint Status
 
-| Sprint       | Theme                                                               | Status         | Deployed |
-| ------------ | ------------------------------------------------------------------- | -------------- | -------- |
-| 9            | Multi-tenant access checks (imported docs, partner, reconciliation) | ✅ Done        | ✅ Prod  |
-| 10           | File transfer payment session hardening                             | ✅ Done        | ✅ Prod  |
-| 11A          | Webhook signature verification + JWT strict                         | ✅ Done        | ✅ Prod  |
-| 11B          | Public board share password hashing + timing-safe comparison        | ✅ Done        | ✅ Prod  |
-| 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)     | ✅ Done        | ✅ Prod  |
-| 11C          | Workspace scope on remaining resolvers                              | ✅ Done        | ✅ Prod  |
-| 11D          | Replace Math.random with crypto.randomBytes (residual)              | ✅ Done        | ✅ Prod  |
-| 11E+         | High/Medium findings from Pass 1                                    | ⏸️ Planned     | ❌       |
-| Audit Pass 2 | Input validation, data exposure, rate limiting                      | ⏸️ Not started | -        |
-| Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                       | ⏸️ Not started | -        |
+| Sprint       | Theme                                                               | Status         | Deployed     |
+| ------------ | ------------------------------------------------------------------- | -------------- | ------------ |
+| 9            | Multi-tenant access checks (imported docs, partner, reconciliation) | ✅ Done        | ✅ Prod      |
+| 10           | File transfer payment session hardening                             | ✅ Done        | ✅ Prod      |
+| 11A          | Webhook signature verification + JWT strict                         | ✅ Done        | ✅ Prod      |
+| 11B          | Public board share password hashing + timing-safe comparison        | ✅ Done        | ✅ Prod      |
+| 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)     | ✅ Done        | ✅ Prod      |
+| 11C          | Workspace scope on remaining resolvers                              | ✅ Done        | ✅ Prod      |
+| 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers       | ✅ Done        | 🟡 Committed |
+| 11D          | Replace Math.random with crypto.randomBytes (residual)              | ✅ Done        | ✅ Prod      |
+| 11E+         | High/Medium findings from Pass 1                                    | ⏸️ Planned     | ❌           |
+| Audit Pass 2 | Input validation, data exposure, rate limiting                      | ⏸️ Not started | -            |
+| Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                       | ⏸️ Not started | -            |
 
 ---
 
@@ -183,12 +184,13 @@ Each sprint focuses on a specific category of access control or input validation
 
 ### Targets
 
-| #   | File                         | Issue                                                                              | Status                 |
-| --- | ---------------------------- | ---------------------------------------------------------------------------------- | ---------------------- |
-| 2   | importedInvoice.js:1413      | findByIdAndDelete without workspace filter (defense in depth)                      | ✅ Committed (53b6ea4) |
-| 3   | importedPurchaseOrder.js:590 | Same pattern                                                                       | ✅ Committed (82a1765) |
-| 1   | importedQuote.js             | 10 resolvers migrated to requireRead/Write/Delete + helper filtered by workspaceId | ✅ Committed (db5a3c4) |
-| 4   | clientAutomation.js          | 1 real defense-in-depth fix + 3 cosmetic hardenings (resolver layer already RBAC)  | ✅ Committed           |
+| #   | File                                          | Issue                                                                              | Status                 |
+| --- | --------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------- |
+| 2   | importedInvoice.js:1413                       | findByIdAndDelete without workspace filter (defense in depth)                      | ✅ Committed (53b6ea4) |
+| 3   | importedPurchaseOrder.js:590                  | Same pattern                                                                       | ✅ Committed (82a1765) |
+| 1   | importedQuote.js                              | 10 resolvers migrated to requireRead/Write/Delete + helper filtered by workspaceId | ✅ Committed (db5a3c4) |
+| 4   | clientAutomation.js                           | 1 real defense-in-depth fix + 3 cosmetic hardenings (resolver layer already RBAC)  | ✅ Committed           |
+| 5   | importedInvoice.js + importedPurchaseOrder.js | 11 resolvers migrated to requireRead/Write + resources added to ROLE_PERMISSIONS   | ✅ Committed (2fbbb57) |
 
 ### Notes
 
@@ -249,6 +251,52 @@ exhaustive read:
 
 - src/resolvers/clientAutomation.js (4 lines + 1 comment block)
 - docs/SECURITY-CONVENTIONS.md (NEW)
+
+### Sprint 11C-5 details
+
+**Status**: ✅ Committed, pending merge to develop
+
+#### Audit findings vs reality
+
+The Phase 1A test conception (multi-tenant isolation) revealed that 11
+resolvers in importedInvoice.js and importedPurchaseOrder.js still used
+isAuthenticated with workspaceId from GraphQL args (controllable by
+client). This is the same pattern fixed in Sprint 11C-1 for
+importedQuote, but missed for these 2 cousin resources.
+
+Sprint 9 had patched the query single and delete operations on these
+files, but list/stats/import resolvers were left untouched.
+
+#### Patches applied
+
+**importedInvoice.js (8 resolvers)**
+
+- importedInvoices (line 598): isAuthenticated → requireRead("importedInvoices")
+- importedInvoiceStats (line 663): same
+- ocrUsageStats (line 694): same
+- userOcrQuota (line 724): same
+- importInvoice (line 750): isAuthenticated → requireWrite("importedInvoices")
+- importInvoiceDirect (line 859): same
+- batchImportInvoices (line 1089): same
+- purchaseExtraOcrImports (line 1460): same
+
+**importedPurchaseOrder.js (3 resolvers)**
+
+- importedPurchaseOrders (line 254): requireRead("importedPurchaseOrders")
+- importedPurchaseOrderStats (line 306): same
+- importPurchaseOrderDirect (line 335): requireWrite("importedPurchaseOrders")
+
+**rbac.js (ROLE_PERMISSIONS)**
+
+- Added `importedInvoices` resource for 5 roles
+- Added `importedPurchaseOrders` resource for 5 roles
+- Matrix aligned on importedQuotes (Sprint 11C-1, Pennylane/Xero pattern)
+
+#### Files changed
+
+- src/middlewares/rbac.js (10 lines added)
+- src/resolvers/importedInvoice.js (~35 lines refactored)
+- src/resolvers/importedPurchaseOrder.js (~15 lines refactored)
 
 ---
 
@@ -382,15 +430,16 @@ Categories to audit:
 
 ## Update log
 
-| Date       | Sprint      | Action                                                                        |
-| ---------- | ----------- | ----------------------------------------------------------------------------- |
-| 2026-05-06 | Tracking    | Tracking file created                                                         |
-| 2026-05-06 | 11C-2       | importedInvoice.js findByIdAndDelete scoped (53b6ea4)                         |
-| 2026-05-06 | 11C-3       | importedPurchaseOrder.js findByIdAndDelete scoped (82a1765)                   |
-| 2026-05-07 | 11C-1       | importedQuote.js migrated to RBAC (10 resolvers) — db5a3c4                    |
-| 2026-05-07 | 11C-4       | clientAutomation defense-in-depth (4 lines)                                   |
-| 2026-05-07 | Conventions | docs/SECURITY-CONVENTIONS.md created                                          |
-| 2026-05-07 | 11D         | Math.random replaced with crypto.randomBytes (3 files) — 86c13af              |
-| 2026-05-06 | CRITICAL    | withWorkspace wrapper lacks membership verification — ~120 resolvers affected |
-| 2026-05-06 | 11-CRITICAL | withWorkspace membership verification (858ca1e) — 120 resolvers protected     |
-| 2026-05-07 | 11C+11D     | Sprint 11C (1, 2, 3, 4) + 11D deployed in prod, monitored 1h, stable          |
+| Date       | Sprint      | Action                                                                         |
+| ---------- | ----------- | ------------------------------------------------------------------------------ |
+| 2026-05-06 | Tracking    | Tracking file created                                                          |
+| 2026-05-06 | 11C-2       | importedInvoice.js findByIdAndDelete scoped (53b6ea4)                          |
+| 2026-05-06 | 11C-3       | importedPurchaseOrder.js findByIdAndDelete scoped (82a1765)                    |
+| 2026-05-07 | 11C-1       | importedQuote.js migrated to RBAC (10 resolvers) — db5a3c4                     |
+| 2026-05-07 | 11C-4       | clientAutomation defense-in-depth (4 lines)                                    |
+| 2026-05-07 | Conventions | docs/SECURITY-CONVENTIONS.md created                                           |
+| 2026-05-07 | 11D         | Math.random replaced with crypto.randomBytes (3 files) — 86c13af               |
+| 2026-05-06 | CRITICAL    | withWorkspace wrapper lacks membership verification — ~120 resolvers affected  |
+| 2026-05-06 | 11-CRITICAL | withWorkspace membership verification (858ca1e) — 120 resolvers protected      |
+| 2026-05-07 | 11C+11D     | Sprint 11C (1, 2, 3, 4) + 11D deployed in prod, monitored 1h, stable           |
+| 2026-05-09 | 11C-5       | importedInvoice/PO list+stats+import migrated to RBAC (11 resolvers) — 2fbbb57 |
