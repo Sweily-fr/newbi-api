@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-09 (Sprint 11C-6 committed)
+Last updated: 2026-05-09 (Phase 1A test suite committed)
 
 ## Overview
 
@@ -19,6 +19,7 @@ Each sprint focuses on a specific category of access control or input validation
 | 11C          | Workspace scope on remaining resolvers                                                       | ✅ Done        | ✅ Prod      |
 | 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers                                | ✅ Done        | 🟡 Committed |
 | 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | 🟡 Committed |
+| Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | 🟡 Committed |
 | 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod      |
 | 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌           |
 | Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -            |
@@ -380,6 +381,61 @@ async (parent, args, { workspaceId }) => {
 
 ---
 
+## Phase 1A — Multi-tenant isolation test suite
+
+**Status**: ✅ Committed, pending merge to develop
+
+### Objective
+
+Build an automated detection mechanism for cross-tenant data leaks
+across financial document resources. Each new resolver added to the
+codebase should be added to the test suite to maintain coverage.
+
+### Coverage
+
+11 resources × 4 tests = 44 cases:
+
+- Query single cross-tenant deny
+- Query list scoping (own org)
+- Query list spoof prevention (no leak)
+- Mutation delete cross-tenant deny
+
+### Resources covered
+
+- Client, Invoice, Quote, CreditNote
+- Product, Expense
+- PurchaseInvoice, PurchaseOrder
+- ImportedInvoice, ImportedPurchaseOrder, ImportedQuote
+
+### Excluded (tested separately)
+
+- FileTransfer (user-level isolation, not org-level)
+
+### Discoveries triggered by Test 3 (spoof prevention)
+
+The "spoof prevention" test revealed three real cross-tenant data
+leaks before any patch:
+
+- Quote.quotes
+- CreditNote.creditNotes
+- PurchaseOrder.purchaseOrders
+
+Audit of the related files revealed 22 additional vulnerable resolvers
+with the same pattern. All 25 were patched in Sprint 11C-6.
+
+### Files changed
+
+- \_\_tests\_\_/integration/multi-tenant-isolation.test.js (NEW, ~540 lines)
+
+### Next phases
+
+- Phase 1B: complete RBAC role tests for CreditNote, PurchaseOrder,
+  Imported\*, FileTransfer
+- Phase 1C: tests for Sprint 9-11D security patches
+- Phase 1D: tests for ~60 resolvers without test coverage
+
+---
+
 ## CRITICAL FINDING — withWorkspace wrapper limitation
 
 Discovered during Sprint 11C planning (2026-05-06).
@@ -524,3 +580,4 @@ Categories to audit:
 | 2026-05-07 | 11C+11D     | Sprint 11C (1, 2, 3, 4) + 11D deployed in prod, monitored 1h, stable                 |
 | 2026-05-09 | 11C-5       | importedInvoice/PO list+stats+import migrated to RBAC (11 resolvers) — 2fbbb57       |
 | 2026-05-09 | 11C-6       | Reconcile workspaceId across financial doc queries (25 resolvers, 4 files) — 7fb07d8 |
+| 2026-05-09 | Phase 1A    | Multi-tenant isolation test suite (44 cases, 11 resources) — 4fc3fa2                 |
