@@ -277,7 +277,11 @@ const invoiceResolvers = {
 
   Query: {
     invoice: requireRead("invoices")(
-      async (_, { id, workspaceId }, context) => {
+      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const invoice = await Invoice.findOne({
           _id: id,
           workspaceId: workspaceId, // ✅ Filtrage par workspace au lieu de createdBy
@@ -291,7 +295,7 @@ const invoiceResolvers = {
       async (
         _,
         {
-          workspaceId,
+          workspaceId: inputWorkspaceId,
           startDate,
           endDate,
           status,
@@ -301,6 +305,10 @@ const invoiceResolvers = {
         },
         context,
       ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         // ✅ Base query avec workspaceId
         const query = { workspaceId: workspaceId };
         const { workspace, user } = context;
@@ -351,8 +359,12 @@ const invoiceResolvers = {
     ),
 
     invoiceStats: requireRead("invoices")(
-      async (_, { workspaceId }, context) => {
-        const { user, workspaceId: contextWorkspaceId, userRole } = context;
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const { user, userRole } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
         // Base match avec workspaceId
         let matchQuery = {
@@ -409,161 +421,181 @@ const invoiceResolvers = {
       },
     ),
 
-    invoiceBalances: requireRead("invoices")(async (_, { workspaceId }) => {
-      const wid = new mongoose.Types.ObjectId(workspaceId);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+    invoiceBalances: requireRead("invoices")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        const wid = new mongoose.Types.ObjectId(workspaceId);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
 
-      // Agrégation des factures créées sur Newbi
-      const [invoiceStats] = await Invoice.aggregate([
-        { $match: { workspaceId: wid } },
-        {
-          $group: {
-            _id: null,
-            totalBilled: {
-              $sum: {
-                $cond: [
-                  { $in: ["$status", ["PENDING", "OVERDUE", "COMPLETED"]] },
-                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
-                  0,
-                ],
+        // Agrégation des factures créées sur Newbi
+        const [invoiceStats] = await Invoice.aggregate([
+          { $match: { workspaceId: wid } },
+          {
+            $group: {
+              _id: null,
+              totalBilled: {
+                $sum: {
+                  $cond: [
+                    { $in: ["$status", ["PENDING", "OVERDUE", "COMPLETED"]] },
+                    {
+                      $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
+                    },
+                    0,
+                  ],
+                },
               },
-            },
-            totalPaid: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "COMPLETED"] },
-                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
-                  0,
-                ],
+              totalPaid: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", "COMPLETED"] },
+                    {
+                      $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
+                    },
+                    0,
+                  ],
+                },
               },
-            },
-            overdueAmount: {
-              $sum: {
-                $cond: [
-                  {
-                    $or: [
-                      { $eq: ["$status", "OVERDUE"] },
-                      {
-                        $and: [
-                          { $eq: ["$status", "PENDING"] },
-                          { $ne: ["$dueDate", null] },
-                          { $lt: ["$dueDate", today] },
-                        ],
-                      },
-                    ],
-                  },
-                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
-                  0,
-                ],
+              overdueAmount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $eq: ["$status", "OVERDUE"] },
+                        {
+                          $and: [
+                            { $eq: ["$status", "PENDING"] },
+                            { $ne: ["$dueDate", null] },
+                            { $lt: ["$dueDate", today] },
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
+                    },
+                    0,
+                  ],
+                },
               },
-            },
-            overdueCount: {
-              $sum: {
-                $cond: [
-                  {
-                    $or: [
-                      { $eq: ["$status", "OVERDUE"] },
-                      {
-                        $and: [
-                          { $eq: ["$status", "PENDING"] },
-                          { $ne: ["$dueDate", null] },
-                          { $lt: ["$dueDate", today] },
-                        ],
-                      },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
+              overdueCount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $eq: ["$status", "OVERDUE"] },
+                        {
+                          $and: [
+                            { $eq: ["$status", "PENDING"] },
+                            { $ne: ["$dueDate", null] },
+                            { $lt: ["$dueDate", today] },
+                          ],
+                        },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
               },
             },
           },
-        },
-      ]);
+        ]);
 
-      // Agrégation des factures importées
-      // VALIDATED = confirmée mais pas encore payée, COMPLETED = payée
-      const [importedStats] = await ImportedInvoice.aggregate([
-        { $match: { workspaceId: wid } },
-        {
-          $group: {
-            _id: null,
-            totalBilled: {
-              $sum: {
-                $cond: [
-                  { $in: ["$status", ["VALIDATED", "COMPLETED"]] },
-                  { $ifNull: ["$totalHT", 0] },
-                  0,
-                ],
+        // Agrégation des factures importées
+        // VALIDATED = confirmée mais pas encore payée, COMPLETED = payée
+        const [importedStats] = await ImportedInvoice.aggregate([
+          { $match: { workspaceId: wid } },
+          {
+            $group: {
+              _id: null,
+              totalBilled: {
+                $sum: {
+                  $cond: [
+                    { $in: ["$status", ["VALIDATED", "COMPLETED"]] },
+                    { $ifNull: ["$totalHT", 0] },
+                    0,
+                  ],
+                },
               },
-            },
-            totalPaid: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "COMPLETED"] },
-                  { $ifNull: ["$totalHT", 0] },
-                  0,
-                ],
+              totalPaid: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", "COMPLETED"] },
+                    { $ifNull: ["$totalHT", 0] },
+                    0,
+                  ],
+                },
               },
-            },
-            overdueAmount: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: ["$status", "VALIDATED"] },
-                      { $ne: ["$dueDate", null] },
-                      { $lt: ["$dueDate", today] },
-                    ],
-                  },
-                  { $ifNull: ["$totalHT", 0] },
-                  0,
-                ],
+              overdueAmount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ["$status", "VALIDATED"] },
+                        { $ne: ["$dueDate", null] },
+                        { $lt: ["$dueDate", today] },
+                      ],
+                    },
+                    { $ifNull: ["$totalHT", 0] },
+                    0,
+                  ],
+                },
               },
-            },
-            overdueCount: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $eq: ["$status", "VALIDATED"] },
-                      { $ne: ["$dueDate", null] },
-                      { $lt: ["$dueDate", today] },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
+              overdueCount: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ["$status", "VALIDATED"] },
+                        { $ne: ["$dueDate", null] },
+                        { $lt: ["$dueDate", today] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
               },
             },
           },
-        },
-      ]);
+        ]);
 
-      const inv = invoiceStats || {
-        totalBilled: 0,
-        totalPaid: 0,
-        overdueAmount: 0,
-        overdueCount: 0,
-      };
-      const imp = importedStats || {
-        totalBilled: 0,
-        totalPaid: 0,
-        overdueAmount: 0,
-        overdueCount: 0,
-      };
+        const inv = invoiceStats || {
+          totalBilled: 0,
+          totalPaid: 0,
+          overdueAmount: 0,
+          overdueCount: 0,
+        };
+        const imp = importedStats || {
+          totalBilled: 0,
+          totalPaid: 0,
+          overdueAmount: 0,
+          overdueCount: 0,
+        };
 
-      return {
-        totalBilled: inv.totalBilled + imp.totalBilled,
-        totalPaid: inv.totalPaid + imp.totalPaid,
-        overdueAmount: inv.overdueAmount + imp.overdueAmount,
-        overdueCount: inv.overdueCount + imp.overdueCount,
-      };
-    }),
+        return {
+          totalBilled: inv.totalBilled + imp.totalBilled,
+          totalPaid: inv.totalPaid + imp.totalPaid,
+          overdueAmount: inv.overdueAmount + imp.overdueAmount,
+          overdueCount: inv.overdueCount + imp.overdueCount,
+        };
+      },
+    ),
 
     nextInvoiceNumber: requireRead("invoices")(
-      async (_, { workspaceId, prefix, isDraft, autoNumbering }, context) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, prefix, isDraft, autoNumbering },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const { user } = context || {};
         if (!user) {
           throw new Error("User not found in context");
@@ -606,7 +638,11 @@ const invoiceResolvers = {
     // afin d'éviter l'erreur "La date d'émission ne peut pas être antérieure à celle
     // de la dernière facture existante")
     latestInvoiceIssueDate: requireRead("invoices")(
-      async (_, { workspaceId }) => {
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const latestInvoice = await Invoice.findOne({
           workspaceId,
           status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
@@ -622,7 +658,15 @@ const invoiceResolvers = {
 
     // Rechercher les factures de situation par référence de situation
     situationInvoicesByQuoteRef: requireRead("invoices")(
-      async (_, { workspaceId, purchaseOrderNumber }, context) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, purchaseOrderNumber },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         if (!purchaseOrderNumber || purchaseOrderNumber.trim() === "") {
           console.log(
             "⚠️ Aucune référence fournie pour la recherche de factures de situation",
@@ -655,7 +699,11 @@ const invoiceResolvers = {
 
     // Récupérer les références de situation uniques (pour la recherche)
     situationReferences: requireRead("invoices")(
-      async (_, { workspaceId, search }, context) => {
+      async (_, { workspaceId: inputWorkspaceId, search }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         console.log(
           `🔍 Recherche des références de situation pour workspace: ${workspaceId}`,
         );
@@ -828,7 +876,15 @@ const invoiceResolvers = {
     ),
 
     checkInvoiceNumberExists: requireRead("invoices")(
-      async (_, { workspaceId, number, prefix, excludeId }) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, number, prefix, excludeId },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId, number, prefix, status: { $ne: "DRAFT" } };
         if (excludeId) {
           query._id = { $ne: excludeId };
