@@ -65,6 +65,15 @@ const ROLE_PERMISSIONS = {
       "export",
     ],
     importedQuotes: ["view", "create", "edit", "delete", "approve", "import"],
+    importedInvoices: ["view", "create", "edit", "delete", "approve", "import"],
+    importedPurchaseOrders: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "import",
+    ],
     purchaseOrders: [
       "view",
       "create",
@@ -126,6 +135,15 @@ const ROLE_PERMISSIONS = {
       "export",
     ],
     importedQuotes: ["view", "create", "edit", "delete", "approve", "import"],
+    importedInvoices: ["view", "create", "edit", "delete", "approve", "import"],
+    importedPurchaseOrders: [
+      "view",
+      "create",
+      "edit",
+      "delete",
+      "approve",
+      "import",
+    ],
     purchaseOrders: [
       "view",
       "create",
@@ -178,6 +196,8 @@ const ROLE_PERMISSIONS = {
     // Member peut créer et gérer ses propres documents + export
     quotes: ["view", "create", "send", "export"],
     importedQuotes: ["view", "create", "edit", "import"],
+    importedInvoices: ["view", "create", "edit", "import"],
+    importedPurchaseOrders: ["view", "create", "edit", "import"],
     purchaseOrders: ["view", "create", "send", "export"],
     invoices: ["view", "create", "send", "export", "import"],
     creditNotes: ["view", "create", "export"],
@@ -200,6 +220,15 @@ const ROLE_PERMISSIONS = {
     // Accountant a accès aux documents financiers + validation + export
     quotes: ["view", "export"],
     importedQuotes: ["view", "create", "edit", "approve", "import", "export"],
+    importedInvoices: ["view", "create", "edit", "approve", "import", "export"],
+    importedPurchaseOrders: [
+      "view",
+      "create",
+      "edit",
+      "approve",
+      "import",
+      "export",
+    ],
     purchaseOrders: ["view", "export"],
     invoices: ["view", "export", "mark-paid", "import"],
     creditNotes: ["view", "export"],
@@ -220,6 +249,8 @@ const ROLE_PERMISSIONS = {
     // Idéal pour les consultants, auditeurs, ou parties prenantes externes
     quotes: ["view"],
     importedQuotes: ["view"],
+    importedInvoices: ["view"],
+    importedPurchaseOrders: ["view"],
     purchaseOrders: ["view"],
     invoices: ["view"],
     creditNotes: ["view"],
