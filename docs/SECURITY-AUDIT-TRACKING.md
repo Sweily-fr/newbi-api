@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-06 (critical finding added)
+Last updated: 2026-05-07 (Sprint 11C + 11D deployed in prod)
 
 ## Overview
 
@@ -16,8 +16,8 @@ Each sprint focuses on a specific category of access control or input validation
 | 11A          | Webhook signature verification + JWT strict                         | ✅ Done        | ✅ Prod  |
 | 11B          | Public board share password hashing + timing-safe comparison        | ✅ Done        | ✅ Prod  |
 | 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)     | ✅ Done        | ✅ Prod  |
-| 11C          | Workspace scope on remaining resolvers                              | 🟡 In Progress | ❌       |
-| 11D          | Replace Math.random with crypto.randomBytes (residual)              | 🟡 Committed   | ❌       |
+| 11C          | Workspace scope on remaining resolvers                              | ✅ Done        | ✅ Prod  |
+| 11D          | Replace Math.random with crypto.randomBytes (residual)              | ✅ Done        | ✅ Prod  |
 | 11E+         | High/Medium findings from Pass 1                                    | ⏸️ Planned     | ❌       |
 | Audit Pass 2 | Input validation, data exposure, rate limiting                      | ⏸️ Not started | -        |
 | Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                       | ⏸️ Not started | -        |
@@ -177,9 +177,9 @@ Each sprint focuses on a specific category of access control or input validation
 
 ---
 
-## Sprint 11C — Workspace scope on remaining resolvers (IN PROGRESS)
+## Sprint 11C — Workspace scope on remaining resolvers
 
-**Status**: 🟡 In progress
+**Status**: ✅ Done, deployed in prod (2026-05-07)
 
 ### Targets
 
@@ -196,7 +196,7 @@ Each sprint focuses on a specific category of access control or input validation
 
 ### Sprint 11C-1 details
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-07)
 
 #### Patches applied
 
@@ -221,7 +221,7 @@ Each sprint focuses on a specific category of access control or input validation
 
 ### Sprint 11C-4 details
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-07)
 
 #### Audit findings vs reality
 
@@ -288,7 +288,7 @@ single middleware change. No resolver code changes required.
 
 ## Sprint 11D — Math.random residuals
 
-**Status**: 🟡 Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-07)
 
 ### Patches applied
 
@@ -393,3 +393,4 @@ Categories to audit:
 | 2026-05-07 | 11D         | Math.random replaced with crypto.randomBytes (3 files) — 86c13af              |
 | 2026-05-06 | CRITICAL    | withWorkspace wrapper lacks membership verification — ~120 resolvers affected |
 | 2026-05-06 | 11-CRITICAL | withWorkspace membership verification (858ca1e) — 120 resolvers protected     |
+| 2026-05-07 | 11C+11D     | Sprint 11C (1, 2, 3, 4) + 11D deployed in prod, monitored 1h, stable          |
