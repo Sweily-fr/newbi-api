@@ -9,6 +9,7 @@ import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireRead,
   requireWrite,
+  requireDelete,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -1333,7 +1334,7 @@ const importedInvoiceResolvers = {
     /**
      * Met à jour une facture importée
      */
-    updateImportedInvoice: withWorkspace(
+    updateImportedInvoice: requireWrite("importedInvoices")(
       async (_, { id, input }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
 
@@ -1404,7 +1405,7 @@ const importedInvoiceResolvers = {
     /**
      * Valide une facture importée
      */
-    validateImportedInvoice: withWorkspace(
+    validateImportedInvoice: requireWrite("importedInvoices")(
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
         return invoice.validate();
@@ -1414,7 +1415,7 @@ const importedInvoiceResolvers = {
     /**
      * Rejette une facture importée
      */
-    rejectImportedInvoice: withWorkspace(
+    rejectImportedInvoice: requireWrite("importedInvoices")(
       async (_, { id, reason }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
         return invoice.reject(reason);
@@ -1424,7 +1425,7 @@ const importedInvoiceResolvers = {
     /**
      * Archive une facture importée
      */
-    archiveImportedInvoice: withWorkspace(
+    archiveImportedInvoice: requireWrite("importedInvoices")(
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
         return invoice.archive();
@@ -1434,32 +1435,34 @@ const importedInvoiceResolvers = {
     /**
      * Supprime une facture importée (et son fichier PDF sur Cloudflare)
      */
-    deleteImportedInvoice: withWorkspace(async (_, { id }, { workspaceId }) => {
-      const invoice = await checkInvoiceAccess(id, workspaceId);
+    deleteImportedInvoice: requireDelete("importedInvoices")(
+      async (_, { id }, { workspaceId }) => {
+        const invoice = await checkInvoiceAccess(id, workspaceId);
 
-      // Supprimer le fichier PDF sur Cloudflare si présent
-      const cloudflareKey = invoice.file?.cloudflareKey;
-      if (cloudflareKey) {
-        try {
-          await cloudflareService.deleteImage(
-            cloudflareKey,
-            cloudflareService.importedInvoicesBucketName,
-          );
-          console.log(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
-        } catch (error) {
-          console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
-          // On continue la suppression même si Cloudflare échoue
+        // Supprimer le fichier PDF sur Cloudflare si présent
+        const cloudflareKey = invoice.file?.cloudflareKey;
+        if (cloudflareKey) {
+          try {
+            await cloudflareService.deleteImage(
+              cloudflareKey,
+              cloudflareService.importedInvoicesBucketName,
+            );
+            console.log(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
+          } catch (error) {
+            console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
+            // On continue la suppression même si Cloudflare échoue
+          }
         }
-      }
 
-      await ImportedInvoice.findOneAndDelete({ _id: id, workspaceId });
-      return true;
-    }),
+        await ImportedInvoice.findOneAndDelete({ _id: id, workspaceId });
+        return true;
+      },
+    ),
 
     /**
      * Supprime plusieurs factures importées (et leurs fichiers PDF sur Cloudflare)
      */
-    deleteImportedInvoices: withWorkspace(
+    deleteImportedInvoices: requireDelete("importedInvoices")(
       async (_, { ids }, { workspaceId }) => {
         // Récupérer les factures pour avoir les cloudflareKeys (IDOR fix: filtre par workspaceId)
         const invoices = await ImportedInvoice.find({
@@ -1540,7 +1543,7 @@ const importedInvoiceResolvers = {
     /**
      * Convertit une facture importée en facture d'achat (PurchaseInvoice)
      */
-    convertImportedInvoiceToPurchaseInvoice: withWorkspace(
+    convertImportedInvoiceToPurchaseInvoice: requireWrite("importedInvoices")(
       async (_, { id }, { user, workspaceId }) => {
         const importedInvoice = await ImportedInvoice.findOne({
           _id: id,
@@ -1561,7 +1564,7 @@ const importedInvoiceResolvers = {
     /**
      * Convertit plusieurs factures importées en factures d'achat
      */
-    convertImportedInvoicesToPurchaseInvoices: withWorkspace(
+    convertImportedInvoicesToPurchaseInvoices: requireWrite("importedInvoices")(
       async (_, { ids }, { user, workspaceId }) => {
         let converted = 0;
         let skipped = 0;

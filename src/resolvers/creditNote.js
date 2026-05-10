@@ -12,6 +12,8 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import {
+  requireWrite,
+  requireDelete,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -214,7 +216,8 @@ const creditNoteResolvers = {
 
   Mutation: {
     createCreditNote: requireCompanyInfo(
-      withWorkspace(async (parent, { workspaceId, input }, context) => {
+      requireWrite("creditNotes")(async (parent, { input }, context) => {
+        const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
           // Vérifier que la facture originale existe
@@ -423,7 +426,8 @@ const creditNoteResolvers = {
     ),
 
     updateCreditNote: requireCompanyInfo(
-      withWorkspace(async (parent, { id, workspaceId, input }, context) => {
+      requireWrite("creditNotes")(async (parent, { id, input }, context) => {
+        const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
           const creditNote = await CreditNote.findOne({
@@ -514,7 +518,8 @@ const creditNoteResolvers = {
     ),
 
     deleteCreditNote: requireCompanyInfo(
-      withWorkspace(async (parent, { id, workspaceId }, context) => {
+      requireDelete("creditNotes")(async (parent, { id }, context) => {
+        const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
           const creditNote = await CreditNote.findOne({
@@ -528,7 +533,7 @@ const creditNoteResolvers = {
 
           // Les avoirs avec statut CREATED peuvent toujours être supprimés
 
-          await CreditNote.findByIdAndDelete(id);
+          await CreditNote.findOneAndDelete({ _id: id, workspaceId });
 
           // Créer un événement
           await Event.create({
