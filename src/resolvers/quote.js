@@ -249,21 +249,26 @@ const quoteResolvers = {
     },
   },
   Query: {
-    quote: requireRead("quotes")(async (_, { workspaceId, id }, context) => {
-      const { user } = context;
-      const quote = await Quote.findOne({ _id: id, workspaceId })
-        .populate("createdBy")
-        .populate("convertedToInvoice");
+    quote: requireRead("quotes")(
+      async (_, { workspaceId: inputWorkspaceId, id }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        const quote = await Quote.findOne({ _id: id, workspaceId })
+          .populate("createdBy")
+          .populate("convertedToInvoice");
 
-      if (!quote) throw createNotFoundError("Devis");
-      return quote;
-    }),
+        if (!quote) throw createNotFoundError("Devis");
+        return quote;
+      },
+    ),
 
     quotes: requireRead("quotes")(
       async (
         _,
         {
-          workspaceId,
+          workspaceId: inputWorkspaceId,
           startDate,
           endDate,
           status,
@@ -271,8 +276,12 @@ const quoteResolvers = {
           page = 1,
           limit = 10,
         },
-        { user },
+        context,
       ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId };
 
         if (startDate || endDate) {
@@ -319,191 +328,217 @@ const quoteResolvers = {
       },
     ),
 
-    quoteStats: requireRead("quotes")(async (_, { workspaceId }, context) => {
-      const { user } = context;
-      const [stats] = await Quote.aggregate([
-        { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
-        {
-          $group: {
-            _id: null,
-            totalCount: { $sum: 1 },
-            draftCount: {
-              $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] },
-            },
-            pendingCount: {
-              $sum: { $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0] },
-            },
-            completedCount: {
-              $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] },
-            },
-            canceledCount: {
-              $sum: { $cond: [{ $eq: ["$status", "CANCELED"] }, 1, 0] },
-            },
-            totalAmount: { $sum: "$finalTotalTTC" },
-            convertedCount: {
-              $sum: {
-                $cond: [{ $ifNull: ["$convertedToInvoice", false] }, 1, 0],
+    quoteStats: requireRead("quotes")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        const [stats] = await Quote.aggregate([
+          { $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) } },
+          {
+            $group: {
+              _id: null,
+              totalCount: { $sum: 1 },
+              draftCount: {
+                $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] },
+              },
+              pendingCount: {
+                $sum: { $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0] },
+              },
+              completedCount: {
+                $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] },
+              },
+              canceledCount: {
+                $sum: { $cond: [{ $eq: ["$status", "CANCELED"] }, 1, 0] },
+              },
+              totalAmount: { $sum: "$finalTotalTTC" },
+              convertedCount: {
+                $sum: {
+                  $cond: [{ $ifNull: ["$convertedToInvoice", false] }, 1, 0],
+                },
               },
             },
           },
-        },
-        {
-          $project: {
-            _id: 0,
-            totalCount: 1,
-            draftCount: 1,
-            pendingCount: 1,
-            canceledCount: 1,
-            completedCount: 1,
-            totalAmount: 1,
-            conversionRate: {
-              $cond: [
-                { $eq: ["$completedCount", 0] },
-                0,
-                { $divide: ["$convertedCount", "$completedCount"] },
-              ],
-            },
-          },
-        },
-      ]);
-
-      // Créer un objet avec des valeurs par défaut
-      const defaultStats = {
-        totalCount: 0,
-        draftCount: 0,
-        pendingCount: 0,
-        canceledCount: 0,
-        completedCount: 0,
-        totalAmount: 0,
-        conversionRate: 0,
-      };
-
-      // Si stats existe, s'assurer que tous les champs requis sont définis et non null
-      if (stats) {
-        // Remplacer toutes les valeurs null par 0
-        Object.keys(defaultStats).forEach((key) => {
-          if (stats[key] === null || stats[key] === undefined) {
-            stats[key] = 0;
-          }
-        });
-        return stats;
-      }
-
-      return defaultStats;
-    }),
-
-    quoteBalances: requireRead("quotes")(async (_, { workspaceId }) => {
-      const wid = new mongoose.Types.ObjectId(workspaceId);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      // Agrégation des devis créés sur Newbi
-      const [quoteStats] = await Quote.aggregate([
-        { $match: { workspaceId: wid } },
-        {
-          $group: {
-            _id: null,
-            totalQuoted: {
-              $sum: {
+          {
+            $project: {
+              _id: 0,
+              totalCount: 1,
+              draftCount: 1,
+              pendingCount: 1,
+              canceledCount: 1,
+              completedCount: 1,
+              totalAmount: 1,
+              conversionRate: {
                 $cond: [
-                  { $in: ["$status", ["PENDING", "COMPLETED"]] },
-                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
+                  { $eq: ["$completedCount", 0] },
                   0,
+                  { $divide: ["$convertedCount", "$completedCount"] },
                 ],
-              },
-            },
-            totalAccepted: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "COMPLETED"] },
-                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
-                  0,
-                ],
-              },
-            },
-            pendingAmount: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "PENDING"] },
-                  { $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }] },
-                  0,
-                ],
-              },
-            },
-            pendingCount: {
-              $sum: {
-                $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0],
               },
             },
           },
-        },
-      ]);
+        ]);
 
-      // Agrégation des devis importés (VALIDATED = accepté/validé)
-      const [importedStats] = await ImportedQuote.aggregate([
-        { $match: { workspaceId: wid } },
-        {
-          $group: {
-            _id: null,
-            totalQuoted: {
-              $sum: {
-                $cond: [
-                  { $in: ["$status", ["VALIDATED", "ARCHIVED"]] },
-                  { $ifNull: ["$totalHT", 0] },
-                  0,
-                ],
+        // Créer un objet avec des valeurs par défaut
+        const defaultStats = {
+          totalCount: 0,
+          draftCount: 0,
+          pendingCount: 0,
+          canceledCount: 0,
+          completedCount: 0,
+          totalAmount: 0,
+          conversionRate: 0,
+        };
+
+        // Si stats existe, s'assurer que tous les champs requis sont définis et non null
+        if (stats) {
+          // Remplacer toutes les valeurs null par 0
+          Object.keys(defaultStats).forEach((key) => {
+            if (stats[key] === null || stats[key] === undefined) {
+              stats[key] = 0;
+            }
+          });
+          return stats;
+        }
+
+        return defaultStats;
+      },
+    ),
+
+    quoteBalances: requireRead("quotes")(
+      async (_, { workspaceId: inputWorkspaceId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        const wid = new mongoose.Types.ObjectId(workspaceId);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Agrégation des devis créés sur Newbi
+        const [quoteStats] = await Quote.aggregate([
+          { $match: { workspaceId: wid } },
+          {
+            $group: {
+              _id: null,
+              totalQuoted: {
+                $sum: {
+                  $cond: [
+                    { $in: ["$status", ["PENDING", "COMPLETED"]] },
+                    {
+                      $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
+                    },
+                    0,
+                  ],
+                },
               },
-            },
-            totalAccepted: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "VALIDATED"] },
-                  { $ifNull: ["$totalHT", 0] },
-                  0,
-                ],
+              totalAccepted: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", "COMPLETED"] },
+                    {
+                      $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
+                    },
+                    0,
+                  ],
+                },
               },
-            },
-            pendingAmount: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$status", "PENDING_REVIEW"] },
-                  { $ifNull: ["$totalHT", 0] },
-                  0,
-                ],
+              pendingAmount: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", "PENDING"] },
+                    {
+                      $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
+                    },
+                    0,
+                  ],
+                },
               },
-            },
-            pendingCount: {
-              $sum: {
-                $cond: [{ $eq: ["$status", "PENDING_REVIEW"] }, 1, 0],
+              pendingCount: {
+                $sum: {
+                  $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0],
+                },
               },
             },
           },
-        },
-      ]);
+        ]);
 
-      const q = quoteStats || {
-        totalQuoted: 0,
-        totalAccepted: 0,
-        pendingAmount: 0,
-        pendingCount: 0,
-      };
-      const imp = importedStats || {
-        totalQuoted: 0,
-        totalAccepted: 0,
-        pendingAmount: 0,
-        pendingCount: 0,
-      };
+        // Agrégation des devis importés (VALIDATED = accepté/validé)
+        const [importedStats] = await ImportedQuote.aggregate([
+          { $match: { workspaceId: wid } },
+          {
+            $group: {
+              _id: null,
+              totalQuoted: {
+                $sum: {
+                  $cond: [
+                    { $in: ["$status", ["VALIDATED", "ARCHIVED"]] },
+                    { $ifNull: ["$totalHT", 0] },
+                    0,
+                  ],
+                },
+              },
+              totalAccepted: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", "VALIDATED"] },
+                    { $ifNull: ["$totalHT", 0] },
+                    0,
+                  ],
+                },
+              },
+              pendingAmount: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", "PENDING_REVIEW"] },
+                    { $ifNull: ["$totalHT", 0] },
+                    0,
+                  ],
+                },
+              },
+              pendingCount: {
+                $sum: {
+                  $cond: [{ $eq: ["$status", "PENDING_REVIEW"] }, 1, 0],
+                },
+              },
+            },
+          },
+        ]);
 
-      return {
-        totalQuoted: q.totalQuoted + imp.totalQuoted,
-        totalAccepted: q.totalAccepted + imp.totalAccepted,
-        pendingAmount: q.pendingAmount + imp.pendingAmount,
-        pendingCount: q.pendingCount + imp.pendingCount,
-      };
-    }),
+        const q = quoteStats || {
+          totalQuoted: 0,
+          totalAccepted: 0,
+          pendingAmount: 0,
+          pendingCount: 0,
+        };
+        const imp = importedStats || {
+          totalQuoted: 0,
+          totalAccepted: 0,
+          pendingAmount: 0,
+          pendingCount: 0,
+        };
+
+        return {
+          totalQuoted: q.totalQuoted + imp.totalQuoted,
+          totalAccepted: q.totalAccepted + imp.totalAccepted,
+          pendingAmount: q.pendingAmount + imp.pendingAmount,
+          pendingCount: q.pendingCount + imp.pendingCount,
+        };
+      },
+    ),
 
     nextQuoteNumber: requireRead("quotes")(
-      async (_, { workspaceId, prefix, autoNumbering }, { user }) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, prefix, autoNumbering },
+        context,
+      ) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const wsId = new mongoose.Types.ObjectId(workspaceId);
         const query = { workspaceId: wsId };
 
@@ -526,7 +561,11 @@ const quoteResolvers = {
 
     // Récupérer un devis par son numéro (pour les factures de situation)
     quoteByNumber: requireRead("quotes")(
-      async (_, { workspaceId, number }, context) => {
+      async (_, { workspaceId: inputWorkspaceId, number }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         console.log("📋 [quoteByNumber] Recherche devis:", {
           workspaceId,
           number,
@@ -600,7 +639,15 @@ const quoteResolvers = {
     ),
 
     checkQuoteNumberExists: requireRead("quotes")(
-      async (_, { workspaceId, number, prefix, excludeId }) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, number, prefix, excludeId },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
         const query = { workspaceId, number, prefix, status: { $ne: "DRAFT" } };
         if (excludeId) {
           query._id = { $ne: excludeId };

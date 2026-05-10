@@ -11,7 +11,10 @@ import {
   requireCompanyInfo,
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  resolveWorkspaceId,
+} from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { generateCreditNoteNumber } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
@@ -100,7 +103,7 @@ const calculateCreditNoteTotals = (
 
 const creditNoteResolvers = {
   Query: {
-    creditNote: withWorkspace(async (parent, { id, workspaceId }) => {
+    creditNote: withWorkspace(async (parent, { id }, { workspaceId }) => {
       const creditNote = await CreditNote.findOne({
         _id: id,
         workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -113,16 +116,9 @@ const creditNoteResolvers = {
       return creditNote;
     }),
 
-    creditNotes: withWorkspace(async (parent, args) => {
-      const {
-        workspaceId,
-        startDate,
-        endDate,
-        status,
-        search,
-        page = 1,
-        limit = 10,
-      } = args;
+    creditNotes: withWorkspace(async (parent, args, context) => {
+      const { startDate, endDate, status, search, page = 1, limit = 10 } = args;
+      const { workspaceId } = context;
 
       const query = {
         workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -165,7 +161,7 @@ const creditNoteResolvers = {
     }),
 
     creditNotesByInvoice: withWorkspace(
-      async (parent, { invoiceId, workspaceId }) => {
+      async (parent, { invoiceId }, { workspaceId }) => {
         const creditNotes = await CreditNote.find({
           originalInvoice: new mongoose.Types.ObjectId(invoiceId),
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -177,7 +173,7 @@ const creditNoteResolvers = {
       },
     ),
 
-    creditNoteStats: withWorkspace(async (parent, { workspaceId }) => {
+    creditNoteStats: withWorkspace(async (parent, _args, { workspaceId }) => {
       const stats = await CreditNote.aggregate([
         {
           $match: {
@@ -206,7 +202,7 @@ const creditNoteResolvers = {
     }),
 
     nextCreditNoteNumber: withWorkspace(
-      async (parent, { workspaceId, prefix, isDraft }) => {
+      async (parent, { prefix, isDraft }, { workspaceId }) => {
         const number = await generateCreditNoteNumber(prefix, {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
           isDraft: isDraft || false,
