@@ -9,6 +9,7 @@ import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireRead,
   requireWrite,
+  requireDelete,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -504,7 +505,7 @@ const importedPurchaseOrderResolvers = {
       },
     ),
 
-    updateImportedPurchaseOrder: withWorkspace(
+    updateImportedPurchaseOrder: requireWrite("importedPurchaseOrders")(
       async (_, { id, input }, { workspaceId }) => {
         const po = await checkPurchaseOrderAccess(id, workspaceId);
 
@@ -565,28 +566,28 @@ const importedPurchaseOrderResolvers = {
       },
     ),
 
-    validateImportedPurchaseOrder: withWorkspace(
+    validateImportedPurchaseOrder: requireWrite("importedPurchaseOrders")(
       async (_, { id }, { workspaceId }) => {
         const po = await checkPurchaseOrderAccess(id, workspaceId);
         return po.validate();
       },
     ),
 
-    rejectImportedPurchaseOrder: withWorkspace(
+    rejectImportedPurchaseOrder: requireWrite("importedPurchaseOrders")(
       async (_, { id, reason }, { workspaceId }) => {
         const po = await checkPurchaseOrderAccess(id, workspaceId);
         return po.reject(reason);
       },
     ),
 
-    archiveImportedPurchaseOrder: withWorkspace(
+    archiveImportedPurchaseOrder: requireWrite("importedPurchaseOrders")(
       async (_, { id }, { workspaceId }) => {
         const po = await checkPurchaseOrderAccess(id, workspaceId);
         return po.archive();
       },
     ),
 
-    deleteImportedPurchaseOrder: withWorkspace(
+    deleteImportedPurchaseOrder: requireDelete("importedPurchaseOrders")(
       async (_, { id }, { workspaceId }) => {
         const po = await checkPurchaseOrderAccess(id, workspaceId);
 
@@ -607,7 +608,7 @@ const importedPurchaseOrderResolvers = {
       },
     ),
 
-    deleteImportedPurchaseOrders: withWorkspace(
+    deleteImportedPurchaseOrders: requireDelete("importedPurchaseOrders")(
       async (_, { ids }, { workspaceId }) => {
         const purchaseOrders = await ImportedPurchaseOrder.find({
           _id: { $in: ids },

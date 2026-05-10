@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-09 (Phase 1A test suite committed)
+Last updated: 2026-05-10 (Sprint 11C-7 committed)
 
 ## Overview
 
@@ -17,9 +17,10 @@ Each sprint focuses on a specific category of access control or input validation
 | 11B          | Public board share password hashing + timing-safe comparison                                 | ✅ Done        | ✅ Prod      |
 | 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)                              | ✅ Done        | ✅ Prod      |
 | 11C          | Workspace scope on remaining resolvers                                                       | ✅ Done        | ✅ Prod      |
-| 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers                                | ✅ Done        | 🟡 Committed |
-| 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | 🟡 Committed |
-| Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | 🟡 Committed |
+| 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers                                | ✅ Done        | ✅ Prod      |
+| 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | ✅ Prod      |
+| Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | ✅ Prod      |
+| 11C-7        | RBAC role-based on creditNote and imported documents mutations (17 mutations, 3 files)       | ✅ Done        | 🟡 Committed |
 | 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod      |
 | 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌           |
 | Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -            |
@@ -186,14 +187,15 @@ Each sprint focuses on a specific category of access control or input validation
 
 ### Targets
 
-| #   | File                                                     | Issue                                                                                                  | Status                 |
-| --- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------- |
-| 2   | importedInvoice.js:1413                                  | findByIdAndDelete without workspace filter (defense in depth)                                          | ✅ Committed (53b6ea4) |
-| 3   | importedPurchaseOrder.js:590                             | Same pattern                                                                                           | ✅ Committed (82a1765) |
-| 1   | importedQuote.js                                         | 10 resolvers migrated to requireRead/Write/Delete + helper filtered by workspaceId                     | ✅ Committed (db5a3c4) |
-| 4   | clientAutomation.js                                      | 1 real defense-in-depth fix + 3 cosmetic hardenings (resolver layer already RBAC)                      | ✅ Committed           |
-| 5   | importedInvoice.js + importedPurchaseOrder.js            | 11 resolvers migrated to requireRead/Write + resources added to ROLE_PERMISSIONS                       | ✅ Committed (2fbbb57) |
-| 6   | invoice.js + quote.js + creditNote.js + purchaseOrder.js | 25 query resolvers reading args.workspaceId without reconciliation, allowing cross-tenant data leakage | ✅ Committed (7fb07d8) |
+| #   | File                                                          | Issue                                                                                                  | Status                 |
+| --- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------- |
+| 2   | importedInvoice.js:1413                                       | findByIdAndDelete without workspace filter (defense in depth)                                          | ✅ Committed (53b6ea4) |
+| 3   | importedPurchaseOrder.js:590                                  | Same pattern                                                                                           | ✅ Committed (82a1765) |
+| 1   | importedQuote.js                                              | 10 resolvers migrated to requireRead/Write/Delete + helper filtered by workspaceId                     | ✅ Committed (db5a3c4) |
+| 4   | clientAutomation.js                                           | 1 real defense-in-depth fix + 3 cosmetic hardenings (resolver layer already RBAC)                      | ✅ Committed           |
+| 5   | importedInvoice.js + importedPurchaseOrder.js                 | 11 resolvers migrated to requireRead/Write + resources added to ROLE_PERMISSIONS                       | ✅ Committed (2fbbb57) |
+| 6   | invoice.js + quote.js + creditNote.js + purchaseOrder.js      | 25 query resolvers reading args.workspaceId without reconciliation, allowing cross-tenant data leakage | ✅ Committed (7fb07d8) |
+| 7   | creditNote.js + importedInvoice.js + importedPurchaseOrder.js | 17 mutations using withWorkspace without RBAC role check, allowing viewer/accountant role escalation   | ✅ Committed (cd09298) |
 
 ### Notes
 
@@ -257,7 +259,7 @@ exhaustive read:
 
 ### Sprint 11C-5 details
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-10)
 
 #### Audit findings vs reality
 
@@ -303,7 +305,7 @@ files, but list/stats/import resolvers were left untouched.
 
 ### Sprint 11C-6 details
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-10)
 
 #### Discovery context
 
@@ -379,11 +381,74 @@ async (parent, args, { workspaceId }) => {
 - Future audits should grep for `args.workspaceId` direct usage as a
   red flag pattern
 
+### Sprint 11C-7 details
+
+**Status**: ✅ Committed, pending merge to develop
+
+#### Discovery context
+
+Phase 1B audit (RBAC role-based test design) revealed that 17 mutations
+across creditNote.js, importedInvoice.js, and importedPurchaseOrder.js
+used withWorkspace alone (or requireCompanyInfo wrapping it) without
+any RBAC role check.
+
+This allowed a user with 'viewer' role to perform create/update/delete/
+validate/reject/archive/convert actions on credit notes and imported
+documents, despite the documented permission matrix excluding viewers
+from these actions.
+
+#### Patches applied
+
+**creditNote.js (3 mutations)**
+
+- createCreditNote, updateCreditNote: requireCompanyInfo(withWorkspace)
+  → requireCompanyInfo(requireWrite("creditNotes"))
+- deleteCreditNote: requireCompanyInfo(withWorkspace)
+  → requireCompanyInfo(requireDelete("creditNotes"))
+
+**importedInvoice.js (8 mutations)**
+
+- updateImportedInvoice, validateImportedInvoice, rejectImportedInvoice,
+  archiveImportedInvoice, convertImportedInvoiceToPurchaseInvoice,
+  convertImportedInvoicesToPurchaseInvoices:
+  withWorkspace → requireWrite("importedInvoices")
+- deleteImportedInvoice, deleteImportedInvoices:
+  withWorkspace → requireDelete("importedInvoices")
+
+**importedPurchaseOrder.js (6 mutations)**
+
+- updateImportedPurchaseOrder, validateImportedPurchaseOrder,
+  rejectImportedPurchaseOrder, archiveImportedPurchaseOrder:
+  withWorkspace → requireWrite("importedPurchaseOrders")
+- deleteImportedPurchaseOrder, deleteImportedPurchaseOrders:
+  withWorkspace → requireDelete("importedPurchaseOrders")
+
+#### Defense-in-depth
+
+- creditNote.js deleteCreditNote: findByIdAndDelete → findOneAndDelete with workspaceId
+  Aligns with Sprint 11C-2 and 11C-3 patterns.
+
+#### Files changed
+
+- src/resolvers/creditNote.js (~10 lines)
+- src/resolvers/importedInvoice.js (~10 lines)
+- src/resolvers/importedPurchaseOrder.js (~8 lines)
+
+#### Note for future sprint
+
+The requireWrite wrapper accepts roles with EITHER 'create' OR 'edit'
+permission. For some resources (e.g. creditNotes where 'member' has
+'create' but not 'edit'), this means a member can call updateXxx via
+requireWrite. This is a pre-existing architectural limitation across
+the codebase, not introduced by this sprint. A future sprint could
+introduce separate requireCreate/requireEdit wrappers if finer
+granularity is needed.
+
 ---
 
 ## Phase 1A — Multi-tenant isolation test suite
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-10)
 
 ### Objective
 
@@ -581,3 +646,5 @@ Categories to audit:
 | 2026-05-09 | 11C-5       | importedInvoice/PO list+stats+import migrated to RBAC (11 resolvers) — 2fbbb57       |
 | 2026-05-09 | 11C-6       | Reconcile workspaceId across financial doc queries (25 resolvers, 4 files) — 7fb07d8 |
 | 2026-05-09 | Phase 1A    | Multi-tenant isolation test suite (44 cases, 11 resources) — 4fc3fa2                 |
+| 2026-05-10 | 11C-5+6+1A  | Sprint 11C-5, 11C-6 and Phase 1A deployed in prod (merge ecb2078)                    |
+| 2026-05-10 | 11C-7       | RBAC role-based on creditNote/imported mutations (17 mutations) — cd09298            |
