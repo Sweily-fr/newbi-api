@@ -1543,7 +1543,38 @@ const invoiceResolvers = {
             );
           }
 
+          // §4.7 — Une fois la facture finalisée (PENDING/COMPLETED/CANCELED),
+          // prefix et number sont VERROUILLÉS. Toute tentative de modification
+          // doit être rejetée — compliance FR (audit trail, séquentialité).
+          // Le cas DRAFT → PENDING via input.status est géré séparément plus
+          // bas (lignes 1900+), il regénère number/prefix sans passer ici.
+          if (invoiceData.status !== "DRAFT") {
+            if (input.number && input.number !== invoiceData.number) {
+              throw createValidationError(
+                "Le numéro d'une facture finalisée est verrouillé (§4.7)",
+                {
+                  number: `Impossible de remplacer le numéro "${invoiceData.number}" par "${input.number}" sur une facture ${invoiceData.status}.`,
+                  code: "INVOICE_NUMBER_LOCKED",
+                  status: invoiceData.status,
+                },
+              );
+            }
+            if (input.prefix && input.prefix !== invoiceData.prefix) {
+              throw createValidationError(
+                "Le préfixe d'une facture finalisée est verrouillé (§4.7)",
+                {
+                  prefix: `Impossible de remplacer le préfixe "${invoiceData.prefix}" par "${input.prefix}" sur une facture ${invoiceData.status}.`,
+                  code: "INVOICE_NUMBER_LOCKED",
+                  status: invoiceData.status,
+                },
+              );
+            }
+          }
+
           // Vérifier si l'utilisateur tente de modifier le numéro de facture
+          // (DRAFT uniquement à ce stade — les non-DRAFT ont été rejetées
+          // ci-dessus). On garde le check duplicate pour éviter qu'un DRAFT
+          // se voit assigner le numéro d'une facture déjà finalisée.
           if (input.number && input.number !== invoiceData.number) {
             // Vérifier si des factures avec le statut PENDING ou COMPLETED existent déjà
             const pendingInvoicesCount = await Invoice.countDocuments({
