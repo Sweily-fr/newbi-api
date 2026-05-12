@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-10 (Sprint 11C-7 deployed in prod)
+Last updated: 2026-05-12 (Phase 1B committed)
 
 ## Overview
 
@@ -9,22 +9,23 @@ Each sprint focuses on a specific category of access control or input validation
 
 ## Sprint Status
 
-| Sprint       | Theme                                                                                        | Status         | Deployed |
-| ------------ | -------------------------------------------------------------------------------------------- | -------------- | -------- |
-| 9            | Multi-tenant access checks (imported docs, partner, reconciliation)                          | ✅ Done        | ✅ Prod  |
-| 10           | File transfer payment session hardening                                                      | ✅ Done        | ✅ Prod  |
-| 11A          | Webhook signature verification + JWT strict                                                  | ✅ Done        | ✅ Prod  |
-| 11B          | Public board share password hashing + timing-safe comparison                                 | ✅ Done        | ✅ Prod  |
-| 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)                              | ✅ Done        | ✅ Prod  |
-| 11C          | Workspace scope on remaining resolvers                                                       | ✅ Done        | ✅ Prod  |
-| 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers                                | ✅ Done        | ✅ Prod  |
-| 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | ✅ Prod  |
-| Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | ✅ Prod  |
-| 11C-7        | RBAC role-based on creditNote and imported documents mutations (17 mutations, 3 files)       | ✅ Done        | ✅ Prod  |
-| 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod  |
-| 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌       |
-| Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -        |
-| Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                                                | ⏸️ Not started | -        |
+| Sprint       | Theme                                                                                        | Status         | Deployed     |
+| ------------ | -------------------------------------------------------------------------------------------- | -------------- | ------------ |
+| 9            | Multi-tenant access checks (imported docs, partner, reconciliation)                          | ✅ Done        | ✅ Prod      |
+| 10           | File transfer payment session hardening                                                      | ✅ Done        | ✅ Prod      |
+| 11A          | Webhook signature verification + JWT strict                                                  | ✅ Done        | ✅ Prod      |
+| 11B          | Public board share password hashing + timing-safe comparison                                 | ✅ Done        | ✅ Prod      |
+| 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)                              | ✅ Done        | ✅ Prod      |
+| 11C          | Workspace scope on remaining resolvers                                                       | ✅ Done        | ✅ Prod      |
+| 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers                                | ✅ Done        | ✅ Prod      |
+| 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | ✅ Prod      |
+| Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | ✅ Prod      |
+| 11C-7        | RBAC role-based on creditNote and imported documents mutations (17 mutations, 3 files)       | ✅ Done        | ✅ Prod      |
+| Phase 1B     | RBAC role-based test suite (49 cases × 11 resources)                                         | ✅ Done        | 🟡 Committed |
+| 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod      |
+| 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌           |
+| Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -            |
+| Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                                                | ⏸️ Not started | -            |
 
 ---
 
@@ -494,10 +495,52 @@ with the same pattern. All 25 were patched in Sprint 11C-6.
 
 ### Next phases
 
-- Phase 1B: complete RBAC role tests for CreditNote, PurchaseOrder,
-  Imported\*, FileTransfer
 - Phase 1C: tests for Sprint 9-11D security patches
 - Phase 1D: tests for ~60 resolvers without test coverage
+- FileTransfer dedicated tests (user-level isolation)
+
+---
+
+## Phase 1B — RBAC role-based test suite
+
+**Status**: ✅ Committed, pending merge to develop
+
+### Objective
+
+Validate that the RBAC permission matrix (defined in
+src/middlewares/rbac.js as ROLE_PERMISSIONS) is correctly enforced
+at the resolver wrapper level. Each role-resource-operation combo
+that should be denied is asserted to throw.
+
+### Coverage
+
+11 resources × variable cases = 49 tests:
+
+- 8 resources with direct create mutation: 5 tests each (40 tests)
+- 3 imported resources without direct create: 3 tests each (9 tests)
+
+### Test cases per resource
+
+- viewer cannot create (where applicable)
+- viewer cannot delete
+- accountant cannot create (where accountant lacks create+edit)
+- accountant cannot delete
+- member cannot delete
+
+### Acts as living audit for
+
+Sprint 11C-1, 11C-5, 11C-6, 11C-7 — all RBAC patches now have
+automated regression coverage.
+
+### Files changed
+
+- \_\_tests\_\_/integration/multi-tenant-isolation.test.js (~190 lines added)
+
+### Final test count
+
+- Files: 24
+- Tests in file: 93 (44 Phase 1A + 49 Phase 1B)
+- Total tests in suite: 470
 
 ---
 
@@ -649,3 +692,4 @@ Categories to audit:
 | 2026-05-10 | 11C-5+6+1A  | Sprint 11C-5, 11C-6 and Phase 1A deployed in prod (merge ecb2078)                    |
 | 2026-05-10 | 11C-7       | RBAC role-based on creditNote/imported mutations (17 mutations) — cd09298            |
 | 2026-05-10 | 11C-7       | Deployed in prod, monitored 30min, stable (merge 8aafb83)                            |
+| 2026-05-12 | Phase 1B    | RBAC role-based test suite (49 tests, 11 resources) — 75c66ec                        |
