@@ -14,14 +14,7 @@ import mongoose from "mongoose";
 /**
  * Service pour exécuter les automatisations
  *
- * SECURITY NOTE: Some methods in this service use findById/findByIdAndUpdate
- * without an explicit workspaceId filter. This is currently safe because all
- * callers pass IDs that come from documents already filtered by workspaceId
- * in the resolver layer (RBAC).
- *
- * Defense-in-depth hardening (adding explicit workspaceId filters to all
- * service queries) is tracked in SECURITY-AUDIT-TRACKING.md under Sprint 11E.
- *
+ * All queries use explicit workspaceId filters (defense-in-depth, Sprint 11E).
  * Convention reference: docs/SECURITY-CONVENTIONS.md
  */
 export const automationService = {
@@ -56,9 +49,10 @@ export const automationService = {
 
           // Vérifier si le client est dans la liste source (si spécifiée)
           if (automation.sourceListId) {
-            const sourceList = await ClientList.findById(
-              automation.sourceListId,
-            );
+            const sourceList = await ClientList.findOne({
+              _id: automation.sourceListId,
+              workspaceId,
+            });
             if (
               !sourceList ||
               !sourceList.clients.some(
@@ -73,13 +67,16 @@ export const automationService = {
           await this.executeAction(automation, clientId);
 
           // Mettre à jour les statistiques
-          await ClientAutomation.findByIdAndUpdate(automation._id, {
-            $inc: { "stats.totalExecutions": 1 },
-            $set: {
-              "stats.lastExecutedAt": new Date(),
-              "stats.lastClientId": clientId,
+          await ClientAutomation.findOneAndUpdate(
+            { _id: automation._id, workspaceId },
+            {
+              $inc: { "stats.totalExecutions": 1 },
+              $set: {
+                "stats.lastExecutedAt": new Date(),
+                "stats.lastClientId": clientId,
+              },
             },
-          });
+          );
 
           results.push({
             automationId: automation._id,
@@ -140,9 +137,10 @@ export const automationService = {
       case "MOVE_TO_LIST":
         // Retirer de la liste source si spécifiée
         if (sourceListId) {
-          await ClientList.findByIdAndUpdate(sourceListId, {
-            $pull: { clients: clientId },
-          });
+          await ClientList.findOneAndUpdate(
+            { _id: sourceListId, workspaceId: automation.workspaceId },
+            { $pull: { clients: clientId } },
+          );
         } else {
           // Retirer de toutes les listes du workspace
           await ClientList.updateMany(
@@ -151,23 +149,26 @@ export const automationService = {
           );
         }
         // Ajouter à la liste cible
-        await ClientList.findByIdAndUpdate(targetListId, {
-          $addToSet: { clients: clientId },
-        });
+        await ClientList.findOneAndUpdate(
+          { _id: targetListId, workspaceId: automation.workspaceId },
+          { $addToSet: { clients: clientId } },
+        );
         break;
 
       case "ADD_TO_LIST":
         // Ajouter à la liste cible sans retirer des autres
-        await ClientList.findByIdAndUpdate(targetListId, {
-          $addToSet: { clients: clientId },
-        });
+        await ClientList.findOneAndUpdate(
+          { _id: targetListId, workspaceId: automation.workspaceId },
+          { $addToSet: { clients: clientId } },
+        );
         break;
 
       case "REMOVE_FROM_LIST":
         // Retirer de la liste cible
-        await ClientList.findByIdAndUpdate(targetListId, {
-          $pull: { clients: clientId },
-        });
+        await ClientList.findOneAndUpdate(
+          { _id: targetListId, workspaceId: automation.workspaceId },
+          { $pull: { clients: clientId } },
+        );
         break;
 
       default:
@@ -175,23 +176,26 @@ export const automationService = {
     }
 
     // Enregistrer l'activité dans le client
-    await Client.findByIdAndUpdate(clientId, {
-      $push: {
-        activity: {
-          id: new mongoose.Types.ObjectId().toString(),
-          type: "automation_executed",
-          userName: "Système",
-          description: `Automatisation "${automation.name}" exécutée`,
-          metadata: {
-            automationId: automation._id.toString(),
-            automationName: automation.name,
-            actionType,
-            targetListId: targetListId.toString(),
+    await Client.findOneAndUpdate(
+      { _id: clientId, workspaceId: automation.workspaceId },
+      {
+        $push: {
+          activity: {
+            id: new mongoose.Types.ObjectId().toString(),
+            type: "automation_executed",
+            userName: "Système",
+            description: `Automatisation "${automation.name}" exécutée`,
+            metadata: {
+              automationId: automation._id.toString(),
+              automationName: automation.name,
+              actionType,
+              targetListId: targetListId.toString(),
+            },
+            createdAt: new Date(),
           },
-          createdAt: new Date(),
         },
       },
-    });
+    );
   },
 
   /**
@@ -220,7 +224,10 @@ export const automationService = {
 
     // Si une liste source est spécifiée, ne prendre que les clients de cette liste
     if (automation.sourceListId) {
-      const sourceList = await ClientList.findById(automation.sourceListId);
+      const sourceList = await ClientList.findOne({
+        _id: automation.sourceListId,
+        workspaceId,
+      });
       if (!sourceList) return results;
       clientIds = sourceList.clients.map((id) => id.toString());
     } else {
@@ -323,10 +330,13 @@ export const automationService = {
 
     // Mettre à jour les statistiques
     if (results.applied > 0) {
-      await ClientAutomation.findByIdAndUpdate(automation._id, {
-        $inc: { "stats.totalExecutions": results.applied },
-        $set: { "stats.lastExecutedAt": new Date() },
-      });
+      await ClientAutomation.findOneAndUpdate(
+        { _id: automation._id, workspaceId },
+        {
+          $inc: { "stats.totalExecutions": results.applied },
+          $set: { "stats.lastExecutedAt": new Date() },
+        },
+      );
     }
 
     return results;
