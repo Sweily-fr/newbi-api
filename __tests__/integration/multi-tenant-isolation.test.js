@@ -80,6 +80,23 @@ const RESOURCES = [
       name: "deleteClient",
       buildArgs: (id, workspaceId) => ({ id, workspaceId }),
     },
+    mutationCreate: {
+      name: "createClient",
+      buildArgs: () => ({
+        input: {
+          name: "RBAC Test",
+          email: "rbac@test.com",
+          type: "COMPANY",
+          siret: "12345678901234",
+          address: {
+            street: "1 rue",
+            city: "Paris",
+            postalCode: "75001",
+            country: "France",
+          },
+        },
+      }),
+    },
   },
 
   {
@@ -111,6 +128,10 @@ const RESOURCES = [
       name: "deleteInvoice",
       buildArgs: (id, workspaceId) => ({ id, workspaceId }),
     },
+    mutationCreate: {
+      name: "createInvoice",
+      buildArgs: () => ({ input: {} }),
+    },
   },
 
   {
@@ -141,6 +162,10 @@ const RESOURCES = [
     mutationDelete: {
       name: "deleteQuote",
       buildArgs: (id) => ({ id }),
+    },
+    mutationCreate: {
+      name: "createQuote",
+      buildArgs: () => ({ input: {} }),
     },
   },
 
@@ -203,6 +228,12 @@ const RESOURCES = [
       name: "deleteCreditNote",
       buildArgs: (id, workspaceId) => ({ id, workspaceId }),
     },
+    mutationCreate: {
+      name: "createCreditNote",
+      buildArgs: () => ({
+        input: { originalInvoiceId: "000000000000000000000000" },
+      }),
+    },
   },
 
   {
@@ -229,6 +260,12 @@ const RESOURCES = [
     mutationDelete: {
       name: "deleteProduct",
       buildArgs: (id) => ({ id }),
+    },
+    mutationCreate: {
+      name: "createProduct",
+      buildArgs: () => ({
+        input: { name: "RBAC Test Product", unitPrice: 10 },
+      }),
     },
   },
 
@@ -259,6 +296,12 @@ const RESOURCES = [
       name: "deleteExpense",
       buildArgs: (id, workspaceId) => ({ id, workspaceId }),
     },
+    mutationCreate: {
+      name: "createExpense",
+      buildArgs: () => ({
+        input: { title: "RBAC Test", amount: 10, currency: "EUR" },
+      }),
+    },
   },
 
   {
@@ -286,6 +329,10 @@ const RESOURCES = [
     mutationDelete: {
       name: "deletePurchaseInvoice",
       buildArgs: (id) => ({ id }),
+    },
+    mutationCreate: {
+      name: "createPurchaseInvoice",
+      buildArgs: () => ({ input: {} }),
     },
   },
 
@@ -329,6 +376,10 @@ const RESOURCES = [
       name: "deletePurchaseOrder",
       buildArgs: (id, workspaceId) => ({ id, workspaceId }),
     },
+    mutationCreate: {
+      name: "createPurchaseOrder",
+      buildArgs: () => ({ input: {} }),
+    },
   },
 
   {
@@ -357,6 +408,7 @@ const RESOURCES = [
       name: "deleteImportedInvoice",
       buildArgs: (id) => ({ id }),
     },
+    mutationCreate: null,
   },
 
   {
@@ -385,6 +437,7 @@ const RESOURCES = [
       name: "deleteImportedPurchaseOrder",
       buildArgs: (id) => ({ id }),
     },
+    mutationCreate: null,
   },
 
   {
@@ -413,6 +466,7 @@ const RESOURCES = [
       name: "deleteImportedQuote",
       buildArgs: (id) => ({ id }),
     },
+    mutationCreate: null,
   },
 ];
 
@@ -554,6 +608,142 @@ describe.each(RESOURCES)("Multi-tenant isolation - $name", (resource) => {
 
     // Verify doc B still exists in DB
     const stillExists = await resource.model.findById(docB._id);
+    expect(stillExists).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 1B — RBAC role-based permission tests (5 cases per resource)
+// ---------------------------------------------------------------------------
+
+describe.each(RESOURCES)("RBAC role-based - $name", (resource) => {
+  async function insertDocIn({ workspaceId, createdBy }) {
+    const doc = resource.buildMinimalDoc({ workspaceId, createdBy });
+    const _id = doc._id || new mongoose.Types.ObjectId();
+    if (resource.insertMode === "collection.insertOne") {
+      await resource.model.collection.insertOne({ ...doc, _id });
+      return { _id, ...doc };
+    }
+    return resource.model.create(doc);
+  }
+
+  // Test RBAC.1 — viewer cannot create
+  if (resource.mutationCreate) {
+    it(`viewer cannot ${resource.mutationCreate.name}`, async () => {
+      const viewer = buildUserId();
+      await seedOrgMembership({
+        userId: viewer,
+        organizationId: orgA._id,
+        role: "viewer",
+      });
+      const ctx = buildContext({ userId: viewer, organizationId: orgA._id });
+
+      const resolver = resource.resolver.Mutation[resource.mutationCreate.name];
+      const args = resource.mutationCreate.buildArgs();
+
+      await expect(resolver(null, args, ctx)).rejects.toThrow();
+    });
+  }
+
+  // Test RBAC.2 — viewer cannot delete
+  it("viewer cannot delete", async () => {
+    const docA = await insertDocIn({
+      workspaceId: orgA._id,
+      createdBy: userA._id,
+    });
+    const viewer = buildUserId();
+    await seedOrgMembership({
+      userId: viewer,
+      organizationId: orgA._id,
+      role: "viewer",
+    });
+    const ctx = buildContext({ userId: viewer, organizationId: orgA._id });
+
+    const resolver = resource.resolver.Mutation[resource.mutationDelete.name];
+    const args = resource.mutationDelete.buildArgs(
+      docA._id.toString(),
+      orgA._id.toString(),
+    );
+
+    await expect(resolver(null, args, ctx)).rejects.toThrow();
+
+    const stillExists = await resource.model.findById(docA._id);
+    expect(stillExists).not.toBeNull();
+  });
+
+  // Test RBAC.3 — accountant cannot create
+  if (resource.mutationCreate) {
+    it(`accountant cannot ${resource.mutationCreate.name}`, async () => {
+      const accountant = buildUserId();
+      await seedOrgMembership({
+        userId: accountant,
+        organizationId: orgA._id,
+        role: "accountant",
+      });
+      const ctx = buildContext({
+        userId: accountant,
+        organizationId: orgA._id,
+      });
+
+      const resolver = resource.resolver.Mutation[resource.mutationCreate.name];
+      const args = resource.mutationCreate.buildArgs();
+
+      await expect(resolver(null, args, ctx)).rejects.toThrow();
+    });
+  }
+
+  // Test RBAC.4 — accountant cannot delete
+  it("accountant cannot delete", async () => {
+    const docA = await insertDocIn({
+      workspaceId: orgA._id,
+      createdBy: userA._id,
+    });
+    const accountant = buildUserId();
+    await seedOrgMembership({
+      userId: accountant,
+      organizationId: orgA._id,
+      role: "accountant",
+    });
+    const ctx = buildContext({
+      userId: accountant,
+      organizationId: orgA._id,
+    });
+
+    const resolver = resource.resolver.Mutation[resource.mutationDelete.name];
+    const args = resource.mutationDelete.buildArgs(
+      docA._id.toString(),
+      orgA._id.toString(),
+    );
+
+    await expect(resolver(null, args, ctx)).rejects.toThrow();
+
+    const stillExists = await resource.model.findById(docA._id);
+    expect(stillExists).not.toBeNull();
+  });
+
+  // Test RBAC.5 — member cannot delete
+  it("member cannot delete", async () => {
+    const docA = await insertDocIn({
+      workspaceId: orgA._id,
+      createdBy: userA._id,
+    });
+    const member = buildUserId();
+    await seedOrgMembership({
+      userId: member,
+      organizationId: orgA._id,
+      role: "member",
+    });
+    const ctx = buildContext({ userId: member, organizationId: orgA._id });
+
+    const resolver = resource.resolver.Mutation[resource.mutationDelete.name];
+    const args = resource.mutationDelete.buildArgs(
+      docA._id.toString(),
+      orgA._id.toString(),
+    );
+
+    await expect(resolver(null, args, ctx)).rejects.toThrow();
+
+    const stillExists = await resource.model.findById(docA._id);
     expect(stillExists).not.toBeNull();
   });
 });
