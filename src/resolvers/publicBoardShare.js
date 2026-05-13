@@ -10,6 +10,7 @@ import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { getPubSub } from "../config/redis.js";
 import cloudflareService from "../services/cloudflareService.js";
+import emailReminderService from "../services/emailReminderService.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 // Événements de subscription (même que kanban.js)
@@ -917,6 +918,40 @@ const resolvers = {
           `Accès approuvé pour ${emailLower}`,
         );
 
+        // Envoyer un email de notification au demandeur
+        try {
+          const board = await Board.findById(share.boardId).select("title");
+          const boardTitle = board?.title || share.name || "le tableau";
+          const shareUrl = `${getBaseUrl()}/public/kanban/${share.token}`;
+          const recipientName = request.name || emailLower;
+
+          await emailReminderService.sendEmail({
+            to: emailLower,
+            subject: `Votre accès à "${boardTitle}" a été approuvé`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #1f2937;">
+                <h2 style="color: #5b50fb; margin-bottom: 16px;">Accès approuvé</h2>
+                <p>Bonjour ${recipientName},</p>
+                <p>Votre demande d'accès au tableau Kanban <strong>${boardTitle}</strong> a été approuvée.</p>
+                <p>Vous pouvez désormais accéder au tableau en cliquant sur le bouton ci-dessous :</p>
+                <p style="text-align: center; margin: 32px 0;">
+                  <a href="${shareUrl}" style="background-color: #5b50fb; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; font-weight: 600;">
+                    Accéder au tableau
+                  </a>
+                </p>
+                <p style="color: #6b7280; font-size: 13px;">Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br/>${shareUrl}</p>
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
+                <p style="color: #6b7280; font-size: 12px;">Cet email a été envoyé automatiquement par Newbi.</p>
+              </div>
+            `,
+          });
+        } catch (emailError) {
+          logger.error(
+            `❌ [PublicShare] Erreur envoi email approbation à ${emailLower}:`,
+            emailError,
+          );
+        }
+
         return {
           ...share.toObject(),
           id: share._id.toString(),
@@ -957,6 +992,8 @@ const resolvers = {
 
         // Mettre à jour le statut de la demande
         request.status = "rejected";
+        const rejectedEmail = request.email.toLowerCase();
+        const rejectedName = request.name || rejectedEmail;
 
         share.updatedAt = new Date();
         await share.save();
@@ -964,6 +1001,32 @@ const resolvers = {
         logger.info(
           `❌ [PublicShare] Demande d'accès rejetée pour ${request.email}`,
         );
+
+        // Envoyer un email de notification au demandeur
+        try {
+          const board = await Board.findById(share.boardId).select("title");
+          const boardTitle = board?.title || share.name || "le tableau";
+
+          await emailReminderService.sendEmail({
+            to: rejectedEmail,
+            subject: `Votre demande d'accès à "${boardTitle}" a été refusée`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #1f2937;">
+                <h2 style="color: #dc2626; margin-bottom: 16px;">Demande d'accès refusée</h2>
+                <p>Bonjour ${rejectedName},</p>
+                <p>Votre demande d'accès au tableau Kanban <strong>${boardTitle}</strong> a été refusée par le propriétaire.</p>
+                <p>Si vous pensez qu'il s'agit d'une erreur, vous pouvez contacter directement le propriétaire du tableau.</p>
+                <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
+                <p style="color: #6b7280; font-size: 12px;">Cet email a été envoyé automatiquement par Newbi.</p>
+              </div>
+            `,
+          });
+        } catch (emailError) {
+          logger.error(
+            `❌ [PublicShare] Erreur envoi email rejet à ${rejectedEmail}:`,
+            emailError,
+          );
+        }
 
         return {
           ...share.toObject(),
@@ -1023,6 +1086,15 @@ const resolvers = {
         const userName =
           visitor?.name || visitor?.firstName || visitorEmail.split("@")[0];
 
+        // Vérifier qu'il y a au moins du contenu ou des images
+        const trimmedContent = (content || "").trim();
+        if (!trimmedContent && (!images || images.length === 0)) {
+          return {
+            success: false,
+            message: "Le commentaire doit contenir du texte ou une image",
+          };
+        }
+
         // Ajouter le commentaire avec le visitorId pour pouvoir récupérer les infos à jour
         // NE PAS stocker userImage ici car elle peut être en base64 et dépasser la limite MongoDB
         // L'image sera récupérée dynamiquement via enrichTaskWithUserInfo
@@ -1031,7 +1103,7 @@ const resolvers = {
           userId: `external_${visitorEmail}`,
           userName: userName, // Stocké pour fallback si le visiteur est supprimé
           userEmail: visitorEmail,
-          content: content.trim(),
+          content: trimmedContent,
           isExternal: true,
           images: (images || []).map((img) => ({
             key: img.key,
