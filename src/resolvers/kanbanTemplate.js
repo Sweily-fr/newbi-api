@@ -113,7 +113,8 @@ const kanbanTemplateResolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const { title, description, templateId, clientId } = input;
+        const { title, description, templateId, clientId, category, color } =
+          input;
 
         const template = await KanbanTemplate.findOne({
           _id: templateId,
@@ -126,6 +127,8 @@ const kanbanTemplateResolvers = {
           title,
           description: description || "",
           clientId: clientId || null,
+          category: category || null,
+          color: color || null,
           userId: user.id,
           workspaceId: finalWorkspaceId,
           templateId: template._id,

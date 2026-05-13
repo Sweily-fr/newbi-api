@@ -52,6 +52,8 @@ input CreateBoardFromTemplateInput {
   description: String
   templateId: ID!
   clientId: ID
+  category: String
+  color: String
 }
 
 extend type Query {

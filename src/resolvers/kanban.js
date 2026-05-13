@@ -1614,12 +1614,23 @@ const resolvers = {
           }
         }
 
-        // Colonne modifiée
+        // Colonne modifiée — activité dédiée (comme les déplacements depuis la liste)
+        let columnActivity = null;
         if (
           updates.columnId !== undefined &&
           updates.columnId !== oldTask.columnId
         ) {
-          changes.push("la colonne");
+          columnActivity = {
+            userId: user?.id,
+            userName: userData?.name || user?.name || user?.email,
+            userImage: userImage,
+            type: "moved",
+            field: "columnId",
+            oldValue: oldTask.columnId,
+            newValue: updates.columnId,
+            description: "a déplacé la tâche",
+            createdAt: new Date(),
+          };
         }
 
         // Tags modifiés — traités séparément pour avoir un verbe dédié
@@ -2015,6 +2026,11 @@ const resolvers = {
         // Activité dédiée pour la priorité
         if (priorityActivity) {
           newActivities.push(priorityActivity);
+        }
+
+        // Activité dédiée pour le changement de colonne
+        if (columnActivity) {
+          newActivities.push(columnActivity);
         }
 
         if (newActivities.length > 0) {
@@ -2733,8 +2749,16 @@ const resolvers = {
           const comment = task.comments.id(commentId);
           if (!comment) throw new Error("Comment not found");
 
-          // Vérifier que l'utilisateur est le créateur du commentaire
-          if (comment.userId !== user.id) {
+          // L'utilisateur peut supprimer le commentaire s'il en est le créateur
+          // ou s'il est le propriétaire du tableau (utile pour les commentaires externes)
+          let canDelete = comment.userId === user.id;
+          if (!canDelete) {
+            const board = await Board.findById(task.boardId).select("userId");
+            if (board && board.userId?.toString() === user.id) {
+              canDelete = true;
+            }
+          }
+          if (!canDelete) {
             throw new Error("Not authorized to delete this comment");
           }
 
