@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-15 (FileTransfer tests committed)
+Last updated: 2026-05-15 (Phase 1C committed — Phase 1 COMPLETE)
 
 ## Overview
 
@@ -23,8 +23,9 @@ Each sprint focuses on a specific category of access control or input validation
 | 11C-7        | RBAC role-based on creditNote and imported documents mutations (17 mutations, 3 files)       | ✅ Done        | ✅ Prod      |
 | Phase 1B     | RBAC role-based test suite (49 cases × 11 resources)                                         | ✅ Done        | ✅ Prod      |
 | 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod      |
-| 11E          | Apply workspace filter to automationService DB calls (9 occurrences)                         | ✅ Done        | 🟡 Committed |
-| Phase 1 — FT | FileTransfer user-level isolation + Sprint 10 mechanisms (9 tests)                           | ✅ Done        | 🟡 Committed |
+| 11E          | Apply workspace filter to automationService DB calls (9 occurrences)                         | ✅ Done        | ✅ Prod      |
+| Phase 1 — FT | FileTransfer user-level isolation + Sprint 10 mechanisms (9 tests)                           | ✅ Done        | ✅ Prod      |
+| Phase 1C     | Tests for Sprint 11A webhooks + 11B password (23 tests)                                      | ✅ Done        | 🟡 Committed |
 | 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌           |
 | Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -            |
 | Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                                                | ⏸️ Not started | -            |
@@ -548,7 +549,7 @@ automated regression coverage.
 
 ## Phase 1 — FileTransfer dedicated tests
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-15)
 
 ### Objective
 
@@ -587,6 +588,60 @@ Sprint 10 — File transfer hardening (now fully tested).
 
 - Files: 25 (was 24)
 - Tests: 479 (was 470)
+
+---
+
+## Phase 1C — Tests for existing sprints (11A + 11B)
+
+**Status**: ✅ Committed, pending merge to develop
+
+### Objective
+
+Add automated regression coverage for the security mechanisms
+introduced in Sprint 11A and Sprint 11B. Sprint 11-CRITICAL is
+already covered by auth.test.js (6 tests) — no duplication.
+
+### Coverage
+
+23 tests in \_\_tests\_\_/integration/sprint-patches.test.js:
+
+**Sprint 11A — Webhook signatures (8 tests)**
+
+- HMAC-SHA256 verification (valid, wrong secret, tampered, invalid)
+- v1= prefix stripping (Bridge format)
+- Uppercase comparison (PayPal format)
+- Empty signature rejection
+
+**Sprint 11B — Timing-safe comparison (8 tests)**
+
+- Equal/different strings, length mismatch, null/undefined/non-string
+
+**Sprint 11B — PublicBoardShare bcrypt + legacy migration (7 tests)**
+
+- setPassword hashes with bcrypt, verifyPassword correct/wrong/null
+- setPassword null clears hash
+- Silent migration: correct plaintext upgrades to bcrypt
+- Silent migration: wrong plaintext does NOT upgrade
+
+### Phase 1 backend security tests — COMPLETE
+
+With Phase 1C, every sprint of the security marathon has automated
+regression coverage:
+
+- Sprint 9 IDOR → Phase 1A multi-tenant (44 tests)
+- Sprint 10 File Transfer → Phase 1 FT (9 tests)
+- Sprint 11A Webhooks → Phase 1C (8 tests)
+- Sprint 11B Password → Phase 1C (15 tests)
+- Sprint 11C-\* RBAC → Phase 1A + 1B (93 tests)
+- Sprint 11D Math.random → indirect via Phase 1A
+- Sprint 11E service-layer → indirect via Phase 1A
+- Sprint 11-CRITICAL withWorkspace → auth.test.js (6 tests)
+
+Total: 502 tests, 0 fail.
+
+### Files changed
+
+- \_\_tests\_\_/integration/sprint-patches.test.js (NEW, ~280 lines)
 
 ---
 
@@ -653,7 +708,7 @@ single middleware change. No resolver code changes required.
 
 ## Sprint 11E — Service-layer hardening
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-15)
 
 ### Patches applied
 
@@ -760,3 +815,5 @@ Categories to audit:
 | 2026-05-12 | Phase 1B    | Deployed in prod, all tests stable (merge 3e2a357)                                   |
 | 2026-05-12 | 11E         | Apply workspace filter to automationService DB calls (9 occ.) — 99262c1              |
 | 2026-05-15 | Phase 1 FT  | FileTransfer user-level isolation + Sprint 10 mechanism tests (9 tests) — 555c27c    |
+| 2026-05-15 | 11E + FT    | Deployed in prod with Dylan kanban+file-transfer fixes (merge c601e42)               |
+| 2026-05-15 | Phase 1C    | Sprint 11A + 11B tests (23 tests) — cf7d128                                          |
