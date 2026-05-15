@@ -501,11 +501,52 @@ const enrichTasksWithUserInfo = async (tasks) => {
 const resolvers = {
   Query: {
     boards: withWorkspace(
-      async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      async (
+        _,
+        { workspaceId },
+        { user, workspaceId: contextWorkspaceId, db },
+      ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        return await Board.find({ workspaceId: finalWorkspaceId })
-          .sort({ createdAt: -1 })
-          .limit(100);
+
+        // Si pas d'utilisateur, retourner vide (sécurité)
+        if (!user?.id) return [];
+
+        // L'admin/owner du workspace voit tous les boards.
+        // Les autres membres ne voient que les boards dont ils sont :
+        //   - le propriétaire (board.userId)
+        //   - ou listés dans board.members
+        let isWorkspaceAdmin = false;
+        try {
+          const orgId =
+            typeof finalWorkspaceId === "string"
+              ? new mongoose.Types.ObjectId(finalWorkspaceId)
+              : finalWorkspaceId;
+          const membership = await db.collection("member").findOne({
+            organizationId: orgId,
+            userId: user.id,
+          });
+          if (
+            membership &&
+            ["owner", "admin"].includes((membership.role || "").toLowerCase())
+          ) {
+            isWorkspaceAdmin = true;
+          }
+        } catch (e) {
+          logger.warn(
+            "⚠️ [boards] Impossible de vérifier le rôle workspace:",
+            e?.message,
+          );
+        }
+
+        const baseFilter = { workspaceId: finalWorkspaceId };
+        const filter = isWorkspaceAdmin
+          ? baseFilter
+          : {
+              ...baseFilter,
+              $or: [{ userId: user.id }, { members: user.id }],
+            };
+
+        return await Board.find(filter).sort({ createdAt: -1 }).limit(100);
       },
     ),
 
@@ -744,13 +785,56 @@ const resolvers = {
     },
 
     board: withWorkspace(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      async (
+        _,
+        { id, workspaceId },
+        { user, workspaceId: contextWorkspaceId, db },
+      ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const board = await Board.findOne({
           _id: id,
           workspaceId: finalWorkspaceId,
         });
         if (!board) throw new Error("Board not found");
+
+        // Vérifier l'accès : owner, membre assigné, ou admin/owner workspace
+        if (user?.id) {
+          const isOwner = board.userId?.toString() === user.id;
+          const isAssigned = (board.members || [])
+            .map((m) => m?.toString())
+            .includes(user.id);
+
+          if (!isOwner && !isAssigned) {
+            let isWorkspaceAdmin = false;
+            try {
+              const orgId =
+                typeof finalWorkspaceId === "string"
+                  ? new mongoose.Types.ObjectId(finalWorkspaceId)
+                  : finalWorkspaceId;
+              const membership = await db.collection("member").findOne({
+                organizationId: orgId,
+                userId: user.id,
+              });
+              if (
+                membership &&
+                ["owner", "admin"].includes(
+                  (membership.role || "").toLowerCase(),
+                )
+              ) {
+                isWorkspaceAdmin = true;
+              }
+            } catch (e) {
+              logger.warn(
+                "⚠️ [board] Impossible de vérifier le rôle workspace:",
+                e?.message,
+              );
+            }
+            if (!isWorkspaceAdmin) {
+              throw new Error("Board not found");
+            }
+          }
+        }
+
         return board;
       },
     ),
@@ -3594,13 +3678,25 @@ const resolvers = {
           `🏢 [Kanban Board.members] Organisation trouvée: ${organization.name}`,
         );
 
-        // 2. Récupérer TOUS les membres via la collection member (Better Auth)
-        const members = await db
+        // Liste des userIds autorisés sur ce board (propriétaire + membres assignés)
+        const ownerId = board.userId?.toString();
+        const assignedIds = (board.members || [])
+          .map((id) => id?.toString())
+          .filter(Boolean);
+        const allowedUserIds = new Set(
+          [ownerId, ...assignedIds].filter(Boolean),
+        );
+
+        // 2. Récupérer les membres workspace, puis filtrer sur la liste autorisée
+        const allWorkspaceMembers = await db
           .collection("member")
           .find({
             organizationId: orgId,
           })
           .toArray();
+        const members = allWorkspaceMembers.filter((m) =>
+          allowedUserIds.has(m.userId?.toString()),
+        );
 
         logger.info(
           `📋 [Kanban Board.members] ${members.length} membres trouvés`,
