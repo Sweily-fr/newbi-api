@@ -443,7 +443,7 @@ const sendPasswordResetConfirmationEmail = async (email) => {
   } catch (error) {
     console.error(
       "Erreur lors de l'envoi de l'email de confirmation de réinitialisation:",
-      error
+      error,
     );
     throw error;
   }
@@ -460,7 +460,7 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
         `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
       <strong>${file.originalName}</strong> 
       <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
-    </li>`
+    </li>`,
     )
     .join("");
 
@@ -595,7 +595,7 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
             
             <div class="expiry">
               <strong>⏰ Attention :</strong> Ce transfert expire le ${new Date(
-                expiryDate
+                expiryDate,
               ).toLocaleDateString("fr-FR", {
                 year: "numeric",
                 month: "long",
@@ -642,7 +642,7 @@ const formatFileSize = (bytes) => {
 const sendReferralThankYouEmail = async (
   referrer,
   referredUser,
-  payoutAmount
+  payoutAmount,
 ) => {
   const dashboardLink = `${process.env.FRONTEND_URL}/dashboard`;
 
@@ -804,7 +804,7 @@ const sendReferralThankYouEmail = async (
                   day: "numeric",
                   hour: "2-digit",
                   minute: "2-digit",
-                }
+                },
               )}</p>
               <p><strong>Récompense :</strong> ${payoutAmount}€</p>
               <p><strong>Statut :</strong> <span style="color: #f59e0b; font-weight: 600;">⏳ Programmé</span></p>
@@ -863,7 +863,7 @@ const sendReferralThankYouEmail = async (
   } catch (error) {
     console.error(
       "Erreur lors de l'envoi de l'email de remerciement parrainage:",
-      error
+      error,
     );
     return false;
   }
@@ -871,7 +871,7 @@ const sendReferralThankYouEmail = async (
 
 const sendFileTransferPaymentNotification = async (
   senderEmail,
-  paymentData
+  paymentData,
 ) => {
   const {
     buyerEmail,
@@ -888,7 +888,7 @@ const sendFileTransferPaymentNotification = async (
         `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
       <strong>${file.originalName || file.displayName}</strong> 
       <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
-    </li>`
+    </li>`,
     )
     .join("");
 
@@ -1063,7 +1063,7 @@ const sendFileTransferPaymentNotification = async (
   } catch (error) {
     console.error(
       "Erreur lors de l'envoi de l'email de notification de paiement:",
-      error
+      error,
     );
     return false;
   }
@@ -1088,19 +1088,22 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
     year: "numeric",
   });
 
-  const downloadTimeFormatted = new Date(downloadDate).toLocaleDateString("fr-FR", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const downloadTimeFormatted = new Date(downloadDate).toLocaleDateString(
+    "fr-FR",
+    {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    },
+  );
 
   const mailOptions = {
     from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: ownerEmail,
-    subject: `Vos fichiers ont été téléchargés`,
+    subject: "Vos fichiers ont été téléchargés",
     html: `
       <!DOCTYPE html>
       <html lang="fr">
@@ -1204,7 +1207,7 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
   } catch (error) {
     console.error(
       "Erreur lors de l'envoi de l'email de notification de téléchargement:",
-      error
+      error,
     );
     return false;
   }
@@ -1242,7 +1245,7 @@ const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
             
             <p style="color: #4b5563; font-size: 14px; line-height: 1.6; margin: 0 0 30px 0; text-align: left;">
               Mmh, il semble que vos fichiers n'aient pas encore été téléchargés, et ce transfert expirera le <strong>${new Date(
-                expiryDate
+                expiryDate,
               ).toLocaleDateString("fr-FR", {
                 day: "numeric",
                 month: "long",
@@ -1280,7 +1283,7 @@ const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
   } catch (error) {
     console.error(
       "Erreur lors de l'envoi de l'email de rappel d'expiration:",
-      error
+      error,
     );
     return false;
   }
@@ -1303,12 +1306,18 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
   } = assignmentData;
 
   const priorityLabels = {
-    low: { label: "Basse", color: "#22c55e", bg: "#dcfce7" },
+    low: { label: "Faible", color: "#22c55e", bg: "#dcfce7" },
     medium: { label: "Moyenne", color: "#f59e0b", bg: "#fef3c7" },
     high: { label: "Haute", color: "#ef4444", bg: "#fee2e2" },
+    none: { label: "Aucune", color: "#6b7280", bg: "#f3f4f6" },
+    "": { label: "Aucune", color: "#6b7280", bg: "#f3f4f6" },
   };
 
-  const priorityInfo = priorityLabels[priority] || priorityLabels.medium;
+  const normalizedPriority =
+    priority === null || priority === undefined
+      ? ""
+      : String(priority).toLowerCase();
+  const priorityInfo = priorityLabels[normalizedPriority] || priorityLabels[""];
 
   const dueDateFormatted = dueDate
     ? new Date(dueDate).toLocaleDateString("fr-FR", {
@@ -1384,10 +1393,14 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
               <strong style="color: #1a1a1a;">${assignerName}</strong> vous a assigné une nouvelle tâche sur le tableau <strong style="color: #1a1a1a;">${boardName}</strong>.
             </p>
 
-            ${taskDescription ? `
+            ${
+              taskDescription
+                ? `
             <!-- Description -->
             <p style="font-size: 14px; color: #6b7280; margin: 0 0 24px 0; line-height: 1.6; white-space: pre-wrap;">${taskDescription.substring(0, 200)}${taskDescription.length > 200 ? "..." : ""}</p>
-            ` : ""}
+            `
+                : ""
+            }
 
             <!-- Détails -->
             <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
@@ -1400,12 +1413,16 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Colonne</td>
                   <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${columnName || "Non spécifiée"}</td>
                 </tr>
-                ${dueDateFormatted ? `
+                ${
+                  dueDateFormatted
+                    ? `
                 <tr>
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Échéance</td>
                   <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right;">${dueDateFormatted}</td>
                 </tr>
-                ` : ""}
+                `
+                    : ""
+                }
                 <tr style="border-top: 1px solid #e5e7eb;">
                   <td style="padding: 12px 0 6px 0; font-size: 14px; color: #6b7280; font-weight: 500;">Priorité</td>
                   <td style="padding: 12px 0 6px 0; font-size: 14px; font-weight: 600; text-align: right; color: ${priorityInfo.color};">${priorityInfo.label}</td>
@@ -1444,22 +1461,22 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`✅ Email d'assignation envoyé à ${assigneeEmail} pour la tâche "${taskTitle}"`);
+    console.log(
+      `✅ Email d'assignation envoyé à ${assigneeEmail} pour la tâche "${taskTitle}"`,
+    );
     return true;
   } catch (error) {
-    console.error("Erreur lors de l'envoi de l'email d'assignation de tâche:", error);
+    console.error(
+      "Erreur lors de l'envoi de l'email d'assignation de tâche:",
+      error,
+    );
     return false;
   }
 };
 
 const sendMentionEmail = async (recipientEmail, mentionData) => {
-  const {
-    actorName,
-    taskTitle,
-    boardName,
-    commentExcerpt,
-    taskUrl,
-  } = mentionData;
+  const { actorName, taskTitle, boardName, commentExcerpt, taskUrl } =
+    mentionData;
 
   const todayFormatted = new Date().toLocaleDateString("fr-FR", {
     day: "numeric",
@@ -1527,12 +1544,16 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
               <strong style="color: #1a1a1a;">${actorName}</strong> vous a mentionné dans un commentaire sur le tableau <strong style="color: #1a1a1a;">${boardName}</strong>.
             </p>
 
-            ${commentExcerpt ? `
+            ${
+              commentExcerpt
+                ? `
             <!-- Extrait du commentaire -->
             <div style="background-color: #fafafa; border-left: 3px solid #5a50ff; border-radius: 0 8px 8px 0; padding: 16px; margin-bottom: 24px;">
               <p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6; font-style: italic;">${commentExcerpt.substring(0, 300)}${commentExcerpt.length > 300 ? "..." : ""}</p>
             </div>
-            ` : ""}
+            `
+                : ""
+            }
 
             <!-- Détails -->
             <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
@@ -1579,7 +1600,9 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`✅ Email de mention envoyé à ${recipientEmail} pour la tâche "${taskTitle}"`);
+    console.log(
+      `✅ Email de mention envoyé à ${recipientEmail} pour la tâche "${taskTitle}"`,
+    );
     return true;
   } catch (error) {
     console.error("Erreur lors de l'envoi de l'email de mention:", error);

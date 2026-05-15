@@ -1421,7 +1421,7 @@ const resolvers = {
                         assignerName: notifAssignerName,
                         assignerImage: notifCreatorImage,
                         dueDate: savedTask.dueDate,
-                        priority: savedTask.priority || "medium",
+                        priority: savedTask.priority || "",
                         taskUrl: taskUrl,
                       });
                       logger.info(
@@ -1856,7 +1856,9 @@ const resolvers = {
                             assignerImage: userImage || userData?.image || null,
                             dueDate: oldTask.dueDate || updates.dueDate,
                             priority:
-                              oldTask.priority || updates.priority || "medium",
+                              updates.priority !== undefined
+                                ? updates.priority
+                                : oldTask.priority || "",
                             taskUrl: taskUrl,
                           });
                           logger.info(
