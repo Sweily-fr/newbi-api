@@ -1951,26 +1951,64 @@ const resolvers = {
           const oldChecklist = oldTask.checklist || [];
           const newChecklist = updates.checklist || [];
 
-          // Comparer par texte pour détecter ajouts/suppressions
-          const oldTexts = oldChecklist.map((i) => i.text);
-          const newTexts = newChecklist.map((i) => i.text);
-          const addedItems = newChecklist.filter(
-            (i) => !oldTexts.includes(i.text),
-          );
-          const removedItems = oldChecklist.filter(
-            (i) => !newTexts.includes(i.text),
-          );
+          // Comptage par texte pour gérer correctement les doublons (ex: 2 fois "okok")
+          const buildCount = (arr) => {
+            const m = new Map();
+            arr.forEach((i) => {
+              const key = i?.text ?? "";
+              m.set(key, (m.get(key) || 0) + 1);
+            });
+            return m;
+          };
+          const oldCount = buildCount(oldChecklist);
+          const newCount = buildCount(newChecklist);
+
+          // Items ajoutés : pour chaque texte, count(new) - count(old) > 0
+          const addedItems = [];
+          newCount.forEach((count, text) => {
+            const oldC = oldCount.get(text) || 0;
+            const diff = count - oldC;
+            for (let i = 0; i < diff; i += 1) {
+              addedItems.push({ text });
+            }
+          });
+
+          // Items supprimés : count(old) - count(new) > 0
+          const removedItems = [];
+          oldCount.forEach((count, text) => {
+            const newC = newCount.get(text) || 0;
+            const diff = count - newC;
+            for (let i = 0; i < diff; i += 1) {
+              removedItems.push({ text });
+            }
+          });
 
           // Détecter les changements de statut (completed/uncompleted)
+          // Match par index pour les items présents dans les deux listes
           const completedItems = [];
           const uncompletedItems = [];
-          newChecklist.forEach((newItem) => {
-            const oldItem = oldChecklist.find((o) => o.text === newItem.text);
-            if (oldItem) {
-              if (!oldItem.completed && newItem.completed) {
-                completedItems.push(newItem.text);
-              } else if (oldItem.completed && !newItem.completed) {
-                uncompletedItems.push(newItem.text);
+          // Construire des maps text → liste d'items pour matcher item-à-item
+          const groupByText = (arr) => {
+            const m = new Map();
+            arr.forEach((i) => {
+              const key = i?.text ?? "";
+              if (!m.has(key)) m.set(key, []);
+              m.get(key).push(i);
+            });
+            return m;
+          };
+          const oldByText = groupByText(oldChecklist);
+          const newByText = groupByText(newChecklist);
+          newByText.forEach((newItems, text) => {
+            const oldItems = oldByText.get(text) || [];
+            const commonCount = Math.min(oldItems.length, newItems.length);
+            for (let i = 0; i < commonCount; i += 1) {
+              const oldI = oldItems[i];
+              const newI = newItems[i];
+              if (!oldI.completed && newI.completed) {
+                completedItems.push(text);
+              } else if (oldI.completed && !newI.completed) {
+                uncompletedItems.push(text);
               }
             }
           });
