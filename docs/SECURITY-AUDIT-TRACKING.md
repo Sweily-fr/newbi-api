@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-15 (Phase 1C committed — Phase 1 COMPLETE)
+Last updated: 2026-05-15 (Phase 1C deployed — Phase 1 COMPLETE)
 
 ## Overview
 
@@ -9,26 +9,26 @@ Each sprint focuses on a specific category of access control or input validation
 
 ## Sprint Status
 
-| Sprint       | Theme                                                                                        | Status         | Deployed     |
-| ------------ | -------------------------------------------------------------------------------------------- | -------------- | ------------ |
-| 9            | Multi-tenant access checks (imported docs, partner, reconciliation)                          | ✅ Done        | ✅ Prod      |
-| 10           | File transfer payment session hardening                                                      | ✅ Done        | ✅ Prod      |
-| 11A          | Webhook signature verification + JWT strict                                                  | ✅ Done        | ✅ Prod      |
-| 11B          | Public board share password hashing + timing-safe comparison                                 | ✅ Done        | ✅ Prod      |
-| 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)                              | ✅ Done        | ✅ Prod      |
-| 11C          | Workspace scope on remaining resolvers                                                       | ✅ Done        | ✅ Prod      |
-| 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers                                | ✅ Done        | ✅ Prod      |
-| 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | ✅ Prod      |
-| Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | ✅ Prod      |
-| 11C-7        | RBAC role-based on creditNote and imported documents mutations (17 mutations, 3 files)       | ✅ Done        | ✅ Prod      |
-| Phase 1B     | RBAC role-based test suite (49 cases × 11 resources)                                         | ✅ Done        | ✅ Prod      |
-| 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod      |
-| 11E          | Apply workspace filter to automationService DB calls (9 occurrences)                         | ✅ Done        | ✅ Prod      |
-| Phase 1 — FT | FileTransfer user-level isolation + Sprint 10 mechanisms (9 tests)                           | ✅ Done        | ✅ Prod      |
-| Phase 1C     | Tests for Sprint 11A webhooks + 11B password (23 tests)                                      | ✅ Done        | 🟡 Committed |
-| 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌           |
-| Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -            |
-| Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                                                | ⏸️ Not started | -            |
+| Sprint       | Theme                                                                                        | Status         | Deployed |
+| ------------ | -------------------------------------------------------------------------------------------- | -------------- | -------- |
+| 9            | Multi-tenant access checks (imported docs, partner, reconciliation)                          | ✅ Done        | ✅ Prod  |
+| 10           | File transfer payment session hardening                                                      | ✅ Done        | ✅ Prod  |
+| 11A          | Webhook signature verification + JWT strict                                                  | ✅ Done        | ✅ Prod  |
+| 11B          | Public board share password hashing + timing-safe comparison                                 | ✅ Done        | ✅ Prod  |
+| 11-CRITICAL  | withWorkspace membership verification (120 resolvers protected)                              | ✅ Done        | ✅ Prod  |
+| 11C          | Workspace scope on remaining resolvers                                                       | ✅ Done        | ✅ Prod  |
+| 11C-5        | RBAC on imported invoice/PO list, stats, and import resolvers                                | ✅ Done        | ✅ Prod  |
+| 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | ✅ Prod  |
+| Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | ✅ Prod  |
+| 11C-7        | RBAC role-based on creditNote and imported documents mutations (17 mutations, 3 files)       | ✅ Done        | ✅ Prod  |
+| Phase 1B     | RBAC role-based test suite (49 cases × 11 resources)                                         | ✅ Done        | ✅ Prod  |
+| 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod  |
+| 11E          | Apply workspace filter to automationService DB calls (9 occurrences)                         | ✅ Done        | ✅ Prod  |
+| Phase 1 — FT | FileTransfer user-level isolation + Sprint 10 mechanisms (9 tests)                           | ✅ Done        | ✅ Prod  |
+| Phase 1C     | Tests for Sprint 11A webhooks + 11B password (23 tests)                                      | ✅ Done        | ✅ Prod  |
+| 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌       |
+| Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -        |
+| Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                                                | ⏸️ Not started | -        |
 
 ---
 
@@ -593,7 +593,7 @@ Sprint 10 — File transfer hardening (now fully tested).
 
 ## Phase 1C — Tests for existing sprints (11A + 11B)
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-15)
 
 ### Objective
 
@@ -817,3 +817,4 @@ Categories to audit:
 | 2026-05-15 | Phase 1 FT  | FileTransfer user-level isolation + Sprint 10 mechanism tests (9 tests) — 555c27c    |
 | 2026-05-15 | 11E + FT    | Deployed in prod with Dylan kanban+file-transfer fixes (merge c601e42)               |
 | 2026-05-15 | Phase 1C    | Sprint 11A + 11B tests (23 tests) — cf7d128                                          |
+| 2026-05-15 | Phase 1C    | Deployed in prod, all tests stable (merge 57dc952)                                   |
