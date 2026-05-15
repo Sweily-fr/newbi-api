@@ -1850,7 +1850,7 @@ const resolvers = {
           filename,
           taskId,
           `visitor_${visitorEmail.replace("@", "_at_")}`,
-          "comments",
+          "comment",
         );
 
         // Créer l'objet image
