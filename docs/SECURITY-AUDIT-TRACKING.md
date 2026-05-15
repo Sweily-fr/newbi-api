@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-12 (Phase 1B committed)
+Last updated: 2026-05-15 (FileTransfer tests committed)
 
 ## Overview
 
@@ -21,8 +21,10 @@ Each sprint focuses on a specific category of access control or input validation
 | 11C-6        | Reconcile workspaceId with context across financial document queries (25 resolvers, 4 files) | ✅ Done        | ✅ Prod      |
 | Phase 1A     | Multi-tenant isolation test suite (44 cases × 11 resources)                                  | ✅ Done        | ✅ Prod      |
 | 11C-7        | RBAC role-based on creditNote and imported documents mutations (17 mutations, 3 files)       | ✅ Done        | ✅ Prod      |
-| Phase 1B     | RBAC role-based test suite (49 cases × 11 resources)                                         | ✅ Done        | 🟡 Committed |
+| Phase 1B     | RBAC role-based test suite (49 cases × 11 resources)                                         | ✅ Done        | ✅ Prod      |
 | 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod      |
+| 11E          | Apply workspace filter to automationService DB calls (9 occurrences)                         | ✅ Done        | 🟡 Committed |
+| Phase 1 — FT | FileTransfer user-level isolation + Sprint 10 mechanisms (9 tests)                           | ✅ Done        | 🟡 Committed |
 | 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌           |
 | Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -            |
 | Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                                                | ⏸️ Not started | -            |
@@ -503,7 +505,7 @@ with the same pattern. All 25 were patched in Sprint 11C-6.
 
 ## Phase 1B — RBAC role-based test suite
 
-**Status**: ✅ Committed, pending merge to develop
+**Status**: ✅ Done, deployed in prod (2026-05-12)
 
 ### Objective
 
@@ -541,6 +543,50 @@ automated regression coverage.
 - Files: 24
 - Tests in file: 93 (44 Phase 1A + 49 Phase 1B)
 - Total tests in suite: 470
+
+---
+
+## Phase 1 — FileTransfer dedicated tests
+
+**Status**: ✅ Committed, pending merge to develop
+
+### Objective
+
+Validate the user-level isolation of FileTransfer (not covered by
+multi-tenant-isolation.test.js which targets workspaceId-scoped
+resources) and the Sprint 10 security mechanisms.
+
+### Coverage
+
+9 tests in \_\_tests\_\_/integration/file-transfer-isolation.test.js:
+
+User-level isolation (5):
+
+- fileTransferById cross-user deny
+- myFileTransfers scoping
+- deleteFileTransfer cross-user deny
+- getFileTransferByLink with wrong accessKey returns failure
+- getFileTransferByLink with expired transfer returns failure
+
+Sprint 10 mechanisms (4):
+
+- generateShareCredentials produces 32-char hex tokens
+- generateShareCredentials produces unique tokens across calls
+- password bcrypt hashing (pre-save hook)
+- isExpired() method correctness
+
+### Acts as regression coverage for
+
+Sprint 10 — File transfer hardening (now fully tested).
+
+### Files changed
+
+- \_\_tests\_\_/integration/file-transfer-isolation.test.js (NEW, ~280 lines)
+
+### Final test count
+
+- Files: 25 (was 24)
+- Tests: 479 (was 470)
 
 ---
 
@@ -605,20 +651,38 @@ single middleware change. No resolver code changes required.
 
 ---
 
-## Sprint 11E — Service-layer hardening (PLANNED)
+## Sprint 11E — Service-layer hardening
 
-**Status**: ⏸️ Planned, not started
+**Status**: ✅ Committed, pending merge to develop
 
-### Targets
+### Patches applied
 
-#### automationService (~9 occurrences in clientAutomation.js)
+#### automationService (9 occurrences in clientAutomation.js)
 
-Internal service used by clientAutomation.js resolvers. Current state:
-findById/findByIdAndUpdate without workspaceId filter. Currently safe
-because callers pass IDs from already-filtered documents, but adds defense
-in depth and avoids future regressions if new callers are added.
+All findById/findByIdAndUpdate calls replaced with findOne/findOneAndUpdate
+including explicit workspaceId filter:
 
-Estimated effort: 30-45 min + caller audit.
+**executeAutomations** (2 occurrences)
+
+- ClientList.findById → findOne with workspaceId
+- ClientAutomation.findByIdAndUpdate → findOneAndUpdate with workspaceId
+
+**executeAction** (5 occurrences)
+
+- ClientList.findByIdAndUpdate × 4 → findOneAndUpdate with automation.workspaceId
+- Client.findByIdAndUpdate → findOneAndUpdate with automation.workspaceId
+
+**applyToExistingClients** (2 occurrences)
+
+- ClientList.findById → findOne with workspaceId
+- ClientAutomation.findByIdAndUpdate → findOneAndUpdate with workspaceId
+
+No signature change required — workspaceId was already available in all
+method scopes (either as direct arg or via automation.workspaceId).
+
+### Files changed
+
+- src/resolvers/clientAutomation.js (~20 lines refactored)
 
 ### Other potential targets
 
@@ -693,3 +757,6 @@ Categories to audit:
 | 2026-05-10 | 11C-7       | RBAC role-based on creditNote/imported mutations (17 mutations) — cd09298            |
 | 2026-05-10 | 11C-7       | Deployed in prod, monitored 30min, stable (merge 8aafb83)                            |
 | 2026-05-12 | Phase 1B    | RBAC role-based test suite (49 tests, 11 resources) — 75c66ec                        |
+| 2026-05-12 | Phase 1B    | Deployed in prod, all tests stable (merge 3e2a357)                                   |
+| 2026-05-12 | 11E         | Apply workspace filter to automationService DB calls (9 occ.) — 99262c1              |
+| 2026-05-15 | Phase 1 FT  | FileTransfer user-level isolation + Sprint 10 mechanism tests (9 tests) — 555c27c    |

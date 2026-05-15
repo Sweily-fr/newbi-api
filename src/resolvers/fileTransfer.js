@@ -368,6 +368,47 @@ const fileTransferResolvers = {
     ),
 
     // Supprimer un transfert de fichiers
+    // Renommer un transfert (titre personnalisé)
+    renameFileTransfer: isAuthenticated(async (_, { id, title }, { user }) => {
+      try {
+        const trimmed = (title || "").trim();
+        if (!trimmed) {
+          throw new UserInputError("Le titre ne peut pas être vide");
+        }
+        if (trimmed.length > 255) {
+          throw new UserInputError(
+            "Le titre est trop long (255 caractères max)",
+          );
+        }
+
+        const fileTransfer = await FileTransfer.findOne({
+          _id: id,
+          userId: user.id,
+        });
+
+        if (!fileTransfer) {
+          throw new UserInputError("Transfert de fichiers non trouvé");
+        }
+
+        fileTransfer.title = trimmed;
+        await fileTransfer.save();
+
+        return fileTransfer;
+      } catch (error) {
+        if (error instanceof UserInputError) {
+          throw error;
+        }
+        console.error(
+          "Erreur lors du renommage du transfert de fichiers:",
+          error,
+        );
+        throw new ApolloError(
+          "Une erreur est survenue lors du renommage du transfert de fichiers.",
+          "FILE_TRANSFER_RENAME_ERROR",
+        );
+      }
+    }),
+
     deleteFileTransfer: isAuthenticated(async (_, { id }, { user }) => {
       try {
         const fileTransfer = await FileTransfer.findOne({

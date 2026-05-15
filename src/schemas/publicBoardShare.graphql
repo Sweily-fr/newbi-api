@@ -140,7 +140,7 @@ type PublicComment {
   userName: String!
   userEmail: String
   userImage: String
-  content: String!
+  content: String
   isExternal: Boolean!
   images: [PublicTaskImage!]
   createdAt: DateTime!
@@ -275,7 +275,7 @@ extend type Mutation {
   addExternalComment(
     token: String!
     taskId: ID!
-    content: String!
+    content: String
     visitorEmail: String!
     images: [CommentImageInput!]
   ): ExternalCommentResult!

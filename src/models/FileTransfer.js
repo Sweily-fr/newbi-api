@@ -63,6 +63,11 @@ const FileTransferSchema = new Schema(
       index: true,
       default: null,
     },
+    // Titre personnalisé du transfert (pour le renommage)
+    title: {
+      type: String,
+      trim: true,
+    },
     files: [fileSchema],
     totalSize: {
       type: Number,

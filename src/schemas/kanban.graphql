@@ -67,7 +67,7 @@ type Comment {
   userId: String!
   userName: String
   userImage: String
-  content: String!
+  content: String
   mentions: [String!]
   images: [TaskImage!]
   createdAt: DateTime!

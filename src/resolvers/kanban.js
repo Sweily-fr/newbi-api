@@ -1282,22 +1282,46 @@ const resolvers = {
           { $inc: { position: 1 } },
         );
 
+        // Construire l'activité initiale : création + checklist initiale éventuelle
+        const initialActivity = [
+          {
+            userId: user.id,
+            userName: creatorName,
+            userImage: creatorImage,
+            type: "created",
+            description: "a créé la tâche",
+            createdAt: new Date(),
+          },
+        ];
+
+        // Si la tâche est créée avec une checklist non vide, logger l'ajout
+        if (
+          Array.isArray(cleanedInput.checklist) &&
+          cleanedInput.checklist.length > 0
+        ) {
+          const initialItems = cleanedInput.checklist
+            .map((i) => i?.text)
+            .filter(Boolean);
+          if (initialItems.length > 0) {
+            initialActivity.push({
+              userId: user.id,
+              userName: creatorName,
+              userImage: creatorImage,
+              type: "updated",
+              field: "checklist",
+              description: `a ajouté ${initialItems.length > 1 ? "les éléments" : "l'élément"} : ${initialItems.join(" ;; ")}`,
+              createdAt: new Date(Date.now() + 1),
+            });
+          }
+        }
+
         const task = new Task({
           ...cleanedInput,
           status: cleanedInput.status || cleanedInput.columnId,
           userId: user.id,
           workspaceId: finalWorkspaceId,
           position: position,
-          activity: [
-            {
-              userId: user.id,
-              userName: creatorName,
-              userImage: creatorImage,
-              type: "created",
-              description: "a créé la tâche",
-              createdAt: new Date(),
-            },
-          ],
+          activity: initialActivity,
         });
         const savedTask = await task.save();
 
@@ -1397,7 +1421,7 @@ const resolvers = {
                         assignerName: notifAssignerName,
                         assignerImage: notifCreatorImage,
                         dueDate: savedTask.dueDate,
-                        priority: savedTask.priority || "medium",
+                        priority: savedTask.priority || "",
                         taskUrl: taskUrl,
                       });
                       logger.info(
@@ -1614,12 +1638,23 @@ const resolvers = {
           }
         }
 
-        // Colonne modifiée
+        // Colonne modifiée — activité dédiée (comme les déplacements depuis la liste)
+        let columnActivity = null;
         if (
           updates.columnId !== undefined &&
           updates.columnId !== oldTask.columnId
         ) {
-          changes.push("la colonne");
+          columnActivity = {
+            userId: user?.id,
+            userName: userData?.name || user?.name || user?.email,
+            userImage: userImage,
+            type: "moved",
+            field: "columnId",
+            oldValue: oldTask.columnId,
+            newValue: updates.columnId,
+            description: "a déplacé la tâche",
+            createdAt: new Date(),
+          };
         }
 
         // Tags modifiés — traités séparément pour avoir un verbe dédié
@@ -1821,7 +1856,9 @@ const resolvers = {
                             assignerImage: userImage || userData?.image || null,
                             dueDate: oldTask.dueDate || updates.dueDate,
                             priority:
-                              oldTask.priority || updates.priority || "medium",
+                              updates.priority !== undefined
+                                ? updates.priority
+                                : oldTask.priority || "",
                             taskUrl: taskUrl,
                           });
                           logger.info(
@@ -1914,26 +1951,64 @@ const resolvers = {
           const oldChecklist = oldTask.checklist || [];
           const newChecklist = updates.checklist || [];
 
-          // Comparer par texte pour détecter ajouts/suppressions
-          const oldTexts = oldChecklist.map((i) => i.text);
-          const newTexts = newChecklist.map((i) => i.text);
-          const addedItems = newChecklist.filter(
-            (i) => !oldTexts.includes(i.text),
-          );
-          const removedItems = oldChecklist.filter(
-            (i) => !newTexts.includes(i.text),
-          );
+          // Comptage par texte pour gérer correctement les doublons (ex: 2 fois "okok")
+          const buildCount = (arr) => {
+            const m = new Map();
+            arr.forEach((i) => {
+              const key = i?.text ?? "";
+              m.set(key, (m.get(key) || 0) + 1);
+            });
+            return m;
+          };
+          const oldCount = buildCount(oldChecklist);
+          const newCount = buildCount(newChecklist);
+
+          // Items ajoutés : pour chaque texte, count(new) - count(old) > 0
+          const addedItems = [];
+          newCount.forEach((count, text) => {
+            const oldC = oldCount.get(text) || 0;
+            const diff = count - oldC;
+            for (let i = 0; i < diff; i += 1) {
+              addedItems.push({ text });
+            }
+          });
+
+          // Items supprimés : count(old) - count(new) > 0
+          const removedItems = [];
+          oldCount.forEach((count, text) => {
+            const newC = newCount.get(text) || 0;
+            const diff = count - newC;
+            for (let i = 0; i < diff; i += 1) {
+              removedItems.push({ text });
+            }
+          });
 
           // Détecter les changements de statut (completed/uncompleted)
+          // Match par index pour les items présents dans les deux listes
           const completedItems = [];
           const uncompletedItems = [];
-          newChecklist.forEach((newItem) => {
-            const oldItem = oldChecklist.find((o) => o.text === newItem.text);
-            if (oldItem) {
-              if (!oldItem.completed && newItem.completed) {
-                completedItems.push(newItem.text);
-              } else if (oldItem.completed && !newItem.completed) {
-                uncompletedItems.push(newItem.text);
+          // Construire des maps text → liste d'items pour matcher item-à-item
+          const groupByText = (arr) => {
+            const m = new Map();
+            arr.forEach((i) => {
+              const key = i?.text ?? "";
+              if (!m.has(key)) m.set(key, []);
+              m.get(key).push(i);
+            });
+            return m;
+          };
+          const oldByText = groupByText(oldChecklist);
+          const newByText = groupByText(newChecklist);
+          newByText.forEach((newItems, text) => {
+            const oldItems = oldByText.get(text) || [];
+            const commonCount = Math.min(oldItems.length, newItems.length);
+            for (let i = 0; i < commonCount; i += 1) {
+              const oldI = oldItems[i];
+              const newI = newItems[i];
+              if (!oldI.completed && newI.completed) {
+                completedItems.push(text);
+              } else if (oldI.completed && !newI.completed) {
+                uncompletedItems.push(text);
               }
             }
           });
@@ -2015,6 +2090,11 @@ const resolvers = {
         // Activité dédiée pour la priorité
         if (priorityActivity) {
           newActivities.push(priorityActivity);
+        }
+
+        // Activité dédiée pour le changement de colonne
+        if (columnActivity) {
+          newActivities.push(columnActivity);
         }
 
         if (newActivities.length > 0) {
@@ -2733,8 +2813,16 @@ const resolvers = {
           const comment = task.comments.id(commentId);
           if (!comment) throw new Error("Comment not found");
 
-          // Vérifier que l'utilisateur est le créateur du commentaire
-          if (comment.userId !== user.id) {
+          // L'utilisateur peut supprimer le commentaire s'il en est le créateur
+          // ou s'il est le propriétaire du tableau (utile pour les commentaires externes)
+          let canDelete = comment.userId === user.id;
+          if (!canDelete) {
+            const board = await Board.findById(task.boardId).select("userId");
+            if (board && board.userId?.toString() === user.id) {
+              canDelete = true;
+            }
+          }
+          if (!canDelete) {
             throw new Error("Not authorized to delete this comment");
           }
 
