@@ -1075,10 +1075,26 @@ const resolvers = {
       async (
         _,
         { input, workspaceId },
-        { workspaceId: contextWorkspaceId },
+        { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { boardMembers, ...rest } = input;
+
+        // Si on modifie la liste des membres (boardMembers), seul le créateur
+        // du board peut le faire.
+        if (boardMembers !== undefined) {
+          const existing = await Board.findOne({
+            _id: input.id,
+            workspaceId: finalWorkspaceId,
+          }).select("userId");
+          if (!existing) throw new Error("Board not found");
+          if (!user?.id || existing.userId?.toString() !== user.id.toString()) {
+            throw new Error(
+              "Seul le créateur du tableau peut modifier la liste des membres autorisés",
+            );
+          }
+        }
+
         const updateData = { ...rest, updatedAt: new Date() };
         if (boardMembers !== undefined) updateData.members = boardMembers;
         const board = await Board.findOneAndUpdate(
