@@ -1,6 +1,6 @@
 # Security Audit — Tracking
 
-Last updated: 2026-05-12 (Sprint 11E committed)
+Last updated: 2026-05-15 (FileTransfer tests committed)
 
 ## Overview
 
@@ -24,6 +24,7 @@ Each sprint focuses on a specific category of access control or input validation
 | Phase 1B     | RBAC role-based test suite (49 cases × 11 resources)                                         | ✅ Done        | ✅ Prod      |
 | 11D          | Replace Math.random with crypto.randomBytes (residual)                                       | ✅ Done        | ✅ Prod      |
 | 11E          | Apply workspace filter to automationService DB calls (9 occurrences)                         | ✅ Done        | 🟡 Committed |
+| Phase 1 — FT | FileTransfer user-level isolation + Sprint 10 mechanisms (9 tests)                           | ✅ Done        | 🟡 Committed |
 | 11E+         | High/Medium findings from Pass 1                                                             | ⏸️ Planned     | ❌           |
 | Audit Pass 2 | Input validation, data exposure, rate limiting                                               | ⏸️ Not started | -            |
 | Audit Pass 3 | CORS, uploads, third-party webhooks, env vars                                                | ⏸️ Not started | -            |
@@ -545,6 +546,50 @@ automated regression coverage.
 
 ---
 
+## Phase 1 — FileTransfer dedicated tests
+
+**Status**: ✅ Committed, pending merge to develop
+
+### Objective
+
+Validate the user-level isolation of FileTransfer (not covered by
+multi-tenant-isolation.test.js which targets workspaceId-scoped
+resources) and the Sprint 10 security mechanisms.
+
+### Coverage
+
+9 tests in \_\_tests\_\_/integration/file-transfer-isolation.test.js:
+
+User-level isolation (5):
+
+- fileTransferById cross-user deny
+- myFileTransfers scoping
+- deleteFileTransfer cross-user deny
+- getFileTransferByLink with wrong accessKey returns failure
+- getFileTransferByLink with expired transfer returns failure
+
+Sprint 10 mechanisms (4):
+
+- generateShareCredentials produces 32-char hex tokens
+- generateShareCredentials produces unique tokens across calls
+- password bcrypt hashing (pre-save hook)
+- isExpired() method correctness
+
+### Acts as regression coverage for
+
+Sprint 10 — File transfer hardening (now fully tested).
+
+### Files changed
+
+- \_\_tests\_\_/integration/file-transfer-isolation.test.js (NEW, ~280 lines)
+
+### Final test count
+
+- Files: 25 (was 24)
+- Tests: 479 (was 470)
+
+---
+
 ## CRITICAL FINDING — withWorkspace wrapper limitation
 
 Discovered during Sprint 11C planning (2026-05-06).
@@ -714,3 +759,4 @@ Categories to audit:
 | 2026-05-12 | Phase 1B    | RBAC role-based test suite (49 tests, 11 resources) — 75c66ec                        |
 | 2026-05-12 | Phase 1B    | Deployed in prod, all tests stable (merge 3e2a357)                                   |
 | 2026-05-12 | 11E         | Apply workspace filter to automationService DB calls (9 occ.) — 99262c1              |
+| 2026-05-15 | Phase 1 FT  | FileTransfer user-level isolation + Sprint 10 mechanism tests (9 tests) — 555c27c    |
