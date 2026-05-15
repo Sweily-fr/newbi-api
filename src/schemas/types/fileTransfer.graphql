@@ -27,6 +27,7 @@ type FileTransfer {
   id: ID!
   userId: ID
   workspaceId: ID
+  title: String
   files: [File]
   totalSize: Float
   shareLink: String
@@ -149,6 +150,9 @@ extend type Mutation {
 
   # Supprimer un transfert de fichiers
   deleteFileTransfer(id: ID!): Boolean!
+
+  # Renommer un transfert de fichiers (titre personnalisé)
+  renameFileTransfer(id: ID!, title: String!): FileTransfer!
 
   # Générer un lien de paiement pour un transfert de fichiers
   generateFileTransferPaymentLink(id: ID!): FileTransferPaymentResponse!
