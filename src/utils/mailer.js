@@ -1610,6 +1610,130 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
   }
 };
 
+/**
+ * Email envoyé à un visiteur dont la demande d'accès à un lien de partage
+ * public a été approuvée.
+ */
+const sendShareAccessApprovedEmail = async (
+  recipientEmail,
+  { recipientName, boardTitle, shareUrl },
+) => {
+  const safeName = recipientName || recipientEmail;
+  const safeBoard = boardTitle || "le tableau";
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: recipientEmail,
+    subject: `Votre accès à "${safeBoard}" a été approuvé`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="fr">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Accès approuvé</title>
+      </head>
+      <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
+        <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
+          <div style="text-align:center;padding:40px 0 24px 0;">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height:32px;width:auto;" />
+          </div>
+          <div style="background-color:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 24px;margin-bottom:32px;">
+            <div style="margin-bottom:20px;">
+              <div style="display:inline-block;background-color:#dcfce7;border-radius:6px;padding:8px 12px;">
+                <span style="font-size:11px;font-weight:500;color:#166534;letter-spacing:0.3px;text-transform:uppercase;">Accès approuvé</span>
+              </div>
+            </div>
+            <h1 style="font-size:24px;font-weight:500;color:#1a1a1a;margin:0 0 16px 0;line-height:1.3;">${safeBoard}</h1>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 12px 0;line-height:1.6;">Bonjour ${safeName},</p>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">Votre demande d'accès au tableau Kanban <strong>${safeBoard}</strong> a été approuvée. Vous pouvez désormais y accéder.</p>
+            <div style="text-align:center;margin:32px 0;">
+              <a href="${shareUrl}" style="display:inline-block;background-color:#5b50fb;color:#ffffff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Accéder au tableau</a>
+            </div>
+            <p style="color:#6b7280;font-size:12px;margin:24px 0 0 0;line-height:1.5;">Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br /><a href="${shareUrl}" style="color:#5b50fb;word-break:break-all;">${shareUrl}</a></p>
+          </div>
+          <p style="text-align:center;color:#9ca3af;font-size:11px;padding-bottom:32px;">© ${new Date().getFullYear()} Newbi · Email automatique, merci de ne pas répondre</p>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(
+      `✅ Email d'approbation d'accès envoyé à ${recipientEmail} pour le tableau "${safeBoard}"`,
+    );
+    return true;
+  } catch (error) {
+    console.error(
+      "Erreur lors de l'envoi de l'email d'approbation d'accès:",
+      error,
+    );
+    return false;
+  }
+};
+
+/**
+ * Email envoyé à un visiteur dont la demande d'accès à un lien de partage
+ * public a été refusée.
+ */
+const sendShareAccessRejectedEmail = async (
+  recipientEmail,
+  { recipientName, boardTitle },
+) => {
+  const safeName = recipientName || recipientEmail;
+  const safeBoard = boardTitle || "le tableau";
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: recipientEmail,
+    subject: `Votre demande d'accès à "${safeBoard}" a été refusée`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="fr">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Demande d'accès refusée</title>
+      </head>
+      <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
+        <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
+          <div style="text-align:center;padding:40px 0 24px 0;">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height:32px;width:auto;" />
+          </div>
+          <div style="background-color:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 24px;margin-bottom:32px;">
+            <div style="margin-bottom:20px;">
+              <div style="display:inline-block;background-color:#fee2e2;border-radius:6px;padding:8px 12px;">
+                <span style="font-size:11px;font-weight:500;color:#991b1b;letter-spacing:0.3px;text-transform:uppercase;">Demande refusée</span>
+              </div>
+            </div>
+            <h1 style="font-size:24px;font-weight:500;color:#1a1a1a;margin:0 0 16px 0;line-height:1.3;">${safeBoard}</h1>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 12px 0;line-height:1.6;">Bonjour ${safeName},</p>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 16px 0;line-height:1.6;">Votre demande d'accès au tableau Kanban <strong>${safeBoard}</strong> a été refusée par le propriétaire.</p>
+            <p style="font-size:14px;color:#6b7280;margin:0;line-height:1.6;">Si vous pensez qu'il s'agit d'une erreur, contactez directement le propriétaire du tableau.</p>
+          </div>
+          <p style="text-align:center;color:#9ca3af;font-size:11px;padding-bottom:32px;">© ${new Date().getFullYear()} Newbi · Email automatique, merci de ne pas répondre</p>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(
+      `✅ Email de refus d'accès envoyé à ${recipientEmail} pour le tableau "${safeBoard}"`,
+    );
+    return true;
+  } catch (error) {
+    console.error("Erreur lors de l'envoi de l'email de refus d'accès:", error);
+    return false;
+  }
+};
+
 export {
   sendPasswordResetEmail,
   sendVerificationEmail,
@@ -1621,4 +1745,6 @@ export {
   sendExpiryReminderEmail,
   sendTaskAssignmentEmail,
   sendMentionEmail,
+  sendShareAccessApprovedEmail,
+  sendShareAccessRejectedEmail,
 };
