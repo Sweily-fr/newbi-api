@@ -539,11 +539,19 @@ const resolvers = {
         }
 
         const baseFilter = { workspaceId: finalWorkspaceId };
+        // Par défaut tous les membres du workspace voient le board.
+        // L'accès est restreint uniquement si board.members contient au moins
+        // un id ; dans ce cas l'utilisateur doit y figurer (ou être propriétaire).
         const filter = isWorkspaceAdmin
           ? baseFilter
           : {
               ...baseFilter,
-              $or: [{ userId: user.id }, { members: user.id }],
+              $or: [
+                { userId: user.id },
+                { members: user.id },
+                { members: { $exists: false } },
+                { members: { $size: 0 } },
+              ],
             };
 
         return await Board.find(filter).sort({ createdAt: -1 }).limit(100);
@@ -797,14 +805,18 @@ const resolvers = {
         });
         if (!board) throw new Error("Board not found");
 
-        // Vérifier l'accès : owner, membre assigné, ou admin/owner workspace
+        // Vérifier l'accès : si aucune restriction de membres → tout le monde
+        // peut voir. Sinon, l'utilisateur doit être propriétaire, listé dans
+        // board.members, ou admin/owner du workspace.
         if (user?.id) {
+          const assignedMembers = (board.members || []).map((m) =>
+            m?.toString(),
+          );
+          const hasRestriction = assignedMembers.length > 0;
           const isOwner = board.userId?.toString() === user.id;
-          const isAssigned = (board.members || [])
-            .map((m) => m?.toString())
-            .includes(user.id);
+          const isAssigned = assignedMembers.includes(user.id);
 
-          if (!isOwner && !isAssigned) {
+          if (hasRestriction && !isOwner && !isAssigned) {
             let isWorkspaceAdmin = false;
             try {
               const orgId =
@@ -3678,25 +3690,31 @@ const resolvers = {
           `🏢 [Kanban Board.members] Organisation trouvée: ${organization.name}`,
         );
 
-        // Liste des userIds autorisés sur ce board (propriétaire + membres assignés)
+        // Liste des userIds autorisés sur ce board.
+        // - Si board.members est vide : aucune restriction → tous les membres
+        //   workspace ont accès (et apparaissent dans la liste).
+        // - Sinon : propriétaire + membres explicitement assignés uniquement.
         const ownerId = board.userId?.toString();
         const assignedIds = (board.members || [])
           .map((id) => id?.toString())
           .filter(Boolean);
-        const allowedUserIds = new Set(
-          [ownerId, ...assignedIds].filter(Boolean),
-        );
+        const hasRestriction = assignedIds.length > 0;
+        const allowedUserIds = hasRestriction
+          ? new Set([ownerId, ...assignedIds].filter(Boolean))
+          : null;
 
-        // 2. Récupérer les membres workspace, puis filtrer sur la liste autorisée
+        // 2. Récupérer les membres workspace
         const allWorkspaceMembers = await db
           .collection("member")
           .find({
             organizationId: orgId,
           })
           .toArray();
-        const members = allWorkspaceMembers.filter((m) =>
-          allowedUserIds.has(m.userId?.toString()),
-        );
+        const members = hasRestriction
+          ? allWorkspaceMembers.filter((m) =>
+              allowedUserIds.has(m.userId?.toString()),
+            )
+          : allWorkspaceMembers;
 
         logger.info(
           `📋 [Kanban Board.members] ${members.length} membres trouvés`,
