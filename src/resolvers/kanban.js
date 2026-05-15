@@ -1282,22 +1282,46 @@ const resolvers = {
           { $inc: { position: 1 } },
         );
 
+        // Construire l'activité initiale : création + checklist initiale éventuelle
+        const initialActivity = [
+          {
+            userId: user.id,
+            userName: creatorName,
+            userImage: creatorImage,
+            type: "created",
+            description: "a créé la tâche",
+            createdAt: new Date(),
+          },
+        ];
+
+        // Si la tâche est créée avec une checklist non vide, logger l'ajout
+        if (
+          Array.isArray(cleanedInput.checklist) &&
+          cleanedInput.checklist.length > 0
+        ) {
+          const initialItems = cleanedInput.checklist
+            .map((i) => i?.text)
+            .filter(Boolean);
+          if (initialItems.length > 0) {
+            initialActivity.push({
+              userId: user.id,
+              userName: creatorName,
+              userImage: creatorImage,
+              type: "updated",
+              field: "checklist",
+              description: `a ajouté ${initialItems.length > 1 ? "les éléments" : "l'élément"} : ${initialItems.join(" ;; ")}`,
+              createdAt: new Date(Date.now() + 1),
+            });
+          }
+        }
+
         const task = new Task({
           ...cleanedInput,
           status: cleanedInput.status || cleanedInput.columnId,
           userId: user.id,
           workspaceId: finalWorkspaceId,
           position: position,
-          activity: [
-            {
-              userId: user.id,
-              userName: creatorName,
-              userImage: creatorImage,
-              type: "created",
-              description: "a créé la tâche",
-              createdAt: new Date(),
-            },
-          ],
+          activity: initialActivity,
         });
         const savedTask = await task.save();
 
