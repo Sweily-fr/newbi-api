@@ -72,7 +72,7 @@ const dashboardAggregationResolvers = {
      */
     dashboardSummary: withWorkspace(
       async (parent, { workspaceId, accountId }) => {
-        const matchFilter = { workspaceId };
+        const matchFilter = { workspaceId, deletedAt: null };
         if (accountId) matchFilter.fromAccount = accountId;
 
         const [transactionStats, { balance }] = await Promise.all([
@@ -120,6 +120,7 @@ const dashboardAggregationResolvers = {
 
         const matchFilter = {
           workspaceId,
+          deletedAt: null,
           date: { $gte: startDate, $lte: endDate },
         };
         if (accountId) matchFilter.fromAccount = accountId;
@@ -207,6 +208,7 @@ const dashboardAggregationResolvers = {
 
         const matchFilter = {
           workspaceId,
+          deletedAt: null,
           date: { $gte: startDate, $lte: endDate },
           amount: isIncome ? { $gt: 0 } : { $lt: 0 },
         };

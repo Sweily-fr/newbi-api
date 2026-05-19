@@ -237,6 +237,14 @@ const transactionSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
     },
+
+    // Soft delete: si défini, la transaction est masquée et ne sera pas
+    // recréée par les synchros bancaires suivantes (Bridge/GoCardless).
+    deletedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: true,
