@@ -664,6 +664,17 @@ const purchaseOrderResolvers = {
             );
           }
 
+          if (
+            status === "CANCELED" &&
+            po.linkedInvoices &&
+            po.linkedInvoices.length > 0
+          ) {
+            throw createResourceLockedError(
+              "Bon de commande",
+              "un bon de commande avec des factures liées ne peut pas être annulé",
+            );
+          }
+
           const oldStatus = po.status;
 
           // Si transition DRAFT → CONFIRMED, snapshot companyInfo + client et générer un numéro séquentiel
