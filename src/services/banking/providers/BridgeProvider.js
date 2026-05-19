@@ -902,6 +902,12 @@ export class BridgeProvider extends BankingProvider {
           provider: this.name,
         });
 
+        // Respecter le soft-delete: si l'utilisateur a supprimé cette
+        // transaction bancaire, on ne la recrée pas lors des syncs suivantes.
+        if (existing?.deletedAt) {
+          continue;
+        }
+
         // Mettre à jour le workspaceId dans les données de transaction
         const updatedTransactionData = {
           ...transactionData,
@@ -917,6 +923,74 @@ export class BridgeProvider extends BankingProvider {
             confidence: pcgSuggestion.confidence,
             isManual: false,
           };
+        }
+
+        // Déduplication: lors du premier import d'une transaction bancaire,
+        // chercher une transaction manuelle équivalente saisie par l'utilisateur
+        // (avant que le rapprochement bancaire ne la rapatrie). Si trouvée, on
+        // récupère les enrichissements manuels (PCG, justificatif, rapprochement)
+        // puis on supprime la transaction manuelle pour éviter le doublon.
+        if (!existing) {
+          const txDate = new Date(transactionData.date);
+          if (!isNaN(txDate.getTime())) {
+            const dateMin = new Date(txDate);
+            dateMin.setDate(dateMin.getDate() - 3);
+            const dateMax = new Date(txDate);
+            dateMax.setDate(dateMax.getDate() + 3);
+
+            const manualMatch = await Transaction.findOne({
+              workspaceId: workspaceStringId,
+              provider: "manual",
+              amount: transactionData.amount,
+              currency: (transactionData.currency || "EUR").toUpperCase(),
+              date: { $gte: dateMin, $lte: dateMax },
+            }).sort({ date: 1 });
+
+            if (manualMatch) {
+              if (manualMatch.pcgAccount?.isManual) {
+                updatedTransactionData.pcgAccount = manualMatch.pcgAccount;
+              }
+              if (manualMatch.receiptFile?.url) {
+                updatedTransactionData.receiptFile = manualMatch.receiptFile;
+                updatedTransactionData.receiptRequired = false;
+              }
+              if (manualMatch.linkedInvoiceId) {
+                updatedTransactionData.linkedInvoiceId =
+                  manualMatch.linkedInvoiceId;
+                updatedTransactionData.reconciliationStatus =
+                  manualMatch.reconciliationStatus;
+                updatedTransactionData.reconciliationDate =
+                  manualMatch.reconciliationDate;
+              }
+              if (manualMatch.linkedExpenseId) {
+                updatedTransactionData.linkedExpenseId =
+                  manualMatch.linkedExpenseId;
+              }
+              if (
+                manualMatch.expenseCategory &&
+                !updatedTransactionData.expenseCategory
+              ) {
+                updatedTransactionData.expenseCategory =
+                  manualMatch.expenseCategory;
+              }
+              const carriedNotes = manualMatch.metadata?.notes;
+              const carriedVendor = manualMatch.metadata?.vendor;
+              if (carriedNotes || carriedVendor) {
+                updatedTransactionData.metadata = {
+                  ...(transactionData.metadata || {}),
+                  ...(carriedNotes ? { notes: carriedNotes } : {}),
+                  ...(carriedVendor && !transactionData.metadata?.vendor
+                    ? { vendor: carriedVendor }
+                    : {}),
+                };
+              }
+
+              await Transaction.deleteOne({ _id: manualMatch._id });
+              console.log(
+                `🔄 Doublon manuel fusionné dans transaction bancaire ${transactionData.externalId} (manualId=${manualMatch._id})`,
+              );
+            }
+          }
         }
 
         await Transaction.findOneAndUpdate(

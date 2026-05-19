@@ -34,7 +34,7 @@ const bankingResolvers = {
         { workspaceId, filters = {}, limit = 50, offset = 0 },
         { user },
       ) => {
-        const query = { workspaceId };
+        const query = { workspaceId, deletedAt: null };
 
         // Appliquer les filtres
         if (filters.type) query.type = filters.type;
@@ -63,6 +63,7 @@ const bankingResolvers = {
         const transaction = await Transaction.findOne({
           _id: id,
           workspaceId,
+          deletedAt: null,
         }).populate("userId");
         if (!transaction) {
           throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
@@ -529,21 +530,29 @@ const bankingResolvers = {
     ),
 
     // Supprimer une transaction
+    // - Manuelle: suppression définitive (rien ne la recréera).
+    // - Bancaire: soft delete (deletedAt) pour éviter qu'elle réapparaisse
+    //   à la prochaine synchro Bridge/GoCardless.
     deleteTransaction: withWorkspace(
       async (parent, { id }, { user, workspaceId }) => {
-        const transaction = await Transaction.findOneAndDelete({
+        const transaction = await Transaction.findOne({
           _id: id,
           workspaceId,
-          provider: "manual", // Seules les transactions manuelles peuvent être supprimées
+          deletedAt: null,
         });
 
         if (!transaction) {
-          throw new AppError(
-            "Transaction non trouvée ou non supprimable",
-            ERROR_CODES.NOT_FOUND,
-          );
+          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
         }
 
+        if (transaction.provider === "manual") {
+          await Transaction.deleteOne({ _id: transaction._id });
+        } else {
+          await Transaction.updateOne(
+            { _id: transaction._id },
+            { $set: { deletedAt: new Date() } },
+          );
+        }
         return true;
       },
     ),

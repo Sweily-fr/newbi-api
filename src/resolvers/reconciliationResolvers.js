@@ -22,6 +22,7 @@ const reconciliationResolvers = {
           // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent)
           const unmatchedTransactions = await Transaction.find({
             workspaceId,
+            deletedAt: null,
             reconciliationStatus: { $in: ["unmatched", "suggested"] },
             amount: { $gt: 0 },
           })
@@ -121,6 +122,7 @@ const reconciliationResolvers = {
           // Récupérer les transactions non rapprochées (crédits uniquement)
           const transactions = await Transaction.find({
             workspaceId,
+            deletedAt: null,
             reconciliationStatus: { $in: ["unmatched", "suggested"] },
             amount: { $gt: 0 },
           })

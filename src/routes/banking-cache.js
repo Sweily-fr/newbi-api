@@ -168,7 +168,10 @@ router.post(
         status: "active",
       }).sort({ createdAt: -1 });
 
-      const transactions = await Transaction.find({ workspaceId })
+      const transactions = await Transaction.find({
+        workspaceId,
+        deletedAt: null,
+      })
         .sort({ date: -1 })
         .limit(500);
 
