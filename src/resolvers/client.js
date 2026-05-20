@@ -171,7 +171,21 @@ const clientResolvers = {
           ],
         });
 
-        await client.save();
+        try {
+          await client.save();
+        } catch (error) {
+          if (error.code === 11000) {
+            const field = error.keyPattern
+              ? Object.keys(error.keyPattern).find((k) => k !== "workspaceId")
+              : "email";
+            throw createAlreadyExistsError(
+              "client",
+              field || "email",
+              input[field] || input.email,
+            );
+          }
+          throw error;
+        }
 
         // Exécuter les automatisations CLIENT_CREATED
         try {
@@ -387,7 +401,21 @@ const clientResolvers = {
           });
         }
 
-        await client.save();
+        try {
+          await client.save();
+        } catch (error) {
+          if (error.code === 11000) {
+            const field = error.keyPattern
+              ? Object.keys(error.keyPattern).find((k) => k !== "workspaceId")
+              : "email";
+            throw createAlreadyExistsError(
+              "client",
+              field || "email",
+              input[field] || input.email,
+            );
+          }
+          throw error;
+        }
 
         // Synchroniser tous les documents non finalisés qui référencent ce client
         if (changes.length > 0) {
