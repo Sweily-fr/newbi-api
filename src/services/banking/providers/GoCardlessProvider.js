@@ -724,17 +724,85 @@ export class GoCardlessProvider extends BankingProvider {
       const workspaceStringId = workspaceId.toString();
 
       for (const transactionData of transactions) {
+        const existing = await Transaction.findOne({
+          externalId: transactionData.externalId,
+          workspaceId: workspaceStringId,
+          provider: this.name,
+        });
+
+        // Respecter le soft-delete: une transaction supprimée par l'utilisateur
+        // ne doit pas réapparaître au prochain sync.
+        if (existing?.deletedAt) {
+          continue;
+        }
+
+        const updatedTransactionData = {
+          ...transactionData,
+          workspaceId: workspaceStringId,
+          provider: this.name,
+        };
+
+        // Déduplication: fusionner avec une éventuelle transaction manuelle
+        // saisie avant le rapprochement bancaire (même montant/devise, ±3 jours).
+        if (!existing) {
+          const txDate = new Date(transactionData.date);
+          if (!isNaN(txDate.getTime())) {
+            const dateMin = new Date(txDate);
+            dateMin.setDate(dateMin.getDate() - 3);
+            const dateMax = new Date(txDate);
+            dateMax.setDate(dateMax.getDate() + 3);
+
+            const manualMatch = await Transaction.findOne({
+              workspaceId: workspaceStringId,
+              provider: "manual",
+              amount: transactionData.amount,
+              currency: (transactionData.currency || "EUR").toUpperCase(),
+              date: { $gte: dateMin, $lte: dateMax },
+            }).sort({ date: 1 });
+
+            if (manualMatch) {
+              if (manualMatch.pcgAccount?.isManual) {
+                updatedTransactionData.pcgAccount = manualMatch.pcgAccount;
+              }
+              if (manualMatch.receiptFile?.url) {
+                updatedTransactionData.receiptFile = manualMatch.receiptFile;
+                updatedTransactionData.receiptRequired = false;
+              }
+              if (manualMatch.linkedInvoiceId) {
+                updatedTransactionData.linkedInvoiceId =
+                  manualMatch.linkedInvoiceId;
+                updatedTransactionData.reconciliationStatus =
+                  manualMatch.reconciliationStatus;
+                updatedTransactionData.reconciliationDate =
+                  manualMatch.reconciliationDate;
+              }
+              if (manualMatch.linkedExpenseId) {
+                updatedTransactionData.linkedExpenseId =
+                  manualMatch.linkedExpenseId;
+              }
+              if (
+                manualMatch.expenseCategory &&
+                !updatedTransactionData.expenseCategory
+              ) {
+                updatedTransactionData.expenseCategory =
+                  manualMatch.expenseCategory;
+              }
+
+              await Transaction.deleteOne({ _id: manualMatch._id });
+              console.log(
+                `🔄 Doublon manuel fusionné dans transaction bancaire ${transactionData.externalId} (manualId=${manualMatch._id})`,
+              );
+            }
+          }
+        }
+
         await Transaction.findOneAndUpdate(
           {
             externalId: transactionData.externalId,
             workspaceId: workspaceStringId,
             provider: this.name,
           },
-          {
-            ...transactionData,
-            workspaceId: workspaceStringId,
-            provider: this.name,
-          },
+          updatedTransactionData,
           { upsert: true, new: true, setDefaultsOnInsert: true },
         );
       }

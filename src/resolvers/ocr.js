@@ -107,6 +107,7 @@ const ocrResolvers = {
               mimetype,
               filename,
               contentHash,
+              { useBatchModel: true },
             );
 
             if (!rawResult.success) {

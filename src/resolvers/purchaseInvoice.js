@@ -226,6 +226,7 @@ const purchaseInvoiceResolvers = {
             $lte: -(invoice.amountTTC * (1 - amountRange)),
           },
           reconciliationStatus: { $ne: "matched" },
+          deletedAt: null,
         };
 
         if (invoice.issueDate) {

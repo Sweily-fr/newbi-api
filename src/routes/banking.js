@@ -307,7 +307,7 @@ router.get("/transactions", async (req, res) => {
     // Cache miss ou skip - récupérer depuis la BDD
     const { default: Transaction } = await import("../models/Transaction.js");
 
-    const query = { workspaceId };
+    const query = { workspaceId, deletedAt: null };
 
     // Filtres optionnels
     if (req.query.accountId) {

@@ -178,6 +178,7 @@ const treasuryForecastResolvers = {
         const bankTxBaseMatch = {
           workspaceId: workspaceId,
           status: "completed",
+          deletedAt: null,
         };
 
         // 4a. Income: all positive-amount transactions

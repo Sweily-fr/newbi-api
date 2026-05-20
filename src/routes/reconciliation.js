@@ -29,6 +29,7 @@ router.get("/suggestions", async (req, res) => {
     // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent)
     const unmatchedTransactions = await Transaction.find({
       workspaceId,
+      deletedAt: null,
       reconciliationStatus: { $in: ["unmatched", "suggested"] },
       amount: { $gt: 0 }, // Seulement les entrées d'argent (crédits)
     })
@@ -141,6 +142,7 @@ router.get("/transactions-for-invoice/:invoiceId", async (req, res) => {
     // Récupérer les transactions non rapprochées (crédits uniquement)
     const transactions = await Transaction.find({
       workspaceId,
+      deletedAt: null,
       reconciliationStatus: { $in: ["unmatched", "suggested"] },
       amount: { $gt: 0 },
     })
