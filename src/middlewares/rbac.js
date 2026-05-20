@@ -201,7 +201,7 @@ const ROLE_PERMISSIONS = {
     purchaseOrders: ["view", "create", "send", "export"],
     invoices: ["view", "create", "send", "export", "import"],
     creditNotes: ["view", "create", "export"],
-    expenses: ["view", "create", "ocr", "export"],
+    expenses: ["view", "create", "delete", "ocr", "export"],
     payments: ["view", "create", "export"],
     clients: ["view", "create", "export"],
     products: ["view", "create", "export"],
