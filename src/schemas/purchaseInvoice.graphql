@@ -237,6 +237,7 @@ input CreatePurchaseInvoiceInput {
   tags: [String!]
   notes: String
   internalReference: String
+  paymentDate: String
   paymentMethod: PurchaseInvoicePaymentMethod
   source: String = "MANUAL"
 }
