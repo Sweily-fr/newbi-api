@@ -408,6 +408,8 @@ const clientSchema = new mongoose.Schema(
           eventId: String,
           eventTitle: String,
           eventDate: String,
+          // Champ pour le blocage de contact
+          blockReason: String,
         },
         createdAt: {
           type: Date,

@@ -607,6 +607,7 @@ const clientResolvers = {
           description: reason
             ? `a bloqué le client : ${reason}`
             : "a bloqué le client",
+          metadata: reason ? { blockReason: reason } : undefined,
           createdAt: new Date(),
         });
 

@@ -47,6 +47,7 @@ type ClientActivityMetadata {
   eventId: String
   eventTitle: String
   eventDate: String
+  blockReason: String
 }
 
 type ClientCustomFieldValueType {
