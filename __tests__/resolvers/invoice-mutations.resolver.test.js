@@ -40,6 +40,15 @@ vi.mock("../../src/resolvers/clientAutomation.js", () => ({
     executeAutomations: vi.fn().mockResolvedValue(undefined),
   },
 }));
+vi.mock("../../src/services/calendar/CalendarSyncService.js", () => ({
+  autoPushEventToConnections: vi.fn().mockResolvedValue(undefined),
+  updateEventInExternalCalendars: vi.fn().mockResolvedValue(undefined),
+  deleteEventFromExternalCalendars: vi.fn().mockResolvedValue(undefined),
+  pushEventToCalendar: vi.fn().mockResolvedValue(undefined),
+  syncConnection: vi.fn().mockResolvedValue(undefined),
+  syncAllForUser: vi.fn().mockResolvedValue(undefined),
+  disconnectCalendar: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Invoice from "../../src/models/Invoice.js";
