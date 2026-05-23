@@ -13,6 +13,7 @@ import {
   deleteEventFromExternalCalendars,
   updateEventInExternalCalendars,
   pushEventToCalendar,
+  autoPushEventToConnections,
 } from "../services/calendar/CalendarSyncService.js";
 import { publishCalendarEventsChanged } from "../services/calendar/CalendarWebhookService.js";
 import { getPubSub } from "../config/redis.js";
@@ -653,6 +654,25 @@ const eventResolvers = {
                   finalWorkspaceId,
                 );
                 events.push(event);
+
+                // Pousser vers les calendriers externes (autoSync) ou propager
+                // une mise à jour si déjà lié
+                if (event?._id) {
+                  if (event.externalCalendarLinks?.length > 0) {
+                    updateEventInExternalCalendars(event).catch((err) =>
+                      logger.error(
+                        `[syncInvoiceEvents] Erreur propagation update pour ${event._id}: ${err.message}`,
+                      ),
+                    );
+                  } else {
+                    autoPushEventToConnections(event._id, user.id).catch(
+                      (err) =>
+                        logger.error(
+                          `[syncInvoiceEvents] Erreur auto-push pour ${event._id}: ${err.message}`,
+                        ),
+                    );
+                  }
+                }
               } catch (error) {
                 logger.error(
                   `Erreur lors de la création de l'événement pour la facture ${invoice._id}:`,
