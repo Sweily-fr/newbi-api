@@ -48,6 +48,8 @@ type ClientActivityMetadata {
   eventTitle: String
   eventDate: String
   blockReason: String
+  listId: String
+  listName: String
 }
 
 type ClientCustomFieldValueType {

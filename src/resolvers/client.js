@@ -714,11 +714,11 @@ const clientResolvers = {
         // Ajouter la note
         client.notes.push(newNote);
 
-        // Ajouter l'activité
+        // Ajouter l'activité (description = contenu de la note pour affichage direct)
         client.activity.push({
           id: new mongoose.Types.ObjectId().toString(),
           type: "note_added",
-          description: "a ajouté une note",
+          description: input.content,
           userId: user.id,
           userName: user.name || user.email,
           userImage: user.image || null,
@@ -765,11 +765,11 @@ const clientResolvers = {
         note.content = content;
         note.updatedAt = new Date();
 
-        // Ajouter l'activité
+        // Ajouter l'activité (description = nouveau contenu pour affichage direct)
         client.activity.push({
           id: new mongoose.Types.ObjectId().toString(),
           type: "note_updated",
-          description: "a modifié une note",
+          description: content,
           userId: user.id,
           userName: user.name || user.email,
           userImage: user.image || null,
