@@ -1,7 +1,40 @@
+import mongoose from "mongoose";
 import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+
+const buildActivityActor = (user) => ({
+  userId: user?.id || user?._id,
+  userName: user?.name || user?.email || "Système",
+  userImage: user?.image || null,
+});
+
+const pushListActivity = async (clientId, type, list, user) => {
+  if (!clientId) return;
+  const description =
+    type === "added_to_list"
+      ? `a ajouté le client à la liste "${list.name}"`
+      : `a retiré le client de la liste "${list.name}"`;
+  await Client.updateOne(
+    { _id: clientId },
+    {
+      $push: {
+        activity: {
+          id: new mongoose.Types.ObjectId().toString(),
+          type,
+          description,
+          ...buildActivityActor(user),
+          metadata: {
+            listId: list._id?.toString() || list.id,
+            listName: list.name,
+          },
+          createdAt: new Date(),
+        },
+      },
+    },
+  );
+};
 
 export const clientListResolvers = {
   Query: {
@@ -186,10 +219,64 @@ export const clientListResolvers = {
             );
           }
 
+          await Promise.all(
+            (list.clients || []).map((clientId) =>
+              pushListActivity(
+                clientId.toString(),
+                "removed_from_list",
+                list,
+                context.user,
+              ),
+            ),
+          );
+
           await ClientList.deleteOne({ _id: id });
           return true;
         } catch (error) {
           console.error("Erreur lors de la suppression de la liste:", error);
+          throw error;
+        }
+      },
+    ),
+
+    // Supprime plusieurs listes en une seule opération (ignore les listes par défaut)
+    deleteClientLists: isAuthenticated(
+      async (_, { workspaceId, ids }, context) => {
+        try {
+          const lists = await ClientList.find({
+            _id: { $in: ids },
+            workspaceId,
+            isDefault: { $ne: true },
+          });
+
+          if (lists.length === 0) return 0;
+
+          const deletableIds = lists.map((l) => l._id);
+
+          const activityTasks = [];
+          for (const list of lists) {
+            for (const clientId of list.clients || []) {
+              activityTasks.push(
+                pushListActivity(
+                  clientId.toString(),
+                  "removed_from_list",
+                  list,
+                  context.user,
+                ),
+              );
+            }
+          }
+          await Promise.all(activityTasks);
+
+          const result = await ClientList.deleteMany({
+            _id: { $in: deletableIds },
+            workspaceId,
+            isDefault: { $ne: true },
+          });
+
+          return result.deletedCount || 0;
+        } catch (error) {
+          console.error("Erreur lors de la suppression des listes:", error);
           throw error;
         }
       },
@@ -213,9 +300,15 @@ export const clientListResolvers = {
           }
 
           // Ajouter le client s'il n'est pas déjà dans la liste
-          if (!list.clients.includes(clientId)) {
+          if (!list.clients.some((id) => id.toString() === clientId)) {
             list.clients.push(clientId);
             await list.save();
+            await pushListActivity(
+              clientId,
+              "added_to_list",
+              list,
+              context.user,
+            );
           }
 
           return list.populate("clients");
@@ -236,10 +329,23 @@ export const clientListResolvers = {
             throw new Error("Liste non trouvée");
           }
 
+          const wasInList = list.clients.some(
+            (id) => id.toString() === clientId,
+          );
+
           list.clients = list.clients.filter(
             (id) => id.toString() !== clientId,
           );
           await list.save();
+
+          if (wasInList) {
+            await pushListActivity(
+              clientId,
+              "removed_from_list",
+              list,
+              context.user,
+            );
+          }
 
           return list.populate("clients");
         } catch (error) {
@@ -281,6 +387,12 @@ export const clientListResolvers = {
           list.clients.push(...newClientIds);
           await list.save();
 
+          await Promise.all(
+            newClientIds.map((id) =>
+              pushListActivity(id, "added_to_list", list, context.user),
+            ),
+          );
+
           return list.populate("clients");
         } catch (error) {
           console.error(
@@ -303,10 +415,21 @@ export const clientListResolvers = {
           }
 
           const clientIdStrings = clientIds.map((id) => id.toString());
+          const existingClientIds = list.clients.map((id) => id.toString());
+          const removedClientIds = clientIdStrings.filter((id) =>
+            existingClientIds.includes(id),
+          );
+
           list.clients = list.clients.filter(
             (id) => !clientIdStrings.includes(id.toString()),
           );
           await list.save();
+
+          await Promise.all(
+            removedClientIds.map((id) =>
+              pushListActivity(id, "removed_from_list", list, context.user),
+            ),
+          );
 
           return list.populate("clients");
         } catch (error) {
@@ -340,10 +463,21 @@ export const clientListResolvers = {
             throw new Error("Une ou plusieurs listes n'existent pas");
           }
 
+          // Identifier les listes où le client n'est pas encore présent
+          const addedLists = lists.filter(
+            (l) => !l.clients.some((id) => id.toString() === clientId),
+          );
+
           // Ajouter le client à toutes les listes en une seule opération
           await ClientList.updateMany(
             { _id: { $in: listIds }, workspaceId, clients: { $ne: clientId } },
             { $push: { clients: clientId } },
+          );
+
+          await Promise.all(
+            addedLists.map((list) =>
+              pushListActivity(clientId, "added_to_list", list, context.user),
+            ),
           );
 
           // Récupérer les listes mises à jour avec les clients peuplés
@@ -379,10 +513,26 @@ export const clientListResolvers = {
             throw new Error("Une ou plusieurs listes n'existent pas");
           }
 
+          // Identifier les listes qui contenaient le client (pour l'activité)
+          const removedLists = lists.filter((l) =>
+            l.clients.some((id) => id.toString() === clientId),
+          );
+
           // Supprimer le client de toutes les listes en une seule opération
           await ClientList.updateMany(
             { _id: { $in: listIds }, workspaceId },
             { $pull: { clients: clientId } },
+          );
+
+          await Promise.all(
+            removedLists.map((list) =>
+              pushListActivity(
+                clientId,
+                "removed_from_list",
+                list,
+                context.user,
+              ),
+            ),
           );
 
           // Récupérer les listes mises à jour avec les clients peuplés
