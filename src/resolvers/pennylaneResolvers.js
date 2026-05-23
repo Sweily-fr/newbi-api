@@ -8,6 +8,16 @@ import logger from "../utils/logger.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const pennylaneResolvers = {
+  PennylaneAccount: {
+    // Le schéma déclare ces champs en String, mais MongoDB les stocke en Date.
+    // Sans ce resolver, la String scalar par défaut sérialise via Date.valueOf()
+    // → un timestamp numérique en string ("1727996400000") qui produit
+    // "Invalid Date" côté client. On force l'ISO string.
+    lastSyncAt: (account) => account.lastSyncAt?.toISOString() || null,
+    createdAt: (account) => account.createdAt?.toISOString() || null,
+    updatedAt: (account) => account.updatedAt?.toISOString() || null,
+  },
+
   Query: {
     /**
      * Récupère le compte Pennylane de l'organisation active
