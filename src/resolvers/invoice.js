@@ -37,6 +37,11 @@ import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
+import {
+  autoPushEventToConnections,
+  updateEventInExternalCalendars,
+  deleteEventFromExternalCalendars,
+} from "../services/calendar/CalendarSyncService.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1404,11 +1409,21 @@ const invoiceResolvers = {
             // Créer automatiquement un événement de calendrier pour l'échéance de la facture
             if (invoice.dueDate) {
               try {
-                await Event.createInvoiceDueEvent(
+                const dueEvent = await Event.createInvoiceDueEvent(
                   invoice,
                   user._id,
                   workspaceId,
                 );
+                // Pousser l'événement vers les calendriers externes connectés (autoSync)
+                if (dueEvent?._id) {
+                  autoPushEventToConnections(dueEvent._id, user._id).catch(
+                    (err) =>
+                      console.error(
+                        "Erreur auto-push échéance facture vers calendriers externes:",
+                        err,
+                      ),
+                  );
+                }
               } catch (eventError) {
                 console.error(
                   "Erreur lors de la création de l'événement de calendrier:",
@@ -2149,7 +2164,45 @@ const invoiceResolvers = {
             // Mettre à jour l'événement de calendrier si la date d'échéance a changé
             if (updatedInvoice.dueDate) {
               try {
-                await Event.updateInvoiceEvent(updatedInvoice, user.id);
+                let dueEvent = await Event.updateInvoiceEvent(
+                  updatedInvoice,
+                  user.id,
+                );
+                // Si aucun événement n'existait (ex: facture sans échéance puis ajout),
+                // on le crée maintenant
+                if (!dueEvent) {
+                  dueEvent = await Event.createInvoiceDueEvent(
+                    updatedInvoice,
+                    user.id,
+                    updatedInvoice.workspaceId,
+                  );
+                  if (dueEvent?._id) {
+                    autoPushEventToConnections(dueEvent._id, user.id).catch(
+                      (err) =>
+                        console.error(
+                          "Erreur auto-push échéance facture vers calendriers externes:",
+                          err,
+                        ),
+                    );
+                  }
+                } else if (dueEvent.externalCalendarLinks?.length > 0) {
+                  // Propager la mise à jour vers les calendriers externes liés
+                  updateEventInExternalCalendars(dueEvent).catch((err) =>
+                    console.error(
+                      "Erreur propagation update échéance facture:",
+                      err,
+                    ),
+                  );
+                } else {
+                  // Pas de lien externe : tenter le push initial vers les calendriers autoSync
+                  autoPushEventToConnections(dueEvent._id, user.id).catch(
+                    (err) =>
+                      console.error(
+                        "Erreur auto-push échéance facture vers calendriers externes:",
+                        err,
+                      ),
+                  );
+                }
               } catch (eventError) {
                 console.error(
                   "Erreur lors de la mise à jour de l'événement de calendrier:",
@@ -2242,6 +2295,17 @@ const invoiceResolvers = {
 
         // Supprimer l'événement de calendrier associé à la facture
         try {
+          // Récupérer l'événement avant suppression pour propager aux calendriers externes liés
+          const existingDueEvent = await Event.findOne({
+            invoiceId: invoice._id,
+            type: "INVOICE_DUE",
+            workspaceId,
+          });
+          if (existingDueEvent?.externalCalendarLinks?.length > 0) {
+            deleteEventFromExternalCalendars(existingDueEvent).catch((err) =>
+              console.error("Erreur propagation delete échéance facture:", err),
+            );
+          }
           await Event.deleteInvoiceEvent(
             invoice._id,
             context.user._id,

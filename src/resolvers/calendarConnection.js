@@ -1,4 +1,5 @@
 import CalendarConnection from "../models/CalendarConnection.js";
+import Event from "../models/Event.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { getCalendarProvider } from "../services/calendar/CalendarProviderFactory.js";
 import {
@@ -518,8 +519,53 @@ const calendarConnectionResolvers = {
           };
         }
 
+        const wasEnabled = connection.autoSync === true;
         connection.autoSync = input.enabled;
         await connection.save();
+
+        // Backfill: si on vient d'activer autoSync, pousser les événements
+        // Newbi existants (échéances de factures, rappels, etc.) qui ne sont
+        // pas encore liés à cette connexion. Fire-and-forget.
+        if (input.enabled && !wasEnabled && connection.status === "active") {
+          (async () => {
+            try {
+              const userId = connection.userId;
+              const events = await Event.find({
+                userId,
+                source: "newbi",
+                isReadOnly: { $ne: true },
+                calendarConnectionId: null,
+                $or: [
+                  { externalCalendarLinks: { $size: 0 } },
+                  {
+                    externalCalendarLinks: {
+                      $not: {
+                        $elemMatch: { calendarConnectionId: connection._id },
+                      },
+                    },
+                  },
+                ],
+              }).select("_id");
+
+              for (const ev of events) {
+                try {
+                  await pushEventToCalendar(ev._id, connection._id);
+                } catch (err) {
+                  logger.error(
+                    `[updateAutoSync backfill] Échec push event ${ev._id} vers ${connection.provider}: ${err.message}`,
+                  );
+                }
+              }
+              logger.info(
+                `[updateAutoSync backfill] ${events.length} événement(s) Newbi poussé(s) vers ${connection.provider} (${connection._id})`,
+              );
+            } catch (err) {
+              logger.error(
+                `[updateAutoSync backfill] Erreur récupération événements: ${err.message}`,
+              );
+            }
+          })();
+        }
 
         return {
           success: true,
