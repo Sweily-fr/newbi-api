@@ -6,6 +6,7 @@ import {
   requireWrite,
   requireDelete,
   requirePermission,
+  requireActiveSubscription,
 } from "../middlewares/rbac.js";
 import {
   createNotFoundError,
@@ -374,26 +375,31 @@ const emailSignatureResolvers = {
     ),
 
     // ✅ Protégé par RBAC - nécessite la permission "set-default" sur "signatures"
+    // Décision #13 (Lot 6) — modification de configuration utilisateur,
+    // requiert un abonnement actif (ou trial app). Sans cette protection, un
+    // user en lecture seule pouvait toujours changer sa signature par défaut.
     setDefaultEmailSignature: requirePermission(
       "signatures",
       "set-default",
-    )(async (_, { id }, context) => {
-      const { user } = context;
-      const signature = await EmailSignature.findOne({
-        _id: id,
-        createdBy: user.id,
-      });
+    )(
+      requireActiveSubscription(async (_, { id }, context) => {
+        const { user } = context;
+        const signature = await EmailSignature.findOne({
+          _id: id,
+          createdBy: user.id,
+        });
 
-      if (!signature) {
-        throw createNotFoundError("Signature email");
-      }
+        if (!signature) {
+          throw createNotFoundError("Signature email");
+        }
 
-      // Définir cette signature comme signature par défaut
-      signature.isDefault = true;
-      await signature.save(); // Le middleware pre-save s'occupera de mettre à jour les autres signatures
+        // Définir cette signature comme signature par défaut
+        signature.isDefault = true;
+        await signature.save(); // Le middleware pre-save s'occupera de mettre à jour les autres signatures
 
-      return signature;
-    }),
+        return signature;
+      }),
+    ),
 
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "signatures"
     cleanupTemporaryFiles: requireWrite("signatures")(

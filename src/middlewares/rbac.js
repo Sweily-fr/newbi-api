@@ -3,6 +3,8 @@ import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { isAuthenticated } from "./better-auth-jwt.js";
 import { getActiveOrganization } from "./org-resolver.js";
+import { isAppTrialEnabled } from "../utils/featureFlags.js";
+import { isTrialAppActive } from "../utils/trialApp.js";
 
 /**
  * ========================================
@@ -201,7 +203,7 @@ const ROLE_PERMISSIONS = {
     purchaseOrders: ["view", "create", "send", "export"],
     invoices: ["view", "create", "send", "export", "import"],
     creditNotes: ["view", "create", "export"],
-    expenses: ["view", "create", "delete", "ocr", "export"],
+    expenses: ["view", "create", "ocr", "export"],
     payments: ["view", "create", "export"],
     clients: ["view", "create", "export"],
     products: ["view", "create", "export"],
@@ -598,6 +600,38 @@ export function invalidateSubCache(orgId) {
   }
 }
 
+// ✅ Cache LRU pour le trial app-managed — séparé du sub cache pour permettre
+// une invalidation indépendante (ex: cron de cleanup trial, souscription Stripe).
+// Stocke un objet { isTrialActive, trialEndDate, stripeTrialActive } ou null.
+const TRIAL_CACHE_TTL = 30_000;
+const _trialCache = new Map();
+
+function getCachedTrial(orgId) {
+  const entry = _trialCache.get(orgId);
+  if (!entry) return undefined; // undefined = cache miss
+  if (Date.now() - entry.ts > TRIAL_CACHE_TTL) {
+    _trialCache.delete(orgId);
+    return undefined;
+  }
+  return entry.flags;
+}
+
+function setCachedTrial(orgId, flags) {
+  if (_trialCache.size >= SUB_CACHE_MAX) {
+    const oldestKey = _trialCache.keys().next().value;
+    _trialCache.delete(oldestKey);
+  }
+  _trialCache.set(orgId, { flags, ts: Date.now() });
+}
+
+export function invalidateTrialCache(orgId) {
+  if (orgId) {
+    _trialCache.delete(orgId);
+  } else {
+    _trialCache.clear();
+  }
+}
+
 export async function checkSubscriptionActive(
   context,
   { failClosed = false } = {},
@@ -616,6 +650,53 @@ export async function checkSubscriptionActive(
   logger.debug(
     `[SubCheck] orgId=${orgId} (from=${context.workspaceId ? "ctx" : "header"})`,
   );
+
+  // App-managed trial check (feature-flagged). When ENABLE_APP_TRIAL is OFF
+  // (default), this block is skipped entirely and the legacy Stripe-based
+  // gating below runs unchanged — zero behavioural change for existing users.
+  if (isAppTrialEnabled()) {
+    let trialFlags = getCachedTrial(orgId);
+    if (trialFlags === undefined) {
+      try {
+        const db = mongoose.connection.db;
+        if (db) {
+          const orgObjectId = mongoose.Types.ObjectId.isValid(orgId)
+            ? new mongoose.Types.ObjectId(orgId)
+            : null;
+          const orgDoc = orgObjectId
+            ? await db.collection("organization").findOne(
+                { _id: orgObjectId },
+                {
+                  projection: {
+                    isTrialActive: 1,
+                    trialEndDate: 1,
+                    stripeTrialActive: 1,
+                  },
+                },
+              )
+            : null;
+          trialFlags = orgDoc
+            ? {
+                isTrialActive: orgDoc.isTrialActive,
+                trialEndDate: orgDoc.trialEndDate,
+                stripeTrialActive: orgDoc.stripeTrialActive,
+              }
+            : null;
+          setCachedTrial(orgId, trialFlags);
+        }
+      } catch (err) {
+        // Lookup failure is non-fatal — fall through to the Stripe check.
+        logger.warn(
+          `[SubCheck] trial lookup failed orgId=${orgId}: ${err.message}`,
+        );
+        trialFlags = null;
+      }
+    }
+    if (isTrialAppActive(trialFlags)) {
+      logger.debug(`[SubCheck] app-trial active orgId=${orgId}`);
+      return; // Trial app-managed actif → accès complet, court-circuit Stripe
+    }
+  }
 
   try {
     // Vérifier le cache d'abord

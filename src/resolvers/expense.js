@@ -17,6 +17,7 @@ import {
   requireWrite,
   requireDelete,
   requirePermission,
+  requireActiveSubscription,
   withOrganization,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -619,127 +620,132 @@ const expenseResolvers = {
 
     // Ajouter un fichier à une dépense
     // ✅ Protégé par RBAC - nécessite la permission "ocr" sur "expenses"
+    // Décision #13 (Lot 6) — modification de données, requiert un abonnement
+    // actif (ou trial app). Sans ce wrapper, requirePermission seul laissait
+    // passer les users en lecture seule.
     addExpenseFile: requirePermission(
       "expenses",
       "ocr",
     )(
-      async (
-        _,
-        { expenseId, input, workspaceId: inputWorkspaceId },
-        context,
-      ) => {
-        const { user, userRole } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
+      requireActiveSubscription(
+        async (
+          _,
+          { expenseId, input, workspaceId: inputWorkspaceId },
+          context,
+        ) => {
+          const { user, userRole } = context;
+          const workspaceId = resolveWorkspaceId(
+            inputWorkspaceId,
+            context.workspaceId,
+          );
 
-        const expense = await checkExpenseAccess(
-          expenseId,
-          workspaceId,
-          user.id,
-          userRole,
-        );
+          const expense = await checkExpenseAccess(
+            expenseId,
+            workspaceId,
+            user.id,
+            userRole,
+          );
 
-        try {
-          let fileData;
+          try {
+            let fileData;
 
-          // Cas 1: Fichier déjà uploadé sur Cloudflare
-          if (input.cloudflareUrl) {
-            fileData = {
-              id: new mongoose.Types.ObjectId(),
-              filename: input.fileName || "document.pdf",
-              originalFilename: input.fileName || "document.pdf",
-              mimetype: input.mimeType || "application/pdf",
-              path: input.cloudflareUrl, // Utiliser l'URL Cloudflare comme path
-              url: input.cloudflareUrl,
-              size: input.fileSize || 1, // Taille par défaut à 1 pour éviter l'erreur de validation
-              ocrProcessed: !!input.ocrData,
-              ocrData: input.ocrData ? JSON.parse(input.ocrData) : null,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            };
-          }
-          // Cas 2: Fichier à uploader normalement
-          else if (input.file) {
-            fileData = await saveUploadedFile(input.file, user.id);
-          }
-          // Cas 3: Aucun fichier fourni
-          else {
-            throw new UserInputError(
-              "Vous devez fournir soit un fichier à uploader, soit une URL Cloudflare",
+            // Cas 1: Fichier déjà uploadé sur Cloudflare
+            if (input.cloudflareUrl) {
+              fileData = {
+                id: new mongoose.Types.ObjectId(),
+                filename: input.fileName || "document.pdf",
+                originalFilename: input.fileName || "document.pdf",
+                mimetype: input.mimeType || "application/pdf",
+                path: input.cloudflareUrl, // Utiliser l'URL Cloudflare comme path
+                url: input.cloudflareUrl,
+                size: input.fileSize || 1, // Taille par défaut à 1 pour éviter l'erreur de validation
+                ocrProcessed: !!input.ocrData,
+                ocrData: input.ocrData ? JSON.parse(input.ocrData) : null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              };
+            }
+            // Cas 2: Fichier à uploader normalement
+            else if (input.file) {
+              fileData = await saveUploadedFile(input.file, user.id);
+            }
+            // Cas 3: Aucun fichier fourni
+            else {
+              throw new UserInputError(
+                "Vous devez fournir soit un fichier à uploader, soit une URL Cloudflare",
+              );
+            }
+
+            // Traiter le fichier avec OCR si demandé ET si ce n'est pas déjà fait
+            if (input.processOCR && !fileData.ocrProcessed && input.file) {
+              try {
+                const ocrResult = await processFileWithOCR(fileData.path);
+                fileData.ocrProcessed = true;
+                fileData.ocrData = ocrResult;
+
+                // Mettre à jour les métadonnées OCR de la dépense si c'est la première fois
+                if (
+                  !expense.ocrMetadata ||
+                  Object.keys(expense.ocrMetadata).length === 0
+                ) {
+                  expense.ocrMetadata = {
+                    vendorName: ocrResult.vendorName,
+                    vendorAddress: ocrResult.vendorAddress,
+                    vendorVatNumber: ocrResult.vendorVatNumber,
+                    invoiceNumber: ocrResult.invoiceNumber,
+                    invoiceDate: ocrResult.invoiceDate
+                      ? new Date(ocrResult.invoiceDate)
+                      : null,
+                    totalAmount: ocrResult.totalAmount,
+                    vatAmount: ocrResult.vatAmount,
+                    currency: ocrResult.currency,
+                    confidenceScore: ocrResult.confidenceScore,
+                    rawExtractedText: ocrResult.rawExtractedText,
+                  };
+                }
+              } catch (ocrError) {
+                console.error("Erreur lors du traitement OCR:", ocrError);
+                // Ne pas bloquer l'ajout du fichier en cas d'erreur OCR
+              }
+            }
+
+            // Si nous avons des données OCR déjà traitées (cas Cloudflare), les utiliser
+            if (
+              fileData.ocrData &&
+              (!expense.ocrMetadata ||
+                Object.keys(expense.ocrMetadata).length === 0)
+            ) {
+              const ocrData = fileData.ocrData;
+              expense.ocrMetadata = {
+                vendorName: ocrData.vendorName || "",
+                vendorAddress: ocrData.vendorAddress || "",
+                vendorVatNumber: ocrData.vendorVatNumber || "",
+                invoiceNumber: ocrData.invoiceNumber || "",
+                invoiceDate: ocrData.invoiceDate
+                  ? new Date(ocrData.invoiceDate)
+                  : null,
+                totalAmount: ocrData.totalAmount || 0,
+                vatAmount: ocrData.vatAmount || 0,
+                currency: ocrData.currency || "EUR",
+                confidenceScore: ocrData.confidenceScore || 0,
+                rawExtractedText: ocrData.rawExtractedText || "",
+              };
+            }
+
+            // Ajouter le fichier à la dépense
+            expense.files.push(fileData);
+            await expense.save();
+
+            return expense;
+          } catch (error) {
+            throw new ApolloError(
+              "Erreur lors de l'ajout du fichier",
+              "FILE_UPLOAD_ERROR",
+              { error },
             );
           }
-
-          // Traiter le fichier avec OCR si demandé ET si ce n'est pas déjà fait
-          if (input.processOCR && !fileData.ocrProcessed && input.file) {
-            try {
-              const ocrResult = await processFileWithOCR(fileData.path);
-              fileData.ocrProcessed = true;
-              fileData.ocrData = ocrResult;
-
-              // Mettre à jour les métadonnées OCR de la dépense si c'est la première fois
-              if (
-                !expense.ocrMetadata ||
-                Object.keys(expense.ocrMetadata).length === 0
-              ) {
-                expense.ocrMetadata = {
-                  vendorName: ocrResult.vendorName,
-                  vendorAddress: ocrResult.vendorAddress,
-                  vendorVatNumber: ocrResult.vendorVatNumber,
-                  invoiceNumber: ocrResult.invoiceNumber,
-                  invoiceDate: ocrResult.invoiceDate
-                    ? new Date(ocrResult.invoiceDate)
-                    : null,
-                  totalAmount: ocrResult.totalAmount,
-                  vatAmount: ocrResult.vatAmount,
-                  currency: ocrResult.currency,
-                  confidenceScore: ocrResult.confidenceScore,
-                  rawExtractedText: ocrResult.rawExtractedText,
-                };
-              }
-            } catch (ocrError) {
-              console.error("Erreur lors du traitement OCR:", ocrError);
-              // Ne pas bloquer l'ajout du fichier en cas d'erreur OCR
-            }
-          }
-
-          // Si nous avons des données OCR déjà traitées (cas Cloudflare), les utiliser
-          if (
-            fileData.ocrData &&
-            (!expense.ocrMetadata ||
-              Object.keys(expense.ocrMetadata).length === 0)
-          ) {
-            const ocrData = fileData.ocrData;
-            expense.ocrMetadata = {
-              vendorName: ocrData.vendorName || "",
-              vendorAddress: ocrData.vendorAddress || "",
-              vendorVatNumber: ocrData.vendorVatNumber || "",
-              invoiceNumber: ocrData.invoiceNumber || "",
-              invoiceDate: ocrData.invoiceDate
-                ? new Date(ocrData.invoiceDate)
-                : null,
-              totalAmount: ocrData.totalAmount || 0,
-              vatAmount: ocrData.vatAmount || 0,
-              currency: ocrData.currency || "EUR",
-              confidenceScore: ocrData.confidenceScore || 0,
-              rawExtractedText: ocrData.rawExtractedText || "",
-            };
-          }
-
-          // Ajouter le fichier à la dépense
-          expense.files.push(fileData);
-          await expense.save();
-
-          return expense;
-        } catch (error) {
-          throw new ApolloError(
-            "Erreur lors de l'ajout du fichier",
-            "FILE_UPLOAD_ERROR",
-            { error },
-          );
-        }
-      },
+        },
+      ),
     ),
 
     // Supprimer un fichier d'une dépense
@@ -787,111 +793,120 @@ const expenseResolvers = {
 
     // Mettre à jour les métadonnées OCR d'une dépense
     // ✅ Protégé par RBAC - nécessite la permission "ocr" sur "expenses"
+    // Décision #13 (Lot 6) — modification, requiert un abonnement actif.
     updateExpenseOCRMetadata: requirePermission(
       "expenses",
       "ocr",
     )(
-      async (
-        _,
-        { expenseId, metadata, workspaceId: inputWorkspaceId },
-        context,
-      ) => {
-        const { user, userRole } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
+      requireActiveSubscription(
+        async (
+          _,
+          { expenseId, metadata, workspaceId: inputWorkspaceId },
+          context,
+        ) => {
+          const { user, userRole } = context;
+          const workspaceId = resolveWorkspaceId(
+            inputWorkspaceId,
+            context.workspaceId,
+          );
 
-        const expense = await checkExpenseAccess(
-          expenseId,
-          workspaceId,
-          user.id,
-          userRole,
-        );
+          const expense = await checkExpenseAccess(
+            expenseId,
+            workspaceId,
+            user.id,
+            userRole,
+          );
 
-        // Mettre à jour les métadonnées OCR
-        expense.ocrMetadata = {
-          ...expense.ocrMetadata,
-          ...metadata,
-          invoiceDate: metadata.invoiceDate
-            ? new Date(metadata.invoiceDate)
-            : expense.ocrMetadata?.invoiceDate,
-        };
-
-        await expense.save();
-        return expense;
-      },
-    ),
-
-    // Déclencher manuellement l'analyse OCR d'un fichier
-    // ✅ Protégé par RBAC - nécessite la permission "ocr" sur "expenses"
-    processExpenseFileOCR: requirePermission(
-      "expenses",
-      "ocr",
-    )(
-      async (
-        _,
-        { expenseId, fileId, workspaceId: inputWorkspaceId },
-        context,
-      ) => {
-        const { user, userRole } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
-
-        const expense = await checkExpenseAccess(
-          expenseId,
-          workspaceId,
-          user.id,
-          userRole,
-        );
-
-        // Trouver le fichier à traiter
-        const fileIndex = expense.files.findIndex(
-          (file) => file._id.toString() === fileId,
-        );
-
-        if (fileIndex === -1) {
-          throw new UserInputError("Fichier non trouvé");
-        }
-
-        const file = expense.files[fileIndex];
-
-        try {
-          // Traiter le fichier avec OCR
-          const ocrResult = await processFileWithOCR(file.path);
-
-          // Mettre à jour les données OCR du fichier
-          expense.files[fileIndex].ocrProcessed = true;
-          expense.files[fileIndex].ocrData = ocrResult;
-
-          // Mettre à jour les métadonnées OCR de la dépense
+          // Mettre à jour les métadonnées OCR
           expense.ocrMetadata = {
-            vendorName: ocrResult.vendorName,
-            vendorAddress: ocrResult.vendorAddress,
-            vendorVatNumber: ocrResult.vendorVatNumber,
-            invoiceNumber: ocrResult.invoiceNumber,
-            invoiceDate: ocrResult.invoiceDate
-              ? new Date(ocrResult.invoiceDate)
-              : null,
-            totalAmount: ocrResult.totalAmount,
-            vatAmount: ocrResult.vatAmount,
-            currency: ocrResult.currency,
-            confidenceScore: ocrResult.confidenceScore,
-            rawExtractedText: ocrResult.rawExtractedText,
+            ...expense.ocrMetadata,
+            ...metadata,
+            invoiceDate: metadata.invoiceDate
+              ? new Date(metadata.invoiceDate)
+              : expense.ocrMetadata?.invoiceDate,
           };
 
           await expense.save();
           return expense;
-        } catch (error) {
-          throw new ApolloError(
-            "Erreur lors du traitement OCR",
-            "OCR_PROCESSING_ERROR",
-            { error },
+        },
+      ),
+    ),
+
+    // Déclencher manuellement l'analyse OCR d'un fichier
+    // ✅ Protégé par RBAC - nécessite la permission "ocr" sur "expenses"
+    // Décision #13 (Lot 6) — OCR consomme un service externe payant
+    // (Mindee / Tesseract). On force failClosed: true comme les autres
+    // resolvers OCR pour éviter d'engager des coûts pour un user expiré.
+    processExpenseFileOCR: requirePermission(
+      "expenses",
+      "ocr",
+    )(
+      requireActiveSubscription(
+        async (
+          _,
+          { expenseId, fileId, workspaceId: inputWorkspaceId },
+          context,
+        ) => {
+          const { user, userRole } = context;
+          const workspaceId = resolveWorkspaceId(
+            inputWorkspaceId,
+            context.workspaceId,
           );
-        }
-      },
+
+          const expense = await checkExpenseAccess(
+            expenseId,
+            workspaceId,
+            user.id,
+            userRole,
+          );
+
+          // Trouver le fichier à traiter
+          const fileIndex = expense.files.findIndex(
+            (file) => file._id.toString() === fileId,
+          );
+
+          if (fileIndex === -1) {
+            throw new UserInputError("Fichier non trouvé");
+          }
+
+          const file = expense.files[fileIndex];
+
+          try {
+            // Traiter le fichier avec OCR
+            const ocrResult = await processFileWithOCR(file.path);
+
+            // Mettre à jour les données OCR du fichier
+            expense.files[fileIndex].ocrProcessed = true;
+            expense.files[fileIndex].ocrData = ocrResult;
+
+            // Mettre à jour les métadonnées OCR de la dépense
+            expense.ocrMetadata = {
+              vendorName: ocrResult.vendorName,
+              vendorAddress: ocrResult.vendorAddress,
+              vendorVatNumber: ocrResult.vendorVatNumber,
+              invoiceNumber: ocrResult.invoiceNumber,
+              invoiceDate: ocrResult.invoiceDate
+                ? new Date(ocrResult.invoiceDate)
+                : null,
+              totalAmount: ocrResult.totalAmount,
+              vatAmount: ocrResult.vatAmount,
+              currency: ocrResult.currency,
+              confidenceScore: ocrResult.confidenceScore,
+              rawExtractedText: ocrResult.rawExtractedText,
+            };
+
+            await expense.save();
+            return expense;
+          } catch (error) {
+            throw new ApolloError(
+              "Erreur lors du traitement OCR",
+              "OCR_PROCESSING_ERROR",
+              { error },
+            );
+          }
+        },
+        { failClosed: true },
+      ),
     ),
 
     // Appliquer les données OCR aux champs de la dépense
