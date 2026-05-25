@@ -47,6 +47,8 @@ const documentEmailResolvers = {
           pdfBase64: input.pdfBase64 || null,
           senderEmail: context?.user?.email || null,
           extraAttachments: input.attachments || [],
+          useCustomFooter: input.useCustomFooter,
+          customEmailFooter: input.customEmailFooter,
         });
 
         return result;
@@ -67,6 +69,8 @@ const documentEmailResolvers = {
           pdfBase64: input.pdfBase64 || null,
           senderEmail: context?.user?.email || null,
           extraAttachments: input.attachments || [],
+          useCustomFooter: input.useCustomFooter,
+          customEmailFooter: input.customEmailFooter,
         });
 
         return result;
@@ -87,6 +91,8 @@ const documentEmailResolvers = {
           pdfBase64: input.pdfBase64 || null,
           senderEmail: context?.user?.email || null,
           extraAttachments: input.attachments || [],
+          useCustomFooter: input.useCustomFooter,
+          customEmailFooter: input.customEmailFooter,
         });
 
         return result;
@@ -107,6 +113,8 @@ const documentEmailResolvers = {
           pdfBase64: input.pdfBase64 || null,
           senderEmail: context?.user?.email || null,
           extraAttachments: input.attachments || [],
+          useCustomFooter: input.useCustomFooter,
+          customEmailFooter: input.customEmailFooter,
         });
 
         return result;
