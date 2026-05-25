@@ -99,6 +99,7 @@ import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
 import { startCalendarWebhookRenewalCron } from "./cron/calendarWebhookRenewalCron.js";
 import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
 import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
+import { startTrialCleanupCron } from "./cron/trialCleanupCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -600,6 +601,10 @@ async function startServer() {
       // Démarrer le cron de détection des factures récurrentes
       startRecurringInvoiceDetectionCron();
       logger.info("✅ Cron de détection des factures récurrentes démarré");
+
+      // Démarrer le cron de nettoyage des trials app-managed
+      // (no-op si ENABLE_APP_TRIAL=false ; vérifié dans startTrialCleanupCron)
+      startTrialCleanupCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
