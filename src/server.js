@@ -85,6 +85,7 @@ import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
+import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import emailTrackingRoutes from "./routes/emailTracking.js";
@@ -293,6 +294,10 @@ async function startServer() {
 
   // Routes file download proxy
   app.use("/api/files", fileDownloadRoutes);
+
+  // Route preview PDF (proxy vers Next.js, auth JWT)
+  // Import at top: import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
+  app.use("/api", invoicePreviewPdfRoutes);
 
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
