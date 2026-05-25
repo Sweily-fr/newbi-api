@@ -3,7 +3,7 @@
  *
  * Why
  *   When ENABLE_APP_TRIAL becomes ON in production, the `databaseHooks.user
- *   .create.after` hook grants a 14-day app trial to every NEW user. Existing
+ *   .create.after` hook grants a 30-day app trial to every NEW user. Existing
  *   organisations created before the refonte have no trial fields at all
  *   (Stripe handled their trial). Without intervention, the org-creation
  *   logic could mistakenly re-grant an app trial to those cohorts if a
