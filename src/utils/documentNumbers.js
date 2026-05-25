@@ -848,7 +848,7 @@ const generateCreditNoteSequentialNumber = async (prefix, options = {}) => {
 
   if (options.manualNumber) {
     const baseQuery = {
-      status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+      status: { $in: ["CREATED", "PENDING", "COMPLETED", "CANCELED"] },
     };
     if (prefix) baseQuery.prefix = prefix;
     if (options.workspaceId) baseQuery.workspaceId = options.workspaceId;
