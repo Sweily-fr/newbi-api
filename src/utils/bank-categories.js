@@ -42,6 +42,8 @@ export const expenseCategories = {
 };
 
 // Catégories de revenus (transactions positives)
+// T4 — la catégorie "Chiffre d'affaires" remplace "Autre revenu" comme catch-all
+// pour les revenus reliés à une facture client (Newbi ou importée).
 export const incomeCategories = {
   100: { name: "Salaire", color: "#22c55e" },
   101: { name: "Prime", color: "#16a34a" },
@@ -57,18 +59,72 @@ export const incomeCategories = {
   132: { name: "Intérêts", color: "#a78bfa" },
   140: { name: "Virements reçus", color: "#3b82f6" },
   141: { name: "Virement interne", color: "#2563eb" },
-  0: { name: "Autre revenu", color: "#A585DB" },
+  // Catégorie spéciale : revenu rattaché à une facture client
+  REVENUE_INVOICE: { name: "Chiffre d'affaires", color: "#5b50ff" },
+  0: { name: "Chiffre d'affaires", color: "#5b50ff" },
   null: { name: "Non catégorisé", color: "#d1d5db" },
 };
 
+// Étiquettes lisibles pour les enum internes de catégories de dépense
+// (T5 — synchroniser les modifs faites par l'utilisateur sur les transactions).
+export const expenseCategoryEnumLabels = {
+  OFFICE_SUPPLIES: { name: "Fournitures", color: "#f97316" },
+  TRAVEL: { name: "Transport", color: "#3b82f6" },
+  MEALS: { name: "Repas", color: "#ea580c" },
+  ACCOMMODATION: { name: "Hébergement", color: "#f472b6" },
+  SOFTWARE: { name: "Logiciels", color: "#6366f1" },
+  HARDWARE: { name: "Matériel", color: "#a78bfa" },
+  SERVICES: { name: "Services", color: "#06b6d4" },
+  MARKETING: { name: "Marketing", color: "#ec4899" },
+  TAXES: { name: "Impôts & Taxes", color: "#64748b" },
+  RENT: { name: "Loyer", color: "#7c3aed" },
+  UTILITIES: { name: "Charges", color: "#a78bfa" },
+  SALARIES: { name: "Salaires", color: "#22c55e" },
+  INSURANCE: { name: "Assurance", color: "#0d9488" },
+  MAINTENANCE: { name: "Entretien", color: "#14b8a6" },
+  TRAINING: { name: "Formation", color: "#0ea5e9" },
+  SUBSCRIPTIONS: { name: "Abonnements", color: "#818cf8" },
+  OTHER: { name: "Autre", color: "#A585DB" },
+};
+
 /**
- * Détecte la catégorie d'une transaction via Bridge ID ou mots-clés description
+ * Détecte la catégorie d'une transaction.
+ * Ordre de priorité :
+ *  1. T4 — si linkedInvoiceId est défini → "Chiffre d'affaires" (revenus)
+ *  2. T5 — si l'utilisateur a défini `expenseCategory` (enum interne) → label associé
+ *  3. T5 — si l'utilisateur a défini `category` (texte libre) → utilisé tel quel
+ *  4. Sinon : Bridge ID ou heuristique sur la description
  */
 export const getTransactionCategory = (transaction) => {
-  const categoryId =
-    transaction.metadata?.bridgeCategoryId || transaction.category_id || null;
   const isIncome = transaction.amount > 0;
   const categories = isIncome ? incomeCategories : expenseCategories;
+
+  // 1. Revenu rattaché à une facture client → Chiffre d'affaires (T4)
+  if (isIncome && transaction.linkedInvoiceId) {
+    return incomeCategories.REVENUE_INVOICE;
+  }
+
+  // 2. Catégorie enum interne posée par l'utilisateur (T5)
+  if (!isIncome && transaction.expenseCategory) {
+    const fromEnum = expenseCategoryEnumLabels[transaction.expenseCategory];
+    if (fromEnum) return fromEnum;
+  }
+
+  // 3. Catégorie texte libre posée par l'utilisateur (T5)
+  if (transaction.category && typeof transaction.category === "string") {
+    // Si la catégorie correspond à un enum interne, on prend le label propre
+    const enumMatch = expenseCategoryEnumLabels[transaction.category];
+    if (enumMatch) return enumMatch;
+    // Sinon on l'utilise tel quel (avec une couleur par défaut)
+    return {
+      name: transaction.category,
+      color: isIncome ? "#10b981" : "#A585DB",
+    };
+  }
+
+  // 4. Heuristique Bridge / description
+  const categoryId =
+    transaction.metadata?.bridgeCategoryId || transaction.category_id || null;
 
   if (categoryId && categories[categoryId]) {
     return categories[categoryId];
