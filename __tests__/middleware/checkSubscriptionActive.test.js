@@ -145,7 +145,7 @@ describe("checkSubscriptionActive — flag OFF (default)", () => {
   it("ignores app-trial fields when flag OFF (no regression)", async () => {
     _orgFindOne.mockResolvedValue({
       isTrialActive: true,
-      trialEndDate: inFuture(14),
+      trialEndDate: inFuture(30),
     });
     _subFindOne.mockResolvedValue(null);
     await expect(
@@ -170,7 +170,7 @@ describe("checkSubscriptionActive — flag ON", () => {
   it("passes when app-trial active (no Stripe sub needed)", async () => {
     _orgFindOne.mockResolvedValue({
       isTrialActive: true,
-      trialEndDate: inFuture(14),
+      trialEndDate: inFuture(30),
     });
     await expect(
       checkSubscriptionActive({ workspaceId: VALID_ORG_ID }),
@@ -181,7 +181,7 @@ describe("checkSubscriptionActive — flag ON", () => {
   it("app-trial wins over an invalid Stripe sub", async () => {
     _orgFindOne.mockResolvedValue({
       isTrialActive: true,
-      trialEndDate: inFuture(14),
+      trialEndDate: inFuture(30),
     });
     _subFindOne.mockResolvedValue({ status: "unpaid" });
     await expect(
@@ -205,7 +205,7 @@ describe("checkSubscriptionActive — flag ON", () => {
   it("falls through to Stripe when isTrialActive=false", async () => {
     _orgFindOne.mockResolvedValue({
       isTrialActive: false,
-      trialEndDate: inFuture(14),
+      trialEndDate: inFuture(30),
     });
     _subFindOne.mockResolvedValue({ status: "active" });
     await expect(
@@ -258,7 +258,7 @@ describe("checkSubscriptionActive — cache behaviour", () => {
   it("trial cache hit avoids a second org lookup", async () => {
     _orgFindOne.mockResolvedValue({
       isTrialActive: true,
-      trialEndDate: inFuture(14),
+      trialEndDate: inFuture(30),
     });
     await checkSubscriptionActive({ workspaceId: VALID_ORG_ID });
     await checkSubscriptionActive({ workspaceId: VALID_ORG_ID });
@@ -268,7 +268,7 @@ describe("checkSubscriptionActive — cache behaviour", () => {
   it("invalidateTrialCache forces a re-lookup", async () => {
     _orgFindOne.mockResolvedValue({
       isTrialActive: true,
-      trialEndDate: inFuture(14),
+      trialEndDate: inFuture(30),
     });
     await checkSubscriptionActive({ workspaceId: VALID_ORG_ID });
     invalidateTrialCache(VALID_ORG_ID);

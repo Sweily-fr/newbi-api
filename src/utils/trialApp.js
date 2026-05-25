@@ -2,7 +2,7 @@
  * App-managed trial helpers.
  *
  * The app-managed trial is stored on the Organization document (Better Auth
- * collection "organization"). It runs for 14 days from signup, independent of
+ * collection "organization"). It runs for 30 days from signup, independent of
  * Stripe and the payment_method. The trial fields are:
  *   - trialStartDate: ISO string
  *   - trialEndDate:   ISO string
