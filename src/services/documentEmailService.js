@@ -467,6 +467,8 @@ async function sendDocumentEmail({
   pdfBase64 = null,
   senderEmail = null,
   extraAttachments = [],
+  useCustomFooter,
+  customEmailFooter,
 }) {
   // Récupérer le document
   const document = await getDocument(documentId, documentType, workspaceId);
@@ -534,13 +536,23 @@ async function sendDocumentEmail({
       ? new Date(document.dueDate).toLocaleDateString("fr-FR")
       : null;
 
-  // Récupérer les paramètres email du workspace (avancé pour le footer)
+  // Récupérer les paramètres email du workspace (fallback pour le footer)
   const emailSettings = await EmailSettings.findOne({ workspaceId });
 
-  // Déterminer le footer personnalisé
+  // Déterminer le footer personnalisé : la valeur envoyée depuis le modal
+  // d'envoi a la priorité sur les paramètres sauvegardés en base.
+  const requestProvidedFooter =
+    useCustomFooter !== undefined || customEmailFooter !== undefined;
+  const effectiveUseCustomFooter = requestProvidedFooter
+    ? Boolean(useCustomFooter)
+    : Boolean(emailSettings?.useCustomFooter);
+  const effectiveCustomFooter = requestProvidedFooter
+    ? customEmailFooter || ""
+    : emailSettings?.customEmailFooter || "";
+
   const customFooter =
-    emailSettings?.useCustomFooter && emailSettings?.customEmailFooter
-      ? replaceVariables(emailSettings.customEmailFooter, variables)
+    effectiveUseCustomFooter && effectiveCustomFooter
+      ? replaceVariables(effectiveCustomFooter, variables)
       : null;
 
   // Générer le token de tracking et l'URL du pixel

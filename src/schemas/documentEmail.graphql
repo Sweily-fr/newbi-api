@@ -23,6 +23,8 @@ input SendDocumentEmailInput {
   bccEmails: [String]
   pdfBase64: String
   attachments: [EmailAttachmentInput!]
+  useCustomFooter: Boolean
+  customEmailFooter: String
 }
 
 type SendDocumentEmailResult {
