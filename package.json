@@ -44,6 +44,9 @@
   ],
   "author": "",
   "license": "ISC",
+  "overrides": {
+    "esbuild": "0.25.12"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@aws-sdk/client-s3": "^3.848.0",
