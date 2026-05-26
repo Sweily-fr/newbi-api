@@ -10,6 +10,7 @@ type SharedDocument {
   mimeType: String!
   fileSize: Int!
   fileExtension: String
+  fileHash: String
   workspaceId: ID!
   folderId: ID
   folder: SharedFolder
