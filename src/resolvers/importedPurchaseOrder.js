@@ -14,9 +14,13 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import ImportedPurchaseOrder from "../models/ImportedPurchaseOrder.js";
+import PurchaseOrder from "../models/PurchaseOrder.js";
+import { getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import invoiceExtractionService from "../services/invoiceExtractionService.js";
+import hybridOcrService from "../services/hybridOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
   createValidationError,
@@ -245,6 +249,140 @@ function transformOcrToPurchaseOrderData(ocrResult, extractionResult) {
   };
 }
 
+/**
+ * Convertit un ImportedPurchaseOrder en PurchaseOrder VALIDATED dans la table
+ * principale. Préfixe dédié `IMP-YYYYMM` pour ne pas consommer un numéro de
+ * la séquence `BC-YYYYMM`. L'ImportedPurchaseOrder passe en VALIDATED.
+ */
+async function convertSingleImportedPurchaseOrder(
+  importedPurchaseOrder,
+  userId,
+) {
+  const workspaceId = importedPurchaseOrder.workspaceId;
+
+  const clientName =
+    importedPurchaseOrder.client?.name ||
+    importedPurchaseOrder.vendor?.name ||
+    "Fournisseur à compléter";
+  const clientSiret =
+    importedPurchaseOrder.client?.siret ||
+    importedPurchaseOrder.vendor?.siret ||
+    "À COMPLÉTER";
+  const clientEmail =
+    importedPurchaseOrder.vendor?.email || "a-completer@a-modifier.fr";
+  const clientStreet =
+    importedPurchaseOrder.client?.address ||
+    importedPurchaseOrder.vendor?.address ||
+    "";
+  const clientCity =
+    importedPurchaseOrder.client?.city ||
+    importedPurchaseOrder.vendor?.city ||
+    "";
+  const clientPostalCode =
+    importedPurchaseOrder.client?.postalCode ||
+    importedPurchaseOrder.vendor?.postalCode ||
+    "";
+  const clientCountry = importedPurchaseOrder.vendor?.country || "France";
+
+  let items = (importedPurchaseOrder.items || [])
+    .filter((it) => it && (it.description || it.totalPrice))
+    .map((it) => ({
+      description: it.description || "Article importé",
+      quantity: it.quantity > 0 ? it.quantity : 1,
+      unitPrice: it.unitPrice >= 0 ? it.unitPrice : 0,
+      vatRate: it.vatRate != null ? it.vatRate : 20,
+      unit: "",
+      discount: 0,
+      discountType: "PERCENTAGE",
+    }));
+  if (items.length === 0) {
+    items = [
+      {
+        description: "À compléter",
+        quantity: 1,
+        unitPrice:
+          importedPurchaseOrder.totalHT || importedPurchaseOrder.totalTTC || 0,
+        vatRate: 20,
+        unit: "",
+        discount: 0,
+        discountType: "PERCENTAGE",
+      },
+    ];
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const prefix = `IMP-${year}${month}`;
+
+  const importIdSuffix = importedPurchaseOrder._id
+    .toString()
+    .slice(-4)
+    .toUpperCase();
+  const rawOriginal = (importedPurchaseOrder.originalPurchaseOrderNumber || "")
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .slice(0, 14)
+    .replace(/^-+|-+$/g, "");
+  const number = rawOriginal
+    ? `${rawOriginal}-${importIdSuffix}`
+    : `IMP${importedPurchaseOrder._id.toString().slice(-8).toUpperCase()}`;
+
+  const organization = await getOrganizationInfo(workspaceId);
+  const companyInfo = mapOrganizationToCompanyInfo(organization);
+
+  const issueDate = importedPurchaseOrder.purchaseOrderDate
+    ? new Date(importedPurchaseOrder.purchaseOrderDate)
+    : new Date();
+  const deliveryDate = importedPurchaseOrder.deliveryDate
+    ? new Date(importedPurchaseOrder.deliveryDate)
+    : undefined;
+  const validUntilDate = importedPurchaseOrder.dueDate
+    ? new Date(importedPurchaseOrder.dueDate)
+    : undefined;
+
+  const totalHT = importedPurchaseOrder.totalHT || 0;
+  const totalVAT = importedPurchaseOrder.totalVAT || 0;
+  const totalTTC = importedPurchaseOrder.totalTTC || totalHT + totalVAT;
+
+  const purchaseOrder = await PurchaseOrder.create({
+    prefix,
+    number,
+    issueDate,
+    validUntil: validUntilDate,
+    deliveryDate,
+    status: "VALIDATED",
+    companyInfo,
+    client: {
+      type: "COMPANY",
+      name: clientName,
+      email: clientEmail,
+      siret: clientSiret,
+      address: {
+        street: clientStreet,
+        city: clientCity,
+        postalCode: clientPostalCode,
+        country: clientCountry,
+      },
+    },
+    items,
+    totalHT,
+    totalVAT,
+    totalTTC,
+    finalTotalHT: totalHT,
+    finalTotalVAT: totalVAT,
+    finalTotalTTC: totalTTC,
+    discount: 0,
+    discountType: "FIXED",
+    workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    createdBy: userId,
+  });
+
+  importedPurchaseOrder.status = "VALIDATED";
+  await importedPurchaseOrder.save();
+
+  return purchaseOrder;
+}
+
 const importedPurchaseOrderResolvers = {
   Upload: GraphQLUpload,
 
@@ -351,8 +489,6 @@ const importedPurchaseOrderResolvers = {
           context.workspaceId,
         );
         try {
-          const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
-
           const { createReadStream, filename, mimetype } = await file;
 
           if (!filename) {
@@ -369,48 +505,6 @@ const importedPurchaseOrderResolvers = {
           const maxSize = 10 * 1024 * 1024;
           if (fileBuffer.length > maxSize) {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
-          }
-
-          const base64Data = fileBuffer.toString("base64");
-          const contentHash = crypto
-            .createHash("sha256")
-            .update(fileBuffer)
-            .digest("hex");
-
-          console.log(
-            `🔍 importPurchaseOrderDirect: OCR direct pour ${filename}`,
-          );
-          const rawResult = await claudeVisionOcrService.processFromBase64(
-            base64Data,
-            mimetype,
-            filename,
-            contentHash,
-          );
-
-          if (!rawResult.success) {
-            throw createInternalServerError(
-              `Erreur OCR: ${rawResult.error || rawResult.message}`,
-            );
-          }
-
-          const structuredResult =
-            claudeVisionOcrService.toInvoiceFormat(rawResult);
-
-          let poData;
-          if (structuredResult.transaction_data) {
-            poData = transformOcrToPurchaseOrderData(
-              structuredResult,
-              structuredResult,
-            );
-          } else {
-            const extractionResult =
-              await invoiceExtractionService.extractInvoiceData(
-                structuredResult,
-              );
-            poData = transformOcrToPurchaseOrderData(
-              structuredResult,
-              extractionResult,
-            );
           }
 
           let organizationId = null;
@@ -443,6 +537,8 @@ const importedPurchaseOrderResolvers = {
             }
           }
 
+          // Upload Cloudflare en premier (indispensable, on a toujours besoin
+          // de stocker le PDF même si l'OCR n'aboutit pas).
           console.log(
             `☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`,
           );
@@ -454,19 +550,108 @@ const importedPurchaseOrderResolvers = {
             organizationId,
           );
 
-          await recordOcrUsage(user.id, workspaceId, plan, {
-            fileName: filename,
-            provider: rawResult.provider || "claude-vision",
-            success: true,
-          });
-
-          const duplicates =
-            await ImportedPurchaseOrder.findPotentialDuplicates(
+          // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
+          // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition
+          // si l'extraction n'est pas parfaite. Aucun message d'erreur visible.
+          let poData = {};
+          let ocrProvider = null;
+          let plan = null;
+          let consumedQuota = false;
+          try {
+            const quotaResult = await checkUserOcrQuota(
+              user.id,
               workspaceId,
-              poData.originalPurchaseOrderNumber,
-              poData.vendor?.name,
-              poData.totalTTC,
+              1,
             );
+            plan = quotaResult.plan;
+
+            const base64Data = fileBuffer.toString("base64");
+            const contentHash = crypto
+              .createHash("sha256")
+              .update(fileBuffer)
+              .digest("hex");
+
+            console.log(
+              `🔍 importPurchaseOrderDirect: Claude Vision pour ${filename}`,
+            );
+            const rawResult = await claudeVisionOcrService.processFromBase64(
+              base64Data,
+              mimetype,
+              filename,
+              contentHash,
+            );
+
+            if (!rawResult.success) {
+              throw createInternalServerError(
+                `Erreur OCR: ${rawResult.error || rawResult.message}`,
+              );
+            }
+
+            const structuredResult =
+              claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+            if (structuredResult.transaction_data) {
+              poData = transformOcrToPurchaseOrderData(
+                structuredResult,
+                structuredResult,
+              );
+            } else {
+              const extractionResult =
+                await invoiceExtractionService.extractInvoiceData(
+                  structuredResult,
+                );
+              poData = transformOcrToPurchaseOrderData(
+                structuredResult,
+                extractionResult,
+              );
+            }
+            ocrProvider = rawResult.provider || "claude-vision";
+            consumedQuota = true;
+          } catch (claudeError) {
+            console.warn(
+              `⚠️ Claude Vision indisponible pour ${filename} (${claudeError.message}). Fallback OCR hybride (Mindee / Google / Mistral).`,
+            );
+            try {
+              const ocrResult = await hybridOcrService.processDocumentFromUrl(
+                uploadResult.url,
+                filename,
+                mimetype,
+                workspaceId,
+              );
+              if (ocrResult?.transaction_data) {
+                poData = transformOcrToPurchaseOrderData(ocrResult, ocrResult);
+              } else {
+                const extractionResult =
+                  await invoiceExtractionService.extractInvoiceData(ocrResult);
+                poData = transformOcrToPurchaseOrderData(
+                  ocrResult,
+                  extractionResult,
+                );
+              }
+              ocrProvider = ocrResult?.provider || "hybrid";
+            } catch (fallbackError) {
+              console.warn(
+                `⚠️ OCR de fallback échec pour ${filename}: ${fallbackError.message}. Champs vides, à compléter via la sidebar.`,
+              );
+            }
+          }
+
+          if (consumedQuota && plan) {
+            await recordOcrUsage(user.id, workspaceId, plan, {
+              fileName: filename,
+              provider: ocrProvider,
+              success: true,
+            });
+          }
+
+          const duplicates = poData.originalPurchaseOrderNumber
+            ? await ImportedPurchaseOrder.findPotentialDuplicates(
+                workspaceId,
+                poData.originalPurchaseOrderNumber,
+                poData.vendor?.name,
+                poData.totalTTC,
+              )
+            : [];
 
           const isDuplicate = duplicates.length > 0;
 
@@ -474,6 +659,7 @@ const importedPurchaseOrderResolvers = {
             workspaceId,
             importedBy: user.id,
             ...poData,
+            status: "PENDING_REVIEW",
             file: {
               url: uploadResult.url,
               cloudflareKey: uploadResult.key,
@@ -572,6 +758,21 @@ const importedPurchaseOrderResolvers = {
         return po.validate();
       },
     ),
+
+    convertImportedPurchaseOrderToPurchaseOrder: requireWrite(
+      "importedPurchaseOrders",
+    )(async (_, { id }, { user, workspaceId }) => {
+      const importedPurchaseOrder = await checkPurchaseOrderAccess(
+        id,
+        workspaceId,
+      );
+      if (importedPurchaseOrder.status === "VALIDATED") {
+        throw createValidationError(
+          "Ce bon de commande importé a déjà été converti.",
+        );
+      }
+      return convertSingleImportedPurchaseOrder(importedPurchaseOrder, user.id);
+    }),
 
     rejectImportedPurchaseOrder: requireWrite("importedPurchaseOrders")(
       async (_, { id, reason }, { workspaceId }) => {
