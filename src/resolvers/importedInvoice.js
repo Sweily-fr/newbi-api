@@ -897,9 +897,6 @@ const importedInvoiceResolvers = {
           context.workspaceId,
         );
         try {
-          // Vérifier le quota utilisateur avant l'import
-          const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
-
           const { createReadStream, filename, mimetype } = await file;
 
           if (!filename) {
@@ -951,112 +948,131 @@ const importedInvoiceResolvers = {
             }
           }
 
-          // OPTIMISATION: Lancer l'upload Cloudflare et l'OCR en parallèle
-          // L'OCR Claude Vision utilise le base64 (pas l'URL), donc les deux sont indépendants
+          // Upload Cloudflare en premier (indispensable, même si l'OCR échoue
+          // on doit garder le PDF stocké pour saisie manuelle).
           console.log(
-            `⚡ importInvoiceDirect: Upload + OCR en parallèle pour ${filename}`,
+            `☁️ importInvoiceDirect: Upload Cloudflare pour ${filename}`,
+          );
+          const uploadResult = await cloudflareService.uploadImage(
+            fileBuffer,
+            filename,
+            user.id,
+            "importedInvoice",
+            organizationId,
           );
 
-          let invoiceData;
-          let ocrProvider = "claude-vision";
-          let uploadResult;
+          // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
+          // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
+          let invoiceData = {};
+          let ocrProvider = null;
+          let plan = null;
+          let consumedQuota = false;
+          try {
+            const quotaResult = await checkUserOcrQuota(
+              user.id,
+              workspaceId,
+              1,
+            );
+            plan = quotaResult.plan;
 
-          if (claudeVisionOcrService.isAvailable()) {
-            // Préparer les données OCR (synchrone, rapide)
-            const base64Data = fileBuffer.toString("base64");
-            const contentHash = crypto
-              .createHash("sha256")
-              .update(fileBuffer)
-              .digest("hex");
+            if (claudeVisionOcrService.isAvailable()) {
+              const base64Data = fileBuffer.toString("base64");
+              const contentHash = crypto
+                .createHash("sha256")
+                .update(fileBuffer)
+                .digest("hex");
 
-            // Lancer upload Cloudflare + OCR Claude Vision en parallèle
-            const [uploadRes, rawResult] = await Promise.all([
-              cloudflareService.uploadImage(
-                fileBuffer,
-                filename,
-                user.id,
-                "importedInvoice",
-                organizationId,
-              ),
-              claudeVisionOcrService.processFromBase64(
+              console.log(
+                `🔍 importInvoiceDirect: Claude Vision pour ${filename}`,
+              );
+              const rawResult = await claudeVisionOcrService.processFromBase64(
                 base64Data,
                 mimetype,
                 filename,
                 contentHash,
-              ),
-            ]);
-
-            uploadResult = uploadRes;
-
-            if (!rawResult.success) {
-              throw createInternalServerError(
-                `Erreur OCR: ${rawResult.error || rawResult.message}`,
               );
-            }
 
-            const structuredResult =
-              claudeVisionOcrService.toInvoiceFormat(rawResult);
+              if (!rawResult.success) {
+                throw createInternalServerError(
+                  `Erreur OCR: ${rawResult.error || rawResult.message}`,
+                );
+              }
 
-            if (structuredResult.transaction_data) {
-              invoiceData = transformOcrToInvoiceDataV2(
-                structuredResult,
-                structuredResult,
-              );
-            } else {
-              const extractionResult =
-                await invoiceExtractionService.extractInvoiceData(
+              const structuredResult =
+                claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+              if (structuredResult.transaction_data) {
+                invoiceData = transformOcrToInvoiceDataV2(
+                  structuredResult,
                   structuredResult,
                 );
-              invoiceData = transformOcrToInvoiceDataV2(
-                structuredResult,
-                extractionResult,
+              } else {
+                const extractionResult =
+                  await invoiceExtractionService.extractInvoiceData(
+                    structuredResult,
+                  );
+                invoiceData = transformOcrToInvoiceDataV2(
+                  structuredResult,
+                  extractionResult,
+                );
+              }
+              ocrProvider = rawResult.provider || "claude-vision";
+            } else {
+              console.log(
+                `🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`,
+              );
+              invoiceData = await processInvoiceWithOcr(
+                uploadResult.url,
+                filename,
+                mimetype,
+                workspaceId,
+              );
+              ocrProvider = invoiceData.ocrData?.provider || "hybrid";
+            }
+            consumedQuota = true;
+          } catch (claudeError) {
+            console.warn(
+              `⚠️ OCR principal indisponible pour ${filename} (${claudeError.message}). Fallback OCR hybride (Mindee / Google / Mistral).`,
+            );
+            try {
+              invoiceData = await processInvoiceWithOcr(
+                uploadResult.url,
+                filename,
+                mimetype,
+                workspaceId,
+              );
+              ocrProvider = invoiceData.ocrData?.provider || "hybrid";
+            } catch (fallbackError) {
+              console.warn(
+                `⚠️ OCR de fallback échec pour ${filename}: ${fallbackError.message}. Champs vides, à compléter via la sidebar.`,
               );
             }
-
-            ocrProvider = rawResult.provider || "claude-vision";
-          } else {
-            // Fallback: Upload d'abord (besoin de l'URL pour OCR hybride)
-            uploadResult = await cloudflareService.uploadImage(
-              fileBuffer,
-              filename,
-              user.id,
-              "importedInvoice",
-              organizationId,
-            );
-            console.log(
-              `🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`,
-            );
-            invoiceData = await processInvoiceWithOcr(
-              uploadResult.url,
-              filename,
-              mimetype,
-              workspaceId,
-            );
-            ocrProvider = invoiceData.ocrData?.provider || "hybrid";
           }
 
-          // OPTIMISATION: Lancer doublons + enregistrement OCR en parallèle
-          const [duplicates] = await Promise.all([
-            ImportedInvoice.findPotentialDuplicates(
-              workspaceId,
-              invoiceData.originalInvoiceNumber,
-              invoiceData.vendor?.name,
-              invoiceData.totalTTC,
-            ),
-            recordOcrUsage(user.id, workspaceId, plan, {
+          if (consumedQuota && plan) {
+            await recordOcrUsage(user.id, workspaceId, plan, {
               fileName: filename,
               provider: ocrProvider,
               success: true,
-            }),
-          ]);
+            });
+          }
+
+          const duplicates = invoiceData.originalInvoiceNumber
+            ? await ImportedInvoice.findPotentialDuplicates(
+                workspaceId,
+                invoiceData.originalInvoiceNumber,
+                invoiceData.vendor?.name,
+                invoiceData.totalTTC,
+              )
+            : [];
 
           const isDuplicate = duplicates.length > 0;
 
-          // Créer et sauvegarder la facture importée
           const importedInvoice = new ImportedInvoice({
             workspaceId,
             importedBy: user.id,
             ...invoiceData,
+            status: "PENDING_REVIEW",
             file: {
               url: uploadResult.url,
               cloudflareKey: uploadResult.key,
@@ -1070,7 +1086,6 @@ const importedInvoiceResolvers = {
 
           await importedInvoice.save();
 
-          // Déclencher les automatisations (fire-and-forget, pas de await)
           documentAutomationService
             .executeAutomationsForExpense(
               "INVOICE_IMPORTED",
