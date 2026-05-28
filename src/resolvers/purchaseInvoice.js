@@ -394,13 +394,13 @@ const purchaseInvoiceResolvers = {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
 
+        const oldStatus = invoice.status;
+
         Object.keys(input).forEach((key) => {
           if (input[key] !== undefined) {
             invoice[key] = input[key];
           }
         });
-
-        const oldStatus = invoice.status;
 
         // Auto-detect overdue
         if (
@@ -409,6 +409,17 @@ const purchaseInvoiceResolvers = {
           invoice.status === "TO_PAY"
         ) {
           invoice.status = "OVERDUE";
+        }
+
+        // Filet de sécurité : si on bascule vers PAID sans paymentDate explicite,
+        // on défaut à aujourd'hui pour que la facture compte dans "Payé ce mois"
+        // (la stat filtre status=PAID + paymentDate dans le mois courant).
+        if (
+          invoice.status === "PAID" &&
+          oldStatus !== "PAID" &&
+          !invoice.paymentDate
+        ) {
+          invoice.paymentDate = new Date();
         }
 
         await invoice.save();

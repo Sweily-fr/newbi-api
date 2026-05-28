@@ -10,6 +10,7 @@ import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { withOrganization } from "../middlewares/rbac.js";
 import { GraphQLUpload } from "graphql-upload";
 import path from "path";
+import crypto from "crypto";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const { ObjectId } = mongoose.Types;
@@ -561,6 +562,10 @@ const sharedDocumentResolvers = {
 
           const fileBuffer = Buffer.concat(chunks);
           const fileSize = fileBuffer.length;
+          const fileHash = crypto
+            .createHash("sha256")
+            .update(fileBuffer)
+            .digest("hex");
 
           // Valider la taille du fichier (500MB pour les vidéos, 50MB pour le reste)
           const isVideo = mimetype?.startsWith("video/");
@@ -623,6 +628,7 @@ const sharedDocumentResolvers = {
             mimeType: mimetype,
             fileSize,
             fileExtension,
+            fileHash,
             workspaceId,
             folderId: folderId || null,
             uploadedBy: user.id,

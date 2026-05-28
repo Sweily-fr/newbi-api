@@ -702,192 +702,68 @@ const quoteResolvers = {
             }
           }
 
-          // Fonction pour forcer un numéro séquentiel pour les devis en PENDING
-          // Vérifie tous les numéros existants et trouve le premier trou disponible
-          // La séquence est PAR PRÉFIXE - chaque préfixe a sa propre numérotation
-          const forceSequentialNumber = async () => {
-            console.log(
-              "🔍 [forceSequentialNumber] Searching for quotes in workspace:",
-              workspaceId,
-              "with prefix:",
-              prefix,
-            );
+          // === Génération du numéro (style Pennylane) ===
+          // Règles légales (Art. 242 nonies A CGI) : unicité, chronologie, continuité.
+          //   - Compteur atomique (DocumentCounter) pour éviter toute race condition
+          //   - Numéro manuel autorisé UNIQUEMENT avant le 1er devis finalisé du préfixe
+          //     (équivalent Pennylane : "le compteur ne peut plus être modifié après la 1ère facture")
+          //   - Brouillons hors séquence (numéros DRAFT-timestamp indépendants)
+          // Le numéro est régénéré à chaque tentative dans la boucle de retry (cf. save plus bas).
 
-            // Récupérer tous les devis en statut officiel (PENDING, COMPLETED, CANCELED)
-            // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
-            // On ne filtre PAS par createdBy car l'unicité est par workspace + prefix
-            const officialQuotes = await Quote.find(
-              {
-                status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-                prefix, // Filtrage par préfixe
-                workspaceId,
-                // Ne considérer que les numéros sans suffixe
-                number: { $regex: /^\d+$/ },
-              },
-              { number: 1 },
-            )
-              .sort({ number: 1 })
-              .lean(); // Tri croissant
-
-            console.log(
-              "🔍 [forceSequentialNumber] Found quotes:",
-              officialQuotes.length,
-            );
-            console.log(
-              "🔍 [forceSequentialNumber] Quote numbers:",
-              officialQuotes.map((q) => q.number),
-            );
-
-            // Si aucun devis officiel n'existe, commencer à 1
-            if (officialQuotes.length === 0) {
-              console.log(
-                "⚠️ [forceSequentialNumber] No quotes found, returning 000001",
-              );
-              return "000001";
-            }
-
-            // Convertir les numéros en entiers et trier
-            const numbers = officialQuotes
-              .map((q) => parseInt(q.number, 10))
-              .sort((a, b) => a - b);
-
-            // Prendre le plus grand numéro et ajouter 1
-            const maxNumber = Math.max(...numbers);
-            const nextNumber = maxNumber + 1;
-
-            console.log(
-              "✅ [forceSequentialNumber] Max number:",
-              maxNumber,
-              "→ Next number:",
-              nextNumber,
-            );
-
-            // Formater avec des zéros à gauche (4 chiffres)
-            return String(nextNumber).padStart(4, "0");
-          };
-
-          // Si le statut est PENDING, vérifier d'abord s'il existe des devis en DRAFT
-          // qui pourraient entrer en conflit avec le numéro qui sera généré
+          // Renomme les brouillons qui entreraient en conflit avec le numéro séquentiel généré
           const handleDraftConflicts = async (newNumber) => {
-            // Vérifier s'il existe un devis en DRAFT avec le même numéro
             const conflictingDrafts = await Quote.find({
               prefix,
               number: newNumber,
               status: "DRAFT",
               workspaceId,
-              createdBy: user.id,
             });
-
-            // S'il y a des devis en conflit, mettre à jour leur numéro en batch
-            if (conflictingDrafts.length > 0) {
-              const bulkOps = conflictingDrafts.map((draft) => {
-                const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-                const finalDraftNumber = `${newNumber}-${timestamp}`;
-                return {
-                  updateOne: {
-                    filter: { _id: draft._id },
-                    update: { $set: { number: finalDraftNumber } },
+            if (conflictingDrafts.length === 0) return;
+            const bulkOps = conflictingDrafts.map((draft) => ({
+              updateOne: {
+                filter: { _id: draft._id },
+                update: {
+                  $set: {
+                    number: `${newNumber}-${Date.now()}${Math.floor(Math.random() * 1000)}`,
                   },
-                };
-              });
-              await Quote.bulkWrite(bulkOps);
-            }
-
-            return newNumber;
+                },
+              },
+            }));
+            await Quote.bulkWrite(bulkOps);
           };
 
-          // Vérifier si c'est le premier devis de l'utilisateur
-          const firstQuote = await Quote.findOne({
-            createdBy: user.id,
-            status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-          });
+          const isDraft = !input.status || input.status === "DRAFT";
 
-          let number;
-
-          // Logique de génération du numéro
-          if (input.number && firstQuote === null) {
-            // C'est le premier devis, on peut accepter le numéro fourni
-            // Vérifier que le numéro est valide
-            if (!/^\d{1,6}$/.test(input.number)) {
+          // Verrou Pennylane : un numéro manuel n'est accepté que s'il n'existe encore
+          // aucun devis finalisé pour ce préfixe (1er document du compteur).
+          let allowManualNumber = false;
+          if (input.number && !isDraft) {
+            const firstFinalizedForPrefix = await Quote.findOne({
+              workspaceId,
+              prefix,
+              status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+            }).lean();
+            allowManualNumber = !firstFinalizedForPrefix;
+            if (allowManualNumber && !/^\d{1,6}$/.test(input.number)) {
               throw new AppError(
                 "Le numéro de devis doit contenir entre 1 et 6 chiffres",
                 ERROR_CODES.VALIDATION_ERROR,
               );
             }
-
-            // Pour les brouillons, utiliser generateQuoteNumber pour gérer les conflits
-            if (input.status === "DRAFT") {
-              number = await generateQuoteNumber(prefix, {
-                isDraft: true,
-                manualNumber: input.number,
-                workspaceId,
-                userId: user.id,
-              });
-            } else {
-              // Pour les devis non-brouillons, vérifier l'unicité
-              const existingQuote = await Quote.findOne({
-                number: input.number,
-                workspaceId,
-                createdBy: user.id,
-              });
-
-              if (existingQuote) {
-                throw new AppError(
-                  "Ce numéro de devis est déjà utilisé",
-                  ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
-                );
-              }
-
-              number = input.number;
-            }
-          } else if (input.number) {
-            // Ce n'est pas le premier devis
-            // Pour les brouillons, IGNORER le numéro fourni et générer un timestamp unique
-            if (input.status === "DRAFT") {
-              number = await generateQuoteNumber(prefix, {
-                isDraft: true,
-                // Ne pas passer manualNumber pour les brouillons - utiliser timestamp
-                workspaceId,
-                userId: user.id,
-              });
-              console.log(
-                "✅ [createQuote] Generated number for DRAFT:",
-                number,
-              );
-            } else if (input.status === "PENDING") {
-              number = await forceSequentialNumber();
-              console.log(
-                "✅ [createQuote] Generated number for PENDING:",
-                number,
-              );
-            } else {
-              // Pour les autres statuts, générer un numéro séquentiel
-              number = await generateQuoteNumber(prefix, {
-                workspaceId,
-                userId: user.id,
-              });
-              console.log(
-                "✅ [createQuote] Generated number for other status:",
-                number,
-              );
-            }
-          } else {
-            // Aucun numéro fourni, on en génère un nouveau
-            if (input.status === "PENDING") {
-              // Pour les devis PENDING, on force un numéro séquentiel
-              number = await forceSequentialNumber();
-            } else {
-              // Pour les brouillons, on génère un numéro standard
-              number = await generateQuoteNumber(prefix, {
-                isDraft: true,
-                workspaceId,
-                userId: user.id,
-              });
-            }
           }
 
-          // Gérer les conflits avec les devis en DRAFT
-          number = await handleDraftConflicts(number);
+          // Fonction unifiée appelée à chaque tentative de save (retry loop plus bas)
+          // Padding 4 chiffres = aligné avec les hooks frontend (useQuoteNumber)
+          const generateNumber = async () => {
+            if (allowManualNumber) {
+              return String(parseInt(input.number, 10)).padStart(4, "0");
+            }
+            return await generateQuoteNumber(prefix, {
+              isDraft,
+              workspaceId,
+              userId: user.id,
+            });
+          };
 
           // Récupérer les informations de l'organisation
           const organization = await getOrganizationInfo(workspaceId);
@@ -965,38 +841,76 @@ const quoteResolvers = {
             }
           }
 
-          // Créer le devis - companyInfo uniquement pour les documents non-DRAFT
-          const isDraft = !input.status || input.status === "DRAFT";
-          const quote = new Quote({
-            ...input,
-            number, // S'assurer que le numéro est défini
-            prefix,
-            workspaceId, // Ajouter le workspaceId
-            companyInfo: isDraft
-              ? undefined
-              : mapOrganizationToCompanyInfo(organization),
-            client: {
-              ...input.client,
-              shippingAddress: input.client.hasDifferentShippingAddress
-                ? {
-                    fullName: input.client.shippingAddress?.fullName || "",
-                    street: input.client.shippingAddress?.street || "",
-                    city: input.client.shippingAddress?.city || "",
-                    postalCode: input.client.shippingAddress?.postalCode || "",
-                    country: input.client.shippingAddress?.country || "",
-                  }
-                : undefined,
-            },
-            appearance: input.appearance || {
-              textColor: "#000000",
-              headerTextColor: "#ffffff",
-              headerBgColor: "#1d1d1b",
-            },
-            createdBy: user.id,
-            ...totals, // Ajouter tous les totaux calculés
-          });
+          // Création avec retry sur E11000 : si le numéro entre en collision
+          // (race condition, index legacy résiduel, ou brouillon conflictuel),
+          // on régénère via le compteur atomique et on retente. Max 5 tentatives.
+          const MAX_SAVE_RETRIES = 5;
+          let quote;
+          let number;
+          for (let attempt = 1; attempt <= MAX_SAVE_RETRIES; attempt++) {
+            number = await generateNumber();
+            await handleDraftConflicts(number);
 
-          await quote.save();
+            quote = new Quote({
+              ...input,
+              number,
+              prefix,
+              workspaceId,
+              companyInfo: isDraft
+                ? undefined
+                : mapOrganizationToCompanyInfo(organization),
+              client: {
+                ...input.client,
+                shippingAddress: input.client.hasDifferentShippingAddress
+                  ? {
+                      fullName: input.client.shippingAddress?.fullName || "",
+                      street: input.client.shippingAddress?.street || "",
+                      city: input.client.shippingAddress?.city || "",
+                      postalCode:
+                        input.client.shippingAddress?.postalCode || "",
+                      country: input.client.shippingAddress?.country || "",
+                    }
+                  : undefined,
+              },
+              appearance: input.appearance || {
+                textColor: "#000000",
+                headerTextColor: "#ffffff",
+                headerBgColor: "#1d1d1b",
+              },
+              createdBy: user.id,
+              ...totals,
+            });
+
+            try {
+              await quote.save();
+              break;
+            } catch (err) {
+              const isDuplicateKey =
+                err && (err.code === 11000 || err.code === 11001);
+              if (!isDuplicateKey) throw err;
+              // Numéro manuel rejeté : ne pas retry indéfiniment, remonter une erreur claire
+              if (allowManualNumber) {
+                throw new AppError(
+                  "Ce numéro de devis est déjà utilisé",
+                  ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
+                );
+              }
+              if (attempt === MAX_SAVE_RETRIES) {
+                console.error(
+                  "[createQuote] Échec après retries E11000:",
+                  err.keyValue,
+                );
+                throw new AppError(
+                  "Impossible de générer un numéro de devis unique. Veuillez réessayer.",
+                  ERROR_CODES.INTERNAL_ERROR,
+                );
+              }
+              console.warn(
+                `[createQuote] Conflit E11000 tentative ${attempt}/${MAX_SAVE_RETRIES}, retry:`,
+                err.keyValue,
+              );
+            }
+          }
 
           // Enregistrer l'activité dans le client si c'est un client existant
           if (clientData.id) {

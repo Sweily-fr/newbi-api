@@ -37,6 +37,11 @@ import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
+import {
+  autoPushEventToConnections,
+  updateEventInExternalCalendars,
+  deleteEventFromExternalCalendars,
+} from "../services/calendar/CalendarSyncService.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1313,62 +1318,94 @@ const invoiceResolvers = {
               ...totals, // Ajouter tous les totaux calculés
             });
 
-            try {
-              await invoice.save();
-              console.log(
-                `✅ Facture sauvegardée avec succès: ${prefix}${number}`,
-              );
-
-              // Log pour les factures de situation
-              if (invoice.invoiceType === "situation") {
-                console.log("📊 Facture de situation sauvegardée:", {
-                  id: invoice._id,
-                  situationReference: invoice.situationReference,
-                  contractTotal: invoice.contractTotal,
-                  purchaseOrderNumber: invoice.purchaseOrderNumber,
-                });
-              }
-
-              // === ROUTAGE E-INVOICING / E-REPORTING ===
-              // Évaluer et router la facture si elle n'est pas un brouillon
-              if (invoice.status !== "DRAFT") {
-                try {
-                  const routingResult = await evaluateAndRouteInvoice(
-                    invoice,
-                    workspaceId,
+            // Retry sur E11000 autour du save initial : régénère le numéro via le
+            // compteur atomique en cas de conflit (race condition, index legacy).
+            // Un numéro fourni manuellement échoue immédiatement (pas de retry).
+            const wasManualInvoiceNumber = Boolean(input.number);
+            const MAX_SAVE_RETRIES = 5;
+            for (let attempt = 1; ; attempt++) {
+              try {
+                await invoice.save();
+                break;
+              } catch (saveError) {
+                const isDup =
+                  saveError.code === 11000 || saveError.code === 11001;
+                if (!isDup) throw saveError;
+                if (wasManualInvoiceNumber) {
+                  throw new AppError(
+                    `Le numéro de facture "${invoice.number}" est déjà utilisé`,
+                    ERROR_CODES.DUPLICATE_ERROR,
                   );
-                  if (routingResult) {
-                    await invoice.save();
-                    logger.info(
-                      `[E-INVOICE-ROUTING] Facture ${prefix}${number}: ${routingResult.flowType} - ${routingResult.reason}`,
-                    );
-                  }
-                } catch (eInvoicingError) {
-                  // Ne pas faire échouer la création de facture si le routage échoue
-                  logger.error("Erreur routing e-invoicing:", eInvoicingError);
-                  try {
-                    invoice.eInvoiceStatus = "ERROR";
-                    invoice.eInvoiceError = eInvoicingError.message;
-                    await invoice.save();
-                  } catch (updateError) {
-                    logger.error(
-                      "Erreur lors de la mise à jour du statut e-invoicing:",
-                      updateError,
-                    );
-                  }
+                }
+                if (attempt >= MAX_SAVE_RETRIES) {
+                  console.error(
+                    "[createInvoice] Échec après retries E11000:",
+                    saveError.keyValue,
+                  );
+                  throw new AppError(
+                    "Impossible de générer un numéro de facture unique. Veuillez réessayer.",
+                    ERROR_CODES.INTERNAL_ERROR,
+                  );
+                }
+                console.warn(
+                  `[createInvoice] Conflit E11000 tentative ${attempt}/${MAX_SAVE_RETRIES}, retry:`,
+                  saveError.keyValue,
+                );
+                const regenerated = await generateInvoiceNumber(prefix, {
+                  workspaceId,
+                  isDraft: input.status === "DRAFT",
+                  userId: context.user._id,
+                });
+                await handleDraftConflicts(regenerated);
+                invoice.number = regenerated;
+                number = regenerated;
+              }
+            }
+
+            console.log(
+              `✅ Facture sauvegardée avec succès: ${prefix}${number}`,
+            );
+
+            // Log pour les factures de situation
+            if (invoice.invoiceType === "situation") {
+              console.log("📊 Facture de situation sauvegardée:", {
+                id: invoice._id,
+                situationReference: invoice.situationReference,
+                contractTotal: invoice.contractTotal,
+                purchaseOrderNumber: invoice.purchaseOrderNumber,
+              });
+            }
+
+            // === ROUTAGE E-INVOICING / E-REPORTING ===
+            // Évaluer et router la facture si elle n'est pas un brouillon
+            if (invoice.status !== "DRAFT") {
+              try {
+                const routingResult = await evaluateAndRouteInvoice(
+                  invoice,
+                  workspaceId,
+                );
+                if (routingResult) {
+                  await invoice.save();
+                  logger.info(
+                    `[E-INVOICE-ROUTING] Facture ${prefix}${number}: ${routingResult.flowType} - ${routingResult.reason}`,
+                  );
+                }
+              } catch (eInvoicingError) {
+                // Ne pas faire échouer la création de facture si le routage échoue
+                logger.error("Erreur routing e-invoicing:", eInvoicingError);
+                try {
+                  invoice.eInvoiceStatus = "ERROR";
+                  invoice.eInvoiceError = eInvoicingError.message;
+                  await invoice.save();
+                } catch (updateError) {
+                  logger.error(
+                    "Erreur lors de la mise à jour du statut e-invoicing:",
+                    updateError,
+                  );
                 }
               }
-              // === FIN ENVOI SUPERPDP ===
-            } catch (saveError) {
-              // Gestion spécifique des erreurs de clé dupliquée MongoDB
-              if (saveError.code === 11000 && saveError.keyPattern?.number) {
-                throw new AppError(
-                  `Un brouillon avec le numéro "${number}" existe déjà. Veuillez réessayer, le système va automatiquement renommer l'ancien brouillon.`,
-                  ERROR_CODES.DUPLICATE_ERROR,
-                );
-              }
-              throw saveError;
             }
+            // === FIN ENVOI SUPERPDP ===
 
             // Enregistrer l'activité dans le client si c'est un client existant
             if (clientData.id) {
@@ -1404,11 +1441,21 @@ const invoiceResolvers = {
             // Créer automatiquement un événement de calendrier pour l'échéance de la facture
             if (invoice.dueDate) {
               try {
-                await Event.createInvoiceDueEvent(
+                const dueEvent = await Event.createInvoiceDueEvent(
                   invoice,
                   user._id,
                   workspaceId,
                 );
+                // Pousser l'événement vers les calendriers externes connectés (autoSync)
+                if (dueEvent?._id) {
+                  autoPushEventToConnections(dueEvent._id, user._id).catch(
+                    (err) =>
+                      console.error(
+                        "Erreur auto-push échéance facture vers calendriers externes:",
+                        err,
+                      ),
+                  );
+                }
               } catch (eventError) {
                 console.error(
                   "Erreur lors de la création de l'événement de calendrier:",
@@ -2149,7 +2196,45 @@ const invoiceResolvers = {
             // Mettre à jour l'événement de calendrier si la date d'échéance a changé
             if (updatedInvoice.dueDate) {
               try {
-                await Event.updateInvoiceEvent(updatedInvoice, user.id);
+                let dueEvent = await Event.updateInvoiceEvent(
+                  updatedInvoice,
+                  user.id,
+                );
+                // Si aucun événement n'existait (ex: facture sans échéance puis ajout),
+                // on le crée maintenant
+                if (!dueEvent) {
+                  dueEvent = await Event.createInvoiceDueEvent(
+                    updatedInvoice,
+                    user.id,
+                    updatedInvoice.workspaceId,
+                  );
+                  if (dueEvent?._id) {
+                    autoPushEventToConnections(dueEvent._id, user.id).catch(
+                      (err) =>
+                        console.error(
+                          "Erreur auto-push échéance facture vers calendriers externes:",
+                          err,
+                        ),
+                    );
+                  }
+                } else if (dueEvent.externalCalendarLinks?.length > 0) {
+                  // Propager la mise à jour vers les calendriers externes liés
+                  updateEventInExternalCalendars(dueEvent).catch((err) =>
+                    console.error(
+                      "Erreur propagation update échéance facture:",
+                      err,
+                    ),
+                  );
+                } else {
+                  // Pas de lien externe : tenter le push initial vers les calendriers autoSync
+                  autoPushEventToConnections(dueEvent._id, user.id).catch(
+                    (err) =>
+                      console.error(
+                        "Erreur auto-push échéance facture vers calendriers externes:",
+                        err,
+                      ),
+                  );
+                }
               } catch (eventError) {
                 console.error(
                   "Erreur lors de la mise à jour de l'événement de calendrier:",
@@ -2242,6 +2327,17 @@ const invoiceResolvers = {
 
         // Supprimer l'événement de calendrier associé à la facture
         try {
+          // Récupérer l'événement avant suppression pour propager aux calendriers externes liés
+          const existingDueEvent = await Event.findOne({
+            invoiceId: invoice._id,
+            type: "INVOICE_DUE",
+            workspaceId,
+          });
+          if (existingDueEvent?.externalCalendarLinks?.length > 0) {
+            deleteEventFromExternalCalendars(existingDueEvent).catch((err) =>
+              console.error("Erreur propagation delete échéance facture:", err),
+            );
+          }
           await Event.deleteInvoiceEvent(
             invoice._id,
             context.user._id,

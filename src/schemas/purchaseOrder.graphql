@@ -1,6 +1,7 @@
 enum PurchaseOrderStatus {
   DRAFT
   CONFIRMED
+  VALIDATED
   IN_PROGRESS
   DELIVERED
   CANCELED
@@ -60,6 +61,7 @@ type PurchaseOrderStats {
   totalCount: Int!
   draftCount: Int!
   confirmedCount: Int!
+  validatedCount: Int!
   inProgressCount: Int!
   deliveredCount: Int!
   canceledCount: Int!

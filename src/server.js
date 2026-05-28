@@ -85,6 +85,7 @@ import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
+import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import emailTrackingRoutes from "./routes/emailTracking.js";
@@ -98,6 +99,7 @@ import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
 import { startCalendarWebhookRenewalCron } from "./cron/calendarWebhookRenewalCron.js";
 import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
 import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
+import { startTrialCleanupCron } from "./cron/trialCleanupCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -293,6 +295,10 @@ async function startServer() {
 
   // Routes file download proxy
   app.use("/api/files", fileDownloadRoutes);
+
+  // Route preview PDF (proxy vers Next.js, auth JWT)
+  // Import at top: import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
+  app.use("/api", invoicePreviewPdfRoutes);
 
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
@@ -595,6 +601,10 @@ async function startServer() {
       // Démarrer le cron de détection des factures récurrentes
       startRecurringInvoiceDetectionCron();
       logger.info("✅ Cron de détection des factures récurrentes démarré");
+
+      // Démarrer le cron de nettoyage des trials app-managed
+      // (no-op si ENABLE_APP_TRIAL=false ; vérifié dans startTrialCleanupCron)
+      startTrialCleanupCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

@@ -380,6 +380,8 @@ const clientSchema = new mongoose.Schema(
             "blocked",
             "unblocked",
             "automation_executed",
+            "added_to_list",
+            "removed_from_list",
           ],
           required: true,
         },
@@ -408,6 +410,11 @@ const clientSchema = new mongoose.Schema(
           eventId: String,
           eventTitle: String,
           eventDate: String,
+          // Champ pour le blocage de contact
+          blockReason: String,
+          // Champs pour l'appartenance à une liste
+          listId: String,
+          listName: String,
         },
         createdAt: {
           type: Date,

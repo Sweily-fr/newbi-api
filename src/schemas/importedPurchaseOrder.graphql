@@ -4,6 +4,7 @@ Types GraphQL pour les bons de commande importés via OCR
 
 # Statuts des bons de commande importés
 enum ImportedPurchaseOrderStatus {
+  UPLOADED
   PENDING_REVIEW
   VALIDATED
   REJECTED
@@ -178,7 +179,10 @@ extend type Query {
 # Mutations
 extend type Mutation {
   """
-  Importe un bon de commande PDF avec OCR — upload direct
+  Importe un bon de commande PDF avec OCR.
+  Chaîne OCR : Claude Vision (si quota disponible, 1 crédit) → Tesseract en
+  fallback gratuit. Document toujours créé en statut PENDING_REVIEW pour
+  vérification/édition via la sidebar.
   """
   importPurchaseOrderDirect(
     file: Upload!
@@ -197,6 +201,13 @@ extend type Mutation {
   Valide un bon de commande importé
   """
   validateImportedPurchaseOrder(id: ID!): ImportedPurchaseOrder!
+
+  """
+  Convertit un bon de commande importé en PurchaseOrder VALIDATED dans la table
+  principale. Préfixe dédié `IMP-YYYYMM` (n'entre pas dans la séquence BC-).
+  Le BC importé passe en statut VALIDATED.
+  """
+  convertImportedPurchaseOrderToPurchaseOrder(id: ID!): PurchaseOrder!
 
   """
   Rejette un bon de commande importé

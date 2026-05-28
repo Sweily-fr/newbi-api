@@ -44,6 +44,12 @@ const SharedDocumentSchema = new mongoose.Schema(
     fileExtension: {
       type: String,
     },
+    // Hash SHA-256 du contenu - sert à détecter les doublons exacts
+    // peu importe le nom ou les métadonnées du fichier
+    fileHash: {
+      type: String,
+      index: true,
+    },
 
     // Organisation et dossier
     workspaceId: {
@@ -118,7 +124,7 @@ const SharedDocumentSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index composés pour les recherches fréquentes
@@ -128,6 +134,8 @@ SharedDocumentSchema.index({ workspaceId: 1, createdAt: -1 });
 SharedDocumentSchema.index({ name: "text", description: "text", tags: "text" });
 // Index pour la corbeille
 SharedDocumentSchema.index({ workspaceId: 1, trashedAt: 1 });
+// Index pour la détection de doublons par contenu
+SharedDocumentSchema.index({ workspaceId: 1, fileHash: 1 });
 
 const SharedDocument = mongoose.model("SharedDocument", SharedDocumentSchema);
 

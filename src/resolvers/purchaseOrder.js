@@ -281,6 +281,9 @@ const purchaseOrderResolvers = {
               confirmedCount: {
                 $sum: { $cond: [{ $eq: ["$status", "CONFIRMED"] }, 1, 0] },
               },
+              validatedCount: {
+                $sum: { $cond: [{ $eq: ["$status", "VALIDATED"] }, 1, 0] },
+              },
               inProgressCount: {
                 $sum: { $cond: [{ $eq: ["$status", "IN_PROGRESS"] }, 1, 0] },
               },
@@ -290,7 +293,15 @@ const purchaseOrderResolvers = {
               canceledCount: {
                 $sum: { $cond: [{ $eq: ["$status", "CANCELED"] }, 1, 0] },
               },
-              totalAmount: { $sum: "$finalTotalTTC" },
+              totalAmount: {
+                $sum: {
+                  $cond: [
+                    { $eq: ["$status", "CANCELED"] },
+                    0,
+                    "$finalTotalTTC",
+                  ],
+                },
+              },
             },
           },
           {
@@ -299,6 +310,7 @@ const purchaseOrderResolvers = {
               totalCount: 1,
               draftCount: 1,
               confirmedCount: 1,
+              validatedCount: 1,
               inProgressCount: 1,
               deliveredCount: 1,
               canceledCount: 1,
@@ -311,6 +323,7 @@ const purchaseOrderResolvers = {
           totalCount: 0,
           draftCount: 0,
           confirmedCount: 0,
+          validatedCount: 0,
           inProgressCount: 0,
           deliveredCount: 0,
           canceledCount: 0,
@@ -416,11 +429,39 @@ const purchaseOrderResolvers = {
             }
           }
 
-          // Générer le numéro séquentiel
-          const number = await generatePurchaseOrderNumber(prefix, {
-            workspaceId,
-            userId: user.id,
-          });
+          // === Génération du numéro (style Pennylane) ===
+          // - Préfixe nouveau (aucun BC finalisé) → numéro manuel libre accepté
+          // - Préfixe existant → numéro imposé par le compteur atomique
+          const isDraft = !input.status || input.status === "DRAFT";
+          let allowManualPONumber = false;
+          if (input.number && !isDraft) {
+            const firstFinalizedForPrefix = await PurchaseOrder.findOne({
+              workspaceId,
+              prefix,
+              status: {
+                $in: ["CONFIRMED", "IN_PROGRESS", "DELIVERED", "CANCELED"],
+              },
+            }).lean();
+            allowManualPONumber = !firstFinalizedForPrefix;
+            if (allowManualPONumber && !/^\d{1,6}$/.test(input.number)) {
+              throw new AppError(
+                "Le numéro de bon de commande doit contenir entre 1 et 6 chiffres",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+          }
+
+          const generatePONumber = async () => {
+            if (allowManualPONumber) {
+              return String(parseInt(input.number, 10)).padStart(4, "0");
+            }
+            return await generatePurchaseOrderNumber(prefix, {
+              workspaceId,
+              userId: user.id,
+            });
+          };
+
+          let number = await generatePONumber();
 
           // Récupérer les informations de l'organisation
           const organization = await getOrganizationInfo(workspaceId);
@@ -455,37 +496,73 @@ const purchaseOrderResolvers = {
           }
 
           // Créer le bon de commande - companyInfo uniquement pour les documents non-DRAFT
-          const isDraft = !input.status || input.status === "DRAFT";
-          const purchaseOrder = new PurchaseOrder({
-            ...input,
-            number,
-            prefix,
-            workspaceId,
-            companyInfo: isDraft
-              ? undefined
-              : mapOrganizationToCompanyInfo(organization),
-            client: {
-              ...input.client,
-              shippingAddress: input.client.hasDifferentShippingAddress
-                ? {
-                    fullName: input.client.shippingAddress?.fullName || "",
-                    street: input.client.shippingAddress?.street || "",
-                    city: input.client.shippingAddress?.city || "",
-                    postalCode: input.client.shippingAddress?.postalCode || "",
-                    country: input.client.shippingAddress?.country || "",
-                  }
-                : undefined,
-            },
-            appearance: input.appearance || {
-              textColor: "#000000",
-              headerTextColor: "#ffffff",
-              headerBgColor: "#1d1d1b",
-            },
-            createdBy: user.id,
-            ...totals,
-          });
+          // Retry sur E11000 : régénère le numéro via le compteur atomique en cas
+          // de conflit (race condition). Numéro manuel échoue immédiatement.
+          const PO_MAX_SAVE_RETRIES = 5;
+          let purchaseOrder;
+          for (let attempt = 1; attempt <= PO_MAX_SAVE_RETRIES; attempt++) {
+            purchaseOrder = new PurchaseOrder({
+              ...input,
+              number,
+              prefix,
+              workspaceId,
+              companyInfo: isDraft
+                ? undefined
+                : mapOrganizationToCompanyInfo(organization),
+              client: {
+                ...input.client,
+                shippingAddress: input.client.hasDifferentShippingAddress
+                  ? {
+                      fullName: input.client.shippingAddress?.fullName || "",
+                      street: input.client.shippingAddress?.street || "",
+                      city: input.client.shippingAddress?.city || "",
+                      postalCode:
+                        input.client.shippingAddress?.postalCode || "",
+                      country: input.client.shippingAddress?.country || "",
+                    }
+                  : undefined,
+              },
+              appearance: input.appearance || {
+                textColor: "#000000",
+                headerTextColor: "#ffffff",
+                headerBgColor: "#1d1d1b",
+              },
+              createdBy: user.id,
+              ...totals,
+            });
 
-          await purchaseOrder.save();
+            try {
+              await purchaseOrder.save();
+              break;
+            } catch (err) {
+              const isDup = err && (err.code === 11000 || err.code === 11001);
+              if (!isDup) throw err;
+              if (allowManualPONumber) {
+                throw new AppError(
+                  `Le numéro de bon de commande "${number}" est déjà utilisé`,
+                  ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
+                );
+              }
+              if (attempt === PO_MAX_SAVE_RETRIES) {
+                console.error(
+                  "[createPurchaseOrder] Échec après retries E11000:",
+                  err.keyValue,
+                );
+                throw new AppError(
+                  "Impossible de générer un numéro de bon de commande unique. Veuillez réessayer.",
+                  ERROR_CODES.INTERNAL_ERROR,
+                );
+              }
+              console.warn(
+                `[createPurchaseOrder] Conflit E11000 tentative ${attempt}/${PO_MAX_SAVE_RETRIES}, retry:`,
+                err.keyValue,
+              );
+              number = await generatePurchaseOrderNumber(prefix, {
+                workspaceId,
+                userId: user.id,
+              });
+            }
+          }
 
           // Automatisations documents partagés (fire-and-forget)
           const poTriggerMap = {
@@ -649,9 +726,10 @@ const purchaseOrderResolvers = {
           }
 
           const allowedTransitions = {
-            DRAFT: ["CONFIRMED"],
-            CONFIRMED: ["IN_PROGRESS", "DRAFT", "CANCELED"],
-            IN_PROGRESS: ["DELIVERED", "CANCELED"],
+            DRAFT: ["CONFIRMED", "CANCELED"],
+            CONFIRMED: ["VALIDATED", "DRAFT", "CANCELED"],
+            VALIDATED: ["IN_PROGRESS"],
+            IN_PROGRESS: ["DELIVERED"],
             DELIVERED: [],
             CANCELED: [],
           };

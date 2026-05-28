@@ -308,6 +308,9 @@ const RESOURCES = [
     name: "PurchaseInvoice",
     model: PurchaseInvoice,
     resolver: purchaseInvoiceResolvers,
+    // Policy: members can delete their own purchase invoices ("ceux qui
+    // peuvent creer peuvent supprimer"), unlike most other resources.
+    memberCanDelete: true,
     buildMinimalDoc: ({ workspaceId, createdBy }) => ({
       workspaceId,
       createdBy,
@@ -721,8 +724,9 @@ describe.each(RESOURCES)("RBAC role-based - $name", (resource) => {
     expect(stillExists).not.toBeNull();
   });
 
-  // Test RBAC.5 — member cannot delete
-  it("member cannot delete", async () => {
+  // Test RBAC.5 — member cannot delete (sauf si la politique l'autorise)
+  const memberDeleteTest = resource.memberCanDelete ? it.skip : it;
+  memberDeleteTest("member cannot delete", async () => {
     const docA = await insertDocIn({
       workspaceId: orgA._id,
       createdBy: userA._id,

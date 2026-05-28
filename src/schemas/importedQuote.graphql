@@ -4,6 +4,7 @@ Types GraphQL pour les devis importés via OCR
 
 # Statuts des devis importés
 enum ImportedQuoteStatus {
+  UPLOADED
   PENDING_REVIEW
   VALIDATED
   REJECTED
@@ -197,6 +198,14 @@ extend type Mutation {
   Valide un devis importé
   """
   validateImportedQuote(id: ID!): ImportedQuote!
+
+  """
+  Convertit un devis importé en devis (DRAFT) dans la table principale.
+  Le devis importé passe en statut VALIDATED, un nouveau Quote DRAFT est créé
+  avec les données OCR et un numéro DRAFT-* unique. Le Quote retourné peut
+  être édité via l'éditeur de devis classique.
+  """
+  convertImportedQuoteToQuote(id: ID!): Quote!
 
   """
   Rejette un devis importé

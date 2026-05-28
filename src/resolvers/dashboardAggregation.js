@@ -214,9 +214,13 @@ const dashboardAggregationResolvers = {
         };
         if (accountId) matchFilter.fromAccount = accountId;
 
-        // Ne récupérer que les champs nécessaires à la catégorisation
+        // T4/T5 : on a besoin de linkedInvoiceId, category, expenseCategory
+        // pour respecter les catégorisations manuelles + reclasser les
+        // paiements de factures clients en "Chiffre d'affaires".
         const transactions = await Transaction.find(matchFilter)
-          .select("amount description metadata")
+          .select(
+            "amount description metadata linkedInvoiceId category expenseCategory",
+          )
           .lean();
 
         const categories = aggregateByCategory(transactions, isIncome);

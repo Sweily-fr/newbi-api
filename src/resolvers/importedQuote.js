@@ -13,9 +13,13 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import ImportedQuote from "../models/ImportedQuote.js";
+import Quote from "../models/Quote.js";
+import { getOrganizationInfo } from "../middlewares/company-info-guard.js";
+import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import invoiceExtractionService from "../services/invoiceExtractionService.js";
+import hybridOcrService from "../services/hybridOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
   createValidationError,
@@ -253,6 +257,139 @@ function transformOcrToQuoteData(ocrResult, extractionResult) {
   };
 }
 
+/**
+ * Convertit un ImportedQuote en Quote PENDING (statut "validé/envoyé") dans
+ * la table principale — équivalent au flux factures d'achat où la facture
+ * importée devient une vraie PurchaseInvoice non-brouillon.
+ * - Mappe vendor + client de l'import vers le client du Quote (best-effort).
+ * - Préfixe dédié `IMP-YYYYMM` + numéro basé sur l'origine OCR / l'_id de
+ *   l'import : aucun numéro de la séquence `D-YYYYMM` n'est consommé.
+ * - companyInfo chargé depuis l'organisation (requis pour les Quote non-DRAFT).
+ * - L'ImportedQuote passe en VALIDATED après la création du Quote.
+ */
+async function convertSingleImportedQuote(importedQuote, userId) {
+  const workspaceId = importedQuote.workspaceId;
+
+  // Best-effort sur les infos client : on prend les champs `client` si présents,
+  // sinon on retombe sur `vendor` (les PDFs scannés ne distinguent pas toujours).
+  const clientName =
+    importedQuote.client?.name ||
+    importedQuote.vendor?.name ||
+    "Client à compléter";
+  const clientSiret =
+    importedQuote.client?.siret || importedQuote.vendor?.siret || "À COMPLÉTER";
+  const clientEmail =
+    importedQuote.vendor?.email || "a-completer@a-modifier.fr";
+  const clientStreet =
+    importedQuote.client?.address || importedQuote.vendor?.address || "";
+  const clientCity =
+    importedQuote.client?.city || importedQuote.vendor?.city || "";
+  const clientPostalCode =
+    importedQuote.client?.postalCode || importedQuote.vendor?.postalCode || "";
+  const clientCountry = importedQuote.vendor?.country || "France";
+
+  // Items : assurer au moins une ligne pour passer la validation.
+  let items = (importedQuote.items || [])
+    .filter((it) => it && (it.description || it.totalPrice))
+    .map((it) => ({
+      description: it.description || "Article importé",
+      quantity: it.quantity > 0 ? it.quantity : 1,
+      unitPrice: it.unitPrice >= 0 ? it.unitPrice : 0,
+      vatRate: it.vatRate != null ? it.vatRate : 20,
+      unit: "",
+      discount: 0,
+      discountType: "PERCENTAGE",
+    }));
+  if (items.length === 0) {
+    items = [
+      {
+        description: "À compléter",
+        quantity: 1,
+        unitPrice: importedQuote.totalHT || importedQuote.totalTTC || 0,
+        vatRate: 20,
+        unit: "",
+        discount: 0,
+        discountType: "PERCENTAGE",
+      },
+    ];
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  // Préfixe dédié aux imports : `IMP-YYYYMM`. Garde la séquence des devis
+  // créés manuellement (`D-YYYYMM`) propre — un import ne consomme jamais
+  // un numéro de cette séquence.
+  const prefix = `IMP-${year}${month}`;
+
+  // Numéro : on conserve le numéro d'origine du PDF si disponible et valide,
+  // suffixé par les 4 derniers caractères de l'_id de l'import pour garantir
+  // l'unicité. Sinon, identifiant court basé sur l'_id de l'import.
+  const importIdSuffix = importedQuote._id.toString().slice(-4).toUpperCase();
+  let number;
+  const rawOriginal = (importedQuote.originalQuoteNumber || "")
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .slice(0, 14)
+    .replace(/^-+|-+$/g, "");
+  if (rawOriginal) {
+    number = `${rawOriginal}-${importIdSuffix}`;
+  } else {
+    number = `IMP${importedQuote._id.toString().slice(-8).toUpperCase()}`;
+  }
+
+  // companyInfo requis pour les Quote non-DRAFT.
+  const organization = await getOrganizationInfo(workspaceId);
+  const companyInfo = mapOrganizationToCompanyInfo(organization);
+
+  const issueDate = importedQuote.quoteDate
+    ? new Date(importedQuote.quoteDate)
+    : new Date();
+  const validUntilDate = importedQuote.validUntil
+    ? new Date(importedQuote.validUntil)
+    : null;
+
+  const totalHT = importedQuote.totalHT || 0;
+  const totalVAT = importedQuote.totalVAT || 0;
+  const totalTTC = importedQuote.totalTTC || totalHT + totalVAT;
+
+  const quote = await Quote.create({
+    prefix,
+    number,
+    issueDate,
+    validUntil: validUntilDate || undefined,
+    status: "PENDING",
+    companyInfo,
+    client: {
+      type: "COMPANY",
+      name: clientName,
+      email: clientEmail,
+      siret: clientSiret,
+      address: {
+        street: clientStreet,
+        city: clientCity,
+        postalCode: clientPostalCode,
+        country: clientCountry,
+      },
+    },
+    items,
+    totalHT,
+    totalVAT,
+    totalTTC,
+    finalTotalHT: totalHT,
+    finalTotalVAT: totalVAT,
+    finalTotalTTC: totalTTC,
+    discount: 0,
+    discountType: "PERCENTAGE",
+    workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    createdBy: userId,
+  });
+
+  importedQuote.status = "VALIDATED";
+  await importedQuote.save();
+
+  return quote;
+}
+
 const importedQuoteResolvers = {
   Upload: GraphQLUpload,
 
@@ -358,8 +495,6 @@ const importedQuoteResolvers = {
           context.workspaceId,
         );
         try {
-          const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
-
           const { createReadStream, filename, mimetype } = await file;
 
           if (!filename) {
@@ -376,46 +511,6 @@ const importedQuoteResolvers = {
           const maxSize = 10 * 1024 * 1024;
           if (fileBuffer.length > maxSize) {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
-          }
-
-          const base64Data = fileBuffer.toString("base64");
-          const contentHash = crypto
-            .createHash("sha256")
-            .update(fileBuffer)
-            .digest("hex");
-
-          console.log(`🔍 importQuoteDirect: OCR direct pour ${filename}`);
-          const rawResult = await claudeVisionOcrService.processFromBase64(
-            base64Data,
-            mimetype,
-            filename,
-            contentHash,
-          );
-
-          if (!rawResult.success) {
-            throw createInternalServerError(
-              `Erreur OCR: ${rawResult.error || rawResult.message}`,
-            );
-          }
-
-          const structuredResult =
-            claudeVisionOcrService.toInvoiceFormat(rawResult);
-
-          let quoteData;
-          if (structuredResult.transaction_data) {
-            quoteData = transformOcrToQuoteData(
-              structuredResult,
-              structuredResult,
-            );
-          } else {
-            const extractionResult =
-              await invoiceExtractionService.extractInvoiceData(
-                structuredResult,
-              );
-            quoteData = transformOcrToQuoteData(
-              structuredResult,
-              extractionResult,
-            );
           }
 
           let organizationId = null;
@@ -459,18 +554,105 @@ const importedQuoteResolvers = {
             organizationId,
           );
 
-          await recordOcrUsage(user.id, workspaceId, plan, {
-            fileName: filename,
-            provider: rawResult.provider || "claude-vision",
-            success: true,
-          });
+          // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
+          // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
+          let quoteData = {};
+          let ocrProvider = null;
+          let plan = null;
+          let consumedQuota = false;
+          try {
+            const quotaResult = await checkUserOcrQuota(
+              user.id,
+              workspaceId,
+              1,
+            );
+            plan = quotaResult.plan;
 
-          const duplicates = await ImportedQuote.findPotentialDuplicates(
-            workspaceId,
-            quoteData.originalQuoteNumber,
-            quoteData.vendor?.name,
-            quoteData.totalTTC,
-          );
+            const base64Data = fileBuffer.toString("base64");
+            const contentHash = crypto
+              .createHash("sha256")
+              .update(fileBuffer)
+              .digest("hex");
+
+            console.log(`🔍 importQuoteDirect: Claude Vision pour ${filename}`);
+            const rawResult = await claudeVisionOcrService.processFromBase64(
+              base64Data,
+              mimetype,
+              filename,
+              contentHash,
+            );
+
+            if (!rawResult.success) {
+              throw createInternalServerError(
+                `Erreur OCR: ${rawResult.error || rawResult.message}`,
+              );
+            }
+
+            const structuredResult =
+              claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+            if (structuredResult.transaction_data) {
+              quoteData = transformOcrToQuoteData(
+                structuredResult,
+                structuredResult,
+              );
+            } else {
+              const extractionResult =
+                await invoiceExtractionService.extractInvoiceData(
+                  structuredResult,
+                );
+              quoteData = transformOcrToQuoteData(
+                structuredResult,
+                extractionResult,
+              );
+            }
+            ocrProvider = rawResult.provider || "claude-vision";
+            consumedQuota = true;
+          } catch (claudeError) {
+            console.warn(
+              `⚠️ Claude Vision indisponible pour ${filename} (${claudeError.message}). Fallback OCR hybride (Mindee / Google / Mistral).`,
+            );
+            try {
+              const ocrResult = await hybridOcrService.processDocumentFromUrl(
+                uploadResult.url,
+                filename,
+                mimetype,
+                workspaceId,
+              );
+              if (ocrResult?.transaction_data) {
+                quoteData = transformOcrToQuoteData(ocrResult, ocrResult);
+              } else {
+                const extractionResult =
+                  await invoiceExtractionService.extractInvoiceData(ocrResult);
+                quoteData = transformOcrToQuoteData(
+                  ocrResult,
+                  extractionResult,
+                );
+              }
+              ocrProvider = ocrResult?.provider || "hybrid";
+            } catch (fallbackError) {
+              console.warn(
+                `⚠️ OCR de fallback échec pour ${filename}: ${fallbackError.message}. Champs vides, à compléter via la sidebar.`,
+              );
+            }
+          }
+
+          if (consumedQuota && plan) {
+            await recordOcrUsage(user.id, workspaceId, plan, {
+              fileName: filename,
+              provider: ocrProvider,
+              success: true,
+            });
+          }
+
+          const duplicates = quoteData.originalQuoteNumber
+            ? await ImportedQuote.findPotentialDuplicates(
+                workspaceId,
+                quoteData.originalQuoteNumber,
+                quoteData.vendor?.name,
+                quoteData.totalTTC,
+              )
+            : [];
 
           const isDuplicate = duplicates.length > 0;
 
@@ -478,6 +660,7 @@ const importedQuoteResolvers = {
             workspaceId,
             importedBy: user.id,
             ...quoteData,
+            status: "PENDING_REVIEW",
             file: {
               url: uploadResult.url,
               cloudflareKey: uploadResult.key,
@@ -491,7 +674,6 @@ const importedQuoteResolvers = {
 
           await importedQuote.save();
 
-          // Déclencher les automatisations QUOTE_IMPORTED (fire-and-forget)
           documentAutomationService
             .executeAutomationsForExpense(
               "QUOTE_IMPORTED",
@@ -594,6 +776,17 @@ const importedQuoteResolvers = {
 
         await quote.save();
         return quote;
+      },
+    ),
+
+    convertImportedQuoteToQuote: requireWrite("importedQuotes")(
+      async (_, { id }, context) => {
+        const { user } = context;
+        const importedQuote = await checkQuoteAccess(id, context.workspaceId);
+        if (importedQuote.status === "VALIDATED") {
+          throw createValidationError("Ce devis importé a déjà été converti.");
+        }
+        return convertSingleImportedQuote(importedQuote, user.id);
       },
     ),
 

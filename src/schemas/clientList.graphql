@@ -21,6 +21,9 @@ extend type Mutation {
   
   # Delete a client list
   deleteClientList(workspaceId: String!, id: ID!): Boolean!
+
+  # Delete multiple client lists in one call (skips default lists)
+  deleteClientLists(workspaceId: String!, ids: [ID!]!): Int!
   
   # Add a client to a list
   addClientToList(workspaceId: String!, listId: ID!, clientId: ID!): ClientList!
