@@ -183,6 +183,119 @@ const emailSignatureResolvers = {
       },
     ),
 
+    // ✅ Protégé par RBAC - nécessite la permission "create" sur "signatures"
+    // Duplication complète d'une signature : on clone TOUT le document Mongoose
+    // côté serveur (tous les champs, y compris banner, containerStructure,
+    // templateId, séparateurs, réseaux sociaux, etc.) plutôt que de dépendre
+    // d'une requête frontend potentiellement incomplète.
+    duplicateEmailSignature: requireWrite("signatures")(
+      async (_, { id }, context) => {
+        const { user } = context;
+
+        // 1. Récupérer la signature source complète
+        const source = await EmailSignature.findOne({
+          _id: id,
+          createdBy: user.id,
+        });
+
+        if (!source) {
+          throw createNotFoundError("Signature email");
+        }
+
+        // 2. Cloner tous les champs du document
+        const data = source.toObject();
+        delete data._id;
+        delete data.id;
+        delete data.__v;
+        delete data.createdAt;
+        delete data.updatedAt;
+        delete data.isDefault; // une copie n'est jamais la signature par défaut
+
+        // 3. Générer un nom unique ("… - copie", "… - copie 2", …)
+        const existingNames = (
+          await EmailSignature.find({ createdBy: user.id }).select(
+            "signatureName",
+          )
+        ).map((s) => s.signatureName);
+        const takenNames = new Set(existingNames);
+        const root = `${source.signatureName} - copie`;
+        let newName = root;
+        let suffix = 2;
+        while (takenNames.has(newName)) {
+          newName = `${root} ${suffix}`;
+          suffix += 1;
+        }
+
+        // 4. Créer la nouvelle signature (sans les images dans un premier temps :
+        //    on a besoin de son _id pour générer les nouvelles clés R2)
+        const duplicate = new EmailSignature({
+          ...data,
+          signatureName: newName,
+          isDefault: false,
+          createdBy: user.id,
+          workspaceId: source.workspaceId || user.id,
+          // On repart de zéro sur les images, copiées juste après
+          photo: undefined,
+          photoKey: undefined,
+          logo: undefined,
+          logoKey: undefined,
+          banner: undefined,
+          bannerKey: undefined,
+        });
+        await duplicate.save();
+
+        // 5. Copier les fichiers images vers de nouvelles clés indépendantes,
+        //    pour que supprimer la signature source ne casse pas la copie.
+        const imageFields = [
+          { keyField: "photoKey", urlField: "photo" },
+          { keyField: "logoKey", urlField: "logo" },
+          { keyField: "bannerKey", urlField: "banner" },
+        ];
+
+        let imagesChanged = false;
+        for (const { keyField, urlField } of imageFields) {
+          const sourceKey = source[keyField];
+          const sourceUrl = source[urlField];
+
+          if (sourceKey) {
+            try {
+              const copied = await cloudflareService.copySignatureImage(
+                sourceKey,
+                user.id,
+                duplicate._id.toString(),
+              );
+              duplicate[keyField] = copied.key;
+              duplicate[urlField] = copied.url;
+              imagesChanged = true;
+            } catch (error) {
+              // Best-effort : si la copie échoue, on réutilise l'image source
+              // plutôt que de perdre l'image dans la duplication.
+              logger.error(
+                `❌ [Signatures] Échec copie image ${urlField} lors de la duplication:`,
+                error,
+              );
+              duplicate[keyField] = sourceKey;
+              duplicate[urlField] = sourceUrl;
+              imagesChanged = true;
+            }
+          } else if (sourceUrl) {
+            // Pas de clé R2 (URL externe par ex.) : on copie simplement l'URL
+            duplicate[urlField] = sourceUrl;
+            imagesChanged = true;
+          }
+        }
+
+        if (imagesChanged) {
+          await duplicate.save();
+        }
+
+        // Remarque : comme createEmailSignature, on ne publie pas d'événement
+        // de subscription ici. La liste est rafraîchie côté client via
+        // refetchQueries, ce qui évite un double toast sur le client initiateur.
+        return duplicate;
+      },
+    ),
+
     // ✅ Protégé par RBAC - nécessite la permission "delete" sur "signatures"
     deleteEmailSignature: requireDelete("signatures")(
       async (_, { id }, context) => {
