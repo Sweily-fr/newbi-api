@@ -355,7 +355,11 @@ const purchaseOrderResolvers = {
           context.workspaceId,
         );
         const wsId = new mongoose.Types.ObjectId(workspaceId);
-        const query = { workspaceId: wsId };
+        // Exclure les brouillons : seuls les documents finalisés réservent un
+        // numéro dans la séquence (règle "au moins un document finalisé").
+        // Un brouillon ne doit ni verrouiller le champ numéro ni décaler le
+        // prochain numéro proposé.
+        const query = { workspaceId: wsId, status: { $ne: "DRAFT" } };
 
         if (!autoNumbering && prefix) {
           query.prefix = prefix;
@@ -455,7 +459,12 @@ const purchaseOrderResolvers = {
             if (allowManualPONumber) {
               return String(parseInt(input.number, 10)).padStart(4, "0");
             }
+            // Les brouillons reçoivent un numéro DRAFT-timestamp (comme les devis
+            // et factures) : ils ne consomment pas le compteur séquentiel et ne sont
+            // pas comptés par nextPurchaseOrderNumber. Le numéro définitif est attribué
+            // à la finalisation (DRAFT → CONFIRMED).
             return await generatePurchaseOrderNumber(prefix, {
+              isDraft,
               workspaceId,
               userId: user.id,
             });
@@ -558,6 +567,7 @@ const purchaseOrderResolvers = {
                 err.keyValue,
               );
               number = await generatePurchaseOrderNumber(prefix, {
+                isDraft,
                 workspaceId,
                 userId: user.id,
               });
