@@ -502,7 +502,10 @@ extend type Mutation {
   
   # Mettre à jour une signature existante
   updateEmailSignature(input: UpdateEmailSignatureInput!): EmailSignature!
-  
+
+  # Dupliquer une signature existante (copie complète, côté serveur)
+  duplicateEmailSignature(id: ID!): EmailSignature!
+
   # Supprimer une signature
   deleteEmailSignature(id: ID!): Boolean!
   
