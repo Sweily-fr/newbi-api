@@ -258,7 +258,12 @@ export class BridgeProvider extends BankingProvider {
   /**
    * Génère l'URL de connexion pour Bridge v3 avec provider pré-sélectionné
    */
-  async generateConnectUrl(userId, workspaceId, providerId = null) {
+  async generateConnectUrl(
+    userId,
+    workspaceId,
+    providerId = null,
+    { callbackUrl: overrideCallbackUrl } = {},
+  ) {
     console.log(
       "🔍 generateConnectUrl appelé avec userId:",
       userId,
@@ -272,8 +277,11 @@ export class BridgeProvider extends BankingProvider {
       const userToken = await this.createUserAuthToken(workspaceId);
 
       // Préparer les données de la session avec callback_url pour la redirection
+      // Mobile callers can override this via the callbackUrl option
       const callbackUrl =
-        this.config.redirectUri || "http://localhost:3000/dashboard";
+        overrideCallbackUrl ||
+        this.config.redirectUri ||
+        "http://localhost:3000/dashboard";
       const sessionData = {
         user_email: `workspace-${workspaceId}@example.com`,
         callback_url: callbackUrl,
