@@ -468,7 +468,7 @@ async function getSelectionInfo({
     if (folders.length === 0) continue;
 
     const rootFolder = folders.find((f) => f._id.toString() === folderId);
-    const subfolders = folders.filter((f) => f._id.toString() !== folderId);
+    if (!rootFolder) continue;
     const folderIdsInTree = folders.map((f) => f._id);
 
     const docs = await SharedDocument.find({
@@ -477,32 +477,49 @@ async function getSelectionInfo({
       trashedAt: null,
     });
 
-    const totalSize = docs.reduce((sum, d) => sum + (d.fileSize || 0), 0);
-
-    // Build subfolder tree info
-    const subfolderInfos = [];
-    for (const sub of subfolders) {
-      const subDocs = await SharedDocument.find({
-        workspaceId,
-        folderId: sub._id,
-        trashedAt: null,
-      });
-      subfolderInfos.push({
-        id: sub._id.toString(),
-        name: sub.name,
-        parentId: sub.parentId?.toString(),
-        filesCount: subDocs.length,
-        size: subDocs.reduce((sum, d) => sum + (d.fileSize || 0), 0),
+    // Group documents by their direct parent folder
+    const docsByFolder = new Map();
+    for (const d of docs) {
+      const fid = d.folderId?.toString();
+      if (!fid) continue;
+      if (!docsByFolder.has(fid)) docsByFolder.set(fid, []);
+      docsByFolder.get(fid).push({
+        id: d._id.toString(),
+        name: d.originalName || d.name,
+        size: d.fileSize || 0,
       });
     }
 
-    folderDetails.push({
-      id: folderId,
-      name: rootFolder?.name || "Dossier",
-      filesCount: docs.length,
-      totalSize,
-      subfolders: subfolderInfos,
-    });
+    // Group folders by their direct parent
+    const foldersByParent = new Map();
+    for (const f of folders) {
+      const pid = f.parentId?.toString() || null;
+      if (!foldersByParent.has(pid)) foldersByParent.set(pid, []);
+      foldersByParent.get(pid).push(f);
+    }
+
+    // Build the folder tree recursively, with files nested under each folder.
+    // filesCount / totalSize cover the whole subtree so exclusions can be
+    // subtracted correctly on the frontend.
+    const buildNode = (folder) => {
+      const fid = folder._id.toString();
+      const files = docsByFolder.get(fid) || [];
+      const subfolders = (foldersByParent.get(fid) || []).map(buildNode);
+      const ownSize = files.reduce((sum, f) => sum + f.size, 0);
+      const subSize = subfolders.reduce((sum, s) => sum + s.totalSize, 0);
+      const subFiles = subfolders.reduce((sum, s) => sum + s.filesCount, 0);
+      return {
+        id: fid,
+        name: folder.name,
+        parentId: folder.parentId?.toString() || null,
+        files,
+        subfolders,
+        filesCount: files.length + subFiles,
+        totalSize: ownSize + subSize,
+      };
+    };
+
+    folderDetails.push(buildNode(rootFolder));
   }
 
   // Individual documents info
