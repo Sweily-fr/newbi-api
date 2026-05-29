@@ -19,6 +19,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import mongoose from "mongoose";
+import { isInternationalEntity } from "../utils/validators.js";
 import { automationService } from "./clientAutomation.js";
 
 const clientResolvers = {
@@ -120,17 +121,19 @@ const clientResolvers = {
         let clientData = { ...input };
 
         if (input.type === "COMPANY") {
+          // International si le flag est coché OU si le pays renseigné n'est pas la France
+          const isIntl = isInternationalEntity(input);
           // Pour une entreprise, le numéro d'identification est obligatoire
           if (!input.siret || input.siret.trim() === "") {
             throw new Error(
-              input.isInternational
+              isIntl
                 ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
                 : "Le SIREN/SIRET est obligatoire pour une entreprise française",
             );
           }
           // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
           if (
-            !input.isInternational &&
+            !isIntl &&
             !/^\d{9}$/.test(input.siret) &&
             !/^\d{14}$/.test(input.siret)
           ) {
@@ -241,17 +244,19 @@ const clientResolvers = {
         let updateData = { ...input };
 
         if (input.type === "COMPANY") {
+          // International si le flag est coché OU si le pays renseigné n'est pas la France
+          const isIntl = isInternationalEntity(input);
           // Pour une entreprise, le numéro d'identification est obligatoire
           if (!input.siret || input.siret.trim() === "") {
             throw new Error(
-              input.isInternational
+              isIntl
                 ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
                 : "Le SIREN/SIRET est obligatoire pour une entreprise française",
             );
           }
           // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
           if (
-            !input.isInternational &&
+            !isIntl &&
             !/^\d{9}$/.test(input.siret) &&
             !/^\d{14}$/.test(input.siret)
           ) {
@@ -539,6 +544,7 @@ const clientResolvers = {
     assignClientMembers: requireWrite("clients")(
       async (_, { id, memberIds, workspaceId: inputWorkspaceId }, context) => {
         const { user } = context;
+        const db = context.db || mongoose.connection.db;
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
@@ -551,20 +557,75 @@ const clientResolvers = {
 
         if (!client) throw createNotFoundError("Client");
 
+        const previousMemberIds = (client.assignedMembers || []).map((m) =>
+          m.toString(),
+        );
+        const newMemberIds = (memberIds || []).map((m) => m.toString());
+
+        const addedIds = newMemberIds.filter(
+          (mId) => !previousMemberIds.includes(mId),
+        );
+        const removedIds = previousMemberIds.filter(
+          (mId) => !newMemberIds.includes(mId),
+        );
+
         client.assignedMembers = memberIds;
 
-        client.activity.push({
-          id: new mongoose.Types.ObjectId().toString(),
-          userId: user.id,
-          userName: user.name || user.email,
-          userImage: user.image || null,
-          type: "assigned",
-          description:
-            memberIds.length > 0
-              ? `a assigné ${memberIds.length} membre${memberIds.length > 1 ? "s" : ""}`
-              : "a retiré tous les membres assignés",
-          createdAt: new Date(),
-        });
+        // Résoudre nom + avatar des membres concernés depuis la collection brute
+        // `user` (Better Auth stocke `name`/`image` hors schéma Mongoose, donc le
+        // modèle User les masquerait). Même logique d'affichage que le kanban.
+        const affectedIds = [...new Set([...addedIds, ...removedIds])];
+        let infoById = {};
+        if (affectedIds.length > 0) {
+          const objectIds = affectedIds
+            .filter((mId) => mongoose.Types.ObjectId.isValid(mId))
+            .map((mId) => new mongoose.Types.ObjectId(mId));
+          const users = await db
+            .collection("user")
+            .find({ _id: { $in: objectIds } })
+            .toArray();
+          infoById = users.reduce((acc, u) => {
+            let name;
+            if (u.name && u.lastName) name = `${u.name} ${u.lastName}`;
+            else name = u.name || u.lastName || u.email || "un membre";
+            const raw = u.image || u.avatar;
+            const image = raw && raw !== "null" && raw !== "" ? raw : null;
+            acc[u._id.toString()] = { id: u._id.toString(), name, image };
+            return acc;
+          }, {});
+        }
+        const memberInfo = (mId) =>
+          infoById[mId] || { id: mId, name: "un membre", image: null };
+        const labelFor = (ids) =>
+          ids.map((mId) => memberInfo(mId).name).join(", ");
+
+        // Construire une description nominative selon le changement effectif.
+        // L'assignation se faisant membre par membre, un remplacement se lit
+        // simplement comme une nouvelle assignation ("a assigné X"), le retrait
+        // de l'ancien étant implicite.
+        let description = null;
+        let activityMembers = [];
+        if (addedIds.length > 0) {
+          description = `a assigné ${labelFor(addedIds)}`;
+          activityMembers = addedIds.map(memberInfo);
+        } else if (removedIds.length > 0) {
+          description = `a retiré ${labelFor(removedIds)}`;
+          activityMembers = removedIds.map(memberInfo);
+        }
+
+        // N'enregistrer une activité que s'il y a un changement réel
+        if (description) {
+          client.activity.push({
+            id: new mongoose.Types.ObjectId().toString(),
+            userId: user.id,
+            userName: user.name || user.email,
+            userImage: user.image || null,
+            type: "assigned",
+            description,
+            metadata: { assignedMembers: activityMembers },
+            createdAt: new Date(),
+          });
+        }
 
         await client.save();
         return client;
