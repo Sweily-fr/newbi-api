@@ -3,6 +3,13 @@ import logger from "../utils/logger.js";
 import Event from "../models/Event.js";
 import emailReminderService from "./emailReminderService.js";
 
+// Marge après la fin d'un événement pendant laquelle un rappel encore en
+// attente reste envoyable. Évite de perdre un rappel "à l'échéance" (0m) sur
+// un événement à durée nulle (end == start) entre deux passages du cron, et
+// rend le système résilient à une courte interruption.
+const REMINDER_GRACE_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_RETRIES = 3;
+
 /**
  * Scheduler pour les rappels par email
  * Vérifie toutes les 5 minutes les événements nécessitant un rappel
@@ -78,16 +85,18 @@ class EmailReminderScheduler {
 
     try {
       const now = new Date();
+      const graceCutoff = new Date(now.getTime() - REMINDER_GRACE_MS);
 
       logger.debug(
         `🔍 Recherche de rappels à envoyer (scheduledFor <= ${now.toISOString()})`,
       );
 
-      // Trouver les événements avec rappel activé et au moins un rappel en attente
-      // end >= now : ignorer les événements déjà terminés
+      // Trouver les événements avec rappel activé et au moins un rappel en attente.
+      // end >= graceCutoff : on tolère une marge après la fin pour ne pas perdre
+      // un rappel dû juste avant la fin (ex. échéance 0m sur durée nulle).
       const events = await Event.find({
         "emailReminder.enabled": true,
-        end: { $gte: now },
+        end: { $gte: graceCutoff },
         $or: [
           {
             "emailReminder.status": { $in: ["pending", "failed"] },
@@ -100,7 +109,7 @@ class EmailReminderScheduler {
         ],
       });
 
-      // Annuler les rappels d'événements déjà terminés (nettoyage)
+      // Annuler les rappels d'événements terminés depuis plus que la marge
       await Event.updateMany(
         {
           "emailReminder.enabled": true,
@@ -108,7 +117,7 @@ class EmailReminderScheduler {
             { "emailReminder.status": { $in: ["pending", "failed"] } },
             { "emailReminder.echeanceStatus": { $in: ["pending", "failed"] } },
           ],
-          end: { $lt: now },
+          end: { $lt: graceCutoff },
         },
         {
           $set: {
@@ -150,6 +159,7 @@ class EmailReminderScheduler {
               event._id,
               "anticipated",
               event.emailReminder.anticipation,
+              { ignoreDoNotDisturb: true },
             );
 
             if (result.success) {
@@ -167,7 +177,8 @@ class EmailReminderScheduler {
                 `❌ Échec rappel anticipé pour "${event.title}": ${result.reason}`,
               );
               const retryCount = event.emailReminder.retryCount || 0;
-              if (retryCount < 3) {
+              if (retryCount < MAX_RETRIES) {
+                // Reprogrammer dans 2 min pour une nouvelle tentative
                 await Event.updateOne(
                   { _id: event._id },
                   {
@@ -179,6 +190,20 @@ class EmailReminderScheduler {
                       ),
                     },
                   },
+                );
+              } else {
+                // Tentatives épuisées : abandonner pour ne pas boucler
+                await Event.updateOne(
+                  { _id: event._id },
+                  {
+                    $set: {
+                      "emailReminder.status": "cancelled",
+                      "emailReminder.failureReason": `Abandon après ${MAX_RETRIES} tentatives: ${result.reason}`,
+                    },
+                  },
+                );
+                logger.error(
+                  `⛔ Rappel anticipé abandonné pour "${event.title}" après ${MAX_RETRIES} tentatives`,
                 );
               }
             }
@@ -210,7 +235,7 @@ class EmailReminderScheduler {
               event._id,
               "due",
               event.emailReminder.echeance,
-              { reminderField: "echeance" },
+              { reminderField: "echeance", ignoreDoNotDisturb: true },
             );
 
             if (result.success) {
@@ -219,6 +244,36 @@ class EmailReminderScheduler {
               logger.error(
                 `❌ Échec rappel échéance pour "${event.title}": ${result.reason}`,
               );
+              const retryCount = event.emailReminder.echeanceRetryCount || 0;
+              if (retryCount < MAX_RETRIES) {
+                // Reprogrammer dans 2 min pour une nouvelle tentative
+                await Event.updateOne(
+                  { _id: event._id },
+                  {
+                    $set: {
+                      "emailReminder.echeanceStatus": "failed",
+                      "emailReminder.echeanceRetryCount": retryCount + 1,
+                      "emailReminder.echeanceScheduledFor": new Date(
+                        now.getTime() + 2 * 60 * 1000,
+                      ),
+                    },
+                  },
+                );
+              } else {
+                // Tentatives épuisées : abandonner pour ne pas boucler
+                await Event.updateOne(
+                  { _id: event._id },
+                  {
+                    $set: {
+                      "emailReminder.echeanceStatus": "cancelled",
+                      "emailReminder.failureReason": `Abandon échéance après ${MAX_RETRIES} tentatives: ${result.reason}`,
+                    },
+                  },
+                );
+                logger.error(
+                  `⛔ Rappel échéance abandonné pour "${event.title}" après ${MAX_RETRIES} tentatives`,
+                );
+              }
             }
           }
         } catch (error) {
