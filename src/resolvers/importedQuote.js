@@ -660,6 +660,7 @@ const importedQuoteResolvers = {
             workspaceId,
             importedBy: user.id,
             ...quoteData,
+            // À vérifier : l'utilisateur valide chaque devis importé un par un via la sidebar.
             status: "PENDING_REVIEW",
             file: {
               url: uploadResult.url,
