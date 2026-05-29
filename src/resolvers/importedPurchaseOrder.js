@@ -659,6 +659,7 @@ const importedPurchaseOrderResolvers = {
             workspaceId,
             importedBy: user.id,
             ...poData,
+            // À vérifier : l'utilisateur valide chaque bon de commande importé un par un via la sidebar.
             status: "PENDING_REVIEW",
             file: {
               url: uploadResult.url,

@@ -1072,6 +1072,8 @@ const importedInvoiceResolvers = {
             workspaceId,
             importedBy: user.id,
             ...invoiceData,
+            // À vérifier : l'utilisateur valide chaque facture importée une par une
+            // via la sidebar (passage en VALIDATED = comptée dans le CA).
             status: "PENDING_REVIEW",
             file: {
               url: uploadResult.url,
