@@ -99,9 +99,21 @@ async function generateDocumentPdf(documentId, documentType) {
       body.purchaseOrderId = documentId;
     }
 
+    // Authentification serveur-à-serveur via secret interne : les routes
+    // /api/*/generate-pdf l'acceptent en lieu et place d'une session utilisateur.
+    const headers = process.env.INTERNAL_API_SECRET
+      ? { "x-internal-secret": process.env.INTERNAL_API_SECRET }
+      : {};
+    if (!process.env.INTERNAL_API_SECRET) {
+      console.warn(
+        "⚠️ [DocumentEmail] INTERNAL_API_SECRET non défini : l'appel PDF échouera en 401.",
+      );
+    }
+
     const response = await axios.post(`${frontendUrl}${endpoint}`, body, {
       responseType: "arraybuffer",
       timeout: 60000,
+      headers,
     });
     return Buffer.from(response.data);
   } catch (error) {
