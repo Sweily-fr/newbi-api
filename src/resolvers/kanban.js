@@ -1830,6 +1830,11 @@ const resolvers = {
         }
 
         // Membres assignés modifiés
+        // Capture du delta pour appliquer une mise à jour ATOMIQUE ($addToSet/
+        // $pull) au lieu d'un remplacement complet du tableau. Sans cela, deux
+        // mutations concurrentes (ou arrivées dans le désordre) s'écrasent en
+        // "last-write-wins" et un membre retiré peut réapparaître.
+        let memberAtomicOps = null; // { add: [], remove: [], all: [] } | null
         logger.info(
           `📧 [UpdateTask] updates.assignedMembers reçu: ${JSON.stringify(updates.assignedMembers)}`,
         );
@@ -1876,6 +1881,13 @@ const resolvers = {
             const removedMembers = oldMembers.filter(
               (m) => !newMembers.includes(m),
             );
+
+            // On appliquera ces ajouts/retraits atomiquement au moment du save.
+            memberAtomicOps = {
+              add: addedMembers,
+              remove: removedMembers,
+              all: newMembers,
+            };
 
             if (addedMembers.length > 0) {
               // Ne PAS ajouter aux changes[] car on a une activité dédiée "assigned"
@@ -2218,9 +2230,35 @@ const resolvers = {
           ];
         }
 
+        // Construire le document de mise à jour. Les membres sont traités
+        // atomiquement ($addToSet/$pull) pour que des changements concurrents
+        // ou désordonnés convergent au lieu de s'écraser mutuellement.
+        const setFields = { ...updates, updatedAt: new Date() };
+        const updateDoc = {};
+
+        if (memberAtomicOps) {
+          delete setFields.assignedMembers;
+          const { add, remove, all } = memberAtomicOps;
+          // MongoDB interdit $addToSet et $pull sur le même champ dans un seul
+          // update : si un toggle ajoute ET retire à la fois (ex: réassignation
+          // en masse), on retombe sur un $set du tableau final normalisé.
+          if (add.length > 0 && remove.length > 0) {
+            setFields.assignedMembers = all;
+          } else if (add.length > 0) {
+            updateDoc.$addToSet = { assignedMembers: { $each: add } };
+          } else if (remove.length > 0) {
+            updateDoc.$pull = { assignedMembers: { $in: remove } };
+          }
+        } else if (updates.assignedMembers !== undefined) {
+          // Champ fourni mais inchangé : pas de réécriture nécessaire.
+          delete setFields.assignedMembers;
+        }
+
+        updateDoc.$set = setFields;
+
         const task = await Task.findOneAndUpdate(
           { _id: id, workspaceId: finalWorkspaceId },
-          { ...updates, updatedAt: new Date() },
+          updateDoc,
           { new: true, runValidators: true },
         );
         if (!task) throw new Error("Task not found");
@@ -2365,91 +2403,77 @@ const resolvers = {
             };
           }
 
-          // Utiliser updateOne pour éviter les problèmes de validation
-          await Task.updateOne(
-            { _id: id, workspaceId: finalWorkspaceId },
-            { $set: updates, ...(updates.$push && { $push: updates.$push }) },
+          // Index réel d'insertion (borné aux tâches existantes de la colonne).
+          // On l'utilise comme position de la tâche déplacée ET comme point
+          // d'insertion : l'ancien code écrivait la position deux fois (une fois
+          // = `position` brut, une fois = index réordonné) via des updateOne
+          // concurrents, ce qui pouvait laisser une position incohérente.
+          const insertIndex = Math.min(
+            Math.max(position, 0),
+            allTasksBeforeUpdate.length,
           );
+          updates.position = insertIndex;
 
-          // Récupérer la tâche mise à jour
-          task = await Task.findOne({ _id: id, workspaceId: finalWorkspaceId });
-
-          // Utiliser les tâches récupérées AVANT la mise à jour (déjà sans la tâche déplacée)
-          let allTasks = allTasksBeforeUpdate;
-
-          console.log("📊 [moveTask] Avant réorganisation:", {
-            taskId: id,
-            targetPosition: position,
-            tasksInColumn: allTasks.length,
-            taskIds: allTasks.map((t) => ({
-              id: t._id.toString(),
-              pos: t.position,
-            })),
-          });
-
-          // Insérer la tâche à la position spécifiée
-          // allTasks ne contient déjà pas la tâche déplacée, donc on peut insérer directement
+          // allTasksBeforeUpdate ne contient déjà pas la tâche déplacée.
           const reorderedTasks = [
-            ...allTasks.slice(0, position),
-            task,
-            ...allTasks.slice(position),
+            ...allTasksBeforeUpdate.slice(0, insertIndex),
+            { _id: id },
+            ...allTasksBeforeUpdate.slice(insertIndex),
           ];
 
-          console.log("📊 [moveTask] Après réorganisation:", {
-            taskId: id,
-            newPosition: reorderedTasks.findIndex(
-              (t) => t._id.toString() === id,
-            ),
-            reorderedTaskIds: reorderedTasks.map((t, idx) => ({
-              id: t._id.toString(),
-              idx,
-            })),
+          // Toutes les écritures sont regroupées dans un seul bulkWrite : un
+          // aller-retour Mongo au lieu de ~N updateOne séquentiels (gros gain
+          // quand on déplace dans une colonne bien remplie).
+          const now = new Date();
+          const bulkOps = [];
+
+          // 1) La tâche déplacée : colonne + position + activité éventuelle
+          const movedUpdate = { $set: { ...updates, updatedAt: now } };
+          delete movedUpdate.$set.$push;
+          if (updates.$push) movedUpdate.$push = updates.$push;
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: id, workspaceId: finalWorkspaceId },
+              update: movedUpdate,
+            },
           });
 
-          // Update positions of all tasks in the DESTINATION column
-          const updatePromises = [];
-
+          // 2) Réindexer la colonne destination (positions 0..n)
           for (let i = 0; i < reorderedTasks.length; i++) {
-            updatePromises.push(
-              Task.updateOne(
-                { _id: reorderedTasks[i]._id },
-                { $set: { position: i, updatedAt: new Date() } },
-              ),
-            );
+            const tid = reorderedTasks[i]._id;
+            if (tid.toString() === id.toString()) continue; // déjà couverte
+            bulkOps.push({
+              updateOne: {
+                filter: { _id: tid },
+                update: { $set: { position: i, updatedAt: now } },
+              },
+            });
           }
 
-          // Si la tâche a changé de colonne, recalculer aussi les positions dans la SOURCE
+          // 3) Si changement de colonne, réindexer aussi la colonne source
           if (oldColumnId !== columnId) {
-            console.log("📊 [moveTask] Recalcul positions colonne source:", {
-              oldColumnId,
-              newColumnId: columnId,
-            });
-
-            // Récupérer toutes les tâches restantes dans la colonne source
             const sourceColumnTasks = await Task.find({
               boardId: task.boardId,
               columnId: oldColumnId,
               workspaceId: finalWorkspaceId,
-              _id: { $ne: id }, // Exclure la tâche qu'on vient de déplacer
-            }).sort("position");
+              _id: { $ne: id },
+            })
+              .sort("position")
+              .select("_id");
 
-            // Recalculer les positions dans la source (0, 1, 2, ...)
             for (let i = 0; i < sourceColumnTasks.length; i++) {
-              updatePromises.push(
-                Task.updateOne(
-                  { _id: sourceColumnTasks[i]._id },
-                  { $set: { position: i, updatedAt: new Date() } },
-                ),
-              );
+              bulkOps.push({
+                updateOne: {
+                  filter: { _id: sourceColumnTasks[i]._id },
+                  update: { $set: { position: i, updatedAt: now } },
+                },
+              });
             }
-
-            console.log("📊 [moveTask] Positions recalculées colonne source:", {
-              tasksCount: sourceColumnTasks.length,
-              taskIds: sourceColumnTasks.map((t) => t._id.toString()),
-            });
           }
 
-          await Promise.all(updatePromises);
+          if (bulkOps.length > 0) {
+            await Task.bulkWrite(bulkOps, { ordered: false });
+          }
 
           // Publier UN SEUL événement pour la tâche principale déplacée
           // Les autres tâches réorganisées ne nécessitent pas de publication
@@ -2477,7 +2501,9 @@ const resolvers = {
             "Tâche déplacée",
           );
 
-          return task;
+          // Renvoyer la tâche À JOUR (et non l'instance pré-update) pour que le
+          // client reçoive bien la nouvelle colonne/position.
+          return updatedTask;
         } catch (error) {
           console.error("Error moving task:", error);
           throw new Error("Failed to move task");
