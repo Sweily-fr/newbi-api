@@ -37,16 +37,24 @@ const safePublish = (channel, payload, context = "") => {
     });
     logger.debug(`📢 [Kanban] ${context} publié sur ${channel}`);
 
-    // Invalider le cache des tâches si c'est un événement lié aux tâches ou colonnes
-    const taskPayload = payload?.taskUpdated;
-    const columnPayload = payload?.columnUpdated;
-    if (taskPayload?.boardId && taskPayload?.workspaceId) {
-      invalidateBoardTasksCache(taskPayload.boardId, taskPayload.workspaceId);
-    } else if (columnPayload?.boardId && columnPayload?.workspaceId) {
-      invalidateBoardTasksCache(
-        columnPayload.boardId,
-        columnPayload.workspaceId,
-      );
+    // Invalider le cache des tâches si c'est un événement lié aux tâches ou colonnes.
+    // Les payloads publiés sont plats ({ type, task, boardId, workspaceId }), pas
+    // imbriqués sous taskUpdated/columnUpdated — on lit donc directement boardId/
+    // workspaceId. On garde le support de l'ancienne forme imbriquée par sécurité.
+    const isTaskOrColumnChannel =
+      typeof channel === "string" &&
+      (channel.startsWith(`${TASK_UPDATED}_`) ||
+        channel.startsWith(`${COLUMN_UPDATED}_`));
+    const boardId =
+      payload?.boardId ||
+      payload?.taskUpdated?.boardId ||
+      payload?.columnUpdated?.boardId;
+    const workspaceId =
+      payload?.workspaceId ||
+      payload?.taskUpdated?.workspaceId ||
+      payload?.columnUpdated?.workspaceId;
+    if (isTaskOrColumnChannel && boardId && workspaceId) {
+      invalidateBoardTasksCache(boardId, workspaceId);
     }
   } catch (error) {
     logger.error(`❌ [Kanban] Erreur getPubSub ${context}:`, error);
