@@ -319,11 +319,30 @@ class EmailReminderService {
       preheader = `${event.title} — ${due.subject}`;
     }
 
+    const todayFormatted = new Date().toLocaleDateString("fr-FR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: tz,
+    });
+
+    // Libellé du badge selon le type d'événement
+    const badgeMap = {
+      REMINDER: "RAPPEL",
+      MEETING: "RENDEZ-VOUS",
+      DEADLINE: "ÉCHÉANCE",
+      INVOICE_DUE: "FACTURE",
+      CREDIT_NOTE_CREATED: "AVOIR",
+      EXTERNAL: "ÉVÉNEMENT",
+      MANUAL: "ÉVÉNEMENT",
+    };
+    const badgeLabel = badgeMap[event.type] || "ÉVÉNEMENT";
+
     const detailRow = (label, value) => `
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280; font-family: Arial, Helvetica, sans-serif;">${label}</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 600; font-family: Arial, Helvetica, sans-serif;">${value}</td>
-              </tr>`;
+                <tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">${label}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${value}</td>
+                </tr>`;
 
     const html = `<!DOCTYPE html>
 <html lang="fr">
@@ -332,63 +351,88 @@ class EmailReminderService {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${this.escapeHtml(subject)}</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f0eeff; font-family: Arial, Helvetica, sans-serif; color: #333;">
-  <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: #f0eeff; font-size: 1px; line-height: 1px;">${this.escapeHtml(preheader)}</div>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0eeff; margin: 0; padding: 0;">
-    <tr>
-      <td align="center" style="padding: 40px 16px;">
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width: 600px; max-width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden;">
-          <!-- Header -->
-          <tr>
-            <td align="center" style="padding: 24px 20px; border-bottom: 1px solid #e5e7eb;">
-              <h1 style="margin: 0; font-size: 22px; font-weight: 700; color: #1f2937; font-family: Arial, Helvetica, sans-serif;">Rappel de calendrier</h1>
-            </td>
-          </tr>
-          <!-- Content -->
-          <tr>
-            <td style="padding: 30px 24px;">
-              <p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">Bonjour,</p>
-              <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4b5563;">${messageText}</p>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
+  <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: #fafafa; font-size: 1px; line-height: 1px;">${this.escapeHtml(preheader)}</div>
+  <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
 
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f3ff; border-radius: 6px;">
-                <tr>
-                  <td style="padding: 16px 18px;">
-                    <p style="margin: 0 0 12px 0; font-size: 13px; font-weight: 700; color: #1f2937; text-transform: uppercase; letter-spacing: 0.5px; font-family: Arial, Helvetica, sans-serif;">Détails de l'événement</p>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                      ${detailRow("Événement", title)}
-                      ${detailRow("Date", this.escapeHtml(eventDate))}
-                      ${detailRow("Heure", this.escapeHtml(eventTime))}
-                      ${event.location ? detailRow("Lieu", this.escapeHtml(event.location)) : ""}
-                      ${event.description ? detailRow("Description", this.escapeHtml(event.description)) : ""}
-                    </table>
-                  </td>
-                </tr>
-              </table>
+    <!-- Logo -->
+    <div style="text-align: center; padding: 40px 0 24px 0;">
+      <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
+    </div>
 
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td align="center" style="padding: 28px 0 8px 0;">
-                    <a href="${frontendUrl}/dashboard/calendar?event=${event._id}" style="display: inline-block; background-color: #5b50ff; color: #ffffff; font-weight: 600; font-size: 14px; text-decoration: none; padding: 12px 28px; border-radius: 6px; font-family: Arial, Helvetica, sans-serif;">Voir dans le calendrier</a>
-                  </td>
-                </tr>
-              </table>
+    <!-- Type de notification -->
+    <div style="text-align: center; margin-bottom: 8px;">
+      <span style="font-size: 11px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.5px; text-transform: uppercase;">
+        RAPPEL D'ÉVÉNEMENT
+      </span>
+    </div>
 
-              <p style="margin: 16px 0 0 0; font-size: 13px; line-height: 1.6; color: #6b7280;">
-                Vous pouvez gérer vos rappels dans les <a href="${frontendUrl}/dashboard/settings" style="color: #5b50ff; text-decoration: none;">paramètres</a> de votre compte.
-              </p>
-            </td>
-          </tr>
-          <!-- Footer -->
-          <tr>
-            <td align="center" style="padding: 20px; border-top: 1px solid #e5e7eb;">
-              <p style="margin: 0 0 4px 0; font-size: 13px; color: #6b7280;">&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
-              <p style="margin: 0; font-size: 12px; color: #9ca3af;">Ce rappel a été envoyé depuis la plateforme Newbi, logiciel de gestion.</p>
-            </td>
-          </tr>
+    <!-- Date -->
+    <div style="text-align: center; margin-bottom: 32px;">
+      <span style="font-size: 12px; color: #6b7280;">
+        ${this.escapeHtml(todayFormatted)}
+      </span>
+    </div>
+
+    <!-- Carte principale -->
+    <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
+
+      <!-- Badge -->
+      <div style="margin-bottom: 20px;">
+        <div style="display: inline-block; background-color: #f3f4f6; border-radius: 6px; padding: 8px 12px;">
+          <span style="font-size: 11px; font-weight: 500; color: #374151; letter-spacing: 0.3px; text-transform: uppercase;">${badgeLabel}</span>
+        </div>
+      </div>
+
+      <!-- Titre -->
+      <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
+        ${title}
+      </h1>
+
+      <!-- Salutation -->
+      <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">
+        Bonjour,
+      </p>
+
+      <!-- Message -->
+      <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
+        ${messageText}
+      </p>
+
+      <!-- Détails -->
+      <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+        <table style="width: 100%; border-collapse: collapse;">
+          ${detailRow("Date", this.escapeHtml(eventDate))}
+          ${detailRow("Heure", this.escapeHtml(eventTime))}
+          ${event.location ? detailRow("Lieu", this.escapeHtml(event.location)) : ""}
+          ${event.description ? detailRow("Description", this.escapeHtml(event.description)) : ""}
         </table>
-      </td>
-    </tr>
-  </table>
+      </div>
+
+      <!-- Bouton CTA -->
+      <a href="${frontendUrl}/dashboard/calendar?event=${event._id}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
+        Voir dans le calendrier
+      </a>
+    </div>
+
+    <!-- Footer -->
+    <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center; padding-bottom: 40px;">
+      <div style="margin-bottom: 16px;">
+        <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height: 28px; width: auto;">
+      </div>
+      <p style="font-size: 13px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0;">
+        Votre gestion, simplifiée.
+      </p>
+      <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
+        Vous recevez cet email car vous avez programmé un rappel pour cet événement sur Newbi. • <a href="https://newbi.fr/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+      </p>
+      <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+        <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
+        <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+      </div>
+    </div>
+
+  </div>
 </body>
 </html>`;
 
