@@ -622,9 +622,10 @@ const chunkUploadR2Resolvers = {
           // Envoyer l'email si un destinataire est spécifié et si SMTP est configuré
           if (
             recipientEmail &&
-            process.env.SMTP_HOST &&
-            process.env.SMTP_USER &&
-            process.env.SMTP_PASS
+            (process.env.RESEND_API_KEY ||
+              (process.env.SMTP_HOST &&
+                process.env.SMTP_USER &&
+                process.env.SMTP_PASS))
           ) {
             try {
               const { sendFileTransferEmail } =
@@ -670,7 +671,7 @@ const chunkUploadR2Resolvers = {
               "📧 Email destinataire fourni mais SMTP non configuré. Lien de partage:",
               `${
                 process.env.FRONTEND_URL || "http://localhost:3000"
-              }/transfer/${fileTransfer.shareLink}?accessKey=${
+              }/transfer/${fileTransfer.shareLink}?key=${
                 fileTransfer.accessKey
               }`,
             );

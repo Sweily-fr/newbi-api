@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import emailReminderService from "../services/emailReminderService.js";
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -452,169 +453,137 @@ const sendPasswordResetConfirmationEmail = async (email) => {
 const sendFileTransferEmail = async (recipientEmail, transferData) => {
   const { shareLink, accessKey, senderName, message, files, expiryDate } =
     transferData;
-  const transferUrl = `${process.env.FRONTEND_URL}/transfer/${shareLink}?accessKey=${accessKey}`;
+  const transferUrl = `${process.env.FRONTEND_URL}/transfer/${shareLink}?key=${accessKey}`;
+  const sender = senderName || "Quelqu'un";
+  const filesCount = files.length;
+
+  const todayFormatted = new Date().toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  const expiryFormatted = new Date(expiryDate).toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
   const filesList = files
     .map(
       (file) =>
-        `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-      <strong>${file.originalName}</strong> 
-      <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
-    </li>`,
+        `<tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; word-break: break-word;">${file.originalName}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280; text-align: right; white-space: nowrap;">${formatFileSize(file.size)}</td>
+                </tr>`,
     )
     .join("");
 
+  const subject = `${sender} vous a envoyé des fichiers via Newbi`;
   const mailOptions = {
     from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: recipientEmail,
-    subject: `${senderName || "Quelqu'un"} vous a envoyé des fichiers via Newbi`,
+    subject,
     html: `
       <!DOCTYPE html>
-      <html>
+      <html lang="fr">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Transfert de fichiers - Newbi</title>
-        <style>
-          body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            margin: 0;
-            padding: 0;
-            background-color: #f0eeff;
-          }
-          .container {
-            max-width: 600px;
-            margin: 40px auto;
-            padding: 20px;
-            background-color: #ffffff;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-          }
-          .header {
-            text-align: center;
-            padding: 20px 0;
-            border-bottom: 1px solid #e5e7eb;
-          }
-          .content {
-            padding: 30px 20px;
-          }
-          h1 {
-            color: #1f2937;
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 20px;
-          }
-          p {
-            margin-bottom: 16px;
-            color: #4b5563;
-          }
-          .btn {
-            display: inline-block;
-            background-color: #5b50ff;
-            color: white;
-            font-weight: 600;
-            text-decoration: none;
-            padding: 12px 24px;
-            border-radius: 6px;
-            margin: 20px 0;
-            text-align: center;
-          }
-          .btn:hover {
-            background-color: #4a41e0;
-          }
-          .files-list {
-            background-color: #f9fafb;
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            padding: 16px;
-            margin: 20px 0;
-          }
-          .files-list ul {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-          }
-          .message-box {
-            background-color: #e6e1ff;
-            padding: 15px;
-            border-radius: 6px;
-            margin: 20px 0;
-            font-style: italic;
-          }
-          .expiry {
-            display: inline-block;
-            background-color: #fee2e2;
-            color: #b91c1c;
-            padding: 8px 16px;
-            border-radius: 4px;
-            font-size: 14px;
-            margin: 20px 0;
-          }
-          .footer {
-            text-align: center;
-            padding: 20px;
-            color: #6b7280;
-            font-size: 14px;
-            border-top: 1px solid #e5e7eb;
-          }
-        </style>
+        <title>Vous avez reçu des fichiers</title>
       </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <img src="${process.env.FRONTEND_URL}/images/logo_newbi/SVG/Logo_Texte_Purple.svg" alt="Newbi" style="width: 200px; height: auto;">
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
+
+          <!-- Logo -->
+          <div style="text-align: center; padding: 40px 0 24px 0;">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
           </div>
-          
-          <div class="content">
-            <h1>📁 Vous avez reçu des fichiers</h1>
-            <p>Bonjour,</p>
-            <p><strong>${senderName || "Quelqu'un"}</strong> vous a envoyé ${files.length} fichier(s) via Newbi.</p>
-            
+
+          <!-- Type de notification -->
+          <div style="text-align: center; margin-bottom: 8px;">
+            <span style="font-size: 11px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.5px; text-transform: uppercase;">
+              TRANSFERT DE FICHIERS
+            </span>
+          </div>
+
+          <!-- Date -->
+          <div style="text-align: center; margin-bottom: 32px;">
+            <span style="font-size: 12px; color: #6b7280;">
+              ${todayFormatted}
+            </span>
+          </div>
+
+          <!-- Carte principale -->
+          <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
+
+            <!-- Badge -->
+            <div style="margin-bottom: 20px;">
+              <div style="display: inline-block; background-color: #ede9fe; border-radius: 6px; padding: 8px 12px;">
+                <span style="font-size: 11px; font-weight: 500; color: #5a50ff; letter-spacing: 0.3px; text-transform: uppercase;">FICHIERS REÇUS</span>
+              </div>
+            </div>
+
+            <!-- Titre -->
+            <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
+              Vous avez reçu des fichiers
+            </h1>
+
+            <!-- Message -->
+            <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
+              <strong style="color: #1a1a1a;">${sender}</strong> vous a envoyé ${filesCount} fichier${filesCount > 1 ? "s" : ""} via Newbi. Cliquez sur le bouton ci-dessous pour les télécharger.
+            </p>
+
             ${
               message
                 ? `
-              <div class="message-box">
-                <strong>Message :</strong><br>
-                ${message}
-              </div>
-            `
+            <!-- Message personnalisé -->
+            <div style="background-color: #fafafa; border-left: 3px solid #5a50ff; border-radius: 0 8px 8px 0; padding: 16px; margin-bottom: 24px;">
+              <p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6; font-style: italic;">${message}</p>
+            </div>`
                 : ""
             }
-            
-            <div class="files-list">
-              <h3 style="margin-top: 0; color: #374151;">Fichiers inclus :</h3>
-              <ul>${filesList}</ul>
+
+            <!-- Liste des fichiers -->
+            <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+              <table style="width: 100%; border-collapse: collapse;">
+                ${filesList}
+              </table>
             </div>
-            
-            <div style="text-align: center;">
-              <a href="${transferUrl}" class="btn">Télécharger les fichiers</a>
+
+            <!-- Bouton CTA -->
+            <a href="${transferUrl}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center; margin-bottom: 24px;">
+              Télécharger les fichiers
+            </a>
+
+            <!-- Note expiration -->
+            <div style="background-color: #fafafa; border-left: 3px solid #5a50ff; border-radius: 0 8px 8px 0; padding: 16px;">
+              <p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6;">
+                Ce transfert expire le <strong style="color: #1a1a1a;">${expiryFormatted}</strong>. Passé ce délai, les fichiers seront automatiquement supprimés de nos serveurs.
+              </p>
             </div>
-            
-            <div class="expiry">
-              <strong>⏰ Attention :</strong> Ce transfert expire le ${new Date(
-                expiryDate,
-              ).toLocaleDateString("fr-FR", {
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}.
-            </div>
-            
-            <p>Si le bouton ne fonctionne pas, vous pouvez copier et coller le lien suivant dans votre navigateur :</p>
-            <p style="word-break: break-all; color: #6b7280; font-size: 14px;">${transferUrl}</p>
-            
-            <p><strong>Sécurisé et confidentiel :</strong> Vos fichiers sont stockés de manière sécurisée et seront automatiquement supprimés après expiration.</p>
           </div>
-          
-          <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
-            <p>Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>
+
+          <!-- Footer -->
+          <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center; padding-bottom: 40px;">
+            <div style="margin-bottom: 16px;">
+              <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height: 28px; width: auto;">
+            </div>
+            <p style="font-size: 13px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0;">
+              Votre gestion, simplifiée.
+            </p>
+            <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
+              Email automatique envoyé via Newbi. Ne répondez pas directement à cet email.
+            </p>
+            <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+              <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
+              <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+            </div>
           </div>
+
         </div>
       </body>
       </html>
@@ -622,6 +591,24 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
   };
 
   try {
+    // Resend en priorité (domaine vérifié), fallback SMTP/nodemailer
+    if (emailReminderService.useResend && emailReminderService.resend) {
+      const { data, error } = await emailReminderService.resend.emails.send({
+        from: `Newbi <${emailReminderService.resendFromEmail}>`,
+        replyTo: process.env.FROM_EMAIL,
+        to: [recipientEmail],
+        subject,
+        html: mailOptions.html,
+      });
+      if (error) {
+        throw new Error(error.message || "Resend error");
+      }
+      console.log(
+        `📧 Email de transfert envoyé via Resend (id: ${data?.id}) à ${recipientEmail}`,
+      );
+      return true;
+    }
+
     await transporter.sendMail(mailOptions);
     return true;
   } catch (error) {
