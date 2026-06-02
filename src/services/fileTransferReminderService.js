@@ -92,7 +92,7 @@ class FileTransferReminderService {
       const owner = await User.findById(transfer.userId);
       if (!owner || !owner.email) {
         logger.warn(
-          `⚠️ Propriétaire non trouvé pour le transfert ${transfer._id}`
+          `⚠️ Propriétaire non trouvé pour le transfert ${transfer._id}`,
         );
         return;
       }
@@ -104,7 +104,7 @@ class FileTransferReminderService {
       const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
       // Construire l'URL du transfert
-      const transferUrl = `${process.env.FRONTEND_URL}/transfer/${transfer.shareLink}?accessKey=${transfer.accessKey}`;
+      const transferUrl = `${process.env.FRONTEND_URL}/transfer/${transfer.shareLink}?key=${transfer.accessKey}`;
 
       // Nom du premier fichier pour l'affichage
       const fileName =
@@ -133,13 +133,13 @@ class FileTransferReminderService {
             ownerEmail: owner.email,
             expiryDate: transfer.expiryDate,
             daysLeft,
-          }
+          },
         );
       }
     } catch (error) {
       logger.error(
         `❌ Erreur envoi rappel pour transfert ${transfer._id}:`,
-        error
+        error,
       );
     }
   }
