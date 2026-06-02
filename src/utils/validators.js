@@ -273,6 +273,26 @@ const isValidRCS = (rcs) => {
 };
 
 /**
+ * Détermine si une entité (client / entreprise) doit être traitée comme internationale,
+ * et donc dispensée des validations de format strictement françaises (SIRET/SIREN, TVA FR).
+ *
+ * La logique est volontairement alignée sur celle du frontend (éditeurs de documents) :
+ * l'entité est internationale si le flag `isInternational` est explicitement vrai
+ * OU si un pays est renseigné et qu'il n'est pas la France.
+ * Sans cet alignement, un client `pays = "Allemagne"` mais `isInternational = false`
+ * (client ancien, importé, ou case non cochée) passe côté front mais est rejeté par Mongo.
+ *
+ * @param {Object} entity - Document/sous-document possédant `isInternational` et `address.country`
+ * @returns {boolean} - True si l'entité est internationale (validations FR à ignorer)
+ */
+const isInternationalEntity = (entity) => {
+  if (!entity) return false;
+  if (entity.isInternational === true) return true;
+  const country = (entity.address?.country || "").trim().toLowerCase();
+  return country !== "" && country !== "france" && country !== "fr";
+};
+
+/**
  * Configuration des champs obligatoires par statut juridique
  * Cette constante définit quels champs sont obligatoires pour chaque statut juridique
  */
@@ -372,6 +392,7 @@ export {
   isValidFooterNotes,
   isValidCapitalSocial,
   isValidRCS,
+  isInternationalEntity,
 
   // Configuration et validation des champs obligatoires par statut juridique
   REQUIRED_FIELDS_BY_COMPANY_STATUS,

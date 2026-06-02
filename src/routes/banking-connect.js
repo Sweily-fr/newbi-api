@@ -217,12 +217,15 @@ router.get(
       const workspaceId =
         req.headers["x-workspace-id"] || req.query.workspaceId;
       const providerId = req.query.providerId || req.query.bankId; // Provider pré-sélectionné (optionnel)
+      const source = req.query.source || "web"; // "web" (default) or "mobile"
 
       console.log(
         "🔍 Route /bridge/connect - workspaceId:",
         workspaceId,
         "providerId:",
         providerId,
+        "source:",
+        source,
       );
       if (!workspaceId) {
         return res.status(400).json({ error: "WorkspaceId requis" });
@@ -255,11 +258,20 @@ router.get(
         }
       }
 
+      // Determine redirect URL based on source (web or mobile)
+      // Mobile uses a Universal Link that iOS intercepts to reopen the app
+      // This URL must also be whitelisted in the Bridge dashboard
+      const connectOptions = {};
+      if (source === "mobile" && process.env.BRIDGE_MOBILE_REDIRECT_URI) {
+        connectOptions.callbackUrl = process.env.BRIDGE_MOBILE_REDIRECT_URI;
+      }
+
       // Générer l'URL de connexion (avec provider pré-sélectionné si fourni)
       const connectUrl = await provider.generateConnectUrl(
         user._id.toString(),
         workspaceId,
         providerId,
+        connectOptions,
       );
 
       logger.info(`URL de connexion Bridge générée pour user ${user._id}`);

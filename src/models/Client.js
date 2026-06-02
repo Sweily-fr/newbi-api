@@ -10,6 +10,7 @@ import {
   isValidName,
   isValidSIRET,
   isValidVATNumberEU,
+  isInternationalEntity,
 } from "../utils/validators.js";
 
 /**
@@ -58,6 +59,9 @@ const clientSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (v) {
+          // Pour les entreprises internationales (flag OU pays hors France),
+          // on accepte tout format de numéro (pas de regex)
+          if (isInternationalEntity(this)) return true;
           return !v || PHONE_REGEX.test(v);
         },
         message: "Veuillez fournir un numéro de téléphone valide",
@@ -103,8 +107,8 @@ const clientSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (v) {
-          // Pour les entreprises internationales, pas de validation stricte du format
-          if (this.isInternational) return true;
+          // Pour les entreprises internationales (flag OU pays hors France), pas de validation stricte du format
+          if (isInternationalEntity(this)) return true;
           return !v || isValidSIRET(v);
         },
         message: "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
@@ -115,8 +119,8 @@ const clientSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (v) {
-          // Pour les entreprises internationales, pas de validation stricte
-          if (this.isInternational) return true;
+          // Pour les entreprises internationales (flag OU pays hors France), pas de validation stricte
+          if (isInternationalEntity(this)) return true;
           return !v || isValidVATNumberEU(v);
         },
         message: "Format de TVA invalide (ex: FR12345678901)",
@@ -415,6 +419,14 @@ const clientSchema = new mongoose.Schema(
           // Champs pour l'appartenance à une liste
           listId: String,
           listName: String,
+          // Membres concernés par une assignation (nom + avatar figés à l'instant T)
+          assignedMembers: [
+            {
+              id: String,
+              name: String,
+              image: String,
+            },
+          ],
         },
         createdAt: {
           type: Date,

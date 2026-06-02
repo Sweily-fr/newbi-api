@@ -48,6 +48,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./types/esignature.graphql"),
   path.join(__dirname, "./types/rgpd.graphql"),
   path.join(__dirname, "./types/dashboardAggregation.graphql"),
+  path.join(__dirname, "./types/receiptMatching.graphql"),
   path.join(__dirname, "./*.graphql"),
 ]);
 

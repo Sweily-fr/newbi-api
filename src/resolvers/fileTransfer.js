@@ -243,6 +243,7 @@ const fileTransferResolvers = {
           isPaid: fileTransfer.isPaid,
           status: fileTransfer.status,
           downloadCount: fileTransfer.downloadCount,
+          message: fileTransfer.message || null,
           paymentInfo,
           isAccessible,
           // Nouvelles options
@@ -847,9 +848,10 @@ const fileTransferResolvers = {
           // Envoyer l'email si un destinataire est spécifié
           if (
             recipientEmail &&
-            process.env.SMTP_HOST &&
-            process.env.SMTP_USER &&
-            process.env.SMTP_PASS
+            (process.env.RESEND_API_KEY ||
+              (process.env.SMTP_HOST &&
+                process.env.SMTP_USER &&
+                process.env.SMTP_PASS))
           ) {
             try {
               const { sendFileTransferEmail } =

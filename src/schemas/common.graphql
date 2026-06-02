@@ -50,6 +50,13 @@ type ClientActivityMetadata {
   blockReason: String
   listId: String
   listName: String
+  assignedMembers: [ActivityMember]
+}
+
+type ActivityMember {
+  id: ID
+  name: String
+  image: String
 }
 
 type ClientCustomFieldValueType {

@@ -1081,6 +1081,89 @@ class CloudflareService {
   }
 
   /**
+   * Copie un fichier image de signature vers une nouvelle clé sous une autre
+   * signature (copie serveur-à-serveur, même bucket de signatures).
+   * Utilisé lors de la duplication d'une signature pour que les images soient
+   * indépendantes : supprimer la signature source ne casse pas la copie.
+   * @param {string} sourceKey - Clé du fichier source (ex: userId/sigId/banner/xxx.png)
+   * @param {string} userId - ID de l'utilisateur propriétaire
+   * @param {string} newSignatureId - ID de la nouvelle signature (destination)
+   * @returns {Promise<{key: string, url: string}>}
+   */
+  async copySignatureImage(sourceKey, userId, newSignatureId) {
+    if (!sourceKey) {
+      throw new Error("sourceKey requis pour copier une image de signature");
+    }
+
+    // La structure des clés est: userId/signatureId/<sousDossier>/<fichier>
+    // On remplace le segment signatureId par le nouvel ID, et on régénère le
+    // nom de fichier pour éviter toute collision.
+    const segments = sourceKey.split("/");
+    const fileExtension = path.extname(sourceKey).toLowerCase() || ".png";
+    const uniqueId = crypto.randomUUID();
+
+    let destKey;
+    if (segments.length >= 4) {
+      // userId / signatureId / sousDossier / fichier
+      const subFolder = segments[2];
+      destKey = `${userId}/${newSignatureId}/${subFolder}/${uniqueId}${fileExtension}`;
+    } else {
+      // Format inattendu : on retombe sur une clé sûre
+      destKey = `${userId}/${newSignatureId}/${uniqueId}${fileExtension}`;
+    }
+
+    const contentType = this.getContentType(fileExtension);
+
+    try {
+      const command = new CopyObjectCommand({
+        Bucket: this.signatureBucketName,
+        Key: destKey,
+        CopySource: `${this.signatureBucketName}/${sourceKey}`,
+        ContentType: contentType,
+        MetadataDirective: "REPLACE",
+        Metadata: {
+          userId,
+          signatureId: newSignatureId,
+          imageType: "signature",
+        },
+      });
+
+      await this.client.send(command);
+    } catch (copyError) {
+      // Fallback: télécharger puis re-uploader si CopyObject échoue
+      const getCommand = new GetObjectCommand({
+        Bucket: this.signatureBucketName,
+        Key: sourceKey,
+      });
+      const response = await this.client.send(getCommand);
+      const fileBuffer = Buffer.from(
+        await response.Body.transformToByteArray(),
+      );
+
+      const putCommand = new PutObjectCommand({
+        Bucket: this.signatureBucketName,
+        Key: destKey,
+        Body: fileBuffer,
+        ContentType: contentType,
+        Metadata: {
+          userId,
+          signatureId: newSignatureId,
+          imageType: "signature",
+        },
+      });
+
+      await this.client.send(putCommand);
+    }
+
+    const cleanUrl = this.signaturePublicUrl.endsWith("/")
+      ? this.signaturePublicUrl.slice(0, -1)
+      : this.signaturePublicUrl;
+    const imageUrl = `${cleanUrl}/${destKey}`;
+
+    return { key: destKey, url: imageUrl };
+  }
+
+  /**
    * Détermine le content-type basé sur l'extension
    * @param {string} extension - Extension du fichier
    * @returns {string}

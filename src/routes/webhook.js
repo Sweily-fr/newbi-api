@@ -37,8 +37,14 @@ const verifyBridgeSignature = (payload, signature, secret) => {
       .digest("hex")
       .toUpperCase(); // Bridge utilise des majuscules
 
-    // Comparaison simple pour éviter l'erreur de longueur
-    return actualSignature.toUpperCase() === expectedSignature;
+    // Timing-safe comparison to prevent timing attacks
+    const expectedBuf = Buffer.from(expectedSignature);
+    const providedBuf = Buffer.from(actualSignature.toUpperCase());
+
+    return (
+      expectedBuf.length === providedBuf.length &&
+      crypto.timingSafeEqual(expectedBuf, providedBuf)
+    );
   } catch (error) {
     console.error("❌ Erreur lors de la vérification de signature:", error);
     return false;
@@ -61,7 +67,7 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
       const isValidSignature = verifyBridgeSignature(
         req.body,
         signature,
-        webhookSecret
+        webhookSecret,
       );
       if (!isValidSignature) {
         console.error("❌ Signature webhook invalide");
@@ -107,7 +113,9 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
 
       // Connexion initiale d'un compte → Sync complète de tout l'historique
       case "account.connected":
-        logger.info("🔗 Événement: account.connected - Déclenchement sync initiale");
+        logger.info(
+          "🔗 Événement: account.connected - Déclenchement sync initiale",
+        );
         await handleAccountConnected(payload);
         break;
 
@@ -213,11 +221,15 @@ async function handleItemRefreshed(payload) {
 
     if (fullRefresh) {
       // L'historique complet est maintenant disponible (après la sync initiale)
-      logger.info(`🔄 Full refresh détecté pour user_uuid: ${userUuid} - Sync complète`);
+      logger.info(
+        `🔄 Full refresh détecté pour user_uuid: ${userUuid} - Sync complète`,
+      );
       await triggerFullSync(userUuid);
     } else {
       // Refresh partiel → sync incrémentale
-      logger.info(`🔄 Refresh partiel pour user_uuid: ${userUuid} - Sync incrémentale`);
+      logger.info(
+        `🔄 Refresh partiel pour user_uuid: ${userUuid} - Sync incrémentale`,
+      );
       await triggerIncrementalSync(userUuid);
     }
   } catch (error) {
@@ -242,7 +254,7 @@ async function handleAccountUpdated(payload) {
     }
 
     logger.info(
-      `📊 Account updated: ${nbNewTransactions} nouvelles, ${nbUpdatedTransactions} mises à jour`
+      `📊 Account updated: ${nbNewTransactions} nouvelles, ${nbUpdatedTransactions} mises à jour`,
     );
 
     // Sync incrémentale pour ce compte spécifique
@@ -268,7 +280,9 @@ async function handleAccountCreated(payload) {
       return;
     }
 
-    logger.info(`➕ Nouveau compte créé: ${accountId} pour user_uuid: ${userUuid}`);
+    logger.info(
+      `➕ Nouveau compte créé: ${accountId} pour user_uuid: ${userUuid}`,
+    );
 
     // D'abord synchroniser les comptes pour avoir le nouveau compte en base
     const workspaceId = await findWorkspaceByBridgeUuid(userUuid);
@@ -330,7 +344,8 @@ async function handleAccountDisconnected(payload) {
       return;
     }
 
-    const { default: AccountBanking } = await import("../models/AccountBanking.js");
+    const { default: AccountBanking } =
+      await import("../models/AccountBanking.js");
 
     if (accountId) {
       // Supprimer le compte spécifique
@@ -340,10 +355,12 @@ async function handleAccountDisconnected(payload) {
         provider: "bridge",
       });
       logger.info(
-        `🔌 Compte ${accountId} supprimé de la DB (${result.deletedCount} docs) suite à account.disconnected`
+        `🔌 Compte ${accountId} supprimé de la DB (${result.deletedCount} docs) suite à account.disconnected`,
       );
     } else {
-      logger.warn("⚠️ handleAccountDisconnected: account_id manquant, aucune action");
+      logger.warn(
+        "⚠️ handleAccountDisconnected: account_id manquant, aucune action",
+      );
     }
   } catch (error) {
     logger.error("❌ Erreur handleAccountDisconnected:", error.message);
@@ -374,15 +391,21 @@ async function triggerFullSync(userUuid) {
     sinceDate.setDate(sinceDate.getDate() - SYNC_CONFIG.fullSyncDaysBack);
     const since = sinceDate.toISOString().split("T")[0];
 
-    logger.info(`🚀 Démarrage sync complète pour workspace ${workspaceId} depuis ${since}`);
+    logger.info(
+      `🚀 Démarrage sync complète pour workspace ${workspaceId} depuis ${since}`,
+    );
 
-    const result = await provider.syncAllTransactions("webhook-sync", workspaceId, {
-      since,
-      fullSync: true, // Pas de limite de pages
-    });
+    const result = await provider.syncAllTransactions(
+      "webhook-sync",
+      workspaceId,
+      {
+        since,
+        fullSync: true, // Pas de limite de pages
+      },
+    );
 
     logger.info(
-      `✅ Sync complète terminée: ${result.transactions} transactions pour ${result.accounts} comptes`
+      `✅ Sync complète terminée: ${result.transactions} transactions pour ${result.accounts} comptes`,
     );
 
     return result;
@@ -409,7 +432,8 @@ async function triggerIncrementalSync(userUuid, specificAccountId = null) {
     // Récupérer la date de dernière sync depuis le compte
     let since;
     if (specificAccountId) {
-      const { default: AccountBanking } = await import("../models/AccountBanking.js");
+      const { default: AccountBanking } =
+        await import("../models/AccountBanking.js");
       const account = await AccountBanking.findOne({
         externalId: specificAccountId.toString(),
         workspaceId,
@@ -426,14 +450,16 @@ async function triggerIncrementalSync(userUuid, specificAccountId = null) {
     // Si pas de lastSyncAt, utiliser les X derniers jours par défaut
     if (!since) {
       const sinceDate = new Date();
-      sinceDate.setDate(sinceDate.getDate() - SYNC_CONFIG.incrementalSyncDaysBack);
+      sinceDate.setDate(
+        sinceDate.getDate() - SYNC_CONFIG.incrementalSyncDaysBack,
+      );
       since = sinceDate.toISOString().split("T")[0];
     }
 
     logger.info(
       `📥 Sync incrémentale pour workspace ${workspaceId}${
         specificAccountId ? ` (compte ${specificAccountId})` : ""
-      } depuis ${since}`
+      } depuis ${since}`,
     );
 
     if (specificAccountId) {
@@ -442,17 +468,23 @@ async function triggerIncrementalSync(userUuid, specificAccountId = null) {
         specificAccountId,
         "webhook-sync",
         workspaceId,
-        { since }
+        { since },
       );
-      logger.info(`✅ Sync incrémentale terminée: ${transactions.length} transactions`);
+      logger.info(
+        `✅ Sync incrémentale terminée: ${transactions.length} transactions`,
+      );
       return { transactions: transactions.length };
     } else {
       // Sync de tous les comptes
-      const result = await provider.syncAllTransactions("webhook-sync", workspaceId, {
-        since,
-      });
+      const result = await provider.syncAllTransactions(
+        "webhook-sync",
+        workspaceId,
+        {
+          since,
+        },
+      );
       logger.info(
-        `✅ Sync incrémentale terminée: ${result.transactions} transactions pour ${result.accounts} comptes`
+        `✅ Sync incrémentale terminée: ${result.transactions} transactions pour ${result.accounts} comptes`,
       );
       return result;
     }
@@ -487,7 +519,7 @@ async function triggerFullSyncForAccount(userUuid, accountId) {
       accountId,
       "webhook-sync",
       workspaceId,
-      { since, fullSync: true }
+      { since, fullSync: true },
     );
 
     logger.info(`✅ Sync compte terminée: ${transactions.length} transactions`);

@@ -99,9 +99,21 @@ async function generateDocumentPdf(documentId, documentType) {
       body.purchaseOrderId = documentId;
     }
 
+    // Authentification serveur-à-serveur via secret interne : les routes
+    // /api/*/generate-pdf l'acceptent en lieu et place d'une session utilisateur.
+    const headers = process.env.INTERNAL_API_SECRET
+      ? { "x-internal-secret": process.env.INTERNAL_API_SECRET }
+      : {};
+    if (!process.env.INTERNAL_API_SECRET) {
+      console.warn(
+        "⚠️ [DocumentEmail] INTERNAL_API_SECRET non défini : l'appel PDF échouera en 401.",
+      );
+    }
+
     const response = await axios.post(`${frontendUrl}${endpoint}`, body, {
       responseType: "arraybuffer",
       timeout: 60000,
+      headers,
     });
     return Buffer.from(response.data);
   } catch (error) {
@@ -150,188 +162,130 @@ function generateEmailHtml(
           ? "Votre bon de commande"
           : "Votre avoir";
 
-  const detailsTitle =
+  const badgeLabel =
     documentType === DOCUMENT_TYPES.INVOICE
-      ? "DE LA FACTURE"
+      ? "FACTURE"
       : documentType === DOCUMENT_TYPES.QUOTE
-        ? "DU DEVIS"
+        ? "DEVIS"
         : documentType === DOCUMENT_TYPES.PURCHASE_ORDER
-          ? "DU BON DE COMMANDE"
-          : "DE L'AVOIR";
+          ? "BON DE COMMANDE"
+          : "AVOIR";
+
+  const notifType =
+    documentType === DOCUMENT_TYPES.INVOICE
+      ? "ENVOI DE FACTURE"
+      : documentType === DOCUMENT_TYPES.QUOTE
+        ? "ENVOI DE DEVIS"
+        : documentType === DOCUMENT_TYPES.PURCHASE_ORDER
+          ? "ENVOI DE BON DE COMMANDE"
+          : "ENVOI D'AVOIR";
 
   const pdfNote = `${labels.article.charAt(0).toUpperCase() + labels.article.slice(1)}${labels.article.endsWith("'") ? "" : " "}${documentLabel} est ${documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.CREDIT_NOTE ? "jointe" : "joint"} à cet email au format PDF.`;
 
   const footerText =
     customFooter ||
-    `${documentType === DOCUMENT_TYPES.INVOICE ? "Cette facture a été envoyée" : documentType === DOCUMENT_TYPES.QUOTE ? "Ce devis a été envoyé" : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? "Ce bon de commande a été envoyé" : "Cet avoir a été envoyé"} par ${variables.companyName} depuis la plateforme Newbi Logiciel de gestion.`;
+    `${documentType === DOCUMENT_TYPES.INVOICE ? "Cette facture a été envoyée" : documentType === DOCUMENT_TYPES.QUOTE ? "Ce devis a été envoyé" : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? "Ce bon de commande a été envoyé" : "Cet avoir a été envoyé"} par ${variables.companyName} depuis Newbi, logiciel de gestion.`;
 
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${titleText}</title>
-      <style>
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          line-height: 1.6;
-          color: #333;
-          margin: 0;
-          padding: 0;
-          background-color: #f0eeff;
-        }
-        .container {
-          max-width: 600px;
-          margin: 40px auto;
-          padding: 20px;
-          background-color: #ffffff;
-          border-radius: 8px;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        .header {
-          text-align: center;
-          padding: 20px 0;
-          border-bottom: 1px solid #e5e7eb;
-        }
-        .logo {
-          display: inline-block;
-          margin-bottom: 20px;
-        }
-        .logo-text {
-          font-size: 34px;
-          font-weight: 800;
-          color: #1f2937;
-          letter-spacing: -0.025em;
-        }
-        .logo-dot {
-          color: #3b82f6;
-        }
-        .logo-subtitle {
-          font-size: 14px;
-          color: #6b7280;
-          margin-top: -5px;
-        }
-        .content {
-          padding: 30px 20px;
-        }
-        h1 {
-          color: #1f2937;
-          font-size: 24px;
-          font-weight: 700;
-          margin-bottom: 20px;
-        }
-        p {
-          margin-bottom: 16px;
-          color: #4b5563;
-        }
-        .btn {
-          display: inline-block;
-          background-color: #5b50ff;
-          color: white;
-          font-weight: 600;
-          text-decoration: none;
-          padding: 12px 24px;
-          border-radius: 6px;
-          margin: 20px 0;
-          text-align: center;
-        }
-        .btn:hover {
-          background-color: #4a41e0;
-        }
-        .link-fallback {
-          word-break: break-all;
-          color: #6b7280;
-          font-size: 14px;
-        }
-        .footer {
-          text-align: center;
-          padding: 20px;
-          color: #6b7280;
-          font-size: 14px;
-          border-top: 1px solid #e5e7eb;
-        }
-        .security-notice {
-          background-color: #e6e1ff;
-          padding: 15px;
-          border-radius: 6px;
-          margin-top: 30px;
-          font-size: 14px;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #1f2937;">${titleText}</h1>
-        </div>
-        <div class="content">
-          <div style="font-size: 15px; line-height: 1.6; color: #4b5563;">
-            ${emailBody.replace(/\n/g, "<br>")}
-          </div>
+  const ctaLabel = `Voir ${labels.article}${labels.article.endsWith("'") ? "" : " "}${documentLabel}`;
 
-          <div class="security-notice">
-            <h2 style="margin: 0 0 16px 0; font-size: 13px; font-weight: 600; color: #1f2937; text-transform: uppercase; letter-spacing: 0.5px;">
-              DÉTAILS ${detailsTitle}
-            </h2>
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Numéro</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${variables.documentNumber}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Montant total</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 600;">${variables.totalAmount}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${variables.issueDate}</td>
-              </tr>
-              ${
-                documentType === DOCUMENT_TYPES.INVOICE && dueDate
-                  ? `
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date d'échéance</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${dueDate}</td>
-              </tr>
-              `
-                  : ""
-              }
-              ${
-                documentType === DOCUMENT_TYPES.CREDIT_NOTE &&
-                variables.invoiceNumber
-                  ? `
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Facture associée</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${variables.invoiceNumber}</td>
-              </tr>
-              `
-                  : ""
-              }
-            </table>
-          </div>
+  const todayFormatted = new Date().toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 
-          <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">${pdfNote}</p>
+  const detailRow = (label, value, opts = {}) => {
+    if (value === null || value === undefined || value === "") return "";
+    const weight = opts.strong ? "600" : "400";
+    return `
+                <tr>
+                  <td style="padding:6px 0;font-size:14px;color:#6b7280;">${label}</td>
+                  <td style="padding:6px 0;font-size:14px;color:#1a1a1a;text-align:right;font-weight:${weight};word-break:break-word;">${value}</td>
+                </tr>`;
+  };
 
-          ${
-            clickTrackingUrl
-              ? `<div style="text-align: center; margin-top: 25px;">
-              <a href="${clickTrackingUrl}" class="btn" style="display: inline-block; background-color: #5b50ff; color: white; font-weight: 600; text-decoration: none; padding: 12px 24px; border-radius: 6px;">
-                Voir ${labels.article}${labels.article.endsWith("'") ? "" : " "}${documentLabel}
-              </a>
-            </div>`
-              : ""
-          }
-        </div>
-        <div class="footer">
-          <p>&copy; ${new Date().getFullYear()} ${variables.companyName}. Tous droits réservés.</p>
-          <p style="margin: 0; font-size: 12px; color: #9ca3af;">${footerText}</p>
+  const detailRows = `${detailRow("Numéro", variables.documentNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date", variables.issueDate)}${documentType === DOCUMENT_TYPES.INVOICE ? detailRow("Date d'échéance", dueDate) : ""}${documentType === DOCUMENT_TYPES.CREDIT_NOTE ? detailRow("Facture associée", variables.invoiceNumber) : ""}`;
+
+  // Gabarit aligné sur les autres emails Newbi (cf. notification de mention) :
+  // logo centré, carte blanche, badge violet, bouton noir, footer marque.
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${titleText}</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#fafafa;font-size:1px;line-height:1px;">${titleText} ${variables.documentNumber} — ${variables.totalAmount}</div>
+  <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
+
+    <!-- Logo -->
+    <div style="text-align:center;padding:40px 0 24px 0;">
+      <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height:32px;width:auto;">
+    </div>
+
+    <!-- Type de notification -->
+    <div style="text-align:center;margin-bottom:8px;">
+      <span style="font-size:11px;font-weight:600;color:#1a1a1a;letter-spacing:0.5px;text-transform:uppercase;">${notifType}</span>
+    </div>
+
+    <!-- Date -->
+    <div style="text-align:center;margin-bottom:32px;">
+      <span style="font-size:12px;color:#6b7280;">${todayFormatted}</span>
+    </div>
+
+    <!-- Carte principale -->
+    <div style="background-color:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 24px;margin-bottom:32px;">
+
+      <!-- Badge -->
+      <div style="margin-bottom:20px;">
+        <div style="display:inline-block;background-color:#ede9fe;border-radius:6px;padding:8px 12px;">
+          <span style="font-size:11px;font-weight:500;color:#5a50ff;letter-spacing:0.3px;text-transform:uppercase;">${badgeLabel}</span>
         </div>
       </div>
-      ${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" border="0" alt="" style="width:1px;height:1px;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" />` : ""}
-    </body>
-    </html>
-  `;
+
+      <!-- Titre -->
+      <h1 style="font-size:26px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;line-height:1.3;">${titleText}</h1>
+
+      <!-- Message -->
+      <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">${emailBody.replace(/\n/g, "<br>")}</div>
+
+      <!-- Note PDF joint -->
+      <div style="background-color:#fafafa;border-left:3px solid #5a50ff;border-radius:0 8px 8px 0;padding:16px;margin-bottom:24px;">
+        <p style="font-size:14px;color:#4b5563;margin:0;line-height:1.6;">📎 ${pdfNote}</p>
+      </div>
+
+      <!-- Détails -->
+      <div style="background-color:#fafafa;border-radius:8px;padding:16px;margin-bottom:24px;">
+        <table style="width:100%;border-collapse:collapse;">${detailRows}
+        </table>
+      </div>
+      ${
+        clickTrackingUrl
+          ? `
+      <!-- Bouton CTA -->
+      <a href="${clickTrackingUrl}" style="display:block;background-color:#1a1a1a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:500;font-size:15px;text-align:center;">${ctaLabel}</a>`
+          : ""
+      }
+    </div>
+
+    <!-- Footer -->
+    <div style="border-top:1px solid #e5e7eb;padding-top:32px;text-align:center;padding-bottom:40px;">
+      <div style="margin-bottom:16px;">
+        <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height:28px;width:auto;">
+      </div>
+      <p style="font-size:13px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;">Votre gestion, simplifiée.</p>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 24px 0;line-height:1.8;">${footerText}</p>
+      <div style="font-size:11px;color:#9ca3af;line-height:1.6;">
+        <p style="margin:0 0 4px 0;">SWEILY (SAS),</p>
+        <p style="margin:0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+      </div>
+    </div>
+
+  </div>
+  ${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" border="0" alt="" style="display:block;width:1px;height:1px;border:0;outline:none;text-decoration:none;">` : ""}
+</body>
+</html>`;
 }
 
 /**
@@ -359,53 +313,92 @@ function generateSenderConfirmationHtml({
       ? "envoyée"
       : "envoyé";
 
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Confirmation d'envoi</title>
-    </head>
-    <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0eeff; margin: 0; padding: 0;">
-      <div style="max-width: 600px; margin: 40px auto; padding: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <div style="text-align: center; padding: 20px 0; border-bottom: 1px solid #e5e7eb;">
-          <h1 style="margin: 0; font-size: 22px; font-weight: 700; color: #1f2937;">Confirmation d'envoi</h1>
-        </div>
-        <div style="padding: 30px 20px;">
-          <p style="font-size: 15px; color: #4b5563; line-height: 1.6;">
-            ${capitalizedArticle}${docLabel} <strong>${documentNumber}</strong> a bien été ${verbAccord} à <strong>${clientName}</strong> (${recipientEmail}).
-          </p>
-          <div style="background-color: #e6e1ff; padding: 15px; border-radius: 6px; margin-top: 20px;">
-            <h2 style="margin: 0 0 12px 0; font-size: 13px; font-weight: 600; color: #1f2937; text-transform: uppercase; letter-spacing: 0.5px;">Récapitulatif</h2>
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr>
-                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Numéro</td>
-                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${documentNumber}</td>
-              </tr>
-              <tr>
-                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Destinataire</td>
-                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${recipientEmail}</td>
-              </tr>
-              <tr>
-                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Montant</td>
-                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 600;">${totalAmount}</td>
-              </tr>
-              <tr>
-                <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Envoyé le</td>
-                <td style="padding: 6px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${sentAt}</td>
-              </tr>
-            </table>
-          </div>
-        </div>
-        <div style="text-align: center; padding: 20px; color: #6b7280; font-size: 12px; border-top: 1px solid #e5e7eb;">
-          <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${companyName}. Tous droits réservés.</p>
-          <p style="margin: 4px 0 0 0; color: #9ca3af;">Email automatique envoyé par Newbi pour confirmer l'envoi de votre document.</p>
+  const todayFormatted = new Date().toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  const confRow = (label, value, opts = {}) => {
+    if (value === null || value === undefined || value === "") return "";
+    const weight = opts.strong ? "600" : "400";
+    return `
+                <tr>
+                  <td style="padding:6px 0;font-size:14px;color:#6b7280;">${label}</td>
+                  <td style="padding:6px 0;font-size:14px;color:#1a1a1a;text-align:right;font-weight:${weight};word-break:break-word;">${value}</td>
+                </tr>`;
+  };
+
+  const confRows = `${confRow("Numéro", documentNumber)}${confRow("Destinataire", recipientEmail)}${confRow("Montant", totalAmount, { strong: true })}${confRow("Envoyé le", sentAt)}`;
+
+  // Même gabarit que l'email d'envoi de document (cf. notification de mention).
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Confirmation d'envoi</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#fafafa;font-size:1px;line-height:1px;">${capitalizedArticle}${docLabel} ${documentNumber} a bien été ${verbAccord} à ${clientName}.</div>
+  <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
+
+    <!-- Logo -->
+    <div style="text-align:center;padding:40px 0 24px 0;">
+      <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height:32px;width:auto;">
+    </div>
+
+    <!-- Type de notification -->
+    <div style="text-align:center;margin-bottom:8px;">
+      <span style="font-size:11px;font-weight:600;color:#1a1a1a;letter-spacing:0.5px;text-transform:uppercase;">CONFIRMATION D'ENVOI</span>
+    </div>
+
+    <!-- Date -->
+    <div style="text-align:center;margin-bottom:32px;">
+      <span style="font-size:12px;color:#6b7280;">${todayFormatted}</span>
+    </div>
+
+    <!-- Carte principale -->
+    <div style="background-color:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 24px;margin-bottom:32px;">
+
+      <!-- Badge -->
+      <div style="margin-bottom:20px;">
+        <div style="display:inline-block;background-color:#ede9fe;border-radius:6px;padding:8px 12px;">
+          <span style="font-size:11px;font-weight:500;color:#5a50ff;letter-spacing:0.3px;text-transform:uppercase;">Envoi confirmé</span>
         </div>
       </div>
-    </body>
-    </html>
-  `;
+
+      <!-- Titre -->
+      <h1 style="font-size:26px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;line-height:1.3;">${capitalizedArticle}${docLabel} ${documentNumber}</h1>
+
+      <!-- Message -->
+      <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">
+        ${capitalizedArticle}${docLabel} <strong style="color:#1a1a1a;">${documentNumber}</strong> a bien été ${verbAccord} à <strong style="color:#1a1a1a;">${clientName}</strong> (${recipientEmail}).
+      </div>
+
+      <!-- Récapitulatif -->
+      <div style="background-color:#fafafa;border-radius:8px;padding:16px;">
+        <table style="width:100%;border-collapse:collapse;">${confRows}
+        </table>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="border-top:1px solid #e5e7eb;padding-top:32px;text-align:center;padding-bottom:40px;">
+      <div style="margin-bottom:16px;">
+        <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height:28px;width:auto;">
+      </div>
+      <p style="font-size:13px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;">Votre gestion, simplifiée.</p>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 24px 0;line-height:1.8;">Email automatique envoyé par Newbi pour confirmer l'envoi de votre document.</p>
+      <div style="font-size:11px;color:#9ca3af;line-height:1.6;">
+        <p style="margin:0 0 4px 0;">SWEILY (SAS),</p>
+        <p style="margin:0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>`;
 }
 
 /**
@@ -600,18 +593,52 @@ async function sendDocumentEmail({
     clickTrackingUrl,
   );
 
-  // Utiliser le PDF envoyé depuis le client, sinon essayer de le générer côté serveur
+  // Résolution du PDF — R2 binaire prioritaire, base64 = transport optionnel.
+  // Le base64 (généré côté éditeur) n'est jamais stocké : il est décodé puis jeté.
+  // La source durable est le binaire mis en cache dans R2 (cachedPdf).
   let pdfBuffer = null;
+  let pdfFromCache = false;
+
+  // 1) Fast-path : PDF généré côté client et transmis dans la requête (transitoire)
   if (pdfBase64) {
-    // Décoder le PDF base64 envoyé depuis le client
     pdfBuffer = Buffer.from(pdfBase64, "base64");
-  } else {
-    // Fallback: essayer de générer le PDF côté serveur (peut échouer sur Vercel)
+  }
+
+  // 2) Sinon, réutiliser le PDF binaire déjà mis en cache dans R2 (aucun base64)
+  if (!pdfBuffer && document.cachedPdf?.url) {
+    try {
+      const cachedResponse = await axios.get(document.cachedPdf.url, {
+        responseType: "arraybuffer",
+        timeout: 30000,
+      });
+      pdfBuffer = Buffer.from(cachedResponse.data);
+      pdfFromCache = true;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "⚠️ [DocumentEmail] Échec lecture du PDF en cache R2:",
+        err.message,
+      );
+    }
+  }
+
+  // 3) En dernier recours : génération côté serveur via Puppeteer (Next.js)
+  if (!pdfBuffer) {
     pdfBuffer = await generateDocumentPdf(documentId, documentType);
   }
 
-  // Cache le PDF dans R2 pour les automatisations futures (fire-and-forget)
+  // Garde-fou : ne jamais envoyer un document sans sa pièce jointe.
+  // On bloque l'envoi avec une erreur explicite plutôt que de partir sans PDF.
+  if (!pdfBuffer) {
+    throw new Error(
+      "Impossible de générer le PDF du document. L'email n'a pas été envoyé. Veuillez réessayer.",
+    );
+  }
+
+  // Cache le PDF binaire dans R2 pour les prochains envois/automatisations
+  // (inutile s'il en provient déjà). Fire-and-forget.
   if (
+    !pdfFromCache &&
     pdfBuffer &&
     (documentType === DOCUMENT_TYPES.INVOICE ||
       documentType === DOCUMENT_TYPES.QUOTE ||

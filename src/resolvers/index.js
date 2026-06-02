@@ -63,6 +63,7 @@ import installedAppResolvers from "./installedApp.js";
 import esignatureResolvers from "./esignatureResolvers.js";
 import rgpdResolvers from "./rgpd.js";
 import dashboardAggregationResolvers from "./dashboardAggregation.js";
+import receiptMatchingResolvers from "./receiptMatchingResolvers.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -129,6 +130,7 @@ const resolvers = mergeResolvers([
   esignatureResolvers,
   rgpdResolvers,
   dashboardAggregationResolvers,
+  receiptMatchingResolvers,
 ]);
 
 export default resolvers;

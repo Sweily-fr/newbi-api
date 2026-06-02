@@ -155,6 +155,12 @@ const eventSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // Horodatage d'envoi distinct pour le rappel à l'échéance
+      // (ne pas écraser celui du rappel anticipé)
+      echeanceSentAt: {
+        type: Date,
+        default: null,
+      },
       status: {
         type: String,
         enum: ["pending", "processing", "sent", "failed", "cancelled"],
@@ -172,6 +178,15 @@ const eventSchema = new mongoose.Schema(
         type: String,
         enum: ["pending", "processing", "sent", "failed", "cancelled", null],
         default: null,
+      },
+      // Compteurs de tentatives indépendants pour borner les renvois
+      retryCount: {
+        type: Number,
+        default: 0,
+      },
+      echeanceRetryCount: {
+        type: Number,
+        default: 0,
       },
       failureReason: {
         type: String,
@@ -211,9 +226,17 @@ eventSchema.index({ userId: 1, visibility: 1, start: 1 });
 eventSchema.index({ calendarConnectionId: 1 }, { sparse: true });
 // Index standalone pour requêtes par userId seul
 eventSchema.index({ userId: 1 });
-// Index pour le cron emailReminderScheduler (toutes les 5 min)
+// Index pour le cron emailReminderScheduler (toutes les 2 min)
 eventSchema.index(
   { "emailReminder.status": 1, "emailReminder.scheduledFor": 1 },
+  { sparse: true },
+);
+// Index pour le rappel à l'échéance
+eventSchema.index(
+  {
+    "emailReminder.echeanceStatus": 1,
+    "emailReminder.echeanceScheduledFor": 1,
+  },
   { sparse: true },
 );
 

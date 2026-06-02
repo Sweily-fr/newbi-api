@@ -230,11 +230,32 @@ class EmailReminderService {
   }
 
   /**
-   * Génère le contenu HTML de l'email
+   * Échappe les caractères HTML pour éviter toute injection / casse de mise en
+   * page lorsque les champs (titre, lieu, description) contiennent du HTML.
    */
-  generateEmailContent(event, reminderType, anticipation = null) {
+  escapeHtml(value) {
+    if (value === null || value === undefined) return "";
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  /**
+   * Génère le contenu HTML de l'email.
+   * Layout en tableaux + styles 100 % inline pour un rendu fiable sur tous les
+   * clients mail (Gmail supprime les balises <style> du <head>).
+   *
+   * @param {object} event
+   * @param {"anticipated"|"due"} reminderType
+   * @param {string|null} offset - valeur d'anticipation ("1h"…) ou d'échéance ("0m"…)
+   */
+  generateEmailContent(event, reminderType, offset = null) {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     const tz = "Europe/Paris";
+
     const eventDate = new Date(event.start).toLocaleDateString("fr-FR", {
       weekday: "long",
       year: "numeric",
@@ -249,17 +270,13 @@ class EmailReminderService {
           minute: "2-digit",
           timeZone: tz,
         });
-    const formattedDate = new Date()
-      .toLocaleDateString("fr-FR", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        timeZone: tz,
-      })
-      .toUpperCase();
 
+    const title = this.escapeHtml(event.title);
+
+    // Libellés selon le type de rappel et le décalage choisi
     let subject = "";
-    let anticipationText = "";
+    let messageText = "";
+    let preheader = "";
 
     if (reminderType === "anticipated") {
       const anticipationMap = {
@@ -272,151 +289,152 @@ class EmailReminderService {
         "1d": "1 jour",
         "3d": "3 jours",
       };
-      anticipationText = anticipationMap[anticipation] || "";
-      subject = `Rappel : ${event.title} dans ${anticipationText}`;
+      const delay = anticipationMap[offset] || "bientôt";
+      subject = `Rappel : ${event.title} dans ${delay}`;
+      messageText = `Votre événement <strong>${title}</strong> arrive dans <strong>${delay}</strong>.`;
+      preheader = `${event.title} — dans ${delay}`;
     } else {
-      subject = `Rappel : ${event.title} - aujourd'hui`;
+      // Rappel à l'échéance : message précis selon l'avance choisie
+      const dueMap = {
+        "0m": {
+          subject: "ça commence maintenant",
+          text: "commence <strong>maintenant</strong>",
+        },
+        "5m": {
+          subject: "dans 5 minutes",
+          text: "commence <strong>dans 5 minutes</strong>",
+        },
+        "10m": {
+          subject: "dans 10 minutes",
+          text: "commence <strong>dans 10 minutes</strong>",
+        },
+        "15m": {
+          subject: "dans 15 minutes",
+          text: "commence <strong>dans 15 minutes</strong>",
+        },
+      };
+      const due = dueMap[offset] || dueMap["0m"];
+      subject = `Rappel : ${event.title} — ${due.subject}`;
+      messageText = `Votre événement <strong>${title}</strong> ${due.text}.`;
+      preheader = `${event.title} — ${due.subject}`;
     }
 
-    const messageText =
-      reminderType === "anticipated"
-        ? `Votre événement <strong>${event.title}</strong> arrive dans <strong>${anticipationText}</strong>.`
-        : `Votre événement <strong>${event.title}</strong> est prévu <strong>aujourd'hui</strong>.`;
+    const todayFormatted = new Date().toLocaleDateString("fr-FR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: tz,
+    });
 
-    const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${subject}</title>
-      <style>
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          line-height: 1.6;
-          color: #333;
-          margin: 0;
-          padding: 0;
-          background-color: #f0eeff;
-        }
-        .container {
-          max-width: 600px;
-          margin: 40px auto;
-          padding: 20px;
-          background-color: #ffffff;
-          border-radius: 8px;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        .header {
-          text-align: center;
-          padding: 20px 0;
-          border-bottom: 1px solid #e5e7eb;
-        }
-        .content {
-          padding: 30px 20px;
-        }
-        h1 {
-          color: #1f2937;
-          font-size: 24px;
-          font-weight: 700;
-          margin-bottom: 20px;
-        }
-        p {
-          margin-bottom: 16px;
-          color: #4b5563;
-        }
-        .btn {
-          display: inline-block;
-          background-color: #5b50ff;
-          color: white;
-          font-weight: 600;
-          text-decoration: none;
-          padding: 12px 24px;
-          border-radius: 6px;
-          margin: 20px 0;
-          text-align: center;
-        }
-        .footer {
-          text-align: center;
-          padding: 20px;
-          color: #6b7280;
-          font-size: 14px;
-          border-top: 1px solid #e5e7eb;
-        }
-        .security-notice {
-          background-color: #e6e1ff;
-          padding: 15px;
-          border-radius: 6px;
-          margin-top: 30px;
-          font-size: 14px;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #1f2937;">Rappel de calendrier</h1>
-        </div>
-        <div class="content">
-          <div style="font-size: 15px; line-height: 1.6; color: #4b5563;">
-            <p>Bonjour,</p>
-            <p>${messageText}</p>
-          </div>
+    // Libellé du badge selon le type d'événement
+    const badgeMap = {
+      REMINDER: "RAPPEL",
+      MEETING: "RENDEZ-VOUS",
+      DEADLINE: "ÉCHÉANCE",
+      INVOICE_DUE: "FACTURE",
+      CREDIT_NOTE_CREATED: "AVOIR",
+      EXTERNAL: "ÉVÉNEMENT",
+      MANUAL: "ÉVÉNEMENT",
+    };
+    const badgeLabel = badgeMap[event.type] || "ÉVÉNEMENT";
 
-          <div class="security-notice">
-            <h2 style="margin: 0 0 16px 0; font-size: 13px; font-weight: 600; color: #1f2937; text-transform: uppercase; letter-spacing: 0.5px;">
-              DÉTAILS DE L'ÉVÉNEMENT
-            </h2>
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Événement</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 600;">${event.title}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Date</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${eventDate}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Heure</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${eventTime}</td>
-              </tr>
-              ${
-                event.location
-                  ? `<tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Lieu</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right; font-weight: 500;">${event.location}</td>
-              </tr>`
-                  : ""
-              }
-              ${
-                event.description
-                  ? `<tr>
-                <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">Description</td>
-                <td style="padding: 8px 0; font-size: 14px; color: #1f2937; text-align: right;">${event.description}</td>
-              </tr>`
-                  : ""
-              }
-            </table>
-          </div>
+    const detailRow = (label, value) => `
+                <tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">${label}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${value}</td>
+                </tr>`;
 
-          <div style="text-align: center; margin-top: 24px;">
-            <a href="${frontendUrl}/dashboard/calendar?event=${event._id}" class="btn" style="display: inline-block; background-color: #5b50ff; color: white; font-weight: 600; text-decoration: none; padding: 12px 24px; border-radius: 6px;">
-              Voir dans le calendrier
-            </a>
-          </div>
+    const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${this.escapeHtml(subject)}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
+  <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: #fafafa; font-size: 1px; line-height: 1px;">${this.escapeHtml(preheader)}</div>
+  <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
 
-          <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">
-            Vous pouvez gérer vos rappels dans les <a href="${frontendUrl}/dashboard/settings" style="color: #5b50ff; text-decoration: none;">paramètres</a> de votre compte.
-          </p>
-        </div>
-        <div class="footer">
-          <p>&copy; ${new Date().getFullYear()} Newbi. Tous droits réservés.</p>
-          <p style="margin: 0; font-size: 12px; color: #9ca3af;">Ce rappel a été envoyé depuis la plateforme Newbi Logiciel de gestion.</p>
+    <!-- Logo -->
+    <div style="text-align: center; padding: 40px 0 24px 0;">
+      <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
+    </div>
+
+    <!-- Type de notification -->
+    <div style="text-align: center; margin-bottom: 8px;">
+      <span style="font-size: 11px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.5px; text-transform: uppercase;">
+        RAPPEL D'ÉVÉNEMENT
+      </span>
+    </div>
+
+    <!-- Date -->
+    <div style="text-align: center; margin-bottom: 32px;">
+      <span style="font-size: 12px; color: #6b7280;">
+        ${this.escapeHtml(todayFormatted)}
+      </span>
+    </div>
+
+    <!-- Carte principale -->
+    <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
+
+      <!-- Badge -->
+      <div style="margin-bottom: 20px;">
+        <div style="display: inline-block; background-color: #f3f4f6; border-radius: 6px; padding: 8px 12px;">
+          <span style="font-size: 11px; font-weight: 500; color: #374151; letter-spacing: 0.3px; text-transform: uppercase;">${badgeLabel}</span>
         </div>
       </div>
-    </body>
-    </html>
-    `;
+
+      <!-- Titre -->
+      <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
+        ${title}
+      </h1>
+
+      <!-- Salutation -->
+      <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">
+        Bonjour,
+      </p>
+
+      <!-- Message -->
+      <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
+        ${messageText}
+      </p>
+
+      <!-- Détails -->
+      <div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+        <table style="width: 100%; border-collapse: collapse;">
+          ${detailRow("Date", this.escapeHtml(eventDate))}
+          ${detailRow("Heure", this.escapeHtml(eventTime))}
+          ${event.location ? detailRow("Lieu", this.escapeHtml(event.location)) : ""}
+          ${event.description ? detailRow("Description", this.escapeHtml(event.description)) : ""}
+        </table>
+      </div>
+
+      <!-- Bouton CTA -->
+      <a href="${frontendUrl}/dashboard/calendar?event=${event._id}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">
+        Voir dans le calendrier
+      </a>
+    </div>
+
+    <!-- Footer -->
+    <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center; padding-bottom: 40px;">
+      <div style="margin-bottom: 16px;">
+        <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height: 28px; width: auto;">
+      </div>
+      <p style="font-size: 13px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0;">
+        Votre gestion, simplifiée.
+      </p>
+      <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
+        Vous recevez cet email car vous avez programmé un rappel pour cet événement sur Newbi. • <a href="https://newbi.fr/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+      </p>
+      <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+        <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
+        <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>`;
 
     return { subject, html };
   }
@@ -428,7 +446,11 @@ class EmailReminderService {
     eventId,
     reminderType,
     anticipation = null,
-    { skipPreferencesCheck = false, reminderField = "anticipation" } = {},
+    {
+      skipPreferencesCheck = false,
+      reminderField = "anticipation",
+      ignoreDoNotDisturb = false,
+    } = {},
   ) {
     try {
       // Récupérer l'événement
@@ -473,8 +495,24 @@ class EmailReminderService {
         preferences = preferencesCheck.preferences;
       }
 
+      // Champs ciblés selon qu'il s'agit du rappel anticipé ou à l'échéance
+      const isEcheance = reminderField === "echeance";
+      const scheduledField = isEcheance
+        ? "echeanceScheduledFor"
+        : "scheduledFor";
+      const statusField = isEcheance ? "echeanceStatus" : "status";
+      const sentAtField = isEcheance ? "echeanceSentAt" : "sentAt";
+      const currentScheduledFor =
+        event.emailReminder?.[scheduledField] || event.start;
+
       // Vérifier la période "Ne pas déranger"
-      if (!skipPreferencesCheck && this.isInDoNotDisturbPeriod(preferences)) {
+      // (ignorée pour les rappels de calendrier : ils doivent partir à l'heure
+      // demandée, même la nuit)
+      if (
+        !skipPreferencesCheck &&
+        !ignoreDoNotDisturb &&
+        this.isInDoNotDisturbPeriod(preferences)
+      ) {
         const nextAllowed = this.getNextAllowedTime(preferences);
         logger.info(`Email différé pour ${user.email} jusqu'à ${nextAllowed}`);
 
@@ -488,7 +526,7 @@ class EmailReminderService {
           anticipation,
           status: "deferred",
           sentAt: new Date(),
-          scheduledFor: event.emailReminder.scheduledFor || event.start,
+          scheduledFor: currentScheduledFor,
           deferredReason: 'Période "Ne pas déranger"',
           eventSnapshot: {
             title: event.title,
@@ -498,8 +536,11 @@ class EmailReminderService {
           },
         });
 
-        // Reprogrammer pour plus tard
-        event.emailReminder.scheduledFor = nextAllowed;
+        // Reprogrammer pour plus tard, sur le bon champ, et remettre le rappel
+        // en "pending" (il avait été passé en "processing" par le claim) pour
+        // qu'il soit bien repris au prochain passage du scheduler.
+        event.emailReminder[scheduledField] = nextAllowed;
+        event.emailReminder[statusField] = "pending";
         await event.save();
 
         return {
@@ -528,13 +569,9 @@ class EmailReminderService {
         `✅ Email de rappel envoyé à ${user.email} pour l'événement "${event.title}"`,
       );
 
-      // Mettre à jour l'événement
-      if (reminderField === "echeance") {
-        event.emailReminder.echeanceStatus = "sent";
-      } else {
-        event.emailReminder.status = "sent";
-      }
-      event.emailReminder.sentAt = new Date();
+      // Mettre à jour l'événement (statut + horodatage du bon rappel)
+      event.emailReminder[statusField] = "sent";
+      event.emailReminder[sentAtField] = new Date();
       await event.save();
 
       // Enregistrer dans les logs
@@ -547,7 +584,7 @@ class EmailReminderService {
         anticipation,
         status: "sent",
         sentAt: new Date(),
-        scheduledFor: event.emailReminder.scheduledFor || event.start,
+        scheduledFor: currentScheduledFor,
         eventSnapshot: {
           title: event.title,
           description: event.description,
@@ -567,6 +604,10 @@ class EmailReminderService {
       try {
         const event = await Event.findById(eventId);
         if (event) {
+          const failScheduledField =
+            reminderField === "echeance"
+              ? "echeanceScheduledFor"
+              : "scheduledFor";
           if (reminderField === "echeance") {
             event.emailReminder.echeanceStatus = "failed";
           } else {
@@ -584,7 +625,8 @@ class EmailReminderService {
             anticipation,
             status: "failed",
             sentAt: new Date(),
-            scheduledFor: event.emailReminder.scheduledFor || event.start,
+            scheduledFor:
+              event.emailReminder[failScheduledField] || event.start,
             failureReason: error.message,
             eventSnapshot: {
               title: event.title,
@@ -603,15 +645,46 @@ class EmailReminderService {
   }
 
   /**
+   * Décalage (en ms) d'un fuseau par rapport à UTC pour une date donnée.
+   * Indépendant du fuseau du serveur (le décalage de parsing s'annule).
+   */
+  tzOffsetMs(timeZone, date) {
+    const utc = new Date(date.toLocaleString("en-US", { timeZone: "UTC" }));
+    const tz = new Date(date.toLocaleString("en-US", { timeZone }));
+    return tz.getTime() - utc.getTime();
+  }
+
+  /**
+   * Renvoie l'instant correspondant à `hours`:`minutes` heure de Paris,
+   * pour le jour calendaire (en heure de Paris) de la date fournie.
+   */
+  atParisHour(date, hours, minutes = 0) {
+    const tz = "Europe/Paris";
+    const ymd = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date); // "YYYY-MM-DD"
+    const hh = String(hours).padStart(2, "0");
+    const mm = String(minutes).padStart(2, "0");
+    // Heure murale interprétée comme UTC, puis corrigée du décalage Paris
+    const naive = new Date(`${ymd}T${hh}:${mm}:00Z`);
+    const offset = this.tzOffsetMs(tz, naive);
+    return new Date(naive.getTime() - offset);
+  }
+
+  /**
    * Calcule la date d'envoi en fonction de l'anticipation
    * Pour les événements "toute la journée", la base est 9h00 (au lieu de 00h00)
    */
   calculateScheduledTime(eventStart, anticipation, allDay = false) {
-    const scheduledTime = new Date(eventStart);
+    let scheduledTime = new Date(eventStart);
 
-    // Pour les événements "toute la journée", utiliser 9h00 comme référence
+    // Pour les événements "toute la journée", utiliser 9h00 (heure de Paris)
+    // comme référence, indépendamment du fuseau horaire du serveur.
     if (allDay) {
-      scheduledTime.setHours(9, 0, 0, 0);
+      scheduledTime = this.atParisHour(scheduledTime, 9, 0);
     }
 
     if (!anticipation) {
