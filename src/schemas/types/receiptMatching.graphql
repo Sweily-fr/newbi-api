@@ -1,0 +1,19 @@
+type ReceiptMatchCandidate {
+  transaction: Transaction!
+  score: Int!
+  confidence: String!
+}
+
+type ReceiptMatchResult {
+  candidates: [ReceiptMatchCandidate!]!
+  count: Int!
+}
+
+extend type Query {
+  matchTransactionsForReceipt(
+    workspaceId: ID!
+    amount: Float!
+    date: DateTime!
+    vendor: String
+  ): ReceiptMatchResult!
+}
