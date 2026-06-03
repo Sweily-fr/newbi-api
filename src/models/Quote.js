@@ -28,7 +28,9 @@ const quoteSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (value) {
-          return value && value.length <= 10;
+          // Un préfixe vide est autorisé : les devis importés conservent leur
+          // référence d'origine (dans `number`) sans préfixe.
+          return !value || value.length <= 10;
         },
         message: "Le préfixe ne doit pas dépasser 10 caractères",
       },
@@ -40,6 +42,15 @@ const quoteSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (value) {
+          // Les devis importés conservent la référence d'origine telle quelle
+          // (verbatim, sans transformation) : on tolère un format plus large.
+          if (this.status === "IMPORTED") {
+            return (
+              typeof value === "string" &&
+              value.length >= 1 &&
+              value.length <= 50
+            );
+          }
           return /^[A-Za-z0-9-]{1,20}$/.test(value);
         },
         message:

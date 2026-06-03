@@ -314,28 +314,18 @@ async function convertSingleImportedQuote(importedQuote, userId) {
     ];
   }
 
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  // Préfixe dédié aux imports : `IMP-YYYYMM`. Garde la séquence des devis
-  // créés manuellement (`D-YYYYMM`) propre — un import ne consomme jamais
-  // un numéro de cette séquence.
-  const prefix = `IMP-${year}${month}`;
-
-  // Numéro : on conserve le numéro d'origine du PDF si disponible et valide,
-  // suffixé par les 4 derniers caractères de l'_id de l'import pour garantir
-  // l'unicité. Sinon, identifiant court basé sur l'_id de l'import.
-  const importIdSuffix = importedQuote._id.toString().slice(-4).toUpperCase();
-  let number;
+  // Référence : on conserve la référence d'origine du devis importé telle
+  // quelle (verbatim, sans préfixe ni suffixe). Le devis prend le statut
+  // dédié `IMPORTED` : il n'est pas modifiable et ne consomme aucun numéro
+  // de la séquence des devis créés manuellement (`D-YYYYMM`).
+  const prefix = "";
   const rawOriginal = (importedQuote.originalQuoteNumber || "")
-    .replace(/[^A-Za-z0-9-]/g, "")
-    .slice(0, 14)
-    .replace(/^-+|-+$/g, "");
-  if (rawOriginal) {
-    number = `${rawOriginal}-${importIdSuffix}`;
-  } else {
-    number = `IMP${importedQuote._id.toString().slice(-8).toUpperCase()}`;
-  }
+    .trim()
+    .slice(0, 50);
+  // Fallback uniquement si l'OCR n'a extrait aucune référence exploitable.
+  const number =
+    rawOriginal ||
+    `IMP-${importedQuote._id.toString().slice(-8).toUpperCase()}`;
 
   // companyInfo requis pour les Quote non-DRAFT.
   const organization = await getOrganizationInfo(workspaceId);
@@ -352,37 +342,49 @@ async function convertSingleImportedQuote(importedQuote, userId) {
   const totalVAT = importedQuote.totalVAT || 0;
   const totalTTC = importedQuote.totalTTC || totalHT + totalVAT;
 
-  const quote = await Quote.create({
-    prefix,
-    number,
-    issueDate,
-    validUntil: validUntilDate || undefined,
-    status: "PENDING",
-    companyInfo,
-    client: {
-      type: "COMPANY",
-      name: clientName,
-      email: clientEmail,
-      siret: clientSiret,
-      address: {
-        street: clientStreet,
-        city: clientCity,
-        postalCode: clientPostalCode,
-        country: clientCountry,
+  let quote;
+  try {
+    quote = await Quote.create({
+      prefix,
+      number,
+      issueDate,
+      validUntil: validUntilDate || undefined,
+      status: "IMPORTED",
+      companyInfo,
+      client: {
+        type: "COMPANY",
+        name: clientName,
+        email: clientEmail,
+        siret: clientSiret,
+        address: {
+          street: clientStreet,
+          city: clientCity,
+          postalCode: clientPostalCode,
+          country: clientCountry,
+        },
       },
-    },
-    items,
-    totalHT,
-    totalVAT,
-    totalTTC,
-    finalTotalHT: totalHT,
-    finalTotalVAT: totalVAT,
-    finalTotalTTC: totalTTC,
-    discount: 0,
-    discountType: "PERCENTAGE",
-    workspaceId: new mongoose.Types.ObjectId(workspaceId),
-    createdBy: userId,
-  });
+      items,
+      totalHT,
+      totalVAT,
+      totalTTC,
+      finalTotalHT: totalHT,
+      finalTotalVAT: totalVAT,
+      finalTotalTTC: totalTTC,
+      discount: 0,
+      discountType: "PERCENTAGE",
+      workspaceId: new mongoose.Types.ObjectId(workspaceId),
+      createdBy: userId,
+    });
+  } catch (error) {
+    // Conflit d'unicité : un devis avec la même référence d'origine existe déjà
+    // pour ce workspace et cette année (la référence est conservée verbatim).
+    if (error?.code === 11000) {
+      throw createValidationError(
+        `Un devis avec la référence « ${number} » existe déjà. Modifiez la référence du devis importé avant de le convertir.`,
+      );
+    }
+    throw error;
+  }
 
   importedQuote.status = "VALIDATED";
   await importedQuote.save();
