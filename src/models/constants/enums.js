@@ -19,6 +19,9 @@ const QUOTE_STATUS = {
   PENDING: "PENDING",
   COMPLETED: "COMPLETED",
   CANCELED: "CANCELED",
+  // Devis importé (via OCR) : référence d'origine conservée, non modifiable,
+  // ne peut être qu'accepté (COMPLETED) ou refusé (CANCELED).
+  IMPORTED: "IMPORTED",
 };
 
 /**

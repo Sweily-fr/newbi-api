@@ -16,6 +16,7 @@ enum QuoteStatus {
   PENDING
   COMPLETED
   CANCELED
+  IMPORTED
 }
 
 enum PaymentMethod {

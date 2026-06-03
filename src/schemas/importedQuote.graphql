@@ -200,10 +200,11 @@ extend type Mutation {
   validateImportedQuote(id: ID!): ImportedQuote!
 
   """
-  Convertit un devis importé en devis (DRAFT) dans la table principale.
-  Le devis importé passe en statut VALIDATED, un nouveau Quote DRAFT est créé
-  avec les données OCR et un numéro DRAFT-* unique. Le Quote retourné peut
-  être édité via l'éditeur de devis classique.
+  Convertit un devis importé en devis (statut IMPORTED) dans la table principale.
+  Le devis importé passe en statut VALIDATED, un nouveau Quote IMPORTED est créé
+  avec les données OCR en conservant la référence d'origine (verbatim, sans
+  préfixe). Un devis IMPORTED n'est pas modifiable : il peut uniquement être
+  accepté (COMPLETED) ou refusé (CANCELED).
   """
   convertImportedQuoteToQuote(id: ID!): Quote!
 

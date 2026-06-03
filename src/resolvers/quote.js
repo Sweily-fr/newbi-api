@@ -993,6 +993,13 @@ const quoteResolvers = {
           );
         }
 
+        if (quote.status === "IMPORTED") {
+          throw createResourceLockedError(
+            "Devis",
+            "un devis importé ne peut pas être modifié",
+          );
+        }
+
         if (quote.convertedToInvoice) {
           throw createResourceLockedError(
             "Devis",
@@ -1251,6 +1258,8 @@ const quoteResolvers = {
           PENDING: ["COMPLETED", "DRAFT", "CANCELED"],
           COMPLETED: [],
           CANCELED: [],
+          // Un devis importé ne peut qu'être accepté ou refusé (pas d'édition).
+          IMPORTED: ["COMPLETED", "CANCELED"],
         };
 
         if (!allowedTransitions[quote.status].includes(status)) {
