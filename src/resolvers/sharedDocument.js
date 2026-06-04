@@ -5,15 +5,47 @@
 import mongoose from "mongoose";
 import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
+import SharedTag, { getDefaultTagColor } from "../models/SharedTag.js";
 import cloudflareService from "../services/cloudflareService.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import {
+  isAuthenticated,
+  withWorkspace,
+} from "../middlewares/better-auth-jwt.js";
 import { withOrganization } from "../middlewares/rbac.js";
 import { GraphQLUpload } from "graphql-upload";
 import path from "path";
 import crypto from "crypto";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { getPubSub } from "../config/redis.js";
 
 const { ObjectId } = mongoose.Types;
+
+// === Subscription temps réel ===
+const SHARED_DOCUMENTS_CHANGED = "SHARED_DOCUMENTS_CHANGED";
+
+// Publie un événement « documents partagés modifiés » sur le canal du workspace.
+// Non bloquant : toute erreur PubSub est avalée (le temps réel est optionnel).
+// Exporté pour être appelé aussi par le service d'automatisation.
+export function publishSharedDocsChanged(
+  workspaceId,
+  type = "UPDATED",
+  documentId = null,
+) {
+  if (!workspaceId) return;
+  const wsId = workspaceId.toString();
+  try {
+    const pubsub = getPubSub();
+    pubsub
+      .publish(`${SHARED_DOCUMENTS_CHANGED}_${wsId}`, {
+        type,
+        documentId: documentId ? documentId.toString() : null,
+        workspaceId: wsId,
+      })
+      .catch(() => {});
+  } catch {
+    // PubSub indisponible — non bloquant
+  }
+}
 
 // === Visibility helpers ===
 
@@ -41,6 +73,48 @@ function canAccessFolder(userId, folder, effectiveVis) {
   if (folder.createdBy?.toString() === userId) return true;
   if (effectiveVis.createdBy === userId) return true;
   return effectiveVis.allowedUserIds.includes(userId);
+}
+
+// === Registre de tags ===
+
+/**
+ * Enregistre (upsert) une liste de tags dans le registre du workspace.
+ * Best-effort et non bloquant : une erreur ne doit jamais faire échouer
+ * l'opération sur le document. Les tags déjà présents sont laissés tels quels
+ * (on ne touche pas à leur couleur), seuls les nouveaux sont créés avec une
+ * couleur de palette déterministe.
+ */
+async function ensureTagsRegistered(workspaceId, tagNames) {
+  if (!workspaceId || !Array.isArray(tagNames)) return;
+  const names = [
+    ...new Set(
+      tagNames
+        .map((t) => (typeof t === "string" ? t.trim() : ""))
+        .filter(Boolean),
+    ),
+  ];
+  if (names.length === 0) return;
+  try {
+    await SharedTag.bulkWrite(
+      names.map((name) => ({
+        updateOne: {
+          filter: { workspaceId, name },
+          update: {
+            $setOnInsert: {
+              workspaceId,
+              name,
+              color: getDefaultTagColor(name),
+            },
+          },
+          upsert: true,
+        },
+      })),
+      { ordered: false },
+    );
+  } catch (error) {
+    // Conflit d'unicité possible en cas de course : non bloquant
+    console.error("⚠️ ensureTagsRegistered:", error.message);
+  }
 }
 
 const sharedDocumentResolvers = {
@@ -531,6 +605,61 @@ const sharedDocumentResolvers = {
         };
       }
     }),
+    /**
+     * Registre de tags du workspace, avec nombre d'utilisations calculé en
+     * direct par agrégation sur les documents (hors corbeille). Les tags
+     * présents sur des documents mais absents du registre (legacy) sont
+     * surfacés et auto-enregistrés.
+     */
+    documentTags: withOrganization(async (_, { workspaceId }, { user }) => {
+      try {
+        const wsId = new ObjectId(workspaceId);
+
+        // Compter les usages réels par tag (documents non en corbeille)
+        const usageAgg = await SharedDocument.aggregate([
+          { $match: { workspaceId: wsId, trashedAt: null } },
+          { $unwind: "$tags" },
+          { $group: { _id: "$tags", count: { $sum: 1 } } },
+        ]);
+        const usageMap = new Map(usageAgg.map((u) => [u._id, u.count]));
+
+        // Registre existant
+        const registry = await SharedTag.find({ workspaceId }).lean();
+        const registryNames = new Set(registry.map((t) => t.name));
+
+        // Auto-enregistrer les tags présents sur des docs mais absents du registre
+        const missing = [...usageMap.keys()].filter(
+          (name) => name && !registryNames.has(name),
+        );
+        if (missing.length > 0) {
+          await ensureTagsRegistered(workspaceId, missing);
+          const created = await SharedTag.find({
+            workspaceId,
+            name: { $in: missing },
+          }).lean();
+          registry.push(...created);
+        }
+
+        const tags = registry
+          .map((t) => ({
+            id: t._id,
+            name: t.name,
+            color: t.color || getDefaultTagColor(t.name),
+            usageCount: usageMap.get(t.name) || 0,
+            createdAt: t.createdAt?.toISOString?.() || t.createdAt,
+            updatedAt: t.updatedAt?.toISOString?.() || t.updatedAt,
+          }))
+          .sort(
+            (a, b) =>
+              b.usageCount - a.usageCount || a.name.localeCompare(b.name),
+          );
+
+        return { success: true, tags };
+      } catch (error) {
+        console.error("❌ Erreur récupération tags:", error);
+        return { success: false, message: error.message, tags: [] };
+      }
+    }),
   },
 
   Mutation: {
@@ -640,6 +769,9 @@ const sharedDocumentResolvers = {
 
           await document.save();
 
+          // Mémoriser les tags dans le registre du workspace
+          await ensureTagsRegistered(workspaceId, document.tags);
+
           console.log("✅ Document partagé créé:", document._id);
 
           const docObj = document.toObject();
@@ -684,6 +816,11 @@ const sharedDocumentResolvers = {
               message: "Document non trouvé",
               document: null,
             };
+          }
+
+          // Mémoriser les éventuels nouveaux tags dans le registre
+          if (input.tags) {
+            await ensureTagsRegistered(workspaceId, input.tags);
           }
 
           return {
@@ -912,6 +1049,8 @@ const sharedDocumentResolvers = {
               { $addToSet: { tags: { $each: addTags } } },
             );
             updatedCount = addResult.modifiedCount;
+            // Mémoriser les nouveaux tags dans le registre
+            await ensureTagsRegistered(workspaceId, addTags);
           }
 
           if (removeTags && removeTags.length > 0) {
@@ -934,6 +1073,146 @@ const sharedDocumentResolvers = {
             message: error.message,
             updatedCount: 0,
           };
+        }
+      },
+    ),
+
+    /**
+     * Crée un tag dans le registre du workspace
+     */
+    createDocumentTag: withOrganization(
+      async (_, { workspaceId, name, color }, { user }) => {
+        try {
+          const trimmed = (name || "").trim();
+          if (!trimmed) {
+            return { success: false, message: "Nom de tag requis", tag: null };
+          }
+
+          // Upsert atomique : évite les erreurs de clé dupliquée si le tag est
+          // auto-enregistré en parallèle (ensureTagsRegistered). La couleur
+          // explicitement choisie reste prioritaire sur la couleur par défaut.
+          const tag = await SharedTag.findOneAndUpdate(
+            { workspaceId, name: trimmed },
+            color
+              ? {
+                  $set: { color },
+                  $setOnInsert: { workspaceId, name: trimmed },
+                }
+              : {
+                  $setOnInsert: {
+                    workspaceId,
+                    name: trimmed,
+                    color: getDefaultTagColor(trimmed),
+                  },
+                },
+            { new: true, upsert: true },
+          );
+
+          return {
+            success: true,
+            message: "Tag enregistré",
+            tag: { ...tag.toObject(), id: tag._id, usageCount: 0 },
+          };
+        } catch (error) {
+          console.error("❌ Erreur création tag:", error);
+          return { success: false, message: error.message, tag: null };
+        }
+      },
+    ),
+
+    /**
+     * Met à jour un tag (renommage et/ou couleur). Le renommage est propagé
+     * sur tous les documents du workspace.
+     */
+    updateDocumentTag: withOrganization(
+      async (_, { workspaceId, id, name, color }, { user }) => {
+        try {
+          const tag = await SharedTag.findOne({ _id: id, workspaceId });
+          if (!tag) {
+            return { success: false, message: "Tag non trouvé", tag: null };
+          }
+
+          const oldName = tag.name;
+          const newName = name != null ? name.trim() : oldName;
+
+          if (!newName) {
+            return { success: false, message: "Nom de tag requis", tag: null };
+          }
+
+          // Vérifier les collisions de nom (autre tag portant déjà ce nom)
+          if (newName !== oldName) {
+            const collision = await SharedTag.findOne({
+              workspaceId,
+              name: newName,
+              _id: { $ne: tag._id },
+            });
+            if (collision) {
+              return {
+                success: false,
+                message: "Un tag porte déjà ce nom",
+                tag: null,
+              };
+            }
+          }
+
+          tag.name = newName;
+          if (color != null) tag.color = color;
+          await tag.save();
+
+          // Propager le renommage sur les documents : on cible d'abord les docs
+          // portant l'ancien tag, puis on retire l'ancien et ajoute le nouveau
+          // (en deux temps pour éviter les doublons dans le tableau)
+          if (newName !== oldName) {
+            const affected = await SharedDocument.find(
+              { workspaceId, tags: oldName },
+              { _id: 1 },
+            ).lean();
+            const affectedIds = affected.map((d) => d._id);
+            if (affectedIds.length > 0) {
+              await SharedDocument.updateMany(
+                { _id: { $in: affectedIds } },
+                { $pull: { tags: oldName } },
+              );
+              await SharedDocument.updateMany(
+                { _id: { $in: affectedIds } },
+                { $addToSet: { tags: newName } },
+              );
+            }
+          }
+
+          return {
+            success: true,
+            message: "Tag mis à jour",
+            tag: { ...tag.toObject(), id: tag._id },
+          };
+        } catch (error) {
+          console.error("❌ Erreur mise à jour tag:", error);
+          return { success: false, message: error.message, tag: null };
+        }
+      },
+    ),
+
+    /**
+     * Supprime un tag du registre et le retire de tous les documents
+     */
+    deleteDocumentTag: withOrganization(
+      async (_, { workspaceId, id }, { user }) => {
+        try {
+          const tag = await SharedTag.findOne({ _id: id, workspaceId });
+          if (!tag) {
+            return { success: false, message: "Tag non trouvé" };
+          }
+
+          await SharedDocument.updateMany(
+            { workspaceId, tags: tag.name },
+            { $pull: { tags: tag.name } },
+          );
+          await SharedTag.deleteOne({ _id: tag._id, workspaceId });
+
+          return { success: true, message: "Tag supprimé" };
+        } catch (error) {
+          console.error("❌ Erreur suppression tag:", error);
+          return { success: false, message: error.message };
         }
       },
     ),
@@ -1532,6 +1811,34 @@ const sharedDocumentResolvers = {
       return parent.createdBy?.toString() === userId;
     },
   },
+
+  Subscription: {
+    // Émis dès qu'un document/dossier du workspace change (y compris via
+    // automatisation côté serveur). Le canal encode le workspaceId, comme kanban.
+    sharedDocumentsChanged: {
+      subscribe: withWorkspace(
+        (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+          const finalWorkspaceId = workspaceId || contextWorkspaceId;
+          const pubsub = getPubSub();
+          return pubsub.asyncIterableIterator([
+            `${SHARED_DOCUMENTS_CHANGED}_${finalWorkspaceId}`,
+          ]);
+        },
+      ),
+      resolve: (
+        payload,
+        { workspaceId },
+        { workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        // Sécurité : filtrer par workspace (le canal le garantit déjà)
+        if (String(payload.workspaceId) === String(finalWorkspaceId)) {
+          return payload;
+        }
+        return null;
+      },
+    },
+  },
 };
 
 // ✅ Phase A.4 — Subscription check on shared document mutations (exclude trash cleanup: emptyTrash, permanentlyDeleteDocuments, permanentlyDeleteFolders)
@@ -1548,7 +1855,10 @@ sharedDocumentResolvers.Mutation = Object.fromEntries(
       ? fn
       : async (parent, args, context, info) => {
           await checkSubscriptionActive(context);
-          return fn(parent, args, context, info);
+          const result = await fn(parent, args, context, info);
+          // Notifier les clients abonnés (mise à jour temps réel des listes)
+          publishSharedDocsChanged(args?.workspaceId, name);
+          return result;
         },
   ]),
 );

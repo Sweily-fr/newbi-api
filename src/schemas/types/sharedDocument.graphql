@@ -61,6 +61,17 @@ type DocumentComment {
   createdAt: String!
 }
 
+# Tag réutilisable du registre (par workspace)
+type SharedTag {
+  id: ID!
+  name: String!
+  color: String!
+  # Nombre de documents utilisant ce tag (calculé à la lecture)
+  usageCount: Int!
+  createdAt: String
+  updatedAt: String
+}
+
 enum SharedDocumentStatus {
   pending
   classified
@@ -114,6 +125,18 @@ type BulkTagsResponse {
   success: Boolean!
   message: String
   updatedCount: Int
+}
+
+type SharedTagResponse {
+  success: Boolean!
+  message: String
+  tag: SharedTag
+}
+
+type SharedTagsResponse {
+  success: Boolean!
+  message: String
+  tags: [SharedTag]
 }
 
 # Inputs
@@ -188,6 +211,9 @@ extend type Query {
 
   # Stats
   sharedDocumentsStats(workspaceId: ID!): SharedDocumentsStatsResponse!
+
+  # Registre de tags (avec nombre d'utilisations)
+  documentTags(workspaceId: ID!): SharedTagsResponse!
 
   # Corbeille
   trashItems(workspaceId: ID!): TrashItemsResponse!
@@ -287,6 +313,24 @@ extend type Mutation {
     removeTags: [String]
   ): BulkTagsResponse!
 
+  # Registre de tags
+  createDocumentTag(
+    workspaceId: ID!
+    name: String!
+    color: String
+  ): SharedTagResponse!
+
+  # Renomme et/ou recolore un tag. Le renommage est propagé sur tous les documents.
+  updateDocumentTag(
+    workspaceId: ID!
+    id: ID!
+    name: String
+    color: String
+  ): SharedTagResponse!
+
+  # Supprime un tag du registre et le retire de tous les documents.
+  deleteDocumentTag(workspaceId: ID!, id: ID!): DeleteResponse!
+
   # Corbeille
   restoreFromTrash(
     workspaceId: ID!
@@ -298,4 +342,17 @@ extend type Mutation {
 
   permanentlyDeleteDocuments(ids: [ID!]!, workspaceId: ID!): DeleteResponse!
   permanentlyDeleteFolders(ids: [ID!]!, workspaceId: ID!): DeleteResponse!
+}
+
+# Notification temps réel : un document/dossier du workspace a changé
+# (upload, déplacement, suppression, ou classement automatique via automatisation).
+# Les clients abonnés rafraîchissent alors leurs listes.
+type SharedDocumentsChangedPayload {
+  type: String!
+  documentId: ID
+  workspaceId: ID!
+}
+
+extend type Subscription {
+  sharedDocumentsChanged(workspaceId: ID!): SharedDocumentsChangedPayload!
 }
