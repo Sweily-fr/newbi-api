@@ -2,6 +2,37 @@ import jwt from "jsonwebtoken";
 import { importJWK } from "jose";
 import logger from "../utils/logger.js";
 
+/**
+ * Erreur levée quand l'endpoint JWKS est injoignable ET qu'aucune clé valide
+ * n'est en cache. C'est une panne d'infrastructure (≠ token invalide) : elle ne
+ * doit JAMAIS être comptée comme une "tentative suspecte" ni bloquer l'IP, sinon
+ * une indispo transitoire du front auto-bloque des utilisateurs légitimes.
+ */
+class JWKSUnavailableError extends Error {
+  constructor(kid, cause) {
+    super(`JWKS injoignable pour le kid ${kid}: ${cause}`);
+    this.name = "JWKSUnavailableError";
+  }
+}
+
+/**
+ * Détecte une IP loopback (dev/local). En dev, le backend redémarre souvent
+ * (nodemon) → cache de clés vide → toute rafale pendant le cold-start du JWKS
+ * échouait et auto-bloquait `::1`. On n'applique pas le blocage au loopback
+ * hors production (en prod l'IP réelle vient de x-forwarded-for, pas du loopback).
+ */
+function isLoopbackIP(ip) {
+  if (!ip) return false;
+  return (
+    ip === "::1" ||
+    ip === "::ffff:127.0.0.1" ||
+    ip === "127.0.0.1" ||
+    ip.startsWith("127.")
+  );
+}
+
+const SKIP_LOOPBACK_BLOCK = process.env.NODE_ENV !== "production";
+
 class JWKSValidator {
   constructor() {
     this.keyCache = new Map(); // Cache des clés publiques
@@ -110,7 +141,9 @@ class JWKSValidator {
           `JWKS fetch failed and no valid cache for kid ${kid}:`,
           fetchError.message,
         );
-        return null;
+        // Panne d'infra (≠ token invalide) : on propage une erreur dédiée pour
+        // que validateJWT n'enregistre PAS de tentative suspecte / ne bloque pas.
+        throw new JWKSUnavailableError(kid, fetchError.message);
       }
 
       // Trouver la clé correspondant au kid
@@ -135,6 +168,8 @@ class JWKSValidator {
       logger.info(`Clé JWKS mise en cache pour kid: ${kid}`);
       return keyLike;
     } catch (error) {
+      // Laisser remonter l'indispo JWKS (gérée sans blocage dans validateJWT)
+      if (error instanceof JWKSUnavailableError) throw error;
       logger.error(
         `Erreur récupération clé publique pour kid ${kid}:`,
         error.message,
@@ -172,6 +207,9 @@ class JWKSValidator {
    * Vérifie si une IP est bloquée pour tentatives suspectes
    */
   checkIPBlocked(clientIP) {
+    // Ne jamais bloquer le loopback hors production (dev local)
+    if (SKIP_LOOPBACK_BLOCK && isLoopbackIP(clientIP)) return false;
+
     const blocked = this.failedAttempts.get(clientIP);
     if (!blocked) return false;
 
@@ -191,6 +229,9 @@ class JWKSValidator {
    * Enregistre une tentative échouée
    */
   recordFailedAttempt(clientIP, reason) {
+    // Ne pas comptabiliser le loopback hors production (dev local)
+    if (SKIP_LOOPBACK_BLOCK && isLoopbackIP(clientIP)) return;
+
     const now = Date.now();
     const current = this.failedAttempts.get(clientIP) || {
       count: 0,
@@ -255,10 +296,27 @@ class JWKSValidator {
         return null;
       }
 
-      // Récupérer la clé publique par kid
-      const publicKey = await this.getPublicKeyByKid(header.kid);
+      // Récupérer la clé publique par kid.
+      // Un JWKS injoignable est une panne d'infra, pas un token invalide : on ne
+      // l'impute PAS à l'IP (sinon une indispo transitoire du front auto-bloque
+      // des utilisateurs légitimes 15 min). On renvoie null → le front réessaie,
+      // et le fetch JWKS réussira une fois le endpoint disponible (cache 24h).
+      let publicKey;
+      try {
+        publicKey = await this.getPublicKeyByKid(header.kid);
+      } catch (keyError) {
+        if (keyError instanceof JWKSUnavailableError) {
+          logger.warn(
+            `JWKS injoignable — validation reportée sans blocage (kid ${header.kid})`,
+          );
+          return null;
+        }
+        throw keyError;
+      }
 
       if (!publicKey) {
+        // Ici le JWKS a bien été récupéré mais ne contient pas ce kid : c'est
+        // anormal (token forgé ou clé révoquée) → on compte la tentative.
         logger.warn(`Aucune clé publique trouvée pour le kid: ${header.kid}`);
         this.recordFailedAttempt(clientIP, "Aucune clé publique trouvée");
         return null;
