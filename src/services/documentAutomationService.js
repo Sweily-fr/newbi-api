@@ -1,6 +1,7 @@
 import DocumentAutomation from "../models/DocumentAutomation.js";
 import DocumentAutomationLog from "../models/DocumentAutomationLog.js";
 import SharedDocument from "../models/SharedDocument.js";
+import { publishSharedDocsChanged } from "../resolvers/sharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
@@ -105,9 +106,28 @@ async function generateDocumentPdf(documentId, documentType) {
 
   const body = { [bodyKeyMap[documentType]]: documentId };
 
+  // Authentification serveur-à-serveur via secret interne : les routes
+  // /api/*/generate-pdf l'acceptent en lieu et place d'une session utilisateur.
+  // Sans ce header, l'appel échoue en 401 (cf. documentEmailService).
+  const headers = process.env.INTERNAL_API_SECRET
+    ? { "x-internal-secret": process.env.INTERNAL_API_SECRET }
+    : {};
+  if (!process.env.INTERNAL_API_SECRET) {
+    console.warn(
+      "⚠️ [DocumentAutomation] INTERNAL_API_SECRET non défini : l'appel PDF échouera en 401.",
+    );
+  }
+
+  // La route /api/*/generate-pdf dispose en interne de 2×60s (page.goto puis
+  // waitForFunction). Un appelant qui coupe à 60s échoue donc dès qu'un doc
+  // « froid » (lancement Chromium + compilation de la page) dépasse ce délai.
+  // On aligne le timeout sur le budget interne de la route (override possible).
+  const pdfTimeout = Number(process.env.PDF_GENERATION_TIMEOUT_MS) || 120000;
+
   const response = await axios.post(`${frontendUrl}${endpoint}`, body, {
     responseType: "arraybuffer",
-    timeout: 60000,
+    timeout: pdfTimeout,
+    headers,
   });
 
   return Buffer.from(response.data);
@@ -469,6 +489,11 @@ const documentAutomationService = {
           });
 
           await sharedDocument.save();
+          publishSharedDocsChanged(
+            sharedDocument.workspaceId,
+            "CREATED",
+            sharedDocument._id,
+          );
 
           // Logger le succès
           await DocumentAutomationLog.create({
@@ -758,6 +783,11 @@ const documentAutomationService = {
           });
 
           await sharedDocument.save();
+          publishSharedDocsChanged(
+            sharedDocument.workspaceId,
+            "CREATED",
+            sharedDocument._id,
+          );
 
           await DocumentAutomationLog.create({
             automationId: automation._id,
@@ -1420,6 +1450,11 @@ const documentAutomationService = {
     });
 
     await sharedDocument.save();
+    publishSharedDocsChanged(
+      sharedDocument.workspaceId,
+      "CREATED",
+      sharedDocument._id,
+    );
 
     // Logger le succès
     await DocumentAutomationLog.create({
@@ -1784,6 +1819,11 @@ const documentAutomationService = {
             });
 
             await sharedDocument.save();
+            publishSharedDocsChanged(
+              sharedDocument.workspaceId,
+              "CREATED",
+              sharedDocument._id,
+            );
 
             // Logger le succès
             await DocumentAutomationLog.create({
