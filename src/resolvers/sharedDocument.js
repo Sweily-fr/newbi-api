@@ -6,14 +6,45 @@ import mongoose from "mongoose";
 import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import cloudflareService from "../services/cloudflareService.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import {
+  isAuthenticated,
+  withWorkspace,
+} from "../middlewares/better-auth-jwt.js";
 import { withOrganization } from "../middlewares/rbac.js";
 import { GraphQLUpload } from "graphql-upload";
 import path from "path";
 import crypto from "crypto";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { getPubSub } from "../config/redis.js";
 
 const { ObjectId } = mongoose.Types;
+
+// === Subscription temps réel ===
+const SHARED_DOCUMENTS_CHANGED = "SHARED_DOCUMENTS_CHANGED";
+
+// Publie un événement « documents partagés modifiés » sur le canal du workspace.
+// Non bloquant : toute erreur PubSub est avalée (le temps réel est optionnel).
+// Exporté pour être appelé aussi par le service d'automatisation.
+export function publishSharedDocsChanged(
+  workspaceId,
+  type = "UPDATED",
+  documentId = null,
+) {
+  if (!workspaceId) return;
+  const wsId = workspaceId.toString();
+  try {
+    const pubsub = getPubSub();
+    pubsub
+      .publish(`${SHARED_DOCUMENTS_CHANGED}_${wsId}`, {
+        type,
+        documentId: documentId ? documentId.toString() : null,
+        workspaceId: wsId,
+      })
+      .catch(() => {});
+  } catch {
+    // PubSub indisponible — non bloquant
+  }
+}
 
 // === Visibility helpers ===
 
@@ -1532,6 +1563,34 @@ const sharedDocumentResolvers = {
       return parent.createdBy?.toString() === userId;
     },
   },
+
+  Subscription: {
+    // Émis dès qu'un document/dossier du workspace change (y compris via
+    // automatisation côté serveur). Le canal encode le workspaceId, comme kanban.
+    sharedDocumentsChanged: {
+      subscribe: withWorkspace(
+        (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+          const finalWorkspaceId = workspaceId || contextWorkspaceId;
+          const pubsub = getPubSub();
+          return pubsub.asyncIterableIterator([
+            `${SHARED_DOCUMENTS_CHANGED}_${finalWorkspaceId}`,
+          ]);
+        },
+      ),
+      resolve: (
+        payload,
+        { workspaceId },
+        { workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        // Sécurité : filtrer par workspace (le canal le garantit déjà)
+        if (String(payload.workspaceId) === String(finalWorkspaceId)) {
+          return payload;
+        }
+        return null;
+      },
+    },
+  },
 };
 
 // ✅ Phase A.4 — Subscription check on shared document mutations (exclude trash cleanup: emptyTrash, permanentlyDeleteDocuments, permanentlyDeleteFolders)
@@ -1548,7 +1607,10 @@ sharedDocumentResolvers.Mutation = Object.fromEntries(
       ? fn
       : async (parent, args, context, info) => {
           await checkSubscriptionActive(context);
-          return fn(parent, args, context, info);
+          const result = await fn(parent, args, context, info);
+          // Notifier les clients abonnés (mise à jour temps réel des listes)
+          publishSharedDocsChanged(args?.workspaceId, name);
+          return result;
         },
   ]),
 );

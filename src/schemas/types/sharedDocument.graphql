@@ -299,3 +299,16 @@ extend type Mutation {
   permanentlyDeleteDocuments(ids: [ID!]!, workspaceId: ID!): DeleteResponse!
   permanentlyDeleteFolders(ids: [ID!]!, workspaceId: ID!): DeleteResponse!
 }
+
+# Notification temps réel : un document/dossier du workspace a changé
+# (upload, déplacement, suppression, ou classement automatique via automatisation).
+# Les clients abonnés rafraîchissent alors leurs listes.
+type SharedDocumentsChangedPayload {
+  type: String!
+  documentId: ID
+  workspaceId: ID!
+}
+
+extend type Subscription {
+  sharedDocumentsChanged(workspaceId: ID!): SharedDocumentsChangedPayload!
+}
