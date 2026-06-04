@@ -212,31 +212,17 @@ importedQuoteSchema.methods.archive = function () {
 importedQuoteSchema.statics.findPotentialDuplicates = async function (
   workspaceId,
   quoteNumber,
-  vendorName,
-  totalTTC,
 ) {
-  const query = {
+  // Un doublon = même numéro de devis d'origine (exact, non vide). On ne se
+  // base plus sur l'heuristique "même fournisseur + même montant TTC", qui
+  // marquait à tort comme doublons deux devis différents d'un même fournisseur.
+  if (!quoteNumber) return [];
+
+  return this.find({
     workspaceId,
     status: { $ne: "REJECTED" },
-    $or: [],
-  };
-
-  if (quoteNumber) {
-    query.$or.push({ originalQuoteNumber: quoteNumber });
-  }
-
-  if (vendorName && totalTTC) {
-    query.$or.push({
-      "vendor.name": { $regex: new RegExp(vendorName, "i") },
-      totalTTC: totalTTC,
-    });
-  }
-
-  if (query.$or.length === 0) {
-    return [];
-  }
-
-  return this.find(query).limit(5);
+    originalQuoteNumber: quoteNumber,
+  }).limit(5);
 };
 
 importedQuoteSchema.statics.getStats = function (workspaceId) {

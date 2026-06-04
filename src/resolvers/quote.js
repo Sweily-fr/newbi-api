@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
-import ImportedQuote from "../models/ImportedQuote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
@@ -425,7 +424,7 @@ const quoteResolvers = {
               totalQuoted: {
                 $sum: {
                   $cond: [
-                    { $in: ["$status", ["PENDING", "COMPLETED"]] },
+                    { $in: ["$status", ["PENDING", "COMPLETED", "IMPORTED"]] },
                     {
                       $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
                     },
@@ -447,7 +446,7 @@ const quoteResolvers = {
               pendingAmount: {
                 $sum: {
                   $cond: [
-                    { $eq: ["$status", "PENDING"] },
+                    { $in: ["$status", ["PENDING", "IMPORTED"]] },
                     {
                       $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
                     },
@@ -457,62 +456,19 @@ const quoteResolvers = {
               },
               pendingCount: {
                 $sum: {
-                  $cond: [{ $eq: ["$status", "PENDING"] }, 1, 0],
+                  $cond: [{ $in: ["$status", ["PENDING", "IMPORTED"]] }, 1, 0],
                 },
               },
             },
           },
         ]);
 
-        // Agrégation des devis importés (VALIDATED = accepté/validé)
-        const [importedStats] = await ImportedQuote.aggregate([
-          { $match: { workspaceId: wid } },
-          {
-            $group: {
-              _id: null,
-              totalQuoted: {
-                $sum: {
-                  $cond: [
-                    { $in: ["$status", ["VALIDATED", "ARCHIVED"]] },
-                    { $ifNull: ["$totalHT", 0] },
-                    0,
-                  ],
-                },
-              },
-              totalAccepted: {
-                $sum: {
-                  $cond: [
-                    { $eq: ["$status", "VALIDATED"] },
-                    { $ifNull: ["$totalHT", 0] },
-                    0,
-                  ],
-                },
-              },
-              pendingAmount: {
-                $sum: {
-                  $cond: [
-                    { $eq: ["$status", "PENDING_REVIEW"] },
-                    { $ifNull: ["$totalHT", 0] },
-                    0,
-                  ],
-                },
-              },
-              pendingCount: {
-                $sum: {
-                  $cond: [{ $eq: ["$status", "PENDING_REVIEW"] }, 1, 0],
-                },
-              },
-            },
-          },
-        ]);
-
+        // Les soldes ne comptent que les vrais devis. Un import validé est
+        // désormais représenté par un vrai devis (statut IMPORTED puis
+        // COMPLETED/CANCELED) : on ne compte donc plus la collection
+        // ImportedQuote, sous peine de double comptage et de montants fantômes
+        // persistants après suppression du devis.
         const q = quoteStats || {
-          totalQuoted: 0,
-          totalAccepted: 0,
-          pendingAmount: 0,
-          pendingCount: 0,
-        };
-        const imp = importedStats || {
           totalQuoted: 0,
           totalAccepted: 0,
           pendingAmount: 0,
@@ -520,10 +476,10 @@ const quoteResolvers = {
         };
 
         return {
-          totalQuoted: q.totalQuoted + imp.totalQuoted,
-          totalAccepted: q.totalAccepted + imp.totalAccepted,
-          pendingAmount: q.pendingAmount + imp.pendingAmount,
-          pendingCount: q.pendingCount + imp.pendingCount,
+          totalQuoted: q.totalQuoted,
+          totalAccepted: q.totalAccepted,
+          pendingAmount: q.pendingAmount,
+          pendingCount: q.pendingCount,
         };
       },
     ),
@@ -1215,7 +1171,11 @@ const quoteResolvers = {
           throw createNotFoundError("Devis");
         }
 
-        if (quote.status === "COMPLETED") {
+        // Les devis issus d'un import (préfixe vide) restent supprimables quel
+        // que soit leur statut, y compris une fois acceptés (COMPLETED).
+        const isImportedOrigin = !quote.prefix && Boolean(quote.number);
+
+        if (quote.status === "COMPLETED" && !isImportedOrigin) {
           throw createResourceLockedError(
             "Devis",
             "un devis terminé ne peut pas être supprimé",
