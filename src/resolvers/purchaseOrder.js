@@ -655,14 +655,20 @@ const purchaseOrderResolvers = {
           // Ne pas persister companyInfo pour les documents DRAFT
           delete updateData.companyInfo;
 
-          // Pour les brouillons, rafraîchir les données client depuis la collection Client
+          // Pour les brouillons, rafraîchir les données client depuis la
+          // collection Client UNIQUEMENT si l'input ne fournit pas de client.
+          // Si un client est fourni (édition du document), on respecte ses
+          // valeurs : l'utilisateur a pu modifier manuellement les coordonnées
+          // (email, adresse…) au niveau du bon de commande, et ces modifications
+          // doivent primer sur la fiche client. Le frontend synchronise déjà les
+          // données CRM à jour dans le formulaire à l'ouverture du brouillon.
           if (
             (!po.status || po.status === "DRAFT") &&
-            (updateData.client?.id || po.client?.id)
+            !updateData.client &&
+            po.client?.id
           ) {
-            const clientId = updateData.client?.id || po.client?.id;
             try {
-              const freshClient = await Client.findById(clientId);
+              const freshClient = await Client.findById(po.client.id);
               if (freshClient) {
                 updateData.client = {
                   id: freshClient._id.toString(),
@@ -773,32 +779,39 @@ const purchaseOrderResolvers = {
               po.companyInfo = mapOrganizationToCompanyInfo(org);
             }
 
-            // Snapshot client à la finalisation (données à jour depuis la collection Client)
-            if (po.client?.id) {
-              try {
-                const freshClient = await Client.findById(po.client.id);
-                if (freshClient) {
-                  po.client = {
-                    id: freshClient._id.toString(),
-                    type: freshClient.type,
-                    name: freshClient.name,
-                    firstName: freshClient.firstName,
-                    lastName: freshClient.lastName,
-                    email: freshClient.email,
-                    address: freshClient.address,
-                    hasDifferentShippingAddress:
-                      freshClient.hasDifferentShippingAddress,
-                    shippingAddress: freshClient.shippingAddress,
-                    isInternational: freshClient.isInternational,
-                    siret: freshClient.siret,
-                    vatNumber: freshClient.vatNumber,
-                  };
+            // Snapshot client à la finalisation : on ne re-snapshote depuis la
+            // collection Client QUE si le bon de commande n'a pas déjà de client
+            // figé. Sinon on conserve le snapshot du document, qui reflète les
+            // dernières données enregistrées (incl. les éventuelles modifications
+            // manuelles des coordonnées faites lors de l'édition du brouillon).
+            if (!po.client?.id) {
+              const clientId = po.client?.id || po.clientId;
+              if (clientId) {
+                try {
+                  const freshClient = await Client.findById(clientId);
+                  if (freshClient) {
+                    po.client = {
+                      id: freshClient._id.toString(),
+                      type: freshClient.type,
+                      name: freshClient.name,
+                      firstName: freshClient.firstName,
+                      lastName: freshClient.lastName,
+                      email: freshClient.email,
+                      address: freshClient.address,
+                      hasDifferentShippingAddress:
+                        freshClient.hasDifferentShippingAddress,
+                      shippingAddress: freshClient.shippingAddress,
+                      isInternational: freshClient.isInternational,
+                      siret: freshClient.siret,
+                      vatNumber: freshClient.vatNumber,
+                    };
+                  }
+                } catch (error) {
+                  console.error(
+                    "[changePurchaseOrderStatus] Erreur snapshot client:",
+                    error.message,
+                  );
                 }
-              } catch (error) {
-                console.error(
-                  "[changePurchaseOrderStatus] Erreur snapshot client:",
-                  error.message,
-                );
               }
             }
 
