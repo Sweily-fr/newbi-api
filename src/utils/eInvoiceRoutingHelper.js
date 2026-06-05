@@ -32,7 +32,7 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
 
   if (!organization) {
     logger.warn(
-      `[E-INVOICE-ROUTING] Organisation non trouvée pour workspace ${workspaceId}`
+      `[E-INVOICE-ROUTING] Organisation non trouvée pour workspace ${workspaceId}`,
     );
     return null;
   }
@@ -40,7 +40,7 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
   // Déterminer le flow type
   const routingResult = eInvoiceRoutingService.determineFlowType(
     invoice,
-    organization
+    organization,
   );
 
   // Stocker le résultat sur la facture
@@ -52,19 +52,20 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
   if (routingResult.flowType === "E_INVOICING") {
     try {
       logger.info(
-        `[E-INVOICE-ROUTING] Envoi e-invoicing: ${invoice.prefix}${invoice.number} → SuperPDP`
+        `[E-INVOICE-ROUTING] Envoi e-invoicing: ${invoice.prefix}${invoice.number} → SuperPDP`,
       );
 
       const superPdpResult = await superPdpService.sendInvoice(
         workspaceId,
-        invoice
+        invoice,
       );
 
       if (superPdpResult.success) {
         invoice.superPdpInvoiceId = superPdpResult.superPdpInvoiceId;
-        invoice.eInvoiceStatus = superPdpService.mapStatusToNewbi(
-          superPdpResult.status
-        );
+        // Statut d'affichage dérivé + historique brut des événements SuperPDP
+        invoice.eInvoiceStatus = superPdpResult.status;
+        invoice.eInvoiceLastCode = superPdpResult.lastCode || null;
+        invoice.eInvoiceEvents = superPdpResult.events || [];
         invoice.eInvoiceSentAt = new Date();
         invoice.facturXData = {
           xmlGenerated: true,
@@ -73,13 +74,13 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
         };
 
         logger.info(
-          `[E-INVOICE-ROUTING] Facture envoyée à SuperPDP: ${superPdpResult.superPdpInvoiceId}`
+          `[E-INVOICE-ROUTING] Facture envoyée à SuperPDP: ${superPdpResult.superPdpInvoiceId}`,
         );
       } else {
         invoice.eInvoiceStatus = "ERROR";
         invoice.eInvoiceError = superPdpResult.error;
         logger.error(
-          `[E-INVOICE-ROUTING] Erreur envoi SuperPDP: ${superPdpResult.error}`
+          `[E-INVOICE-ROUTING] Erreur envoi SuperPDP: ${superPdpResult.error}`,
         );
       }
     } catch (sendError) {
@@ -87,9 +88,40 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
       invoice.eInvoiceError = sendError.message;
       logger.error(
         "[E-INVOICE-ROUTING] Erreur lors de l'envoi à SuperPDP:",
-        sendError
+        sendError,
       );
     }
+  } else if (routingResult.flowType === "E_REPORTING_TRANSACTION") {
+    // Flux e-reporting (B2C / international / exonéré) → soumettre la transaction
+    try {
+      logger.info(
+        `[E-INVOICE-ROUTING] E-reporting transaction: ${invoice.prefix}${invoice.number} → SuperPDP`,
+      );
+      const result = await superPdpService.submitB2cTransaction(
+        workspaceId,
+        invoice,
+      );
+      if (result.success) {
+        invoice.eReportingStatus = "REPORTED";
+        invoice.eReportingTransactionId = result.id ? String(result.id) : null;
+        invoice.eReportingError = null;
+      } else {
+        invoice.eReportingStatus = "ERROR";
+        invoice.eReportingError = result.error;
+      }
+      // Si TVA sur encaissements : le paiement devra aussi être déclaré
+      if (invoice.companyInfo?.vatPaymentCondition === "ENCAISSEMENTS") {
+        invoice.eReportingPaymentStatus = "PENDING_REPORT";
+      }
+    } catch (reportError) {
+      invoice.eReportingStatus = "ERROR";
+      invoice.eReportingError = reportError.message;
+      logger.error(
+        "[E-INVOICE-ROUTING] Erreur e-reporting transaction:",
+        reportError,
+      );
+    }
+    invoice.eInvoiceStatus = "NOT_SENT"; // pas d'envoi e-invoicing pour ce flux
   } else {
     // Pas e-invoicing → statut NOT_SENT
     invoice.eInvoiceStatus = "NOT_SENT";
@@ -98,44 +130,41 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
   return routingResult;
 }
 
-// TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
-//
-// /**
-//  * Évalue si un paiement reçu déclenche un e-reporting de paiement.
-//  *
-//  * Conditions :
-//  * 1. La facture relève du e-reporting transaction (pas du e-invoicing)
-//  * 2. La TVA est sur les encaissements
-//  * 3. Un paiement est effectivement reçu
-//  *
-//  * @param {Object} invoice - Document Mongoose Invoice
-//  * @param {Date} paymentDate - Date du paiement
-//  * @returns {boolean} true si le e-reporting payment doit être déclenché
-//  */
-// export function evaluatePaymentReporting(invoice, paymentDate) {
-//   // Condition 1: la facture relève du e-reporting transaction
-//   if (invoice.eInvoiceFlowType !== 'E_REPORTING_TRANSACTION') return false;
-//
-//   // Condition 2: TVA sur les encaissements
-//   if (invoice.companyInfo?.vatPaymentCondition !== 'ENCAISSEMENTS') return false;
-//
-//   // Condition 3: un paiement est reçu (la date est fournie)
-//   if (!paymentDate) return false;
-//
-//   // Marquer pour e-reporting payment
-//   invoice.eInvoiceFlowType = 'E_REPORTING_PAYMENT';
-//   invoice.eInvoiceFlowReason = 'Paiement reçu sur facture e-reporting avec TVA sur encaissements';
-//   if (invoice.eInvoiceRoutingDetails) {
-//     invoice.eInvoiceRoutingDetails.evaluatedAt = new Date();
-//   }
-//
-//   // TODO: Envoyer à SuperPDP via l'API e-reporting AFNOR
-//   // invoice.eReportingPaymentStatus = 'PENDING_REPORT';
-//   // invoice.eReportingPaymentDate = paymentDate;
-//
-//   logger.info(
-//     `[E-INVOICE-ROUTING] E-reporting payment déclenché pour facture ${invoice._id} (paiement: ${paymentDate})`
-//   );
-//
-//   return true;
-// }
+/**
+ * Déclare le paiement d'une facture e-reporting (TVA sur encaissements) à SuperPDP.
+ *
+ * Conditions : la facture relève du e-reporting transaction, la TVA est sur les
+ * encaissements, et une date de paiement est fournie. Non bloquant.
+ *
+ * @param {Object} invoice - Document Mongoose Invoice
+ * @param {string} workspaceId
+ * @param {Date} paymentDate
+ * @returns {Promise<boolean>} true si une déclaration a été tentée
+ */
+export async function reportPaymentIfNeeded(invoice, workspaceId, paymentDate) {
+  if (invoice.eInvoiceFlowType !== "E_REPORTING_TRANSACTION") return false;
+  if (invoice.companyInfo?.vatPaymentCondition !== "ENCAISSEMENTS")
+    return false;
+  if (!paymentDate) return false;
+
+  try {
+    const result = await superPdpService.submitB2cPayment(
+      workspaceId,
+      invoice,
+      paymentDate,
+    );
+    if (result.success) {
+      invoice.eReportingPaymentStatus = "REPORTED";
+      invoice.eReportingPaymentId = result.id ? String(result.id) : null;
+      invoice.eReportingPaymentDate = new Date(paymentDate);
+    } else {
+      invoice.eReportingPaymentStatus = "ERROR";
+      invoice.eReportingError = result.error;
+    }
+  } catch (error) {
+    invoice.eReportingPaymentStatus = "ERROR";
+    invoice.eReportingError = error.message;
+    logger.error("[E-INVOICE-ROUTING] Erreur e-reporting paiement:", error);
+  }
+  return true;
+}

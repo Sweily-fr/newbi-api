@@ -48,12 +48,20 @@ type Invoice {
   superPdpInvoiceId: String
   eInvoiceStatus: String
   eInvoiceSentAt: String
+  eInvoiceLastCode: String
+  eInvoiceEvents: [EInvoiceEvent!]
   archivedPdfUrl: String
+  archivedPdfKey: String
+  archivedPdfStoredAt: String
+  archivedPdfSource: String
   eInvoiceError: String
   facturXData: FacturXData
   # Routing e-invoicing
   eInvoiceFlowType: String
   eInvoiceFlowReason: String
+  # E-reporting (B2C / international / paiements)
+  eReportingStatus: String
+  eReportingPaymentStatus: String
   # Email tracking
   emailTracking: EmailTracking
   createdAt: String!
@@ -64,6 +72,51 @@ type FacturXData {
   xmlGenerated: Boolean
   profile: String
   generatedAt: String
+}
+
+# Événement brut du cycle de vie SuperPDP (code api:* / fr:* / ppf:*)
+type EInvoiceEvent {
+  code: String
+  label: String
+  occurredAt: String
+}
+
+# Entreprise SuperPDP connectée (companies/me)
+type EInvoicingCompany {
+  formalName: String
+  tradeName: String
+  number: String
+  numberScheme: String
+  vatRegime: String
+  env: String
+}
+
+# Statut de vérification KYC/KYB de la session OAuth SuperPDP.
+# Tant que companyVerificationStatus != "verified", l'émission/réception est bloquée (403).
+type EInvoicingVerification {
+  connected: Boolean!
+  companyVerificationStatus: String
+  userIdentityVerificationStatus: String
+  company: EInvoicingCompany
+  error: String
+}
+
+# Entrée d'annuaire (peppol|ppf) pour pouvoir recevoir des factures
+type EInvoicingDirectoryEntry {
+  id: Int
+  directory: String
+  identifier: String
+  status: String
+  statusMessage: String
+  effectiveDate: String
+}
+
+# Déclaration e-reporting transmise au PPF
+type EInvoicingEReporting {
+  id: Int
+  kind: String
+  startPeriod: String
+  endPeriod: String
 }
 
 type InvoicePagination {
@@ -168,6 +221,15 @@ extend type Query {
   ): [Invoice!]!
   situationReferences(workspaceId: ID!, search: String): [SituationReference!]!
   checkInvoiceNumberExists(workspaceId: ID!, number: String!, prefix: String!, excludeId: ID): Boolean!
+  # URL signée (R2 ou copie SuperPDP) pour afficher le PDF Factur-X d'une facture.
+  # Renvoie null pour les brouillons (preview client live) ou si aucun document n'est disponible.
+  invoiceDocumentUrl(workspaceId: ID!, invoiceId: ID!): String
+  # Statut de vérification KYC/KYB + entreprise SuperPDP connectée
+  eInvoicingVerification(workspaceId: ID!): EInvoicingVerification!
+  # Entrées d'annuaire de l'entreprise (réception de factures)
+  eInvoicingDirectoryEntries(workspaceId: ID!): [EInvoicingDirectoryEntry!]!
+  # Historique des déclarations e-reporting transmises au PPF
+  eInvoicingEReportings(workspaceId: ID!): [EInvoicingEReporting!]!
 }
 
 type SituationReference {
@@ -196,4 +258,10 @@ extend type Mutation {
     isDeposit: Boolean!
   ): LinkedInvoiceResult!
   deleteLinkedInvoice(id: ID!, workspaceId: ID!): Boolean!
+  # Archive le PDF Factur-X (généré côté frontend) d'une facture non-brouillon sur Cloudflare R2.
+  archiveInvoicePdf(workspaceId: ID!, invoiceId: ID!, file: Upload!): Invoice!
+  # Inscrit l'entreprise dans les annuaires Peppol + PPF (pour recevoir des factures).
+  registerEInvoicingDirectory(workspaceId: ID!): [EInvoicingDirectoryEntry!]!
+  # Met à jour le régime TVA SuperPDP (pilote le calendrier d'envoi e-reporting au PPF).
+  updateEInvoicingVatRegime(workspaceId: ID!, vatRegime: String!): Boolean!
 }

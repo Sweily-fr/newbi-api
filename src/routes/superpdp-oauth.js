@@ -2,8 +2,34 @@ import express from "express";
 import crypto from "crypto";
 import logger from "../utils/logger.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
+import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 
 const router = express.Router();
+
+// Préfixe Redis pour les states OAuth (TTL 10 min) — multi-instance safe.
+const OAUTH_STATE_PREFIX = "superpdp:oauth:";
+const OAUTH_STATE_TTL = 10 * 60; // secondes
+
+/**
+ * Garde d'authentification serveur-à-serveur : ces routes sont appelées par les
+ * route handlers Next.js qui ont DÉJÀ authentifié la session utilisateur et vérifié
+ * l'appartenance à l'organisation. On exige donc le secret interne partagé.
+ */
+function requireInternalSecret(req, res, next) {
+  const expected = process.env.INTERNAL_API_SECRET;
+  if (!expected) {
+    logger.error(
+      "[superpdp-oauth] INTERNAL_API_SECRET non défini — routes OAuth non sécurisées, accès refusé",
+    );
+    return res
+      .status(500)
+      .json({ success: false, error: "Configuration serveur manquante" });
+  }
+  if (req.headers["x-internal-secret"] !== expected) {
+    return res.status(401).json({ success: false, error: "Non autorisé" });
+  }
+  next();
+}
 
 // Configuration OAuth2 SuperPDP
 const SUPERPDP_OAUTH_CONFIG = {
@@ -17,9 +43,9 @@ const SUPERPDP_OAUTH_CONFIG = {
  * GET /api/superpdp/authorize
  * Génère l'URL d'autorisation OAuth2 pour rediriger l'utilisateur vers SuperPDP
  */
-router.get("/authorize", async (req, res) => {
+router.get("/authorize", requireInternalSecret, async (req, res) => {
   try {
-    const { organizationId } = req.query;
+    const { organizationId, login_hint: loginHint } = req.query;
 
     if (!organizationId) {
       return res.status(400).json({
@@ -37,24 +63,13 @@ router.get("/authorize", async (req, res) => {
       });
     }
 
-    // Générer un state unique pour la sécurité CSRF
+    // Générer un state unique (CSRF) et le stocker dans Redis (multi-instance safe)
     const state = crypto.randomBytes(32).toString("hex");
-
-    // Stocker le state temporairement (associé à l'organisation)
-    // En production, utiliser Redis ou une base de données
-    global.superpdpOAuthStates = global.superpdpOAuthStates || new Map();
-    global.superpdpOAuthStates.set(state, {
-      organizationId,
-      createdAt: Date.now(),
-    });
-
-    // Nettoyer les states expirés (plus de 10 minutes)
-    const TEN_MINUTES = 10 * 60 * 1000;
-    for (const [key, value] of global.superpdpOAuthStates.entries()) {
-      if (Date.now() - value.createdAt > TEN_MINUTES) {
-        global.superpdpOAuthStates.delete(key);
-      }
-    }
+    await cacheSet(
+      `${OAUTH_STATE_PREFIX}${state}`,
+      { organizationId },
+      OAUTH_STATE_TTL,
+    );
 
     // Construire l'URL de redirection (callback)
     const redirectUri = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000"}/api/superpdp/callback`;
@@ -67,8 +82,31 @@ router.get("/authorize", async (req, res) => {
     authUrl.searchParams.set("state", state);
     // Scopes: laisser vide selon la documentation SuperPDP
 
+    // Pré-remplissage (best-effort) du formulaire SuperPDP : email + SIREN de l'org
+    if (loginHint) {
+      authUrl.searchParams.set("login_hint", loginHint);
+    }
+    try {
+      const organization =
+        await EInvoicingSettingsService.getOrganizationById(organizationId);
+      const rawNumber =
+        organization?.siret ||
+        organization?.siren ||
+        organization?.companyInfo?.siret ||
+        "";
+      const siren = String(rawNumber).replace(/\s/g, "").substring(0, 9);
+      if (siren && siren.length === 9) {
+        authUrl.searchParams.set("superpdp_company_number", siren);
+        authUrl.searchParams.set("superpdp_company_number_scheme", "fr_siren");
+      }
+    } catch (prefillError) {
+      logger.debug(
+        `[superpdp-oauth] prefill SIREN ignoré: ${prefillError.message}`,
+      );
+    }
+
     logger.info(
-      `🔗 URL d'autorisation SuperPDP générée pour org ${organizationId}`
+      `🔗 URL d'autorisation SuperPDP générée pour org ${organizationId}`,
     );
 
     res.json({
@@ -79,7 +117,7 @@ router.get("/authorize", async (req, res) => {
   } catch (error) {
     logger.error(
       "Erreur lors de la génération de l'URL d'autorisation:",
-      error
+      error,
     );
     res.status(500).json({
       success: false,
@@ -102,7 +140,7 @@ router.get("/callback", async (req, res) => {
       // Rediriger vers le frontend avec l'erreur
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard/parametres/facturation-electronique?error=${encodeURIComponent(error_description || error)}`
+        `${frontendUrl}/dashboard/parametres/facturation-electronique?error=${encodeURIComponent(error_description || error)}`,
       );
     }
 
@@ -113,20 +151,19 @@ router.get("/callback", async (req, res) => {
       });
     }
 
-    // Vérifier le state (protection CSRF)
-    global.superpdpOAuthStates = global.superpdpOAuthStates || new Map();
-    const stateData = global.superpdpOAuthStates.get(state);
+    // Vérifier le state (protection CSRF) depuis Redis
+    const stateData = await cacheGet(`${OAUTH_STATE_PREFIX}${state}`);
 
     if (!stateData) {
       logger.error("State OAuth2 invalide ou expiré");
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard/parametres/facturation-electronique?error=${encodeURIComponent("Session expirée, veuillez réessayer")}`
+        `${frontendUrl}/dashboard/parametres/facturation-electronique?error=${encodeURIComponent("Session expirée, veuillez réessayer")}`,
       );
     }
 
     const { organizationId } = stateData;
-    global.superpdpOAuthStates.delete(state); // Supprimer le state utilisé
+    await cacheDel(`${OAUTH_STATE_PREFIX}${state}`); // Supprimer le state utilisé
 
     // Récupérer les credentials
     const clientId = process.env.SUPERPDP_CLIENT_ID;
@@ -141,7 +178,7 @@ router.get("/callback", async (req, res) => {
 
     // Échanger le code contre des tokens
     logger.info(
-      `🔄 Échange du code OAuth2 pour l'organisation ${organizationId}`
+      `🔄 Échange du code OAuth2 pour l'organisation ${organizationId}`,
     );
 
     const tokenResponse = await fetch(SUPERPDP_OAUTH_CONFIG.tokenEndpoint, {
@@ -161,14 +198,14 @@ router.get("/callback", async (req, res) => {
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       logger.error(
-        `Erreur échange token SuperPDP: ${tokenResponse.status} - ${errorText}`
+        `Erreur échange token SuperPDP: ${tokenResponse.status} - ${errorText}`,
       );
       throw new Error(`Erreur échange token: ${tokenResponse.status}`);
     }
 
     const tokenData = await tokenResponse.json();
     logger.info(
-      `✅ Tokens OAuth2 obtenus pour l'organisation ${organizationId}`
+      `✅ Tokens OAuth2 obtenus pour l'organisation ${organizationId}`,
     );
 
     // Stocker les tokens dans l'organisation
@@ -185,19 +222,19 @@ router.get("/callback", async (req, res) => {
     });
 
     logger.info(
-      `✅ Facturation électronique activée pour l'organisation ${organizationId}`
+      `✅ Facturation électronique activée pour l'organisation ${organizationId}`,
     );
 
     // Rediriger vers le frontend avec succès
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     res.redirect(
-      `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&success=true&message=${encodeURIComponent("Connexion à SuperPDP réussie !")}`
+      `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&success=true&message=${encodeURIComponent("Connexion à SuperPDP réussie !")}`,
     );
   } catch (error) {
     logger.error("Erreur lors du callback OAuth2:", error);
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     res.redirect(
-      `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&error=${encodeURIComponent(error.message)}`
+      `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&error=${encodeURIComponent(error.message)}`,
     );
   }
 });
@@ -206,7 +243,7 @@ router.get("/callback", async (req, res) => {
  * POST /api/superpdp/disconnect
  * Déconnecter le compte SuperPDP d'une organisation
  */
-router.post("/disconnect", async (req, res) => {
+router.post("/disconnect", requireInternalSecret, async (req, res) => {
   try {
     const { organizationId } = req.body;
 
@@ -222,7 +259,7 @@ router.post("/disconnect", async (req, res) => {
     await EInvoicingSettingsService.disableEInvoicing(organizationId);
 
     logger.info(
-      `🔌 Compte SuperPDP déconnecté pour l'organisation ${organizationId}`
+      `🔌 Compte SuperPDP déconnecté pour l'organisation ${organizationId}`,
     );
 
     res.json({
@@ -242,7 +279,7 @@ router.post("/disconnect", async (req, res) => {
  * GET /api/superpdp/status
  * Vérifier le statut de connexion SuperPDP pour une organisation
  */
-router.get("/status", async (req, res) => {
+router.get("/status", requireInternalSecret, async (req, res) => {
   try {
     const { organizationId } = req.query;
 

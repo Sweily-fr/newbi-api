@@ -147,13 +147,11 @@ class EInvoiceRoutingService {
     // Client identifié TVA ?
     details.clientVatRegistered = this.isClientVatRegistered(invoice);
 
-    // Cas EXONERATION : vendeur non assujetti → pas e-invoicing
+    // Cas EXONERATION : vendeur non assujetti (micro-entrepreneur) → e-reporting
     if (vatPaymentCondition === "EXONERATION") {
-      // TODO E-REPORTING: Retournera E_REPORTING_TRANSACTION quand l'API sera disponible
       return {
-        flowType: "NONE",
-        reason:
-          "Vendeur exonéré de TVA (micro-entrepreneur) — e-reporting futur",
+        flowType: "E_REPORTING_TRANSACTION",
+        reason: "Vendeur exonéré de TVA (micro-entrepreneur) — e-reporting",
         details,
       };
     }
@@ -168,25 +166,16 @@ class EInvoiceRoutingService {
     ) {
       return {
         flowType: "E_INVOICING",
-        reason: "Facture B2B domestique France-France — e-invoicing obligatoire",
+        reason:
+          "Facture B2B domestique France-France — e-invoicing obligatoire",
         details,
       };
     }
 
-    // 6. Sinon → e-reporting transaction (commenté pour l'instant)
-    // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
-    // const eReportingReason = this._buildEReportingReason(details);
-    // return {
-    //   flowType: 'E_REPORTING_TRANSACTION',
-    //   reason: eReportingReason,
-    //   details,
-    // };
-
-    // En attendant, retourner NONE pour les cas non-e-invoicing
-    const reason = this._buildNonEInvoicingReason(details);
+    // 6. Sinon (B2C, international, client non identifié) → e-reporting transaction
     return {
-      flowType: "NONE",
-      reason: `${reason} — e-reporting sera activé ultérieurement`,
+      flowType: "E_REPORTING_TRANSACTION",
+      reason: this._buildEReportingReason(details),
       details,
     };
   }
@@ -314,16 +303,20 @@ class EInvoiceRoutingService {
       : "Non éligible e-invoicing";
   }
 
-  // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
-  // _buildEReportingReason(details) {
-  //   const reasons = [];
-  //   if (!details.isB2B) reasons.push('client particulier (B2C)');
-  //   if (!details.clientInFrance) reasons.push('client international');
-  //   if (!details.clientVatRegistered) reasons.push('client sans identification TVA');
-  //   return reasons.length > 0
-  //     ? `E-reporting obligatoire : ${reasons.join(', ')}`
-  //     : 'E-reporting obligatoire';
-  // }
+  /**
+   * Construit la raison du e-reporting (flux hors B2B domestique)
+   */
+  _buildEReportingReason(details) {
+    const reasons = [];
+    if (!details.isB2B) reasons.push("client particulier (B2C)");
+    if (!details.clientInFrance) reasons.push("client international");
+    if (!details.sellerVatRegistered) reasons.push("vendeur exonéré de TVA");
+    if (!details.clientVatRegistered)
+      reasons.push("client sans identification TVA");
+    return reasons.length > 0
+      ? `E-reporting obligatoire : ${reasons.join(", ")}`
+      : "E-reporting obligatoire";
+  }
 }
 
 // Singleton

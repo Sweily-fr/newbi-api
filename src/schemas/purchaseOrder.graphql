@@ -49,6 +49,9 @@ type PurchaseOrder {
   createdBy: User!
   createdAt: String!
   updatedAt: String!
+  archivedPdfKey: String
+  archivedPdfStoredAt: String
+  archivedPdfSource: String
 }
 
 type PurchaseOrderPagination {
@@ -133,6 +136,7 @@ extend type Query {
   purchaseOrderStats(workspaceId: ID!): PurchaseOrderStats!
   nextPurchaseOrderNumber(workspaceId: ID!, prefix: String, autoNumbering: Boolean): String!
   checkPurchaseOrderNumberExists(workspaceId: ID!, number: String!, prefix: String!, excludeId: ID): Boolean!
+  purchaseOrderDocumentUrl(workspaceId: ID!, purchaseOrderId: ID!): String
 }
 
 extend type Mutation {
@@ -143,4 +147,5 @@ extend type Mutation {
   convertQuoteToPurchaseOrder(quoteId: ID!, workspaceId: ID!): PurchaseOrder!
   convertPurchaseOrderToInvoice(id: ID!, workspaceId: ID!): Invoice!
   sendPurchaseOrder(id: ID!, workspaceId: ID!, email: String!): Boolean!
+  archivePurchaseOrderPdf(workspaceId: ID!, purchaseOrderId: ID!, file: Upload!): PurchaseOrder!
 }

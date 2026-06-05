@@ -14,6 +14,7 @@ import {
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncPurchaseInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
+import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionService.js";
 
 const checkAccess = async (id, workspaceId) => {
   const doc = await PurchaseInvoice.findOne({
@@ -942,99 +943,22 @@ const purchaseInvoiceResolvers = {
           };
         }
 
-        let imported = 0;
-        let skipped = 0;
-        let errors = 0;
-        let page = 1;
-        let hasMore = true;
-
         try {
-          while (hasMore) {
-            const result = await superPdpService.getReceivedInvoices(
-              workspaceId,
-              {
-                page,
-                limit: 50,
-                since,
-              },
-            );
-
-            for (const superPdpInvoice of result.invoices) {
-              try {
-                const superPdpId =
-                  superPdpInvoice.id || superPdpInvoice.invoiceId;
-
-                // Vérifier si la facture existe déjà (par superPdpInvoiceId)
-                const existing = await PurchaseInvoice.findOne({
-                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                  superPdpInvoiceId: superPdpId,
-                });
-
-                if (existing) {
-                  skipped++;
-                  continue;
-                }
-
-                // Transformer la facture SuperPDP → PurchaseInvoice
-                const purchaseInvoiceData =
-                  superPdpService.transformReceivedInvoiceToPurchaseInvoice(
-                    superPdpInvoice,
-                    workspaceId,
-                    context.user._id || context.user.id,
-                  );
-
-                // Auto-créer ou trouver le fournisseur
-                let supplier = await Supplier.findOne({
-                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                  name: {
-                    $regex: new RegExp(
-                      `^${purchaseInvoiceData.supplierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-                      "i",
-                    ),
-                  },
-                });
-
-                if (!supplier) {
-                  const ocrMeta = purchaseInvoiceData.ocrMetadata || {};
-                  supplier = await Supplier.create({
-                    workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                    name: purchaseInvoiceData.supplierName,
-                    siret: ocrMeta.supplierSiret || undefined,
-                    vatNumber: ocrMeta.supplierVatNumber || undefined,
-                    defaultCategory: purchaseInvoiceData.category,
-                  });
-                }
-
-                purchaseInvoiceData.supplierId = supplier._id;
-
-                // Créer la facture d'achat
-                await PurchaseInvoice.create(purchaseInvoiceData);
-                imported++;
-
-                logger.info(
-                  `✅ Facture d'achat importée depuis SuperPDP: ${purchaseInvoiceData.invoiceNumber} (${purchaseInvoiceData.supplierName})`,
-                );
-              } catch (err) {
-                errors++;
-                logger.error("❌ Erreur import facture SuperPDP:", err);
-              }
-            }
-
-            hasMore = page < result.totalPages;
-            page++;
-          }
-
+          const { imported, skipped, errors } = await importReceivedInvoices(
+            workspaceId,
+            context.user._id || context.user.id,
+            since,
+          );
           const message = `Synchronisation terminée : ${imported} importée(s), ${skipped} déjà existante(s), ${errors} erreur(s)`;
           logger.info(`📊 ${message}`);
-
           return { success: true, imported, skipped, errors, message };
         } catch (error) {
           logger.error("❌ Erreur synchronisation SuperPDP:", error);
           return {
             success: false,
-            imported,
-            skipped,
-            errors: errors + 1,
+            imported: 0,
+            skipped: 0,
+            errors: 1,
             message: `Erreur de synchronisation : ${error.message}`,
           };
         }
@@ -1053,7 +977,53 @@ const purchaseInvoiceResolvers = {
           );
         }
 
+        // Émettre le statut d'approbation (fr:205) au cycle de vie SuperPDP
+        const result = await superPdpService.submitInvoiceEvent(
+          workspaceId,
+          invoice.superPdpInvoiceId,
+          "fr:205",
+        );
+        if (!result.success) {
+          throw new AppError(
+            `Échec de l'approbation auprès de SuperPDP : ${result.error}`,
+            ERROR_CODES.INTERNAL_ERROR,
+          );
+        }
+
         invoice.eInvoiceStatus = "ACCEPTED";
+        await invoice.save();
+
+        return invoice;
+      },
+    ),
+
+    refusePurchaseInvoiceEInvoice: requireWrite("expenses")(
+      async (_, { id, reason }, context) => {
+        const workspaceId = resolveWorkspaceId(null, context.workspaceId);
+        const invoice = await checkAccess(id, workspaceId);
+
+        if (!invoice.superPdpInvoiceId) {
+          throw new AppError(
+            "Cette facture n'est pas liée à une e-facture SuperPDP",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
+        // Émettre le statut de refus (fr:210) au cycle de vie SuperPDP
+        const result = await superPdpService.submitInvoiceEvent(
+          workspaceId,
+          invoice.superPdpInvoiceId,
+          "fr:210",
+          { reason },
+        );
+        if (!result.success) {
+          throw new AppError(
+            `Échec du refus auprès de SuperPDP : ${result.error}`,
+            ERROR_CODES.INTERNAL_ERROR,
+          );
+        }
+
+        invoice.eInvoiceStatus = "REJECTED";
         await invoice.save();
 
         return invoice;

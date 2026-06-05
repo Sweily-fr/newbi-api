@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import {
+  archiveDocumentPdf,
+  documentUrl,
+} from "../utils/documentArchiveHelper.js";
 import Quote from "../models/Quote.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
@@ -193,6 +197,26 @@ const purchaseOrderResolvers = {
   },
 
   Query: {
+    // URL d'aperçu du bon de commande archivé (R2) — null si brouillon / pas archivé
+    purchaseOrderDocumentUrl: requireRead("purchaseOrders")(
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, purchaseOrderId },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        return documentUrl({
+          Model: PurchaseOrder,
+          docType: "purchaseOrder",
+          draftStatus: "DRAFT",
+          workspaceId,
+          docId: purchaseOrderId,
+        });
+      },
+    ),
     purchaseOrder: requireRead("purchaseOrders")(
       async (_, { workspaceId: inputWorkspaceId, id }, context) => {
         const workspaceId = resolveWorkspaceId(
@@ -399,6 +423,27 @@ const purchaseOrderResolvers = {
   },
 
   Mutation: {
+    // Archive le PDF du bon de commande (généré côté frontend) sur R2
+    archivePurchaseOrderPdf: requireWrite("purchaseOrders")(
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, purchaseOrderId, file },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        return archiveDocumentPdf({
+          Model: PurchaseOrder,
+          docType: "purchaseOrder",
+          draftStatus: "DRAFT",
+          workspaceId,
+          docId: purchaseOrderId,
+          file,
+        });
+      },
+    ),
     createPurchaseOrder: requireCompanyInfo(
       requireWrite("purchaseOrders")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {

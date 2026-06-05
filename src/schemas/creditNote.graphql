@@ -40,6 +40,9 @@ type CreditNote {
   createdBy: User!
   createdAt: String!
   updatedAt: String!
+  archivedPdfKey: String
+  archivedPdfStoredAt: String
+  archivedPdfSource: String
 }
 
 type CreditNotePagination {
@@ -121,6 +124,7 @@ extend type Query {
   creditNotesByInvoice(invoiceId: ID!, workspaceId: ID!): [CreditNote!]!
   creditNoteStats(workspaceId: ID!): CreditNoteStats!
   nextCreditNoteNumber(workspaceId: ID!, prefix: String, isDraft: Boolean): String!
+  creditNoteDocumentUrl(workspaceId: ID!, creditNoteId: ID!): String
 }
 
 extend type Mutation {
@@ -128,4 +132,5 @@ extend type Mutation {
   updateCreditNote(id: ID!, workspaceId: ID!, input: UpdateCreditNoteInput!): CreditNote!
   deleteCreditNote(id: ID!, workspaceId: ID!): Boolean!
   changeCreditNoteStatus(id: ID!, workspaceId: ID!, status: CreditNoteStatus!): CreditNote!
+  archiveCreditNotePdf(workspaceId: ID!, creditNoteId: ID!, file: Upload!): CreditNote!
 }

@@ -76,6 +76,19 @@ class CloudflareService {
     this.sharedDocumentsPublicUrl =
       process.env.SHARED_DOCUMENTS_URL || "https://pub-shared-docs.r2.dev";
 
+    // Bucket dédié à l'archivage des factures émises (PDF Factur-X).
+    // Bucket PRIVÉ : on ne stocke pas d'URL publique, on sert via URL signée.
+    this.invoicesBucketName =
+      process.env.INVOICES_BUCKET || "app-invoices-prod";
+
+    // Buckets PRIVÉS dédiés aux autres documents archivés (devis, avoirs, BC).
+    this.documentBuckets = {
+      quote: process.env.QUOTES_BUCKET || "app-quotes-prod",
+      creditNote: process.env.CREDIT_NOTES_BUCKET || "app-credit-notes-prod",
+      purchaseOrder:
+        process.env.PURCHASE_ORDERS_BUCKET || "app-purchase-orders-prod",
+    };
+
     if (!this.bucketName) {
       throw new Error("Configuration manquante: USER_IMAGE_BUCKET");
     }
@@ -121,6 +134,149 @@ class CloudflareService {
       "→",
       this.sharedDocumentsPublicUrl,
     );
+    console.log("  - Invoices (privé):", this.invoicesBucketName);
+  }
+
+  /**
+   * Archive le PDF Factur-X d'une facture dans le bucket dédié (privé).
+   * @param {Buffer} pdfBuffer - PDF Factur-X (PDF/A-3)
+   * @param {string} workspaceId - ID du workspace
+   * @param {string} invoiceId - ID de la facture
+   * @param {Object} [options]
+   * @param {string} [options.source="NEWBI"] - Origine du PDF ("NEWBI" | "SUPERPDP")
+   * @param {string} [options.fileName] - Nom de fichier lisible
+   * @returns {Promise<{key: string, bucket: string}>}
+   */
+  async uploadInvoicePdf(pdfBuffer, workspaceId, invoiceId, options = {}) {
+    const { source = "NEWBI", fileName } = options;
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const safeName = this.sanitizeFileName(
+      fileName || `facture_${invoiceId}.pdf`,
+    );
+    // Clé déterministe par facture+source : ré-archiver écrase la version précédente.
+    const key = `invoices/${workspaceId}/${year}/${month}/${invoiceId}_${source.toLowerCase()}_${safeName}`;
+
+    const command = new PutObjectCommand({
+      Bucket: this.invoicesBucketName,
+      Key: key,
+      Body: pdfBuffer,
+      ContentType: "application/pdf",
+      Metadata: {
+        workspaceId: String(workspaceId),
+        invoiceId: String(invoiceId),
+        source,
+        uploadedAt: now.toISOString(),
+      },
+    });
+
+    await this.client.send(command);
+    console.log(`🗄️ PDF facture archivé (${source}): ${key}`);
+
+    return { key, bucket: this.invoicesBucketName };
+  }
+
+  /**
+   * Génère une URL signée pour un PDF de facture archivé (bucket privé).
+   * @param {string} key - Clé R2 de l'objet
+   * @param {number} [expiresIn=3600] - Validité en secondes
+   * @returns {Promise<string>}
+   */
+  async getInvoiceSignedUrl(key, expiresIn = 3600) {
+    // Autonome : on signe directement sur le bucket factures (la fonction
+    // générique getSignedUrlForBucket ignore son paramètre bucketName).
+    const command = new GetObjectCommand({
+      Bucket: this.invoicesBucketName,
+      Key: key,
+    });
+    return getSignedUrl(this.client, command, {
+      expiresIn,
+      signableHeaders: new Set(["host"]),
+      unhoistableHeaders: new Set(["x-amz-content-sha256"]),
+    });
+  }
+
+  /**
+   * Lit un PDF de facture archivé depuis R2 et renvoie son Buffer.
+   * Utilisé par la route de streaming (pas d'URL signée côté navigateur).
+   * @param {string} key - Clé R2 de l'objet (bucket factures)
+   * @returns {Promise<Buffer>}
+   */
+  async getInvoiceObjectBuffer(key) {
+    const response = await this.client.send(
+      new GetObjectCommand({ Bucket: this.invoicesBucketName, Key: key }),
+    );
+    return Buffer.from(await response.Body.transformToByteArray());
+  }
+
+  // ============================================================
+  // ARCHIVAGE GÉNÉRIQUE (devis, avoirs, bons de commande)
+  // ============================================================
+
+  /**
+   * Archive le PDF d'un document (devis/avoir/BC) dans son bucket dédié (privé).
+   * @param {string} docType - "quote" | "creditNote" | "purchaseOrder"
+   * @param {Buffer} pdfBuffer
+   * @param {string} workspaceId
+   * @param {string} docId
+   * @param {Object} [options] - { fileName }
+   * @returns {Promise<{key: string, bucket: string}>}
+   */
+  async uploadDocumentPdf(
+    docType,
+    pdfBuffer,
+    workspaceId,
+    docId,
+    options = {},
+  ) {
+    const bucket = this.documentBuckets[docType];
+    if (!bucket) {
+      throw new Error(`Type de document inconnu pour l'archivage: ${docType}`);
+    }
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const safeName = this.sanitizeFileName(
+      options.fileName || `${docType}_${docId}.pdf`,
+    );
+    const key = `${docType}s/${workspaceId}/${year}/${month}/${docId}_newbi_${safeName}`;
+
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: pdfBuffer,
+        ContentType: "application/pdf",
+        Metadata: {
+          workspaceId: String(workspaceId),
+          documentId: String(docId),
+          documentType: docType,
+          uploadedAt: now.toISOString(),
+        },
+      }),
+    );
+
+    console.log(`🗄️ PDF ${docType} archivé sur R2: ${key}`);
+    return { key, bucket };
+  }
+
+  /**
+   * Lit le PDF archivé d'un document depuis R2 et renvoie son Buffer.
+   * @param {string} docType - "quote" | "creditNote" | "purchaseOrder"
+   * @param {string} key - Clé R2
+   * @returns {Promise<Buffer>}
+   */
+  async getDocumentObjectBuffer(docType, key) {
+    const bucket = this.documentBuckets[docType];
+    if (!bucket) {
+      throw new Error(`Type de document inconnu pour la lecture: ${docType}`);
+    }
+    const response = await this.client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    );
+    return Buffer.from(await response.Body.transformToByteArray());
   }
 
   /**

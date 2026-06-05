@@ -402,21 +402,43 @@ const invoiceSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Statut e-invoicing
+    // Statut e-invoicing (statut d'AFFICHAGE dérivé du dernier événement SuperPDP).
+    // L'enum est un SURENSEMBLE : on conserve les 9 valeurs historiques (compat prod)
+    // et on ajoute les valeurs correspondant aux statuts officiels fr:* (cycle de vie DGFiP).
     eInvoiceStatus: {
       type: String,
       enum: [
         "NOT_SENT", // Pas encore envoyée à SuperPDP
-        "PENDING_VALIDATION", // En cours de validation chez SuperPDP
-        "VALIDATED", // Validée par SuperPDP
-        "SENT_TO_RECIPIENT", // Envoyée au destinataire
-        "RECEIVED", // Reçue par le destinataire
-        "ACCEPTED", // Acceptée par le destinataire
-        "REJECTED", // Rejetée par le destinataire
-        "PAID", // Marquée comme payée
-        "ERROR", // Erreur lors de l'envoi
+        "PENDING_VALIDATION", // En cours de validation chez SuperPDP (api:uploaded / fr:200)
+        "VALIDATED", // Validée par SuperPDP (api:validated)
+        "SENT_TO_RECIPIENT", // Émise / transmise (api:sent / fr:201)
+        "RECEIVED", // Reçue / mise à disposition (api:received / fr:202-204)
+        "ACCEPTED", // Approuvée / complétée (api:accepted / fr:205 / fr:209)
+        "PARTIALLY_ACCEPTED", // Approuvée partiellement (fr:206)
+        "DISPUTED", // Litige / contestée (fr:207)
+        "ON_HOLD", // Suspendue (fr:208)
+        "REFUSED", // Refusée (fr:210)
+        "PAYMENT_SENT", // Paiement transmis (fr:211)
+        "REJECTED", // Rejetée (api:rejected / fr:213)
+        "PAID", // Paiement reçu (fr:212)
+        "ERROR", // Erreur / irrecevable (api:invalid / fr:501)
       ],
       default: "NOT_SENT",
+    },
+
+    // Historique BRUT des événements SuperPDP (fidélité totale au modèle "array of statuses").
+    // SuperPDP n'est pas une state machine : on conserve tous les codes api:* / fr:* / ppf:*.
+    eInvoiceEvents: [
+      {
+        code: { type: String }, // ex. "fr:205", "api:sent", "ppf:validated"
+        label: { type: String }, // libellé lisible (status_text SuperPDP)
+        occurredAt: { type: Date },
+      },
+    ],
+
+    // Dernier code brut SuperPDP (ex. "fr:205") — source du statut d'affichage dérivé
+    eInvoiceLastCode: {
+      type: String,
     },
 
     // Date d'envoi à SuperPDP
@@ -427,6 +449,23 @@ const invoiceSchema = new mongoose.Schema(
     // URL du PDF Factur-X archivé (Cloudflare R2 ou SuperPDP)
     archivedPdfUrl: {
       type: String,
+    },
+
+    // Clé de l'objet PDF Factur-X sur Cloudflare R2 (bucket privé).
+    // On sert le document via une URL signée générée à la demande.
+    archivedPdfKey: {
+      type: String,
+    },
+
+    // Date d'archivage du PDF Factur-X
+    archivedPdfStoredAt: {
+      type: Date,
+    },
+
+    // Origine du PDF archivé : "NEWBI" (généré par Newbi) ou "SUPERPDP" (copie de secours)
+    archivedPdfSource: {
+      type: String,
+      enum: ["NEWBI", "SUPERPDP"],
     },
 
     // Erreur e-invoicing (si applicable)
@@ -470,18 +509,31 @@ const invoiceSchema = new mongoose.Schema(
       evaluatedAt: Date,
     },
 
-    // E-reporting (préparé, commenté pour activation future)
-    // eReportingStatus: {
-    //   type: String,
-    //   enum: ['NOT_REPORTED', 'PENDING_REPORT', 'REPORTED', 'ERROR'],
-    //   default: 'NOT_REPORTED',
-    // },
-    // eReportingPaymentStatus: {
-    //   type: String,
-    //   enum: ['NOT_APPLICABLE', 'PENDING_REPORT', 'REPORTED', 'ERROR'],
-    //   default: 'NOT_APPLICABLE',
-    // },
-    // eReportingPaymentDate: Date,
+    // === E-REPORTING (B2C / international / paiements) ===
+
+    // Statut e-reporting transaction (déclaration des données de transaction au PPF)
+    eReportingStatus: {
+      type: String,
+      enum: ["NOT_REPORTED", "PENDING_REPORT", "REPORTED", "ERROR"],
+      default: "NOT_REPORTED",
+    },
+
+    // Statut e-reporting paiement (TVA sur encaissements)
+    eReportingPaymentStatus: {
+      type: String,
+      enum: ["NOT_APPLICABLE", "PENDING_REPORT", "REPORTED", "ERROR"],
+      default: "NOT_APPLICABLE",
+    },
+
+    // Date du paiement déclaré en e-reporting
+    eReportingPaymentDate: { type: Date },
+
+    // Identifiants SuperPDP des enregistrements e-reporting
+    eReportingTransactionId: { type: String },
+    eReportingPaymentId: { type: String },
+
+    // Erreur e-reporting (si applicable)
+    eReportingError: { type: String },
   },
   {
     timestamps: true,
