@@ -157,6 +157,10 @@ type MonthlyCollection {
   collectedTTC: Float!
   invoicedCount: Int!
   collectedCount: Int!
+  # Impayés échus (échéance dépassée), sans avoir, factures Newbi + importées,
+  # regroupés par mois d'échéance. Sert au taux de recouvrement encaissé/impayé.
+  unpaidTTC: Float!
+  unpaidCount: Int!
 }
 
 type CollectionData {

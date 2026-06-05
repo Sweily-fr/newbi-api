@@ -272,6 +272,34 @@ const financialAnalyticsResolvers = {
         }
         if (status && status.length > 0) invoiceMatch.status = { $in: status };
 
+        // --- Paid invoice match (revenu reconnu à la DATE DE PAIEMENT) ---
+        // Les graphiques "Détail par client" et "Tableau croisé Client x Mois"
+        // — ainsi que "Top 10 clients" et "Répartition par type" qui partagent
+        // la même source — se basent uniquement sur les factures PAYÉES
+        // (status COMPLETED), filtrées et regroupées par paymentDate. Cela vaut
+        // pour les factures créées sur Newbi (collection Invoice) ET les
+        // factures importées payées (collection ImportedInvoice).
+        const paymentDateRange = { $ne: null };
+        if (startDate) paymentDateRange.$gte = new Date(startDate);
+        if (endDate) paymentDateRange.$lte = new Date(endDate);
+        const paidInvoiceMatch = {
+          workspaceId: wId,
+          status: "COMPLETED",
+          paymentDate: paymentDateRange,
+        };
+        if (clientIds && clientIds.length > 0) {
+          paidInvoiceMatch["client.id"] = { $in: clientIds };
+        } else if (clientId) {
+          paidInvoiceMatch["client.id"] = clientId;
+        }
+        // Les factures importées n'ont pas de client.id fiable (rapprochées par
+        // nom), elles ne sont donc filtrées que par workspace + statut + date.
+        const paidImportedMatch = {
+          workspaceId: wId,
+          status: "COMPLETED",
+          paymentDate: paymentDateRange,
+        };
+
         // --- Expense match ---
         const expenseMatch = {
           workspaceId: wId,
@@ -310,8 +338,11 @@ const financialAnalyticsResolvers = {
           currentReceivablesStats,
           importedInvoiceMonthlyStats,
           importedInvoiceCollectedStats,
-          importedInvoiceByClientStats,
           purchaseInvoiceMonthlyStats,
+          paidInvoiceByClientMonthly,
+          paidImportedByClientMonthly,
+          invoiceUnpaidStats,
+          importedInvoiceUnpaidStats,
         ] = await Promise.all([
           // 1. Invoice facet aggregation
           Invoice.aggregate([
@@ -449,71 +480,10 @@ const financialAnalyticsResolvers = {
                     },
                   },
                 ],
-                // Revenue by client x month — T20 : basé sur les factures payées
-                // (paymentDate) plutôt que la date d'émission.
-                revenueByClientMonthly: [
-                  {
-                    $match: {
-                      status: "COMPLETED",
-                      paymentDate: { $ne: null },
-                    },
-                  },
-                  {
-                    $group: {
-                      _id: {
-                        clientId: "$client.id",
-                        clientName: {
-                          $cond: {
-                            if: { $eq: ["$client.type", "INDIVIDUAL"] },
-                            then: {
-                              $concat: [
-                                { $ifNull: ["$client.firstName", ""] },
-                                " ",
-                                { $ifNull: ["$client.lastName", ""] },
-                              ],
-                            },
-                            else: {
-                              $ifNull: ["$client.name", "Client inconnu"],
-                            },
-                          },
-                        },
-                        year: { $year: "$paymentDate" },
-                        month: { $month: "$paymentDate" },
-                      },
-                      totalHT: { $sum: "$finalTotalHT" },
-                      totalTTC: { $sum: "$finalTotalTTC" },
-                      totalVAT: { $sum: "$finalTotalVAT" },
-                      invoiceCount: { $sum: 1 },
-                    },
-                  },
-                  {
-                    $project: {
-                      _id: 0,
-                      clientId: "$_id.clientId",
-                      clientName: "$_id.clientName",
-                      month: {
-                        $concat: [
-                          { $toString: "$_id.year" },
-                          "-",
-                          {
-                            $cond: {
-                              if: { $lt: ["$_id.month", 10] },
-                              then: {
-                                $concat: ["0", { $toString: "$_id.month" }],
-                              },
-                              else: { $toString: "$_id.month" },
-                            },
-                          },
-                        ],
-                      },
-                      totalHT: { $round: ["$totalHT", 2] },
-                      totalTTC: { $round: ["$totalTTC", 2] },
-                      totalVAT: { $round: ["$totalVAT", 2] },
-                      invoiceCount: 1,
-                    },
-                  },
-                  { $sort: { month: 1, clientName: 1 } },
-                ],
+                // NB : revenueByClient (par date de paiement, Newbi + importées)
+                // et revenueByClientMonthly (tableau croisé) sont désormais
+                // calculés via des agrégations dédiées #11/#12 (factures PAYÉES,
+                // regroupées par paymentDate) puis fusionnés en JS.
                 // Global totals
                 totals: [
                   {
@@ -961,45 +931,6 @@ const financialAnalyticsResolvers = {
             return ImportedInvoice.aggregate(pipeline);
           })(),
 
-          // 10. ImportedInvoice — agrégat par client (T18)
-          // Permet d'inclure les factures importées dans le Top 10 clients
-          // et la répartition par type de client.
-          (() => {
-            const importedMatch = {
-              workspaceId: wId,
-              status: { $in: ["VALIDATED", "COMPLETED"] },
-            };
-            const pipeline = [
-              { $match: importedMatch },
-              {
-                $addFields: {
-                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
-                },
-              },
-            ];
-            if (startDate || endDate) {
-              const effectiveDateFilter = {};
-              if (startDate) effectiveDateFilter.$gte = new Date(startDate);
-              if (endDate) effectiveDateFilter.$lte = new Date(endDate);
-              pipeline.push({
-                $match: { _effectiveDate: effectiveDateFilter },
-              });
-            }
-            pipeline.push(
-              {
-                $group: {
-                  _id: { $ifNull: ["$client.name", "Client inconnu"] },
-                  totalHT: { $sum: { $ifNull: ["$totalHT", 0] } },
-                  totalTTC: { $sum: { $ifNull: ["$totalTTC", 0] } },
-                  totalVAT: { $sum: { $ifNull: ["$totalVAT", 0] } },
-                  invoiceCount: { $sum: 1 },
-                },
-              },
-              { $sort: { totalHT: -1 } },
-            );
-            return ImportedInvoice.aggregate(pipeline);
-          })(),
-
           // 9. PurchaseInvoice — TVA déductible mensuelle + dépenses (HT/TTC/VAT)
           // (T22 : ajouter TVA des factures d'achats au graphique TVA)
           // (T11 : inclure les factures d'achats payées dans les dépenses mensuelles)
@@ -1012,59 +943,6 @@ const financialAnalyticsResolvers = {
             }
             return PurchaseInvoice.aggregate([
               { $match: piMatch },
-              // Filet de sécurité TVA déductible : certaines factures d'achat
-              // (anciennes, importées SuperPDP/Pennylane, OCR ne remplissant que
-              // ocrMetadata) ont amountTVA=0. On reconstitue alors la TVA depuis
-              // amountTTC − amountHT, sinon depuis amountTTC × taux/(100+taux).
-              {
-                $addFields: {
-                  _effectiveTVA: {
-                    $let: {
-                      vars: {
-                        tva: { $ifNull: ["$amountTVA", 0] },
-                        ttc: { $ifNull: ["$amountTTC", 0] },
-                        ht: { $ifNull: ["$amountHT", 0] },
-                        rate: { $ifNull: ["$vatRate", 0] },
-                      },
-                      in: {
-                        $cond: [
-                          { $gt: ["$$tva", 0] },
-                          "$$tva",
-                          {
-                            $cond: [
-                              {
-                                $and: [
-                                  { $gt: ["$$ttc", 0] },
-                                  { $gt: ["$$ht", 0] },
-                                  { $gt: ["$$ttc", "$$ht"] },
-                                ],
-                              },
-                              { $subtract: ["$$ttc", "$$ht"] },
-                              {
-                                $cond: [
-                                  {
-                                    $and: [
-                                      { $gt: ["$$ttc", 0] },
-                                      { $gt: ["$$rate", 0] },
-                                    ],
-                                  },
-                                  {
-                                    $divide: [
-                                      { $multiply: ["$$ttc", "$$rate"] },
-                                      { $add: [100, "$$rate"] },
-                                    ],
-                                  },
-                                  0,
-                                ],
-                              },
-                            ],
-                          },
-                        ],
-                      },
-                    },
-                  },
-                },
-              },
               {
                 $group: {
                   _id: {
@@ -1072,7 +950,7 @@ const financialAnalyticsResolvers = {
                     month: { $month: "$issueDate" },
                   },
                   amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
-                  amountTVA: { $sum: "$_effectiveTVA" },
+                  amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
                   amountHT: { $sum: { $ifNull: ["$amountHT", 0] } },
                   count: { $sum: 1 },
                 },
@@ -1097,6 +975,127 @@ const financialAnalyticsResolvers = {
                   amountTVA: 1,
                   amountHT: 1,
                   count: 1,
+                },
+              },
+            ]);
+          })(),
+
+          // 11. Invoice — CA payé par client x mois (paymentDate)
+          // Alimente "Détail par client", "Top 10 clients", "Répartition par
+          // type" et "Tableau croisé Client x Mois". Granularité mensuelle :
+          // les totaux par client sont dérivés en sommant les mois en JS.
+          Invoice.aggregate([
+            { $match: paidInvoiceMatch },
+            {
+              $group: {
+                _id: {
+                  clientId: "$client.id",
+                  clientName: {
+                    $cond: {
+                      if: { $eq: ["$client.type", "INDIVIDUAL"] },
+                      then: {
+                        $concat: [
+                          { $ifNull: ["$client.firstName", ""] },
+                          " ",
+                          { $ifNull: ["$client.lastName", ""] },
+                        ],
+                      },
+                      else: { $ifNull: ["$client.name", "Client inconnu"] },
+                    },
+                  },
+                  clientType: "$client.type",
+                  year: { $year: "$paymentDate" },
+                  month: { $month: "$paymentDate" },
+                },
+                totalHT: { $sum: "$finalTotalHT" },
+                totalTTC: { $sum: "$finalTotalTTC" },
+                totalVAT: { $sum: "$finalTotalVAT" },
+                invoiceCount: { $sum: 1 },
+              },
+            },
+          ]),
+
+          // 12. ImportedInvoice — CA payé par client x mois (paymentDate)
+          // Mêmes graphiques : on inclut les factures importées PAYÉES,
+          // regroupées par mois de paiement. Rapprochées par nom de client.
+          ImportedInvoice.aggregate([
+            { $match: paidImportedMatch },
+            {
+              $group: {
+                _id: {
+                  clientName: { $ifNull: ["$client.name", "Client inconnu"] },
+                  year: { $year: "$paymentDate" },
+                  month: { $month: "$paymentDate" },
+                },
+                totalHT: { $sum: { $ifNull: ["$totalHT", 0] } },
+                totalTTC: { $sum: { $ifNull: ["$totalTTC", 0] } },
+                totalVAT: { $sum: { $ifNull: ["$totalVAT", 0] } },
+                invoiceCount: { $sum: 1 },
+              },
+            },
+          ]),
+
+          // 13. Invoice — impayés échus SANS avoir, par mois d'échéance (dueDate)
+          // Factures PENDING/OVERDUE dont l'échéance est dépassée et qui n'ont
+          // pas d'avoir associé. Alimente le taux de recouvrement (encaissé/impayé).
+          (() => {
+            const dueDateMatch = { $ne: null, $lt: now };
+            if (startDate) dueDateMatch.$gte = new Date(startDate);
+            if (endDate) dueDateMatch.$lte = new Date(endDate);
+            return Invoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: ["PENDING", "OVERDUE"] },
+                  dueDate: dueDateMatch,
+                },
+              },
+              // "sans avoir" : exclure les factures ayant au moins un avoir associé
+              {
+                $lookup: {
+                  from: "creditnotes",
+                  localField: "_id",
+                  foreignField: "originalInvoice",
+                  as: "_creditNotes",
+                },
+              },
+              { $match: { _creditNotes: { $size: 0 } } },
+              {
+                $group: {
+                  _id: {
+                    year: { $year: "$dueDate" },
+                    month: { $month: "$dueDate" },
+                  },
+                  unpaidTTC: { $sum: "$finalTotalTTC" },
+                  unpaidCount: { $sum: 1 },
+                },
+              },
+            ]);
+          })(),
+
+          // 14. ImportedInvoice — impayés échus par mois d'échéance (dueDate)
+          // Factures importées VALIDATED (validées, non encaissées) dont
+          // l'échéance est dépassée. Les importées n'ont pas d'avoirs.
+          (() => {
+            const dueDateMatch = { $ne: null, $lt: now };
+            if (startDate) dueDateMatch.$gte = new Date(startDate);
+            if (endDate) dueDateMatch.$lte = new Date(endDate);
+            return ImportedInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: "VALIDATED",
+                  dueDate: dueDateMatch,
+                },
+              },
+              {
+                $group: {
+                  _id: {
+                    year: { $year: "$dueDate" },
+                    month: { $month: "$dueDate" },
+                  },
+                  unpaidTTC: { $sum: "$totalTTC" },
+                  unpaidCount: { $sum: 1 },
                 },
               },
             ]);
@@ -1353,21 +1352,42 @@ const financialAnalyticsResolvers = {
             };
           }
         }
+        // Impayés échus (échéance dépassée, sans avoir) — Newbi + importées,
+        // regroupés par mois d'échéance.
+        const unpaidMap = {};
+        const mergeUnpaid = (rows) => {
+          for (const r of rows || []) {
+            if (!r._id.year || !r._id.month) continue;
+            const m = `${r._id.year}-${String(r._id.month).padStart(2, "0")}`;
+            unpaidMap[m] = {
+              unpaidTTC: (unpaidMap[m]?.unpaidTTC || 0) + (r.unpaidTTC || 0),
+              unpaidCount:
+                (unpaidMap[m]?.unpaidCount || 0) + (r.unpaidCount || 0),
+            };
+          }
+        };
+        mergeUnpaid(invoiceUnpaidStats);
+        mergeUnpaid(importedInvoiceUnpaidStats);
+
         const allCollectionMonths = [
           ...new Set([
             ...Object.keys(invoicedMap),
             ...Object.keys(collectedMap),
+            ...Object.keys(unpaidMap),
           ]),
         ].sort();
         const monthlyCollection = allCollectionMonths.map((m) => {
           const inv = invoicedMap[m] || { invoicedTTC: 0, invoicedCount: 0 };
           const col = collectedMap[m] || { collectedTTC: 0, collectedCount: 0 };
+          const unp = unpaidMap[m] || { unpaidTTC: 0, unpaidCount: 0 };
           return {
             month: m,
             invoicedTTC: Math.round(inv.invoicedTTC * 100) / 100,
             collectedTTC: Math.round(col.collectedTTC * 100) / 100,
             invoicedCount: inv.invoicedCount,
             collectedCount: col.collectedCount,
+            unpaidTTC: Math.round(unp.unpaidTTC * 100) / 100,
+            unpaidCount: unp.unpaidCount,
           };
         });
 
@@ -1845,23 +1865,88 @@ const financialAnalyticsResolvers = {
           clientIds,
         );
 
-        // Build revenueByClient with time data
+        // ── CA PAYÉ par client (factures Newbi + importées, date de paiement) ──
+        // À partir des lignes mensuelles (regroupées par paymentDate), on dérive
+        // le détail/total par client ("Détail par client", "Top 10",
+        // "Répartition par type") et le "Tableau croisé Client x Mois".
+        // Les factures importées sont rapprochées par NOM de client (elles n'ont
+        // pas de clientId fiable).
+        const normName = (s) => (s || "Client inconnu").trim();
+
+        // 1) Agrégat par client (somme des mois) — factures Newbi payées.
+        const clientAgg = new Map(); // clé : clientId, sinon `name:<nom>`
+        for (const row of paidInvoiceByClientMonthly || []) {
+          const cId = row._id.clientId || null;
+          const name = normName(row._id.clientName);
+          const key = cId || `name:${name.toLowerCase()}`;
+          let entry = clientAgg.get(key);
+          if (!entry) {
+            entry = {
+              clientId: cId,
+              clientName: name,
+              clientType: row._id.clientType || null,
+              totalHT: 0,
+              totalTTC: 0,
+              totalVAT: 0,
+              invoiceCount: 0,
+            };
+            clientAgg.set(key, entry);
+          }
+          entry.totalHT += row.totalHT || 0;
+          entry.totalTTC += row.totalTTC || 0;
+          entry.totalVAT += row.totalVAT || 0;
+          entry.invoiceCount += row.invoiceCount || 0;
+        }
+
+        // Index par nom pour rapprocher les importées (pas de clientId).
+        const clientByName = new Map();
+        for (const entry of clientAgg.values()) {
+          clientByName.set(entry.clientName.toLowerCase(), entry);
+        }
+
+        // 2) Fusionner les factures importées payées (par nom de client).
+        for (const row of paidImportedByClientMonthly || []) {
+          const name = normName(row._id.clientName);
+          const nameKey = name.toLowerCase();
+          let entry = clientByName.get(nameKey);
+          if (!entry) {
+            entry = {
+              clientId: null,
+              clientName: name,
+              clientType: null,
+              totalHT: 0,
+              totalTTC: 0,
+              totalVAT: 0,
+              invoiceCount: 0,
+            };
+            clientAgg.set(`name:${nameKey}`, entry);
+            clientByName.set(nameKey, entry);
+          }
+          entry.totalHT += row.totalHT || 0;
+          entry.totalTTC += row.totalTTC || 0;
+          entry.totalVAT += row.totalVAT || 0;
+          entry.invoiceCount += row.invoiceCount || 0;
+        }
+
+        // 3) Construire revenueByClient (+ temps passé via clientTimeMap).
         const matchedClientIds = new Set();
-        const revenueByClient = invResult.revenueByClient.map((c) => {
-          const cId = c._id.clientId || null;
+        const revenueByClient = [];
+        for (const entry of clientAgg.values()) {
+          const cId = entry.clientId || null;
           if (cId) matchedClientIds.add(cId);
           const timeData = cId ? clientTimeMap.get(cId) : null;
-          return {
+          const totalHT = Math.round(entry.totalHT * 100) / 100;
+          revenueByClient.push({
             clientId: cId,
-            clientName: (c._id.clientName || "Client inconnu").trim(),
-            clientType: c._id.clientType || null,
-            totalHT: Math.round(c.totalHT * 100) / 100,
-            totalTTC: Math.round(c.totalTTC * 100) / 100,
-            totalVAT: Math.round(c.totalVAT * 100) / 100,
-            invoiceCount: c.invoiceCount,
+            clientName: entry.clientName,
+            clientType: entry.clientType || null,
+            totalHT,
+            totalTTC: Math.round(entry.totalTTC * 100) / 100,
+            totalVAT: Math.round(entry.totalVAT * 100) / 100,
+            invoiceCount: entry.invoiceCount,
             averageInvoiceHT:
-              c.invoiceCount > 0
-                ? Math.round((c.totalHT / c.invoiceCount) * 100) / 100
+              entry.invoiceCount > 0
+                ? Math.round((totalHT / entry.invoiceCount) * 100) / 100
                 : 0,
             totalTimeSeconds: timeData?.totalTimeSeconds || 0,
             totalBillableAmount: timeData
@@ -1870,10 +1955,10 @@ const financialAnalyticsResolvers = {
             totalHours: timeData
               ? Math.round((timeData.totalTimeSeconds / 3600) * 100) / 100
               : 0,
-          };
-        });
+          });
+        }
 
-        // Add clients that have time tracked but no invoices
+        // Add clients that have time tracked but no paid invoices
         const Client = mongoose.model("Client");
         for (const [clientIdStr, timeData] of clientTimeMap) {
           if (matchedClientIds.has(clientIdStr)) continue;
@@ -1900,59 +1985,10 @@ const financialAnalyticsResolvers = {
           });
         }
 
-        // T18 : fusionner les factures importées dans revenueByClient
-        // (matching par nom de client, à défaut d'un clientId).
-        const byNameIndex = new Map();
-        for (const c of revenueByClient) {
-          const key = (c.clientName || "").trim().toLowerCase();
-          if (key) byNameIndex.set(key, c);
-        }
-        for (const imp of importedInvoiceByClientStats || []) {
-          const rawName = (imp._id || "Client inconnu").trim();
-          const key = rawName.toLowerCase();
-          const totalHT = Math.round((imp.totalHT || 0) * 100) / 100;
-          const totalTTC = Math.round((imp.totalTTC || 0) * 100) / 100;
-          const totalVAT = Math.round((imp.totalVAT || 0) * 100) / 100;
-          const invoiceCount = imp.invoiceCount || 0;
-          const existing = byNameIndex.get(key);
-          if (existing) {
-            existing.totalHT =
-              Math.round((existing.totalHT + totalHT) * 100) / 100;
-            existing.totalTTC =
-              Math.round((existing.totalTTC + totalTTC) * 100) / 100;
-            existing.totalVAT =
-              Math.round((existing.totalVAT + totalVAT) * 100) / 100;
-            existing.invoiceCount += invoiceCount;
-            existing.averageInvoiceHT =
-              existing.invoiceCount > 0
-                ? Math.round((existing.totalHT / existing.invoiceCount) * 100) /
-                  100
-                : 0;
-          } else {
-            const newEntry = {
-              clientId: null,
-              clientName: rawName,
-              clientType: null,
-              totalHT,
-              totalTTC,
-              totalVAT,
-              invoiceCount,
-              averageInvoiceHT:
-                invoiceCount > 0
-                  ? Math.round((totalHT / invoiceCount) * 100) / 100
-                  : 0,
-              totalTimeSeconds: 0,
-              totalBillableAmount: 0,
-              totalHours: 0,
-            };
-            revenueByClient.push(newEntry);
-            byNameIndex.set(key, newEntry);
-          }
-        }
-        // Re-trier après fusion
+        // Trier par CA TTC payé décroissant.
         revenueByClient.sort((a, b) => (b.totalTTC || 0) - (a.totalTTC || 0));
 
-        // Top 10 clients (T18 : basé sur CA TTC total incluant importées)
+        // Top 10 clients (CA TTC payé, Newbi + importées).
         const totalTTCAll =
           revenueByClient.reduce((s, c) => s + (c.totalTTC || 0), 0) || 1;
         const topClients = revenueByClient.slice(0, 10).map((c) => ({
@@ -1962,6 +1998,60 @@ const financialAnalyticsResolvers = {
           invoiceCount: c.invoiceCount,
           percentage: Math.round((c.totalTTC / totalTTCAll) * 10000) / 100,
         }));
+
+        // 4) Tableau croisé Client x Mois (CA payé par mois de paiement,
+        // Newbi + importées, rapprochées par nom de client).
+        const monthlyByClientMonth = new Map();
+        const fmtMonth = (year, month) =>
+          `${year}-${month < 10 ? "0" + month : month}`;
+        const addMonthly = (name, month, r) => {
+          const key = `${name.toLowerCase()}::${month}`;
+          let m = monthlyByClientMonth.get(key);
+          if (!m) {
+            m = {
+              clientName: name,
+              month,
+              totalHT: 0,
+              totalTTC: 0,
+              totalVAT: 0,
+              invoiceCount: 0,
+            };
+            monthlyByClientMonth.set(key, m);
+          }
+          m.totalHT += r.totalHT || 0;
+          m.totalTTC += r.totalTTC || 0;
+          m.totalVAT += r.totalVAT || 0;
+          m.invoiceCount += r.invoiceCount || 0;
+        };
+        for (const row of paidInvoiceByClientMonthly || []) {
+          addMonthly(
+            normName(row._id.clientName),
+            fmtMonth(row._id.year, row._id.month),
+            row,
+          );
+        }
+        for (const row of paidImportedByClientMonthly || []) {
+          addMonthly(
+            normName(row._id.clientName),
+            fmtMonth(row._id.year, row._id.month),
+            row,
+          );
+        }
+        const revenueByClientMonthly = [...monthlyByClientMonth.values()]
+          .map((m) => ({
+            clientId: null,
+            clientName: m.clientName,
+            month: m.month,
+            totalHT: Math.round(m.totalHT * 100) / 100,
+            totalTTC: Math.round(m.totalTTC * 100) / 100,
+            totalVAT: Math.round(m.totalVAT * 100) / 100,
+            invoiceCount: m.invoiceCount,
+          }))
+          .sort((a, b) =>
+            a.month === b.month
+              ? a.clientName.localeCompare(b.clientName)
+              : a.month.localeCompare(b.month),
+          );
 
         // ==============================
         // BUILD KPI
@@ -2032,15 +2122,7 @@ const financialAnalyticsResolvers = {
             amount: Math.round(c.amount * 100) / 100,
             count: c.count,
           })),
-          revenueByClientMonthly: invResult.revenueByClientMonthly.map((r) => ({
-            clientId: r.clientId || null,
-            clientName: (r.clientName || "Client inconnu").trim(),
-            month: r.month,
-            totalHT: r.totalHT,
-            totalTTC: r.totalTTC,
-            totalVAT: r.totalVAT,
-            invoiceCount: r.invoiceCount,
-          })),
+          revenueByClientMonthly,
           expenseByCategoryMonthly: expResult.byCategoryMonthly.map((e) => ({
             category: e.category,
             month: e.month,
