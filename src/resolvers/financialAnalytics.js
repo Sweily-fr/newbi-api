@@ -1012,6 +1012,59 @@ const financialAnalyticsResolvers = {
             }
             return PurchaseInvoice.aggregate([
               { $match: piMatch },
+              // Filet de sécurité TVA déductible : certaines factures d'achat
+              // (anciennes, importées SuperPDP/Pennylane, OCR ne remplissant que
+              // ocrMetadata) ont amountTVA=0. On reconstitue alors la TVA depuis
+              // amountTTC − amountHT, sinon depuis amountTTC × taux/(100+taux).
+              {
+                $addFields: {
+                  _effectiveTVA: {
+                    $let: {
+                      vars: {
+                        tva: { $ifNull: ["$amountTVA", 0] },
+                        ttc: { $ifNull: ["$amountTTC", 0] },
+                        ht: { $ifNull: ["$amountHT", 0] },
+                        rate: { $ifNull: ["$vatRate", 0] },
+                      },
+                      in: {
+                        $cond: [
+                          { $gt: ["$$tva", 0] },
+                          "$$tva",
+                          {
+                            $cond: [
+                              {
+                                $and: [
+                                  { $gt: ["$$ttc", 0] },
+                                  { $gt: ["$$ht", 0] },
+                                  { $gt: ["$$ttc", "$$ht"] },
+                                ],
+                              },
+                              { $subtract: ["$$ttc", "$$ht"] },
+                              {
+                                $cond: [
+                                  {
+                                    $and: [
+                                      { $gt: ["$$ttc", 0] },
+                                      { $gt: ["$$rate", 0] },
+                                    ],
+                                  },
+                                  {
+                                    $divide: [
+                                      { $multiply: ["$$ttc", "$$rate"] },
+                                      { $add: [100, "$$rate"] },
+                                    ],
+                                  },
+                                  0,
+                                ],
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
               {
                 $group: {
                   _id: {
@@ -1019,7 +1072,7 @@ const financialAnalyticsResolvers = {
                     month: { $month: "$issueDate" },
                   },
                   amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
-                  amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
+                  amountTVA: { $sum: "$_effectiveTVA" },
                   amountHT: { $sum: { $ifNull: ["$amountHT", 0] } },
                   count: { $sum: 1 },
                 },
