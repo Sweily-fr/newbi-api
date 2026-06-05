@@ -364,7 +364,9 @@ extend type Mutation {
 
   # Synchronisation e-invoicing (SuperPDP)
   syncPurchaseInvoicesFromSuperPdp(workspaceId: ID!, since: String): SyncPurchaseInvoicesResult!
+  # Cycle de vie destinataire : approuver (fr:205) / refuser (fr:210)
   acknowledgePurchaseInvoiceEInvoice(id: ID!): PurchaseInvoice!
+  refusePurchaseInvoiceEInvoice(id: ID!, reason: String): PurchaseInvoice!
 
   createSupplier(input: CreateSupplierInput!): Supplier!
   updateSupplier(id: ID!, input: UpdateSupplierInput!): Supplier!

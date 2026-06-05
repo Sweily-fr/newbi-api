@@ -327,6 +327,11 @@ const quoteSchema = new mongoose.Schema(
       enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
       default: "NOT_SYNCED",
     },
+
+    // === ARCHIVAGE PDF (Cloudflare R2, bucket privé) ===
+    archivedPdfKey: { type: String },
+    archivedPdfStoredAt: { type: Date },
+    archivedPdfSource: { type: String, enum: ["NEWBI"] },
   },
   {
     timestamps: true,

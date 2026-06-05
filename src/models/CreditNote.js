@@ -315,6 +315,11 @@ const creditNoteSchema = new mongoose.Schema(
       min: 0,
       max: 100,
     },
+
+    // === ARCHIVAGE PDF (Cloudflare R2, bucket privé) ===
+    archivedPdfKey: { type: String },
+    archivedPdfStoredAt: { type: Date },
+    archivedPdfSource: { type: String, enum: ["NEWBI"] },
   },
   {
     timestamps: true,

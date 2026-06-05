@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
+import {
+  archiveDocumentPdf,
+  documentUrl,
+} from "../utils/documentArchiveHelper.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
@@ -248,6 +252,22 @@ const quoteResolvers = {
     },
   },
   Query: {
+    // URL d'aperçu du devis archivé (R2) — null si brouillon / pas archivé
+    quoteDocumentUrl: requireRead("quotes")(
+      async (_, { workspaceId: inputWorkspaceId, quoteId }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        return documentUrl({
+          Model: Quote,
+          docType: "quote",
+          draftStatus: "DRAFT",
+          workspaceId,
+          docId: quoteId,
+        });
+      },
+    ),
     quote: requireRead("quotes")(
       async (_, { workspaceId: inputWorkspaceId, id }, context) => {
         const workspaceId = resolveWorkspaceId(
@@ -615,6 +635,23 @@ const quoteResolvers = {
   },
 
   Mutation: {
+    // Archive le PDF du devis (généré côté frontend) sur R2
+    archiveQuotePdf: requireWrite("quotes")(
+      async (_, { workspaceId: inputWorkspaceId, quoteId, file }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        return archiveDocumentPdf({
+          Model: Quote,
+          docType: "quote",
+          draftStatus: "DRAFT",
+          workspaceId,
+          docId: quoteId,
+          file,
+        });
+      },
+    ),
     createQuote: requireCompanyInfo(
       requireWrite("quotes")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {

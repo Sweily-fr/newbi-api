@@ -47,6 +47,9 @@ type Quote {
   convertedToInvoice: Invoice
   linkedInvoices: [Invoice]
   situationInvoicedTotal: Float
+  archivedPdfKey: String
+  archivedPdfStoredAt: String
+  archivedPdfSource: String
 }
 
 type QuotePagination {
@@ -119,6 +122,7 @@ extend type Query {
   nextQuoteNumber(workspaceId: ID!, prefix: String, autoNumbering: Boolean): String!
   quoteByNumber(workspaceId: ID!, number: String!): Quote
   checkQuoteNumberExists(workspaceId: ID!, number: String!, prefix: String!, excludeId: ID): Boolean!
+  quoteDocumentUrl(workspaceId: ID!, quoteId: ID!): String
 }
 
 extend type Mutation {
@@ -128,4 +132,5 @@ extend type Mutation {
   convertQuoteToInvoice(id: ID!, distribution: [Float], isDeposit: Boolean, skipValidation: Boolean): Invoice!
   changeQuoteStatus(id: ID!, status: QuoteStatus!): Quote!
   sendQuote(id: ID!, email: String!): Boolean!
+  archiveQuotePdf(workspaceId: ID!, quoteId: ID!, file: Upload!): Quote!
 }

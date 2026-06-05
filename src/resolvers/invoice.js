@@ -31,8 +31,10 @@ import {
 import logger from "../utils/logger.js";
 import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
-import { evaluateAndRouteInvoice } from "../utils/eInvoiceRoutingHelper.js";
-// import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
+import {
+  evaluateAndRouteInvoice,
+  reportPaymentIfNeeded,
+} from "../utils/eInvoiceRoutingHelper.js";
 import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
@@ -2702,15 +2704,22 @@ const invoiceResolvers = {
         invoice.paymentDate = new Date(paymentDate);
         await invoice.save();
 
-        // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
-        // try {
-        //   if (evaluatePaymentReporting(invoice, new Date(paymentDate))) {
-        //     await invoice.save();
-        //     logger.info(`[E-INVOICE-ROUTING] E-reporting payment pour ${invoice.prefix}${invoice.number}`);
-        //   }
-        // } catch (eReportingError) {
-        //   logger.error("Erreur e-reporting payment:", eReportingError);
-        // }
+        // E-reporting paiement (TVA sur encaissements) — non bloquant
+        try {
+          const reported = await reportPaymentIfNeeded(
+            invoice,
+            workspaceId,
+            new Date(paymentDate),
+          );
+          if (reported) {
+            await invoice.save();
+            logger.info(
+              `[E-INVOICE-ROUTING] E-reporting paiement pour ${invoice.prefix}${invoice.number}`,
+            );
+          }
+        } catch (eReportingError) {
+          logger.error("Erreur e-reporting paiement:", eReportingError);
+        }
 
         // Envoyer la notification "Paiement reçu" si activée
         try {

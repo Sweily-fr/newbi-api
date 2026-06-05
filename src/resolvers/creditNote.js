@@ -1,4 +1,8 @@
 import CreditNote from "../models/CreditNote.js";
+import {
+  archiveDocumentPdf,
+  documentUrl,
+} from "../utils/documentArchiveHelper.js";
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
@@ -105,6 +109,18 @@ const calculateCreditNoteTotals = (
 
 const creditNoteResolvers = {
   Query: {
+    // URL d'aperçu de l'avoir archivé (R2) — null si pas encore archivé
+    creditNoteDocumentUrl: withWorkspace(
+      async (parent, { creditNoteId }, { workspaceId }) => {
+        return documentUrl({
+          Model: CreditNote,
+          docType: "creditNote",
+          draftStatus: null,
+          workspaceId,
+          docId: creditNoteId,
+        });
+      },
+    ),
     creditNote: withWorkspace(async (parent, { id }, { workspaceId }) => {
       const creditNote = await CreditNote.findOne({
         _id: id,
@@ -215,6 +231,20 @@ const creditNoteResolvers = {
   },
 
   Mutation: {
+    // Archive le PDF Factur-X de l'avoir (généré côté frontend) sur R2
+    archiveCreditNotePdf: requireWrite("creditNotes")(
+      async (parent, { creditNoteId, file }, context) => {
+        const { workspaceId } = context;
+        return archiveDocumentPdf({
+          Model: CreditNote,
+          docType: "creditNote",
+          draftStatus: null,
+          workspaceId,
+          docId: creditNoteId,
+          file,
+        });
+      },
+    ),
     createCreditNote: requireCompanyInfo(
       requireWrite("creditNotes")(async (parent, { input }, context) => {
         const { workspaceId } = context;

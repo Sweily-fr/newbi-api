@@ -79,13 +79,14 @@ import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
 import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
-// DÉSACTIVÉ: SuperPDP API pas encore active
-// import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
+import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
 import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
+import invoiceDocumentPdfRoutes from "./routes/invoiceDocumentPdf.js";
+import documentPdfRoutes from "./routes/documentPdf.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import emailTrackingRoutes from "./routes/emailTracking.js";
@@ -100,6 +101,8 @@ import { startCalendarWebhookRenewalCron } from "./cron/calendarWebhookRenewalCr
 import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
 import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import { startTrialCleanupCron } from "./cron/trialCleanupCron.js";
+import { startEInvoiceStatusSyncCron } from "./cron/eInvoiceStatusSyncCron.js";
+import { startPurchaseInvoiceReceptionCron } from "./cron/purchaseInvoiceReceptionCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -300,6 +303,12 @@ async function startServer() {
   // Import at top: import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
   app.use("/api", invoicePreviewPdfRoutes);
 
+  // Route de streaming du PDF Factur-X d'une facture (R2 / SuperPDP, auth session)
+  app.use("/invoices", invoiceDocumentPdfRoutes);
+
+  // Route de streaming du PDF des devis / avoirs / bons de commande (R2, auth session)
+  app.use("/documents", documentPdfRoutes);
+
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
 
@@ -310,9 +319,8 @@ async function startServer() {
   app.use("/banking-cache", bankingCacheRoutes); // Gestion du cache bancaire
   app.use("/reconciliation", reconciliationRoutes); // Rapprochement factures/transactions
 
-  // DÉSACTIVÉ: SuperPDP API pas encore active
-  // Routes OAuth SuperPDP (facturation électronique)
-  // app.use("/api/superpdp", superpdpOAuthRoutes);
+  // Routes OAuth SuperPDP (facturation électronique) — sécurisées par secret interne
+  app.use("/api/superpdp", superpdpOAuthRoutes);
 
   // Routes téléchargement documents partagés (ZIP dossiers)
   app.use("/api/shared-documents", sharedDocumentDownloadRoutes);
@@ -605,6 +613,14 @@ async function startServer() {
       // Démarrer le cron de nettoyage des trials app-managed
       // (no-op si ENABLE_APP_TRIAL=false ; vérifié dans startTrialCleanupCron)
       startTrialCleanupCron();
+
+      // Démarrer le cron de suivi des statuts e-invoicing (SuperPDP, pas de webhook)
+      startEInvoiceStatusSyncCron();
+      logger.info("✅ Cron de suivi des statuts e-invoicing démarré");
+
+      // Démarrer le cron d'import des factures fournisseurs reçues (SuperPDP)
+      startPurchaseInvoiceReceptionCron();
+      logger.info("✅ Cron d'import des factures reçues démarré");
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
