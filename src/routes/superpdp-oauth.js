@@ -140,7 +140,7 @@ router.get("/callback", async (req, res) => {
       // Rediriger vers le frontend avec l'erreur
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard/parametres/facturation-electronique?error=${encodeURIComponent(error_description || error)}`,
+        `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&error=${encodeURIComponent(error_description || error)}`,
       );
     }
 
@@ -158,7 +158,7 @@ router.get("/callback", async (req, res) => {
       logger.error("State OAuth2 invalide ou expiré");
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard/parametres/facturation-electronique?error=${encodeURIComponent("Session expirée, veuillez réessayer")}`,
+        `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&error=${encodeURIComponent("Session expirée, veuillez réessayer")}`,
       );
     }
 
