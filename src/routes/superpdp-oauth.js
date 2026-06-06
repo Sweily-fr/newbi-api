@@ -82,14 +82,30 @@ router.get("/authorize", requireInternalSecret, async (req, res) => {
     authUrl.searchParams.set("state", state);
     // Scopes: laisser vide selon la documentation SuperPDP
 
-    // Pré-remplissage (best-effort) de l'email uniquement.
-    // On NE pré-remplit PAS le numéro de société (superpdp_company_number) :
-    // cela rattachait la session à une société existante et faisait échouer
-    // l'onboarding ("not subject to the reform" / "environment do not match").
-    // En le laissant vide, SuperPDP ouvre son écran d'inscription et le client
-    // onboarde lui-même sa société dans le bon environnement.
+    // Pré-remplissage (best-effort) du formulaire SuperPDP : email + SIREN réel.
+    // Le scheme "fr_siren" indique à SuperPDP d'onboarder une société RÉELLE
+    // (production) ; sans numéro, SuperPDP retombe sur l'onboarding "sandbox".
+    // On n'envoie le numéro que s'il s'agit d'un SIREN valide (9 chiffres).
     if (loginHint) {
       authUrl.searchParams.set("login_hint", loginHint);
+    }
+    try {
+      const organization =
+        await EInvoicingSettingsService.getOrganizationById(organizationId);
+      const rawNumber =
+        organization?.siret ||
+        organization?.siren ||
+        organization?.companyInfo?.siret ||
+        "";
+      const siren = String(rawNumber).replace(/\s/g, "").substring(0, 9);
+      if (/^\d{9}$/.test(siren)) {
+        authUrl.searchParams.set("superpdp_company_number", siren);
+        authUrl.searchParams.set("superpdp_company_number_scheme", "fr_siren");
+      }
+    } catch (prefillError) {
+      logger.debug(
+        `[superpdp-oauth] prefill SIREN ignoré: ${prefillError.message}`,
+      );
     }
 
     logger.info(
