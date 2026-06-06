@@ -997,25 +997,26 @@ class SuperPdpService {
   }
 
   /**
-   * Résout le category_code e-reporting (enum imposé par la spec, Annexe A Z12-012).
-   * Valeurs valides : TLB1 | TPS1 | TNT1 | TMA1. Piloté par EREPORTING_CATEGORY_CODE,
-   * sinon repli prudent sur TPS1 (prestation de services). On NE renvoie JAMAIS une
-   * valeur hors enum (sinon SuperPDP rejette la soumission).
+   * Résout le category_code e-reporting (enum imposé, Annexe A Z12-012) à partir
+   * de la NATURE DE L'OPÉRATION de la facture (champ `operationType`, obligatoire 2026) :
+   *   LB (livraison de biens) → TLB1 · PS (prestation de services) → TPS1 · LBPS (mixte) → TMA1
+   * Repli : EREPORTING_CATEGORY_CODE (validé) sinon TPS1. On NE renvoie JAMAIS une
+   * valeur hors enum (sinon SuperPDP rejette la soumission). (TNT1 = non taxable,
+   * uniquement via override env.)
+   * @param {Object} invoice
    * @returns {string}
    */
-  _resolveEReportingCategory() {
+  _resolveEReportingCategory(invoice) {
     const VALID = ["TLB1", "TPS1", "TNT1", "TMA1"];
+    const MAP = { LB: "TLB1", PS: "TPS1", LBPS: "TMA1" };
+    const fromOp = MAP[invoice?.operationType];
+    if (fromOp) return fromOp;
+
     const env = process.env.EREPORTING_CATEGORY_CODE;
     if (env && VALID.includes(env)) return env;
-    if (env) {
-      logger.warn(
-        `EREPORTING_CATEGORY_CODE="${env}" hors enum (${VALID.join("|")}) → repli sur TPS1`,
-      );
-    } else {
-      logger.warn(
-        "EREPORTING_CATEGORY_CODE non défini → repli sur TPS1 (prestation de services). À confirmer selon l'activité (Annexe A Z12-012).",
-      );
-    }
+    logger.warn(
+      `category_code e-reporting indéterminé (operationType=${invoice?.operationType ?? "null"}) → repli TPS1. Renseignez la « Nature de l'opération » sur la facture ou EREPORTING_CATEGORY_CODE.`,
+    );
     return "TPS1";
   }
 
@@ -1043,7 +1044,7 @@ class SuperPdpService {
 
       // ⚠️ category_code n'a pas d'énum documenté dans la spec : valeur par défaut
       // prudente, surchargée par EREPORTING_CATEGORY_CODE — à valider en sandbox.
-      const categoryCode = this._resolveEReportingCategory();
+      const categoryCode = this._resolveEReportingCategory(invoice);
 
       const item = {
         category_code: String(categoryCode),
@@ -1088,7 +1089,7 @@ class SuperPdpService {
         : new Date().toISOString().split("T")[0];
 
       // category_code est REQUIS sur chaque b2c_payment_subtotal (cf. spec).
-      const categoryCode = this._resolveEReportingCategory();
+      const categoryCode = this._resolveEReportingCategory(invoice);
 
       const groups = this._computeVatGroups(invoice);
       // Montant encaissé par taux = HT + TVA du groupe (TTC)
