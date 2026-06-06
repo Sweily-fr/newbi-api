@@ -31,6 +31,7 @@ vi.mock("../../src/services/eInvoicingSettingsService.js", () => ({
 }));
 vi.mock("../../src/utils/eInvoiceRoutingHelper.js", () => ({
   evaluateAndRouteInvoice: vi.fn().mockResolvedValue(undefined),
+  reportPaymentIfNeeded: vi.fn().mockResolvedValue(false),
 }));
 vi.mock("../../src/services/documentAutomationService.js", () => ({
   default: { executeAutomations: vi.fn().mockResolvedValue(undefined) },
