@@ -112,14 +112,22 @@ export const getTransactionCategory = (transaction) => {
 
   // 3. Catégorie texte libre posée par l'utilisateur (T5)
   if (transaction.category && typeof transaction.category === "string") {
-    // Si la catégorie correspond à un enum interne, on prend le label propre
+    // Les libellés d'enum interne sont des catégories de DÉPENSE :
+    // on ne les applique qu'aux sorties.
     const enumMatch = expenseCategoryEnumLabels[transaction.category];
-    if (enumMatch) return enumMatch;
-    // Sinon on l'utilise tel quel (avec une couleur par défaut)
-    return {
-      name: transaction.category,
-      color: isIncome ? "#10b981" : "#A585DB",
-    };
+    if (!isIncome && enumMatch) return enumMatch;
+    // Pour un revenu, on ignore les valeurs d'enum de dépense (ex. "OTHER"
+    // écrit par le mapping Bridge "Autre revenu", "SERVICES" pour la
+    // facturation, …) : elles doivent être consolidées dans
+    // "Chiffre d'affaires" via le défaut plus bas, et non rangées sous un
+    // libellé de dépense. On ne conserve le texte libre que s'il n'est pas
+    // une valeur d'enum de dépense.
+    if (!enumMatch) {
+      return {
+        name: transaction.category,
+        color: isIncome ? "#10b981" : "#A585DB",
+      };
+    }
   }
 
   // 4. Heuristique Bridge / description
