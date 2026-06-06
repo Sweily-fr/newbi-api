@@ -628,11 +628,15 @@ const eInvoicingResolvers = {
 
         for (const directory of ["peppol", "ppf"]) {
           if (alreadyCreated.has(directory)) continue;
+          // Peppol exige le format "scheme_id:participant_id" (0225 = SIREN FR,
+          // ex. "0225:853322915") ; le PPF utilise le SIREN brut.
+          const entryIdentifier =
+            directory === "peppol" ? `0225:${identifier}` : identifier;
           try {
             await superPdpService.registerDirectoryEntry(
               workspaceId,
               directory,
-              identifier,
+              entryIdentifier,
             );
           } catch (e) {
             logger.warn(
