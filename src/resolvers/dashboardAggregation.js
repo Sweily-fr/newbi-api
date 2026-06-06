@@ -1,6 +1,8 @@
+import mongoose from "mongoose";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
+import Invoice from "../models/Invoice.js";
 import { aggregateByCategory } from "../utils/bank-categories.js";
 
 /**
@@ -214,6 +216,12 @@ const dashboardAggregationResolvers = {
         };
         if (accountId) matchFilter.fromAccount = accountId;
 
+        // Entrées : la tranche "Chiffre d'affaires" est dérivée des factures
+        // émises (cf. plus bas), pas des transactions bancaires. On exclut donc
+        // les transactions déjà rattachées à une facture pour éviter de
+        // compter deux fois les factures payées et rapprochées.
+        if (isIncome) matchFilter.linkedInvoiceId = null;
+
         // T4/T5 : on a besoin de linkedInvoiceId, category, expenseCategory
         // pour respecter les catégorisations manuelles + reclasser les
         // paiements de factures clients en "Chiffre d'affaires".
@@ -224,6 +232,58 @@ const dashboardAggregationResolvers = {
           .lean();
 
         const categories = aggregateByCategory(transactions, isIncome);
+
+        // Entrées : on injecte le chiffre d'affaires issu des factures émises.
+        // "Factures clients" et "factures clients importées" vivent toutes deux
+        // dans la collection Invoice (les importées ont un préfixe vide). Base
+        // retenue : TOUTES les factures émises (hors brouillon/annulée) sur la
+        // période, par date d'émission, en TTC. Non filtré par compte bancaire
+        // (une facture n'est pas rattachée à un compte) : on n'injecte donc le
+        // CA que lorsqu'aucun compte précis n'est sélectionné.
+        if (isIncome && !accountId) {
+          const [invAgg] = await Invoice.aggregate([
+            {
+              $match: {
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                status: { $in: ["PENDING", "OVERDUE", "COMPLETED"] },
+                issueDate: { $gte: startDate, $lte: endDate },
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalTTC: {
+                  $sum: {
+                    $ifNull: ["$finalTotalTTC", { $ifNull: ["$totalTTC", 0] }],
+                  },
+                },
+                count: { $sum: 1 },
+              },
+            },
+          ]);
+
+          const revenueTTC = invAgg?.totalTTC || 0;
+          const invoiceCount = invAgg?.count || 0;
+
+          if (revenueTTC > 0) {
+            const CA_NAME = "Chiffre d'affaires";
+            const existing = categories.find((c) => c.name === CA_NAME);
+            if (existing) {
+              existing.amount += revenueTTC;
+              existing.count += invoiceCount;
+            } else {
+              categories.push({
+                name: CA_NAME,
+                amount: revenueTTC,
+                count: invoiceCount,
+                color: "#5b50ff",
+              });
+            }
+            // Re-trier par montant décroissant après injection du CA.
+            categories.sort((a, b) => b.amount - a.amount);
+          }
+        }
+
         const total = categories.reduce((s, c) => s + c.amount, 0);
 
         return {
