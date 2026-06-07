@@ -22,7 +22,7 @@ type Transaction {
   fees: TransactionFees
   metadata: JSON
   receiptRequired: Boolean
-  receiptFile: ReceiptFile
+  receiptFiles: [ReceiptFile!]!
   # Champs de rapprochement bancaire
   linkedInvoiceId: ID
   linkedInvoice: LinkedInvoiceSummary
@@ -91,6 +91,7 @@ enum ExpenseCategory {
 }
 
 type ReceiptFile {
+  id: ID!
   url: String
   key: String
   filename: String
@@ -527,7 +528,7 @@ type PCGAccountEntry {
 type UploadTransactionReceiptResult {
   success: Boolean!
   message: String
-  receiptFile: ReceiptFile
+  receiptFiles: [ReceiptFile!]
   transaction: Transaction
 }
 
@@ -540,8 +541,11 @@ extend type Mutation {
   # Mettre à jour le compte PCG d'une transaction
   updateTransactionPCG(transactionId: ID!, pcgNumero: String!, workspaceId: ID!): Transaction!
 
-  # Upload de justificatif
-  uploadTransactionReceipt(transactionId: ID!, workspaceId: ID!, file: Upload!): UploadTransactionReceiptResult!
+  # Upload de justificatifs (multi-fichiers)
+  uploadTransactionReceipt(transactionId: ID!, workspaceId: ID!, files: [Upload!]!): UploadTransactionReceiptResult!
+
+  # Suppression d'un justificatif spécifique
+  removeTransactionReceiptFile(transactionId: ID!, workspaceId: ID!, fileId: ID!): UploadTransactionReceiptResult!
 
   # Paiements
   processPayment(input: ProcessPaymentInput!): PaymentResult!
