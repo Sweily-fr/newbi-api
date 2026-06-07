@@ -1086,13 +1086,15 @@ const bankingResolvers = {
     currency: (parent) => parent.currency || "EUR",
     description: (parent) => parent.description || "",
     // receiptFiles : fallback sur le legacy receiptFile (objet) si pas encore migré
+    // Génère un id synthétique stable si _id manque (subdocs migrés via raw driver)
     receiptFiles: (parent) => {
+      const txId = parent._id?.toString() || parent.id || "tx";
       if (
         Array.isArray(parent.receiptFiles) &&
         parent.receiptFiles.length > 0
       ) {
-        return parent.receiptFiles.map((r) => ({
-          id: r._id?.toString() || r.id,
+        return parent.receiptFiles.map((r, idx) => ({
+          id: r._id?.toString() || r.id || `${txId}-receipt-${idx}`,
           url: r.url,
           key: r.key,
           filename: r.filename,
@@ -1105,9 +1107,7 @@ const bankingResolvers = {
       if (parent.receiptFile?.url) {
         return [
           {
-            id:
-              parent.receiptFile._id?.toString() ||
-              `${parent._id?.toString() || parent.id}-legacy`,
+            id: parent.receiptFile._id?.toString() || `${txId}-legacy`,
             url: parent.receiptFile.url,
             key: parent.receiptFile.key,
             filename: parent.receiptFile.filename,
