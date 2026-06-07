@@ -958,8 +958,11 @@ export class BridgeProvider extends BankingProvider {
               if (manualMatch.pcgAccount?.isManual) {
                 updatedTransactionData.pcgAccount = manualMatch.pcgAccount;
               }
-              if (manualMatch.receiptFile?.url) {
-                updatedTransactionData.receiptFile = manualMatch.receiptFile;
+              if (
+                Array.isArray(manualMatch.receiptFiles) &&
+                manualMatch.receiptFiles.length > 0
+              ) {
+                updatedTransactionData.receiptFiles = manualMatch.receiptFiles;
                 updatedTransactionData.receiptRequired = false;
               }
               if (manualMatch.linkedInvoiceId) {

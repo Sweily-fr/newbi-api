@@ -21,8 +21,8 @@ export function matchReceiptToTransactions(
   const scored = [];
 
   for (const tx of transactions) {
-    // Ignorer les transactions qui ont déjà un justificatif
-    if (tx.receiptFile?.url) continue;
+    // Ignorer les transactions qui ont déjà au moins un justificatif
+    if (Array.isArray(tx.receiptFiles) && tx.receiptFiles.length > 0) continue;
 
     let score = 0;
     const txAmount = Math.abs(tx.amount);

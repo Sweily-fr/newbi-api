@@ -215,16 +215,18 @@ const transactionSchema = new mongoose.Schema(
       default: false,
     },
 
-    // Justificatif attaché directement à la transaction
-    receiptFile: {
-      url: { type: String },
-      key: { type: String },
-      filename: { type: String },
-      mimetype: { type: String },
-      size: { type: Number },
-      uploadedAt: { type: Date },
-      uploadedBy: { type: String },
-    },
+    // Justificatifs attachés directement à la transaction (multi-fichiers)
+    receiptFiles: [
+      {
+        url: { type: String },
+        key: { type: String },
+        filename: { type: String },
+        mimetype: { type: String },
+        size: { type: Number },
+        uploadedAt: { type: Date, default: Date.now },
+        uploadedBy: { type: String },
+      },
+    ],
 
     // Réponse brute de l'API pour debug
     raw: {
