@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { ObjectId } from "mongodb";
 import dotenv from "dotenv";
 
 // Migration: receiptFile (object) -> receiptFiles ([object])
@@ -41,6 +42,7 @@ async function migrate() {
       }
 
       const receiptFileObj = {
+        _id: new ObjectId(),
         url: tx.receiptFile.url,
         key: tx.receiptFile.key,
         filename: tx.receiptFile.filename,
