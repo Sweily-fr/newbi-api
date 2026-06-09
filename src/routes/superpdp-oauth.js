@@ -143,7 +143,7 @@ router.get("/callback", async (req, res) => {
       // Rediriger vers le frontend avec l'erreur
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&error=${encodeURIComponent(error_description || error)}`,
+        `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&error=${encodeURIComponent(error_description || error)}`,
       );
     }
 
@@ -161,7 +161,7 @@ router.get("/callback", async (req, res) => {
       logger.error("State OAuth2 invalide ou expiré");
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&error=${encodeURIComponent("Session expirée, veuillez réessayer")}`,
+        `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&error=${encodeURIComponent("Session expirée, veuillez réessayer")}`,
       );
     }
 
@@ -231,13 +231,13 @@ router.get("/callback", async (req, res) => {
     // Rediriger vers le frontend avec succès
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     res.redirect(
-      `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&success=true&message=${encodeURIComponent("Connexion à SuperPDP réussie !")}`,
+      `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&success=true&message=${encodeURIComponent("Connexion à SuperPDP réussie !")}`,
     );
   } catch (error) {
     logger.error("Erreur lors du callback OAuth2:", error);
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     res.redirect(
-      `${frontendUrl}/dashboard?openSettings=true&settingsTab=e-invoicing&error=${encodeURIComponent(error.message)}`,
+      `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&error=${encodeURIComponent(error.message)}`,
     );
   }
 });
