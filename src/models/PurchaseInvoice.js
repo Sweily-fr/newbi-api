@@ -209,6 +209,8 @@ const purchaseInvoiceSchema = new mongoose.Schema(
         "PENDING_VALIDATION",
         "VALIDATED",
         "ACCEPTED",
+        "PARTIALLY_ACCEPTED",
+        "DISPUTED",
         "REJECTED",
         "PAID",
         "ERROR",
@@ -217,6 +219,13 @@ const purchaseInvoiceSchema = new mongoose.Schema(
     },
     eInvoiceReceivedAt: {
       type: Date,
+    },
+    // Statut du signalement de paiement à SuperPDP (événement fr:211).
+    // ERROR → repris par le cron de relance purchaseInvoicePaymentRetryCron.
+    eInvoicePaymentReportStatus: {
+      type: String,
+      enum: ["NOT_APPLICABLE", "REPORTED", "ERROR"],
+      default: "NOT_APPLICABLE",
     },
     eInvoiceRawData: {
       type: mongoose.Schema.Types.Mixed,

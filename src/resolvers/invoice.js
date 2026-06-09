@@ -1381,30 +1381,51 @@ const invoiceResolvers = {
             // === ROUTAGE E-INVOICING / E-REPORTING ===
             // Évaluer et router la facture si elle n'est pas un brouillon
             if (invoice.status !== "DRAFT") {
+              let routingResult = null;
               try {
-                const routingResult = await evaluateAndRouteInvoice(
+                routingResult = await evaluateAndRouteInvoice(
                   invoice,
                   workspaceId,
                 );
-                if (routingResult) {
-                  await invoice.save();
-                  logger.info(
-                    `[E-INVOICE-ROUTING] Facture ${prefix}${number}: ${routingResult.flowType} - ${routingResult.reason}`,
-                  );
-                }
               } catch (eInvoicingError) {
-                // Ne pas faire échouer la création de facture si le routage échoue
                 logger.error("Erreur routing e-invoicing:", eInvoicingError);
+                invoice.eInvoiceStatus = "ERROR";
+                invoice.eInvoiceError = eInvoicingError.message;
+                // Traiter comme un échec d'envoi e-invoicing : ne pas finaliser
+                routingResult = {
+                  flowType: "E_INVOICING",
+                  sendFailed: true,
+                  error: eInvoicingError.message,
+                };
+              }
+
+              // VERROU e-invoicing : si la transmission SuperPDP échoue (flux
+              // E_INVOICING), la facture ne doit pas rester finalisée → on la
+              // repasse en brouillon et on remonte l'erreur à l'utilisateur.
+              if (
+                routingResult?.flowType === "E_INVOICING" &&
+                routingResult.sendFailed
+              ) {
+                invoice.status = "DRAFT";
                 try {
-                  invoice.eInvoiceStatus = "ERROR";
-                  invoice.eInvoiceError = eInvoicingError.message;
                   await invoice.save();
-                } catch (updateError) {
+                } catch (revertError) {
                   logger.error(
-                    "Erreur lors de la mise à jour du statut e-invoicing:",
-                    updateError,
+                    "[E-INVOICE] Échec rollback DRAFT après erreur SuperPDP (création):",
+                    revertError,
                   );
                 }
+                throw new AppError(
+                  `La facture n'a pas pu être transmise à SuperPDP et n'a donc pas été validée : ${routingResult.error || "erreur inconnue"}`,
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+
+              if (routingResult) {
+                await invoice.save();
+                logger.info(
+                  `[E-INVOICE-ROUTING] Facture ${prefix}${number}: ${routingResult.flowType} - ${routingResult.reason}`,
+                );
               }
             }
             // === FIN ENVOI SUPERPDP ===
@@ -2422,6 +2443,11 @@ const invoiceResolvers = {
 
         const oldStatus = invoice.status;
 
+        // Numéro/préfixe du brouillon — conservés pour rollback si la
+        // transmission e-invoicing (SuperPDP) échoue lors de la validation.
+        const draftNumber = invoice.number;
+        const draftPrefix = invoice.prefix;
+
         // Si la facture passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
         if (invoice.status === "DRAFT" && status === "PENDING") {
           // Snapshot companyInfo à la finalisation
@@ -2540,21 +2566,55 @@ const invoiceResolvers = {
         // === ROUTAGE E-INVOICING (DRAFT → PENDING) ===
         // Les factures passant de DRAFT à PENDING n'ont pas été routées à la création
         if (oldStatus === "DRAFT" && status === "PENDING") {
+          let routingResult = null;
           try {
-            const routingResult = await evaluateAndRouteInvoice(
-              invoice,
-              workspaceId,
-            );
-            if (routingResult) {
-              await invoice.save();
-              logger.info(
-                `[E-INVOICE-ROUTING] DRAFT→PENDING ${invoice.prefix}${invoice.number}: ${routingResult.flowType} - ${routingResult.reason}`,
-              );
-            }
+            routingResult = await evaluateAndRouteInvoice(invoice, workspaceId);
           } catch (eInvoicingError) {
             logger.error(
               "Erreur routing e-invoicing (DRAFT→PENDING):",
               eInvoicingError,
+            );
+            invoice.eInvoiceStatus = "ERROR";
+            invoice.eInvoiceError = eInvoicingError.message;
+            routingResult = {
+              flowType: "E_INVOICING",
+              sendFailed: true,
+              error: eInvoicingError.message,
+            };
+          }
+
+          // VERROU e-invoicing : on ne valide pas une facture qui n'a pas été
+          // correctement transmise à SuperPDP (flux E_INVOICING). On annule la
+          // validation (retour brouillon, numéro non consommé) et on remonte
+          // l'erreur pour que l'utilisateur corrige et réessaie.
+          if (
+            routingResult?.flowType === "E_INVOICING" &&
+            routingResult.sendFailed
+          ) {
+            invoice.status = "DRAFT";
+            invoice.number = draftNumber;
+            invoice.prefix = draftPrefix;
+            try {
+              await invoice.save();
+            } catch (revertError) {
+              logger.error(
+                "[E-INVOICE] Échec rollback DRAFT après erreur SuperPDP:",
+                revertError,
+              );
+            }
+            logger.warn(
+              `[E-INVOICE] Validation annulée (SuperPDP KO) ${draftPrefix || ""}${draftNumber}: ${routingResult.error}`,
+            );
+            throw new AppError(
+              `La facture n'a pas pu être transmise à SuperPDP et n'a donc pas été validée : ${routingResult.error || "erreur inconnue"}`,
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+
+          if (routingResult) {
+            await invoice.save();
+            logger.info(
+              `[E-INVOICE-ROUTING] DRAFT→PENDING ${invoice.prefix}${invoice.number}: ${routingResult.flowType} - ${routingResult.reason}`,
             );
           }
         }

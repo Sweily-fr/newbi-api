@@ -102,7 +102,9 @@ import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
 import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import { startTrialCleanupCron } from "./cron/trialCleanupCron.js";
 import { startEInvoiceStatusSyncCron } from "./cron/eInvoiceStatusSyncCron.js";
+import { startEReportingRetryCron } from "./cron/eReportingRetryCron.js";
 import { startPurchaseInvoiceReceptionCron } from "./cron/purchaseInvoiceReceptionCron.js";
+import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaymentRetryCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -618,9 +620,17 @@ async function startServer() {
       startEInvoiceStatusSyncCron();
       logger.info("✅ Cron de suivi des statuts e-invoicing démarré");
 
+      // Démarrer le cron de relance des déclarations e-reporting en erreur
+      startEReportingRetryCron();
+      logger.info("✅ Cron de relance e-reporting démarré");
+
       // Démarrer le cron d'import des factures fournisseurs reçues (SuperPDP)
       startPurchaseInvoiceReceptionCron();
       logger.info("✅ Cron d'import des factures reçues démarré");
+
+      // Démarrer le cron de relance du signalement de paiement des factures reçues
+      startPurchaseInvoicePaymentRetryCron();
+      logger.info("✅ Cron de relance signalement paiement (achats) démarré");
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

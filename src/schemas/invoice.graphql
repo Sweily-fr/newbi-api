@@ -62,6 +62,7 @@ type Invoice {
   # E-reporting (B2C / international / paiements)
   eReportingStatus: String
   eReportingPaymentStatus: String
+  eReportingError: String
   # Email tracking
   emailTracking: EmailTracking
   createdAt: String!

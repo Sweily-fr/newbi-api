@@ -15,6 +15,19 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncPurchaseInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionService.js";
+import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
+
+// Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
+// statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
+const PI_EINVOICE_EVENT_STATUS = {
+  "fr:204": "RECEIVED", // Accusé de réception
+  "fr:205": "ACCEPTED", // Accepté
+  "fr:206": "PARTIALLY_ACCEPTED", // Accepté partiellement
+  "fr:207": "DISPUTED", // Litige / contesté
+  "fr:210": "REJECTED", // Refusé
+  "fr:211": "PAID", // Paiement transmis
+  "fr:212": "PAID", // Paiement encaissé
+};
 
 const checkAccess = async (id, workspaceId) => {
   const doc = await PurchaseInvoice.findOne({
@@ -423,6 +436,11 @@ const purchaseInvoiceResolvers = {
           invoice.paymentDate = new Date();
         }
 
+        // Signaler le paiement à SuperPDP lors d'un passage en PAID (best-effort)
+        if (invoice.status === "PAID" && oldStatus !== "PAID") {
+          await reportPurchaseInvoicePaymentIfNeeded(invoice, workspaceId);
+        }
+
         await invoice.save();
 
         // Sync Pennylane si le statut a changé (fire-and-forget)
@@ -619,6 +637,9 @@ const purchaseInvoiceResolvers = {
         invoice.paymentDate = paymentDate ? new Date(paymentDate) : new Date();
         if (paymentMethod) invoice.paymentMethod = paymentMethod;
 
+        // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
+        await reportPurchaseInvoicePaymentIfNeeded(invoice, workspaceId);
+
         await invoice.save();
 
         // Sync Pennylane (fire-and-forget)
@@ -670,6 +691,24 @@ const purchaseInvoiceResolvers = {
           { _id: { $in: ids }, workspaceId },
           { $set: updateData },
         );
+
+        // Signaler le paiement à SuperPDP pour les e-factures reçues (best-effort)
+        if (status === "PAID") {
+          const superPdpInvoices = await PurchaseInvoice.find({
+            _id: { $in: ids },
+            workspaceId,
+            source: "SUPERPDP",
+            superPdpInvoiceId: { $exists: true, $ne: null },
+          });
+          for (const inv of superPdpInvoices) {
+            await reportPurchaseInvoicePaymentIfNeeded(
+              inv,
+              workspaceId.toString(),
+            );
+            // Sauvegarde inconditionnelle : persiste REPORTED comme ERROR (relance)
+            await inv.save();
+          }
+        }
 
         return {
           success: true,
@@ -769,6 +808,9 @@ const purchaseInvoiceResolvers = {
           { _id: { $in: transactionIds } },
           { $set: { reconciliationStatus: "matched" } },
         );
+
+        // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
+        await reportPurchaseInvoicePaymentIfNeeded(invoice, workspaceId);
 
         await invoice.save();
 
@@ -1024,6 +1066,46 @@ const purchaseInvoiceResolvers = {
         }
 
         invoice.eInvoiceStatus = "REJECTED";
+        await invoice.save();
+
+        return invoice;
+      },
+    ),
+
+    submitPurchaseInvoiceEInvoiceEvent: requireWrite("expenses")(
+      async (_, { id, statusCode, reason }, context) => {
+        const workspaceId = resolveWorkspaceId(null, context.workspaceId);
+        const invoice = await checkAccess(id, workspaceId);
+
+        if (!invoice.superPdpInvoiceId) {
+          throw new AppError(
+            "Cette facture n'est pas liée à une e-facture SuperPDP",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
+        const mappedStatus = PI_EINVOICE_EVENT_STATUS[statusCode];
+        if (!mappedStatus) {
+          throw new AppError(
+            `Code de statut e-invoicing non supporté : ${statusCode}`,
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
+        const result = await superPdpService.submitInvoiceEvent(
+          workspaceId,
+          invoice.superPdpInvoiceId,
+          statusCode,
+          reason ? { reason } : {},
+        );
+        if (!result.success) {
+          throw new AppError(
+            `Échec de l'émission de l'événement ${statusCode} auprès de SuperPDP : ${result.error}`,
+            ERROR_CODES.INTERNAL_ERROR,
+          );
+        }
+
+        invoice.eInvoiceStatus = mappedStatus;
         await invoice.save();
 
         return invoice;
