@@ -557,11 +557,10 @@ const bankingResolvers = {
       },
     ),
 
-    // Upload de justificatif pour une transaction
+    // Upload de justificatifs (multi-fichiers) pour une transaction
     uploadTransactionReceipt: withWorkspace(
-      async (parent, { transactionId, workspaceId, file }, { user }) => {
+      async (parent, { transactionId, workspaceId, files }, { user }) => {
         try {
-          // Vérifier que la transaction existe
           const transaction = await Transaction.findOne({
             _id: transactionId,
             workspaceId,
@@ -571,34 +570,21 @@ const bankingResolvers = {
             return {
               success: false,
               message: "Transaction non trouvée",
-              receiptFile: null,
+              receiptFiles: null,
               transaction: null,
             };
           }
 
-          // Récupérer les informations du fichier uploadé
-          const { createReadStream, filename, mimetype } = await file;
-
-          // Lire le fichier en buffer
-          const stream = createReadStream();
-          const chunks = [];
-          for await (const chunk of stream) {
-            chunks.push(chunk);
-          }
-          const fileBuffer = Buffer.concat(chunks);
-          const fileSize = fileBuffer.length;
-
-          // Valider la taille (10MB max)
-          if (fileSize > 10 * 1024 * 1024) {
+          const filesArray = Array.isArray(files) ? files : [files];
+          if (filesArray.length === 0) {
             return {
               success: false,
-              message: "Fichier trop volumineux. Maximum 10 Mo.",
-              receiptFile: null,
+              message: "Aucun fichier fourni",
+              receiptFiles: null,
               transaction: null,
             };
           }
 
-          // Valider le type
           const allowedTypes = [
             "image/jpeg",
             "image/jpg",
@@ -606,46 +592,66 @@ const bankingResolvers = {
             "image/webp",
             "application/pdf",
           ];
-          if (!allowedTypes.includes(mimetype)) {
-            return {
-              success: false,
-              message: "Type de fichier non supporté.",
-              receiptFile: null,
-              transaction: null,
-            };
+
+          const uploadedReceiptFiles = [];
+
+          for (const fileInput of filesArray) {
+            const { createReadStream, filename, mimetype } = await fileInput;
+
+            const stream = createReadStream();
+            const chunks = [];
+            for await (const chunk of stream) {
+              chunks.push(chunk);
+            }
+            const fileBuffer = Buffer.concat(chunks);
+            const fileSize = fileBuffer.length;
+
+            if (fileSize > 10 * 1024 * 1024) {
+              return {
+                success: false,
+                message: `Fichier trop volumineux (${filename}). Maximum 10 Mo.`,
+                receiptFiles: null,
+                transaction: null,
+              };
+            }
+
+            if (!allowedTypes.includes(mimetype)) {
+              return {
+                success: false,
+                message: `Type de fichier non supporté (${filename}).`,
+                receiptFiles: null,
+                transaction: null,
+              };
+            }
+
+            const uploadResult = await cloudflareService.uploadImage(
+              fileBuffer,
+              filename,
+              user._id || user.id,
+              "receipt",
+              workspaceId,
+            );
+
+            uploadedReceiptFiles.push({
+              url: uploadResult.url,
+              key: uploadResult.key,
+              filename,
+              mimetype,
+              size: fileSize,
+              uploadedAt: new Date(),
+              uploadedBy: String(user._id || user.id),
+            });
           }
-
-          // Upload vers Cloudflare R2
-          const uploadResult = await cloudflareService.uploadImage(
-            fileBuffer,
-            filename,
-            user._id || user.id,
-            "receipt",
-            workspaceId,
-          );
-
-          // Mettre à jour la transaction avec le fichier
-          const receiptFile = {
-            url: uploadResult.url,
-            key: uploadResult.key,
-            filename: filename,
-            mimetype: mimetype,
-            size: fileSize,
-            uploadedAt: new Date(),
-          };
 
           const updatedTransaction = await Transaction.findOneAndUpdate(
             { _id: transactionId, workspaceId },
             {
-              $set: {
-                receiptFile: receiptFile,
-                receiptRequired: false,
-              },
+              $push: { receiptFiles: { $each: uploadedReceiptFiles } },
+              $set: { receiptRequired: false },
             },
             { new: true },
           );
 
-          // Déclencher les automatisations TRANSACTION_RECEIPT (fire-and-forget)
           documentAutomationService
             .executeAutomations(
               "TRANSACTION_RECEIPT",
@@ -671,16 +677,86 @@ const bankingResolvers = {
 
           return {
             success: true,
-            message: "Justificatif ajouté avec succès",
-            receiptFile: receiptFile,
+            message:
+              uploadedReceiptFiles.length === 1
+                ? "Justificatif ajouté avec succès"
+                : `${uploadedReceiptFiles.length} justificatifs ajoutés avec succès`,
+            receiptFiles: updatedTransaction?.receiptFiles || [],
             transaction: updatedTransaction,
           };
         } catch (error) {
           console.error("❌ [UPLOAD RECEIPT] Error:", error);
           return {
             success: false,
-            message: error.message || "Erreur lors de l'upload du justificatif",
-            receiptFile: null,
+            message:
+              error.message || "Erreur lors de l'upload des justificatifs",
+            receiptFiles: null,
+            transaction: null,
+          };
+        }
+      },
+    ),
+
+    // Suppression d'un justificatif spécifique d'une transaction
+    removeTransactionReceiptFile: withWorkspace(
+      async (parent, { transactionId, workspaceId, fileId }) => {
+        try {
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+          });
+          if (!transaction) {
+            return {
+              success: false,
+              message: "Transaction non trouvée",
+              receiptFiles: null,
+              transaction: null,
+            };
+          }
+
+          const fileToRemove = transaction.receiptFiles?.find(
+            (f) => String(f._id) === String(fileId),
+          );
+
+          if (!fileToRemove) {
+            return {
+              success: false,
+              message: "Justificatif introuvable",
+              receiptFiles: transaction.receiptFiles || [],
+              transaction,
+            };
+          }
+
+          // Best-effort suppression R2
+          if (fileToRemove.key) {
+            try {
+              await cloudflareService.deleteImage(fileToRemove.key);
+            } catch (err) {
+              console.warn(
+                "⚠️ [REMOVE RECEIPT] Suppression R2 échouée:",
+                err.message,
+              );
+            }
+          }
+
+          const updatedTransaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            { $pull: { receiptFiles: { _id: fileToRemove._id } } },
+            { new: true },
+          );
+
+          return {
+            success: true,
+            message: "Justificatif supprimé",
+            receiptFiles: updatedTransaction?.receiptFiles || [],
+            transaction: updatedTransaction,
+          };
+        } catch (error) {
+          console.error("❌ [REMOVE RECEIPT] Error:", error);
+          return {
+            success: false,
+            message: error.message || "Erreur lors de la suppression",
+            receiptFiles: null,
             transaction: null,
           };
         }
@@ -1009,6 +1085,40 @@ const bankingResolvers = {
     amount: (parent) => parent.amount ?? 0,
     currency: (parent) => parent.currency || "EUR",
     description: (parent) => parent.description || "",
+    // receiptFiles : fallback sur le legacy receiptFile (objet) si pas encore migré
+    // Génère un id synthétique stable si _id manque (subdocs migrés via raw driver)
+    receiptFiles: (parent) => {
+      const txId = parent._id?.toString() || parent.id || "tx";
+      if (
+        Array.isArray(parent.receiptFiles) &&
+        parent.receiptFiles.length > 0
+      ) {
+        return parent.receiptFiles.map((r, idx) => ({
+          id: r._id?.toString() || r.id || `${txId}-receipt-${idx}`,
+          url: r.url,
+          key: r.key,
+          filename: r.filename,
+          mimetype: r.mimetype,
+          size: r.size,
+          uploadedAt: r.uploadedAt,
+        }));
+      }
+      // Legacy receiptFile (objet unique) — wrap dans un array
+      if (parent.receiptFile?.url) {
+        return [
+          {
+            id: parent.receiptFile._id?.toString() || `${txId}-legacy`,
+            url: parent.receiptFile.url,
+            key: parent.receiptFile.key,
+            filename: parent.receiptFile.filename,
+            mimetype: parent.receiptFile.mimetype,
+            size: parent.receiptFile.size,
+            uploadedAt: parent.receiptFile.uploadedAt,
+          },
+        ];
+      }
+      return [];
+    },
     // Fees avec valeurs par défaut pour éviter null sur les champs non-null
     fees: (parent) => {
       if (!parent.fees) return null;

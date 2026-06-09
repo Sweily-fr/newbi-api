@@ -391,20 +391,21 @@ const documentAutomationService = {
           let fileExt = "pdf";
 
           if (documentContext.documentType === "transaction") {
-            // Transaction : copier le justificatif existant (image ou PDF)
+            // Transaction : copier le 1er justificatif attaché (image ou PDF)
             const txn = await Transaction.findById(documentContext.documentId)
-              .select("receiptFile")
+              .select("receiptFiles")
               .lean();
-            if (!txn?.receiptFile?.url) {
+            const firstReceipt = txn?.receiptFiles?.[0];
+            if (!firstReceipt?.url) {
               throw new Error("Aucun justificatif pour cette transaction");
             }
-            const response = await axios.get(txn.receiptFile.url, {
+            const response = await axios.get(firstReceipt.url, {
               responseType: "arraybuffer",
               timeout: 30000,
             });
             const fileBuffer = Buffer.from(response.data);
-            fileMimeType = txn.receiptFile.mimetype || "application/pdf";
-            fileExt = txn.receiptFile.filename?.split(".").pop() || "pdf";
+            fileMimeType = firstReceipt.mimetype || "application/pdf";
+            fileExt = firstReceipt.filename?.split(".").pop() || "pdf";
             // Reconstruire le nom du fichier avec la bonne extension
             fileName = buildFileName(
               automation.actionConfig.documentNaming ||
@@ -957,7 +958,7 @@ const documentAutomationService = {
         model: Transaction,
         status: null,
         docType: "transaction",
-        customFilter: { "receiptFile.url": { $exists: true, $ne: null } },
+        customFilter: { "receiptFiles.0.url": { $exists: true, $ne: null } },
       },
     };
     return TRIGGER_TO_QUERY[triggerType] || null;
@@ -1326,8 +1327,9 @@ const documentAutomationService = {
       fileExt = sourceFile.filename?.split(".").pop() || "pdf";
       fileSize = fileBuffer.length;
     } else if (documentType === "transaction") {
-      // Transaction : copie du justificatif (receiptFile)
-      const receiptUrl = doc.receiptFile?.url;
+      // Transaction : copie du 1er justificatif (receiptFiles[0])
+      const firstReceipt = doc.receiptFiles?.[0];
+      const receiptUrl = firstReceipt?.url;
       if (!receiptUrl)
         throw new Error("Aucun justificatif pour cette transaction");
       const response = await axios.get(receiptUrl, {
@@ -1335,8 +1337,8 @@ const documentAutomationService = {
         timeout: 30000,
       });
       fileBuffer = Buffer.from(response.data);
-      fileMimeType = doc.receiptFile?.mimetype || "application/pdf";
-      fileExt = doc.receiptFile?.filename?.split(".").pop() || "pdf";
+      fileMimeType = firstReceipt?.mimetype || "application/pdf";
+      fileExt = firstReceipt?.filename?.split(".").pop() || "pdf";
       fileSize = fileBuffer.length;
     } else if (pdfBase64) {
       // PDF fourni par le client
@@ -1712,11 +1714,12 @@ const documentAutomationService = {
                 sourceMime = sourceFile.mimetype || "application/pdf";
                 sourceFilename = sourceFile.filename || "";
               } else {
-                if (!doc.receiptFile?.url)
+                const firstReceipt = doc.receiptFiles?.[0];
+                if (!firstReceipt?.url)
                   throw new Error("Aucun justificatif pour cette transaction");
-                sourceUrl = doc.receiptFile.url;
-                sourceMime = doc.receiptFile.mimetype || "application/pdf";
-                sourceFilename = doc.receiptFile.filename || "";
+                sourceUrl = firstReceipt.url;
+                sourceMime = firstReceipt.mimetype || "application/pdf";
+                sourceFilename = firstReceipt.filename || "";
               }
               const response = await axios.get(sourceUrl, {
                 responseType: "arraybuffer",
