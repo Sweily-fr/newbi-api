@@ -15,7 +15,9 @@ import logger from "./logger.js";
  *
  * @param {Object} invoice - Document Mongoose Invoice
  * @param {string} workspaceId - ID du workspace
- * @returns {Object|null} Le routingResult, ou null si e-invoicing non activé
+ * @returns {Object|null} Le routingResult ({ flowType, reason, details, sendFailed?,
+ *   error? }), ou null si e-invoicing non activé. `sendFailed` est `true` quand le
+ *   flux est E_INVOICING et que la transmission à SuperPDP a échoué.
  */
 export async function evaluateAndRouteInvoice(invoice, workspaceId) {
   // Vérifier si e-invoicing est activé
@@ -79,6 +81,9 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
       } else {
         invoice.eInvoiceStatus = "ERROR";
         invoice.eInvoiceError = superPdpResult.error;
+        // Signaler l'échec au caller pour qu'il puisse bloquer la validation
+        routingResult.sendFailed = true;
+        routingResult.error = superPdpResult.error;
         logger.error(
           `[E-INVOICE-ROUTING] Erreur envoi SuperPDP: ${superPdpResult.error}`,
         );
@@ -86,6 +91,9 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
     } catch (sendError) {
       invoice.eInvoiceStatus = "ERROR";
       invoice.eInvoiceError = sendError.message;
+      // Signaler l'échec au caller pour qu'il puisse bloquer la validation
+      routingResult.sendFailed = true;
+      routingResult.error = sendError.message;
       logger.error(
         "[E-INVOICE-ROUTING] Erreur lors de l'envoi à SuperPDP:",
         sendError,

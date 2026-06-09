@@ -8,6 +8,9 @@ type NotificationData {
   actorName: String
   actorImage: String
   url: String
+  purchaseInvoiceId: ID
+  supplierName: String
+  amountTTC: Float
 }
 
 type Notification {

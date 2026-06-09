@@ -94,6 +94,8 @@ enum PurchaseInvoiceEInvoiceStatus {
   PENDING_VALIDATION
   VALIDATED
   ACCEPTED
+  PARTIALLY_ACCEPTED
+  DISPUTED
   REJECTED
   PAID
   ERROR
@@ -129,6 +131,7 @@ type PurchaseInvoice {
   superPdpInvoiceId: String
   eInvoiceStatus: PurchaseInvoiceEInvoiceStatus
   eInvoiceReceivedAt: String
+  eInvoicePaymentReportStatus: String
   archivedPdfUrl: String
   createdBy: User!
   createdAt: String!
@@ -367,6 +370,15 @@ extend type Mutation {
   # Cycle de vie destinataire : approuver (fr:205) / refuser (fr:210)
   acknowledgePurchaseInvoiceEInvoice(id: ID!): PurchaseInvoice!
   refusePurchaseInvoiceEInvoice(id: ID!, reason: String): PurchaseInvoice!
+  # Émission générique d'un statut de cycle de vie destinataire (fr:204..fr:212)
+  # Codes supportés : fr:204 (accusé réception), fr:205 (accepté),
+  # fr:206 (accepté partiellement), fr:207 (litige), fr:210 (refusé),
+  # fr:211/fr:212 (paiement).
+  submitPurchaseInvoiceEInvoiceEvent(
+    id: ID!
+    statusCode: String!
+    reason: String
+  ): PurchaseInvoice!
 
   createSupplier(input: CreateSupplierInput!): Supplier!
   updateSupplier(id: ID!, input: UpdateSupplierInput!): Supplier!

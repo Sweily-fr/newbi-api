@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
+import Notification from "../models/Notification.js";
 import superPdpService from "./superPdpService.js";
+import { publishNotification } from "../resolvers/notification.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -65,6 +67,7 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
           const ocrMeta = purchaseInvoiceData.ocrMetadata || {};
           supplier = await Supplier.create({
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            createdBy: new mongoose.Types.ObjectId(userId),
             name: purchaseInvoiceData.supplierName,
             siret: ocrMeta.supplierSiret || undefined,
             vatNumber: ocrMeta.supplierVatNumber || undefined,
@@ -73,12 +76,31 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
         }
 
         purchaseInvoiceData.supplierId = supplier._id;
-        await PurchaseInvoice.create(purchaseInvoiceData);
+        const created = await PurchaseInvoice.create(purchaseInvoiceData);
         imported++;
 
         logger.info(
           `✅ Facture d'achat importée depuis SuperPDP: ${purchaseInvoiceData.invoiceNumber} (${purchaseInvoiceData.supplierName})`,
         );
+
+        // Notifier l'utilisateur de l'arrivée de la facture (best-effort)
+        try {
+          const notification =
+            await Notification.createPurchaseInvoiceReceivedNotification({
+              userId,
+              workspaceId,
+              purchaseInvoiceId: created._id,
+              invoiceNumber: purchaseInvoiceData.invoiceNumber,
+              supplierName: purchaseInvoiceData.supplierName,
+              amountTTC: purchaseInvoiceData.amountTTC,
+              url: `/dashboard/outils/factures-achat?invoice=${created._id}`,
+            });
+          await publishNotification(notification);
+        } catch (notifErr) {
+          logger.warn(
+            `[reception] notification non envoyée pour ${purchaseInvoiceData.invoiceNumber}: ${notifErr.message}`,
+          );
+        }
       } catch (err) {
         errors++;
         logger.error("❌ Erreur import facture SuperPDP:", err);

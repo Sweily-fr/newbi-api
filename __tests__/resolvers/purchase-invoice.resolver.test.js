@@ -17,18 +17,17 @@ import { buildOrganizationId, buildUserId } from "../factories/index.js";
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: {
     deleteImage: vi.fn().mockResolvedValue(true),
-    uploadImage: vi
-      .fn()
-      .mockResolvedValue({
-        url: "https://test.r2.dev/test.pdf",
-        key: "test.pdf",
-      }),
+    uploadImage: vi.fn().mockResolvedValue({
+      url: "https://test.r2.dev/test.pdf",
+      key: "test.pdf",
+    }),
   },
 }));
 vi.mock("../../src/services/superPdpService.js", () => ({
   default: {
     getReceivedInvoices: vi.fn(),
     transformReceivedInvoiceToPurchaseInvoice: vi.fn(),
+    submitInvoiceEvent: vi.fn(),
   },
 }));
 vi.mock("../../src/services/eInvoicingSettingsService.js", () => ({
@@ -46,6 +45,7 @@ vi.mock("../../src/services/pennylaneSyncHelper.js", () => ({
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import Supplier from "../../src/models/Supplier.js";
+import superPdpService from "../../src/services/superPdpService.js";
 import purchaseInvoiceResolvers from "../../src/resolvers/purchaseInvoice.js";
 
 const userId = buildUserId();
@@ -303,5 +303,95 @@ describe("PurchaseInvoice Resolver - Mutation.bulkUpdatePurchaseInvoiceStatus", 
       status: "PAID",
     });
     expect(remaining).toBe(3);
+  });
+});
+
+describe("PurchaseInvoice Resolver - submitPurchaseInvoiceEInvoiceEvent", () => {
+  const resolver =
+    purchaseInvoiceResolvers.Mutation.submitPurchaseInvoiceEInvoiceEvent;
+
+  it("émet fr:207 et passe l'e-facture en DISPUTED", async () => {
+    superPdpService.submitInvoiceEvent.mockReset();
+    superPdpService.submitInvoiceEvent.mockResolvedValue({ success: true });
+    const { insertedId } = await insertPurchaseInvoice({
+      source: "SUPERPDP",
+      superPdpInvoiceId: "sp-77",
+      eInvoiceStatus: "RECEIVED",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        statusCode: "fr:207",
+        reason: "Montant erroné",
+      },
+      ctx(),
+    );
+
+    const call = superPdpService.submitInvoiceEvent.mock.calls[0];
+    expect(call[1]).toBe("sp-77");
+    expect(call[2]).toBe("fr:207");
+    expect(call[3]).toEqual({ reason: "Montant erroné" });
+    expect(result.eInvoiceStatus).toBe("DISPUTED");
+  });
+
+  it("rejette un code de statut non supporté", async () => {
+    const { insertedId } = await insertPurchaseInvoice({
+      source: "SUPERPDP",
+      superPdpInvoiceId: "sp-78",
+      eInvoiceStatus: "RECEIVED",
+    });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), statusCode: "fr:999" },
+        ctx(),
+      ),
+    ).rejects.toThrow(/non supporté/i);
+  });
+
+  it("rejette une facture non liée à SuperPDP", async () => {
+    const { insertedId } = await insertPurchaseInvoice();
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), statusCode: "fr:205" },
+        ctx(),
+      ),
+    ).rejects.toThrow(/SuperPDP/i);
+  });
+});
+
+describe("PurchaseInvoice Resolver - markPurchaseInvoiceAsPaid (e-invoicing)", () => {
+  const resolver = purchaseInvoiceResolvers.Mutation.markPurchaseInvoiceAsPaid;
+
+  it("signale le paiement à SuperPDP et passe l'e-facture en PAID", async () => {
+    superPdpService.submitInvoiceEvent.mockReset();
+    superPdpService.submitInvoiceEvent.mockResolvedValue({ success: true });
+    const { insertedId } = await insertPurchaseInvoice({
+      source: "SUPERPDP",
+      superPdpInvoiceId: "sp-90",
+      eInvoiceStatus: "ACCEPTED",
+    });
+
+    const result = await resolver(null, { id: insertedId.toString() }, ctx());
+
+    const call = superPdpService.submitInvoiceEvent.mock.calls[0];
+    expect(call[1]).toBe("sp-90");
+    expect(call[2]).toBe("fr:211");
+    expect(result.status).toBe("PAID");
+    expect(result.eInvoiceStatus).toBe("PAID");
+  });
+
+  it("ne touche pas SuperPDP pour une facture saisie manuellement", async () => {
+    superPdpService.submitInvoiceEvent.mockReset();
+    const { insertedId } = await insertPurchaseInvoice({ source: "MANUAL" });
+
+    const result = await resolver(null, { id: insertedId.toString() }, ctx());
+
+    expect(superPdpService.submitInvoiceEvent).not.toHaveBeenCalled();
+    expect(result.status).toBe("PAID");
   });
 });
