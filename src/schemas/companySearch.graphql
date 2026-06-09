@@ -21,5 +21,6 @@ type CompanyNameResult {
   name: String!
   siret: String!
   siren: String!
+  vatNumber: String
   address: Address
 }

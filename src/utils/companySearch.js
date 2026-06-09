@@ -1,9 +1,6 @@
 import axios from "axios";
 // Importer les données mock
-import {
-  findCompanyBySiret,
-  findCompaniesByName,
-} from "./mockCompanyData.js";
+import { findCompanyBySiret, findCompaniesByName } from "./mockCompanyData.js";
 
 // Mode de fonctionnement : 'mock' pour les données fictives, 'api' pour l'API réelle
 // Peut être contrôlé via la variable d'environnement COMPANY_SEARCH_MODE
@@ -72,13 +69,13 @@ async function makeApiRequest(endpoint) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       console.log(
-        `Tentative d'appel API ${attempt}/${MAX_RETRIES}: ${API_URL}${endpoint}`
+        `Tentative d'appel API ${attempt}/${MAX_RETRIES}: ${API_URL}${endpoint}`,
       );
       return await apiClient.get(`${API_URL}${endpoint}`);
     } catch (error) {
       lastError = error;
       console.error(
-        `Échec de la tentative ${attempt}/${MAX_RETRIES}: ${error.message}`
+        `Échec de la tentative ${attempt}/${MAX_RETRIES}: ${error.message}`,
       );
 
       // Vérifier si l'erreur est temporaire et peut bénéficier d'un retry
@@ -108,7 +105,7 @@ async function makeApiRequest(endpoint) {
     // Amélioration des messages d'erreur
     if (lastError.code === "ECONNRESET") {
       throw new Error(
-        "La connexion au service de recherche d'entreprises a été interrompue. Veuillez réessayer plus tard."
+        "La connexion au service de recherche d'entreprises a été interrompue. Veuillez réessayer plus tard.",
       );
     } else if (
       lastError.code === "ECONNREFUSED" ||
@@ -116,28 +113,28 @@ async function makeApiRequest(endpoint) {
       lastError.message.includes("timeout")
     ) {
       throw new Error(
-        "Impossible de se connecter au service de recherche d'entreprises. Veuillez réessayer plus tard."
+        "Impossible de se connecter au service de recherche d'entreprises. Veuillez réessayer plus tard.",
       );
     } else if (lastError.response) {
       // Erreur de réponse du serveur (4xx, 5xx)
       if (lastError.response.status === 429) {
         throw new Error(
-          "Trop de requêtes vers le service de recherche d'entreprises. Veuillez réessayer dans quelques instants."
+          "Trop de requêtes vers le service de recherche d'entreprises. Veuillez réessayer dans quelques instants.",
         );
       } else if (lastError.response.status >= 500) {
         throw new Error(
-          "Le service de recherche d'entreprises est temporairement indisponible. Veuillez réessayer plus tard."
+          "Le service de recherche d'entreprises est temporairement indisponible. Veuillez réessayer plus tard.",
         );
       } else if (lastError.response.status === 404) {
         return { data: null }; // Entreprise non trouvée
       } else {
         throw new Error(
-          `Erreur lors de la recherche: ${lastError.response.status} - ${lastError.response.statusText}`
+          `Erreur lors de la recherche: ${lastError.response.status} - ${lastError.response.statusText}`,
         );
       }
     } else {
       throw new Error(
-        `Impossible de rechercher les entreprises: ${lastError.message}`
+        `Impossible de rechercher les entreprises: ${lastError.message}`,
       );
     }
   }
@@ -186,7 +183,7 @@ const searchCompanyBySiret = async (siret) => {
 
     // Trouver l'entreprise avec le SIRET exact dans les résultats
     const company = response.data.results.find(
-      (result) => result.siege && result.siege.siret === siret
+      (result) => result.siege && result.siege.siret === siret,
     );
 
     if (!company) {
@@ -209,7 +206,7 @@ const searchCompanyBySiret = async (siret) => {
   } catch (error) {
     console.error(
       "Erreur lors de la recherche de l'entreprise par SIRET:",
-      error.message
+      error.message,
     );
     throw error;
   }
@@ -238,13 +235,15 @@ const searchCompaniesByName = async (name) => {
         name: company.name,
         siret: company.siret,
         siren: company.siren,
+        vatNumber: company.vatNumber || calculateFrenchVatNumber(company.siren),
+        address: company.address,
       }));
     }
 
     // Mode API: utilisation de notre fonction avec gestion d'erreur améliorée
     // Avec la nouvelle API, on utilise le paramètre q pour la recherche textuelle
     const response = await makeApiRequest(
-      `/search?q=${encodeURIComponent(name)}&per_page=5`
+      `/search?q=${encodeURIComponent(name)}&per_page=5`,
     );
 
     if (
@@ -272,13 +271,10 @@ const searchCompaniesByName = async (name) => {
   } catch (error) {
     console.error(
       "Erreur lors de la recherche des entreprises par nom:",
-      error.message
+      error.message,
     );
     throw error;
   }
 };
 
-export {
-  searchCompanyBySiret,
-  searchCompaniesByName,
-};
+export { searchCompanyBySiret, searchCompaniesByName };

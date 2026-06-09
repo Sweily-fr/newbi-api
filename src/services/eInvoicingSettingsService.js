@@ -76,7 +76,7 @@ class EInvoicingSettingsService {
     } catch (error) {
       logger.error(
         "Erreur lors de la récupération de l'organisation par ID:",
-        error
+        error,
       );
       return null;
     }
@@ -100,7 +100,7 @@ class EInvoicingSettingsService {
     } catch (error) {
       logger.error(
         "Erreur lors de la vérification du statut e-invoicing:",
-        error
+        error,
       );
       return false;
     }
@@ -126,7 +126,7 @@ class EInvoicingSettingsService {
       return {
         eInvoicingEnabled: Boolean(organization.eInvoicingEnabled),
         superPdpConfigured: Boolean(
-          organization.superPdpClientId && organization.superPdpClientSecret
+          organization.superPdpClientId && organization.superPdpClientSecret,
         ),
         superPdpWebhookConfigured: Boolean(organization.superPdpWebhookSecret),
         // Ne pas exposer les secrets
@@ -134,12 +134,18 @@ class EInvoicingSettingsService {
           ? "***configured***"
           : null,
         superPdpEnvironment: organization.superPdpEnvironment || "sandbox",
-        eInvoicingActivatedAt: organization.eInvoicingActivatedAt || null,
+        // Le champ GraphQL est typé String : on renvoie une date ISO parsable
+        // côté frontend. Sans ça, le scalar String sérialise l'objet Date via
+        // Date.valueOf() → timestamp epoch ("1749376800000") que `new Date(str)`
+        // interprète comme une date invalide ("Invalid Date").
+        eInvoicingActivatedAt: organization.eInvoicingActivatedAt
+          ? new Date(organization.eInvoicingActivatedAt).toISOString()
+          : null,
       };
     } catch (error) {
       logger.error(
         "Erreur lors de la récupération des paramètres e-invoicing:",
-        error
+        error,
       );
       throw error;
     }
@@ -180,11 +186,11 @@ class EInvoicingSettingsService {
 
       await organizationCollection.updateOne(
         { _id: orgObjectId },
-        { $set: updateData }
+        { $set: updateData },
       );
 
       logger.info(
-        `✅ E-invoicing activé pour l'organisation ${organizationId}`
+        `✅ E-invoicing activé pour l'organisation ${organizationId}`,
       );
 
       return await this.getEInvoicingSettings(organizationId);
@@ -215,11 +221,11 @@ class EInvoicingSettingsService {
             eInvoicingEnabled: false,
             updatedAt: new Date(),
           },
-        }
+        },
       );
 
       logger.info(
-        `⚠️ E-invoicing désactivé pour l'organisation ${organizationId}`
+        `⚠️ E-invoicing désactivé pour l'organisation ${organizationId}`,
       );
 
       return await this.getEInvoicingSettings(organizationId);
@@ -263,18 +269,18 @@ class EInvoicingSettingsService {
 
       await organizationCollection.updateOne(
         { _id: orgObjectId },
-        { $set: updateData }
+        { $set: updateData },
       );
 
       logger.info(
-        `🔑 Credentials SuperPDP mis à jour pour l'organisation ${organizationId}`
+        `🔑 Credentials SuperPDP mis à jour pour l'organisation ${organizationId}`,
       );
 
       return await this.getEInvoicingSettings(organizationId);
     } catch (error) {
       logger.error(
         "Erreur lors de la mise à jour des credentials SuperPDP:",
-        error
+        error,
       );
       throw error;
     }
@@ -311,7 +317,7 @@ class EInvoicingSettingsService {
     } catch (error) {
       logger.error(
         "Erreur lors de la récupération des credentials SuperPDP:",
-        error
+        error,
       );
       return null;
     }
@@ -336,7 +342,7 @@ class EInvoicingSettingsService {
         superPdpAccessToken: tokens.accessToken,
         superPdpRefreshToken: tokens.refreshToken,
         superPdpTokenExpiresAt: new Date(
-          Date.now() + (tokens.expiresIn || 3600) * 1000
+          Date.now() + (tokens.expiresIn || 3600) * 1000,
         ),
         superPdpTokenType: tokens.tokenType || "Bearer",
         updatedAt: new Date(),
@@ -344,11 +350,11 @@ class EInvoicingSettingsService {
 
       await organizationCollection.updateOne(
         { _id: orgObjectId },
-        { $set: updateData }
+        { $set: updateData },
       );
 
       logger.info(
-        `🔑 Tokens OAuth2 SuperPDP stockés pour l'organisation ${organizationId}`
+        `🔑 Tokens OAuth2 SuperPDP stockés pour l'organisation ${organizationId}`,
       );
     } catch (error) {
       logger.error("Erreur lors du stockage des tokens SuperPDP:", error);
@@ -380,11 +386,11 @@ class EInvoicingSettingsService {
             superPdpTokenType: "",
           },
           $set: { updatedAt: new Date() },
-        }
+        },
       );
 
       logger.info(
-        `🗑️ Tokens OAuth2 SuperPDP supprimés pour l'organisation ${organizationId}`
+        `🗑️ Tokens OAuth2 SuperPDP supprimés pour l'organisation ${organizationId}`,
       );
     } catch (error) {
       logger.error("Erreur lors de la suppression des tokens SuperPDP:", error);
@@ -417,7 +423,7 @@ class EInvoicingSettingsService {
     } catch (error) {
       logger.error(
         "Erreur lors de la récupération des tokens SuperPDP:",
-        error
+        error,
       );
       return null;
     }
@@ -445,7 +451,7 @@ class EInvoicingSettingsService {
     } catch (error) {
       logger.error(
         "Erreur lors de la récupération des statistiques e-invoicing:",
-        error
+        error,
       );
       throw error;
     }

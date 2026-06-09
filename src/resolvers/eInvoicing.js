@@ -620,14 +620,24 @@ const eInvoicingResolvers = {
         } catch (e) {
           logger.debug(`Lecture annuaire échouée (continue): ${e.message}`);
         }
-        const alreadyCreated = new Set(
+        // Idempotence : on saute un annuaire si une entrée "created" existe déjà,
+        // OU si une entrée en erreur indique que la ligne est DÉJÀ ACTIVE côté
+        // annuaire public (PPF renvoie un 422 "ligne d'annuaire déjà active" —
+        // l'entreprise est donc bien inscrite, inutile de re-tenter et de
+        // régénérer l'erreur).
+        const isAlreadyActiveError = (e) =>
+          e.status === "error" &&
+          /d[eè]j[aà] active|already active|ligne-annuaire/i.test(
+            e.statusMessage || "",
+          );
+        const alreadyRegistered = new Set(
           existing
-            .filter((e) => e.status === "created")
+            .filter((e) => e.status === "created" || isAlreadyActiveError(e))
             .map((e) => e.directory),
         );
 
         for (const directory of ["peppol", "ppf"]) {
-          if (alreadyCreated.has(directory)) continue;
+          if (alreadyRegistered.has(directory)) continue;
           // Peppol exige le format "scheme_id:participant_id" (0225 = SIREN FR,
           // ex. "0225:853322915") ; le PPF utilise le SIREN brut.
           const entryIdentifier =
