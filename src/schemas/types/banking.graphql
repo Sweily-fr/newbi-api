@@ -490,6 +490,7 @@ input UpdateTransactionInput {
   currency: String
   description: String
   type: TransactionType
+  status: TransactionStatus
   date: DateTime
   category: String
   vendor: String
