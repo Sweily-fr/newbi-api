@@ -275,10 +275,12 @@ const financialAnalyticsResolvers = {
         // --- Paid invoice match (revenu reconnu à la DATE DE PAIEMENT) ---
         // Les graphiques "Détail par client" et "Tableau croisé Client x Mois"
         // — ainsi que "Top 10 clients" et "Répartition par type" qui partagent
-        // la même source — se basent uniquement sur les factures PAYÉES
-        // (status COMPLETED), filtrées et regroupées par paymentDate. Cela vaut
-        // pour les factures créées sur Newbi (collection Invoice) ET les
-        // factures importées payées (collection ImportedInvoice).
+        // la même source — se basent uniquement sur les factures CLIENT PAYÉES
+        // (status COMPLETED), filtrées et regroupées par paymentDate.
+        // Les factures client créées sur Newbi ET les factures client importées
+        // vivent toutes dans la collection Invoice (les importées ont un préfixe
+        // vide) : une seule agrégation suffit. Les factures d'ACHAT
+        // (ImportedInvoice) ne sont PAS du CA client → exclues de ces graphiques.
         const paymentDateRange = { $ne: null };
         if (startDate) paymentDateRange.$gte = new Date(startDate);
         if (endDate) paymentDateRange.$lte = new Date(endDate);
@@ -292,13 +294,6 @@ const financialAnalyticsResolvers = {
         } else if (clientId) {
           paidInvoiceMatch["client.id"] = clientId;
         }
-        // Les factures importées n'ont pas de client.id fiable (rapprochées par
-        // nom), elles ne sont donc filtrées que par workspace + statut + date.
-        const paidImportedMatch = {
-          workspaceId: wId,
-          status: "COMPLETED",
-          paymentDate: paymentDateRange,
-        };
 
         // --- Expense match ---
         const expenseMatch = {
@@ -340,7 +335,6 @@ const financialAnalyticsResolvers = {
           importedInvoiceCollectedStats,
           purchaseInvoiceMonthlyStats,
           paidInvoiceByClientMonthly,
-          paidImportedByClientMonthly,
           invoiceUnpaidStats,
           importedInvoiceUnpaidStats,
         ] = await Promise.all([
@@ -980,10 +974,11 @@ const financialAnalyticsResolvers = {
             ]);
           })(),
 
-          // 11. Invoice — CA payé par client x mois (paymentDate)
+          // 11. Invoice — CA client payé par client x mois (paymentDate)
           // Alimente "Détail par client", "Top 10 clients", "Répartition par
-          // type" et "Tableau croisé Client x Mois". Granularité mensuelle :
-          // les totaux par client sont dérivés en sommant les mois en JS.
+          // type" et "Tableau croisé Client x Mois". Couvre les factures client
+          // créées sur Newbi ET importées (toutes dans la collection Invoice).
+          // Granularité mensuelle : les totaux par client sont sommés en JS.
           Invoice.aggregate([
             { $match: paidInvoiceMatch },
             {
@@ -1010,26 +1005,6 @@ const financialAnalyticsResolvers = {
                 totalHT: { $sum: "$finalTotalHT" },
                 totalTTC: { $sum: "$finalTotalTTC" },
                 totalVAT: { $sum: "$finalTotalVAT" },
-                invoiceCount: { $sum: 1 },
-              },
-            },
-          ]),
-
-          // 12. ImportedInvoice — CA payé par client x mois (paymentDate)
-          // Mêmes graphiques : on inclut les factures importées PAYÉES,
-          // regroupées par mois de paiement. Rapprochées par nom de client.
-          ImportedInvoice.aggregate([
-            { $match: paidImportedMatch },
-            {
-              $group: {
-                _id: {
-                  clientName: { $ifNull: ["$client.name", "Client inconnu"] },
-                  year: { $year: "$paymentDate" },
-                  month: { $month: "$paymentDate" },
-                },
-                totalHT: { $sum: { $ifNull: ["$totalHT", 0] } },
-                totalTTC: { $sum: { $ifNull: ["$totalTTC", 0] } },
-                totalVAT: { $sum: { $ifNull: ["$totalVAT", 0] } },
                 invoiceCount: { $sum: 1 },
               },
             },
@@ -1865,15 +1840,16 @@ const financialAnalyticsResolvers = {
           clientIds,
         );
 
-        // ── CA PAYÉ par client (factures Newbi + importées, date de paiement) ──
+        // ── CA CLIENT PAYÉ par client (factures Newbi + importées) ──
         // À partir des lignes mensuelles (regroupées par paymentDate), on dérive
         // le détail/total par client ("Détail par client", "Top 10",
         // "Répartition par type") et le "Tableau croisé Client x Mois".
-        // Les factures importées sont rapprochées par NOM de client (elles n'ont
-        // pas de clientId fiable).
+        // Factures client natives ET importées vivent toutes dans la collection
+        // Invoice (agrégation #11) : aucun rapprochement par nom n'est requis,
+        // et les factures d'achat (ImportedInvoice) sont exclues.
         const normName = (s) => (s || "Client inconnu").trim();
 
-        // 1) Agrégat par client (somme des mois) — factures Newbi payées.
+        // 1) Agrégat par client (somme des mois).
         const clientAgg = new Map(); // clé : clientId, sinon `name:<nom>`
         for (const row of paidInvoiceByClientMonthly || []) {
           const cId = row._id.clientId || null;
@@ -1898,37 +1874,7 @@ const financialAnalyticsResolvers = {
           entry.invoiceCount += row.invoiceCount || 0;
         }
 
-        // Index par nom pour rapprocher les importées (pas de clientId).
-        const clientByName = new Map();
-        for (const entry of clientAgg.values()) {
-          clientByName.set(entry.clientName.toLowerCase(), entry);
-        }
-
-        // 2) Fusionner les factures importées payées (par nom de client).
-        for (const row of paidImportedByClientMonthly || []) {
-          const name = normName(row._id.clientName);
-          const nameKey = name.toLowerCase();
-          let entry = clientByName.get(nameKey);
-          if (!entry) {
-            entry = {
-              clientId: null,
-              clientName: name,
-              clientType: null,
-              totalHT: 0,
-              totalTTC: 0,
-              totalVAT: 0,
-              invoiceCount: 0,
-            };
-            clientAgg.set(`name:${nameKey}`, entry);
-            clientByName.set(nameKey, entry);
-          }
-          entry.totalHT += row.totalHT || 0;
-          entry.totalTTC += row.totalTTC || 0;
-          entry.totalVAT += row.totalVAT || 0;
-          entry.invoiceCount += row.invoiceCount || 0;
-        }
-
-        // 3) Construire revenueByClient (+ temps passé via clientTimeMap).
+        // 2) Construire revenueByClient (+ temps passé via clientTimeMap).
         const matchedClientIds = new Set();
         const revenueByClient = [];
         for (const entry of clientAgg.values()) {
@@ -1999,8 +1945,8 @@ const financialAnalyticsResolvers = {
           percentage: Math.round((c.totalTTC / totalTTCAll) * 10000) / 100,
         }));
 
-        // 4) Tableau croisé Client x Mois (CA payé par mois de paiement,
-        // Newbi + importées, rapprochées par nom de client).
+        // 3) Tableau croisé Client x Mois (CA client payé par mois de paiement,
+        // factures Newbi + importées, toutes issues de la collection Invoice).
         const monthlyByClientMonth = new Map();
         const fmtMonth = (year, month) =>
           `${year}-${month < 10 ? "0" + month : month}`;
@@ -2024,13 +1970,6 @@ const financialAnalyticsResolvers = {
           m.invoiceCount += r.invoiceCount || 0;
         };
         for (const row of paidInvoiceByClientMonthly || []) {
-          addMonthly(
-            normName(row._id.clientName),
-            fmtMonth(row._id.year, row._id.month),
-            row,
-          );
-        }
-        for (const row of paidImportedByClientMonthly || []) {
           addMonthly(
             normName(row._id.clientName),
             fmtMonth(row._id.year, row._id.month),
