@@ -1244,15 +1244,10 @@ const financialAnalyticsResolvers = {
               : 0;
         }
 
-        // Collection rate: COMPLETED / total non-DRAFT (in count)
-        const collectionRate =
-          collectionTotals.totalInvoices > 0
-            ? Math.round(
-                (collectionTotals.completedInvoices /
-                  collectionTotals.totalInvoices) *
-                  10000,
-              ) / 100
-            : 0;
+        // Taux de recouvrement = montant encaissé / montant impayé × 100.
+        // Calculé plus bas, à partir des totaux de `monthlyCollection`
+        // (encaissé + impayés échus sans avoir, factures Newbi + importées).
+        let collectionRate = 0;
 
         // Aging buckets - normalize from MongoDB $bucket output
         const agingBucketsConfig = [
@@ -1365,6 +1360,25 @@ const financialAnalyticsResolvers = {
             unpaidCount: unp.unpaidCount,
           };
         });
+
+        // Taux de recouvrement = (montant encaissé / montant impayé) × 100.
+        // Impayé = factures échues (échéance dépassée), sans avoir,
+        // Newbi + importées — cf. unpaidTTC. Si aucun impayé, on retourne 0
+        // (le champ est non-nullable côté schéma GraphQL).
+        const totalCollectedTTCForRate = monthlyCollection.reduce(
+          (s, m) => s + (m.collectedTTC || 0),
+          0,
+        );
+        const totalUnpaidTTCForRate = monthlyCollection.reduce(
+          (s, m) => s + (m.unpaidTTC || 0),
+          0,
+        );
+        collectionRate =
+          totalUnpaidTTCForRate > 0
+            ? Math.round(
+                (totalCollectedTTCForRate / totalUnpaidTTCForRate) * 10000,
+              ) / 100
+            : 0;
 
         // Top client concentration
         const revenueByClientSorted = [...invResult.revenueByClient].sort(
@@ -1578,7 +1592,16 @@ const financialAnalyticsResolvers = {
             issueDate: prevDateQuery,
           };
 
-          const [prevInv, prevExp, prevCn, prevQuote] = await Promise.all([
+          const [
+            prevInv,
+            prevExp,
+            prevCn,
+            prevQuote,
+            prevInvCollected,
+            prevImpCollected,
+            prevInvUnpaid,
+            prevImpUnpaid,
+          ] = await Promise.all([
             Invoice.aggregate([
               { $match: prevInvoiceMatch },
               {
@@ -1687,6 +1710,73 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
+            // Taux de recouvrement N-1 : montant encaissé (Newbi, par paymentDate)
+            Invoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: "COMPLETED",
+                  paymentDate: { $ne: null, $gte: prevStart, $lte: prevEnd },
+                },
+              },
+              {
+                $group: { _id: null, collectedTTC: { $sum: "$finalTotalTTC" } },
+              },
+            ]),
+            // Taux de recouvrement N-1 : montant encaissé (importées)
+            ImportedInvoice.aggregate([
+              { $match: { workspaceId: wId, status: "COMPLETED" } },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
+                },
+              },
+              {
+                $match: { _effectiveDate: { $gte: prevStart, $lte: prevEnd } },
+              },
+              { $group: { _id: null, collectedTTC: { $sum: "$totalTTC" } } },
+            ]),
+            // Taux de recouvrement N-1 : montant impayé échu sans avoir (Newbi)
+            Invoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: ["PENDING", "OVERDUE"] },
+                  dueDate: {
+                    $ne: null,
+                    $lt: now,
+                    $gte: prevStart,
+                    $lte: prevEnd,
+                  },
+                },
+              },
+              {
+                $lookup: {
+                  from: "creditnotes",
+                  localField: "_id",
+                  foreignField: "originalInvoice",
+                  as: "_creditNotes",
+                },
+              },
+              { $match: { _creditNotes: { $size: 0 } } },
+              { $group: { _id: null, unpaidTTC: { $sum: "$finalTotalTTC" } } },
+            ]),
+            // Taux de recouvrement N-1 : montant impayé échu (importées)
+            ImportedInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: "VALIDATED",
+                  dueDate: {
+                    $ne: null,
+                    $lt: now,
+                    $gte: prevStart,
+                    $lte: prevEnd,
+                  },
+                },
+              },
+              { $group: { _id: null, unpaidTTC: { $sum: "$totalTTC" } } },
+            ]),
           ]);
 
           const prevInvResult = prevInv[0];
@@ -1730,15 +1820,18 @@ const financialAnalyticsResolvers = {
                 100
               : 0;
 
-          const prevInvoiceCountForRate =
-            prevInvTotals.invoiceCountExclCanceled ||
-            prevInvTotals.invoiceCount;
+          // Taux de recouvrement N-1 = montant encaissé / montant impayé × 100
+          // (même formule que la période courante : encaissé et impayés échus
+          // sans avoir, factures Newbi + importées).
+          const prevCollectedTTC =
+            (prevInvCollected[0]?.collectedTTC || 0) +
+            (prevImpCollected[0]?.collectedTTC || 0);
+          const prevUnpaidTTC =
+            (prevInvUnpaid[0]?.unpaidTTC || 0) +
+            (prevImpUnpaid[0]?.unpaidTTC || 0);
           const prevCollectionRate =
-            prevInvoiceCountForRate > 0
-              ? Math.round(
-                  (prevInvTotals.completedCount / prevInvoiceCountForRate) *
-                    10000,
-                ) / 100
+            prevUnpaidTTC > 0
+              ? Math.round((prevCollectedTTC / prevUnpaidTTC) * 10000) / 100
               : 0;
           const prevNbDays = Math.max(
             1,
