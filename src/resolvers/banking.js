@@ -367,6 +367,8 @@ const bankingResolvers = {
         if (input.currency) updateData.currency = input.currency;
         if (input.description) updateData.description = input.description;
         if (input.type) updateData.type = input.type.toLowerCase();
+        // Statut stocké en minuscules (cohérent avec createTransaction et l'enum du modèle)
+        if (input.status) updateData.status = input.status.toLowerCase();
         if (input.date) updateData.date = input.date;
         if (input.category) {
           updateData.category = input.category; // Catégorie fine (ex: "parking", "carburant") ou large (ex: "TRAVEL")
