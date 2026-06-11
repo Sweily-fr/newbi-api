@@ -890,7 +890,9 @@ const financialAnalyticsResolvers = {
             return ImportedInvoice.aggregate(pipeline);
           })(),
 
-          // 8. Imported invoices — monthly collected (COMPLETED = encaissé, by invoiceDate fallback createdAt)
+          // 8. Imported invoices — monthly collected (COMPLETED = encaissé).
+          // L'encaissement est reconnu à la DATE DE PAIEMENT (paymentDate),
+          // fallback invoiceDate puis createdAt pour les anciennes données.
           (() => {
             const importedCollectedMatch = {
               workspaceId: wId,
@@ -900,7 +902,12 @@ const financialAnalyticsResolvers = {
               { $match: importedCollectedMatch },
               {
                 $addFields: {
-                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
+                  _effectiveDate: {
+                    $ifNull: [
+                      "$paymentDate",
+                      { $ifNull: ["$invoiceDate", "$createdAt"] },
+                    ],
+                  },
                 },
               },
             ];
@@ -919,6 +926,12 @@ const financialAnalyticsResolvers = {
                   month: { $month: "$_effectiveDate" },
                 },
                 collectedTTC: { $sum: "$totalTTC" },
+                // totalHT vaut 0 par défaut sur le modèle → fallback TTC
+                collectedHT: {
+                  $sum: {
+                    $cond: [{ $gt: ["$totalHT", 0] }, "$totalHT", "$totalTTC"],
+                  },
+                },
                 collectedCount: { $sum: 1 },
               },
             });
@@ -1462,9 +1475,11 @@ const financialAnalyticsResolvers = {
             revenueVAT: 0,
             invoiceCount: 0,
           };
-          // Pour ImportedInvoice on n'a que TTC ; on l'ajoute en HT (approximation)
-          existing.revenueHT += r.collectedTTC || 0;
-          existing.revenueTTC += r.collectedTTC || 0;
+          const impHT = r.collectedHT || r.collectedTTC || 0;
+          const impTTC = r.collectedTTC || 0;
+          existing.revenueHT += impHT;
+          existing.revenueTTC += impTTC;
+          existing.revenueVAT += Math.max(0, impTTC - impHT);
           existing.invoiceCount += r.collectedCount || 0;
           paidMonthlyMap[m] = existing;
         }
@@ -1723,12 +1738,18 @@ const financialAnalyticsResolvers = {
                 $group: { _id: null, collectedTTC: { $sum: "$finalTotalTTC" } },
               },
             ]),
-            // Taux de recouvrement N-1 : montant encaissé (importées)
+            // Taux de recouvrement N-1 : montant encaissé (importées),
+            // reconnu à la date de paiement (fallback invoiceDate/createdAt)
             ImportedInvoice.aggregate([
               { $match: { workspaceId: wId, status: "COMPLETED" } },
               {
                 $addFields: {
-                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
+                  _effectiveDate: {
+                    $ifNull: [
+                      "$paymentDate",
+                      { $ifNull: ["$invoiceDate", "$createdAt"] },
+                    ],
+                  },
                 },
               },
               {
