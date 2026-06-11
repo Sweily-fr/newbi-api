@@ -296,10 +296,12 @@ const financialAnalyticsResolvers = {
         }
 
         // --- Expense match ---
+        // Dépenses reconnues au PAIEMENT : seules les dépenses payées
+        // (status PAID) comptent, à la date de paiement (fallback date).
         const expenseMatch = {
           workspaceId: wId,
+          status: "PAID",
         };
-        if (startDate || endDate) expenseMatch.date = dateQuery;
 
         // --- Quote match ---
         const quoteMatch = {
@@ -517,8 +519,18 @@ const financialAnalyticsResolvers = {
           ]),
 
           // 2. Expense aggregation — now with HT calculation
+          // T-rentabilité : dépenses payées uniquement, rattachées au mois de
+          // paiement (paymentDate, fallback date pour les anciennes données).
           Expense.aggregate([
             { $match: expenseMatch },
+            {
+              $addFields: {
+                _effectiveDate: { $ifNull: ["$paymentDate", "$date"] },
+              },
+            },
+            ...(startDate || endDate
+              ? [{ $match: { _effectiveDate: dateQuery } }]
+              : []),
             {
               $facet: {
                 totals: [
@@ -537,8 +549,8 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        year: { $year: "$date" },
-                        month: { $month: "$date" },
+                        year: { $year: "$_effectiveDate" },
+                        month: { $month: "$_effectiveDate" },
                       },
                       amountTTC: { $sum: "$amount" },
                       vatAmount: { $sum: { $ifNull: ["$vatAmount", 0] } },
@@ -586,8 +598,8 @@ const financialAnalyticsResolvers = {
                     $group: {
                       _id: {
                         category: "$category",
-                        year: { $year: "$date" },
-                        month: { $month: "$date" },
+                        year: { $year: "$_effectiveDate" },
+                        month: { $month: "$_effectiveDate" },
                       },
                       amount: { $sum: "$amount" },
                       count: { $sum: 1 },
@@ -972,20 +984,33 @@ const financialAnalyticsResolvers = {
           // 9. PurchaseInvoice — TVA déductible mensuelle + dépenses (HT/TTC/VAT)
           // (T22 : ajouter TVA des factures d'achats au graphique TVA)
           // (T11 : inclure les factures d'achats payées dans les dépenses mensuelles)
+          // T-rentabilité : seules les factures d'achat PAYÉES comptent en
+          // dépenses, rattachées au mois de paiement (paymentDate, fallback
+          // issueDate pour les anciennes données sans paymentDate).
           (() => {
-            const piMatch = { workspaceId: wId };
+            const pipeline = [
+              { $match: { workspaceId: wId, status: "PAID" } },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
+                },
+              },
+            ];
             if (startDate || endDate) {
-              piMatch.issueDate = {};
-              if (startDate) piMatch.issueDate.$gte = new Date(startDate);
-              if (endDate) piMatch.issueDate.$lte = new Date(endDate);
+              const effectiveDateFilter = {};
+              if (startDate) effectiveDateFilter.$gte = new Date(startDate);
+              if (endDate) effectiveDateFilter.$lte = new Date(endDate);
+              pipeline.push({
+                $match: { _effectiveDate: effectiveDateFilter },
+              });
             }
             return PurchaseInvoice.aggregate([
-              { $match: piMatch },
+              ...pipeline,
               {
                 $group: {
                   _id: {
-                    year: { $year: "$issueDate" },
-                    month: { $month: "$issueDate" },
+                    year: { $year: "$_effectiveDate" },
+                    month: { $month: "$_effectiveDate" },
                   },
                   amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
                   amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
