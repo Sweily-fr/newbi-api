@@ -295,14 +295,6 @@ const financialAnalyticsResolvers = {
           paidInvoiceMatch["client.id"] = clientId;
         }
 
-        // --- Expense match ---
-        // Dépenses reconnues au PAIEMENT : seules les dépenses payées
-        // (status PAID) comptent, à la date de paiement (fallback date).
-        const expenseMatch = {
-          workspaceId: wId,
-          status: "PAID",
-        };
-
         // --- Quote match ---
         const quoteMatch = {
           workspaceId: wId,
@@ -317,11 +309,32 @@ const financialAnalyticsResolvers = {
         if (startDate || endDate) creditNoteMatch.issueDate = dateQuery;
 
         const Invoice = mongoose.model("Invoice");
-        const Expense = mongoose.model("Expense");
         const PurchaseInvoice = mongoose.model("PurchaseInvoice");
         const Quote = mongoose.model("Quote");
         const CreditNote = mongoose.model("CreditNote");
         const ImportedInvoice = mongoose.model("ImportedInvoice");
+        const Transaction = mongoose.model("Transaction");
+
+        // --- Dépenses : transactions sortantes payées ---
+        // Les dépenses = factures d'achat PAYÉES (agrégation #9) + transactions
+        // sortantes payées (montant < 0, status "completed" — minuscule en
+        // base). Les transactions déjà rapprochées à une facture d'achat
+        // (linkedTransactionIds) sont exclues pour éviter le double comptage
+        // avec la facture payée. NB : workspaceId est stocké en String sur
+        // Transaction (pas en ObjectId).
+        const linkedTxIds = (
+          await PurchaseInvoice.distinct("linkedTransactionIds", {
+            workspaceId: wId,
+          })
+        ).filter(Boolean);
+        const outgoingTxMatch = {
+          workspaceId: String(workspaceId),
+          amount: { $lt: 0 },
+          status: "completed",
+          deletedAt: null,
+        };
+        if (linkedTxIds.length > 0) outgoingTxMatch._id = { $nin: linkedTxIds };
+        if (startDate || endDate) outgoingTxMatch.date = dateQuery;
 
         // ==============================
         // MAIN AGGREGATIONS (parallel)
@@ -495,52 +508,29 @@ const financialAnalyticsResolvers = {
                 // Note: receivables, overdueInvoices, agingBuckets moved to separate aggregation
                 // (unfiltered by issueDate — snapshot of current state)
                 // Note: monthlyCollected moved to a separate aggregation (filtered by paymentDate, not issueDate)
-                // Collection rate data (excluding CANCELED from denominator)
-                collectionTotals: [
-                  {
-                    $match: { status: { $ne: "CANCELED" } },
-                  },
-                  {
-                    $group: {
-                      _id: null,
-                      totalInvoices: { $sum: 1 },
-                      completedInvoices: {
-                        $sum: {
-                          $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0],
-                        },
-                      },
-                      // Revenue TTC excluding CANCELED (for DSO calculation)
-                      totalRevenueTTCExclCanceled: { $sum: "$finalTotalTTC" },
-                    },
-                  },
-                ],
               },
             },
           ]),
 
-          // 2. Expense aggregation — now with HT calculation
-          // T-rentabilité : dépenses payées uniquement, rattachées au mois de
-          // paiement (paymentDate, fallback date pour les anciennes données).
-          Expense.aggregate([
-            { $match: expenseMatch },
+          // 2. Dépenses : transactions sortantes payées (montant < 0,
+          // status "completed"), hors transactions rapprochées à une facture
+          // d'achat. Une transaction bancaire ne porte pas de TVA → vatAmount
+          // vaut 0 et HT = TTC. Montants stockés négatifs → valeur absolue.
+          Transaction.aggregate([
+            { $match: outgoingTxMatch },
             {
               $addFields: {
-                _effectiveDate: { $ifNull: ["$paymentDate", "$date"] },
+                _absAmount: { $abs: "$amount" },
               },
             },
-            ...(startDate || endDate
-              ? [{ $match: { _effectiveDate: dateQuery } }]
-              : []),
             {
               $facet: {
                 totals: [
                   {
                     $group: {
                       _id: null,
-                      totalExpensesTTC: { $sum: "$amount" },
-                      totalExpensesVAT: {
-                        $sum: { $ifNull: ["$vatAmount", 0] },
-                      },
+                      totalExpensesTTC: { $sum: "$_absAmount" },
+                      totalExpensesVAT: { $sum: 0 },
                       expenseCount: { $sum: 1 },
                     },
                   },
@@ -549,11 +539,11 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        year: { $year: "$_effectiveDate" },
-                        month: { $month: "$_effectiveDate" },
+                        year: { $year: "$date" },
+                        month: { $month: "$date" },
                       },
-                      amountTTC: { $sum: "$amount" },
-                      vatAmount: { $sum: { $ifNull: ["$vatAmount", 0] } },
+                      amountTTC: { $sum: "$_absAmount" },
+                      vatAmount: { $sum: 0 },
                       count: { $sum: 1 },
                     },
                   },
@@ -586,8 +576,8 @@ const financialAnalyticsResolvers = {
                 byCategory: [
                   {
                     $group: {
-                      _id: "$category",
-                      amount: { $sum: "$amount" },
+                      _id: { $ifNull: ["$expenseCategory", "OTHER"] },
+                      amount: { $sum: "$_absAmount" },
                       count: { $sum: 1 },
                     },
                   },
@@ -597,11 +587,11 @@ const financialAnalyticsResolvers = {
                   {
                     $group: {
                       _id: {
-                        category: "$category",
-                        year: { $year: "$_effectiveDate" },
-                        month: { $month: "$_effectiveDate" },
+                        category: { $ifNull: ["$expenseCategory", "OTHER"] },
+                        year: { $year: "$date" },
+                        month: { $month: "$date" },
                       },
-                      amount: { $sum: "$amount" },
+                      amount: { $sum: "$_absAmount" },
                       count: { $sum: 1 },
                     },
                   },
@@ -772,24 +762,26 @@ const financialAnalyticsResolvers = {
                         paidRevenueHT: { $sum: "$finalTotalHT" },
                         paidRevenueTTC: { $sum: "$finalTotalTTC" },
                         paidInvoiceCount: { $sum: 1 },
-                        // DSO : moyenne des jours entre émission et paiement (T10.4)
-                        avgDaysToPay: {
-                          $avg: {
+                        // DSO : jours entre émission et paiement (T10.4).
+                        // Somme + compteur pour pondérer la moyenne avec les
+                        // factures importées (paymentDate non-null via $match).
+                        sumDaysToPay: {
+                          $sum: {
                             $cond: [
-                              {
-                                $and: [
-                                  { $ne: ["$paymentDate", null] },
-                                  { $ne: ["$issueDate", null] },
-                                ],
-                              },
+                              { $ne: ["$issueDate", null] },
                               {
                                 $divide: [
                                   { $subtract: ["$paymentDate", "$issueDate"] },
                                   86400000,
                                 ],
                               },
-                              null,
+                              0,
                             ],
+                          },
+                        },
+                        daysToPayCount: {
+                          $sum: {
+                            $cond: [{ $ne: ["$issueDate", null] }, 1, 0],
                           },
                         },
                       },
@@ -898,7 +890,9 @@ const financialAnalyticsResolvers = {
             },
           ]),
 
-          // 7. Imported invoices — monthly invoiced (by invoiceDate, fallback createdAt)
+          // 7. Imported invoices — émises (by invoiceDate, fallback createdAt).
+          // Les factures importées comptent dans « Factures émises » et le
+          // « Panier moyen » au même titre que les factures créées sur Newbi.
           (() => {
             const importedMatch = {
               workspaceId: wId,
@@ -921,64 +915,125 @@ const financialAnalyticsResolvers = {
               });
             }
             pipeline.push({
-              $group: {
-                _id: {
-                  year: { $year: "$_effectiveDate" },
-                  month: { $month: "$_effectiveDate" },
-                },
-                invoicedTTC: { $sum: "$totalTTC" },
-                invoicedCount: { $sum: 1 },
+              $facet: {
+                monthly: [
+                  {
+                    $group: {
+                      _id: {
+                        year: { $year: "$_effectiveDate" },
+                        month: { $month: "$_effectiveDate" },
+                      },
+                      invoicedTTC: { $sum: "$totalTTC" },
+                      invoicedCount: { $sum: 1 },
+                    },
+                  },
+                ],
+                totals: [
+                  {
+                    $group: {
+                      _id: null,
+                      invoicedTTC: { $sum: "$totalTTC" },
+                      // totalHT vaut 0 par défaut sur le modèle → fallback TTC
+                      invoicedHT: {
+                        $sum: {
+                          $cond: [
+                            { $gt: ["$totalHT", 0] },
+                            "$totalHT",
+                            "$totalTTC",
+                          ],
+                        },
+                      },
+                      invoicedCount: { $sum: 1 },
+                    },
+                  },
+                ],
               },
             });
             return ImportedInvoice.aggregate(pipeline);
           })(),
 
-          // 8. Imported invoices — monthly collected (COMPLETED = encaissé).
-          // L'encaissement est reconnu à la DATE DE PAIEMENT (paymentDate),
-          // fallback invoiceDate puis createdAt pour les anciennes données.
+          // 8. Imported invoices — encaissées (COMPLETED). L'encaissement est
+          // reconnu STRICTEMENT à la DATE DE PAIEMENT (paymentDate) : une
+          // facture importée payée sans paymentDate n'entre pas dans le CA net.
           (() => {
-            const importedCollectedMatch = {
-              workspaceId: wId,
-              status: "COMPLETED",
-            };
-            const pipeline = [
-              { $match: importedCollectedMatch },
+            const importedPaymentDateRange = { $ne: null };
+            if (startDate) importedPaymentDateRange.$gte = new Date(startDate);
+            if (endDate) importedPaymentDateRange.$lte = new Date(endDate);
+            return ImportedInvoice.aggregate([
               {
-                $addFields: {
-                  _effectiveDate: {
-                    $ifNull: [
-                      "$paymentDate",
-                      { $ifNull: ["$invoiceDate", "$createdAt"] },
-                    ],
-                  },
+                $match: {
+                  workspaceId: wId,
+                  status: "COMPLETED",
+                  paymentDate: importedPaymentDateRange,
                 },
               },
-            ];
-            if (startDate || endDate) {
-              const effectiveDateFilter = {};
-              if (startDate) effectiveDateFilter.$gte = new Date(startDate);
-              if (endDate) effectiveDateFilter.$lte = new Date(endDate);
-              pipeline.push({
-                $match: { _effectiveDate: effectiveDateFilter },
-              });
-            }
-            pipeline.push({
-              $group: {
-                _id: {
-                  year: { $year: "$_effectiveDate" },
-                  month: { $month: "$_effectiveDate" },
+              {
+                $facet: {
+                  monthly: [
+                    {
+                      $group: {
+                        _id: {
+                          year: { $year: "$paymentDate" },
+                          month: { $month: "$paymentDate" },
+                        },
+                        collectedTTC: { $sum: "$totalTTC" },
+                        // totalHT vaut 0 par défaut sur le modèle → fallback TTC
+                        collectedHT: {
+                          $sum: {
+                            $cond: [
+                              { $gt: ["$totalHT", 0] },
+                              "$totalHT",
+                              "$totalTTC",
+                            ],
+                          },
+                        },
+                        collectedCount: { $sum: 1 },
+                      },
+                    },
+                  ],
+                  totals: [
+                    {
+                      $group: {
+                        _id: null,
+                        collectedTTC: { $sum: "$totalTTC" },
+                        collectedHT: {
+                          $sum: {
+                            $cond: [
+                              { $gt: ["$totalHT", 0] },
+                              "$totalHT",
+                              "$totalTTC",
+                            ],
+                          },
+                        },
+                        collectedCount: { $sum: 1 },
+                        // DSO : jours entre émission (invoiceDate) et paiement
+                        sumDaysToPay: {
+                          $sum: {
+                            $cond: [
+                              { $ne: ["$invoiceDate", null] },
+                              {
+                                $divide: [
+                                  {
+                                    $subtract: ["$paymentDate", "$invoiceDate"],
+                                  },
+                                  86400000,
+                                ],
+                              },
+                              0,
+                            ],
+                          },
+                        },
+                        daysToPayCount: {
+                          $sum: {
+                            $cond: [{ $ne: ["$invoiceDate", null] }, 1, 0],
+                          },
+                        },
+                      },
+                    },
+                  ],
                 },
-                collectedTTC: { $sum: "$totalTTC" },
-                // totalHT vaut 0 par défaut sur le modèle → fallback TTC
-                collectedHT: {
-                  $sum: {
-                    $cond: [{ $gt: ["$totalHT", 0] }, "$totalHT", "$totalTTC"],
-                  },
-                },
-                collectedCount: { $sum: 1 },
               },
-            });
-            return ImportedInvoice.aggregate(pipeline);
+            ]);
           })(),
 
           // 9. PurchaseInvoice — TVA déductible mensuelle + dépenses (HT/TTC/VAT)
@@ -1007,37 +1062,90 @@ const financialAnalyticsResolvers = {
             return PurchaseInvoice.aggregate([
               ...pipeline,
               {
-                $group: {
-                  _id: {
-                    year: { $year: "$_effectiveDate" },
-                    month: { $month: "$_effectiveDate" },
-                  },
-                  amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
-                  amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
-                  amountHT: { $sum: { $ifNull: ["$amountHT", 0] } },
-                  count: { $sum: 1 },
-                },
-              },
-              {
-                $project: {
-                  _id: 0,
-                  month: {
-                    $concat: [
-                      { $toString: "$_id.year" },
-                      "-",
-                      {
-                        $cond: {
-                          if: { $lt: ["$_id.month", 10] },
-                          then: { $concat: ["0", { $toString: "$_id.month" }] },
-                          else: { $toString: "$_id.month" },
+                $facet: {
+                  monthly: [
+                    {
+                      $group: {
+                        _id: {
+                          year: { $year: "$_effectiveDate" },
+                          month: { $month: "$_effectiveDate" },
                         },
+                        amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
+                        amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
+                        amountHT: { $sum: { $ifNull: ["$amountHT", 0] } },
+                        count: { $sum: 1 },
                       },
-                    ],
-                  },
-                  amountTTC: 1,
-                  amountTVA: 1,
-                  amountHT: 1,
-                  count: 1,
+                    },
+                    {
+                      $project: {
+                        _id: 0,
+                        month: {
+                          $concat: [
+                            { $toString: "$_id.year" },
+                            "-",
+                            {
+                              $cond: {
+                                if: { $lt: ["$_id.month", 10] },
+                                then: {
+                                  $concat: ["0", { $toString: "$_id.month" }],
+                                },
+                                else: { $toString: "$_id.month" },
+                              },
+                            },
+                          ],
+                        },
+                        amountTTC: 1,
+                        amountTVA: 1,
+                        amountHT: 1,
+                        count: 1,
+                      },
+                    },
+                  ],
+                  byCategory: [
+                    {
+                      $group: {
+                        _id: { $ifNull: ["$category", "OTHER"] },
+                        amount: { $sum: { $ifNull: ["$amountTTC", 0] } },
+                        count: { $sum: 1 },
+                      },
+                    },
+                  ],
+                  byCategoryMonthly: [
+                    {
+                      $group: {
+                        _id: {
+                          category: { $ifNull: ["$category", "OTHER"] },
+                          year: { $year: "$_effectiveDate" },
+                          month: { $month: "$_effectiveDate" },
+                        },
+                        amount: { $sum: { $ifNull: ["$amountTTC", 0] } },
+                        count: { $sum: 1 },
+                      },
+                    },
+                    {
+                      $project: {
+                        _id: 0,
+                        category: "$_id.category",
+                        month: {
+                          $concat: [
+                            { $toString: "$_id.year" },
+                            "-",
+                            {
+                              $cond: {
+                                if: { $lt: ["$_id.month", 10] },
+                                then: {
+                                  $concat: ["0", { $toString: "$_id.month" }],
+                                },
+                                else: { $toString: "$_id.month" },
+                              },
+                            },
+                          ],
+                        },
+                        amount: { $round: ["$amount", 2] },
+                        count: 1,
+                      },
+                    },
+                  ],
                 },
               },
             ]);
@@ -1158,12 +1266,6 @@ const financialAnalyticsResolvers = {
           invoiceCount: 0,
           clients: [],
         };
-        const collectionTotals = invResult.collectionTotals[0] || {
-          totalInvoices: 0,
-          completedInvoices: 0,
-          totalRevenueTTCExclCanceled: 0,
-        };
-
         // Current receivables snapshot (unfiltered by issueDate)
         const recvResult = currentReceivablesStats[0] || {
           receivables: [],
@@ -1174,15 +1276,21 @@ const financialAnalyticsResolvers = {
           outstandingReceivables: 0,
         };
 
-        // Expense results — incluant aussi les factures d'achats (PurchaseInvoice)
-        // pour T10/T11/T22.
+        // Dépenses = transactions sortantes payées (expenseStats) + factures
+        // d'achats payées (purchaseInvoiceMonthlyStats).
         const expResult = expenseStats[0];
         const rawExpTotals = expResult.totals[0] || {
           totalExpensesTTC: 0,
           totalExpensesVAT: 0,
           expenseCount: 0,
         };
-        const piTotalAgg = (purchaseInvoiceMonthlyStats || []).reduce(
+        const piFacet = (purchaseInvoiceMonthlyStats &&
+          purchaseInvoiceMonthlyStats[0]) || {
+          monthly: [],
+          byCategory: [],
+          byCategoryMonthly: [],
+        };
+        const piTotalAgg = (piFacet.monthly || []).reduce(
           (acc, m) => {
             acc.amountTTC += m.amountTTC || 0;
             acc.amountTVA += m.amountTVA || 0;
@@ -1208,7 +1316,26 @@ const financialAnalyticsResolvers = {
           paidRevenueHT: 0,
           paidRevenueTTC: 0,
           paidInvoiceCount: 0,
-          avgDaysToPay: null,
+          sumDaysToPay: 0,
+          daysToPayCount: 0,
+        };
+
+        // Factures importées — facettes émises (#7) et encaissées (#8)
+        const importedInvoicedFacet = (importedInvoiceMonthlyStats &&
+          importedInvoiceMonthlyStats[0]) || { monthly: [], totals: [] };
+        const importedInvoicedTotals = importedInvoicedFacet.totals[0] || {
+          invoicedHT: 0,
+          invoicedTTC: 0,
+          invoicedCount: 0,
+        };
+        const importedCollectedFacet = (importedInvoiceCollectedStats &&
+          importedInvoiceCollectedStats[0]) || { monthly: [], totals: [] };
+        const importedCollectedTotals = importedCollectedFacet.totals[0] || {
+          collectedHT: 0,
+          collectedTTC: 0,
+          collectedCount: 0,
+          sumDaysToPay: 0,
+          daysToPayCount: 0,
         };
 
         // Quote results
@@ -1248,11 +1375,7 @@ const financialAnalyticsResolvers = {
         // période (filtre paymentDate), moins les avoirs « cash » (liés à une
         // facture encaissée). Les avoirs sur factures non payées/supprimées ne
         // réduisent pas le CA encaissé.
-        const importedCollectedHT = (
-          importedInvoiceCollectedStats || []
-        ).reduce((sum, r) => sum + (r.collectedHT || r.collectedTTC || 0), 0);
-        // Note: si collectedHT manque côté ImportedInvoice agg, on retombera sur
-        // collectedTTC. C'est volontairement approximatif faute de champ HT systématique.
+        const importedCollectedHT = importedCollectedTotals.collectedHT || 0;
         const paidRevenueHT = paidTotalsAgg.paidRevenueHT || 0;
         const netRevenueHT =
           Math.round(
@@ -1298,29 +1421,17 @@ const financialAnalyticsResolvers = {
         );
         const overdueCount = overdueInvoices.length;
 
-        // DSO (T10.4) : moyenne directe entre date d'émission et date de
-        // paiement des factures payées sur la période. Fallback sur l'ancienne
-        // formule (créances en cours / CA × nbJours) si aucune facture payée.
-        const periodStart = new Date(startDate);
-        const periodEnd = new Date(endDate);
-        const nbDays = Math.max(
-          1,
-          Math.ceil((periodEnd - periodStart) / 86400000),
-        );
-        const dsoFromPayments = paidTotalsAgg.avgDaysToPay;
-        let dso;
-        if (dsoFromPayments != null && !Number.isNaN(dsoFromPayments)) {
-          dso = Math.round(dsoFromPayments * 100) / 100;
-        } else {
-          const revenueTTCForDso =
-            collectionTotals.totalRevenueTTCExclCanceled || totalRevenueTTC;
-          dso =
-            revenueTTCForDso > 0
-              ? Math.round(
-                  (outstandingReceivables / revenueTTCForDso) * nbDays * 100,
-                ) / 100
-              : 0;
-        }
+        // DSO (T10.4) : moyenne pondérée des jours entre date d'émission et
+        // date de paiement des factures payées sur la période — factures
+        // Newbi + importées. 0 si aucune facture payée sur la période.
+        const dsoSumDays =
+          (paidTotalsAgg.sumDaysToPay || 0) +
+          (importedCollectedTotals.sumDaysToPay || 0);
+        const dsoCount =
+          (paidTotalsAgg.daysToPayCount || 0) +
+          (importedCollectedTotals.daysToPayCount || 0);
+        const dso =
+          dsoCount > 0 ? Math.round((dsoSumDays / dsoCount) * 100) / 100 : 0;
 
         // Taux de recouvrement = montant encaissé / montant impayé × 100.
         // Calculé plus bas, à partir des totaux de `monthlyCollection`
@@ -1364,7 +1475,7 @@ const financialAnalyticsResolvers = {
           };
         }
         // Merge imported invoices into invoicedMap
-        for (const r of importedInvoiceMonthlyStats || []) {
+        for (const r of importedInvoicedFacet.monthly || []) {
           if (!r._id.year || !r._id.month) continue;
           const m = `${r._id.year}-${String(r._id.month).padStart(2, "0")}`;
           if (invoicedMap[m]) {
@@ -1387,7 +1498,7 @@ const financialAnalyticsResolvers = {
           };
         }
         // Merge imported invoices into collectedMap
-        for (const r of importedInvoiceCollectedStats || []) {
+        for (const r of importedCollectedFacet.monthly || []) {
           if (!r._id.year || !r._id.month) continue;
           const m = `${r._id.year}-${String(r._id.month).padStart(2, "0")}`;
           if (collectedMap[m]) {
@@ -1493,8 +1604,8 @@ const financialAnalyticsResolvers = {
         // T11 + T22 : fusion des factures d'achats (PurchaseInvoice) dans le
         // map mensuel des dépenses (HT/TTC/VAT) — la TVA déductible vient des
         // factures d'achats, et les dépenses du mois doivent inclure factures
-        // d'achats + dépenses libres.
-        for (const m of purchaseInvoiceMonthlyStats || []) {
+        // d'achats + transactions sortantes payées.
+        for (const m of piFacet.monthly || []) {
           if (!m.month) continue;
           const existing = expenseMonthlyMap[m.month] || {
             amountTTC: 0,
@@ -1533,7 +1644,7 @@ const financialAnalyticsResolvers = {
             invoiceCount: r.collectedCount || 0,
           };
         }
-        for (const r of importedInvoiceCollectedStats || []) {
+        for (const r of importedCollectedFacet.monthly || []) {
           if (!r._id?.year || !r._id?.month) continue;
           const m = `${r._id.year}-${String(r._id.month).padStart(2, "0")}`;
           const existing = paidMonthlyMap[m] || {
@@ -1667,10 +1778,19 @@ const financialAnalyticsResolvers = {
             status: { $ne: "DRAFT" },
             issueDate: prevDateQuery,
           };
-          const prevExpenseMatch = {
-            workspaceId: wId,
+          // Dépenses N-1 : transactions sortantes payées (mêmes règles que la
+          // période courante — montant < 0, status "completed", hors
+          // transactions rapprochées à une facture d'achat).
+          const prevOutgoingTxMatch = {
+            workspaceId: String(workspaceId),
+            amount: { $lt: 0 },
+            status: "completed",
+            deletedAt: null,
             date: prevDateQuery,
           };
+          if (linkedTxIds.length > 0) {
+            prevOutgoingTxMatch._id = { $nin: linkedTxIds };
+          }
           const prevCreditNoteMatch = {
             workspaceId: wId,
             issueDate: prevDateQuery,
@@ -1686,6 +1806,7 @@ const financialAnalyticsResolvers = {
             prevInvUnpaid,
             prevImpUnpaid,
             prevPurchaseInv,
+            prevImpInvoiced,
           ] = await Promise.all([
             Invoice.aggregate([
               { $match: prevInvoiceMatch },
@@ -1758,13 +1879,13 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
-            Expense.aggregate([
-              { $match: prevExpenseMatch },
+            Transaction.aggregate([
+              { $match: prevOutgoingTxMatch },
               {
                 $group: {
                   _id: null,
-                  totalExpensesTTC: { $sum: "$amount" },
-                  totalExpensesVAT: { $sum: { $ifNull: ["$vatAmount", 0] } },
+                  totalExpensesTTC: { $sum: { $abs: "$amount" } },
+                  totalExpensesVAT: { $sum: 0 },
                 },
               },
             ]),
@@ -1825,7 +1946,8 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
-            // Taux de recouvrement N-1 : montant encaissé (Newbi, par paymentDate)
+            // Encaissé N-1 (Newbi, par paymentDate) — alimente le CA net,
+            // le taux de recouvrement et le DSO N-1.
             Invoice.aggregate([
               {
                 $match: {
@@ -1839,25 +1961,35 @@ const financialAnalyticsResolvers = {
                   _id: null,
                   collectedTTC: { $sum: "$finalTotalTTC" },
                   collectedHT: { $sum: "$finalTotalHT" },
-                },
-              },
-            ]),
-            // Taux de recouvrement N-1 : montant encaissé (importées),
-            // reconnu à la date de paiement (fallback invoiceDate/createdAt)
-            ImportedInvoice.aggregate([
-              { $match: { workspaceId: wId, status: "COMPLETED" } },
-              {
-                $addFields: {
-                  _effectiveDate: {
-                    $ifNull: [
-                      "$paymentDate",
-                      { $ifNull: ["$invoiceDate", "$createdAt"] },
-                    ],
+                  sumDaysToPay: {
+                    $sum: {
+                      $cond: [
+                        { $ne: ["$issueDate", null] },
+                        {
+                          $divide: [
+                            { $subtract: ["$paymentDate", "$issueDate"] },
+                            86400000,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                  daysToPayCount: {
+                    $sum: { $cond: [{ $ne: ["$issueDate", null] }, 1, 0] },
                   },
                 },
               },
+            ]),
+            // Encaissé N-1 (importées) — STRICTEMENT à la date de paiement,
+            // comme la période courante.
+            ImportedInvoice.aggregate([
               {
-                $match: { _effectiveDate: { $gte: prevStart, $lte: prevEnd } },
+                $match: {
+                  workspaceId: wId,
+                  status: "COMPLETED",
+                  paymentDate: { $ne: null, $gte: prevStart, $lte: prevEnd },
+                },
               },
               {
                 $group: {
@@ -1872,6 +2004,23 @@ const financialAnalyticsResolvers = {
                         "$totalTTC",
                       ],
                     },
+                  },
+                  sumDaysToPay: {
+                    $sum: {
+                      $cond: [
+                        { $ne: ["$invoiceDate", null] },
+                        {
+                          $divide: [
+                            { $subtract: ["$paymentDate", "$invoiceDate"] },
+                            86400000,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                  daysToPayCount: {
+                    $sum: { $cond: [{ $ne: ["$invoiceDate", null] }, 1, 0] },
                   },
                 },
               },
@@ -1917,20 +2066,53 @@ const financialAnalyticsResolvers = {
               },
               { $group: { _id: null, unpaidTTC: { $sum: "$totalTTC" } } },
             ]),
-            // Dépenses N-1 : factures d'achat (mêmes règles que la période
-            // courante — par issueDate, ajoutées aux dépenses libres).
+            // Dépenses N-1 : factures d'achat PAYÉES (mêmes règles que la
+            // période courante — par paymentDate, fallback issueDate).
             PurchaseInvoice.aggregate([
+              { $match: { workspaceId: wId, status: "PAID" } },
               {
-                $match: {
-                  workspaceId: wId,
-                  issueDate: prevDateQuery,
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
                 },
               },
+              { $match: { _effectiveDate: prevDateQuery } },
               {
                 $group: {
                   _id: null,
                   amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
                   amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
+                },
+              },
+            ]),
+            // Factures importées émises N-1 (VALIDATED/COMPLETED, par
+            // invoiceDate) — pour « Factures émises » et « Panier moyen » N-1.
+            ImportedInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: ["VALIDATED", "COMPLETED"] },
+                },
+              },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
+                },
+              },
+              { $match: { _effectiveDate: prevDateQuery } },
+              {
+                $group: {
+                  _id: null,
+                  invoicedTTC: { $sum: "$totalTTC" },
+                  invoicedHT: {
+                    $sum: {
+                      $cond: [
+                        { $gt: ["$totalHT", 0] },
+                        "$totalHT",
+                        "$totalTTC",
+                      ],
+                    },
+                  },
+                  invoicedCount: { $sum: 1 },
                 },
               },
             ]),
@@ -1967,16 +2149,20 @@ const financialAnalyticsResolvers = {
           };
 
           const prevTotalRevenueHT = prevInvTotals.totalRevenueHT;
-          const prevTotalRevenueTTC = prevInvTotals.totalRevenueTTC;
           const prevCreditNoteTotalHT = prevCnTotals.totalHT;
+          const prevImpInvoicedTotals = prevImpInvoiced[0] || {
+            invoicedHT: 0,
+            invoicedTTC: 0,
+            invoicedCount: 0,
+          };
           // CA net N-1 sur la même base que la période courante : factures
           // ENCAISSÉES (paymentDate) + avoirs « cash » — et non le CA facturé.
           const prevNetRevenueHT =
             (prevInvCollected[0]?.collectedHT || 0) +
             (prevImpCollected[0]?.collectedHT || 0) +
             (prevCnCashTotals.totalHT || 0);
-          // Dépenses N-1 = dépenses libres + factures d'achat (comme la
-          // période courante).
+          // Dépenses N-1 = transactions sortantes payées + factures d'achat
+          // payées (comme la période courante).
           const prevTotalExpensesTTC =
             prevExpTotals.totalExpensesTTC + (prevPiTotals.amountTTC || 0);
           const prevTotalExpensesVAT =
@@ -2007,20 +2193,18 @@ const financialAnalyticsResolvers = {
             prevUnpaidTTC > 0
               ? Math.round((prevCollectedTTC / prevUnpaidTTC) * 10000) / 100
               : 0;
-          const prevNbDays = Math.max(
-            1,
-            Math.ceil((prevEnd - prevStart) / 86400000),
-          );
-          const prevRevenueTTCForDso =
-            prevInvTotals.revenueTTCExclCanceled || prevTotalRevenueTTC;
+          // DSO N-1 : même définition que la période courante — moyenne
+          // pondérée des jours entre émission et paiement des factures payées
+          // sur N-1 (Newbi + importées).
+          const prevDsoSumDays =
+            (prevInvCollected[0]?.sumDaysToPay || 0) +
+            (prevImpCollected[0]?.sumDaysToPay || 0);
+          const prevDsoCount =
+            (prevInvCollected[0]?.daysToPayCount || 0) +
+            (prevImpCollected[0]?.daysToPayCount || 0);
           const prevDso =
-            prevRevenueTTCForDso > 0
-              ? Math.round(
-                  (prevReceivables.outstandingReceivables /
-                    prevRevenueTTCForDso) *
-                    prevNbDays *
-                    100,
-                ) / 100
+            prevDsoCount > 0
+              ? Math.round((prevDsoSumDays / prevDsoCount) * 100) / 100
               : 0;
 
           const prevActiveClientCount = (prevInvTotals.clients || []).filter(
@@ -2067,11 +2251,21 @@ const financialAnalyticsResolvers = {
             totalExpensesHT: Math.round(prevTotalExpensesHT * 100) / 100,
             grossMargin: Math.round(prevGrossMargin * 100) / 100,
             grossMarginRate: prevGrossMarginRate,
-            invoiceCount: prevInvTotals.invoiceCount,
+            // Factures émises et panier moyen N-1 : Newbi + importées,
+            // comme la période courante.
+            invoiceCount:
+              (prevInvTotals.invoiceCount || 0) +
+              (prevImpInvoicedTotals.invoicedCount || 0),
             averageInvoiceHT:
-              prevInvTotals.invoiceCount > 0
+              (prevInvTotals.invoiceCount || 0) +
+                (prevImpInvoicedTotals.invoicedCount || 0) >
+              0
                 ? Math.round(
-                    (prevTotalRevenueHT / prevInvTotals.invoiceCount) * 100,
+                    ((prevTotalRevenueHT +
+                      (prevImpInvoicedTotals.invoicedHT || 0)) /
+                      ((prevInvTotals.invoiceCount || 0) +
+                        (prevImpInvoicedTotals.invoicedCount || 0))) *
+                      100,
                   ) / 100
                 : 0,
             collectionRate: prevCollectionRate,
@@ -2259,9 +2453,78 @@ const financialAnalyticsResolvers = {
               : a.month.localeCompare(b.month),
           );
 
+        // ── Dépenses par catégorie : transactions sortantes payées
+        // (expenseCategory) + factures d'achat payées (category), fusionnées
+        // pour rester cohérent avec le total « Dépenses HT ».
+        const expenseCategoryMap = new Map();
+        const addExpenseCategory = (category, amount, count) => {
+          const key = category || "OTHER";
+          const entry = expenseCategoryMap.get(key) || { amount: 0, count: 0 };
+          entry.amount += amount || 0;
+          entry.count += count || 0;
+          expenseCategoryMap.set(key, entry);
+        };
+        for (const c of expResult.byCategory || []) {
+          addExpenseCategory(c._id, c.amount, c.count);
+        }
+        for (const c of piFacet.byCategory || []) {
+          addExpenseCategory(c._id, c.amount, c.count);
+        }
+        const expenseByCategory = [...expenseCategoryMap.entries()]
+          .map(([category, e]) => ({
+            category,
+            amount: Math.round(e.amount * 100) / 100,
+            count: e.count,
+          }))
+          .sort((a, b) => b.amount - a.amount);
+
+        const expenseCategoryMonthlyMap = new Map();
+        const addExpenseCategoryMonthly = (category, month, amount, count) => {
+          if (!month) return;
+          const cat = category || "OTHER";
+          const key = `${cat}::${month}`;
+          const entry = expenseCategoryMonthlyMap.get(key) || {
+            category: cat,
+            month,
+            amount: 0,
+            count: 0,
+          };
+          entry.amount += amount || 0;
+          entry.count += count || 0;
+          expenseCategoryMonthlyMap.set(key, entry);
+        };
+        for (const e of expResult.byCategoryMonthly || []) {
+          addExpenseCategoryMonthly(e.category, e.month, e.amount, e.count);
+        }
+        for (const e of piFacet.byCategoryMonthly || []) {
+          addExpenseCategoryMonthly(e.category, e.month, e.amount, e.count);
+        }
+        const expenseByCategoryMonthly = [...expenseCategoryMonthlyMap.values()]
+          .map((e) => ({
+            category: e.category,
+            month: e.month,
+            amount: Math.round(e.amount * 100) / 100,
+            count: e.count,
+          }))
+          .sort((a, b) =>
+            a.month === b.month
+              ? a.category.localeCompare(b.category)
+              : a.month.localeCompare(b.month),
+          );
+
         // ==============================
         // BUILD KPI
         // ==============================
+
+        // Factures émises et panier moyen : factures créées sur Newbi
+        // (collection Invoice, hors brouillons) + factures importées
+        // (VALIDATED/COMPLETED), sur la base du CA facturé (date d'émission).
+        const issuedInvoiceCount =
+          (invTotals.invoiceCount || 0) +
+          (importedInvoicedTotals.invoicedCount || 0);
+        const issuedRevenueHT =
+          totalRevenueHT + (importedInvoicedTotals.invoicedHT || 0);
+
         const kpi = {
           totalRevenueHT,
           totalRevenueTTC,
@@ -2269,12 +2532,11 @@ const financialAnalyticsResolvers = {
           totalExpenses: totalExpensesTTC,
           netResult:
             Math.round((totalRevenueHT - totalExpensesTTC) * 100) / 100,
-          invoiceCount: invTotals.invoiceCount,
+          invoiceCount: issuedInvoiceCount,
           expenseCount: expTotals.expenseCount,
           averageInvoiceHT:
-            invTotals.invoiceCount > 0
-              ? Math.round((totalRevenueHT / invTotals.invoiceCount) * 100) /
-                100
+            issuedInvoiceCount > 0
+              ? Math.round((issuedRevenueHT / issuedInvoiceCount) * 100) / 100
               : 0,
           clientCount: activeClientCount,
           quoteConversionRate,
@@ -2323,18 +2585,9 @@ const financialAnalyticsResolvers = {
             totalTTC: Math.round(s.totalTTC * 100) / 100,
           })),
           topClients,
-          expenseByCategory: expResult.byCategory.map((c) => ({
-            category: c._id || "OTHER",
-            amount: Math.round(c.amount * 100) / 100,
-            count: c.count,
-          })),
+          expenseByCategory,
           revenueByClientMonthly,
-          expenseByCategoryMonthly: expResult.byCategoryMonthly.map((e) => ({
-            category: e.category,
-            month: e.month,
-            amount: e.amount,
-            count: e.count,
-          })),
+          expenseByCategoryMonthly,
           collection: {
             overdueInvoices,
             agingBuckets,
