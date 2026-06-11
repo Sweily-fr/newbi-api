@@ -637,8 +637,28 @@ const financialAnalyticsResolvers = {
           ]),
 
           // 4. CreditNote aggregation
+          // Le CA est reconnu à l'encaissement (paymentDate) : seuls les
+          // avoirs « cash » — liés à une facture encaissée (COMPLETED), donc
+          // correspondant à un remboursement réel — doivent réduire le CA net.
+          // Les avoirs sur factures non payées ou supprimées (orphelins)
+          // annulent un CA qui n'a jamais été encaissé : ils sont comptés dans
+          // `totals` (KPI « avoirs émis ») mais exclus de `cashTotals` et
+          // `monthly` (qui alimentent netRevenueHT global et mensuel).
           CreditNote.aggregate([
             { $match: creditNoteMatch },
+            {
+              $lookup: {
+                from: "invoices",
+                localField: "originalInvoice",
+                foreignField: "_id",
+                as: "_origInvoice",
+              },
+            },
+            {
+              $addFields: {
+                _origStatus: { $arrayElemAt: ["$_origInvoice.status", 0] },
+              },
+            },
             {
               $facet: {
                 totals: [
@@ -652,7 +672,18 @@ const financialAnalyticsResolvers = {
                     },
                   },
                 ],
+                cashTotals: [
+                  { $match: { _origStatus: "COMPLETED" } },
+                  {
+                    $group: {
+                      _id: null,
+                      totalHT: { $sum: "$finalTotalHT" },
+                      totalTTC: { $sum: "$finalTotalTTC" },
+                    },
+                  },
+                ],
                 monthly: [
+                  { $match: { _origStatus: "COMPLETED" } },
                   {
                     $group: {
                       _id: {
@@ -1171,6 +1202,12 @@ const financialAnalyticsResolvers = {
           totalVAT: 0,
           count: 0,
         };
+        // Avoirs « cash » uniquement (facture d'origine encaissée) — seuls
+        // ceux-là réduisent le CA encaissé.
+        const cnCashTotals = (cnResult.cashTotals || [])[0] || {
+          totalHT: 0,
+          totalTTC: 0,
+        };
 
         // ==============================
         // COMPUTE DERIVED KPI
@@ -1179,10 +1216,13 @@ const financialAnalyticsResolvers = {
         const totalRevenueHT = Math.round(invTotals.totalRevenueHT * 100) / 100;
         const totalRevenueTTC =
           Math.round(invTotals.totalRevenueTTC * 100) / 100;
-        const creditNoteTotalHT = Math.round(cnTotals.totalHT * 100) / 100; // negative
+        const creditNoteTotalHT = Math.round(cnTotals.totalHT * 100) / 100; // negative — avoirs émis (KPI)
+        const cashCreditNoteHT = Math.round(cnCashTotals.totalHT * 100) / 100; // negative — avoirs sur factures encaissées
 
         // T10.1 : netRevenueHT = factures payées (Newbi + importées) sur la
-        // période (filtre paymentDate), moins les avoirs émis sur la période.
+        // période (filtre paymentDate), moins les avoirs « cash » (liés à une
+        // facture encaissée). Les avoirs sur factures non payées/supprimées ne
+        // réduisent pas le CA encaissé.
         const importedCollectedHT = (
           importedInvoiceCollectedStats || []
         ).reduce((sum, r) => sum + (r.collectedHT || r.collectedTTC || 0), 0);
@@ -1191,7 +1231,7 @@ const financialAnalyticsResolvers = {
         const paidRevenueHT = paidTotalsAgg.paidRevenueHT || 0;
         const netRevenueHT =
           Math.round(
-            (paidRevenueHT + importedCollectedHT + creditNoteTotalHT) * 100,
+            (paidRevenueHT + importedCollectedHT + cashCreditNoteHT) * 100,
           ) / 100;
 
         const totalExpensesTTC =
@@ -1445,6 +1485,8 @@ const financialAnalyticsResolvers = {
           };
         }
 
+        // Avoirs « cash » par mois (cnResult.monthly est déjà filtré sur les
+        // avoirs dont la facture d'origine est encaissée).
         const cnMonthlyMap = {};
         for (const m of cnResult.monthly) {
           cnMonthlyMap[m.month] = { totalHT: m.totalHT, totalTTC: m.totalTTC };
@@ -1515,12 +1557,14 @@ const financialAnalyticsResolvers = {
 
           // T11.1 : CA mensuel = factures payées sur le mois (HT)
           // T11.3 : Marge brute = CA HT − Dépenses HT
+          // Sans CA encaissé sur le mois, le taux n'est pas défini → null
+          // (et non 0, qui laisserait croire à une marge nulle).
           const monthNetRevenueHT = paid.revenueHT + cn.totalHT;
           const monthGrossMargin = monthNetRevenueHT - exp.amountHT;
           const monthGrossMarginRate =
             monthNetRevenueHT > 0
               ? Math.round((monthGrossMargin / monthNetRevenueHT) * 10000) / 100
-              : 0;
+              : null;
 
           return {
             month,
@@ -1575,7 +1619,7 @@ const financialAnalyticsResolvers = {
             creditNoteHT: Math.round(cn.totalHT * 100) / 100,
             netRevenueHT: Math.round(monthNetRevenueHT * 100) / 100,
             grossMargin: Math.round(monthGrossMargin * 100) / 100,
-            grossMarginRate: 0,
+            grossMarginRate: null,
           });
         }
         monthlyRevenue.sort((a, b) => a.month.localeCompare(b.month));
@@ -1616,6 +1660,7 @@ const financialAnalyticsResolvers = {
             prevImpCollected,
             prevInvUnpaid,
             prevImpUnpaid,
+            prevPurchaseInv,
           ] = await Promise.all([
             Invoice.aggregate([
               { $match: prevInvoiceMatch },
@@ -1698,12 +1743,42 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
+            // Avoirs N-1 : mêmes règles que la période courante — totals (tous,
+            // KPI) vs cashTotals (facture d'origine encaissée → réduit le CA).
             CreditNote.aggregate([
               { $match: prevCreditNoteMatch },
               {
-                $group: {
-                  _id: null,
-                  totalHT: { $sum: "$finalTotalHT" },
+                $lookup: {
+                  from: "invoices",
+                  localField: "originalInvoice",
+                  foreignField: "_id",
+                  as: "_origInvoice",
+                },
+              },
+              {
+                $addFields: {
+                  _origStatus: { $arrayElemAt: ["$_origInvoice.status", 0] },
+                },
+              },
+              {
+                $facet: {
+                  totals: [
+                    {
+                      $group: {
+                        _id: null,
+                        totalHT: { $sum: "$finalTotalHT" },
+                      },
+                    },
+                  ],
+                  cashTotals: [
+                    { $match: { _origStatus: "COMPLETED" } },
+                    {
+                      $group: {
+                        _id: null,
+                        totalHT: { $sum: "$finalTotalHT" },
+                      },
+                    },
+                  ],
                 },
               },
             ]),
@@ -1735,7 +1810,11 @@ const financialAnalyticsResolvers = {
                 },
               },
               {
-                $group: { _id: null, collectedTTC: { $sum: "$finalTotalTTC" } },
+                $group: {
+                  _id: null,
+                  collectedTTC: { $sum: "$finalTotalTTC" },
+                  collectedHT: { $sum: "$finalTotalHT" },
+                },
               },
             ]),
             // Taux de recouvrement N-1 : montant encaissé (importées),
@@ -1755,7 +1834,22 @@ const financialAnalyticsResolvers = {
               {
                 $match: { _effectiveDate: { $gte: prevStart, $lte: prevEnd } },
               },
-              { $group: { _id: null, collectedTTC: { $sum: "$totalTTC" } } },
+              {
+                $group: {
+                  _id: null,
+                  collectedTTC: { $sum: "$totalTTC" },
+                  // totalHT vaut 0 par défaut sur le modèle → fallback TTC
+                  collectedHT: {
+                    $sum: {
+                      $cond: [
+                        { $gt: ["$totalHT", 0] },
+                        "$totalHT",
+                        "$totalTTC",
+                      ],
+                    },
+                  },
+                },
+              },
             ]),
             // Taux de recouvrement N-1 : montant impayé échu sans avoir (Newbi)
             Invoice.aggregate([
@@ -1798,6 +1892,23 @@ const financialAnalyticsResolvers = {
               },
               { $group: { _id: null, unpaidTTC: { $sum: "$totalTTC" } } },
             ]),
+            // Dépenses N-1 : factures d'achat (mêmes règles que la période
+            // courante — par issueDate, ajoutées aux dépenses libres).
+            PurchaseInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  issueDate: prevDateQuery,
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
+                  amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
+                },
+              },
+            ]),
           ]);
 
           const prevInvResult = prevInv[0];
@@ -1812,7 +1923,15 @@ const financialAnalyticsResolvers = {
             totalExpensesTTC: 0,
             totalExpensesVAT: 0,
           };
-          const prevCnTotals = prevCn[0] || { totalHT: 0 };
+          const prevCnResult = prevCn[0] || {};
+          const prevCnTotals = (prevCnResult.totals || [])[0] || { totalHT: 0 };
+          const prevCnCashTotals = (prevCnResult.cashTotals || [])[0] || {
+            totalHT: 0,
+          };
+          const prevPiTotals = prevPurchaseInv[0] || {
+            amountTTC: 0,
+            amountTVA: 0,
+          };
           const prevQuoteTotals = prevQuote[0] || { total: 0, completed: 0 };
           const prevReceivables = prevInvResult.receivables[0] || {
             outstandingReceivables: 0,
@@ -1825,9 +1944,18 @@ const financialAnalyticsResolvers = {
           const prevTotalRevenueHT = prevInvTotals.totalRevenueHT;
           const prevTotalRevenueTTC = prevInvTotals.totalRevenueTTC;
           const prevCreditNoteTotalHT = prevCnTotals.totalHT;
-          const prevNetRevenueHT = prevTotalRevenueHT + prevCreditNoteTotalHT;
-          const prevTotalExpensesTTC = prevExpTotals.totalExpensesTTC;
-          const prevTotalExpensesVAT = prevExpTotals.totalExpensesVAT;
+          // CA net N-1 sur la même base que la période courante : factures
+          // ENCAISSÉES (paymentDate) + avoirs « cash » — et non le CA facturé.
+          const prevNetRevenueHT =
+            (prevInvCollected[0]?.collectedHT || 0) +
+            (prevImpCollected[0]?.collectedHT || 0) +
+            (prevCnCashTotals.totalHT || 0);
+          // Dépenses N-1 = dépenses libres + factures d'achat (comme la
+          // période courante).
+          const prevTotalExpensesTTC =
+            prevExpTotals.totalExpensesTTC + (prevPiTotals.amountTTC || 0);
+          const prevTotalExpensesVAT =
+            prevExpTotals.totalExpensesVAT + (prevPiTotals.amountTVA || 0);
           const prevTotalExpensesHT =
             prevTotalExpensesTTC - prevTotalExpensesVAT;
           const prevGrossMargin = prevNetRevenueHT - prevTotalExpensesHT;
