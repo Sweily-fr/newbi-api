@@ -18,6 +18,21 @@ export const normalizeParty = (name) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+// Bank labels carry operation prefixes (PRLV SEPA, VIR, CB\u2026) and reference
+// numbers/dates that change on every occurrence \u2014 strip them so the same
+// subscription maps to a stable partyKey across months.
+const BANK_LABEL_NOISE =
+  /\b(prlv|sepa|vir|virement|cb|carte|paiement|achat|echeance|echange|pmt|facture|abonnement|recu|emis|inst|web|janvier|janv|fevrier|fevr|mars|avril|avr|mai|juin|juillet|juil|aout|septembre|sept|octobre|oct|novembre|nov|decembre|dec)\b/g;
+export const normalizeBankLabel = (label) =>
+  (label || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\d+/g, " ")
+    .replace(BANK_LABEL_NOISE, " ")
+    .replace(/[^a-z]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
 const median = (arr) => {
   const sorted = [...arr].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -95,6 +110,37 @@ export const detectForSource = async (workspaceId, source) => {
     })
       .select("supplierName category amountTTC issueDate")
       .lean();
+  } else if (source === "TRANSACTION") {
+    // Bank transactions (subscriptions, recurring transfers). workspaceId is
+    // stored as a String on Transaction, and legacy docs may miss `date` —
+    // same effective-date fallback as the forecast resolver.
+    const Transaction = mongoose.model("Transaction");
+    docs = await Transaction.aggregate([
+      {
+        $match: {
+          workspaceId: String(workspaceId),
+          status: "completed",
+          deletedAt: null,
+          amount: { $ne: 0 },
+        },
+      },
+      {
+        $addFields: {
+          _effectiveDate: {
+            $ifNull: ["$date", { $ifNull: ["$processedAt", "$createdAt"] }],
+          },
+        },
+      },
+      { $match: { _effectiveDate: { $gte: startBound, $lt: endBoundDate } } },
+      {
+        $project: {
+          description: 1,
+          amount: 1,
+          expenseCategory: 1,
+          _effectiveDate: 1,
+        },
+      },
+    ]);
   } else {
     docs = await Invoice.find({
       workspaceId,
@@ -105,32 +151,68 @@ export const detectForSource = async (workspaceId, source) => {
       .lean();
   }
 
+  // An invoice-based recurrence wins over a transaction-based one for the
+  // same party (the bank movement is just the invoice being paid).
+  let invoiceRecurrenceKeys = new Set();
+  if (source === "TRANSACTION") {
+    const invoiceRecs = await DetectedRecurrence.find({
+      workspaceId,
+      source: { $ne: "TRANSACTION" },
+      isActive: true,
+    })
+      .select("partyKey type")
+      .lean();
+    invoiceRecurrenceKeys = new Set(
+      invoiceRecs.map((r) => `${r.partyKey}::${r.type}`),
+    );
+  }
+
   // Group by (partyKey, category)
   const groups = new Map();
   for (const d of docs) {
-    const partyName =
-      source === "PURCHASE_INVOICE"
-        ? d.supplierName
-        : d?.client?.name ||
-          [d?.client?.firstName, d?.client?.lastName]
-            .filter(Boolean)
-            .join(" ") ||
-          d?.client?.email;
-    if (!partyName) continue;
-    const category =
-      source === "PURCHASE_INVOICE" ? d.category || "OTHER" : "SALES";
-    const partyKey = normalizeParty(partyName);
-    if (!partyKey) continue;
-    const groupKey = `${partyKey}::${category}`;
-    const amount =
-      source === "PURCHASE_INVOICE" ? d.amountTTC : d.finalTotalTTC;
+    let partyName;
+    let category;
+    let amount;
+    let type;
+    let partyKey;
+    let docDate;
+    if (source === "PURCHASE_INVOICE") {
+      partyName = d.supplierName;
+      category = d.category || "OTHER";
+      amount = d.amountTTC;
+      type = "EXPENSE";
+      partyKey = normalizeParty(partyName);
+      docDate = d.issueDate;
+    } else if (source === "TRANSACTION") {
+      partyName = (d.description || "").trim();
+      type = d.amount > 0 ? "INCOME" : "EXPENSE";
+      category =
+        type === "EXPENSE" ? d.expenseCategory || "OTHER" : "OTHER_INCOME";
+      amount = Math.abs(d.amount);
+      partyKey = normalizeBankLabel(partyName);
+      docDate = d._effectiveDate;
+    } else {
+      partyName =
+        d?.client?.name ||
+        [d?.client?.firstName, d?.client?.lastName].filter(Boolean).join(" ") ||
+        d?.client?.email;
+      category = "SALES";
+      amount = d.finalTotalTTC;
+      type = "INCOME";
+      partyKey = normalizeParty(partyName);
+      docDate = d.issueDate;
+    }
+    if (!partyName || !partyKey) continue;
     if (!amount || amount <= 0) continue;
-    const m = monthKey(d.issueDate);
+    if (invoiceRecurrenceKeys.has(`${partyKey}::${type}`)) continue;
+    const groupKey = `${partyKey}::${category}`;
+    const m = monthKey(docDate);
     if (!groups.has(groupKey)) {
       groups.set(groupKey, {
         partyKey,
         partyName,
         category,
+        type,
         monthsSeen: new Map(),
       });
     }
@@ -138,8 +220,6 @@ export const detectForSource = async (workspaceId, source) => {
     if (!g.monthsSeen.has(m)) g.monthsSeen.set(m, []);
     g.monthsSeen.get(m).push(amount);
   }
-
-  const type = source === "PURCHASE_INVOICE" ? "EXPENSE" : "INCOME";
 
   // Existing recurrences for this source/workspace to apply stop/resume.
   const existing = await DetectedRecurrence.find({
@@ -167,7 +247,7 @@ export const detectForSource = async (workspaceId, source) => {
         },
         {
           $set: {
-            type,
+            type: g.type,
             partyName: g.partyName,
             averageAmount: Math.round(streak.median),
             lastSeenMonth: lastSeen,
@@ -219,8 +299,11 @@ export const detectForSource = async (workspaceId, source) => {
 };
 
 export const runRecurringInvoiceDetectionForWorkspace = async (workspaceId) => {
+  // TRANSACTION runs last: its dedup reads the invoice-based recurrences
+  // freshly upserted by the two previous passes.
   await detectForSource(workspaceId, "PURCHASE_INVOICE");
   await detectForSource(workspaceId, "INVOICE");
+  await detectForSource(workspaceId, "TRANSACTION");
 };
 
 export const runRecurringInvoiceDetection = async () => {
@@ -231,8 +314,7 @@ export const runRecurringInvoiceDetection = async () => {
   );
   for (const ws of workspaces) {
     try {
-      await detectForSource(ws._id, "PURCHASE_INVOICE");
-      await detectForSource(ws._id, "INVOICE");
+      await runRecurringInvoiceDetectionForWorkspace(ws._id);
     } catch (error) {
       logger.error(
         `❌ [Cron] Détection récurrences workspace ${ws._id}:`,

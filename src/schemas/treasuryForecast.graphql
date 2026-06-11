@@ -85,6 +85,13 @@ enum CashflowFrequency {
   ANNUAL
 }
 
+# « Augmenter ou diminuer de » : EUR fixe ou pourcentage composé,
+# appliqué à chaque occurrence de la récurrence.
+enum AmountDeltaType {
+  AMOUNT
+  PERCENT
+}
+
 type ManualCashflowEntry {
   id: ID!
   workspaceId: ID!
@@ -92,6 +99,8 @@ type ManualCashflowEntry {
   type: ForecastType!
   category: ForecastCategory
   amount: Float!
+  amountDelta: Float
+  amountDeltaType: AmountDeltaType
   startDate: String!
   endDate: String
   frequency: CashflowFrequency!
@@ -108,6 +117,8 @@ input UpsertManualCashflowEntryInput {
   type: ForecastType!
   category: ForecastCategory
   amount: Float!
+  amountDelta: Float
+  amountDeltaType: AmountDeltaType
   startDate: String!
   endDate: String
   frequency: CashflowFrequency!
@@ -117,6 +128,7 @@ input UpsertManualCashflowEntryInput {
 enum RecurrenceSource {
   PURCHASE_INVOICE
   INVOICE
+  TRANSACTION
 }
 
 type DetectedRecurrence {
