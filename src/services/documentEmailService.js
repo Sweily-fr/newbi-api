@@ -289,6 +289,119 @@ function generateEmailHtml(
 }
 
 /**
+ * Génère le HTML de l'email de relance de facture, sur le même gabarit
+ * que les autres emails Newbi (logo centré, carte blanche, badge violet,
+ * footer marque). Utilisé par la queue de relances automatiques.
+ */
+function generateReminderEmailHtml(emailBody, variables, reminderType) {
+  const isSecond = reminderType === "SECOND";
+  const titleText = isSecond
+    ? "Dernier rappel de paiement"
+    : "Rappel de paiement";
+  const badgeLabel = isSecond ? "2ÈME RELANCE" : "1ÈRE RELANCE";
+  const notifType = "RELANCE DE FACTURE";
+
+  const todayFormatted = new Date().toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  const detailRow = (label, value, opts = {}) => {
+    if (value === null || value === undefined || value === "") return "";
+    const weight = opts.strong ? "600" : "400";
+    return `
+                <tr>
+                  <td style="padding:6px 0;font-size:14px;color:#6b7280;">${label}</td>
+                  <td style="padding:6px 0;font-size:14px;color:#1a1a1a;text-align:right;font-weight:${weight};word-break:break-word;">${value}</td>
+                </tr>`;
+  };
+
+  const detailRows = `${detailRow("Numéro", variables.invoiceNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date d'échéance", variables.dueDate)}`;
+
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${titleText}</title>
+</head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#fafafa;font-size:1px;line-height:1px;">${titleText} ${variables.invoiceNumber} — ${variables.totalAmount}</div>
+  <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
+
+    <!-- Logo -->
+    <div style="text-align:center;padding:40px 0 24px 0;">
+      <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height:32px;width:auto;">
+    </div>
+
+    <!-- Type de notification -->
+    <div style="text-align:center;margin-bottom:8px;">
+      <span style="font-size:11px;font-weight:600;color:#1a1a1a;letter-spacing:0.5px;text-transform:uppercase;">${notifType}</span>
+    </div>
+
+    <!-- Date -->
+    <div style="text-align:center;margin-bottom:32px;">
+      <span style="font-size:12px;color:#6b7280;">${todayFormatted}</span>
+    </div>
+
+    <!-- Carte principale -->
+    <div style="background-color:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 24px;margin-bottom:32px;">
+
+      <!-- Badge -->
+      <div style="margin-bottom:20px;">
+        <div style="display:inline-block;background-color:#ede9fe;border-radius:6px;padding:8px 12px;">
+          <span style="font-size:11px;font-weight:500;color:#5a50ff;letter-spacing:0.3px;text-transform:uppercase;">${badgeLabel}</span>
+        </div>
+      </div>
+
+      <!-- Titre -->
+      <h1 style="font-size:26px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;line-height:1.3;">${titleText}</h1>
+
+      <!-- Message -->
+      <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">${emailBody.replace(/\n/g, "<br>")}</div>
+
+      ${
+        isSecond
+          ? `
+      <!-- Avertissement dernier rappel -->
+      <div style="background-color:#fef3c7;border-left:3px solid #f59e0b;border-radius:0 8px 8px 0;padding:16px;margin-bottom:24px;">
+        <p style="font-size:14px;color:#92400e;margin:0;line-height:1.6;">⚠️ Il s'agit de notre dernier rappel concernant cette facture. Merci de régulariser votre situation dans les plus brefs délais.</p>
+      </div>`
+          : ""
+      }
+
+      <!-- Note PDF joint -->
+      <div style="background-color:#fafafa;border-left:3px solid #5a50ff;border-radius:0 8px 8px 0;padding:16px;margin-bottom:24px;">
+        <p style="font-size:14px;color:#4b5563;margin:0;line-height:1.6;">📎 La facture est jointe à cet email au format PDF.</p>
+      </div>
+
+      <!-- Détails -->
+      <div style="background-color:#fafafa;border-radius:8px;padding:16px;">
+        <table style="width:100%;border-collapse:collapse;">${detailRows}
+        </table>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="border-top:1px solid #e5e7eb;padding-top:32px;text-align:center;padding-bottom:40px;">
+      <div style="margin-bottom:16px;">
+        <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height:28px;width:auto;">
+      </div>
+      <p style="font-size:13px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;">Votre gestion, simplifiée.</p>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 24px 0;line-height:1.8;">Cette relance a été envoyée par ${variables.companyName} depuis Newbi, logiciel de gestion.</p>
+      <div style="font-size:11px;color:#9ca3af;line-height:1.6;">
+        <p style="margin:0 0 4px 0;">SWEILY (SAS),</p>
+        <p style="margin:0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>`;
+}
+
+/**
  * Génère le HTML de l'email de confirmation d'envoi destiné à l'émetteur
  */
 function generateSenderConfirmationHtml({
@@ -938,4 +1051,5 @@ export {
   getDefaultEmailContent,
   getDocument,
   generateDocumentPdf,
+  generateReminderEmailHtml,
 };

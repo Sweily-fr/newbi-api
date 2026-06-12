@@ -1,31 +1,40 @@
-import mongoose from 'mongoose';
-import Invoice from '../models/Invoice.js';
-import Client from '../models/Client.js';
-import InvoiceReminderSettings from '../models/InvoiceReminderSettings.js';
-import InvoiceReminderLog from '../models/InvoiceReminderLog.js';
-import EmailSettings from '../models/EmailSettings.js';
-import emailReminderService from './emailReminderService.js';
-import axios from 'axios';
+import mongoose from "mongoose";
+import Invoice from "../models/Invoice.js";
+import Client from "../models/Client.js";
+import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
+import InvoiceReminderLog from "../models/InvoiceReminderLog.js";
+import EmailSettings from "../models/EmailSettings.js";
+import emailReminderService from "./emailReminderService.js";
+import axios from "axios";
 
 /**
  * Vérifie et envoie les relances automatiques pour toutes les factures impayées
  */
 async function processAutomaticReminders() {
-  console.log('🔔 [InvoiceReminder] Démarrage du processus de relance automatique...');
-  
+  console.log(
+    "🔔 [InvoiceReminder] Démarrage du processus de relance automatique...",
+  );
+
   try {
     // Récupérer tous les workspaces avec les relances activées
-    const activeSettings = await InvoiceReminderSettings.find({ enabled: true });
-    
-    console.log(`📊 [InvoiceReminder] ${activeSettings.length} workspace(s) avec relances activées`);
-    
+    const activeSettings = await InvoiceReminderSettings.find({
+      enabled: true,
+    });
+
+    console.log(
+      `📊 [InvoiceReminder] ${activeSettings.length} workspace(s) avec relances activées`,
+    );
+
     for (const settings of activeSettings) {
       await processWorkspaceReminders(settings);
     }
-    
-    console.log('✅ [InvoiceReminder] Processus de relance terminé');
+
+    console.log("✅ [InvoiceReminder] Processus de relance terminé");
   } catch (error) {
-    console.error('❌ [InvoiceReminder] Erreur lors du processus de relance:', error);
+    console.error(
+      "❌ [InvoiceReminder] Erreur lors du processus de relance:",
+      error,
+    );
     throw error;
   }
 }
@@ -34,45 +43,63 @@ async function processAutomaticReminders() {
  * Traite les relances pour un workspace spécifique
  */
 async function processWorkspaceReminders(settings) {
-  const { workspaceId, firstReminderDays, secondReminderDays, excludedClientIds = [] } = settings;
-  
+  const {
+    workspaceId,
+    firstReminderDays,
+    secondReminderDays,
+    excludedClientIds = [],
+  } = settings;
+
   console.log(`🏢 [InvoiceReminder] Traitement du workspace: ${workspaceId}`);
-  
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  
+
   // Calculer les dates cibles pour les relances
   const firstReminderDate = new Date(today);
   firstReminderDate.setDate(firstReminderDate.getDate() - firstReminderDays);
-  
+
   const secondReminderDate = new Date(today);
   secondReminderDate.setDate(secondReminderDate.getDate() - secondReminderDays);
-  
+
+  // Borne en fin de journée : les dueDate sont stockées à minuit UTC
+  // (= 01h/02h heure de Paris), donc une comparaison avec minuit local
+  // exclurait à tort les factures échéant aujourd'hui — or les réglages
+  // promettent « 0 = le jour de l'échéance ».
+  const endOfToday = new Date(today);
+  endOfToday.setHours(23, 59, 59, 999);
+
   // Construire la requête de base
   const query = {
     workspaceId,
-    status: { $in: ['PENDING', 'OVERDUE'] },
-    dueDate: { $lte: today },
+    status: { $in: ["PENDING", "OVERDUE"] },
+    dueDate: { $lte: endOfToday },
   };
-  
-  // Exclure les clients si nécessaire
-  if (excludedClientIds && excludedClientIds.length > 0) {
-    query.client = { $nin: excludedClientIds };
-    console.log(`🚫 [InvoiceReminder] ${excludedClientIds.length} client(s) exclu(s) des relances`);
-  }
-  
-  // Trouver les factures impayées avec date d'échéance dépassée
-  const overdueInvoices = await Invoice.find(query).populate('client');
 
-  console.log(`📄 [InvoiceReminder] ${overdueInvoices.length} facture(s) en retard trouvée(s)`);
+  // Exclure les clients désélectionnés. Le client est un sous-document
+  // embarqué dont `id` est un String, alors que excludedClientIds contient
+  // des ObjectIds → comparer sur client.id après conversion en String.
+  if (excludedClientIds && excludedClientIds.length > 0) {
+    query["client.id"] = { $nin: excludedClientIds.map(String) };
+    console.log(
+      `🚫 [InvoiceReminder] ${excludedClientIds.length} client(s) exclu(s) des relances`,
+    );
+  }
+
+  // Trouver les factures impayées avec date d'échéance dépassée
+  const overdueInvoices = await Invoice.find(query).populate("client");
+
+  console.log(
+    `📄 [InvoiceReminder] ${overdueInvoices.length} facture(s) en retard trouvée(s)`,
+  );
 
   if (overdueInvoices.length === 0) return;
 
   // Batch-load tous les logs de relance pour éviter N+1 queries
-  const invoiceIds = overdueInvoices.map(inv => inv._id);
+  const invoiceIds = overdueInvoices.map((inv) => inv._id);
   const allReminderLogs = await InvoiceReminderLog.find({
     invoiceId: { $in: invoiceIds },
-    reminderType: { $in: ['FIRST', 'SECOND'] },
+    reminderType: { $in: ["FIRST", "SECOND"] },
   }).lean();
 
   // Indexer par invoiceId+type pour lookup O(1)
@@ -85,14 +112,28 @@ async function processWorkspaceReminders(settings) {
   const emailSettings = await EmailSettings.findOne({ workspaceId });
 
   for (const invoice of overdueInvoices) {
-    await processInvoiceReminder(invoice, settings, firstReminderDate, secondReminderDate, reminderLogMap, emailSettings);
+    await processInvoiceReminder(
+      invoice,
+      settings,
+      firstReminderDate,
+      secondReminderDate,
+      reminderLogMap,
+      emailSettings,
+    );
   }
 }
 
 /**
  * Traite la relance pour une facture spécifique
  */
-async function processInvoiceReminder(invoice, settings, firstReminderDate, secondReminderDate, reminderLogMap, emailSettings) {
+async function processInvoiceReminder(
+  invoice,
+  settings,
+  firstReminderDate,
+  secondReminderDate,
+  reminderLogMap,
+  emailSettings,
+) {
   try {
     const invoiceDueDate = new Date(invoice.dueDate);
     invoiceDueDate.setHours(0, 0, 0, 0);
@@ -102,7 +143,7 @@ async function processInvoiceReminder(invoice, settings, firstReminderDate, seco
       const firstReminderSent = reminderLogMap.has(`${invoice._id}_FIRST`);
 
       if (!firstReminderSent) {
-        await sendReminder(invoice, settings, 'FIRST', emailSettings);
+        await sendReminder(invoice, settings, "FIRST", emailSettings);
         return;
       }
     }
@@ -112,113 +153,158 @@ async function processInvoiceReminder(invoice, settings, firstReminderDate, seco
       const secondReminderSent = reminderLogMap.has(`${invoice._id}_SECOND`);
 
       if (!secondReminderSent) {
-        await sendReminder(invoice, settings, 'SECOND', emailSettings);
+        await sendReminder(invoice, settings, "SECOND", emailSettings);
         return;
       }
     }
   } catch (error) {
-    console.error(`❌ [InvoiceReminder] Erreur pour la facture ${invoice.number}:`, error);
+    console.error(
+      `❌ [InvoiceReminder] Erreur pour la facture ${invoice.number}:`,
+      error,
+    );
   }
 }
 
 /**
  * Envoie une relance par email
  */
-async function sendReminder(invoice, settings, reminderType, preloadedEmailSettings) {
+async function sendReminder(
+  invoice,
+  settings,
+  reminderType,
+  preloadedEmailSettings,
+) {
   try {
-    console.log(`📧 [InvoiceReminder] Envoi ${reminderType} relance pour facture ${invoice.number}`);
-    
+    console.log(
+      `📧 [InvoiceReminder] Envoi ${reminderType} relance pour facture ${invoice.number}`,
+    );
+
     // Récupérer les informations du client
     const clientEmail = invoice.client?.email;
     if (!clientEmail) {
-      console.warn(`⚠️ [InvoiceReminder] Pas d'email pour le client de la facture ${invoice.number}`);
+      console.warn(
+        `⚠️ [InvoiceReminder] Pas d'email pour le client de la facture ${invoice.number}`,
+      );
       return;
     }
-    
+
     // Calculer le total si nécessaire
     const total = invoice.total || invoice.totalAmount || 0;
-    
+
     // Préparer les variables pour le template
     const variables = {
       invoiceNumber: `${invoice.prefix}-${invoice.number}`,
-      clientName: invoice.client?.name || 'Client',
-      totalAmount: `${total.toFixed(2).replace('.', ',')} €`,
-      dueDate: new Date(invoice.dueDate).toLocaleDateString('fr-FR'),
-      companyName: invoice.companyInfo?.name || 'Votre Entreprise',
+      clientName: invoice.client?.name || "Client",
+      totalAmount: `${total.toFixed(2).replace(".", ",")} €`,
+      dueDate: new Date(invoice.dueDate).toLocaleDateString("fr-FR"),
+      companyName: invoice.companyInfo?.name || "Votre Entreprise",
     };
-    
+
     // Remplacer les variables dans l'objet et le corps de l'email
     const emailSubject = replaceVariables(settings.emailSubject, variables);
     const emailBody = replaceVariables(settings.emailBody, variables);
-    
+
     // Générer le HTML de l'email (simplifié pour l'instant)
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Rappel de paiement</h2>
-        <p>${emailBody.replace(/\n/g, '<br>')}</p>
+        <p>${emailBody.replace(/\n/g, "<br>")}</p>
         <hr>
         <p><strong>Facture:</strong> ${variables.invoiceNumber}</p>
         <p><strong>Montant:</strong> ${variables.totalAmount}</p>
         <p><strong>Date d'échéance:</strong> ${variables.dueDate}</p>
       </div>
     `;
-    
+
     // Générer le PDF de la facture via l'API Next.js
     let pdfBuffer = null;
     try {
-      console.log(`📄 [InvoiceReminder] Génération du PDF pour facture ${invoice.number}`);
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      console.log(
+        `📄 [InvoiceReminder] Génération du PDF pour facture ${invoice.number}`,
+      );
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      // Authentification serveur-à-serveur via secret interne : la route
+      // /api/invoices/generate-pdf l'accepte en lieu et place d'une session
+      // utilisateur. Sans ce header, l'appel échoue en 401 et la relance
+      // part sans facture jointe (cf. documentEmailService).
+      const headers = process.env.INTERNAL_API_SECRET
+        ? { "x-internal-secret": process.env.INTERNAL_API_SECRET }
+        : {};
+      if (!process.env.INTERNAL_API_SECRET) {
+        console.warn(
+          "⚠️ [InvoiceReminder] INTERNAL_API_SECRET non défini : l'appel PDF échouera en 401.",
+        );
+      }
+      const pdfTimeout =
+        Number(process.env.PDF_GENERATION_TIMEOUT_MS) || 120000;
       const response = await axios.post(
         `${frontendUrl}/api/invoices/generate-pdf`,
         { invoiceId: invoice._id.toString() },
-        { responseType: 'arraybuffer', timeout: 30000 }
+        { responseType: "arraybuffer", timeout: pdfTimeout, headers },
       );
       pdfBuffer = Buffer.from(response.data);
-      console.log(`✅ [InvoiceReminder] PDF généré (${pdfBuffer.length} bytes)`);
+      console.log(
+        `✅ [InvoiceReminder] PDF généré (${pdfBuffer.length} bytes)`,
+      );
     } catch (pdfError) {
-      console.warn('⚠️ [InvoiceReminder] Erreur génération PDF:', pdfError.message);
+      console.warn(
+        "⚠️ [InvoiceReminder] Erreur génération PDF:",
+        pdfError.message,
+      );
       // On continue sans PDF si la génération échoue
     }
-    
+
     // Préparer les pièces jointes
-    const attachments = pdfBuffer ? [{
-      filename: `${variables.invoiceNumber}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf',
-    }] : [];
-    
+    const attachments = pdfBuffer
+      ? [
+          {
+            filename: `${variables.invoiceNumber}.pdf`,
+            content: pdfBuffer,
+            contentType: "application/pdf",
+          },
+        ]
+      : [];
+
     // Utiliser les paramètres email pré-chargés ou fallback sur un fetch
-    const emailSettings = preloadedEmailSettings ?? await EmailSettings.findOne({
-      workspaceId: invoice.workspaceId
-    });
-    
+    const emailSettings =
+      preloadedEmailSettings ??
+      (await EmailSettings.findOne({
+        workspaceId: invoice.workspaceId,
+      }));
+
     // Déterminer l'email expéditeur (priorité aux EmailSettings)
     let fromEmail;
     let fromName;
     let replyTo = null;
-    
+
     if (emailSettings && emailSettings.fromEmail) {
       // Utiliser les paramètres EmailSettings (configurés dans le modal de relance)
       fromEmail = emailSettings.fromEmail;
-      fromName = emailSettings.fromName || invoice.companyInfo?.name || '';
+      fromName = emailSettings.fromName || invoice.companyInfo?.name || "";
       replyTo = emailSettings.replyTo || emailSettings.fromEmail;
-      console.log(`📧 [InvoiceReminder] Utilisation de l'email personnalisé: ${fromEmail}`);
+      console.log(
+        `📧 [InvoiceReminder] Utilisation de l'email personnalisé: ${fromEmail}`,
+      );
     } else {
       // Fallback sur les informations de la facture
-      fromEmail = invoice.companyInfo?.email || 'noreply@newbi.fr';
-      fromName = invoice.companyInfo?.name || '';
-      console.log(`⚠️ [InvoiceReminder] Aucun email configuré, utilisation de l'email de la facture: ${fromEmail}`);
+      fromEmail = invoice.companyInfo?.email || "noreply@newbi.fr";
+      fromName = invoice.companyInfo?.name || "";
+      console.log(
+        `⚠️ [InvoiceReminder] Aucun email configuré, utilisation de l'email de la facture: ${fromEmail}`,
+      );
     }
-    
+
     // Formater l'expéditeur
-    const actualSenderEmail = fromName 
+    const actualSenderEmail = fromName
       ? `"${fromName}" <${fromEmail}>`
       : fromEmail;
-    
+
     // Envoyer l'email avec le SMTP centralisé
-    console.log(`📤 [InvoiceReminder] Envoi email de ${actualSenderEmail} vers ${clientEmail}`);
+    console.log(
+      `📤 [InvoiceReminder] Envoi email de ${actualSenderEmail} vers ${clientEmail}`,
+    );
     console.log(`📋 [InvoiceReminder] Sujet: ${emailSubject}`);
-    
+
     const mailOptions = {
       from: actualSenderEmail,
       to: clientEmail,
@@ -226,21 +312,26 @@ async function sendReminder(invoice, settings, reminderType, preloadedEmailSetti
       html: emailHtml,
       attachments: attachments,
     };
-    
+
     // Ajouter replyTo si configuré
     if (replyTo) {
       mailOptions.replyTo = replyTo;
     }
-    
+
     // Vérifier que le transporter est initialisé
     if (!emailReminderService.transporter) {
-      throw new Error('Service SMTP non initialisé. Vérifiez la configuration SMTP dans .env');
+      throw new Error(
+        "Service SMTP non initialisé. Vérifiez la configuration SMTP dans .env",
+      );
     }
-    
-    const mailResult = await emailReminderService.transporter.sendMail(mailOptions);
-    
-    console.log(`✅ [InvoiceReminder] Email envoyé, messageId: ${mailResult.messageId}`);
-    
+
+    const mailResult =
+      await emailReminderService.transporter.sendMail(mailOptions);
+
+    console.log(
+      `✅ [InvoiceReminder] Email envoyé, messageId: ${mailResult.messageId}`,
+    );
+
     // Enregistrer la relance dans les logs
     await InvoiceReminderLog.create({
       invoiceId: invoice._id,
@@ -249,26 +340,26 @@ async function sendReminder(invoice, settings, reminderType, preloadedEmailSetti
       recipientEmail: clientEmail,
       emailSubject: emailSubject,
       emailBody: emailBody,
-      status: 'SENT',
+      status: "SENT",
     });
-    
+
     // Ajouter l'activité au client
     try {
       if (invoice.client?.id || invoice.client?._id) {
         const clientId = invoice.client.id || invoice.client._id;
         const client = await Client.findById(clientId);
-        
+
         if (client) {
-          const reminderLabel = reminderType === 'first' ? '1ère' : '2ème';
-          
+          const reminderLabel = reminderType === "first" ? "1ère" : "2ème";
+
           client.activity.push({
             id: new mongoose.Types.ObjectId().toString(),
-            type: 'invoice_reminder_sent',
+            type: "invoice_reminder_sent",
             description: `a envoyé la ${reminderLabel} relance pour la facture ${variables.invoiceNumber}`,
             userId: invoice.createdBy || invoice.userId,
             userName: variables.companyName,
             metadata: {
-              documentType: 'invoice',
+              documentType: "invoice",
               documentId: invoice._id.toString(),
               documentNumber: variables.invoiceNumber,
               reminderType: reminderType,
@@ -276,28 +367,33 @@ async function sendReminder(invoice, settings, reminderType, preloadedEmailSetti
             },
             createdAt: new Date(),
           });
-          
+
           await client.save();
         }
       }
     } catch (activityError) {
       // Ne pas bloquer l'envoi si l'ajout d'activité échoue
-      console.warn('⚠️ [InvoiceReminder] Erreur ajout activité client:', activityError.message);
+      console.warn(
+        "⚠️ [InvoiceReminder] Erreur ajout activité client:",
+        activityError.message,
+      );
     }
-    
-    console.log(`✅ [InvoiceReminder] Relance ${reminderType} envoyée pour ${invoice.number}`);
+
+    console.log(
+      `✅ [InvoiceReminder] Relance ${reminderType} envoyée pour ${invoice.number}`,
+    );
   } catch (error) {
-    console.error(`❌ [InvoiceReminder] Erreur envoi relance:`, error);
-    
+    console.error("❌ [InvoiceReminder] Erreur envoi relance:", error);
+
     // Enregistrer l'échec dans les logs
     await InvoiceReminderLog.create({
       invoiceId: invoice._id,
       workspaceId: invoice.workspaceId,
       reminderType: reminderType,
-      recipientEmail: invoice.client?.email || 'unknown',
+      recipientEmail: invoice.client?.email || "unknown",
       emailSubject: settings.emailSubject,
       emailBody: settings.emailBody,
-      status: 'FAILED',
+      status: "FAILED",
       error: error.message,
     });
   }
@@ -307,19 +403,15 @@ async function sendReminder(invoice, settings, reminderType, preloadedEmailSetti
  * Remplace les variables dans un texte
  */
 function replaceVariables(text, variables) {
-  if (!text) return '';
-  
+  if (!text) return "";
+
   let result = text;
-  Object.keys(variables).forEach(key => {
-    const regex = new RegExp(`\\{${key}\\}`, 'g');
+  Object.keys(variables).forEach((key) => {
+    const regex = new RegExp(`\\{${key}\\}`, "g");
     result = result.replace(regex, variables[key]);
   });
-  
+
   return result;
 }
 
-export {
-  processAutomaticReminders,
-  processWorkspaceReminders,
-  sendReminder,
-};
+export { processAutomaticReminders, processWorkspaceReminders, sendReminder };
