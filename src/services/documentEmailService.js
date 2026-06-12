@@ -204,7 +204,16 @@ function generateEmailHtml(
                 </tr>`;
   };
 
-  const detailRows = `${detailRow("Numéro", variables.documentNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date", variables.issueDate)}${documentType === DOCUMENT_TYPES.INVOICE ? detailRow("Date d'échéance", dueDate) : ""}${documentType === DOCUMENT_TYPES.CREDIT_NOTE ? detailRow("Facture associée", variables.invoiceNumber) : ""}`;
+  const numberLabel =
+    documentType === DOCUMENT_TYPES.INVOICE
+      ? "Numéro de la facture"
+      : documentType === DOCUMENT_TYPES.QUOTE
+        ? "Numéro du devis"
+        : documentType === DOCUMENT_TYPES.PURCHASE_ORDER
+          ? "Numéro du bon de commande"
+          : "Numéro de l'avoir";
+
+  const detailRows = `${detailRow(numberLabel, variables.documentNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date d'émission", variables.issueDate)}${documentType === DOCUMENT_TYPES.INVOICE ? detailRow("Date d'échéance", dueDate) : ""}${documentType === DOCUMENT_TYPES.CREDIT_NOTE ? detailRow("Facture associée", variables.invoiceNumber) : ""}`;
 
   // Gabarit aligné sur les autres emails Newbi (cf. notification de mention) :
   // logo centré, carte blanche, badge violet, bouton noir, footer marque.
@@ -317,7 +326,7 @@ function generateReminderEmailHtml(emailBody, variables, reminderType) {
                 </tr>`;
   };
 
-  const detailRows = `${detailRow("Numéro", variables.invoiceNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date d'échéance", variables.dueDate)}`;
+  const detailRows = `${detailRow("Numéro de la facture", variables.invoiceNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date d'échéance", variables.dueDate)}`;
 
   return `<!DOCTYPE html>
 <html lang="fr">
@@ -680,16 +689,20 @@ async function sendDocumentEmail({
   };
   const TrackingModel = ModelMap[documentType];
   if (TrackingModel) {
+    // $set de l'objet entier (pas de chemins pointés) : un document dont
+    // emailTracking vaut null ferait échouer la création de sous-champs.
     await TrackingModel.updateOne(
       { _id: documentId },
       {
         $set: {
-          "emailTracking.trackingToken": trackingToken,
-          "emailTracking.emailSentAt": new Date(),
-          "emailTracking.emailOpenedAt": null,
-          "emailTracking.emailOpenCount": 0,
-          "emailTracking.emailClickedAt": null,
-          "emailTracking.emailClickCount": 0,
+          emailTracking: {
+            trackingToken,
+            emailSentAt: new Date(),
+            emailOpenedAt: null,
+            emailOpenCount: 0,
+            emailClickedAt: null,
+            emailClickCount: 0,
+          },
         },
       },
     );
