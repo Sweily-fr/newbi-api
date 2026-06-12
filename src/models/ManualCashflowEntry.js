@@ -66,6 +66,18 @@ const manualCashflowEntrySchema = new mongoose.Schema(
       required: true,
       min: [0, "Le montant doit être positif"],
     },
+    // « Augmenter ou diminuer de » : évolution appliquée à chaque occurrence
+    // de la récurrence — montant fixe en EUR ou pourcentage composé.
+    // Négatif pour diminuer.
+    amountDelta: {
+      type: Number,
+      default: 0,
+    },
+    amountDeltaType: {
+      type: String,
+      enum: ["AMOUNT", "PERCENT"],
+      default: "AMOUNT",
+    },
     startDate: {
       type: Date,
       required: true,

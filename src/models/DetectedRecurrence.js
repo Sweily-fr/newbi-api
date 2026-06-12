@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const RECURRENCE_SOURCE = {
   PURCHASE_INVOICE: "PURCHASE_INVOICE",
   INVOICE: "INVOICE",
+  TRANSACTION: "TRANSACTION",
 };
 
 const detectedRecurrenceSchema = new mongoose.Schema(
@@ -18,7 +19,8 @@ const detectedRecurrenceSchema = new mongoose.Schema(
       enum: Object.values(RECURRENCE_SOURCE),
       required: true,
     },
-    // INCOME (client invoices) or EXPENSE (purchase invoices)
+    // INCOME (client invoices, incoming transactions) or EXPENSE
+    // (purchase invoices, outgoing transactions)
     type: {
       type: String,
       enum: ["INCOME", "EXPENSE"],

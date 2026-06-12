@@ -86,7 +86,8 @@ type MonthlyRevenue {
   expenseAmountHT: Float!
   expenseVAT: Float!
   grossMargin: Float!
-  grossMarginRate: Float!
+  # null quand aucun CA encaissé sur le mois (taux non défini)
+  grossMarginRate: Float
   creditNoteHT: Float!
   netRevenueHT: Float!
 }
