@@ -6,32 +6,52 @@ import Invoice from "../models/Invoice.js";
 import { aggregateByCategory } from "../utils/bank-categories.js";
 
 /**
+ * Fin de journée (UTC) du jour calendaire courant en France.
+ * Les transactions saisies manuellement sont datées à minuit UTC du jour
+ * choisi : avec `endDate = now`, une saisie datée d'aujourd'hui restait
+ * invisible tant que minuit UTC n'était pas passé (ex. avant 2h du matin
+ * heure de Paris). On borne donc la période à la fin du jour courant,
+ * sans inclure les transactions datées dans le futur.
+ */
+function endOfCurrentDay(now) {
+  const ymd = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris",
+  }).format(now);
+  return new Date(`${ymd}T23:59:59.999Z`);
+}
+
+/**
  * Résout les dates de début/fin à partir d'un preset ou de dates custom
  */
 function resolvePeriodDates(period) {
   const now = new Date();
 
   if (period.startDate && period.endDate && !period.preset) {
+    // Date du picker (YYYY-MM-DD) parsée à minuit UTC → étendre à la fin
+    // de journée pour que la borne de fin soit inclusive.
+    const endDate = new Date(period.endDate);
+    endDate.setUTCHours(23, 59, 59, 999);
     return {
       startDate: new Date(period.startDate),
-      endDate: new Date(period.endDate),
+      endDate,
     };
   }
 
+  const endDate = endOfCurrentDay(now);
   const preset = period.preset || "cumul-year";
 
   switch (preset) {
     case "cumul-month":
       return {
         startDate: new Date(now.getFullYear(), now.getMonth(), 1),
-        endDate: now,
+        endDate,
       };
     case "cumul-quarter": {
       const qm = Math.floor(now.getMonth() / 3) * 3;
-      return { startDate: new Date(now.getFullYear(), qm, 1), endDate: now };
+      return { startDate: new Date(now.getFullYear(), qm, 1), endDate };
     }
     case "cumul-year":
-      return { startDate: new Date(now.getFullYear(), 0, 1), endDate: now };
+      return { startDate: new Date(now.getFullYear(), 0, 1), endDate };
     case "30d":
     case "90d":
     case "365d":
@@ -39,10 +59,10 @@ function resolvePeriodDates(period) {
       const days = parseInt(preset);
       const s = new Date(now);
       s.setDate(s.getDate() - days);
-      return { startDate: s, endDate: now };
+      return { startDate: s, endDate };
     }
     default:
-      return { startDate: new Date(now.getFullYear(), 0, 1), endDate: now };
+      return { startDate: new Date(now.getFullYear(), 0, 1), endDate };
   }
 }
 

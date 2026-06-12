@@ -87,13 +87,110 @@ export const expenseCategoryEnumLabels = {
   OTHER: { name: "Autre", color: "#A585DB" },
 };
 
+// Libellés des sous-catégories fines choisies par l'utilisateur sur la page
+// transactions (slugs du sélecteur front, cf. NewbiV2
+// app/dashboard/outils/transactions/components/category-search-select.jsx).
+// Couleurs reprises de la catégorie large correspondante (expenseCategoryEnumLabels).
+export const expenseSubcategoryLabels = {
+  // Fournitures et équipement
+  bureau: { name: "Fournitures de bureau", color: "#f97316" },
+  materiel: { name: "Matériel informatique", color: "#a78bfa" },
+  mobilier: { name: "Mobilier", color: "#f97316" },
+  equipement: { name: "Équipement professionnel", color: "#a78bfa" },
+  // Transport et déplacements
+  transport: { name: "Transport", color: "#3b82f6" },
+  carburant: { name: "Carburant", color: "#2563eb" },
+  parking: { name: "Parking", color: "#1d4ed8" },
+  peage: { name: "Péage", color: "#3b82f6" },
+  taxi: { name: "Taxi / VTC", color: "#93c5fd" },
+  train: { name: "Train", color: "#60a5fa" },
+  avion: { name: "Avion", color: "#3b82f6" },
+  location_vehicule: { name: "Location de véhicule", color: "#3b82f6" },
+  // Repas et hébergement
+  repas: { name: "Repas d'affaires", color: "#ea580c" },
+  restaurant: { name: "Restaurant", color: "#ea580c" },
+  hotel: { name: "Hébergement / Hôtel", color: "#f472b6" },
+  // Communication et marketing
+  marketing: { name: "Marketing", color: "#ec4899" },
+  publicite: { name: "Publicité", color: "#ec4899" },
+  communication: { name: "Communication", color: "#ec4899" },
+  telephone: { name: "Téléphone", color: "#4f46e5" },
+  internet: { name: "Internet", color: "#4f46e5" },
+  site_web: { name: "Site web", color: "#6366f1" },
+  reseaux_sociaux: { name: "Réseaux sociaux", color: "#ec4899" },
+  // Formation et développement
+  formation: { name: "Formation", color: "#0ea5e9" },
+  conference: { name: "Conférence / Séminaire", color: "#0284c7" },
+  livres: { name: "Livres et documentation", color: "#38bdf8" },
+  abonnement: { name: "Abonnements professionnels", color: "#818cf8" },
+  // Services professionnels
+  comptabilite: { name: "Comptabilité", color: "#06b6d4" },
+  juridique: { name: "Services juridiques", color: "#06b6d4" },
+  assurance: { name: "Assurance", color: "#0d9488" },
+  banque: { name: "Frais bancaires", color: "#a5b4fc" },
+  conseil: { name: "Conseil", color: "#06b6d4" },
+  sous_traitance: { name: "Sous-traitance", color: "#06b6d4" },
+  // Locaux et charges
+  loyer: { name: "Loyer", color: "#7c3aed" },
+  electricite: { name: "Électricité", color: "#a78bfa" },
+  eau: { name: "Eau", color: "#a78bfa" },
+  chauffage: { name: "Chauffage", color: "#a78bfa" },
+  entretien: { name: "Entretien et réparations", color: "#14b8a6" },
+  // Logiciels et outils
+  logiciel: { name: "Logiciels", color: "#6366f1" },
+  saas: { name: "SaaS / Abonnements cloud", color: "#6366f1" },
+  licence: { name: "Licences", color: "#6366f1" },
+  // Ressources humaines
+  salaire: { name: "Salaires", color: "#22c55e" },
+  charges_sociales: { name: "Charges sociales", color: "#16a34a" },
+  recrutement: { name: "Recrutement", color: "#06b6d4" },
+  // Fiscalité
+  impots_taxes: { name: "Impôts et taxes", color: "#64748b" },
+  tva: { name: "TVA", color: "#475569" },
+  avoirs_remboursement: { name: "Avoirs / Remboursement", color: "#A585DB" },
+  // Autres
+  cadeaux: { name: "Cadeaux clients", color: "#A585DB" },
+  representation: { name: "Frais de représentation", color: "#A585DB" },
+  poste: { name: "Frais postaux", color: "#f97316" },
+  impression: { name: "Impression", color: "#f97316" },
+  autre: { name: "Autre", color: "#A585DB" },
+};
+
+export const incomeSubcategoryLabels = {
+  // Ventes et services
+  ventes: { name: "Ventes de produits", color: "#10b981" },
+  services: { name: "Prestations de services", color: "#059669" },
+  honoraires: { name: "Honoraires", color: "#34d399" },
+  commissions: { name: "Commissions", color: "#10b981" },
+  consulting: { name: "Consulting", color: "#10b981" },
+  // Revenus récurrents
+  abonnements_revenus: { name: "Abonnements", color: "#818cf8" },
+  licences_revenus: { name: "Licences", color: "#6366f1" },
+  royalties: { name: "Royalties", color: "#10b981" },
+  loyers_revenus: { name: "Loyers perçus", color: "#7c3aed" },
+  // Revenus financiers
+  interets: { name: "Intérêts", color: "#a78bfa" },
+  dividendes: { name: "Dividendes", color: "#7c3aed" },
+  plus_values: { name: "Plus-values", color: "#8b5cf6" },
+  // Autres revenus
+  subventions: { name: "Subventions", color: "#06b6d4" },
+  remboursements_revenus: { name: "Remboursements", color: "#4ade80" },
+  indemnites: { name: "Indemnités", color: "#10b981" },
+  cadeaux_recus: { name: "Cadeaux reçus", color: "#10b981" },
+  autre_revenu: { name: "Autre revenu", color: "#10b981" },
+};
+
 /**
  * Détecte la catégorie d'une transaction.
  * Ordre de priorité :
  *  1. T4 — si linkedInvoiceId est défini → "Chiffre d'affaires" (revenus)
- *  2. T5 — si l'utilisateur a défini `expenseCategory` (enum interne) → label associé
- *  3. T5 — si l'utilisateur a défini `category` (texte libre) → utilisé tel quel
- *  4. Sinon : Bridge ID ou heuristique sur la description
+ *  2. Si `category` est une sous-catégorie fine posée par l'utilisateur
+ *     (slug du sélecteur front) → son libellé exact ("Abonnements
+ *     professionnels", …), prioritaire sur l'enum large pour que le
+ *     camembert reflète le choix fait sur la page transactions
+ *  3. T5 — si l'utilisateur a défini `expenseCategory` (enum interne) → label associé
+ *  4. T5 — si l'utilisateur a défini `category` (texte libre) → utilisé tel quel
+ *  5. Sinon : Bridge ID ou heuristique sur la description
  */
 export const getTransactionCategory = (transaction) => {
   const isIncome = transaction.amount > 0;
@@ -104,17 +201,37 @@ export const getTransactionCategory = (transaction) => {
     return incomeCategories.REVENUE_INVOICE;
   }
 
-  // 2. Catégorie enum interne posée par l'utilisateur (T5)
+  // 2. Sous-catégorie fine choisie par l'utilisateur → libellé exact.
+  // On cherche d'abord dans la liste correspondant au signe, puis dans
+  // l'autre (même fallback que le sélecteur front).
+  if (transaction.category && typeof transaction.category === "string") {
+    const primary = isIncome
+      ? incomeSubcategoryLabels
+      : expenseSubcategoryLabels;
+    const fallback = isIncome
+      ? expenseSubcategoryLabels
+      : incomeSubcategoryLabels;
+    const fromSlug =
+      (Object.hasOwn(primary, transaction.category) &&
+        primary[transaction.category]) ||
+      (Object.hasOwn(fallback, transaction.category) &&
+        fallback[transaction.category]);
+    if (fromSlug) return fromSlug;
+  }
+
+  // 3. Catégorie enum interne posée par l'utilisateur (T5)
   if (!isIncome && transaction.expenseCategory) {
     const fromEnum = expenseCategoryEnumLabels[transaction.expenseCategory];
     if (fromEnum) return fromEnum;
   }
 
-  // 3. Catégorie texte libre posée par l'utilisateur (T5)
+  // 4. Catégorie texte libre posée par l'utilisateur (T5)
   if (transaction.category && typeof transaction.category === "string") {
     // Les libellés d'enum interne sont des catégories de DÉPENSE :
     // on ne les applique qu'aux sorties.
-    const enumMatch = expenseCategoryEnumLabels[transaction.category];
+    const enumMatch =
+      Object.hasOwn(expenseCategoryEnumLabels, transaction.category) &&
+      expenseCategoryEnumLabels[transaction.category];
     if (!isIncome && enumMatch) return enumMatch;
     // Pour un revenu, on ignore les valeurs d'enum de dépense (ex. "OTHER"
     // écrit par le mapping Bridge "Autre revenu", "SERVICES" pour la
@@ -130,7 +247,7 @@ export const getTransactionCategory = (transaction) => {
     }
   }
 
-  // 4. Heuristique Bridge / description
+  // 5. Heuristique Bridge / description
   const categoryId =
     transaction.metadata?.bridgeCategoryId || transaction.category_id || null;
 
