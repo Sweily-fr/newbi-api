@@ -921,15 +921,20 @@ const resolvers = {
           .sort({ updatedAt: -1 })
           .limit(100);
 
-        // Filtrer les tâches où l'utilisateur connecté est membre assigné
+        // Filtrer les tâches pertinentes pour l'utilisateur connecté :
+        // celles qu'il a lui-même lancées OU dont il est membre assigné.
         let filteredTasks = tasks;
         if (user?.id) {
+          const userId = user.id.toString();
           filteredTasks = tasks.filter((task) => {
+            // Timer démarré par l'utilisateur
+            const startedById = task.timeTracking?.startedBy?.userId;
+            if (startedById && startedById.toString() === userId) return true;
+            // Ou utilisateur dans les membres assignés
             const assignedMembers = task.assignedMembers || [];
-            // Vérifier si l'utilisateur est dans les membres assignés
             return assignedMembers.some((member) => {
               const memberId = member?.userId || member?._id || member;
-              return memberId?.toString() === user.id.toString();
+              return memberId?.toString() === userId;
             });
           });
         }
