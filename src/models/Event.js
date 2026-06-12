@@ -135,6 +135,13 @@ const eventSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Membres assignés à l'événement (IDs utilisateurs, même format que les tâches kanban)
+    assignedMembers: [
+      {
+        type: String,
+      },
+    ],
+
     // Rappel par email
     emailReminder: {
       enabled: {
