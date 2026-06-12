@@ -22,6 +22,57 @@ import logger from "../utils/logger.js";
 const CALENDAR_EVENTS_CHANGED = "CALENDAR_EVENTS_CHANGED";
 
 /**
+ * Construit les infos d'un membre assigné (même format que le kanban).
+ * Better Auth stocke l'avatar dans 'image' ou 'avatar', parfois "null"/"" en string.
+ * @param {string} idStr - ID utilisateur (string)
+ * @param {object|null} user - document user de la collection Better Auth
+ */
+function buildAssignedMemberInfo(idStr, user) {
+  if (!user) {
+    return { id: idStr, userId: idStr, name: idStr, email: null, image: null };
+  }
+  const rawImage = user.image || user.avatar;
+  const image =
+    rawImage && rawImage !== "null" && rawImage !== "" ? rawImage : null;
+  const name =
+    [user.name, user.lastName].filter(Boolean).join(" ") ||
+    user.email ||
+    idStr;
+  return { id: idStr, userId: idStr, name, email: user.email || null, image };
+}
+
+/**
+ * Charge en une requête les users correspondant aux IDs assignés.
+ * @param {string[]} memberIds
+ * @param {object} db - connexion MongoDB native (context.db)
+ * @returns {Promise<Map<string, object>>} Map id → user
+ */
+async function loadAssignedUsers(memberIds, db) {
+  const usersMap = new Map();
+  const objectIds = memberIds
+    .map((id) => {
+      try {
+        return new mongoose.Types.ObjectId(id);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+
+  if (objectIds.length === 0 || !db) return usersMap;
+
+  const users = await db
+    .collection("user")
+    .find({ _id: { $in: objectIds } })
+    .toArray();
+
+  for (const user of users) {
+    usersMap.set(user._id.toString(), user);
+  }
+  return usersMap;
+}
+
+/**
  * Détermine le statut d'un rappel lors d'un (re)calcul.
  * Règle clé : si l'heure d'envoi recalculée est déjà passée ET que le rappel
  * a déjà été envoyé, on conserve "sent" pour NE PAS le renvoyer (évite les
@@ -122,6 +173,23 @@ const eventResolvers = {
       parent.invoiceId
         ? parent.invoiceId._id?.toString() || parent.invoiceId.toString()
         : null,
+
+    // Enrichir les membres assignés avec leurs infos (nom, email, photo).
+    // getEvents pré-enrichit en batch ; ce resolver sert de fallback pour
+    // getEvent et les réponses de mutations.
+    assignedMembersInfo: async (parent, _, { db }) => {
+      if (parent.assignedMembersInfo) return parent.assignedMembersInfo;
+
+      const memberIds = (parent.assignedMembers || [])
+        .filter(Boolean)
+        .map(String);
+      if (memberIds.length === 0) return [];
+
+      const usersMap = await loadAssignedUsers(memberIds, db);
+      return memberIds.map((id) =>
+        buildAssignedMemberInfo(id, usersMap.get(id) || null),
+      );
+    },
   },
 
   Query: {
@@ -138,7 +206,7 @@ const eventResolvers = {
           includeExternalCalendars = false,
           sources,
         },
-        { user, workspaceId: contextWorkspaceId },
+        { user, workspaceId: contextWorkspaceId, db },
       ) => {
         try {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -201,6 +269,19 @@ const eventResolvers = {
 
           const totalCount = await Event.countDocuments(filter);
 
+          // Charger en une seule requête les infos des membres assignés
+          // (même pattern que l'enrichissement des tâches kanban)
+          const allAssignedIds = new Set();
+          for (const event of events) {
+            (event.assignedMembers || []).forEach((id) => {
+              if (id) allAssignedIds.add(String(id));
+            });
+          }
+          const assignedUsersMap = await loadAssignedUsers(
+            Array.from(allAssignedIds),
+            db,
+          );
+
           // S'assurer que tous les champs sont correctement sérialisés
           const serializedEvents = events.map((event) => {
             const baseEvent = {
@@ -224,6 +305,13 @@ const eventResolvers = {
                   calendarConnectionId: link.calendarConnectionId?.toString(),
                 }),
               ),
+              assignedMembers: (event.assignedMembers || []).map(String),
+              assignedMembersInfo: (event.assignedMembers || [])
+                .filter(Boolean)
+                .map(String)
+                .map((id) =>
+                  buildAssignedMemberInfo(id, assignedUsersMap.get(id) || null),
+                ),
             };
 
             // Seulement inclure invoice si invoiceId existe et est populé

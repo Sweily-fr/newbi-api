@@ -12,6 +12,8 @@ type Event {
   invoice: Invoice
   clientId: ID
   userId: ID!
+  assignedMembers: [String!]
+  assignedMembersInfo: [AssignedMemberInfo!]
   emailReminder: EmailReminder
   source: EventSource
   visibility: EventVisibility
@@ -70,6 +72,7 @@ input CreateEventInput {
   location: String
   type: EventType = MANUAL
   clientId: ID
+  assignedMembers: [String!]
   emailReminder: EmailReminderInput
 }
 
@@ -83,6 +86,7 @@ input UpdateEventInput {
   color: String
   location: String
   type: EventType
+  assignedMembers: [String!]
   emailReminder: EmailReminderInput
 }
 
