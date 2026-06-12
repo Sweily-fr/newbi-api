@@ -533,11 +533,12 @@ export const withRBAC = (resolver, options = {}) => {
       }
 
       // Logger les erreurs inattendues avec stack trace complète
+      // (message interpolé : winston n'écrit pas les arguments supplémentaires
+      // dans les fichiers, ce qui rendait ces erreurs illisibles)
       logger.error(
-        `Erreur RBAC dans ${resolver.name || "resolver"}:`,
-        error.message,
+        `Erreur RBAC dans ${resolver.name || "resolver"}: ${error.message}`,
       );
-      logger.error("Stack trace:", error.stack);
+      logger.error(`Stack trace: ${error.stack}`);
       throw new AppError(
         `Erreur lors de la vérification des permissions: ${error.message}`,
         ERROR_CODES.INTERNAL_ERROR,
