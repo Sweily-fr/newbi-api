@@ -7,6 +7,7 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   CopyObjectCommand,
 } from "@aws-sdk/client-s3";
@@ -277,6 +278,34 @@ class CloudflareService {
       new GetObjectCommand({ Bucket: bucket, Key: key }),
     );
     return Buffer.from(await response.Body.transformToByteArray());
+  }
+
+  /**
+   * Vérifie qu'un objet document existe réellement sur R2.
+   * Évite de proposer une URL d'aperçu pointant vers un objet absent
+   * (ex: clé en base archivée dans un autre environnement / bucket).
+   * @param {string} docType - "quote" | "creditNote" | "purchaseOrder"
+   * @param {string} key - Clé R2
+   * @returns {Promise<boolean>}
+   */
+  async documentObjectExists(docType, key) {
+    const bucket = this.documentBuckets[docType];
+    if (!bucket || !key) return false;
+    try {
+      await this.client.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: key }),
+      );
+      return true;
+    } catch (error) {
+      if (
+        error?.name === "NotFound" ||
+        error?.name === "NoSuchKey" ||
+        error?.$metadata?.httpStatusCode === 404
+      ) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   /**
