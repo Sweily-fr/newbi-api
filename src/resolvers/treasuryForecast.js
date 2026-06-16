@@ -25,17 +25,24 @@ const CATEGORY_ALIAS = {
 };
 const normalizeCat = (cat) => CATEGORY_ALIAS[cat] || cat;
 
-// Helper: generate array of "YYYY-MM" strings between start and end
+// Helper: generate array of "YYYY-MM" strings between start and end (inclusive).
+// On itère en arithmétique entière sur (année, mois) : mélanger un parsing UTC
+// (new Date("YYYY-MM-01")) avec setMonth (heure locale) provoquait un off-by-one
+// au passage heure d'été/hiver — la dernière borne tombant un mois d'hiver était
+// exclue (ex. plage 6 mois juin->novembre qui ne renvoyait que 5 mois).
 const getMonthRange = (startDate, endDate) => {
   const months = [];
-  const start = new Date(startDate + "-01");
-  const end = new Date(endDate + "-01");
-  const current = new Date(start);
-  while (current <= end) {
-    const y = current.getFullYear();
-    const m = String(current.getMonth() + 1).padStart(2, "0");
-    months.push(`${y}-${m}`);
-    current.setMonth(current.getMonth() + 1);
+  const [startYear, startMonth] = startDate.split("-").map(Number);
+  const [endYear, endMonth] = endDate.split("-").map(Number);
+  let y = startYear;
+  let m = startMonth;
+  while (y < endYear || (y === endYear && m <= endMonth)) {
+    months.push(`${y}-${String(m).padStart(2, "0")}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
   }
   return months;
 };
