@@ -1594,21 +1594,6 @@ const quoteResolvers = {
         const invoiceDistribution = distribution || [100];
         const invoiceCount = invoiceDistribution.length;
 
-        // Vérifier que le nombre de factures à créer + les factures existantes ne dépasse pas 3
-        const validLinkedInvoicesCount = validLinkedInvoices.length;
-        if (validLinkedInvoicesCount + invoiceCount > 3) {
-          throw new AppError(
-            `Un devis ne peut pas avoir plus de 3 factures liées (${validLinkedInvoicesCount} existante(s) + ${invoiceCount} à créer)`,
-            ERROR_CODES.RESOURCE_LOCKED,
-            {
-              resource: "Devis",
-              maxInvoices: 3,
-              currentCount: validLinkedInvoicesCount,
-              requestedCount: invoiceCount,
-            },
-          );
-        }
-
         // Calculer le pourcentage déjà utilisé par les factures existantes
         let existingInvoicesPercentage = 0;
 
