@@ -98,15 +98,17 @@ function getCurrentFiscalYearRange(org, now = new Date()) {
 
   const litStart = new Date(`${startStr}T00:00:00.000Z`);
 
-  // Période littérale configurée contenant aujourd'hui (exercice atypique)
+  // Exercice configuré avec une date de fin → on respecte EXACTEMENT la plage
+  // saisie [début, fin], bornée à aujourd'hui pour ne pas compter de
+  // transactions futures. (Un exercice clôturé passé affiche donc sa période
+  // complète ; un exercice en cours s'arrête à aujourd'hui.)
   if (endStr) {
     const litEnd = new Date(`${endStr}T23:59:59.999Z`);
-    if (now >= litStart && now <= litEnd) {
-      return { startDate: litStart, endDate: cap(litEnd) };
-    }
+    return { startDate: litStart, endDate: cap(litEnd) };
   }
 
-  // Sinon : report de l'ancre (mois/jour) sur la fenêtre annuelle contenant aujourd'hui
+  // Date de début seule (pas de fin) → report de l'ancre (mois/jour) sur la
+  // fenêtre annuelle contenant aujourd'hui
   const month = litStart.getUTCMonth();
   const day = litStart.getUTCDate();
   let startDate = new Date(
