@@ -238,6 +238,11 @@ extend type Mutation {
 
   muteDetectedRecurrence(id: ID!, muted: Boolean!): DetectedRecurrence!
 
+  # Supprime définitivement une récurrence détectée. Elle pourra réapparaître
+  # à la prochaine analyse si le motif persiste (utiliser le mute pour la
+  # masquer durablement).
+  deleteDetectedRecurrence(id: ID!): TreasuryDeleteResult!
+
   # Lance la détection des récurrences immédiatement pour le workspace courant
   # (utile pour tester sans attendre le cron mensuel).
   runRecurrenceDetection(workspaceId: ID): Int!

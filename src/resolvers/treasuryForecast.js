@@ -1195,6 +1195,20 @@ const treasuryForecastResolvers = {
         return updated;
       },
     ),
+
+    deleteDetectedRecurrence: requireWrite("expenses")(
+      async (_, { id }, context) => {
+        const recurrence = await DetectedRecurrence.findOne({
+          _id: id,
+          workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
+        }).lean();
+        if (!recurrence) {
+          throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+        await DetectedRecurrence.deleteOne({ _id: id });
+        return { success: true, message: "Récurrence supprimée" };
+      },
+    ),
   },
 
   TreasuryForecast: {
