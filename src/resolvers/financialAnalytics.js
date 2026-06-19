@@ -112,10 +112,29 @@ function normalizeProductDescription(desc) {
   return normalized.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Détecte les lignes d'article générées automatiquement lors de la
+ * facturation d'un devis (acompte, facture partielle, facture de solde,
+ * facture sur devis). Ces lignes représentent un document, pas un produit,
+ * et ne doivent pas apparaître dans le « Top produits / services ».
+ */
+function isQuoteLinkedLineItem(desc) {
+  if (!desc) return false;
+  const normalized = desc
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim();
+  return /^(acompte|facture)\b.*\bdevis\b/i.test(normalized);
+}
+
 function mergeRevenueByProduct(rawProducts) {
   if (!Array.isArray(rawProducts) || rawProducts.length === 0) return [];
   const groups = new Map();
   for (const p of rawProducts) {
+    // Exclure les lignes liées à un devis (acompte/partielle/solde) :
+    // ce sont des documents, pas des produits.
+    if (isQuoteLinkedLineItem(p.description)) continue;
     const key = normalizeProductDescription(p.description) || p.description;
     if (!groups.has(key)) {
       groups.set(key, {
