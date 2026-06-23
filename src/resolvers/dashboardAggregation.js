@@ -67,6 +67,65 @@ function resolvePeriodDates(period) {
 }
 
 /**
+ * Borne [début, fin] de l'exercice comptable EN COURS d'une organisation.
+ *
+ * Lit `fiscalYearStartDate` / `fiscalYearEndDate` (format "YYYY-MM-DD") de
+ * l'organisation. Si aucune date n'est configurée, l'exercice par défaut est
+ * l'année civile (1er janvier → 31 décembre).
+ *
+ * Pour respecter « exercice en cours », l'ancre (jour/mois de la date de début)
+ * est reportée d'année en année jusqu'à la fenêtre annuelle qui contient `now`.
+ * Exception : si la période littérale configurée contient déjà `now`, on
+ * l'utilise telle quelle (gère un premier exercice atypique, ex. exercice long).
+ *
+ * La borne de fin est plafonnée à la fin du jour courant (heure de Paris) pour
+ * exclure les transactions datées dans le futur, comme resolvePeriodDates.
+ */
+function getCurrentFiscalYearRange(org, now = new Date()) {
+  const startStr = org?.fiscalYearStartDate;
+  const endStr = org?.fiscalYearEndDate;
+  const todayEnd = endOfCurrentDay(now);
+  const cap = (endDate) => (endDate < todayEnd ? endDate : todayEnd);
+
+  // Aucun exercice configuré → année civile en cours
+  if (!startStr) {
+    const y = now.getUTCFullYear();
+    return {
+      startDate: new Date(`${y}-01-01T00:00:00.000Z`),
+      endDate: cap(new Date(`${y}-12-31T23:59:59.999Z`)),
+    };
+  }
+
+  const litStart = new Date(`${startStr}T00:00:00.000Z`);
+
+  // Exercice configuré avec une date de fin → on respecte EXACTEMENT la plage
+  // saisie [début, fin], bornée à aujourd'hui pour ne pas compter de
+  // transactions futures. (Un exercice clôturé passé affiche donc sa période
+  // complète ; un exercice en cours s'arrête à aujourd'hui.)
+  if (endStr) {
+    const litEnd = new Date(`${endStr}T23:59:59.999Z`);
+    return { startDate: litStart, endDate: cap(litEnd) };
+  }
+
+  // Date de début seule (pas de fin) → report de l'ancre (mois/jour) sur la
+  // fenêtre annuelle contenant aujourd'hui
+  const month = litStart.getUTCMonth();
+  const day = litStart.getUTCDate();
+  let startDate = new Date(
+    Date.UTC(now.getUTCFullYear(), month, day, 0, 0, 0, 0),
+  );
+  if (startDate > now) {
+    startDate = new Date(
+      Date.UTC(now.getUTCFullYear() - 1, month, day, 0, 0, 0, 0),
+    );
+  }
+  const endDate = new Date(startDate);
+  endDate.setUTCFullYear(endDate.getUTCFullYear() + 1);
+  endDate.setUTCMilliseconds(endDate.getUTCMilliseconds() - 1);
+  return { startDate, endDate: cap(endDate) };
+}
+
+/**
  * Récupère le solde total des comptes bancaires (avec filtre optionnel)
  */
 async function getAccountsBalance(workspaceId, accountId) {
@@ -97,6 +156,26 @@ const dashboardAggregationResolvers = {
         const matchFilter = { workspaceId, deletedAt: null };
         if (accountId) matchFilter.fromAccount = accountId;
 
+        // Encaissements / décaissements bornés à l'exercice comptable en cours
+        // (défaut : année civile). Le solde et le nombre de transactions restent
+        // calculés sur l'ensemble pour ne pas altérer leur sémantique.
+        let org = null;
+        try {
+          org = await mongoose.connection.db
+            .collection("organization")
+            .findOne(
+              { _id: new mongoose.Types.ObjectId(workspaceId) },
+              { projection: { fiscalYearStartDate: 1, fiscalYearEndDate: 1 } },
+            );
+        } catch {
+          org = null;
+        }
+        const { startDate, endDate } = getCurrentFiscalYearRange(org);
+        const inFiscalYear = [
+          { $gte: ["$date", startDate] },
+          { $lte: ["$date", endDate] },
+        ];
+
         const [transactionStats, { balance }] = await Promise.all([
           Transaction.aggregate([
             { $match: matchFilter },
@@ -104,11 +183,21 @@ const dashboardAggregationResolvers = {
               $group: {
                 _id: null,
                 totalIncome: {
-                  $sum: { $cond: [{ $gt: ["$amount", 0] }, "$amount", 0] },
+                  $sum: {
+                    $cond: [
+                      { $and: [{ $gt: ["$amount", 0] }, ...inFiscalYear] },
+                      "$amount",
+                      0,
+                    ],
+                  },
                 },
                 totalExpenses: {
                   $sum: {
-                    $cond: [{ $lt: ["$amount", 0] }, { $abs: "$amount" }, 0],
+                    $cond: [
+                      { $and: [{ $lt: ["$amount", 0] }, ...inFiscalYear] },
+                      { $abs: "$amount" },
+                      0,
+                    ],
                   },
                 },
                 count: { $sum: 1 },

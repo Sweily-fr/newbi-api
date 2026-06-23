@@ -108,5 +108,13 @@ export async function documentUrl({
   }
   if (draftStatus && doc.status === draftStatus) return null;
   if (!doc.archivedPdfKey) return null;
+  // L'objet peut être référencé en base sans exister dans le bucket courant
+  // (clé archivée dans un autre environnement). On retombe alors sur le rendu
+  // live côté frontend plutôt que sur une iframe qui 500.
+  const exists = await cloudflareService.documentObjectExists(
+    docType,
+    doc.archivedPdfKey,
+  );
+  if (!exists) return null;
   return buildDocumentUrl(docType, docId);
 }

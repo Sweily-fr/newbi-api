@@ -1159,7 +1159,9 @@ const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
 
   if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
     const query = {
-      status: { $in: ["CONFIRMED", "IN_PROGRESS", "DELIVERED", "CANCELED"] },
+      status: {
+        $in: ["CONFIRMED", "VALIDATED", "IN_PROGRESS", "DELIVERED", "CANCELED"],
+      },
     };
     if (prefix) query.prefix = prefix;
     if (options.workspaceId) query.workspaceId = options.workspaceId;

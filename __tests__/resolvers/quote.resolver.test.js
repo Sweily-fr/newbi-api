@@ -193,9 +193,9 @@ describe("Quote Resolver - Query.quotes", () => {
   });
 
   it("filters by date range", async () => {
-    await insertQuote({ createdAt: new Date("2026-02-01") });
-    await insertQuote({ createdAt: new Date("2026-06-01") });
-    await insertQuote({ createdAt: new Date("2026-11-01") });
+    await insertQuote({ number: "0001", createdAt: new Date("2026-02-01") });
+    await insertQuote({ number: "0002", createdAt: new Date("2026-06-01") });
+    await insertQuote({ number: "0003", createdAt: new Date("2026-11-01") });
 
     const result = await resolver(
       null,

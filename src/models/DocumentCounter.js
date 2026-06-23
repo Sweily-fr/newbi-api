@@ -105,7 +105,13 @@ async function getExistingMaxNumber(
     },
     purchaseOrder: {
       model: PurchaseOrder,
-      statuses: ["CONFIRMED", "IN_PROGRESS", "DELIVERED", "CANCELED"],
+      statuses: [
+        "CONFIRMED",
+        "VALIDATED",
+        "IN_PROGRESS",
+        "DELIVERED",
+        "CANCELED",
+      ],
     },
   };
 

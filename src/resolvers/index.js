@@ -1,5 +1,6 @@
 import { mergeResolvers } from "@graphql-tools/merge";
 import userResolvers from "./user.js";
+import subscriptionResolvers from "./subscription.js";
 import invoiceResolvers from "./invoice.js";
 import quoteResolvers from "./quote.js";
 import creditNoteResolvers from "./creditNote.js";
@@ -67,6 +68,7 @@ import receiptMatchingResolvers from "./receiptMatchingResolvers.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
+  subscriptionResolvers,
   invoiceResolvers,
   quoteResolvers,
   creditNoteResolvers,

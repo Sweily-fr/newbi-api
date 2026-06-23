@@ -39,6 +39,7 @@ import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
+import { triggerInvoiceFacturXArchive } from "../services/invoiceFacturXArchiveService.js";
 import {
   autoPushEventToConnections,
   updateEventInExternalCalendars,
@@ -1507,27 +1508,20 @@ const invoiceResolvers = {
               });
 
               if (matchingQuote) {
-                // Vérifier si le devis n'a pas déjà trop de factures liées
-                const linkedInvoicesCount = matchingQuote.linkedInvoices
-                  ? matchingQuote.linkedInvoices.length
-                  : 0;
+                // Ajouter cette facture aux factures liées du devis
+                if (!matchingQuote.linkedInvoices) {
+                  matchingQuote.linkedInvoices = [];
+                }
 
-                if (linkedInvoicesCount < 3) {
-                  // Ajouter cette facture aux factures liées du devis
-                  if (!matchingQuote.linkedInvoices) {
-                    matchingQuote.linkedInvoices = [];
-                  }
+                // Vérifier que la facture n'est pas déjà liée
+                const alreadyLinked = matchingQuote.linkedInvoices.some(
+                  (linkedInvoice) =>
+                    linkedInvoice.toString() === invoice._id.toString(),
+                );
 
-                  // Vérifier que la facture n'est pas déjà liée
-                  const alreadyLinked = matchingQuote.linkedInvoices.some(
-                    (linkedInvoice) =>
-                      linkedInvoice.toString() === invoice._id.toString(),
-                  );
-
-                  if (!alreadyLinked) {
-                    matchingQuote.linkedInvoices.push(invoice._id);
-                    await matchingQuote.save();
-                  }
+                if (!alreadyLinked) {
+                  matchingQuote.linkedInvoices.push(invoice._id);
+                  await matchingQuote.save();
                 }
               }
             }
@@ -1551,11 +1545,7 @@ const invoiceResolvers = {
                   const alreadyLinked = sourceQuote.linkedInvoices?.some(
                     (id) => id.toString() === invoice._id.toString(),
                   );
-                  if (
-                    !alreadyLinked &&
-                    (!sourceQuote.linkedInvoices ||
-                      sourceQuote.linkedInvoices.length < 3)
-                  ) {
+                  if (!alreadyLinked) {
                     await Quote.findByIdAndUpdate(sourceQuoteId, {
                       $addToSet: { linkedInvoices: invoice._id },
                     });
@@ -1589,6 +1579,12 @@ const invoiceResolvers = {
                     err,
                   ),
                 );
+            }
+
+            // Archivage Factur-X sur R2 si la facture est créée directement
+            // finalisée (non brouillon). Fire-and-forget, ne bloque pas la réponse.
+            if (invoice.status !== "DRAFT") {
+              triggerInvoiceFacturXArchive(invoice, workspaceId);
             }
 
             return await invoice.populate("createdBy");
@@ -2267,6 +2263,16 @@ const invoiceResolvers = {
               }
             }
 
+            // Archivage Factur-X sur R2 si la mise à jour finalise un brouillon
+            // (DRAFT → non-brouillon). Fire-and-forget, ne bloque pas la réponse.
+            if (
+              invoiceData.status === "DRAFT" &&
+              updatedInvoice?.status &&
+              updatedInvoice.status !== "DRAFT"
+            ) {
+              triggerInvoiceFacturXArchive(updatedInvoice, workspaceId);
+            }
+
             return updatedInvoice;
           } catch (error) {
             // Intercepter les erreurs de validation Mongoose
@@ -2690,6 +2696,12 @@ const invoiceResolvers = {
           context.organizationId || workspaceId,
         ).catch((err) => console.error("Erreur sync Pennylane:", err));
 
+        // Archivage Factur-X sur R2 à la finalisation (DRAFT → PENDING).
+        // Fire-and-forget, ne bloque pas la réponse.
+        if (oldStatus === "DRAFT" && status === "PENDING") {
+          triggerInvoiceFacturXArchive(invoice, workspaceId);
+        }
+
         return await invoice.populate("createdBy");
       },
     ),
@@ -2940,15 +2952,9 @@ const invoiceResolvers = {
           );
         }
 
-        // Vérifier le nombre de factures déjà liées (max 3)
         const linkedInvoicesCount = quote.linkedInvoices
           ? quote.linkedInvoices.length
           : 0;
-        if (linkedInvoicesCount >= 3) {
-          throw createValidationError("Limite de factures liées atteinte", {
-            linkedInvoices: "Un devis ne peut avoir plus de 3 factures liées",
-          });
-        }
 
         // Calculer le montant total déjà facturé et vérifier les acomptes
         let totalInvoiced = 0;
@@ -2972,10 +2978,15 @@ const invoiceResolvers = {
           });
         }
 
-        // Vérifier que le montant ne dépasse pas le total du devis
-        const remainingAmount = quote.finalTotalTTC - totalInvoiced;
+        // Vérifier que le montant ne dépasse pas le total du devis.
+        // Comparaison en centimes pour éviter les erreurs de virgule flottante
+        // (ex: reste réel 1498.1799999999998 vs montant saisi 1498.18).
+        const remainingAmount =
+          Math.round((quote.finalTotalTTC - totalInvoiced) * 100) / 100;
 
-        if (numericAmount > remainingAmount) {
+        if (
+          Math.round(numericAmount * 100) > Math.round(remainingAmount * 100)
+        ) {
           console.error("Erreur de validation - Montant trop élevé:", {
             amount: numericAmount,
             remainingAmount,
@@ -2986,21 +2997,6 @@ const invoiceResolvers = {
               2,
             )}€)`,
           });
-        }
-
-        // Si c'est la dernière facture possible (3ème facture OU reste exactement ce montant),
-        // le montant doit être exactement égal au reste à facturer
-        const isLastPossibleInvoice =
-          linkedInvoicesCount === 2 || remainingAmount === numericAmount;
-        if (linkedInvoicesCount === 2 && numericAmount !== remainingAmount) {
-          throw createValidationError(
-            "Montant de la dernière facture invalide",
-            {
-              amount: `La dernière facture liée doit être exactement égale au reste à facturer (${remainingAmount.toFixed(
-                2,
-              )}€)`,
-            },
-          );
         }
 
         // Générer le numéro de facture avec un préfixe de facture (pas celui du devis)
@@ -3015,6 +3011,23 @@ const invoiceResolvers = {
         // Si numericAmount = 120€ TTC avec 20% TVA, alors HT = 120 / 1.20 = 100€
         const vatRate = 20;
         const unitPriceHT = numericAmount / (1 + vatRate / 100);
+
+        // Libellé de l'article selon le type de facture liée
+        const quoteRef = `${quote.prefix}-${quote.number}`;
+        let itemDescription;
+        if (isDeposit) {
+          itemDescription = `Acompte sur devis ${quoteRef}`;
+        } else if (numericAmount >= remainingAmount - 0.01) {
+          itemDescription =
+            linkedInvoicesCount > 0
+              ? `Facture de solde du devis ${quoteRef}`
+              : `Facture sur devis ${quoteRef}`;
+        } else {
+          const percentage = quote.finalTotalTTC
+            ? Math.round((numericAmount / quote.finalTotalTTC) * 10000) / 100
+            : 0;
+          itemDescription = `Facture partielle de ${String(percentage).replace(".", ",")}% du devis ${quoteRef}`;
+        }
 
         // Utiliser les paramètres par défaut de facture (organisation), pas ceux du devis
         const org = linkedInvoiceOrg;
@@ -3035,11 +3048,7 @@ const invoiceResolvers = {
           // Créer un article unique avec le montant spécifié
           items: [
             {
-              description: isDeposit
-                ? `Acompte sur devis ${quote.prefix}-${quote.number}`
-                : numericAmount >= remainingAmount - 0.01
-                  ? `Facture sur devis ${quote.prefix}-${quote.number}`
-                  : `Facture partielle sur devis ${quote.prefix}-${quote.number}`,
+              description: itemDescription,
               quantity: 1,
               unitPrice: unitPriceHT,
               vatRate: vatRate,

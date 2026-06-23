@@ -63,13 +63,33 @@ const productResolvers = {
         };
 
         if (search && search.trim() !== "") {
-          const searchRegex = new RegExp(search, "i");
+          const trimmed = search.trim();
+          const searchRegex = new RegExp(trimmed, "i");
 
           query.$or = [
             { name: searchRegex },
             { reference: searchRegex },
             { description: searchRegex },
           ];
+
+          // Recherche par prix : si la saisie contient des chiffres, on matche
+          // aussi les produits dont le prix HT (champ numérique) contient ces
+          // chiffres. Un regex classique ne fonctionne pas sur un Number, d'où
+          // $expr + $toString. On accepte la virgule comme séparateur décimal
+          // et on ignore un éventuel symbole (« 100 € »).
+          const priceQuery = trimmed.replace(/[^\d.,]/g, "").replace(",", ".");
+          if (/\d/.test(priceQuery)) {
+            const escapedPrice = priceQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            query.$or.push({
+              $expr: {
+                $regexMatch: {
+                  input: { $toString: { $ifNull: ["$unitPrice", ""] } },
+                  regex: escapedPrice,
+                  options: "i",
+                },
+              },
+            });
+          }
         }
 
         if (category) {

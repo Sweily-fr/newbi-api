@@ -1,5 +1,6 @@
 import express from "express";
 import { bankingService } from "../services/banking/index.js";
+import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
@@ -454,6 +455,84 @@ router.post("/disconnect", async (req, res) => {
       }
     };
 
+    // Helper: supprimer en cascade les données issues des comptes bancaires.
+    // - supprime les transactions synchronisées,
+    // - détache (sans supprimer) les factures/dépenses/factures d'achat qui y
+    //   étaient réconciliées, pour ne pas laisser de liens orphelins.
+    // externalAccountIds = comptes (AccountBanking.externalId) ciblés ; passer
+    // `null` supprime TOUTES les transactions du provider pour ce workspace.
+    const cascadeDeleteBankData = async (
+      targetProvider,
+      externalAccountIds,
+    ) => {
+      try {
+        const { default: Transaction } =
+          await import("../models/Transaction.js");
+        const wsId = workspaceId.toString();
+
+        const txFilter = { workspaceId: wsId };
+        if (targetProvider) txFilter.provider = targetProvider;
+        if (Array.isArray(externalAccountIds)) {
+          // Sécurité : une liste vide ne doit jamais tout supprimer.
+          if (externalAccountIds.length === 0) return 0;
+          txFilter.fromAccount = { $in: externalAccountIds };
+        }
+
+        const txs = await Transaction.find(txFilter).select("_id");
+        const txIds = txs.map((t) => t._id);
+        if (txIds.length === 0) return 0;
+
+        // 1) Supprimer les transactions (objectif principal).
+        const del = await Transaction.deleteMany({ _id: { $in: txIds } });
+        logger.info(
+          `Cascade: ${del.deletedCount} transactions supprimées pour workspace ${wsId}${
+            targetProvider ? ` (${targetProvider})` : ""
+          }`,
+        );
+
+        // 2) Détacher les liens de réconciliation (best-effort, on conserve
+        //    les factures/dépenses, on retire juste le lien orphelin).
+        try {
+          const [
+            { default: Invoice },
+            { default: Expense },
+            { default: PurchaseInvoice },
+          ] = await Promise.all([
+            import("../models/Invoice.js"),
+            import("../models/Expense.js"),
+            import("../models/PurchaseInvoice.js"),
+          ]);
+
+          await Promise.all([
+            Invoice.updateMany(
+              { linkedTransactionId: { $in: txIds } },
+              { $set: { linkedTransactionId: null } },
+            ),
+            Expense.updateMany(
+              { linkedTransactionId: { $in: txIds } },
+              { $set: { linkedTransactionId: null, isReconciled: false } },
+            ),
+            PurchaseInvoice.updateMany(
+              { linkedTransactionIds: { $in: txIds } },
+              {
+                $pull: { linkedTransactionIds: { $in: txIds } },
+                $set: { isReconciled: false },
+              },
+            ),
+          ]);
+        } catch (unlinkErr) {
+          logger.warn(
+            `Cascade: liens de réconciliation non nettoyés: ${unlinkErr.message}`,
+          );
+        }
+
+        return del.deletedCount;
+      } catch (err) {
+        logger.error(`Erreur cascade suppression transactions: ${err.message}`);
+        return 0;
+      }
+    };
+
     // Cas 1: Déconnexion d'un compte spécifique par son ID
     if (accountId) {
       const account = await AccountBanking.findOne({
@@ -473,12 +552,15 @@ router.post("/disconnect", async (req, res) => {
         await deleteBridgeItemSafe(accountItemId);
         deletedItems.push(accountItemId);
 
-        // Récupérer les IDs avant suppression
+        // Récupérer les IDs + externalId avant suppression
         const accountsToDelete = await AccountBanking.find({
           workspaceId,
           "raw.item_id": accountItemId,
-        }).select("_id");
+        }).select("_id externalId");
         deletedAccountIds = accountsToDelete.map((a) => a._id.toString());
+        const externalIds = accountsToDelete
+          .map((a) => a.externalId)
+          .filter(Boolean);
 
         // Supprimer les comptes de la DB
         const result = await AccountBanking.deleteMany({
@@ -489,15 +571,25 @@ router.post("/disconnect", async (req, res) => {
         logger.info(
           `Suppression de l'item ${accountItemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
         );
+
+        // Supprimer en cascade les transactions de ces comptes + liens
+        await cascadeDeleteBankData(null, externalIds);
       } else {
         // Pas d'itemId, supprimer uniquement ce compte
         deletedAccountIds.push(accountId.toString());
+        const externalIds = account.externalId ? [account.externalId] : [];
         await AccountBanking.findByIdAndDelete(accountId);
 
         logger.info(
           `Suppression du compte ${accountId} pour workspace ${workspaceId}`,
         );
+
+        // Supprimer en cascade les transactions de ce compte + liens
+        await cascadeDeleteBankData(null, externalIds);
       }
+
+      // Invalider le cache pour que la liste des comptes reflète la suppression
+      await bankingCacheService.invalidateAll(workspaceId);
 
       return res.json({
         success: true,
@@ -512,12 +604,15 @@ router.post("/disconnect", async (req, res) => {
       // Supprimer l'item côté Bridge API
       await deleteBridgeItemSafe(itemId);
 
-      // Récupérer les IDs avant suppression
+      // Récupérer les IDs + externalId avant suppression
       const accountsToDelete = await AccountBanking.find({
         workspaceId,
         "raw.item_id": itemId,
-      }).select("_id");
+      }).select("_id externalId");
       deletedAccountIds = accountsToDelete.map((a) => a._id.toString());
+      const externalIds = accountsToDelete
+        .map((a) => a.externalId)
+        .filter(Boolean);
 
       // Supprimer les comptes de la DB
       const result = await AccountBanking.deleteMany({
@@ -528,6 +623,12 @@ router.post("/disconnect", async (req, res) => {
       logger.info(
         `Suppression de l'item ${itemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
       );
+
+      // Supprimer en cascade les transactions de ces comptes + liens
+      await cascadeDeleteBankData(null, externalIds);
+
+      // Invalider le cache pour que la liste des comptes reflète la suppression
+      await bankingCacheService.invalidateAll(workspaceId);
 
       return res.json({
         success: true,
@@ -570,7 +671,13 @@ router.post("/disconnect", async (req, res) => {
 
       // Supprimer les comptes de la DB
       await AccountBanking.deleteMany({ workspaceId, provider: p });
+
+      // Supprimer en cascade toutes les transactions du provider + liens
+      await cascadeDeleteBankData(p, null);
     }
+
+    // Invalider le cache pour que la liste des comptes reflète la suppression
+    await bankingCacheService.invalidateAll(workspaceId);
 
     logger.info(
       `Déconnexion bancaire complète pour user ${user._id}, workspace ${workspaceId}, providers: ${providersToDisconnect.join(", ")}`,
@@ -581,6 +688,7 @@ router.post("/disconnect", async (req, res) => {
       disconnectedProviders: providersToDisconnect,
       deletedItems,
       mode: "provider",
+      all: true,
     });
   } catch (error) {
     logger.error("Erreur déconnexion:", error);

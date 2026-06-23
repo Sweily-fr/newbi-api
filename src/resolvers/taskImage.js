@@ -10,6 +10,42 @@ import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const TASK_UPDATED = "TASK_UPDATED";
 
+// Types MIME autorisés pour les pièces jointes des tâches/commentaires
+const VALID_MIME_TYPES = [
+  // Images
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  // Documents
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/plain",
+  "text/csv",
+  // Vidéos
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-msvideo",
+  "video/x-matroska",
+];
+
+const isVideoMime = (mimetype) => !!mimetype && mimetype.startsWith("video/");
+
+// Taille max par fichier : 100 Mo pour les vidéos, 10 Mo sinon
+// (la limite vidéo correspond au maxFileSize de graphqlUploadExpress)
+const getMaxFileSize = (mimetype) =>
+  isVideoMime(mimetype) ? 100 * 1024 * 1024 : 10 * 1024 * 1024;
+
+// Taille totale max par tâche (toutes pièces jointes confondues)
+const MAX_TASK_TOTAL_SIZE = 500 * 1024 * 1024;
+
+const UNSUPPORTED_TYPE_MESSAGE =
+  "Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), vidéos (MP4, WebM, MOV, AVI, MKV), documents (PDF, Word, Excel, TXT, CSV).";
+
 // Publier en toute sécurité
 const safePublish = (channel, payload, context = "") => {
   try {
@@ -84,48 +120,34 @@ const taskImageResolvers = {
           const fileBuffer = Buffer.concat(chunks);
 
           // Valider le type de fichier
-          const validMimeTypes = [
-            "image/jpeg",
-            "image/png",
-            "image/gif",
-            "image/webp",
-            "application/pdf",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "text/plain",
-            "text/csv",
-          ];
-          if (!validMimeTypes.includes(mimetype)) {
+          if (!VALID_MIME_TYPES.includes(mimetype)) {
             return {
               success: false,
               image: null,
-              message:
-                "Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).",
+              message: UNSUPPORTED_TYPE_MESSAGE,
             };
           }
 
-          // Valider la taille (max 10MB)
-          const maxSize = 10 * 1024 * 1024;
+          // Valider la taille (100 Mo pour les vidéos, 10 Mo sinon)
+          const maxSize = getMaxFileSize(mimetype);
           if (fileBuffer.length > maxSize) {
             return {
               success: false,
               image: null,
-              message: "Fichier trop volumineux. Maximum 10MB.",
+              message: `Fichier trop volumineux. Maximum ${maxSize / (1024 * 1024)} Mo.`,
             };
           }
 
-          // Valider la taille totale par tâche (max 50MB)
+          // Valider la taille totale par tâche
           const currentTotalSize = (task.images || []).reduce(
             (sum, img) => sum + (img.fileSize || 0),
             0,
           );
-          if (currentTotalSize + fileBuffer.length > 50 * 1024 * 1024) {
+          if (currentTotalSize + fileBuffer.length > MAX_TASK_TOTAL_SIZE) {
             return {
               success: false,
               image: null,
-              message: "Limite de stockage atteinte. Maximum 50MB par tâche.",
+              message: `Limite de stockage atteinte. Maximum ${MAX_TASK_TOTAL_SIZE / (1024 * 1024)} Mo par tâche.`,
             };
           }
 
@@ -415,35 +437,21 @@ const taskImageResolvers = {
           const fileBuffer = Buffer.concat(chunks);
 
           // Valider le type de fichier
-          const validMimeTypes = [
-            "image/jpeg",
-            "image/png",
-            "image/gif",
-            "image/webp",
-            "application/pdf",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "text/plain",
-            "text/csv",
-          ];
-          if (!validMimeTypes.includes(mimetype)) {
+          if (!VALID_MIME_TYPES.includes(mimetype)) {
             return {
               success: false,
               image: null,
-              message:
-                "Type de fichier non supporté. Formats acceptés : images (JPEG, PNG, GIF, WebP), documents (PDF, Word, Excel, TXT, CSV).",
+              message: UNSUPPORTED_TYPE_MESSAGE,
             };
           }
 
-          // Valider la taille (max 10MB)
-          const maxSize = 10 * 1024 * 1024;
+          // Valider la taille (100 Mo pour les vidéos, 10 Mo sinon)
+          const maxSize = getMaxFileSize(mimetype);
           if (fileBuffer.length > maxSize) {
             return {
               success: false,
               image: null,
-              message: "Fichier trop volumineux. Maximum 10MB.",
+              message: `Fichier trop volumineux. Maximum ${maxSize / (1024 * 1024)} Mo.`,
             };
           }
 

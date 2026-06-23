@@ -12,13 +12,20 @@ import cloudflareTransferService from "../services/cloudflareTransferService.js"
 import FileTransfer from "../models/FileTransfer.js";
 import { v4 as uuidv4 } from "uuid";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 
 // Cache temporaire pour stocker les métadonnées des fichiers uploadés (avec TTL)
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL_SECONDS = 30 * 60; // idem en secondes pour Redis
+// Cache mémoire L1 (rapide, mais local à l'instance PM2)
 const fileMetadataCache = new Map();
 const cacheTimers = new Map();
 
-function setCacheEntry(key, value) {
+// Préfixe des clés Redis (cache L2 partagé entre toutes les instances PM2)
+const redisMetaKey = (fileId) => `filetransfer:meta:${fileId}`;
+
+async function setCacheEntry(key, value) {
+  // L1 : mémoire locale
   fileMetadataCache.set(key, value);
   if (cacheTimers.has(key)) clearTimeout(cacheTimers.get(key));
   cacheTimers.set(
@@ -28,6 +35,12 @@ function setCacheEntry(key, value) {
       cacheTimers.delete(key);
     }, CACHE_TTL),
   );
+  // L2 : Redis partagé — indispensable en mode cluster, l'upload et la
+  // création de transfert pouvant être traités par des instances différentes.
+  // On attend l'écriture pour qu'elle soit durable avant que la mutation
+  // d'upload ne réponde au client (qui enchaîne sur la création du transfert).
+  // Best-effort : cacheSet est silencieux si Redis est indisponible.
+  await cacheSet(redisMetaKey(key), value, CACHE_TTL_SECONDS);
 }
 
 function deleteCacheEntry(key) {
@@ -36,20 +49,31 @@ function deleteCacheEntry(key) {
     clearTimeout(cacheTimers.get(key));
     cacheTimers.delete(key);
   }
+  void cacheDel(redisMetaKey(key));
 }
 
 const getFileInfoByTransferId = async (fileId) => {
-  // D'abord, vérifier le cache temporaire
+  // 1) Cache mémoire local (L1)
   if (fileMetadataCache.has(fileId)) {
     const cachedInfo = fileMetadataCache.get(fileId);
     return cachedInfo;
   }
 
-  // Rechercher par fileId dans les fichiers existants
+  // 2) Cache Redis partagé (L2) — couvre le cas cluster où l'upload a été
+  //    traité par une autre instance que la création du transfert.
+  const redisInfo = await cacheGet(redisMetaKey(fileId));
+  if (redisInfo) {
+    // Réamorcer le cache L1 local pour les accès suivants
+    fileMetadataCache.set(fileId, redisInfo);
+    return redisInfo;
+  }
+
+  // 3) Repli : rechercher par fileId dans les fichiers existants
+  //    (storageType est porté par le sous-document `files`, pas la racine).
   let fileTransfer = await FileTransfer.findOne({
     "files.fileId": fileId,
     uploadMethod: "chunk",
-    storageType: "r2",
+    "files.storageType": "r2",
   });
 
   if (!fileTransfer) {
@@ -198,7 +222,7 @@ const chunkUploadR2Resolvers = {
             uploadedAt: new Date(),
           };
 
-          setCacheEntry(fileId, fileMetadata);
+          await setCacheEntry(fileId, fileMetadata);
 
           return {
             success: true,
@@ -380,7 +404,7 @@ const chunkUploadR2Resolvers = {
               uploadedAt: new Date(),
             };
 
-            setCacheEntry(fileId, fileMetadata);
+            await setCacheEntry(fileId, fileMetadata);
           }
 
           return {
@@ -495,7 +519,7 @@ const chunkUploadR2Resolvers = {
             };
 
             // Ajouter au cache temporaire pour la création du transfert
-            setCacheEntry(fileId, fileMetadata);
+            await setCacheEntry(fileId, fileMetadata);
           }
 
           return {
@@ -618,6 +642,12 @@ const chunkUploadR2Resolvers = {
 
           // Sauvegarder le transfert de fichier
           await fileTransfer.save();
+
+          // Les métadonnées temporaires ont été consommées : purger les caches
+          // L1 (mémoire) et L2 (Redis) pour éviter toute réutilisation périmée.
+          for (const fileId of fileIds) {
+            deleteCacheEntry(fileId);
+          }
 
           // Envoyer l'email si un destinataire est spécifié et si SMTP est configuré
           if (

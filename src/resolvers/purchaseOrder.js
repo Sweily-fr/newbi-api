@@ -488,7 +488,13 @@ const purchaseOrderResolvers = {
               workspaceId,
               prefix,
               status: {
-                $in: ["CONFIRMED", "IN_PROGRESS", "DELIVERED", "CANCELED"],
+                $in: [
+                  "CONFIRMED",
+                  "VALIDATED",
+                  "IN_PROGRESS",
+                  "DELIVERED",
+                  "CANCELED",
+                ],
               },
             }).lean();
             allowManualPONumber = !firstFinalizedForPrefix;

@@ -59,12 +59,9 @@ router.get("/:docType/:id/document-pdf", validateJWT, async (req, res) => {
       return res.status(404).json({ error: "Aucun document disponible" });
     }
 
-    const buffer = await cloudflareService.getDocumentObjectBuffer(
-      docType,
-      doc.archivedPdfKey,
-    );
-
-    // Autoriser l'affichage en iframe du frontend (helmet bloque par défaut)
+    // Autoriser l'affichage en iframe du frontend (helmet bloque par défaut).
+    // Posé avant le fetch pour que même une réponse d'erreur reste affichable
+    // dans l'iframe (sinon X-Frame-Options: SAMEORIGIN bloque le rendu).
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     res.removeHeader("X-Frame-Options");
     res.setHeader(
@@ -72,6 +69,23 @@ router.get("/:docType/:id/document-pdf", validateJWT, async (req, res) => {
       `frame-ancestors 'self' ${frontendUrl}`,
     );
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+
+    let buffer;
+    try {
+      buffer = await cloudflareService.getDocumentObjectBuffer(
+        docType,
+        doc.archivedPdfKey,
+      );
+    } catch (error) {
+      // Clé en base mais objet absent du bucket (ex: archivé dans un autre env)
+      if (
+        error?.name === "NoSuchKey" ||
+        error?.$metadata?.httpStatusCode === 404
+      ) {
+        return res.status(404).json({ error: "Aucun document disponible" });
+      }
+      throw error;
+    }
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
