@@ -1,0 +1,18 @@
+type MySubscription {
+  status: String
+  plan: String
+  periodEnd: String
+  cancelAtPeriodEnd: Boolean
+  appTrialEnabled: Boolean!
+  isTrialActive: Boolean!
+  trialStartDate: String
+  trialEndDate: String
+  stripeTrialActive: Boolean!
+  hasUsedTrial: Boolean!
+  isActive: Boolean!
+  isReadOnly: Boolean!
+}
+
+extend type Query {
+  mySubscription: MySubscription!
+}
