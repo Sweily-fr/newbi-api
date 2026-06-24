@@ -40,6 +40,9 @@ type Quote {
   # E-Signature
   signatureStatus: String
   signingUrl: String
+  # Cachet qualifié de l'entreprise (QES automatique)
+  sealStatus: String
+  sealedDocumentUrl: String
   # Email tracking
   emailTracking: EmailTracking
   createdAt: String!
