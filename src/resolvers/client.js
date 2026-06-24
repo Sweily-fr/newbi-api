@@ -123,23 +123,27 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // International si le flag est coché OU si le pays renseigné n'est pas la France
           const isIntl = isInternationalEntity(input);
-          // Pour une entreprise, le numéro d'identification est obligatoire
-          if (!input.siret || input.siret.trim() === "") {
-            throw new Error(
-              isIntl
-                ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
-                : "Le SIREN/SIRET est obligatoire pour une entreprise française",
-            );
-          }
-          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
-          if (
-            !isIntl &&
-            !/^\d{9}$/.test(input.siret) &&
-            !/^\d{14}$/.test(input.siret)
-          ) {
-            throw new Error(
-              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
-            );
+          if (isIntl) {
+            // Entreprise hors France : SIREN/TVA sont des notions franco-françaises
+            // → champs non requis et non stockés en base
+            clientData.siret = undefined;
+            clientData.vatNumber = undefined;
+          } else {
+            // Entreprise française : le SIREN/SIRET est obligatoire
+            if (!input.siret || input.siret.trim() === "") {
+              throw new Error(
+                "Le SIREN/SIRET est obligatoire pour une entreprise française",
+              );
+            }
+            // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
+            if (
+              !/^\d{9}$/.test(input.siret) &&
+              !/^\d{14}$/.test(input.siret)
+            ) {
+              throw new Error(
+                "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
+              );
+            }
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
@@ -246,23 +250,27 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // International si le flag est coché OU si le pays renseigné n'est pas la France
           const isIntl = isInternationalEntity(input);
-          // Pour une entreprise, le numéro d'identification est obligatoire
-          if (!input.siret || input.siret.trim() === "") {
-            throw new Error(
-              isIntl
-                ? "Le numéro d'identification est obligatoire pour une entreprise internationale"
-                : "Le SIREN/SIRET est obligatoire pour une entreprise française",
-            );
-          }
-          // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres) - uniquement pour les entreprises françaises
-          if (
-            !isIntl &&
-            !/^\d{9}$/.test(input.siret) &&
-            !/^\d{14}$/.test(input.siret)
-          ) {
-            throw new Error(
-              "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
-            );
+          if (isIntl) {
+            // Entreprise hors France : SIREN/TVA sont des notions franco-françaises
+            // → champs non requis et vidés en base (le client était peut-être FR avant)
+            updateData.siret = "";
+            updateData.vatNumber = "";
+          } else {
+            // Entreprise française : le SIREN/SIRET est obligatoire
+            if (!input.siret || input.siret.trim() === "") {
+              throw new Error(
+                "Le SIREN/SIRET est obligatoire pour une entreprise française",
+              );
+            }
+            // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
+            if (
+              !/^\d{9}$/.test(input.siret) &&
+              !/^\d{14}$/.test(input.siret)
+            ) {
+              throw new Error(
+                "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
+              );
+            }
           }
         } else if (input.type === "INDIVIDUAL") {
           // Pour un particulier, générer le nom complet à partir de firstName et lastName
