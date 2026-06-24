@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { EMAIL_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX } from '../../utils/validators.js';
+import { EMAIL_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX, isInternationalEntity } from '../../utils/validators.js';
 import addressSchema from './address.js';
 
 /**
@@ -111,7 +111,9 @@ const clientSchema = new mongoose.Schema({
       validator: function(v) {
         // Si ce n'est pas une entreprise, pas besoin de SIRET
         if (this.type !== CLIENT_TYPES.COMPANY) return true;
-        // Pour les entreprises, un identifiant est obligatoire
+        // Entreprise hors France : SIREN/TVA = notions FR → non requis
+        if (isInternationalEntity(this)) return true;
+        // Pour les entreprises françaises, un identifiant est obligatoire
         return v && v.trim().length > 0;
       },
       message: 'Un numéro d\'identification (SIRET/SIREN ou équivalent) est requis pour une entreprise'
