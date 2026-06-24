@@ -40,12 +40,17 @@ type Quote {
   # E-Signature
   signatureStatus: String
   signingUrl: String
+  # Cachet qualifié de l'entreprise (QES automatique)
+  sealStatus: String
+  sealedDocumentUrl: String
   # Email tracking
   emailTracking: EmailTracking
   createdAt: String!
   updatedAt: String!
   convertedToInvoice: Invoice
   linkedInvoices: [Invoice]
+  # Vrai si une facture a été créée via un bon de commande issu de ce devis
+  hasPurchaseOrderInvoices: Boolean
   situationInvoicedTotal: Float
   archivedPdfKey: String
   archivedPdfStoredAt: String

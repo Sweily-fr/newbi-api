@@ -20,13 +20,17 @@ class ESignatureService {
   }
 
   get baseUrl() {
-    return process.env.ESIGNATURE_API_URL || "https://test.esignature.openapi.com";
+    return (
+      process.env.ESIGNATURE_API_URL || "https://test.esignature.openapi.com"
+    );
   }
 
   get oauthUrl() {
     // Sandbox = test.oauth.openapi.it, Production = oauth.openapi.it
     const isTest = this.baseUrl.includes("test.");
-    return isTest ? "https://test.oauth.openapi.it" : "https://oauth.openapi.it";
+    return isTest
+      ? "https://test.oauth.openapi.it"
+      : "https://oauth.openapi.it";
   }
 
   /**
@@ -36,7 +40,11 @@ class ESignatureService {
    */
   async getAccessToken() {
     // Retourner le token en cache s'il est encore valide (avec 5 min de marge)
-    if (this._cachedToken && this._tokenExpiry && Date.now() < this._tokenExpiry - 300000) {
+    if (
+      this._cachedToken &&
+      this._tokenExpiry &&
+      Date.now() < this._tokenExpiry - 300000
+    ) {
       return this._cachedToken;
     }
 
@@ -46,7 +54,7 @@ class ESignatureService {
     if (!username || !password) {
       throw new Error(
         "ESIGNATURE_OAUTH_USERNAME et ESIGNATURE_OAUTH_PASSWORD sont requis. " +
-        "Récupérez-les sur https://console.openapi.com"
+          "Récupérez-les sur https://console.openapi.com",
       );
     }
 
@@ -55,6 +63,7 @@ class ESignatureService {
     const domain = this.baseUrl.replace("https://", "");
     const scopes = [
       `POST:${domain}/EU-SES`,
+      `POST:${domain}/EU-QES_otp`,
       `POST:${domain}/EU-QES_automatic`,
       `GET:${domain}/signatures`,
       `DELETE:${domain}/signatures`,
@@ -88,9 +97,13 @@ class ESignatureService {
     }
 
     this._cachedToken = data.token;
-    this._tokenExpiry = data.expire ? data.expire * 1000 : Date.now() + 86400000;
+    this._tokenExpiry = data.expire
+      ? data.expire * 1000
+      : Date.now() + 86400000;
 
-    logger.info(`OAuth token obtained, expires: ${new Date(this._tokenExpiry).toISOString()}`);
+    logger.info(
+      `OAuth token obtained, expires: ${new Date(this._tokenExpiry).toISOString()}`,
+    );
 
     return this._cachedToken;
   }
@@ -128,23 +141,17 @@ class ESignatureService {
     if (response.status === 429 && retries > 0) {
       const retryAfter = parseInt(
         response.headers.get("retry-after") || "5",
-        10
+        10,
       );
-      logger.warn(
-        `eSignature rate limit hit, retrying in ${retryAfter}s...`
-      );
+      logger.warn(`eSignature rate limit hit, retrying in ${retryAfter}s...`);
       await new Promise((r) => setTimeout(r, retryAfter * 1000));
       return this.request(method, endpoint, body, retries - 1);
     }
 
     if (!response.ok) {
       const errorBody = await response.text();
-      logger.error(
-        `eSignature API error ${response.status}: ${errorBody}`
-      );
-      throw new Error(
-        `eSignature API ${response.status}: ${errorBody}`
-      );
+      logger.error(`eSignature API error ${response.status}: ${errorBody}`);
+      throw new Error(`eSignature API ${response.status}: ${errorBody}`);
     }
 
     // Vérifier si la réponse est un fichier binaire (PDF)
@@ -175,8 +182,14 @@ class ESignatureService {
     documentInput,
     signers,
     options = {},
-    callbackConfig = {}
+    callbackConfig = {},
   ) {
+    // Placement par défaut de la signature : bas à droite d'une page A4 (595x842 pt).
+    // Origine des coordonnées en HAUT à gauche (confirmé par test) → bas = y élevé.
+    const defaultPlacement = options.signaturePlacement || [
+      { page: options.signaturePage || 1, x: 400, y: 730 },
+    ];
+
     // Formater les signataires
     const formattedSigners = signers.map((signer) => ({
       name: signer.name,
@@ -184,7 +197,7 @@ class ESignatureService {
       email: signer.email,
       ...(signer.mobile && { mobile: signer.mobile }),
       authentication: signer.authentication || ["email"],
-      ...(signer.signatures && { signatures: signer.signatures }),
+      signatures: signer.signatures || defaultPlacement,
     }));
 
     // Préparer le document (base64 ou URL)
@@ -227,7 +240,7 @@ class ESignatureService {
     const result = await this.request("POST", "/EU-SES", payload);
 
     logger.info(
-      `eSignature SES created: ${result?.data?.id || result?.id || "unknown"}`
+      `eSignature SES created: ${result?.data?.id || result?.id || "unknown"}`,
     );
 
     return result;
@@ -242,11 +255,7 @@ class ESignatureService {
    * @param {object} callbackConfig - Configuration du callback
    * @returns {Promise<object>}
    */
-  async createQESAutomatic(
-    documentInput,
-    options = {},
-    callbackConfig = {}
-  ) {
+  async createQESAutomatic(documentInput, options = {}, callbackConfig = {}) {
     const certificateUsername =
       options.certificateUsername ||
       process.env.ESIGNATURE_CERTIFICATE_USERNAME;
@@ -256,7 +265,7 @@ class ESignatureService {
 
     if (!certificateUsername || !certificatePassword) {
       throw new Error(
-        "Certificate credentials required for QES automatic signature"
+        "Certificate credentials required for QES automatic signature",
       );
     }
 
@@ -279,6 +288,9 @@ class ESignatureService {
         asyncSignature: options.asyncSignature !== false,
         withTimestamp: options.withTimestamp !== false,
         ...(options.page && { page: options.page }),
+        // Position visuelle du cachet (si l'API la respecte) — origine en haut à gauche
+        ...(options.x !== undefined && { x: options.x }),
+        ...(options.y !== undefined && { y: options.y }),
         ...(options.signerImage && { signerImage: options.signerImage }),
       },
     };
@@ -293,14 +305,102 @@ class ESignatureService {
       };
     }
 
-    const result = await this.request(
-      "POST",
-      "/EU-QES_automatic",
-      payload
-    );
+    const result = await this.request("POST", "/EU-QES_automatic", payload);
 
     logger.info(
-      `eSignature QES automatic created: ${result?.id || "unknown"}`
+      `eSignature QES automatic created: ${result?.data?.id || result?.id || "unknown"}`,
+    );
+
+    return result;
+  }
+
+  /**
+   * Créer une signature QES avec OTP (signature qualifiée signée par le CLIENT)
+   * Le signataire signe lui-même via un lien et s'authentifie par OTP (email/SMS).
+   * Même structure que la SES, niveau de garantie supérieur, endpoint /EU-QES_otp.
+   *
+   * @param {Buffer|string} documentInput - PDF en base64 ou URL du document
+   * @param {Array<object>} signers - Liste des signataires (nom, prénom, email, mobile)
+   * @param {object} options - Options de signature (UI, mode, etc.)
+   * @param {object} callbackConfig - Configuration du callback webhook
+   * @returns {Promise<object>}
+   */
+  async createQESOTP(
+    documentInput,
+    signers,
+    options = {},
+    callbackConfig = {},
+  ) {
+    // Le QES_otp utilise le certificat qualifié de l'entreprise (le client
+    // déclenche/authentifie la signature via OTP).
+    const certificateUsername =
+      options.certificateUsername ||
+      process.env.ESIGNATURE_CERTIFICATE_USERNAME;
+    const certificatePassword =
+      options.certificatePassword ||
+      process.env.ESIGNATURE_CERTIFICATE_PASSWORD;
+
+    if (!certificateUsername || !certificatePassword) {
+      throw new Error("Certificate credentials required for QES OTP signature");
+    }
+
+    // Placement par défaut : bas à droite (origine des coordonnées en haut à gauche)
+    const defaultPlacement = options.signaturePlacement || [
+      { page: options.signaturePage || 1, x: 400, y: 730 },
+    ];
+
+    // Formater les signataires (OTP par SMS si mobile fourni, sinon email)
+    const formattedSigners = signers.map((signer) => ({
+      name: signer.name,
+      surname: signer.surname,
+      email: signer.email,
+      ...(signer.mobile && { mobile: signer.mobile }),
+      authentication:
+        signer.authentication || (signer.mobile ? ["email", "sms"] : ["email"]),
+      signatures: signer.signatures || defaultPlacement,
+    }));
+
+    let inputDocuments;
+    if (Buffer.isBuffer(documentInput)) {
+      inputDocuments = documentInput.toString("base64");
+    } else {
+      inputDocuments = documentInput;
+    }
+
+    const payload = {
+      inputDocuments,
+      certificateUsername,
+      certificatePassword,
+      signers: formattedSigners,
+      ...(options.title && { title: options.title }),
+      options: {
+        signatureMode: options.signatureMode || ["typed", "drawn"],
+        ...(options.signerMustRead !== undefined && {
+          signerMustRead: options.signerMustRead,
+        }),
+        ui: {
+          headerBackgroundColor: "#5a50ff",
+          buttonBackgroundColor: "#5a50ff",
+          ...(options.ui || {}),
+        },
+        ...(options.asyncSignature && { asyncSignature: true }),
+      },
+    };
+
+    if (callbackConfig.url) {
+      payload.callback = {
+        url: callbackConfig.url,
+        method: "JSON",
+        retry: callbackConfig.retry || 3,
+        ...(callbackConfig.headers && { headers: callbackConfig.headers }),
+        ...(callbackConfig.custom && { custom: callbackConfig.custom }),
+      };
+    }
+
+    const result = await this.request("POST", "/EU-QES_otp", payload);
+
+    logger.info(
+      `eSignature QES OTP created: ${result?.data?.id || result?.id || "unknown"}`,
     );
 
     return result;
@@ -351,10 +451,7 @@ class ESignatureService {
    * @returns {Promise<Buffer>} - PDF signé
    */
   async downloadSignedDocument(signatureId) {
-    return this.request(
-      "GET",
-      `/signatures/${signatureId}/signedDocument`
-    );
+    return this.request("GET", `/signatures/${signatureId}/signedDocument`);
   }
 
   /**
@@ -363,10 +460,7 @@ class ESignatureService {
    * @returns {Promise<object|Buffer>} - Audit trail (JSON ou PDF)
    */
   async downloadAuditTrail(signatureId) {
-    return this.request(
-      "GET",
-      `/signatures/${signatureId}/audit`
-    );
+    return this.request("GET", `/signatures/${signatureId}/audit`);
   }
 
   /**

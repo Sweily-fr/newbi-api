@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
+import PurchaseOrder from "../models/PurchaseOrder.js";
 import {
   archiveDocumentPdf,
   documentUrl,
@@ -7,6 +8,7 @@ import {
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
+import SignatureRequest from "../models/SignatureRequest.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   withRBAC,
@@ -213,6 +215,16 @@ const quoteResolvers = {
         return invoice ? [invoice] : [];
       }
       return [];
+    },
+    // Vrai si une facture existante a été créée via un bon de commande issu de ce devis
+    hasPurchaseOrderInvoices: async (quote) => {
+      const purchaseOrders = await PurchaseOrder.find({
+        sourceQuoteId: quote._id,
+        linkedInvoices: { $exists: true, $ne: [] },
+      }).select("linkedInvoices");
+      if (purchaseOrders.length === 0) return false;
+      const invoiceIds = purchaseOrders.flatMap((po) => po.linkedInvoices);
+      return !!(await Invoice.exists({ _id: { $in: invoiceIds } }));
     },
     // Calculer le total des factures de situation liées à ce devis
     situationInvoicedTotal: async (quote) => {
@@ -1263,6 +1275,25 @@ const quoteResolvers = {
           throw createStatusTransitionError("Devis", quote.status, status);
         }
 
+        // Un devis natif (PENDING) ne peut être accepté que si le CLIENT l'a signé
+        // (SES ou QES_otp = « bon pour accord »). Le QES automatique est un cachet de
+        // la société et ne vaut pas acceptation. Les devis importés (IMPORTED) restent
+        // acceptables manuellement sans signature.
+        if (status === "COMPLETED" && quote.status === "PENDING") {
+          const clientSignature = await SignatureRequest.findOne({
+            documentType: "quote",
+            documentId: quote._id,
+            signatureType: { $ne: "QES_automatic" },
+            status: "DONE",
+          });
+
+          if (!clientSignature) {
+            throw createValidationError(
+              "Ce devis doit être signé par le client avant de pouvoir être accepté. Envoyez-le pour signature : il sera accepté automatiquement une fois signé.",
+            );
+          }
+        }
+
         const oldStatus = quote.status;
 
         // Si le devis passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
@@ -1580,6 +1611,34 @@ const quoteResolvers = {
             throw createResourceLockedError(
               "Devis",
               "déjà converti en facture",
+            );
+          }
+        }
+
+        // Empêcher la double facturation : si un bon de commande issu de ce devis
+        // a déjà été converti en facture, le devis ne peut plus être facturé directement
+        const purchaseOrdersWithInvoices = await PurchaseOrder.find({
+          sourceQuoteId: quote._id,
+          workspaceId,
+          linkedInvoices: { $exists: true, $ne: [] },
+        }).select("linkedInvoices");
+
+        if (purchaseOrdersWithInvoices.length > 0) {
+          const poInvoiceIds = purchaseOrdersWithInvoices.flatMap(
+            (po) => po.linkedInvoices,
+          );
+          const poInvoiceExists = await Invoice.exists({
+            _id: { $in: poInvoiceIds },
+          });
+
+          if (poInvoiceExists) {
+            throw new AppError(
+              "Ce devis a déjà été facturé via un bon de commande. Impossible de le convertir directement en facture.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              {
+                resource: "Devis",
+                reason: "ALREADY_INVOICED_VIA_PURCHASE_ORDER",
+              },
             );
           }
         }

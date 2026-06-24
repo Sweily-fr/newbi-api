@@ -44,6 +44,8 @@ type PurchaseOrder {
   operationType: String
   sourceQuote: Quote
   linkedInvoices: [Invoice]
+  # Vrai si le devis source a déjà été facturé directement ou via un autre bon de commande
+  sourceQuoteHasInvoices: Boolean
   # Email tracking
   emailTracking: EmailTracking
   createdBy: User!

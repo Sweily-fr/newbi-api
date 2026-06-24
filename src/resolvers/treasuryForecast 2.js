@@ -29,7 +29,7 @@ const normalizeCat = (cat) => CATEGORY_ALIAS[cat] || cat;
 // On itère en arithmétique entière sur (année, mois) : mélanger un parsing UTC
 // (new Date("YYYY-MM-01")) avec setMonth (heure locale) provoquait un off-by-one
 // au passage heure d'été/hiver — la dernière borne tombant un mois d'hiver était
-// exclue (ex. plage 6 mois juin→novembre qui ne renvoyait que 5 mois).
+// exclue (ex. plage 6 mois juin->novembre qui ne renvoyait que 5 mois).
 const getMonthRange = (startDate, endDate) => {
   const months = [];
   const [startYear, startMonth] = startDate.split("-").map(Number);
@@ -47,25 +47,9 @@ const getMonthRange = (startDate, endDate) => {
   return months;
 };
 
-// Amount of the nth occurrence (0-based, counted from startDate): the
-// "Augmenter ou diminuer de" delta applies at each repetition — fixed EUR
-// step or compounding percent. Never goes below 0.
-const occurrenceAmount = (entry, index) => {
-  const delta = entry.amountDelta || 0;
-  if (!delta || index === 0) return entry.amount;
-  const amount =
-    entry.amountDeltaType === "PERCENT"
-      ? entry.amount * Math.pow(1 + delta / 100, index)
-      : entry.amount + delta * index;
-  return Math.max(0, Math.round(amount * 100) / 100);
-};
-
-// Expand a manual entry into { date, amount } occurrences within
-// [rangeStart, rangeEnd). The occurrence index keeps counting through
-// occurrences before rangeStart so the amount progression stays anchored
-// on startDate. frequency: ONCE, WEEKLY, MONTHLY, QUARTERLY, SEMIANNUAL,
-// ANNUAL. Exported for tests.
-export const expandManualEntry = (entry, rangeStart, rangeEnd) => {
+// Expand a manual entry into occurrence dates within [rangeStart, rangeEnd).
+// frequency: ONCE, WEEKLY, MONTHLY, QUARTERLY, SEMIANNUAL, ANNUAL.
+const expandManualEntry = (entry, rangeStart, rangeEnd) => {
   const occurrences = [];
   const start = new Date(entry.startDate);
   const end = entry.endDate ? new Date(entry.endDate) : null;
@@ -74,7 +58,7 @@ export const expandManualEntry = (entry, rangeStart, rangeEnd) => {
 
   if (entry.frequency === "ONCE") {
     if (start >= rangeStart && start < rangeEnd && (!end || start <= end)) {
-      occurrences.push({ date: new Date(start), amount: entry.amount });
+      occurrences.push(new Date(start));
     }
     return occurrences;
   }
@@ -83,12 +67,7 @@ export const expandManualEntry = (entry, rangeStart, rangeEnd) => {
   // Safety cap to avoid runaway loops on malformed data.
   let guard = 0;
   while (current < upperBound && guard < 600) {
-    if (current >= rangeStart) {
-      occurrences.push({
-        date: new Date(current),
-        amount: occurrenceAmount(entry, guard),
-      });
-    }
+    if (current >= rangeStart) occurrences.push(new Date(current));
     switch (entry.frequency) {
       case "WEEKLY":
         current.setDate(current.getDate() + 7);
@@ -397,26 +376,7 @@ const treasuryForecastResolvers = {
             existingInvoiceKeys.add(`${normalizeParty(name)}::${m}`);
           }
 
-          // Invoice-based recurrences win over transaction-based ones for the
-          // same party/type (the bank movement is the invoice being paid).
-          const invoiceRecurrenceKeys = new Set(
-            activeRecurrences
-              .filter((r) => r.source !== "TRANSACTION")
-              .map((r) => `${r.partyKey}::${r.type}`),
-          );
-          // Bucket an expense category into the forecast enum (OTHER and
-          // Bridge aliases like TRAVEL don't exist in EXPENSE_CATS).
-          const toExpenseCat = (cat) => {
-            const c = normalizeCat(cat || "OTHER");
-            return c === "OTHER" ? "OTHER_EXPENSE" : c;
-          };
-
           for (const rec of activeRecurrences) {
-            if (
-              rec.source === "TRANSACTION" &&
-              invoiceRecurrenceKeys.has(`${rec.partyKey}::${rec.type}`)
-            )
-              continue;
             for (const month of monthRange) {
               if (month < currentMonth) continue;
               // Only project months strictly after the last observed occurrence,
@@ -425,27 +385,11 @@ const treasuryForecastResolvers = {
               if (rec.source === "PURCHASE_INVOICE") {
                 const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
                 if (existingPurchaseKeys.has(key)) continue;
-                const cat = toExpenseCat(rec.category);
+                const cat = rec.category || "OTHER_EXPENSE";
                 if (!recurrenceExpenseMap[month])
                   recurrenceExpenseMap[month] = {};
                 recurrenceExpenseMap[month][cat] =
                   (recurrenceExpenseMap[month][cat] || 0) + rec.averageAmount;
-              } else if (rec.source === "TRANSACTION") {
-                if (rec.type === "EXPENSE") {
-                  const cat = toExpenseCat(rec.category);
-                  if (!recurrenceExpenseMap[month])
-                    recurrenceExpenseMap[month] = {};
-                  recurrenceExpenseMap[month][cat] =
-                    (recurrenceExpenseMap[month][cat] || 0) + rec.averageAmount;
-                } else {
-                  const cat = INCOME_CATEGORIES.includes(rec.category)
-                    ? rec.category
-                    : "OTHER_INCOME";
-                  if (!recurrenceIncomeMap[month])
-                    recurrenceIncomeMap[month] = {};
-                  recurrenceIncomeMap[month][cat] =
-                    (recurrenceIncomeMap[month][cat] || 0) + rec.averageAmount;
-                }
               } else {
                 const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${month}`;
                 if (existingInvoiceKeys.has(key)) continue;
@@ -469,18 +413,18 @@ const treasuryForecastResolvers = {
         for (const entry of manualEntries) {
           const occurrences = expandManualEntry(entry, txStartDate, txEndDate);
           for (const occ of occurrences) {
-            const m = `${occ.date.getFullYear()}-${String(occ.date.getMonth() + 1).padStart(2, "0")}`;
+            const m = `${occ.getFullYear()}-${String(occ.getMonth() + 1).padStart(2, "0")}`;
             const cat =
               entry.category ||
               (entry.type === "INCOME" ? "OTHER_INCOME" : "OTHER_EXPENSE");
             if (entry.type === "INCOME") {
               if (!manualIncomeMap[m]) manualIncomeMap[m] = {};
               manualIncomeMap[m][cat] =
-                (manualIncomeMap[m][cat] || 0) + occ.amount;
+                (manualIncomeMap[m][cat] || 0) + entry.amount;
             } else {
               if (!manualExpenseMap[m]) manualExpenseMap[m] = {};
               manualExpenseMap[m][cat] =
-                (manualExpenseMap[m][cat] || 0) + occ.amount;
+                (manualExpenseMap[m][cat] || 0) + entry.amount;
             }
           }
         }
@@ -534,12 +478,10 @@ const treasuryForecastResolvers = {
           // Auto-forecast: only apply to current and future months without manual
           // forecast. Past months keep their actuals untouched (no projection
           // overlay on what already happened).
-          // Quotes and manual entries STACK ON TOP of the historical average.
-          // Detected recurrences are deducted from the auto base first (they
-          // are computed FROM the same history that feeds the averages, so
-          // their amount is already inside avgMonthly*), then re-added below
-          // as their own visible component — total stays at the historical
-          // level instead of double-counting.
+          // Signals (quotes, recurrences, manual entries) STACK ON TOP of the
+          // historical average so their contribution is always additive and
+          // visible on the chart. Quotes alone still replace the SALES auto
+          // (they already represent concrete signed commitments feeding SALES).
           const needsAutoForecast =
             forecastIncome === 0 &&
             forecastExpense === 0 &&
@@ -554,27 +496,9 @@ const treasuryForecastResolvers = {
               : {};
 
           if (needsAutoForecast) {
-            if (recurrenceIncomeTotal > 0 && autoForecastIncome.SALES) {
-              autoForecastIncome.SALES = Math.max(
-                0,
-                autoForecastIncome.SALES - recurrenceIncomeTotal,
-              );
-            }
-            for (const [cat, amt] of Object.entries(recurrenceExpenseByCat)) {
-              if (autoForecastExpense[cat]) {
-                autoForecastExpense[cat] = Math.max(
-                  0,
-                  autoForecastExpense[cat] - amt,
-                );
-              }
-            }
             if (avgMonthlyIncome > 0 && quoteIncome === 0)
-              forecastIncome = autoForecastIncome.SALES || 0;
-            if (avgMonthlyExpense > 0)
-              forecastExpense = Object.values(autoForecastExpense).reduce(
-                (s, v) => s + v,
-                0,
-              );
+              forecastIncome = avgMonthlyIncome;
+            if (avgMonthlyExpense > 0) forecastExpense = avgMonthlyExpense;
           }
 
           // Signed quotes: add on top (stacks with manual SALES forecast if any).
@@ -587,9 +511,9 @@ const treasuryForecastResolvers = {
             forecastIncome += manualEntryIncomeTotal;
           if (manualEntryExpenseTotal > 0)
             forecastExpense += manualEntryExpenseTotal;
-          // Auto-detected recurrences: their share was deducted from the auto
-          // base above, re-adding them here keeps the total unchanged while
-          // making them visible as a distinct component.
+          // Auto-detected recurrences stack on top for future months. Auto
+          // historical avg is already suppressed above when a recurrence exists,
+          // so no double-counting on the past-data side.
           if (recurrenceIncomeTotal > 0) {
             forecastIncome += recurrenceIncomeTotal;
           }
@@ -1095,8 +1019,6 @@ const treasuryForecastResolvers = {
           type: input.type,
           category: input.category || null,
           amount: input.amount,
-          amountDelta: input.amountDelta || 0,
-          amountDeltaType: input.amountDeltaType || "AMOUNT",
           startDate: new Date(input.startDate),
           endDate: input.endDate ? new Date(input.endDate) : null,
           frequency: input.frequency,
@@ -1193,20 +1115,6 @@ const treasuryForecastResolvers = {
           updated.isActive = true;
         }
         return updated;
-      },
-    ),
-
-    deleteDetectedRecurrence: requireWrite("expenses")(
-      async (_, { id }, context) => {
-        const recurrence = await DetectedRecurrence.findOne({
-          _id: id,
-          workspaceId: new mongoose.Types.ObjectId(context.workspaceId),
-        }).lean();
-        if (!recurrence) {
-          throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
-        }
-        await DetectedRecurrence.deleteOne({ _id: id });
-        return { success: true, message: "Récurrence supprimée" };
       },
     ),
   },

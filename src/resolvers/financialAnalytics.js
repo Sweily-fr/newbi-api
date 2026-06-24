@@ -1784,7 +1784,6 @@ const financialAnalyticsResolvers = {
         // ==============================
         let previousPeriod = null;
         let _newClientCount = 0;
-        let _retainedClientCount = 0;
         try {
           const { prevStart, prevEnd } = computePreviousPeriod(
             startDate,
@@ -2252,12 +2251,6 @@ const financialAnalyticsResolvers = {
           for (const cId of currentClientSet) {
             if (!prevClientSet.has(cId)) newClientCount++;
           }
-          // Retained: clients active in both periods
-          let retainedClientCount = 0;
-          for (const cId of currentClientSet) {
-            if (prevClientSet.has(cId)) retainedClientCount++;
-          }
-
           const prevQuoteConversionRate =
             prevQuoteTotals.total > 0
               ? Math.round(
@@ -2302,9 +2295,8 @@ const financialAnalyticsResolvers = {
             chargeRate: prevChargeRate,
           };
 
-          // Set newClientCount and retainedClientCount on main KPI (need both periods)
+          // Set newClientCount on main KPI (needs both periods)
           _newClientCount = newClientCount;
-          _retainedClientCount = retainedClientCount;
         } catch (err) {
           // If N-1 fails, just continue without it
           console.error("N-1 period calculation error:", err.message);
@@ -2575,7 +2567,6 @@ const financialAnalyticsResolvers = {
           collectionRate,
           activeClientCount,
           newClientCount: _newClientCount,
-          retainedClientCount: _retainedClientCount,
           topClientConcentration,
           quoteCount: quoteResult.total,
           quoteConvertedCount: quoteResult.completed,

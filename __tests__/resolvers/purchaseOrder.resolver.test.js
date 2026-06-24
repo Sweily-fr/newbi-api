@@ -21,6 +21,7 @@ vi.mock("../../src/services/documentAutomationService.js", () => ({
 
 import PurchaseOrder from "../../src/models/PurchaseOrder.js";
 import Invoice from "../../src/models/Invoice.js";
+import Quote from "../../src/models/Quote.js";
 import purchaseOrderResolvers from "../../src/resolvers/purchaseOrder.js";
 
 // ---------------------------------------------------------------------------
@@ -68,18 +69,16 @@ beforeEach(async () => {
   await seedOrgMembership({ userId, organizationId, role: "owner" });
   // requireCompanyInfo validates capitalSocial + rcs for SASU
   const db = mongoose.connection.db;
-  await db
-    .collection("organization")
-    .updateOne(
-      { _id: organizationId },
-      {
-        $set: {
-          capitalSocial: "10000",
-          rcs: "Paris B 123 456 789",
-          vatNumber: "FR12345678901",
-        },
+  await db.collection("organization").updateOne(
+    { _id: organizationId },
+    {
+      $set: {
+        capitalSocial: "10000",
+        rcs: "Paris B 123 456 789",
+        vatNumber: "FR12345678901",
       },
-    );
+    },
+  );
 });
 
 const ctx = () => buildContext({ userId, organizationId });
@@ -332,6 +331,152 @@ describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice", () => {
     await expect(
       convert(null, { id: po._id.toString() }, ctx()),
     ).rejects.toThrow();
+  });
+
+  it("rejects re-conversion when the PO already has a linked invoice", async () => {
+    const invoiceId = new mongoose.Types.ObjectId();
+    await Invoice.collection.insertOne({
+      _id: invoiceId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "001",
+      prefix: "F-RECONV",
+      status: "DRAFT",
+      finalTotalTTC: 1200,
+      createdAt: new Date(),
+    });
+
+    const { insertedId: poId } = await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "300",
+      prefix: "BC-RECONV",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      linkedInvoices: [invoiceId],
+    });
+
+    const convert =
+      purchaseOrderResolvers.Mutation.convertPurchaseOrderToInvoice;
+    await expect(convert(null, { id: poId.toString() }, ctx())).rejects.toThrow(
+      /déjà été converti en facture/i,
+    );
+  });
+
+  it("rejects conversion when the source quote was already invoiced directly", async () => {
+    const invoiceId = new mongoose.Types.ObjectId();
+    await Invoice.collection.insertOne({
+      _id: invoiceId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "002",
+      prefix: "F-DIRECT",
+      status: "PENDING",
+      finalTotalTTC: 1200,
+      createdAt: new Date(),
+    });
+
+    const { insertedId: quoteId } = await Quote.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "0010",
+      prefix: "D-GUARD",
+      status: "COMPLETED",
+      items: [],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      linkedInvoices: [invoiceId],
+    });
+
+    const { insertedId: poId } = await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "301",
+      prefix: "BC-GUARD",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      sourceQuoteId: quoteId,
+    });
+
+    const convert =
+      purchaseOrderResolvers.Mutation.convertPurchaseOrderToInvoice;
+    await expect(convert(null, { id: poId.toString() }, ctx())).rejects.toThrow(
+      /devis à l'origine/i,
+    );
+  });
+
+  it("rejects conversion when the source quote was already invoiced via another PO", async () => {
+    const invoiceId = new mongoose.Types.ObjectId();
+    await Invoice.collection.insertOne({
+      _id: invoiceId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "003",
+      prefix: "F-SIBLING",
+      status: "PENDING",
+      finalTotalTTC: 1200,
+      createdAt: new Date(),
+    });
+
+    const { insertedId: quoteId } = await Quote.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "0011",
+      prefix: "D-SIBL",
+      status: "COMPLETED",
+      items: [],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+    });
+
+    // Premier BC issu du devis, déjà converti en facture
+    await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "302",
+      prefix: "BC-SIBL",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      sourceQuoteId: quoteId,
+      linkedInvoices: [invoiceId],
+    });
+
+    // Second BC issu du même devis, sans facture
+    const { insertedId: poId } = await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "303",
+      prefix: "BC-SIBL",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      sourceQuoteId: quoteId,
+    });
+
+    const convert =
+      purchaseOrderResolvers.Mutation.convertPurchaseOrderToInvoice;
+    await expect(convert(null, { id: poId.toString() }, ctx())).rejects.toThrow(
+      /autre bon de commande/i,
+    );
   });
 });
 
