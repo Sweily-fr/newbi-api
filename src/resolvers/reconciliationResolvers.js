@@ -19,12 +19,17 @@ const reconciliationResolvers = {
           // Utiliser le workspaceId passé en argument ou celui du contexte
           const workspaceId = argWorkspaceId || ctxWorkspaceId;
 
-          // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent)
+          // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent).
+          // Une transaction déjà justifiée n'est plus "à rapprocher" : on exclut celles
+          // qui ont un justificatif attaché (receiptFiles non vide) OU une facture liée,
+          // pour rester cohérent avec le hasReceipt affiché côté UI.
           const unmatchedTransactions = await Transaction.find({
             workspaceId,
             deletedAt: null,
             reconciliationStatus: { $in: ["unmatched", "suggested"] },
             amount: { $gt: 0 },
+            linkedInvoiceId: null,
+            "receiptFiles.0": { $exists: false },
           })
             .sort({ date: -1 })
             .limit(50);
@@ -252,13 +257,10 @@ const reconciliationResolvers = {
           return {
             success: true,
             message: "Rapprochement effectué avec succès",
-            transaction: {
-              id: transaction._id.toString(),
-              amount: transaction.amount,
-              description: transaction.description,
-              date: transaction.date,
-              reconciliationStatus: transaction.reconciliationStatus,
-            },
+            // Document Mongoose complet : les résolveurs de champ Transaction
+            // (id, linkedInvoice, reconciliationStatus…) s'exécutent dessus et
+            // permettent à Apollo de normaliser l'entité côté front sans refetch.
+            transaction,
             invoice: {
               id: invoice._id.toString(),
               number: invoice.number,
@@ -322,6 +324,9 @@ const reconciliationResolvers = {
           return {
             success: true,
             message: "Déliaison effectuée avec succès",
+            // Transaction mise à jour (linkedInvoiceId null, statut unmatched) :
+            // Apollo efface linkedInvoice de l'entité en cache sans refetch.
+            transaction: transaction || null,
           };
         } catch (error) {
           logger.error("[RECONCILIATION-GQL] Erreur déliaison:", error);

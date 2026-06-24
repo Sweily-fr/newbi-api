@@ -37,16 +37,20 @@ type TransactionsForInvoiceResponse {
   invoiceAmount: Float!
 }
 
+# transaction renvoie le type Transaction complet (et non ReconciliationTransaction)
+# pour qu'Apollo normalise l'entité par id côté front (même __typename) et mette à
+# jour la liste sans refetch réseau.
 type ReconciliationLinkResponse {
   success: Boolean!
   message: String
-  transaction: ReconciliationTransaction
+  transaction: Transaction
   invoice: ReconciliationInvoice
 }
 
 type ReconciliationUnlinkResponse {
   success: Boolean!
   message: String
+  transaction: Transaction
 }
 
 type ReconciliationIgnoreResponse {
