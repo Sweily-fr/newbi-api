@@ -188,6 +188,37 @@ const purchaseOrderResolvers = {
       if (!po.sourceQuoteId) return null;
       return await Quote.findById(po.sourceQuoteId);
     },
+    // Vrai si le devis source a déjà été facturé directement ou via un autre bon de commande
+    sourceQuoteHasInvoices: async (po) => {
+      if (!po.sourceQuoteId) return false;
+
+      const sourceQuote = await Quote.findById(po.sourceQuoteId).select(
+        "linkedInvoices convertedToInvoice",
+      );
+      const directInvoiceIds = [
+        ...(sourceQuote?.linkedInvoices || []),
+        ...(sourceQuote?.convertedToInvoice
+          ? [sourceQuote.convertedToInvoice]
+          : []),
+      ];
+      if (
+        directInvoiceIds.length > 0 &&
+        (await Invoice.exists({ _id: { $in: directInvoiceIds } }))
+      ) {
+        return true;
+      }
+
+      const siblingPurchaseOrders = await PurchaseOrder.find({
+        sourceQuoteId: po.sourceQuoteId,
+        _id: { $ne: po._id },
+        linkedInvoices: { $exists: true, $ne: [] },
+      }).select("linkedInvoices");
+      if (siblingPurchaseOrders.length === 0) return false;
+      const siblingInvoiceIds = siblingPurchaseOrders.flatMap(
+        (sibling) => sibling.linkedInvoices,
+      );
+      return !!(await Invoice.exists({ _id: { $in: siblingInvoiceIds } }));
+    },
     linkedInvoices: async (po) => {
       if (po.linkedInvoices && po.linkedInvoices.length > 0) {
         return await Invoice.find({ _id: { $in: po.linkedInvoices } });
@@ -1064,6 +1095,75 @@ const purchaseOrderResolvers = {
             "Seuls les bons de commande confirmés, en cours ou livrés peuvent être convertis en facture",
             ERROR_CODES.RESOURCE_LOCKED,
           );
+        }
+
+        // Empêcher la double conversion du même bon de commande
+        if (
+          po.linkedInvoices &&
+          po.linkedInvoices.length > 0 &&
+          (await Invoice.exists({ _id: { $in: po.linkedInvoices } }))
+        ) {
+          throw new AppError(
+            "Ce bon de commande a déjà été converti en facture",
+            ERROR_CODES.RESOURCE_LOCKED,
+            {
+              resource: "Bon de commande",
+              reason: "ALREADY_CONVERTED_TO_INVOICE",
+            },
+          );
+        }
+
+        // Empêcher la double facturation du devis source : si le devis a déjà été
+        // converti directement en facture (ou via un autre bon de commande),
+        // ce bon de commande ne peut plus être converti en facture
+        if (po.sourceQuoteId) {
+          const sourceQuote = await Quote.findById(po.sourceQuoteId).select(
+            "linkedInvoices convertedToInvoice",
+          );
+          const directInvoiceIds = [
+            ...(sourceQuote?.linkedInvoices || []),
+            ...(sourceQuote?.convertedToInvoice
+              ? [sourceQuote.convertedToInvoice]
+              : []),
+          ];
+
+          if (
+            directInvoiceIds.length > 0 &&
+            (await Invoice.exists({ _id: { $in: directInvoiceIds } }))
+          ) {
+            throw new AppError(
+              "Le devis à l'origine de ce bon de commande a déjà été converti en facture. Impossible de créer une nouvelle facture.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              {
+                resource: "Bon de commande",
+                reason: "SOURCE_QUOTE_ALREADY_INVOICED",
+              },
+            );
+          }
+
+          const siblingPurchaseOrders = await PurchaseOrder.find({
+            sourceQuoteId: po.sourceQuoteId,
+            _id: { $ne: po._id },
+            workspaceId,
+            linkedInvoices: { $exists: true, $ne: [] },
+          }).select("linkedInvoices");
+
+          if (siblingPurchaseOrders.length > 0) {
+            const siblingInvoiceIds = siblingPurchaseOrders.flatMap(
+              (sibling) => sibling.linkedInvoices,
+            );
+
+            if (await Invoice.exists({ _id: { $in: siblingInvoiceIds } })) {
+              throw new AppError(
+                "Le devis à l'origine de ce bon de commande a déjà été facturé via un autre bon de commande.",
+                ERROR_CODES.RESOURCE_LOCKED,
+                {
+                  resource: "Bon de commande",
+                  reason: "SOURCE_QUOTE_ALREADY_INVOICED",
+                },
+              );
+            }
+          }
         }
 
         const organization = await getOrganizationInfo(workspaceId);

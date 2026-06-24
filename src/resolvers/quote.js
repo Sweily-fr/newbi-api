@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
+import PurchaseOrder from "../models/PurchaseOrder.js";
 import {
   archiveDocumentPdf,
   documentUrl,
@@ -213,6 +214,16 @@ const quoteResolvers = {
         return invoice ? [invoice] : [];
       }
       return [];
+    },
+    // Vrai si une facture existante a été créée via un bon de commande issu de ce devis
+    hasPurchaseOrderInvoices: async (quote) => {
+      const purchaseOrders = await PurchaseOrder.find({
+        sourceQuoteId: quote._id,
+        linkedInvoices: { $exists: true, $ne: [] },
+      }).select("linkedInvoices");
+      if (purchaseOrders.length === 0) return false;
+      const invoiceIds = purchaseOrders.flatMap((po) => po.linkedInvoices);
+      return !!(await Invoice.exists({ _id: { $in: invoiceIds } }));
     },
     // Calculer le total des factures de situation liées à ce devis
     situationInvoicedTotal: async (quote) => {
@@ -1580,6 +1591,34 @@ const quoteResolvers = {
             throw createResourceLockedError(
               "Devis",
               "déjà converti en facture",
+            );
+          }
+        }
+
+        // Empêcher la double facturation : si un bon de commande issu de ce devis
+        // a déjà été converti en facture, le devis ne peut plus être facturé directement
+        const purchaseOrdersWithInvoices = await PurchaseOrder.find({
+          sourceQuoteId: quote._id,
+          workspaceId,
+          linkedInvoices: { $exists: true, $ne: [] },
+        }).select("linkedInvoices");
+
+        if (purchaseOrdersWithInvoices.length > 0) {
+          const poInvoiceIds = purchaseOrdersWithInvoices.flatMap(
+            (po) => po.linkedInvoices,
+          );
+          const poInvoiceExists = await Invoice.exists({
+            _id: { $in: poInvoiceIds },
+          });
+
+          if (poInvoiceExists) {
+            throw new AppError(
+              "Ce devis a déjà été facturé via un bon de commande. Impossible de le convertir directement en facture.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              {
+                resource: "Devis",
+                reason: "ALREADY_INVOICED_VIA_PURCHASE_ORDER",
+              },
             );
           }
         }

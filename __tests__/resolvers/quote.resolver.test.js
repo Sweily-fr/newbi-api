@@ -37,6 +37,8 @@ vi.mock("../../src/utils/documentNumbers.js", async (importActual) => {
 
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Quote from "../../src/models/Quote.js";
+import Invoice from "../../src/models/Invoice.js";
+import PurchaseOrder from "../../src/models/PurchaseOrder.js";
 import quoteResolvers from "../../src/resolvers/quote.js";
 import { calculateQuoteTotals } from "../../src/resolvers/quote.js";
 
@@ -292,6 +294,77 @@ describe("Quote Resolver - Mutation.deleteQuote (RBAC + status guard)", () => {
     await expect(
       resolver(null, { id: insertedId.toString() }, viewerCtx),
     ).rejects.toThrow(/permission|delete/i);
+  });
+});
+
+describe("Quote Resolver - Mutation.convertQuoteToInvoice (guard bon de commande)", () => {
+  const resolver = quoteResolvers.Mutation.convertQuoteToInvoice;
+
+  it("blocks direct conversion when a PO from this quote already has an invoice", async () => {
+    const { insertedId: quoteId } = await insertQuote({ status: "COMPLETED" });
+
+    const invoiceId = new mongoose.Types.ObjectId();
+    await Invoice.collection.insertOne({
+      _id: invoiceId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "001",
+      prefix: "F-VIA-BC",
+      status: "DRAFT",
+      finalTotalTTC: 1200,
+      createdAt: new Date(),
+    });
+
+    await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "100",
+      prefix: "BC-GUARD",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      sourceQuoteId: quoteId,
+      linkedInvoices: [invoiceId],
+    });
+
+    await expect(
+      resolver(null, { id: quoteId.toString() }, ctx()),
+    ).rejects.toThrow(/facturé via un bon de commande/i);
+  });
+
+  it("ignores POs whose linked invoices were deleted", async () => {
+    const { insertedId: quoteId } = await insertQuote({ status: "COMPLETED" });
+
+    // BC issu du devis dont la facture liée n'existe plus
+    await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "101",
+      prefix: "BC-STALE",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      sourceQuoteId: quoteId,
+      linkedInvoices: [new mongoose.Types.ObjectId()],
+    });
+
+    // La conversion ne doit pas être bloquée par le garde-fou : elle peut échouer
+    // plus loin (ou réussir) mais pas avec le message « facturé via un bon de commande »
+    let error = null;
+    try {
+      await resolver(null, { id: quoteId.toString() }, ctx());
+    } catch (e) {
+      error = e;
+    }
+    if (error) {
+      expect(error.message).not.toMatch(/facturé via un bon de commande/i);
+    }
   });
 });
 
