@@ -24,7 +24,6 @@ type FinancialAnalyticsKPI {
   collectionRate: Float!
   activeClientCount: Int!
   newClientCount: Int!
-  retainedClientCount: Int!
   topClientConcentration: Float!
   quoteCount: Int!
   quoteConvertedCount: Int!
