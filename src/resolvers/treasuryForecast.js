@@ -29,7 +29,7 @@ const normalizeCat = (cat) => CATEGORY_ALIAS[cat] || cat;
 // On itère en arithmétique entière sur (année, mois) : mélanger un parsing UTC
 // (new Date("YYYY-MM-01")) avec setMonth (heure locale) provoquait un off-by-one
 // au passage heure d'été/hiver — la dernière borne tombant un mois d'hiver était
-// exclue (ex. plage 6 mois juin->novembre qui ne renvoyait que 5 mois).
+// exclue (ex. plage 6 mois juin→novembre qui ne renvoyait que 5 mois).
 const getMonthRange = (startDate, endDate) => {
   const months = [];
   const [startYear, startMonth] = startDate.split("-").map(Number);
