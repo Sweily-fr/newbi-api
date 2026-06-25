@@ -70,6 +70,16 @@ type SignatureResult {
   signatureRequest: SignatureRequest
 }
 
+"""
+Mise à jour temps réel du statut de signature d'un document
+"""
+type SignatureStatusUpdate {
+  documentId: ID!
+  documentType: String!
+  status: String!
+  signatureType: String
+}
+
 # === QUERIES ===
 
 extend type Query {
@@ -122,4 +132,14 @@ extend type Mutation {
   Relancer une signature en erreur
   """
   retrySignature(signatureId: ID!): SignatureResult!
+}
+
+# === SUBSCRIPTIONS ===
+
+extend type Subscription {
+  """
+  Notifie en temps réel les changements de statut de signature d'un document
+  (passage à signé, erreur, cachet appliqué…).
+  """
+  signatureStatusUpdated(documentId: ID!): SignatureStatusUpdate!
 }

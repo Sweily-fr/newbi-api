@@ -1,5 +1,6 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import esignatureService from "./esignatureService.js";
+import { buildProofCertificatePdf } from "./esignatureCertificate.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -74,16 +75,40 @@ export async function storeSignedDocuments(signatureRequest) {
         signatureRequest.externalSignatureId,
       );
       if (auditTrail) {
-        const isPdf = Buffer.isBuffer(auditTrail);
-        const auditBuffer = isPdf
-          ? auditTrail
-          : Buffer.from(JSON.stringify(auditTrail));
-        const auditKey = `esignature/${signatureRequest.organizationId}/${signatureRequest._id}/audit-trail.${isPdf ? "pdf" : "json"}`;
-        signatureRequest.auditTrailUrl = await uploadFileToR2(
-          auditBuffer,
-          auditKey,
-          isPdf ? "application/pdf" : "application/json",
-        );
+        const baseKey = `esignature/${signatureRequest.organizationId}/${signatureRequest._id}`;
+
+        if (Buffer.isBuffer(auditTrail)) {
+          // Le provider a déjà renvoyé un PDF : on le stocke tel quel.
+          signatureRequest.auditTrailUrl = await uploadFileToR2(
+            auditTrail,
+            `${baseKey}/audit-trail.pdf`,
+            "application/pdf",
+          );
+        } else {
+          // L'audit est un JSON (preuve technique). On archive le JSON brut ET on
+          // génère un certificat PDF lisible, présentable au client.
+          await uploadFileToR2(
+            Buffer.from(JSON.stringify(auditTrail)),
+            `${baseKey}/audit-trail.json`,
+            "application/json",
+          );
+
+          try {
+            const certificatePdf = await buildProofCertificatePdf(auditTrail, {
+              documentNumber: signatureRequest.documentNumber,
+              companyName: auditTrail?.data?.creatorData?.name,
+            });
+            signatureRequest.auditTrailUrl = await uploadFileToR2(
+              certificatePdf,
+              `${baseKey}/certificat-signature.pdf`,
+              "application/pdf",
+            );
+          } catch (certError) {
+            logger.error(
+              `Génération certificat de preuve échouée: ${certError.message}`,
+            );
+          }
+        }
       }
     } catch (auditError) {
       logger.warn(

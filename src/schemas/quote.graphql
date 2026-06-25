@@ -43,6 +43,10 @@ type Quote {
   # Cachet qualifié de l'entreprise (QES automatique)
   sealStatus: String
   sealedDocumentUrl: String
+  # Preuve de la signature client : document signé, certificat de preuve, signataires
+  signedDocumentUrl: String
+  auditTrailUrl: String
+  signers: [SignatureSigner!]
   # Email tracking
   emailTracking: EmailTracking
   createdAt: String!

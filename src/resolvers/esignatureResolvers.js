@@ -7,6 +7,12 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
+import { sendSignatureInvitations } from "../services/esignatureEmail.js";
+import {
+  publishSignatureStatus,
+  signatureChannel,
+} from "../services/esignaturePubsub.js";
+import { getPubSub } from "../config/redis.js";
 
 /**
  * Récupérer le modèle Mongoose correspondant au type de document
@@ -91,6 +97,27 @@ const esignatureResolvers = {
         signatureType: "QES_automatic",
       });
       return sig?.signedDocumentUrl || null;
+    },
+    // Document signé par le client (preuve), hors cachet entreprise
+    signedDocumentUrl: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
+      return sig?.signedDocumentUrl || null;
+    },
+    // Certificat de preuve / piste d'audit de la signature client
+    auditTrailUrl: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
+      return sig?.auditTrailUrl || null;
+    },
+    // Signataires de la signature client (avec date de signature)
+    signers: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
+      return sig?.signers || [];
     },
   },
   Query: {
@@ -177,6 +204,7 @@ const esignatureResolvers = {
                     signatureRequest.errorMessage = detail.errorMessage;
                   }
                   await signatureRequest.save();
+                  publishSignatureStatus(signatureRequest);
 
                   // Filet de sécurité sans webhook (ex: local) : récupérer le
                   // document signé/cacheté puis auto-accepter le devis.
@@ -405,11 +433,6 @@ const esignatureResolvers = {
             );
           }
 
-          // Log complet de la réponse API
-          console.log("===== API RESULT =====");
-          console.log(JSON.stringify(apiResult, null, 2));
-          console.log("======================");
-
           // Mettre à jour avec les infos de l'API
           // La réponse API encapsule les données dans apiResult.data
           const resultData = apiResult.data || apiResult;
@@ -423,9 +446,67 @@ const esignatureResolvers = {
           signatureRequest.signingUrl = resultData.signingUrl || firstSignerUrl;
           await signatureRequest.save();
 
+          publishSignatureStatus(signatureRequest);
+
           logger.info(
             `Signature ${signatureType} créée pour ${documentType} ${document.number || documentId}`,
           );
+
+          // Envoyer l'invitation à signer à chaque signataire (sauf cachet entreprise).
+          // L'API n'envoie pas toujours d'email (sandbox) : on garantit l'acheminement
+          // du lien via Resend. Fire-and-forget pour ne pas bloquer la réponse.
+          if (signatureType !== "QES_automatic") {
+            const apiSigners = Array.isArray(resultData.signers)
+              ? resultData.signers
+              : [];
+            // Associer chaque URL renvoyée par l'API au signataire correspondant
+            // (par email si disponible, sinon par position).
+            const signerUrls = signers.map((s, i) => {
+              const match =
+                apiSigners.find(
+                  (as) =>
+                    as?.email &&
+                    s?.email &&
+                    as.email.toLowerCase() === s.email.toLowerCase(),
+                ) ||
+                apiSigners[i] ||
+                {};
+              return {
+                email: s.email,
+                name: s.name,
+                surname: s.surname,
+                url: match.url || signatureRequest.signingUrl,
+              };
+            });
+
+            const documentNumber =
+              `${document.prefix || ""}-${document.number || ""}`.replace(
+                /^-/,
+                "",
+              );
+            const companyName =
+              document.companyInfo?.name || "Votre prestataire";
+            const totalAmount =
+              document.finalTotalTTC ?? document.totalTTC ?? null;
+
+            sendSignatureInvitations({
+              signerUrls,
+              companyName,
+              documentNumber: documentNumber || document.number || "",
+              totalAmount:
+                totalAmount != null
+                  ? new Intl.NumberFormat("fr-FR", {
+                      style: "currency",
+                      currency: "EUR",
+                    }).format(totalAmount)
+                  : null,
+              qualified: signatureType === "QES_otp",
+            }).catch((err) =>
+              logger.error(
+                `Envoi invitations signature (devis ${documentNumber}): ${err.message}`,
+              ),
+            );
+          }
 
           return {
             success: true,
@@ -559,6 +640,7 @@ const esignatureResolvers = {
             resultData.state || "WAIT_VALIDATION",
           );
           await sealRequest.save();
+          publishSignatureStatus(sealRequest);
 
           logger.info(`Cachet QES créé pour devis ${quote.number || quoteId}`);
 
@@ -618,6 +700,7 @@ const esignatureResolvers = {
 
           signatureRequest.status = "CANCELLED";
           await signatureRequest.save();
+          publishSignatureStatus(signatureRequest);
 
           logger.info(`Signature ${signatureId} annulée`);
 
@@ -708,6 +791,14 @@ const esignatureResolvers = {
         }
       },
     ),
+  },
+
+  Subscription: {
+    // Mises à jour temps réel du statut de signature d'un document.
+    signatureStatusUpdated: {
+      subscribe: (_, { documentId }) =>
+        getPubSub().asyncIterableIterator([signatureChannel(documentId)]),
+    },
   },
 };
 

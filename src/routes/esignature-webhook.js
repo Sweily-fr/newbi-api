@@ -4,6 +4,7 @@ import SignatureRequest from "../models/SignatureRequest.js";
 import logger from "../utils/logger.js";
 import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
+import { publishSignatureStatus } from "../services/esignaturePubsub.js";
 
 const router = express.Router();
 
@@ -14,7 +15,17 @@ const router = express.Router();
 const verifyWebhookSecret = (req) => {
   const webhookSecret = process.env.ESIGNATURE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    // Pas de secret configuré, on accepte (dev/sandbox)
+    // En production/staging, un webhook non authentifié est refusé : le secret
+    // DOIT être configuré (ESIGNATURE_WEBHOOK_SECRET) côté API et callback.
+    const env = process.env.NODE_ENV;
+    if (env === "production" || env === "staging") {
+      logger.error(
+        "Webhook eSignature: ESIGNATURE_WEBHOOK_SECRET non configuré en " +
+          `${env} — callback refusé. Définissez le secret pour activer le webhook.`,
+      );
+      return false;
+    }
+    // Dev/sandbox uniquement : on accepte sans secret.
     return true;
   }
 
@@ -113,6 +124,11 @@ router.post("/", express.json(), async (req, res) => {
 
     await signatureRequest.save();
 
+    // Notifier le front en temps réel du changement de statut
+    if (newStatus !== previousStatus) {
+      publishSignatureStatus(signatureRequest);
+    }
+
     logger.info(`Signature ${signatureRequest._id} mise à jour: ${newStatus}`);
 
     // Une fois terminé : récupérer le document signé/cacheté puis auto-accepter le devis
@@ -132,9 +148,6 @@ router.post("/", express.json(), async (req, res) => {
         );
       }
     }
-
-    // TODO: Publier événement Redis PubSub pour notification temps réel
-    // pubsub.publish(`SIGNATURE_UPDATED_${signatureRequest.organizationId}`, { ... })
 
     res.status(200).json({
       received: true,
