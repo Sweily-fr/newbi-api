@@ -5,6 +5,14 @@ import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
+import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
+import { storeSignedDocuments } from "../services/esignatureDocuments.js";
+import { sendSignatureInvitations } from "../services/esignatureEmail.js";
+import {
+  publishSignatureStatus,
+  signatureChannel,
+} from "../services/esignaturePubsub.js";
+import { getPubSub } from "../config/redis.js";
 
 /**
  * Récupérer le modèle Mongoose correspondant au type de document
@@ -18,7 +26,7 @@ function getDocumentModel(documentType) {
     default:
       throw new AppError(
         `Type de document non supporté: ${documentType}`,
-        ERROR_CODES.VALIDATION_ERROR
+        ERROR_CODES.VALIDATION_ERROR,
       );
   }
 }
@@ -34,53 +42,104 @@ function mapExternalStatus(externalState) {
     DONE: "DONE",
     ERROR: "ERROR",
   };
-  return statusMap[externalState] || "PENDING";
+  // Normaliser la casse : l'API peut renvoyer l'état en minuscules/casse mixte
+  const key = String(externalState || "")
+    .trim()
+    .toUpperCase();
+  const mapped = statusMap[key];
+  if (!mapped) {
+    logger.warn(
+      `mapExternalStatus: état eSignature inconnu "${externalState}", repli sur PENDING`,
+    );
+    return "PENDING";
+  }
+  return mapped;
 }
 
-// Helper pour récupérer le dernier statut de signature d'un document
-async function getLatestSignature(parent, documentType) {
+// Helper pour récupérer la dernière SignatureRequest d'un document (filtre optionnel)
+async function getLatestSignature(parent, documentType, extraFilter = {}) {
   const docId = parent._id || parent.id;
   if (!docId) return null;
   return SignatureRequest.findOne({
     documentType,
     documentId: docId.toString(),
-  }).sort({ createdAt: -1 }).lean();
+    ...extraFilter,
+  })
+    .sort({ createdAt: -1 })
+    .lean();
 }
 
 const esignatureResolvers = {
   // Field resolvers pour Quote
   Quote: {
+    // Signature du client : on ignore les cachets QES automatiques de l'entreprise
     signatureStatus: async (parent) => {
-      const sig = await getLatestSignature(parent, "quote");
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
       return sig?.status || null;
     },
     signingUrl: async (parent) => {
-      const sig = await getLatestSignature(parent, "quote");
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
       return sig?.signingUrl || null;
+    },
+    // Cachet qualifié de l'entreprise (QES automatique)
+    sealStatus: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: "QES_automatic",
+      });
+      return sig?.status || null;
+    },
+    sealedDocumentUrl: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: "QES_automatic",
+      });
+      return sig?.signedDocumentUrl || null;
+    },
+    // Document signé par le client (preuve), hors cachet entreprise
+    signedDocumentUrl: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
+      return sig?.signedDocumentUrl || null;
+    },
+    // Certificat de preuve / piste d'audit de la signature client
+    auditTrailUrl: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
+      return sig?.auditTrailUrl || null;
+    },
+    // Signataires de la signature client (avec date de signature)
+    signers: async (parent) => {
+      const sig = await getLatestSignature(parent, "quote", {
+        signatureType: { $ne: "QES_automatic" },
+      });
+      return sig?.signers || [];
     },
   },
   Query: {
     /**
      * Récupérer une demande de signature par ID
      */
-    getSignatureRequest: requireRead("invoices")(
-      async (_, { id }, context) => {
-        try {
-          const signatureRequest = await SignatureRequest.findOne({
-            _id: id,
-            organizationId: context.organizationId,
-          });
+    getSignatureRequest: requireRead("invoices")(async (_, { id }, context) => {
+      try {
+        const signatureRequest = await SignatureRequest.findOne({
+          _id: id,
+          organizationId: context.organizationId,
+        });
 
-          return signatureRequest;
-        } catch (error) {
-          logger.error("Erreur récupération signature:", error);
-          throw new AppError(
-            "Erreur lors de la récupération de la signature",
-            ERROR_CODES.INTERNAL_ERROR
-          );
-        }
+        return signatureRequest;
+      } catch (error) {
+        logger.error("Erreur récupération signature:", error);
+        throw new AppError(
+          "Erreur lors de la récupération de la signature",
+          ERROR_CODES.INTERNAL_ERROR,
+        );
       }
-    ),
+    }),
 
     /**
      * Lister les demandes de signature avec filtres
@@ -105,10 +164,10 @@ const esignatureResolvers = {
           logger.error("Erreur liste signatures:", error);
           throw new AppError(
             "Erreur lors de la récupération des signatures",
-            ERROR_CODES.INTERNAL_ERROR
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
     ),
 
     /**
@@ -123,30 +182,49 @@ const esignatureResolvers = {
             organizationId: context.organizationId,
           }).sort({ createdAt: -1 });
 
-          // Si on a une signature en cours, rafraîchir le statut depuis l'API
-          if (
-            signatureRequest &&
-            signatureRequest.externalSignatureId &&
-            !["DONE", "ERROR", "CANCELLED"].includes(signatureRequest.status)
-          ) {
+          if (signatureRequest && signatureRequest.externalSignatureId) {
+            const isActive = !["DONE", "ERROR", "CANCELLED"].includes(
+              signatureRequest.status,
+            );
             try {
-              const externalStatus =
-                await esignatureService.getSignatureStatus(
-                  signatureRequest.externalSignatureId
-                );
+              if (isActive) {
+                // Rafraîchir le statut depuis l'API
+                const externalStatus =
+                  await esignatureService.getSignatureStatus(
+                    signatureRequest.externalSignatureId,
+                  );
 
-              const newStatus = mapExternalStatus(externalStatus.state);
-              if (newStatus !== signatureRequest.status) {
-                signatureRequest.status = newStatus;
-                if (externalStatus.errorMessage) {
-                  signatureRequest.errorMessage =
-                    externalStatus.errorMessage;
+                // L'API OpenAPI encapsule les données dans .data
+                const detail = externalStatus?.data || externalStatus || {};
+
+                const newStatus = mapExternalStatus(detail.state);
+                if (newStatus !== signatureRequest.status) {
+                  signatureRequest.status = newStatus;
+                  if (detail.errorMessage) {
+                    signatureRequest.errorMessage = detail.errorMessage;
+                  }
+                  await signatureRequest.save();
+                  publishSignatureStatus(signatureRequest);
+
+                  // Filet de sécurité sans webhook (ex: local) : récupérer le
+                  // document signé/cacheté puis auto-accepter le devis.
+                  if (newStatus === "DONE") {
+                    await storeSignedDocuments(signatureRequest);
+                    await acceptQuoteOnSignature(signatureRequest);
+                  }
                 }
-                await signatureRequest.save();
+              } else if (
+                signatureRequest.status === "DONE" &&
+                !signatureRequest.signedDocumentUrl
+              ) {
+                // Demande déjà terminée mais document jamais récupéré
+                // (cas local : le webhook n'a pas tourné) → backfill.
+                await storeSignedDocuments(signatureRequest);
+                await acceptQuoteOnSignature(signatureRequest);
               }
             } catch (err) {
               logger.warn(
-                `Impossible de rafraîchir le statut eSignature: ${err.message}`
+                `Impossible de rafraîchir le statut eSignature: ${err.message}`,
               );
             }
           }
@@ -156,10 +234,10 @@ const esignatureResolvers = {
           logger.error("Erreur statut signature document:", error);
           throw new AppError(
             "Erreur lors de la récupération du statut de signature",
-            ERROR_CODES.INTERNAL_ERROR
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
     ),
   },
 
@@ -185,7 +263,7 @@ const esignatureResolvers = {
           if (documentType !== "quote") {
             throw new AppError(
               "Seuls les devis peuvent être signés électroniquement.",
-              ERROR_CODES.VALIDATION_ERROR
+              ERROR_CODES.VALIDATION_ERROR,
             );
           }
 
@@ -197,17 +275,14 @@ const esignatureResolvers = {
           });
 
           if (!document) {
-            throw new AppError(
-              "Document non trouvé",
-              ERROR_CODES.NOT_FOUND
-            );
+            throw new AppError("Document non trouvé", ERROR_CODES.NOT_FOUND);
           }
 
           // Vérifier que le document n'est pas un brouillon
           if (document.status === "DRAFT") {
             throw new AppError(
               "Les brouillons ne peuvent pas être signés. Veuillez d'abord valider le document.",
-              ERROR_CODES.VALIDATION_ERROR
+              ERROR_CODES.VALIDATION_ERROR,
             );
           }
 
@@ -216,25 +291,37 @@ const esignatureResolvers = {
             documentType,
             documentId,
             status: {
-              $in: [
-                "PENDING",
-                "WAIT_VALIDATION",
-                "WAIT_SIGN",
-                "WAIT_SIGNER",
-              ],
+              $in: ["PENDING", "WAIT_VALIDATION", "WAIT_SIGN", "WAIT_SIGNER"],
             },
           });
 
           if (existingSignature) {
-            // Auto-annuler les demandes PENDING sans ID externe (jamais envoyées à l'API)
-            if (existingSignature.status === "PENDING" && !existingSignature.externalSignatureId) {
-              logger.info(`Auto-annulation de la demande PENDING orpheline ${existingSignature._id}`);
+            // Une demande PENDING n'a jamais été confirmée comme réellement envoyée
+            // (une demande active côté provider est en WAIT_VALIDATION/WAIT_SIGN/WAIT_SIGNER).
+            // On l'auto-annule pour permettre un renvoi, même si un externalSignatureId
+            // existe (cas d'une demande restée coincée en PENDING).
+            if (existingSignature.status === "PENDING") {
+              logger.info(
+                `Auto-annulation de la demande PENDING ${existingSignature._id} (externalSignatureId: ${existingSignature.externalSignatureId || "aucun"})`,
+              );
+              // Supprimer l'orphelin côté API si une demande externe avait été créée
+              if (existingSignature.externalSignatureId) {
+                try {
+                  await esignatureService.deleteSignature(
+                    existingSignature.externalSignatureId,
+                  );
+                } catch (err) {
+                  logger.warn(
+                    `Impossible de supprimer la signature externe orpheline ${existingSignature.externalSignatureId}: ${err.message}`,
+                  );
+                }
+              }
               existingSignature.status = "CANCELLED";
               await existingSignature.save();
             } else {
               throw new AppError(
-                "Une demande de signature est déjà en cours pour ce document",
-                ERROR_CODES.VALIDATION_ERROR
+                "Une demande de signature est déjà en attente de signature pour ce devis. Annulez la demande en cours avant d'en envoyer une nouvelle.",
+                ERROR_CODES.VALIDATION_ERROR,
               );
             }
           }
@@ -262,7 +349,7 @@ const esignatureResolvers = {
 
           // Préparer le callback webhook
           const callbackConfig = esignatureService.buildCallbackConfig(
-            signatureRequest._id.toString()
+            signatureRequest._id.toString(),
           );
 
           // Appeler l'API eSignature
@@ -272,7 +359,7 @@ const esignatureResolvers = {
             if (!documentBase64) {
               throw new AppError(
                 "Le PDF du document est requis pour la signature SES",
-                ERROR_CODES.VALIDATION_ERROR
+                ERROR_CODES.VALIDATION_ERROR,
               );
             }
 
@@ -286,17 +373,47 @@ const esignatureResolvers = {
                 signatureMode: signatureMode || ["typed", "drawn"],
                 signerMustRead: true,
                 ui: {
-                  completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}/${documentId}?signed=true`,
-                  cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}/${documentId}?signed=cancelled`,
+                  completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
+                  cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,
                 },
               },
-              callbackConfig
+              callbackConfig,
+            );
+          } else if (signatureType === "QES_otp") {
+            if (!documentBase64) {
+              throw new AppError(
+                "Le PDF du document est requis pour la signature QES",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+            if (!signers || signers.length === 0) {
+              throw new AppError(
+                "Au moins un signataire est requis pour la signature QES",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+
+            apiResult = await esignatureService.createQESOTP(
+              documentBase64,
+              signers,
+              {
+                title:
+                  title ||
+                  `Signature ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
+                signatureMode: signatureMode || ["typed", "drawn"],
+                signerMustRead: true,
+                ui: {
+                  completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
+                  cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,
+                },
+              },
+              callbackConfig,
             );
           } else if (signatureType === "QES_automatic") {
             if (!documentBase64) {
               throw new AppError(
                 "Le PDF du document est requis pour la signature QES",
-                ERROR_CODES.VALIDATION_ERROR
+                ERROR_CODES.VALIDATION_ERROR,
               );
             }
 
@@ -307,19 +424,14 @@ const esignatureResolvers = {
                   title ||
                   `Cachet ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
               },
-              callbackConfig
+              callbackConfig,
             );
           } else {
             throw new AppError(
               `Type de signature non supporté: ${signatureType}`,
-              ERROR_CODES.VALIDATION_ERROR
+              ERROR_CODES.VALIDATION_ERROR,
             );
           }
-
-          // Log complet de la réponse API
-          console.log("===== API RESULT =====");
-          console.log(JSON.stringify(apiResult, null, 2));
-          console.log("======================");
 
           // Mettre à jour avec les infos de l'API
           // La réponse API encapsule les données dans apiResult.data
@@ -327,16 +439,74 @@ const esignatureResolvers = {
           signatureRequest.externalSignatureId =
             resultData.id || resultData._id;
           signatureRequest.status = mapExternalStatus(
-            resultData.state || "WAIT_VALIDATION"
+            resultData.state || "WAIT_VALIDATION",
           );
           // L'URL de signature est dans le premier signataire
           const firstSignerUrl = resultData.signers?.[0]?.url || null;
           signatureRequest.signingUrl = resultData.signingUrl || firstSignerUrl;
           await signatureRequest.save();
 
+          publishSignatureStatus(signatureRequest);
+
           logger.info(
-            `Signature ${signatureType} créée pour ${documentType} ${document.number || documentId}`
+            `Signature ${signatureType} créée pour ${documentType} ${document.number || documentId}`,
           );
+
+          // Envoyer l'invitation à signer à chaque signataire (sauf cachet entreprise).
+          // L'API n'envoie pas toujours d'email (sandbox) : on garantit l'acheminement
+          // du lien via Resend. Fire-and-forget pour ne pas bloquer la réponse.
+          if (signatureType !== "QES_automatic") {
+            const apiSigners = Array.isArray(resultData.signers)
+              ? resultData.signers
+              : [];
+            // Associer chaque URL renvoyée par l'API au signataire correspondant
+            // (par email si disponible, sinon par position).
+            const signerUrls = signers.map((s, i) => {
+              const match =
+                apiSigners.find(
+                  (as) =>
+                    as?.email &&
+                    s?.email &&
+                    as.email.toLowerCase() === s.email.toLowerCase(),
+                ) ||
+                apiSigners[i] ||
+                {};
+              return {
+                email: s.email,
+                name: s.name,
+                surname: s.surname,
+                url: match.url || signatureRequest.signingUrl,
+              };
+            });
+
+            const documentNumber =
+              `${document.prefix || ""}-${document.number || ""}`.replace(
+                /^-/,
+                "",
+              );
+            const companyName =
+              document.companyInfo?.name || "Votre prestataire";
+            const totalAmount =
+              document.finalTotalTTC ?? document.totalTTC ?? null;
+
+            sendSignatureInvitations({
+              signerUrls,
+              companyName,
+              documentNumber: documentNumber || document.number || "",
+              totalAmount:
+                totalAmount != null
+                  ? new Intl.NumberFormat("fr-FR", {
+                      style: "currency",
+                      currency: "EUR",
+                    }).format(totalAmount)
+                  : null,
+              qualified: signatureType === "QES_otp",
+            }).catch((err) =>
+              logger.error(
+                `Envoi invitations signature (devis ${documentNumber}): ${err.message}`,
+              ),
+            );
+          }
 
           return {
             success: true,
@@ -353,10 +523,141 @@ const esignatureResolvers = {
           throw new AppError(
             error.message ||
               "Erreur lors de la création de la demande de signature",
-            ERROR_CODES.INTERNAL_ERROR
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
+    ),
+
+    /**
+     * Apposer un cachet qualifié (QES automatique) sur le document signé d'un devis.
+     * Exige une signature client (SES/QES_otp) terminée. Ne change pas le statut du devis.
+     */
+    sealQuoteDocument: requireWrite("quotes")(
+      async (_, { quoteId }, context) => {
+        try {
+          const quote = await Quote.findOne({
+            _id: quoteId,
+            workspaceId: context.workspaceId,
+          });
+          if (!quote) {
+            throw new AppError("Devis non trouvé", ERROR_CODES.NOT_FOUND);
+          }
+
+          // Exiger une signature client terminée (hors cachet entreprise)
+          const clientSignature = await SignatureRequest.findOne({
+            documentType: "quote",
+            documentId: quoteId,
+            signatureType: { $ne: "QES_automatic" },
+            status: "DONE",
+          }).sort({ createdAt: -1 });
+
+          if (!clientSignature || !clientSignature.externalSignatureId) {
+            throw new AppError(
+              "Le devis doit d'abord être signé par le client avant d'être cacheté.",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+
+          // Empêcher un double cachet
+          const existingSeal = await SignatureRequest.findOne({
+            documentType: "quote",
+            documentId: quoteId,
+            signatureType: "QES_automatic",
+            status: {
+              $in: [
+                "PENDING",
+                "WAIT_VALIDATION",
+                "WAIT_SIGN",
+                "WAIT_SIGNER",
+                "DONE",
+              ],
+            },
+          });
+          if (existingSeal) {
+            // Auto-annuler un cachet PENDING orphelin (jamais envoyé), sinon bloquer
+            if (
+              existingSeal.status === "PENDING" &&
+              !existingSeal.externalSignatureId
+            ) {
+              existingSeal.status = "CANCELLED";
+              await existingSeal.save();
+            } else {
+              throw new AppError(
+                existingSeal.status === "DONE"
+                  ? "Ce devis a déjà été cacheté."
+                  : "Un cachet est déjà en cours pour ce devis.",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+          }
+
+          // Récupérer le document signé par le client
+          const signedDocBuffer =
+            await esignatureService.downloadSignedDocument(
+              clientSignature.externalSignatureId,
+            );
+          if (!signedDocBuffer || !Buffer.isBuffer(signedDocBuffer)) {
+            throw new AppError(
+              "Impossible de récupérer le document signé à cacheter.",
+              ERROR_CODES.INTERNAL_ERROR,
+            );
+          }
+
+          // Créer l'entrée de cachet
+          const sealRequest = new SignatureRequest({
+            organizationId: context.organizationId,
+            workspaceId: context.workspaceId,
+            documentType: "quote",
+            documentId: quoteId,
+            documentNumber: quote.number || null,
+            signatureType: "QES_automatic",
+            status: "PENDING",
+            signers: [],
+            createdBy: context.user._id,
+          });
+          await sealRequest.save();
+
+          const callbackConfig = esignatureService.buildCallbackConfig(
+            sealRequest._id.toString(),
+          );
+
+          const apiResult = await esignatureService.createQESAutomatic(
+            signedDocBuffer,
+            {
+              title: `Cachet devis ${quote.number || ""}`,
+              // Même ligne que la signature client (bas), cachet à gauche
+              page: 1,
+              x: 50,
+              y: 730,
+            },
+            callbackConfig,
+          );
+
+          const resultData = apiResult.data || apiResult;
+          sealRequest.externalSignatureId = resultData.id || resultData._id;
+          sealRequest.status = mapExternalStatus(
+            resultData.state || "WAIT_VALIDATION",
+          );
+          await sealRequest.save();
+          publishSignatureStatus(sealRequest);
+
+          logger.info(`Cachet QES créé pour devis ${quote.number || quoteId}`);
+
+          return {
+            success: true,
+            message: "Cachet qualifié appliqué au document signé",
+            signatureRequest: sealRequest,
+          };
+        } catch (error) {
+          logger.error("Erreur cachet devis:", error);
+          if (error instanceof AppError) throw error;
+          throw new AppError(
+            error.message || "Erreur lors de l'application du cachet",
+            ERROR_CODES.INTERNAL_ERROR,
+          );
+        }
+      },
     ),
 
     /**
@@ -373,14 +674,14 @@ const esignatureResolvers = {
           if (!signatureRequest) {
             throw new AppError(
               "Demande de signature non trouvée",
-              ERROR_CODES.NOT_FOUND
+              ERROR_CODES.NOT_FOUND,
             );
           }
 
           if (["DONE", "CANCELLED"].includes(signatureRequest.status)) {
             throw new AppError(
               "Cette signature ne peut plus être annulée",
-              ERROR_CODES.VALIDATION_ERROR
+              ERROR_CODES.VALIDATION_ERROR,
             );
           }
 
@@ -388,21 +689,20 @@ const esignatureResolvers = {
           if (signatureRequest.externalSignatureId) {
             try {
               await esignatureService.deleteSignature(
-                signatureRequest.externalSignatureId
+                signatureRequest.externalSignatureId,
               );
             } catch (err) {
               logger.warn(
-                `Impossible de supprimer la signature externe: ${err.message}`
+                `Impossible de supprimer la signature externe: ${err.message}`,
               );
             }
           }
 
           signatureRequest.status = "CANCELLED";
           await signatureRequest.save();
+          publishSignatureStatus(signatureRequest);
 
-          logger.info(
-            `Signature ${signatureId} annulée`
-          );
+          logger.info(`Signature ${signatureId} annulée`);
 
           return {
             success: true,
@@ -417,12 +717,11 @@ const esignatureResolvers = {
           }
 
           throw new AppError(
-            error.message ||
-              "Erreur lors de l'annulation de la signature",
-            ERROR_CODES.INTERNAL_ERROR
+            error.message || "Erreur lors de l'annulation de la signature",
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
     ),
 
     /**
@@ -439,14 +738,14 @@ const esignatureResolvers = {
           if (!signatureRequest) {
             throw new AppError(
               "Demande de signature non trouvée",
-              ERROR_CODES.NOT_FOUND
+              ERROR_CODES.NOT_FOUND,
             );
           }
 
           if (signatureRequest.status !== "ERROR") {
             throw new AppError(
               "Seules les signatures en erreur peuvent être relancées",
-              ERROR_CODES.VALIDATION_ERROR
+              ERROR_CODES.VALIDATION_ERROR,
             );
           }
 
@@ -454,11 +753,11 @@ const esignatureResolvers = {
           if (signatureRequest.externalSignatureId) {
             try {
               await esignatureService.deleteSignature(
-                signatureRequest.externalSignatureId
+                signatureRequest.externalSignatureId,
               );
             } catch (err) {
               logger.warn(
-                `Impossible de supprimer l'ancienne signature: ${err.message}`
+                `Impossible de supprimer l'ancienne signature: ${err.message}`,
               );
             }
           }
@@ -486,13 +785,20 @@ const esignatureResolvers = {
           }
 
           throw new AppError(
-            error.message ||
-              "Erreur lors de la relance de la signature",
-            ERROR_CODES.INTERNAL_ERROR
+            error.message || "Erreur lors de la relance de la signature",
+            ERROR_CODES.INTERNAL_ERROR,
           );
         }
-      }
+      },
     ),
+  },
+
+  Subscription: {
+    // Mises à jour temps réel du statut de signature d'un document.
+    signatureStatusUpdated: {
+      subscribe: (_, { documentId }) =>
+        getPubSub().asyncIterableIterator([signatureChannel(documentId)]),
+    },
   },
 };
 
