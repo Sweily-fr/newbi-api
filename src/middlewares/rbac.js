@@ -567,7 +567,7 @@ export const withRBAC = (resolver, options = {}) => {
  *   est inaccessible au lieu de laisser passer. À utiliser pour les mutations
  *   qui appellent des services externes payants (banking, OCR, Pennylane).
  */
-const ACTIVE_SUBSCRIPTION_STATUSES = ["active", "trialing", "past_due"];
+export const ACTIVE_SUBSCRIPTION_STATUSES = ["active", "trialing", "past_due"];
 
 // ✅ Cache LRU pour le statut subscription — évite 1 query DB par mutation protégée
 const SUB_CACHE_TTL = 30_000; // 30 secondes
