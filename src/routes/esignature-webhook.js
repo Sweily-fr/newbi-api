@@ -1,42 +1,12 @@
 import express from "express";
 import crypto from "crypto";
 import SignatureRequest from "../models/SignatureRequest.js";
-import esignatureService from "../services/esignatureService.js";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import logger from "../utils/logger.js";
+import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
+import { storeSignedDocuments } from "../services/esignatureDocuments.js";
+import { publishSignatureStatus } from "../services/esignaturePubsub.js";
 
 const router = express.Router();
-
-/**
- * Upload un fichier vers R2 dans le bucket OCR (réutilisé pour les documents signés)
- */
-async function uploadFileToR2(fileBuffer, key, contentType) {
-  const client = new S3Client({
-    region: "auto",
-    endpoint: process.env.R2_API_URL,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-    },
-  });
-
-  const bucket = process.env.OCR_BUCKET;
-  const publicUrl = process.env.OCR_URL;
-
-  const command = new PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    Body: fileBuffer,
-    ContentType: contentType,
-  });
-
-  await client.send(command);
-
-  const cleanUrl = publicUrl?.endsWith("/")
-    ? publicUrl.slice(0, -1)
-    : publicUrl;
-  return `${cleanUrl}/${key}`;
-}
 
 /**
  * Vérifier le header secret du webhook eSignature
@@ -45,7 +15,17 @@ async function uploadFileToR2(fileBuffer, key, contentType) {
 const verifyWebhookSecret = (req) => {
   const webhookSecret = process.env.ESIGNATURE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    // Pas de secret configuré, on accepte (dev/sandbox)
+    // En production/staging, un webhook non authentifié est refusé : le secret
+    // DOIT être configuré (ESIGNATURE_WEBHOOK_SECRET) côté API et callback.
+    const env = process.env.NODE_ENV;
+    if (env === "production" || env === "staging") {
+      logger.error(
+        "Webhook eSignature: ESIGNATURE_WEBHOOK_SECRET non configuré en " +
+          `${env} — callback refusé. Définissez le secret pour activer le webhook.`,
+      );
+      return false;
+    }
+    // Dev/sandbox uniquement : on accepte sans secret.
     return true;
   }
 
@@ -57,7 +37,7 @@ const verifyWebhookSecret = (req) => {
   try {
     return crypto.timingSafeEqual(
       Buffer.from(webhookSecret),
-      Buffer.from(receivedSecret)
+      Buffer.from(receivedSecret),
     );
   } catch {
     return false;
@@ -85,7 +65,7 @@ router.post("/", express.json(), async (req, res) => {
 
     logger.debug(
       "Payload webhook eSignature:",
-      JSON.stringify(payload, null, 2)
+      JSON.stringify(payload, null, 2),
     );
 
     // Extraire les infos de la signature
@@ -96,18 +76,14 @@ router.post("/", express.json(), async (req, res) => {
 
     if (!externalSignatureId && !signatureRequestId) {
       logger.warn("Webhook eSignature sans ID de signature");
-      return res
-        .status(400)
-        .json({ error: "Missing signature identifier" });
+      return res.status(400).json({ error: "Missing signature identifier" });
     }
 
     // Trouver la SignatureRequest correspondante
     let signatureRequest;
 
     if (signatureRequestId) {
-      signatureRequest = await SignatureRequest.findById(
-        signatureRequestId
-      );
+      signatureRequest = await SignatureRequest.findById(signatureRequestId);
     }
 
     if (!signatureRequest && externalSignatureId) {
@@ -118,7 +94,7 @@ router.post("/", express.json(), async (req, res) => {
 
     if (!signatureRequest) {
       logger.warn(
-        `SignatureRequest non trouvée pour webhook: external=${externalSignatureId}, internal=${signatureRequestId}`
+        `SignatureRequest non trouvée pour webhook: external=${externalSignatureId}, internal=${signatureRequestId}`,
       );
       // Retourner 200 pour éviter les retries
       return res.status(200).json({
@@ -132,7 +108,7 @@ router.post("/", express.json(), async (req, res) => {
     const newStatus = mapExternalStatus(state);
 
     logger.info(
-      `Signature ${signatureRequest._id}: ${previousStatus} → ${newStatus}`
+      `Signature ${signatureRequest._id}: ${previousStatus} → ${newStatus}`,
     );
 
     // Mettre à jour le statut
@@ -146,80 +122,32 @@ router.post("/", express.json(), async (req, res) => {
       signatureRequest.errorNumber = payload.errorNumber;
     }
 
-    // Si la signature est terminée, télécharger le document signé
-    if (newStatus === "DONE" && externalSignatureId) {
-      try {
-        // Télécharger le document signé
-        const signedDocBuffer =
-          await esignatureService.downloadSignedDocument(
-            externalSignatureId
-          );
-
-        if (signedDocBuffer && Buffer.isBuffer(signedDocBuffer)) {
-          const key = `esignature/${signatureRequest.organizationId}/${signatureRequest._id}/signed-${signatureRequest.documentNumber || signatureRequest.documentId}.pdf`;
-
-          const url = await uploadFileToR2(
-            signedDocBuffer,
-            key,
-            "application/pdf"
-          );
-
-          signatureRequest.signedDocumentUrl = url;
-        }
-
-        // Télécharger l'audit trail
-        try {
-          const auditTrail =
-            await esignatureService.downloadAuditTrail(
-              externalSignatureId
-            );
-
-          if (auditTrail) {
-            const auditBuffer = Buffer.isBuffer(auditTrail)
-              ? auditTrail
-              : Buffer.from(JSON.stringify(auditTrail));
-
-            const auditKey = `esignature/${signatureRequest.organizationId}/${signatureRequest._id}/audit-trail.${Buffer.isBuffer(auditTrail) ? "pdf" : "json"}`;
-
-            const auditUrl = await uploadFileToR2(
-              auditBuffer,
-              auditKey,
-              Buffer.isBuffer(auditTrail)
-                ? "application/pdf"
-                : "application/json"
-            );
-
-            signatureRequest.auditTrailUrl = auditUrl;
-          }
-        } catch (auditError) {
-          logger.warn(
-            `Impossible de télécharger l'audit trail: ${auditError.message}`
-          );
-        }
-
-        // Mettre à jour la date de signature des signataires
-        signatureRequest.signers = signatureRequest.signers.map(
-          (signer) => ({
-            ...signer.toObject ? signer.toObject() : signer,
-            signedAt: signer.signedAt || new Date(),
-          })
-        );
-      } catch (downloadError) {
-        logger.error(
-          `Erreur téléchargement document signé: ${downloadError.message}`
-        );
-        signatureRequest.errorMessage = `Document signé mais erreur au téléchargement: ${downloadError.message}`;
-      }
-    }
-
     await signatureRequest.save();
 
-    logger.info(
-      `Signature ${signatureRequest._id} mise à jour: ${newStatus}`
-    );
+    // Notifier le front en temps réel du changement de statut
+    if (newStatus !== previousStatus) {
+      publishSignatureStatus(signatureRequest);
+    }
 
-    // TODO: Publier événement Redis PubSub pour notification temps réel
-    // pubsub.publish(`SIGNATURE_UPDATED_${signatureRequest.organizationId}`, { ... })
+    logger.info(`Signature ${signatureRequest._id} mise à jour: ${newStatus}`);
+
+    // Une fois terminé : récupérer le document signé/cacheté puis auto-accepter le devis
+    if (newStatus === "DONE") {
+      try {
+        await storeSignedDocuments(signatureRequest);
+      } catch (downloadError) {
+        logger.warn(
+          `Impossible de stocker le document signé: ${downloadError.message}`,
+        );
+      }
+      try {
+        await acceptQuoteOnSignature(signatureRequest);
+      } catch (acceptError) {
+        logger.warn(
+          `Impossible d'auto-accepter le devis après signature: ${acceptError.message}`,
+        );
+      }
+    }
 
     res.status(200).json({
       received: true,
@@ -248,7 +176,18 @@ function mapExternalStatus(externalState) {
     DONE: "DONE",
     ERROR: "ERROR",
   };
-  return statusMap[externalState] || "PENDING";
+  // Normaliser la casse : l'API peut renvoyer l'état en minuscules/casse mixte
+  const key = String(externalState || "")
+    .trim()
+    .toUpperCase();
+  const mapped = statusMap[key];
+  if (!mapped) {
+    logger.warn(
+      `mapExternalStatus: état eSignature inconnu "${externalState}", repli sur PENDING`,
+    );
+    return "PENDING";
+  }
+  return mapped;
 }
 
 /**

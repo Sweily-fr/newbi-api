@@ -7,6 +7,7 @@ import {
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
+import SignatureRequest from "../models/SignatureRequest.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   withRBAC,
@@ -1261,6 +1262,25 @@ const quoteResolvers = {
 
         if (!allowedTransitions[quote.status].includes(status)) {
           throw createStatusTransitionError("Devis", quote.status, status);
+        }
+
+        // Un devis natif (PENDING) ne peut être accepté que si le CLIENT l'a signé
+        // (SES ou QES_otp = « bon pour accord »). Le QES automatique est un cachet de
+        // la société et ne vaut pas acceptation. Les devis importés (IMPORTED) restent
+        // acceptables manuellement sans signature.
+        if (status === "COMPLETED" && quote.status === "PENDING") {
+          const clientSignature = await SignatureRequest.findOne({
+            documentType: "quote",
+            documentId: quote._id,
+            signatureType: { $ne: "QES_automatic" },
+            status: "DONE",
+          });
+
+          if (!clientSignature) {
+            throw createValidationError(
+              "Ce devis doit être signé par le client avant de pouvoir être accepté. Envoyez-le pour signature : il sera accepté automatiquement une fois signé.",
+            );
+          }
         }
 
         const oldStatus = quote.status;
