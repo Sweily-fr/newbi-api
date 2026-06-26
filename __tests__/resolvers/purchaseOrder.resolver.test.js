@@ -21,6 +21,7 @@ vi.mock("../../src/services/documentAutomationService.js", () => ({
 
 import PurchaseOrder from "../../src/models/PurchaseOrder.js";
 import Invoice from "../../src/models/Invoice.js";
+import Quote from "../../src/models/Quote.js";
 import purchaseOrderResolvers from "../../src/resolvers/purchaseOrder.js";
 
 // ---------------------------------------------------------------------------
@@ -332,6 +333,155 @@ describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice", () => {
     await expect(
       convert(null, { id: po._id.toString() }, ctx()),
     ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — anti-doublon devis→BC→facture vs devis→facture directe
+// convertPurchaseOrderToInvoice n'utilise pas de transaction : on insère
+// directement un BC CONFIRMED lié à un devis pour exercer la synchro/garde.
+// ---------------------------------------------------------------------------
+
+// Insère un BC CONFIRMED rattaché à un devis, prêt à être converti
+async function seedConfirmedPO({ sourceQuoteId, prefix, number }) {
+  const _id = new mongoose.Types.ObjectId();
+  await PurchaseOrder.collection.insertOne({
+    _id,
+    workspaceId: organizationId,
+    createdBy: userId,
+    number,
+    prefix,
+    status: "CONFIRMED",
+    sourceQuoteId,
+    items: [{ description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 }],
+    client: {
+      name: "Client Test",
+      email: "c@test.fr",
+      address: {
+        street: "1 rue Test",
+        city: "Paris",
+        postalCode: "75001",
+        country: "France",
+      },
+    },
+    issueDate: new Date(),
+    createdAt: new Date(),
+    totalHT: 1000,
+    totalVAT: 200,
+    totalTTC: 1200,
+    finalTotalHT: 1000,
+    finalTotalVAT: 200,
+    finalTotalTTC: 1200,
+  });
+  return _id;
+}
+
+describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice & devis source", () => {
+  const convert =
+    purchaseOrderResolvers.Mutation.convertPurchaseOrderToInvoice;
+
+  it("synchronise le devis source : sourceQuote + linkedInvoices", async () => {
+    const quoteId = new mongoose.Types.ObjectId();
+    await Quote.collection.insertOne({
+      _id: quoteId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "200",
+      prefix: "D-SYNC",
+      status: "COMPLETED",
+      items: [{ description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 }],
+      client: {
+      name: "Client Test",
+      email: "c@test.fr",
+      address: {
+        street: "1 rue Test",
+        city: "Paris",
+        postalCode: "75001",
+        country: "France",
+      },
+    },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      linkedInvoices: [],
+    });
+
+    const poId = await seedConfirmedPO({
+      sourceQuoteId: quoteId,
+      prefix: "BC-SYNC",
+      number: "201",
+    });
+
+    const invoice = await convert(null, { id: poId.toString() }, ctx());
+
+    expect(invoice).toBeDefined();
+    expect(String(invoice.sourceQuote)).toBe(String(quoteId));
+
+    // Le devis n'est plus « vierge » : la facture y est rattachée
+    const updatedQuote = await Quote.findById(quoteId);
+    expect(updatedQuote.linkedInvoices.map(String)).toContain(
+      String(invoice._id),
+    );
+    expect(String(updatedQuote.convertedToInvoice)).toBe(String(invoice._id));
+
+    // Le BC référence aussi la facture
+    const updatedPO = await PurchaseOrder.findById(poId);
+    expect(updatedPO.linkedInvoices.map(String)).toContain(String(invoice._id));
+  });
+
+  it("bloque la conversion si le devis source est déjà entièrement facturé", async () => {
+    const existingInvoiceId = new mongoose.Types.ObjectId();
+    await Invoice.collection.insertOne({
+      _id: existingInvoiceId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "1",
+      prefix: "F-EXIST",
+      status: "DRAFT",
+      finalTotalTTC: 1200,
+      createdAt: new Date(),
+    });
+
+    const quoteId = new mongoose.Types.ObjectId();
+    await Quote.collection.insertOne({
+      _id: quoteId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "300",
+      prefix: "D-FULL",
+      status: "COMPLETED",
+      items: [{ description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 }],
+      client: {
+      name: "Client Test",
+      email: "c@test.fr",
+      address: {
+        street: "1 rue Test",
+        city: "Paris",
+        postalCode: "75001",
+        country: "France",
+      },
+    },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+      linkedInvoices: [existingInvoiceId],
+    });
+
+    const poId = await seedConfirmedPO({
+      sourceQuoteId: quoteId,
+      prefix: "BC-FULL",
+      number: "301",
+    });
+
+    await expect(
+      convert(null, { id: poId.toString() }, ctx()),
+    ).rejects.toThrow();
+
+    // Aucune nouvelle facture ne doit avoir été créée
+    const invoiceCount = await Invoice.countDocuments({
+      workspaceId: organizationId,
+    });
+    expect(invoiceCount).toBe(1);
   });
 });
 

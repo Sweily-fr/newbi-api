@@ -1066,6 +1066,56 @@ const purchaseOrderResolvers = {
           );
         }
 
+        // Si le BC provient d'un devis, garantir qu'on ne facture pas au-delà
+        // du montant du devis, tous chemins confondus (devis→facture directe
+        // OU devis→BC→facture). On charge le devis source pour contrôler et
+        // synchroniser quote.linkedInvoices (source de vérité anti-doublon).
+        let sourceQuote = null;
+        if (po.sourceQuoteId) {
+          sourceQuote = await Quote.findOne({
+            _id: po.sourceQuoteId,
+            workspaceId,
+          });
+
+          if (sourceQuote) {
+            const quoteAmount = sourceQuote.finalTotalTTC || 0;
+
+            // Nettoyer les références mortes et calculer le déjà-facturé
+            let existingInvoicesTotalAmount = 0;
+            if (sourceQuote.linkedInvoices?.length > 0) {
+              const existingInvoices = await Invoice.find({
+                _id: { $in: sourceQuote.linkedInvoices },
+              });
+              const validIds = existingInvoices.map((inv) => inv._id);
+              if (validIds.length !== sourceQuote.linkedInvoices.length) {
+                sourceQuote.linkedInvoices = validIds;
+                await sourceQuote.save();
+              }
+              existingInvoicesTotalAmount = existingInvoices.reduce(
+                (sum, inv) => sum + (inv.finalTotalTTC || 0),
+                0,
+              );
+            }
+
+            if (
+              quoteAmount > 0 &&
+              quoteAmount - existingInvoicesTotalAmount <= 0.01
+            ) {
+              throw new AppError(
+                `Le devis associé à ce bon de commande est déjà entièrement facturé (${existingInvoicesTotalAmount.toFixed(
+                  2,
+                )}€ sur ${quoteAmount.toFixed(2)}€)`,
+                ERROR_CODES.RESOURCE_LOCKED,
+                {
+                  resource: "Devis",
+                  quoteAmount,
+                  existingInvoicesTotalAmount,
+                },
+              );
+            }
+          }
+        }
+
         const organization = await getOrganizationInfo(workspaceId);
 
         const now = new Date();
@@ -1106,6 +1156,9 @@ const purchaseOrderResolvers = {
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
           purchaseOrderNumber: `${po.prefix}-${po.number}`,
+          // Tracer le devis d'origine pour que la garde anti-doublon de
+          // convertQuoteToInvoice voie cette facture (chemin devis→BC→facture)
+          sourceQuote: po.sourceQuoteId || undefined,
           discount: po.discount,
           discountType: po.discountType,
           customFields: poObj.customFields,
@@ -1148,6 +1201,19 @@ const purchaseOrderResolvers = {
         }
         po.linkedInvoices.push(invoice._id);
         await po.save();
+
+        // Synchroniser le devis source : sans cela, le devis paraît « vierge »
+        // et pourrait être reconverti directement en facture → doublon.
+        if (sourceQuote) {
+          if (!sourceQuote.linkedInvoices) {
+            sourceQuote.linkedInvoices = [];
+          }
+          sourceQuote.linkedInvoices.push(invoice._id);
+          if (!sourceQuote.convertedToInvoice) {
+            sourceQuote.convertedToInvoice = invoice._id;
+          }
+          await sourceQuote.save();
+        }
 
         return await invoice.populate("createdBy");
       },
