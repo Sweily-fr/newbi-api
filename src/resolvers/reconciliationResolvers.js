@@ -19,18 +19,29 @@ const reconciliationResolvers = {
           // Utiliser le workspaceId passé en argument ou celui du contexte
           const workspaceId = argWorkspaceId || ctxWorkspaceId;
 
-          // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent).
-          // Une transaction déjà justifiée n'est plus "à rapprocher" : on exclut celles
-          // qui ont un justificatif attaché (receiptFiles non vide) OU une facture liée,
-          // pour rester cohérent avec le hasReceipt affiché côté UI.
-          const unmatchedTransactions = await Transaction.find({
+          // Critères "à rapprocher" : une entrée d'argent (amount > 0) pas encore
+          // liée à une facture (linkedInvoiceId null), sans justificatif attaché
+          // (receiptFiles vide → un justificatif/ticket vaut justification, donc
+          // plus rien à rapprocher) et dont le statut n'est ni "matched" ni
+          // "ignored" (donc unmatched/suggested, ou vide pour données legacy).
+          // Doit rester identique au filtre "toReconcile" de la page Transactions
+          // (TransactionTable.jsx) et à la route REST /reconciliation/suggestions.
+          const reconcileQuery = {
             workspaceId,
             deletedAt: null,
-            reconciliationStatus: { $in: ["unmatched", "suggested"] },
+            reconciliationStatus: { $nin: ["matched", "ignored"] },
             amount: { $gt: 0 },
             linkedInvoiceId: null,
             "receiptFiles.0": { $exists: false },
-          })
+          };
+
+          // Comptage complet, sans plafond (countDocuments) → le badge reflète le
+          // vrai total. La génération de suggestions ci-dessous reste plafonnée
+          // (perf), mais ne sert plus à calculer unmatchedCount.
+          const unmatchedCount =
+            await Transaction.countDocuments(reconcileQuery);
+
+          const unmatchedTransactions = await Transaction.find(reconcileQuery)
             .sort({ date: -1 })
             .limit(50);
 
@@ -100,7 +111,7 @@ const reconciliationResolvers = {
           return {
             success: true,
             suggestions,
-            unmatchedCount: unmatchedTransactions.length,
+            unmatchedCount,
             pendingInvoicesCount: pendingInvoices.length,
           };
         } catch (error) {
@@ -194,51 +205,58 @@ const reconciliationResolvers = {
         try {
           const { transactionId, invoiceId } = input;
 
-          // Vérifier que la transaction existe
-          const transaction = await Transaction.findOne({
-            _id: transactionId,
-            workspaceId,
-          });
+          // Revendication ATOMIQUE de la transaction : la condition
+          // linkedInvoiceId:null dans le filtre garantit qu'on ne lie pas une
+          // transaction déjà liée, même si une autre requête arrive en parallèle
+          // (élimine la race TOCTOU entre la vérification et l'écriture).
+          const transaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId, linkedInvoiceId: null },
+            {
+              linkedInvoiceId: invoiceId,
+              reconciliationStatus: "matched",
+              reconciliationDate: new Date(),
+            },
+            { new: true },
+          );
           if (!transaction) {
-            return { success: false, message: "Transaction non trouvée" };
+            const exists = await Transaction.exists({
+              _id: transactionId,
+              workspaceId,
+            });
+            return {
+              success: false,
+              message: exists
+                ? "Cette transaction est déjà liée à une facture"
+                : "Transaction non trouvée",
+            };
           }
 
-          // Vérifier que la facture existe
-          const invoice = await Invoice.findOne({
-            _id: invoiceId,
-            workspaceId,
-          });
+          // Revendication ATOMIQUE de la facture. Si elle échoue (facture
+          // introuvable ou déjà liée), on annule la liaison de la transaction
+          // pour éviter un état incohérent (pas de transaction Mongo requise,
+          // compatible avec un MongoDB standalone).
+          const invoice = await Invoice.findOneAndUpdate(
+            { _id: invoiceId, workspaceId, linkedTransactionId: null },
+            {
+              linkedTransactionId: transactionId,
+              status: "COMPLETED",
+              paymentDate: transaction.date,
+            },
+            { new: true },
+          );
           if (!invoice) {
-            return { success: false, message: "Facture non trouvée" };
-          }
-
-          // Vérifier que la transaction n'est pas déjà liée
-          if (transaction.linkedInvoiceId) {
+            transaction.linkedInvoiceId = null;
+            transaction.reconciliationStatus = "unmatched";
+            transaction.reconciliationDate = null;
+            await transaction.save();
+            const exists = await Invoice.exists({ _id: invoiceId, workspaceId });
             return {
               success: false,
-              message: "Cette transaction est déjà liée à une facture",
+              message: exists
+                ? "Cette facture est déjà liée à une transaction"
+                : "Facture non trouvée",
             };
           }
-
-          // Vérifier que la facture n'est pas déjà liée
-          if (invoice.linkedTransactionId) {
-            return {
-              success: false,
-              message: "Cette facture est déjà liée à une transaction",
-            };
-          }
-
-          // Mettre à jour la transaction
-          transaction.linkedInvoiceId = invoiceId;
-          transaction.reconciliationStatus = "matched";
-          transaction.reconciliationDate = new Date();
-          await transaction.save();
-
-          // Mettre à jour la facture (passer en COMPLETED)
-          invoice.linkedTransactionId = transactionId;
-          invoice.status = "COMPLETED";
-          invoice.paymentDate = transaction.date;
-          await invoice.save();
 
           // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
           // try {
