@@ -1132,6 +1132,8 @@ const bankingResolvers = {
     },
     // Champs de rapprochement
     linkedInvoiceId: (parent) => parent.linkedInvoiceId?.toString() || null,
+    linkedImportedInvoiceId: (parent) =>
+      parent.linkedImportedInvoiceId?.toString() || null,
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
     reconciliationStatus: (parent) => {
       const status = parent.reconciliationStatus || "unmatched";

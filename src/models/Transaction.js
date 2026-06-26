@@ -141,6 +141,14 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
+    // Rapprochement avec facture de CA importée (entrée d'argent)
+    linkedImportedInvoiceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ImportedInvoice",
+      default: null,
+      index: true,
+    },
+
     // Rapprochement avec justificatif/dépense (pour les sorties d'argent)
     linkedExpenseId: {
       type: mongoose.Schema.Types.ObjectId,

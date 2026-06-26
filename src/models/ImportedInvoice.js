@@ -197,6 +197,14 @@ const importedInvoiceSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Rapprochement avec transaction bancaire (entrée d'argent — facture de CA importée)
+    linkedTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
+      default: null,
+      index: true,
+    },
+
     // Marqueur de doublon potentiel
     isDuplicate: {
       type: Boolean,
