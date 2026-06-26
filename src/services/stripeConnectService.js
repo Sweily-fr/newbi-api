@@ -298,6 +298,90 @@ const stripeConnectService = {
   },
 
   /**
+   * Crée une session de paiement Stripe Checkout pour une facture Newbi.
+   * Encaissement direct sur le compte Stripe Connect du vendeur (destination charge),
+   * SANS commission Newbi (contrairement aux transferts de fichiers).
+   * @param {Object} invoice - Document Invoice (Mongoose)
+   * @param {string} accountId - ID du compte Stripe Connect du vendeur
+   * @param {string} successUrl - URL de succès après paiement
+   * @param {string} cancelUrl - URL d'annulation
+   * @returns {Promise<Object>} - { success, sessionId, sessionUrl }
+   */
+  async createInvoicePaymentSession(invoice, accountId, successUrl, cancelUrl) {
+    try {
+      const account = await StripeConnectAccount.findOne({ accountId });
+      if (!account || !account.chargesEnabled) {
+        return {
+          success: false,
+          message:
+            "Le compte Stripe Connect n'est pas configuré pour recevoir des paiements",
+        };
+      }
+
+      const amount = Math.round((invoice.finalTotalTTC || 0) * 100); // centimes
+      if (!amount || amount <= 0) {
+        return {
+          success: false,
+          message: "Montant de facture invalide pour un paiement en ligne",
+        };
+      }
+
+      const invoiceLabel = `${invoice.prefix || ""}${invoice.number}`;
+      const metadata = {
+        invoiceId: invoice._id.toString(),
+        workspaceId: invoice.workspaceId.toString(),
+        type: "invoice_payment",
+      };
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price_data: {
+              currency: "eur",
+              product_data: {
+                name: `Facture ${invoiceLabel}`,
+                description: invoice.client?.name
+                  ? `Paiement pour ${invoice.client.name}`
+                  : undefined,
+              },
+              unit_amount: amount,
+            },
+            quantity: 1,
+          },
+        ],
+        mode: "payment",
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        // Destination charge SANS application_fee_amount => 100% au vendeur
+        payment_intent_data: {
+          transfer_data: {
+            destination: accountId,
+          },
+          metadata,
+        },
+        metadata,
+      });
+
+      return {
+        success: true,
+        sessionId: session.id,
+        sessionUrl: session.url,
+        message: "Session de paiement créée avec succès",
+      };
+    } catch (error) {
+      logger.error(
+        "Erreur lors de la création de la session de paiement facture:",
+        error
+      );
+      return {
+        success: false,
+        message: `Erreur lors de la création de la session de paiement: ${error.message}`,
+      };
+    }
+  },
+
+  /**
    * Effectue un virement depuis le solde Stripe de Newbi vers un compte Stripe Connect
    * @param {string} accountId - ID du compte Stripe Connect destinataire
    * @param {number} amount - Montant en centimes
@@ -385,5 +469,6 @@ export const {
   generateOnboardingLink,
   checkAccountStatus,
   createPaymentSession,
+  createInvoicePaymentSession,
   transferToStripeConnect,
 } = stripeConnectService;

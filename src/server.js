@@ -58,6 +58,10 @@ import {
   downloadAllFiles,
   validatePayment,
 } from "./controllers/fileTransferController.js";
+import {
+  redirectToInvoicePayment,
+  handleInvoicePaymentWebhook,
+} from "./controllers/invoicePaymentController.js";
 import { setupScheduledJobs } from "./jobs/scheduler.js";
 import logger from "./utils/logger.js";
 import {
@@ -278,6 +282,13 @@ async function startServer() {
     handleFileTransferStripeWebhook,
   );
 
+  // Webhook encaissement des factures (body brut requis, AVANT express.json)
+  app.post(
+    "/webhook/invoice-payment",
+    express.raw({ type: "application/json" }),
+    handleInvoicePaymentWebhook,
+  );
+
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
 
@@ -294,6 +305,9 @@ async function startServer() {
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
+
+  // Redirection publique de paiement d'une facture vers Stripe Checkout
+  app.get("/pay/invoice/:invoiceId", redirectToInvoicePayment);
 
   // Routes file transfer auth
   app.use("/api/transfers", fileTransferAuthRoutes);
