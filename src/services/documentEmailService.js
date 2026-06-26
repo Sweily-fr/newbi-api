@@ -6,6 +6,7 @@ import CreditNote from "../models/CreditNote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import Client from "../models/Client.js";
 import EmailSettings from "../models/EmailSettings.js";
+import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
 import cloudflareService from "./cloudflareService.js";
@@ -149,6 +150,7 @@ function generateEmailHtml(
   customFooter = null,
   trackingPixelUrl = null,
   clickTrackingUrl = null,
+  paymentUrl = null,
 ) {
   const labels = DOCUMENT_LABELS[documentType];
   const documentLabel = labels.singular;
@@ -269,6 +271,13 @@ function generateEmailHtml(
         <table style="width:100%;border-collapse:collapse;">${detailRows}
         </table>
       </div>
+      ${
+        paymentUrl
+          ? `
+      <!-- Bouton Paiement en ligne -->
+      <a href="${paymentUrl}" style="display:block;background-color:#16a34a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:600;font-size:15px;text-align:center;margin-bottom:12px;">Payer en ligne</a>`
+          : ""
+      }
       ${
         clickTrackingUrl
           ? `
@@ -708,6 +717,32 @@ async function sendDocumentEmail({
     );
   }
 
+  // Lien de paiement en ligne : uniquement pour une facture non encore payée,
+  // et si l'organisation a un compte Stripe Connect opérationnel (chargesEnabled).
+  // Lien stable vers l'endpoint de redirection du backend (crée une session Checkout fraîche).
+  let paymentUrl = null;
+  if (
+    documentType === DOCUMENT_TYPES.INVOICE &&
+    document.status !== "COMPLETED" &&
+    document.status !== "CANCELED" &&
+    document.status !== "DRAFT"
+  ) {
+    try {
+      const stripeAccount = await StripeConnectAccount.findOne({
+        organizationId: workspaceId.toString(),
+      });
+      if (stripeAccount && stripeAccount.chargesEnabled) {
+        const backendUrl = process.env.BACKEND_URL || "http://localhost:4000";
+        paymentUrl = `${backendUrl}/pay/invoice/${documentId}`;
+      }
+    } catch (stripeLinkError) {
+      console.error(
+        "Erreur résolution lien de paiement Stripe:",
+        stripeLinkError,
+      );
+    }
+  }
+
   // Générer le HTML avec le pixel de tracking et le bouton cliquable
   const emailHtml = generateEmailHtml(
     finalBody,
@@ -717,6 +752,7 @@ async function sendDocumentEmail({
     customFooter,
     trackingPixelUrl,
     clickTrackingUrl,
+    paymentUrl,
   );
 
   // Résolution du PDF — R2 binaire prioritaire, base64 = transport optionnel.

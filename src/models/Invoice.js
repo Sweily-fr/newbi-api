@@ -312,6 +312,23 @@ const invoiceSchema = new mongoose.Schema(
       sparse: true,
       index: true,
     },
+    // Paiement en ligne via Stripe Connect (encaissement sur le compte du vendeur)
+    stripePaymentIntentId: {
+      type: String,
+      trim: true,
+      sparse: true,
+      index: true,
+    },
+    stripeCheckoutSessionId: {
+      type: String,
+      trim: true,
+      sparse: true,
+    },
+    // "paid" une fois l'encaissement confirmé par webhook (idempotence)
+    stripePaymentStatus: {
+      type: String,
+      trim: true,
+    },
     sourceQuote: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Quote",

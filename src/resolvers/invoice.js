@@ -5,6 +5,7 @@ import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import Event from "../models/Event.js";
 import Client from "../models/Client.js";
+import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   withRBAC,
@@ -47,6 +48,139 @@ import {
 } from "../services/calendar/CalendarSyncService.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
+
+/**
+ * Applique le passage d'une facture en "payée" (COMPLETED) et déclenche tous les
+ * effets de bord associés (e-reporting, notification, automatisations CRM, sync Pennylane).
+ *
+ * Centralisé ici pour être réutilisé par le resolver `markInvoiceAsPaid` (paiement manuel)
+ * ET par le webhook Stripe d'encaissement en ligne (paiement carte). Le webhook n'ayant
+ * pas de contexte GraphQL, ce helper ne dépend que de la facture et des paramètres fournis.
+ *
+ * Ne fait PAS les vérifications de statut/permissions : c'est à l'appelant de les gérer.
+ *
+ * @param {Object} invoice - Document Invoice (Mongoose), déjà chargé
+ * @param {Object} opts
+ * @param {Date|string} opts.paymentDate - Date du paiement
+ * @param {string|Object} [opts.userId] - ID de l'utilisateur (notifications/automatisations)
+ * @param {string} opts.workspaceId - ID de l'organisation
+ * @param {string} [opts.organizationId] - ID organisation pour la sync Pennylane (défaut workspaceId)
+ * @param {string} [opts.paymentMethod] - Méthode de paiement (ex: "CARD")
+ * @param {Object} [opts.stripe] - { paymentIntentId, checkoutSessionId }
+ * @returns {Promise<Object>} la facture mise à jour
+ */
+export async function applyInvoicePaid(
+  invoice,
+  { paymentDate, userId, workspaceId, organizationId, paymentMethod, stripe } = {},
+) {
+  const paidAt = new Date(paymentDate);
+
+  invoice.status = "COMPLETED";
+  invoice.paymentDate = paidAt;
+  if (paymentMethod) invoice.paymentMethod = paymentMethod;
+  if (stripe) {
+    if (stripe.paymentIntentId)
+      invoice.stripePaymentIntentId = stripe.paymentIntentId;
+    if (stripe.checkoutSessionId)
+      invoice.stripeCheckoutSessionId = stripe.checkoutSessionId;
+    invoice.stripePaymentStatus = "paid";
+  }
+  await invoice.save();
+
+  // E-reporting paiement (TVA sur encaissements) — non bloquant
+  try {
+    const reported = await reportPaymentIfNeeded(invoice, workspaceId, paidAt);
+    if (reported) {
+      await invoice.save();
+      logger.info(
+        `[E-INVOICE-ROUTING] E-reporting paiement pour ${invoice.prefix}${invoice.number}`,
+      );
+    }
+  } catch (eReportingError) {
+    logger.error("Erreur e-reporting paiement:", eReportingError);
+  }
+
+  // Notification "Paiement reçu" si activée
+  if (userId) {
+    try {
+      await notificationService.sendPaymentReceivedNotification({
+        userId,
+        invoice: invoice.toObject(),
+        paymentDate: paidAt,
+      });
+    } catch (notifError) {
+      console.error("Erreur lors de l'envoi de la notification:", notifError);
+    }
+  }
+
+  // Automatisations CRM si le client est lié
+  if (invoice.client && invoice.client.id) {
+    try {
+      const clientId = invoice.client.id;
+      const isFirstInvoice = await automationService.isFirstPaidInvoice(
+        clientId,
+        workspaceId,
+        invoice._id,
+      );
+      if (isFirstInvoice) {
+        await automationService.executeAutomations(
+          "FIRST_INVOICE_PAID",
+          workspaceId,
+          clientId,
+          {
+            isFirstInvoice: true,
+            amount: invoice.finalTotalTTC,
+            invoiceId: invoice._id.toString(),
+          },
+        );
+      }
+      await automationService.executeAutomations(
+        "INVOICE_PAID",
+        workspaceId,
+        clientId,
+        {
+          isFirstInvoice,
+          amount: invoice.finalTotalTTC,
+          invoiceId: invoice._id.toString(),
+        },
+      );
+    } catch (automationError) {
+      console.error(
+        "Erreur lors de l'exécution des automatisations CRM:",
+        automationError,
+      );
+    }
+  }
+
+  // Automatisations documents partagés (fire-and-forget)
+  if (userId) {
+    documentAutomationService
+      .executeAutomations(
+        "INVOICE_PAID",
+        workspaceId,
+        {
+          documentId: invoice._id.toString(),
+          documentType: "invoice",
+          documentNumber: invoice.number,
+          prefix: invoice.prefix || "",
+          clientName: invoice.client?.name || "",
+          issueDate: invoice.issueDate || invoice.createdAt,
+          clientId: invoice.client?._id || invoice.clientId || null,
+        },
+        userId.toString(),
+      )
+      .catch((err) =>
+        console.error("Erreur automatisation documents (paid):", err),
+      );
+  }
+
+  // Sync Pennylane (fire-and-forget)
+  syncInvoiceIfNeeded(invoice, organizationId || workspaceId).catch((err) =>
+    console.error("Erreur sync Pennylane (paid):", err),
+  );
+
+  return invoice;
+}
 
 /**
  * Calcule les totaux d'une facture
@@ -195,6 +329,24 @@ const validateInvoiceIssueDate = async (
 
 const invoiceResolvers = {
   Invoice: {
+    // Lien de paiement en ligne (Stripe Connect). Stable, pointe vers l'endpoint de
+    // redirection du backend qui crée une session Checkout fraîche à chaque clic.
+    // Renvoyé uniquement si la facture est payable (PENDING) ET que l'organisation a un
+    // compte Stripe Connect opérationnel (chargesEnabled). Sinon null → bouton masqué côté front.
+    paymentLink: async (invoice) => {
+      if (invoice.status !== "PENDING") return null;
+      try {
+        const account = await StripeConnectAccount.findOne({
+          organizationId: invoice.workspaceId.toString(),
+        });
+        if (!account || !account.chargesEnabled) return null;
+        const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
+        return `${baseUrl}/pay/invoice/${invoice._id.toString()}`;
+      } catch (error) {
+        logger.error("[Invoice.paymentLink] Erreur:", error);
+        return null;
+      }
+    },
     companyInfo: async (invoice) => {
       // Pour les brouillons, toujours résoudre depuis l'organisation (données dynamiques)
       if (!invoice.status || invoice.status === "DRAFT") {
@@ -2771,114 +2923,13 @@ const invoiceResolvers = {
           }
         }
 
-        // Mettre à jour le statut et la date de paiement
-        invoice.status = "COMPLETED";
-        invoice.paymentDate = new Date(paymentDate);
-        await invoice.save();
-
-        // E-reporting paiement (TVA sur encaissements) — non bloquant
-        try {
-          const reported = await reportPaymentIfNeeded(
-            invoice,
-            workspaceId,
-            new Date(paymentDate),
-          );
-          if (reported) {
-            await invoice.save();
-            logger.info(
-              `[E-INVOICE-ROUTING] E-reporting paiement pour ${invoice.prefix}${invoice.number}`,
-            );
-          }
-        } catch (eReportingError) {
-          logger.error("Erreur e-reporting paiement:", eReportingError);
-        }
-
-        // Envoyer la notification "Paiement reçu" si activée
-        try {
-          await notificationService.sendPaymentReceivedNotification({
-            userId: user._id,
-            invoice: invoice.toObject(),
-            paymentDate: new Date(paymentDate),
-          });
-        } catch (notifError) {
-          console.error(
-            "Erreur lors de l'envoi de la notification:",
-            notifError,
-          );
-          // Ne pas faire échouer la mutation si la notification échoue
-        }
-
-        // Exécuter les automatisations CRM si le client est lié
-        if (invoice.client && invoice.client.id) {
-          try {
-            const clientId = invoice.client.id;
-
-            // Vérifier si c'est la première facture payée
-            const isFirstInvoice = await automationService.isFirstPaidInvoice(
-              clientId,
-              workspaceId,
-              invoice._id,
-            );
-
-            // Exécuter les automatisations FIRST_INVOICE_PAID
-            if (isFirstInvoice) {
-              await automationService.executeAutomations(
-                "FIRST_INVOICE_PAID",
-                workspaceId,
-                clientId,
-                {
-                  isFirstInvoice: true,
-                  amount: invoice.finalTotalTTC,
-                  invoiceId: invoice._id.toString(),
-                },
-              );
-            }
-
-            // Exécuter les automatisations INVOICE_PAID (pour toutes les factures)
-            await automationService.executeAutomations(
-              "INVOICE_PAID",
-              workspaceId,
-              clientId,
-              {
-                isFirstInvoice,
-                amount: invoice.finalTotalTTC,
-                invoiceId: invoice._id.toString(),
-              },
-            );
-          } catch (automationError) {
-            console.error(
-              "Erreur lors de l'exécution des automatisations CRM:",
-              automationError,
-            );
-            // Ne pas faire échouer la mutation si les automatisations échouent
-          }
-        }
-
-        // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
-        documentAutomationService
-          .executeAutomations(
-            "INVOICE_PAID",
-            workspaceId,
-            {
-              documentId: invoice._id.toString(),
-              documentType: "invoice",
-              documentNumber: invoice.number,
-              prefix: invoice.prefix || "",
-              clientName: invoice.client?.name || "",
-              issueDate: invoice.issueDate || invoice.createdAt,
-              clientId: invoice.client?._id || invoice.clientId || null,
-            },
-            user._id.toString(),
-          )
-          .catch((err) =>
-            console.error("Erreur automatisation documents (paid):", err),
-          );
-
-        // Sync Pennylane (fire-and-forget) — utiliser organizationId du header pour matcher PennylaneAccount
-        syncInvoiceIfNeeded(
-          invoice,
-          context.organizationId || workspaceId,
-        ).catch((err) => console.error("Erreur sync Pennylane (paid):", err));
+        // Mettre à jour le statut + déclencher tous les effets de bord (centralisé)
+        await applyInvoicePaid(invoice, {
+          paymentDate,
+          userId: user._id,
+          workspaceId,
+          organizationId: context.organizationId,
+        });
 
         return await invoice.populate("createdBy");
       },
