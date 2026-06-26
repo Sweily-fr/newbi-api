@@ -22,6 +22,9 @@ type ReconciliationInvoice {
   totalTTC: Float
   dueDate: DateTime
   status: String
+  # "INVOICE" (facture standard) ou "IMPORTED_INVOICE" (facture de CA importée),
+  # pour router le clic "Rattacher" vers la bonne mutation côté front.
+  documentType: String
 }
 
 type ReconciliationSuggestionsResponse {
@@ -80,6 +83,17 @@ input ReconciliationIgnoreInput {
   transactionId: ID!
 }
 
+# Inputs dédiés aux factures de CA importées (ImportedInvoice)
+input ImportedInvoiceReconciliationLinkInput {
+  transactionId: ID!
+  importedInvoiceId: ID!
+}
+
+input ImportedInvoiceReconciliationUnlinkInput {
+  transactionId: ID
+  importedInvoiceId: ID
+}
+
 # Queries
 extend type Query {
   # Suggestions de rapprochement
@@ -89,6 +103,11 @@ extend type Query {
 
   # Transactions pour une facture spécifique
   transactionsForInvoice(invoiceId: ID!): TransactionsForInvoiceResponse!
+
+  # Transactions candidates pour une facture de CA importée
+  transactionsForImportedInvoice(
+    importedInvoiceId: ID!
+  ): TransactionsForInvoiceResponse!
 }
 
 # Mutations
@@ -107,4 +126,14 @@ extend type Mutation {
   ignoreTransaction(
     input: ReconciliationIgnoreInput!
   ): ReconciliationIgnoreResponse!
+
+  # Lier une transaction à une facture de CA importée
+  linkTransactionToImportedInvoice(
+    input: ImportedInvoiceReconciliationLinkInput!
+  ): ReconciliationLinkResponse!
+
+  # Délier une transaction d'une facture de CA importée
+  unlinkTransactionFromImportedInvoice(
+    input: ImportedInvoiceReconciliationUnlinkInput!
+  ): ReconciliationUnlinkResponse!
 }

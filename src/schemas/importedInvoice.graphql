@@ -110,6 +110,7 @@ type ImportedInvoice {
   ocrData: ImportedInvoiceOcrData
   notes: String
   linkedExpenseId: ID
+  linkedTransactionId: ID
   isDuplicate: Boolean
   duplicateOf: ID
   source: String

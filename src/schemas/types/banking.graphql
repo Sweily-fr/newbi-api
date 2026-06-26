@@ -26,6 +26,7 @@ type Transaction {
   # Champs de rapprochement bancaire
   linkedInvoiceId: ID
   linkedInvoice: LinkedInvoiceSummary
+  linkedImportedInvoiceId: ID
   linkedExpenseId: ID
   reconciliationStatus: ReconciliationStatusEnum
   reconciliationDate: DateTime

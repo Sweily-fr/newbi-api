@@ -2,7 +2,7 @@ import express from "express";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
-import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
+import { buildReconciliationMatches } from "../utils/reconciliationMatch.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const router = express.Router();
@@ -53,63 +53,41 @@ router.get("/suggestions", async (req, res) => {
       linkedTransactionId: null,
     }).sort({ dueDate: 1 });
 
-    // Générer des suggestions de correspondance
+    // Générer des suggestions de correspondance, dédupliquées par facture
+    // (une facture ne peut être liée qu'à une seule transaction).
+    const matchesByTransaction = buildReconciliationMatches(
+      unmatchedTransactions,
+      pendingInvoices,
+    );
+
     const suggestions = [];
-
+    // On conserve l'ordre de tri des transactions (date décroissante).
     for (const transaction of unmatchedTransactions) {
-      const matchingInvoices = pendingInvoices.filter((invoice) => {
-        // Correspondance par montant (avec tolérance de 1%)
-        const invoiceAmount = invoice.finalTotalTTC || invoice.totalTTC || 0;
-        const tolerance = invoiceAmount * 0.01;
-        const amountMatch =
-          Math.abs(transaction.amount - invoiceAmount) <= tolerance;
+      const entry = matchesByTransaction.get(transaction._id.toString());
+      if (!entry || entry.matches.length === 0) continue;
 
-        // Correspondance par nom du client dans la description
-        const clientName =
-          invoice.client?.name || invoice.client?.firstName || "";
-        const descriptionMatch =
-          clientName &&
-          transaction.description
-            ?.toLowerCase()
-            .includes(clientName.toLowerCase());
-
-        // Correspondance par numéro de facture présent dans le libellé brut
-        // de la transaction (référence Bridge non tronquée).
-        const referenceMatch = invoiceReferenceMatches(transaction, invoice);
-
-        return amountMatch || descriptionMatch || referenceMatch;
+      suggestions.push({
+        transaction: {
+          _id: transaction._id,
+          amount: transaction.amount,
+          description: transaction.description,
+          date: transaction.date,
+          reconciliationStatus: transaction.reconciliationStatus,
+        },
+        matchingInvoices: entry.matches.map(({ invoice: inv }) => ({
+          _id: inv._id,
+          number: inv.number,
+          clientName:
+            inv.client?.name ||
+            `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
+          totalTTC: inv.finalTotalTTC || inv.totalTTC,
+          dueDate: inv.dueDate,
+          status: inv.status,
+        })),
+        confidence: entry.matches.some((m) => m.match.high)
+          ? "high"
+          : "medium",
       });
-
-      if (matchingInvoices.length > 0) {
-        suggestions.push({
-          transaction: {
-            _id: transaction._id,
-            amount: transaction.amount,
-            description: transaction.description,
-            date: transaction.date,
-            reconciliationStatus: transaction.reconciliationStatus,
-          },
-          matchingInvoices: matchingInvoices.map((inv) => ({
-            _id: inv._id,
-            number: inv.number,
-            clientName:
-              inv.client?.name ||
-              `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
-            totalTTC: inv.finalTotalTTC || inv.totalTTC,
-            dueDate: inv.dueDate,
-            status: inv.status,
-          })),
-          confidence: matchingInvoices.some((inv) => {
-            const invoiceAmount = inv.finalTotalTTC || inv.totalTTC || 0;
-            const amtMatch =
-              Math.abs(transaction.amount - invoiceAmount) <=
-              invoiceAmount * 0.01;
-            return amtMatch || invoiceReferenceMatches(transaction, inv);
-          })
-            ? "high"
-            : "medium",
-        });
-      }
     }
 
     res.json({
