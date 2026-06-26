@@ -26,13 +26,22 @@ router.get("/suggestions", async (req, res) => {
     const { default: Transaction } = await import("../models/Transaction.js");
     const { default: Invoice } = await import("../models/Invoice.js");
 
-    // Récupérer les transactions non rapprochées (crédit uniquement = entrées d'argent)
-    const unmatchedTransactions = await Transaction.find({
+    // Critères "à rapprocher" : IDENTIQUES au resolver GraphQL
+    // (reconciliationResolvers.js). Entrée d'argent (amount > 0), non liée à une
+    // facture, sans justificatif (receiptFiles vide = déjà justifiée), statut ni
+    // "matched" ni "ignored".
+    const reconcileQuery = {
       workspaceId,
       deletedAt: null,
-      reconciliationStatus: { $in: ["unmatched", "suggested"] },
-      amount: { $gt: 0 }, // Seulement les entrées d'argent (crédits)
-    })
+      reconciliationStatus: { $nin: ["matched", "ignored"] },
+      amount: { $gt: 0 },
+      linkedInvoiceId: null,
+      "receiptFiles.0": { $exists: false },
+    };
+
+    // Comptage complet (countDocuments) → le compteur n'est plus tronqué à 50.
+    const unmatchedCount = await Transaction.countDocuments(reconcileQuery);
+    const unmatchedTransactions = await Transaction.find(reconcileQuery)
       .sort({ date: -1 })
       .limit(50);
 
@@ -101,7 +110,7 @@ router.get("/suggestions", async (req, res) => {
     res.json({
       success: true,
       suggestions,
-      unmatchedCount: unmatchedTransactions.length,
+      unmatchedCount,
       pendingInvoicesCount: pendingInvoices.length,
     });
   } catch (error) {
@@ -226,46 +235,49 @@ router.post(
       const { default: Transaction } = await import("../models/Transaction.js");
       const { default: Invoice } = await import("../models/Invoice.js");
 
-      // Vérifier que la transaction existe et appartient au workspace
-      const transaction = await Transaction.findOne({
-        _id: transactionId,
-        workspaceId,
-      });
+      // Revendication ATOMIQUE de la transaction (condition linkedInvoiceId:null)
+      // → pas de race TOCTOU entre vérification et écriture.
+      const transaction = await Transaction.findOneAndUpdate(
+        { _id: transactionId, workspaceId, linkedInvoiceId: null },
+        {
+          linkedInvoiceId: invoiceId,
+          reconciliationStatus: "matched",
+          reconciliationDate: new Date(),
+        },
+        { new: true },
+      );
       if (!transaction) {
-        return res.status(404).json({ error: "Transaction non trouvée" });
+        const exists = await Transaction.exists({ _id: transactionId, workspaceId });
+        return res.status(exists ? 400 : 404).json({
+          error: exists
+            ? "Cette transaction est déjà liée à une facture"
+            : "Transaction non trouvée",
+        });
       }
 
-      // Vérifier que la facture existe et appartient au workspace
-      const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
+      // Revendication ATOMIQUE de la facture, avec rollback de la transaction
+      // si elle échoue (état cohérent garanti, sans transaction Mongo).
+      const invoice = await Invoice.findOneAndUpdate(
+        { _id: invoiceId, workspaceId, linkedTransactionId: null },
+        {
+          linkedTransactionId: transactionId,
+          status: "COMPLETED",
+          paymentDate: transaction.date,
+        },
+        { new: true },
+      );
       if (!invoice) {
-        return res.status(404).json({ error: "Facture non trouvée" });
+        transaction.linkedInvoiceId = null;
+        transaction.reconciliationStatus = "unmatched";
+        transaction.reconciliationDate = null;
+        await transaction.save();
+        const exists = await Invoice.exists({ _id: invoiceId, workspaceId });
+        return res.status(exists ? 400 : 404).json({
+          error: exists
+            ? "Cette facture est déjà liée à une transaction"
+            : "Facture non trouvée",
+        });
       }
-
-      // Vérifier que la transaction n'est pas déjà liée
-      if (transaction.linkedInvoiceId) {
-        return res
-          .status(400)
-          .json({ error: "Cette transaction est déjà liée à une facture" });
-      }
-
-      // Vérifier que la facture n'est pas déjà liée
-      if (invoice.linkedTransactionId) {
-        return res
-          .status(400)
-          .json({ error: "Cette facture est déjà liée à une transaction" });
-      }
-
-      // Mettre à jour la transaction
-      transaction.linkedInvoiceId = invoiceId;
-      transaction.reconciliationStatus = "matched";
-      transaction.reconciliationDate = new Date();
-      await transaction.save();
-
-      // Mettre à jour la facture (passer en COMPLETED)
-      invoice.linkedTransactionId = transactionId;
-      invoice.status = "COMPLETED";
-      invoice.paymentDate = transaction.date;
-      await invoice.save();
 
       // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
       // try {
