@@ -2,6 +2,7 @@ import express from "express";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
+import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const router = express.Router();
@@ -72,7 +73,11 @@ router.get("/suggestions", async (req, res) => {
             ?.toLowerCase()
             .includes(clientName.toLowerCase());
 
-        return amountMatch || descriptionMatch;
+        // Correspondance par numéro de facture présent dans le libellé brut
+        // de la transaction (référence Bridge non tronquée).
+        const referenceMatch = invoiceReferenceMatches(transaction, invoice);
+
+        return amountMatch || descriptionMatch || referenceMatch;
       });
 
       if (matchingInvoices.length > 0) {
@@ -96,10 +101,10 @@ router.get("/suggestions", async (req, res) => {
           })),
           confidence: matchingInvoices.some((inv) => {
             const invoiceAmount = inv.finalTotalTTC || inv.totalTTC || 0;
-            return (
+            const amtMatch =
               Math.abs(transaction.amount - invoiceAmount) <=
-              invoiceAmount * 0.01
-            );
+              invoiceAmount * 0.01;
+            return amtMatch || invoiceReferenceMatches(transaction, inv);
           })
             ? "high"
             : "medium",
