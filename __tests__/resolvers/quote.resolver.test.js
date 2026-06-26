@@ -37,6 +37,7 @@ vi.mock("../../src/utils/documentNumbers.js", async (importActual) => {
 
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Quote from "../../src/models/Quote.js";
+import PurchaseOrder from "../../src/models/PurchaseOrder.js";
 import quoteResolvers from "../../src/resolvers/quote.js";
 import { calculateQuoteTotals } from "../../src/resolvers/quote.js";
 
@@ -350,5 +351,52 @@ describe("Quote totals — real calculator", () => {
     );
     expect(totals.discountAmount).toBe(150);
     expect(totals.finalTotalHT).toBe(850);
+  });
+});
+
+describe("Quote Resolver - Quote.hasPurchaseOrderInvoices", () => {
+  const resolver = quoteResolvers.Quote.hasPurchaseOrderInvoices;
+
+  it("true quand un BC issu du devis a déjà une facture", async () => {
+    const { insertedId: quoteId } = await insertQuote({ status: "COMPLETED" });
+    await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "1",
+      prefix: "BC-HPO",
+      status: "CONFIRMED",
+      sourceQuoteId: quoteId,
+      items: [],
+      client: { name: "Acme" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      linkedInvoices: [new mongoose.Types.ObjectId()],
+    });
+
+    expect(await resolver({ _id: quoteId })).toBe(true);
+  });
+
+  it("false quand le BC issu du devis n'a aucune facture", async () => {
+    const { insertedId: quoteId } = await insertQuote({ status: "COMPLETED" });
+    await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "2",
+      prefix: "BC-HPO",
+      status: "CONFIRMED",
+      sourceQuoteId: quoteId,
+      items: [],
+      client: { name: "Acme" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      linkedInvoices: [],
+    });
+
+    expect(await resolver({ _id: quoteId })).toBe(false);
+  });
+
+  it("false quand le devis n'a aucun bon de commande", async () => {
+    const { insertedId: quoteId } = await insertQuote({ status: "COMPLETED" });
+    expect(await resolver({ _id: quoteId })).toBe(false);
   });
 });

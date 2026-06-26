@@ -8,6 +8,7 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import SignatureRequest from "../models/SignatureRequest.js";
+import PurchaseOrder from "../models/PurchaseOrder.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   withRBAC,
@@ -214,6 +215,16 @@ const quoteResolvers = {
         return invoice ? [invoice] : [];
       }
       return [];
+    },
+    // true si une facture existe déjà via un bon de commande issu de ce devis.
+    // Sert au front à masquer/désactiver les boutons de conversion pour éviter
+    // les doublons devis→facture vs devis→BC→facture.
+    hasPurchaseOrderInvoices: async (quote) => {
+      const count = await PurchaseOrder.countDocuments({
+        sourceQuoteId: quote._id,
+        linkedInvoices: { $exists: true, $not: { $size: 0 } },
+      });
+      return count > 0;
     },
     // Calculer le total des factures de situation liées à ce devis
     situationInvoicedTotal: async (quote) => {
