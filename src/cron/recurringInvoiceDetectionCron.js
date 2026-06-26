@@ -5,10 +5,23 @@ import Invoice from "../models/Invoice.js";
 import DetectedRecurrence from "../models/DetectedRecurrence.js";
 import logger from "../utils/logger.js";
 
-const AMOUNT_TOLERANCE = 0.2; // ±20% of median
-const WINDOW_MONTHS = 3;
-const SCAN_PAST_MONTHS = 6; // months scanned before current month
+const AMOUNT_TOLERANCE = 0.35; // ±35% of median (variable bills still count)
+const SCAN_PAST_MONTHS = 24; // months scanned before current month (annual needs ≥13)
 const SCAN_FUTURE_MONTHS = 6; // months scanned after current month (scheduled invoices)
+const DAY = 86400000;
+
+// Periodicities detected from the gaps (in days) between consecutive
+// occurrences. `min`/`max` bound a single interval; `minOccur` is how many
+// occurrences are required before we trust the pattern (a yearly charge only
+// needs 2, a weekly one needs more to be distinguishable from noise).
+const FREQUENCIES = [
+  { key: "WEEKLY", days: 7, min: 5, max: 10, minOccur: 4 },
+  { key: "BIWEEKLY", days: 14, min: 11, max: 18, minOccur: 3 },
+  { key: "MONTHLY", days: 30, min: 24, max: 38, minOccur: 3 },
+  { key: "QUARTERLY", days: 91, min: 75, max: 110, minOccur: 2 },
+  { key: "SEMIANNUAL", days: 182, min: 150, max: 215, minOccur: 2 },
+  { key: "ANNUAL", days: 365, min: 300, max: 430, minOccur: 2 },
+];
 
 export const normalizeParty = (name) =>
   (name || "")
@@ -44,63 +57,75 @@ const monthKey = (date) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
-const getLastNMonthKeys = (n) => {
-  const months = [];
+// Scan window bounds [start, end) spanning past + current + future months.
+const getScanBounds = () => {
   const now = new Date();
-  // Window includes the current month (a recurring invoice that has already
-  // been issued this month should count toward the streak).
-  for (let i = 0; i < n; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    months.push(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-    );
-  }
-  return months.sort();
+  const start = new Date(now.getFullYear(), now.getMonth() - SCAN_PAST_MONTHS, 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + SCAN_FUTURE_MONTHS + 1, 1);
+  return { start, end };
 };
 
-// Scan window spanning past + current + future months, sorted oldest-first.
-const getScanMonthRange = () => {
-  const months = [];
-  const now = new Date();
-  for (let i = -SCAN_PAST_MONTHS; i <= SCAN_FUTURE_MONTHS; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    months.push(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-    );
-  }
-  return months;
-};
+// Analyse the dated occurrences of one party and decide whether they form a
+// recurrence. Instead of requiring N consecutive calendar months, we look at
+// the gaps (in days) between consecutive occurrences and match them against a
+// known periodicity — so weekly, monthly, quarterly and yearly patterns are
+// all detected. Returns { frequency, intervalDays, median, lastSeenDate,
+// occurrenceCount } or null.
+export const analyzeRecurrence = (occurrences) => {
+  if (!occurrences || occurrences.length < 2) return null;
+  const sorted = [...occurrences].sort((a, b) => a.date - b.date);
 
-// Find any window of WINDOW_MONTHS consecutive months in `scanMonths` where
-// the group has invoices in every month and amounts are within tolerance.
-// Returns { months, amounts, median } or null.
-const findValidStreak = (scanMonths, monthsSeen) => {
-  for (let start = scanMonths.length - WINDOW_MONTHS; start >= 0; start--) {
-    const window = scanMonths.slice(start, start + WINDOW_MONTHS);
-    const amountsPerMonth = window.map((m) => {
-      const amts = monthsSeen.get(m) || [];
-      return amts.length ? amts.reduce((s, v) => s + v, 0) : null;
-    });
-    if (amountsPerMonth.some((v) => v == null)) continue;
-    const med = median(amountsPerMonth);
-    if (med <= 0) continue;
-    const inTolerance = amountsPerMonth.every(
-      (v) => Math.abs(v - med) / med <= AMOUNT_TOLERANCE,
-    );
-    if (inTolerance) {
-      return { months: window, amounts: amountsPerMonth, median: med };
+  // Merge near-duplicate charges (a split payment, a double bank posting, or
+  // an invoice + its mirrored transaction) that land within 3 days, so they
+  // don't masquerade as a tiny interval.
+  const merged = [];
+  for (const o of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && (o.date - last.date) / DAY <= 3) {
+      last.amount += o.amount;
+      continue;
     }
+    merged.push({ date: o.date, amount: o.amount });
   }
-  return null;
+  if (merged.length < 2) return null;
+
+  const gaps = [];
+  for (let i = 1; i < merged.length; i++) {
+    gaps.push((merged[i].date - merged[i - 1].date) / DAY);
+  }
+  const medGap = median(gaps);
+  const freq = FREQUENCIES.find((f) => medGap >= f.min && medGap <= f.max);
+  if (!freq) return null;
+
+  // The pattern must be regular enough: most gaps land on the chosen interval
+  // (a few missed/extra occurrences are tolerated), and we need enough history.
+  const matching = gaps.filter((g) => g >= freq.min && g <= freq.max).length;
+  if (merged.length < freq.minOccur) return null;
+  if (matching < freq.minOccur - 1) return null;
+  if (matching / gaps.length < 0.5) return null;
+
+  const amounts = merged.map((m) => m.amount);
+  const medAmount = median(amounts);
+  if (medAmount <= 0) return null;
+  const inTol = amounts.filter(
+    (a) => Math.abs(a - medAmount) / medAmount <= AMOUNT_TOLERANCE,
+  ).length;
+  if (inTol / amounts.length < 0.5) return null;
+
+  return {
+    frequency: freq.key,
+    intervalDays: freq.days,
+    median: medAmount,
+    lastSeenDate: merged[merged.length - 1].date,
+    occurrenceCount: merged.length,
+  };
 };
 
 export const detectForSource = async (workspaceId, source) => {
-  // Scan past + future months to find any 3-consecutive-month streak.
-  // Future-dated invoices count too (a planned recurrence is still recurring).
-  const scanMonths = getScanMonthRange();
-  const startBound = new Date(scanMonths[0] + "-01");
-  const endBoundDate = new Date(scanMonths[scanMonths.length - 1] + "-01");
-  endBoundDate.setMonth(endBoundDate.getMonth() + 1);
+  // Scan a wide past + future window and look for a regular interval between
+  // occurrences (any periodicity). Future-dated invoices count too (a planned
+  // recurrence is still recurring).
+  const { start: startBound, end: endBoundDate } = getScanBounds();
 
   let docs;
   if (source === "PURCHASE_INVOICE") {
@@ -204,21 +229,19 @@ export const detectForSource = async (workspaceId, source) => {
     }
     if (!partyName || !partyKey) continue;
     if (!amount || amount <= 0) continue;
+    if (!docDate) continue;
     if (invoiceRecurrenceKeys.has(`${partyKey}::${type}`)) continue;
     const groupKey = `${partyKey}::${category}`;
-    const m = monthKey(docDate);
     if (!groups.has(groupKey)) {
       groups.set(groupKey, {
         partyKey,
         partyName,
         category,
         type,
-        monthsSeen: new Map(),
+        occurrences: [],
       });
     }
-    const g = groups.get(groupKey);
-    if (!g.monthsSeen.has(m)) g.monthsSeen.set(m, []);
-    g.monthsSeen.get(m).push(amount);
+    groups.get(groupKey).occurrences.push({ date: new Date(docDate), amount });
   }
 
   // Existing recurrences for this source/workspace to apply stop/resume.
@@ -233,11 +256,10 @@ export const detectForSource = async (workspaceId, source) => {
 
   for (const [groupKey, g] of groups) {
     seenGroupKeys.add(groupKey);
-    const streak = findValidStreak(scanMonths, g.monthsSeen);
+    const streak = analyzeRecurrence(g.occurrences);
     const prev = existingMap.get(groupKey);
 
     if (streak) {
-      const lastSeen = streak.months[streak.months.length - 1];
       await DetectedRecurrence.findOneAndUpdate(
         {
           workspaceId,
@@ -250,8 +272,12 @@ export const detectForSource = async (workspaceId, source) => {
             type: g.type,
             partyName: g.partyName,
             averageAmount: Math.round(streak.median),
-            lastSeenMonth: lastSeen,
-            consecutiveMonths: WINDOW_MONTHS,
+            frequency: streak.frequency,
+            intervalDays: streak.intervalDays,
+            occurrenceCount: streak.occurrenceCount,
+            lastSeenDate: streak.lastSeenDate,
+            lastSeenMonth: monthKey(streak.lastSeenDate),
+            consecutiveMonths: streak.occurrenceCount,
             isActive: !prev?.isMuted,
             lastDetectedAt: new Date(),
           },
