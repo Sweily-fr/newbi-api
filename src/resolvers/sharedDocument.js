@@ -1540,59 +1540,103 @@ const sharedDocumentResolvers = {
 
           // Restaurer les dossiers
           if (folderIds && folderIds.length > 0) {
+            // Collecte récursive de tous les sous-dossiers en corbeille d'un
+            // dossier donné (via originalParentId, posé lors de la mise en
+            // corbeille). Permet de restaurer toute l'arborescence et pas
+            // seulement les fichiers directement contenus dans le dossier.
+            const collectTrashedDescendants = async (parentId) => {
+              const children = await SharedFolder.find({
+                workspaceId,
+                originalParentId: parentId,
+                trashedAt: { $ne: null },
+              });
+              let all = [];
+              for (const child of children) {
+                all.push(child);
+                all = all.concat(await collectTrashedDescendants(child._id));
+              }
+              return all;
+            };
+
+            const processedFolderIds = new Set();
+
             for (const folderId of folderIds) {
+              if (processedFolderIds.has(folderId.toString())) continue;
+
               const folder = await SharedFolder.findOne({
                 _id: folderId,
                 workspaceId,
                 trashedAt: { $ne: null },
               });
 
-              if (folder) {
-                // Vérifier si le dossier parent original existe encore
-                let targetParentId = folder.originalParentId;
-                if (targetParentId) {
-                  const originalParent = await SharedFolder.findOne({
-                    _id: targetParentId,
-                    trashedAt: null,
-                  });
-                  if (!originalParent) {
-                    targetParentId = null; // Parent supprimé, mettre à la racine
-                  }
-                }
+              if (!folder) continue;
 
+              // Vérifier si le dossier parent original existe encore
+              let targetParentId = folder.originalParentId;
+              if (targetParentId) {
+                const originalParent = await SharedFolder.findOne({
+                  _id: targetParentId,
+                  trashedAt: null,
+                });
+                if (!originalParent) {
+                  targetParentId = null; // Parent supprimé, mettre à la racine
+                }
+              }
+
+              // Restaurer le dossier racine vers son parent original
+              await SharedFolder.updateOne(
+                { _id: folderId },
+                {
+                  $set: {
+                    trashedAt: null,
+                    parentId: targetParentId,
+                  },
+                  $unset: { originalParentId: "" },
+                },
+              );
+              processedFolderIds.add(folderId.toString());
+              restoredFolders++;
+
+              // Restaurer récursivement tous les sous-dossiers vers leur
+              // parent original (qui fait partie de l'arborescence restaurée)
+              const descendants = await collectTrashedDescendants(folderId);
+              for (const sub of descendants) {
+                if (processedFolderIds.has(sub._id.toString())) continue;
                 await SharedFolder.updateOne(
-                  { _id: folderId },
+                  { _id: sub._id },
                   {
                     $set: {
                       trashedAt: null,
-                      parentId: targetParentId,
+                      parentId: sub.originalParentId,
                     },
                     $unset: { originalParentId: "" },
                   },
                 );
+                processedFolderIds.add(sub._id.toString());
                 restoredFolders++;
+              }
 
-                // Restaurer aussi les documents du dossier qui sont en corbeille
-                const docsInFolder = await SharedDocument.find({
-                  workspaceId,
-                  originalFolderId: folderId,
-                  trashedAt: { $ne: null },
-                });
+              // Restaurer les documents du dossier ET de tous ses sous-dossiers
+              const allFolderIds = [folderId, ...descendants.map((f) => f._id)];
+              const docsInFolders = await SharedDocument.find({
+                workspaceId,
+                originalFolderId: { $in: allFolderIds },
+                trashedAt: { $ne: null },
+              });
 
-                for (const doc of docsInFolder) {
-                  await SharedDocument.updateOne(
-                    { _id: doc._id },
-                    {
-                      $set: {
-                        trashedAt: null,
-                        folderId: folderId,
-                        status: "classified",
-                      },
-                      $unset: { originalFolderId: "" },
+              for (const doc of docsInFolders) {
+                await SharedDocument.updateOne(
+                  { _id: doc._id },
+                  {
+                    $set: {
+                      trashedAt: null,
+                      folderId: doc.originalFolderId,
+                      status: "classified",
                     },
-                  );
-                  restoredDocuments++;
-                }
+                    $unset: { originalFolderId: "" },
+                  },
+                );
+                restoredDocuments++;
               }
             }
           }
