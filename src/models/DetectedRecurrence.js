@@ -6,6 +6,17 @@ const RECURRENCE_SOURCE = {
   TRANSACTION: "TRANSACTION",
 };
 
+// Détectées par analyse des intervalles entre occurrences (plus seulement
+// mensuel) : hebdomadaire, bi-mensuel, mensuel, trimestriel, semestriel, annuel.
+const RECURRENCE_FREQUENCY = {
+  WEEKLY: "WEEKLY",
+  BIWEEKLY: "BIWEEKLY",
+  MONTHLY: "MONTHLY",
+  QUARTERLY: "QUARTERLY",
+  SEMIANNUAL: "SEMIANNUAL",
+  ANNUAL: "ANNUAL",
+};
+
 const detectedRecurrenceSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -31,6 +42,19 @@ const detectedRecurrenceSchema = new mongoose.Schema(
     partyName: { type: String, required: true },
     category: { type: String },
     averageAmount: { type: Number, required: true, min: 0 },
+    // Périodicité détectée à partir des intervalles entre occurrences.
+    frequency: {
+      type: String,
+      enum: Object.values(RECURRENCE_FREQUENCY),
+      default: RECURRENCE_FREQUENCY.MONTHLY,
+    },
+    // Intervalle nominal en jours (7, 14, 30, 91, 182, 365) — sert à projeter
+    // les occurrences futures dans les prévisions.
+    intervalDays: { type: Number, default: 30 },
+    // Nombre d'occurrences observées dans la fenêtre d'analyse.
+    occurrenceCount: { type: Number, default: 0 },
+    // Date exacte de la dernière occurrence observée (pour la projection).
+    lastSeenDate: { type: Date },
     // YYYY-MM of the most recent matched occurrence.
     lastSeenMonth: { type: String, required: true },
     consecutiveMonths: { type: Number, default: 0 },
@@ -47,6 +71,7 @@ detectedRecurrenceSchema.index(
 );
 
 detectedRecurrenceSchema.statics.RECURRENCE_SOURCE = RECURRENCE_SOURCE;
+detectedRecurrenceSchema.statics.RECURRENCE_FREQUENCY = RECURRENCE_FREQUENCY;
 
 const DetectedRecurrence = mongoose.model(
   "DetectedRecurrence",
