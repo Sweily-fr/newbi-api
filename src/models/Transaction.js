@@ -61,6 +61,16 @@ const transactionSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Référence brute du libellé bancaire (provider_description côté Bridge).
+    // Contrairement à `description` (clean_description, nettoyée par Bridge et
+    // qui tronque les numéros de factures, ex. "F-202605-0016" → "F"), ce champ
+    // conserve les références saisies par le payeur afin de permettre le
+    // rapprochement bancaire par numéro de facture.
+    reference: {
+      type: String,
+      default: null,
+    },
+
     // Comptes impliqués
     fromAccount: {
       type: String,

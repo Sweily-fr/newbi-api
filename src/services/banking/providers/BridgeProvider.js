@@ -825,6 +825,13 @@ export class BridgeProvider extends BankingProvider {
         transaction.clean_description ||
         transaction.provider_description ||
         "Transaction",
+      // Libellé brut conservant les références de factures (clean_description
+      // les tronque, ex. "F-202605-0016 F-202605-0013" → "F F"). Utilisé pour
+      // le rapprochement bancaire par numéro de facture.
+      reference:
+        transaction.provider_description ||
+        transaction.clean_description ||
+        null,
       date: new Date(transaction.date),
       type: transaction.amount > 0 ? "credit" : "debit",
       status: transaction.deleted ? "cancelled" : "completed",
