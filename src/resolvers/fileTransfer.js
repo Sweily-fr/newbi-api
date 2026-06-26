@@ -656,7 +656,23 @@ const fileTransferResolvers = {
 
           // Traiter chaque dossier sélectionné
           if (folderIds && folderIds.length > 0) {
+            // Le front envoie un dossier parent ET tous ses sous-dossiers.
+            // Ne garder que les dossiers de plus haut niveau : un sous-dossier
+            // déjà couvert par un parent sélectionné serait sinon ajouté deux
+            // fois (une fois imbriqué, une fois à la racine).
+            const descendantOfSelected = new Set();
             for (const folderId of folderIds) {
+              const subs = await getAllSubfolders(folderId, workspaceId);
+              for (const f of subs) {
+                const fid = f._id.toString();
+                if (fid !== String(folderId)) descendantOfSelected.add(fid);
+              }
+            }
+            const topLevelFolderIds = folderIds.filter(
+              (id) => !descendantOfSelected.has(String(id)),
+            );
+
+            for (const folderId of topLevelFolderIds) {
               const folders = await getAllSubfolders(folderId, workspaceId);
               if (folders.length === 0) continue;
 

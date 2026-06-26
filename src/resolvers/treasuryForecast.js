@@ -411,17 +411,40 @@ const treasuryForecastResolvers = {
             return c === "OTHER" ? "OTHER_EXPENSE" : c;
           };
 
+          const mk = (d) =>
+            `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          // Step forward one occurrence at a time according to the detected
+          // periodicity. Weekly/biweekly advance by days (several land in a
+          // month → naturally summed); the rest advance by calendar months so
+          // quarterly/yearly charges only hit their actual month.
+          const monthStep = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
+          const dayStep = { WEEKLY: 7, BIWEEKLY: 14 };
+          const advance = (date, freq) => {
+            const d = new Date(date);
+            if (dayStep[freq]) d.setDate(d.getDate() + dayStep[freq]);
+            else d.setMonth(d.getMonth() + (monthStep[freq] || 1));
+            return d;
+          };
+          const monthSet = new Set(monthRange);
+
           for (const rec of activeRecurrences) {
             if (
               rec.source === "TRANSACTION" &&
               invoiceRecurrenceKeys.has(`${rec.partyKey}::${rec.type}`)
             )
               continue;
-            for (const month of monthRange) {
-              if (month < currentMonth) continue;
-              // Only project months strictly after the last observed occurrence,
-              // so a streak May→Jul doesn't pollute April (or earlier gaps).
-              if (rec.lastSeenMonth && month <= rec.lastSeenMonth) continue;
+            const freq = rec.frequency || "MONTHLY";
+            const anchor = rec.lastSeenDate
+              ? new Date(rec.lastSeenDate)
+              : new Date((rec.lastSeenMonth || currentMonth) + "-01");
+            // Project each occurrence strictly after the last observed one,
+            // so a past streak doesn't pollute earlier months.
+            let occ = advance(anchor, freq);
+            let guard = 0;
+            while (occ < txEndDate && guard++ < 1000) {
+              const month = mk(occ);
+              occ = advance(occ, freq);
+              if (month < currentMonth || !monthSet.has(month)) continue;
               if (rec.source === "PURCHASE_INVOICE") {
                 const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
                 if (existingPurchaseKeys.has(key)) continue;
@@ -1184,8 +1207,9 @@ const treasuryForecastResolvers = {
         if (!updated) {
           throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
         }
-        // If unmuting and the streak is full, flip active back on.
-        if (!muted && updated.consecutiveMonths >= 3 && !updated.isActive) {
+        // If unmuting and the recurrence still has a valid streak, flip active
+        // back on (2 occurrences is the floor for the longest periodicities).
+        if (!muted && updated.consecutiveMonths >= 2 && !updated.isActive) {
           await DetectedRecurrence.updateOne(
             { _id: updated._id },
             { $set: { isActive: true } },

@@ -131,6 +131,15 @@ enum RecurrenceSource {
   TRANSACTION
 }
 
+enum RecurrenceFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
 type DetectedRecurrence {
   id: ID!
   workspaceId: ID!
@@ -139,6 +148,9 @@ type DetectedRecurrence {
   partyName: String!
   category: String
   averageAmount: Float!
+  frequency: RecurrenceFrequency
+  intervalDays: Int
+  occurrenceCount: Int
   lastSeenMonth: String!
   consecutiveMonths: Int!
   isActive: Boolean!
