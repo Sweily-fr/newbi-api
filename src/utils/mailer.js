@@ -1073,6 +1073,7 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: "Europe/Paris",
   });
 
   const downloadTimeFormatted = new Date(downloadDate).toLocaleDateString(
@@ -1083,6 +1084,7 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
       year: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      timeZone: "Europe/Paris",
     },
   );
 

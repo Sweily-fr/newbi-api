@@ -43,6 +43,8 @@ type Invoice {
   operationType: String
   createdBy: User!
   stripeInvoiceId: String
+  # Lien de paiement en ligne Stripe Connect (null si Stripe non connecté ou facture non payable)
+  paymentLink: String
   linkedTransactionId: ID
   # E-Invoicing SuperPDP
   superPdpInvoiceId: String
