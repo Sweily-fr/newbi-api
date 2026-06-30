@@ -60,8 +60,16 @@ const monthKey = (date) => {
 // Scan window bounds [start, end) spanning past + current + future months.
 const getScanBounds = () => {
   const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - SCAN_PAST_MONTHS, 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + SCAN_FUTURE_MONTHS + 1, 1);
+  const start = new Date(
+    now.getFullYear(),
+    now.getMonth() - SCAN_PAST_MONTHS,
+    1,
+  );
+  const end = new Date(
+    now.getFullYear(),
+    now.getMonth() + SCAN_FUTURE_MONTHS + 1,
+    1,
+  );
   return { start, end };
 };
 
@@ -281,12 +289,16 @@ export const detectForSource = async (workspaceId, source) => {
             isActive: !prev?.isMuted,
             lastDetectedAt: new Date(),
           },
+          // excludedMonths est délibérément absent du $set : les occurrences
+          // supprimées individuellement par l'utilisateur doivent survivre à
+          // chaque re-détection.
           $setOnInsert: {
             workspaceId,
             source,
             partyKey: g.partyKey,
             category: g.category,
             isMuted: false,
+            excludedMonths: [],
           },
         },
         { upsert: true, new: true },

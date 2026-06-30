@@ -97,6 +97,13 @@ const manualCashflowEntrySchema = new mongoose.Schema(
       trim: true,
       maxlength: 500,
     },
+    // Mois (format YYYY-MM) pour lesquels une occurrence de cette récurrence
+    // a été supprimée individuellement depuis le tableau/drawer de prévision.
+    // Ces mois sont ignorés lors de la projection sans affecter les autres.
+    excludedMonths: {
+      type: [String],
+      default: [],
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

@@ -60,6 +60,10 @@ const detectedRecurrenceSchema = new mongoose.Schema(
     consecutiveMonths: { type: Number, default: 0 },
     isActive: { type: Boolean, default: false, index: true },
     isMuted: { type: Boolean, default: false },
+    // Mois (format YYYY-MM) pour lesquels une occurrence projetée de cette
+    // récurrence a été supprimée individuellement. Préservé par le cron de
+    // détection (cf. recurringInvoiceDetectionCron) et ignoré à la projection.
+    excludedMonths: { type: [String], default: [] },
     lastDetectedAt: { type: Date },
   },
   { timestamps: true },
