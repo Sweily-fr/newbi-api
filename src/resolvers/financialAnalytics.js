@@ -743,29 +743,45 @@ const financialAnalyticsResolvers = {
             },
           ]),
 
-          // 5. Monthly collected — separate aggregation filtered by paymentDate (not issueDate)
-          // This ensures invoices issued before the selected period but paid during it are counted
+          // 5. CA mensuel encaissé — factures Newbi COMPLETED rattachées au mois.
+          // Le mois de rattachement = paymentDate, avec REPLI sur issueDate quand
+          // la facture est marquée payée sans date de paiement (ex. clôturée sans
+          // rapprochement bancaire / anciennes données). Cela garantit que TOUTES
+          // les factures payées du mois entrent dans le CA, qu'elles aient un
+          // justificatif/rapprochement ou non.
+          // Le facet `totals` (T10 + DSO) reste, lui, STRICT sur paymentDate.
           (() => {
-            const paymentDateQuery = { $ne: null };
-            if (startDate) paymentDateQuery.$gte = new Date(startDate);
-            if (endDate) paymentDateQuery.$lte = new Date(endDate);
+            const effectiveDateRange = {};
+            if (startDate) effectiveDateRange.$gte = new Date(startDate);
+            if (endDate) effectiveDateRange.$lte = new Date(endDate);
+            const hasRange = Boolean(startDate || endDate);
             return Invoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
                   status: "COMPLETED",
-                  paymentDate: paymentDateQuery,
                 },
               },
               {
+                $addFields: {
+                  // Date effective de rattachement : paiement, à défaut émission
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
+                },
+              },
+              {
+                $match: hasRange
+                  ? { _effectiveDate: effectiveDateRange }
+                  : { _effectiveDate: { $ne: null } },
+              },
+              {
                 $facet: {
-                  // Monthly breakdown by paymentDate
+                  // Ventilation mensuelle par date effective (paymentDate ?? issueDate)
                   monthly: [
                     {
                       $group: {
                         _id: {
-                          year: { $year: "$paymentDate" },
-                          month: { $month: "$paymentDate" },
+                          year: { $year: "$_effectiveDate" },
+                          month: { $month: "$_effectiveDate" },
                         },
                         collectedTTC: { $sum: "$finalTotalTTC" },
                         collectedHT: { $sum: "$finalTotalHT" },
@@ -773,7 +789,12 @@ const financialAnalyticsResolvers = {
                       },
                     },
                   ],
-                  // T10 : totaux des factures payées sur la période (par paymentDate)
+                  // T10 : totaux des factures payées sur la période. Les montants
+                  // encaissés (paidRevenueHT/TTC/count) incluent le repli issueDate
+                  // pour rester cohérents avec le CA mensuel ci-dessus. En revanche
+                  // le DSO reste STRICT : le $cond exige une vraie paymentDate, donc
+                  // les factures payées sans date de paiement n'altèrent pas la
+                  // moyenne émission→paiement (règle « DSO sans fallback »).
                   totals: [
                     {
                       $group: {
@@ -782,12 +803,17 @@ const financialAnalyticsResolvers = {
                         paidRevenueTTC: { $sum: "$finalTotalTTC" },
                         paidInvoiceCount: { $sum: 1 },
                         // DSO : jours entre émission et paiement (T10.4).
-                        // Somme + compteur pour pondérer la moyenne avec les
-                        // factures importées (paymentDate non-null via $match).
+                        // Strict : ne compte que les factures ayant paymentDate
+                        // ET issueDate (sinon $subtract null → fausse la moyenne).
                         sumDaysToPay: {
                           $sum: {
                             $cond: [
-                              { $ne: ["$issueDate", null] },
+                              {
+                                $and: [
+                                  { $ne: ["$paymentDate", null] },
+                                  { $ne: ["$issueDate", null] },
+                                ],
+                              },
                               {
                                 $divide: [
                                   { $subtract: ["$paymentDate", "$issueDate"] },
@@ -800,7 +826,16 @@ const financialAnalyticsResolvers = {
                         },
                         daysToPayCount: {
                           $sum: {
-                            $cond: [{ $ne: ["$issueDate", null] }, 1, 0],
+                            $cond: [
+                              {
+                                $and: [
+                                  { $ne: ["$paymentDate", null] },
+                                  { $ne: ["$issueDate", null] },
+                                ],
+                              },
+                              1,
+                              0,
+                            ],
                           },
                         },
                       },
@@ -971,20 +1006,33 @@ const financialAnalyticsResolvers = {
             return ImportedInvoice.aggregate(pipeline);
           })(),
 
-          // 8. Imported invoices — encaissées (COMPLETED). L'encaissement est
-          // reconnu STRICTEMENT à la DATE DE PAIEMENT (paymentDate) : une
-          // facture importée payée sans paymentDate n'entre pas dans le CA net.
+          // 8. Imported invoices — encaissées (COMPLETED). Mois de rattachement =
+          // paymentDate, avec REPLI sur invoiceDate quand la facture importée est
+          // payée sans date de paiement, pour que toutes les factures payées du
+          // mois entrent dans le CA (avec ou sans justificatif/rapprochement).
+          // Le facet `totals` (T10 + DSO importées) reste STRICT sur paymentDate.
           (() => {
-            const importedPaymentDateRange = { $ne: null };
-            if (startDate) importedPaymentDateRange.$gte = new Date(startDate);
-            if (endDate) importedPaymentDateRange.$lte = new Date(endDate);
+            const importedEffectiveRange = {};
+            if (startDate) importedEffectiveRange.$gte = new Date(startDate);
+            if (endDate) importedEffectiveRange.$lte = new Date(endDate);
+            const hasImportedRange = Boolean(startDate || endDate);
             return ImportedInvoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
                   status: "COMPLETED",
-                  paymentDate: importedPaymentDateRange,
                 },
+              },
+              {
+                $addFields: {
+                  // Date effective de rattachement : paiement, à défaut émission
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$invoiceDate"] },
+                },
+              },
+              {
+                $match: hasImportedRange
+                  ? { _effectiveDate: importedEffectiveRange }
+                  : { _effectiveDate: { $ne: null } },
               },
               {
                 $facet: {
@@ -992,8 +1040,8 @@ const financialAnalyticsResolvers = {
                     {
                       $group: {
                         _id: {
-                          year: { $year: "$paymentDate" },
-                          month: { $month: "$paymentDate" },
+                          year: { $year: "$_effectiveDate" },
+                          month: { $month: "$_effectiveDate" },
                         },
                         collectedTTC: { $sum: "$totalTTC" },
                         // totalHT vaut 0 par défaut sur le modèle → fallback TTC
@@ -1010,6 +1058,10 @@ const financialAnalyticsResolvers = {
                       },
                     },
                   ],
+                  // Totaux encaissés importés : montants (collectedHT/TTC/count)
+                  // incluent le repli invoiceDate pour rester cohérents avec le CA
+                  // mensuel ci-dessus. Le DSO reste STRICT (exige une vraie
+                  // paymentDate) → règle « DSO sans fallback ».
                   totals: [
                     {
                       $group: {
@@ -1025,11 +1077,17 @@ const financialAnalyticsResolvers = {
                           },
                         },
                         collectedCount: { $sum: 1 },
-                        // DSO : jours entre émission (invoiceDate) et paiement
+                        // DSO : jours entre émission (invoiceDate) et paiement.
+                        // Strict : exige paymentDate ET invoiceDate non-null.
                         sumDaysToPay: {
                           $sum: {
                             $cond: [
-                              { $ne: ["$invoiceDate", null] },
+                              {
+                                $and: [
+                                  { $ne: ["$paymentDate", null] },
+                                  { $ne: ["$invoiceDate", null] },
+                                ],
+                              },
                               {
                                 $divide: [
                                   {
@@ -1044,7 +1102,16 @@ const financialAnalyticsResolvers = {
                         },
                         daysToPayCount: {
                           $sum: {
-                            $cond: [{ $ne: ["$invoiceDate", null] }, 1, 0],
+                            $cond: [
+                              {
+                                $and: [
+                                  { $ne: ["$paymentDate", null] },
+                                  { $ne: ["$invoiceDate", null] },
+                                ],
+                              },
+                              1,
+                              0,
+                            ],
                           },
                         },
                       },
@@ -1965,16 +2032,22 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
-            // Encaissé N-1 (Newbi, par paymentDate) — alimente le CA net,
-            // le taux de recouvrement et le DSO N-1.
+            // Encaissé N-1 (Newbi) — alimente le CA net, le taux de recouvrement
+            // et le DSO N-1. Montants encaissés avec repli paymentDate→issueDate
+            // (cohérent avec la période courante) ; DSO strict (paymentDate réelle).
             Invoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
                   status: "COMPLETED",
-                  paymentDate: { $ne: null, $gte: prevStart, $lte: prevEnd },
                 },
               },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
+                },
+              },
+              { $match: { _effectiveDate: prevDateQuery } },
               {
                 $group: {
                   _id: null,
@@ -1983,7 +2056,12 @@ const financialAnalyticsResolvers = {
                   sumDaysToPay: {
                     $sum: {
                       $cond: [
-                        { $ne: ["$issueDate", null] },
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$issueDate", null] },
+                          ],
+                        },
                         {
                           $divide: [
                             { $subtract: ["$paymentDate", "$issueDate"] },
@@ -1995,21 +2073,37 @@ const financialAnalyticsResolvers = {
                     },
                   },
                   daysToPayCount: {
-                    $sum: { $cond: [{ $ne: ["$issueDate", null] }, 1, 0] },
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$issueDate", null] },
+                          ],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
                   },
                 },
               },
             ]),
-            // Encaissé N-1 (importées) — STRICTEMENT à la date de paiement,
-            // comme la période courante.
+            // Encaissé N-1 (importées) — repli paymentDate→invoiceDate (cohérent
+            // avec la période courante) ; DSO strict (paymentDate réelle).
             ImportedInvoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
                   status: "COMPLETED",
-                  paymentDate: { $ne: null, $gte: prevStart, $lte: prevEnd },
                 },
               },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$invoiceDate"] },
+                },
+              },
+              { $match: { _effectiveDate: prevDateQuery } },
               {
                 $group: {
                   _id: null,
@@ -2027,7 +2121,12 @@ const financialAnalyticsResolvers = {
                   sumDaysToPay: {
                     $sum: {
                       $cond: [
-                        { $ne: ["$invoiceDate", null] },
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$invoiceDate", null] },
+                          ],
+                        },
                         {
                           $divide: [
                             { $subtract: ["$paymentDate", "$invoiceDate"] },
@@ -2039,7 +2138,18 @@ const financialAnalyticsResolvers = {
                     },
                   },
                   daysToPayCount: {
-                    $sum: { $cond: [{ $ne: ["$invoiceDate", null] }, 1, 0] },
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$invoiceDate", null] },
+                          ],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
                   },
                 },
               },
