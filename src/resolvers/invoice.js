@@ -19,7 +19,10 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
-import { generateInvoiceNumber } from "../utils/documentNumbers.js";
+import {
+  generateInvoiceNumber,
+  validateNumberSequence,
+} from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
 import {
   createNotFoundError,
@@ -1315,6 +1318,10 @@ const invoiceResolvers = {
             return newNumber;
           };
 
+          // Lire le flag "séquence continue" de l'organisation (numérotation globale)
+          const invoiceOrg = await getOrganizationInfo(workspaceId);
+          const autoNumbering = invoiceOrg?.invoiceAutoNumbering === true;
+
           // Logique de génération des numéros
           let number;
 
@@ -1358,11 +1365,27 @@ const invoiceResolvers = {
                 );
               }
 
+              // Vérifier la continuité de la séquence (pas de trou, pas de recul).
+              // Par préfixe en mode normal, tous préfixes confondus en séquence continue.
+              const sequenceCheck = await validateNumberSequence(
+                "invoice",
+                input.number,
+                prefix,
+                { workspaceId, autoNumbering },
+              );
+              if (!sequenceCheck.isValid) {
+                throw new AppError(
+                  sequenceCheck.message,
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+
               number = input.number;
             } else {
               // Générer le prochain numéro séquentiel (strict, sans écart)
               const sequentialNumber = await generateInvoiceNumber(prefix, {
                 workspaceId: workspaceId,
+                autoNumbering,
                 // Plus de numéro manuel pour les factures non-brouillons - numérotation strictement séquentielle
               });
 
@@ -1510,6 +1533,7 @@ const invoiceResolvers = {
                   workspaceId,
                   isDraft: input.status === "DRAFT",
                   userId: context.user._id,
+                  autoNumbering,
                 });
                 await handleDraftConflicts(regenerated);
                 invoice.number = regenerated;
@@ -2259,6 +2283,10 @@ const invoiceResolvers = {
               number: tempNumber,
             });
 
+            // Lire le flag "séquence continue" de l'organisation
+            const finalizeOrg = await getOrganizationInfo(workspaceId);
+            const autoNumbering = finalizeOrg?.invoiceAutoNumbering === true;
+
             // Utiliser generateInvoiceNumber avec isValidatingDraft pour
             // préserver le numéro du brouillon quand c'est le premier document finalisé
             const newNumber = await generateInvoiceNumber(prefix, {
@@ -2268,6 +2296,7 @@ const invoiceResolvers = {
               workspaceId: workspaceId,
               userId: context.user._id,
               currentInvoiceId: invoiceData._id,
+              autoNumbering,
             });
 
             // Mettre à jour le numéro et le préfixe
@@ -2687,6 +2716,10 @@ const invoiceResolvers = {
                   prefix,
                 );
 
+                const statusOrg = await getOrganizationInfo(workspaceId);
+                const autoNumbering =
+                  statusOrg?.invoiceAutoNumbering === true;
+
                 const newNumber = await generateInvoiceNumber(prefix, {
                   isValidatingDraft: true,
                   currentDraftNumber: invoice.number,
@@ -2694,6 +2727,7 @@ const invoiceResolvers = {
                   workspaceId: workspaceId,
                   currentInvoiceId: invoice._id,
                   session,
+                  autoNumbering,
                 });
 
                 invoice.number = newNumber;
