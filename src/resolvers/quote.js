@@ -20,6 +20,7 @@ import {
 import {
   generateQuoteNumber,
   generateInvoiceNumber,
+  validateNumberSequence,
 } from "../utils/documentNumbers.js";
 import {
   createNotFoundError,
@@ -739,22 +740,47 @@ const quoteResolvers = {
 
           const isDraft = !input.status || input.status === "DRAFT";
 
+          // Récupérer les informations de l'organisation (avant la numérotation :
+          // le flag "séquence continue" en dépend)
+          const organization = await getOrganizationInfo(workspaceId);
+          const autoNumbering = organization?.quoteAutoNumbering === true;
+
           // Verrou Pennylane : un numéro manuel n'est accepté que s'il n'existe encore
-          // aucun devis finalisé pour ce préfixe (1er document du compteur).
+          // aucun devis finalisé (1er document du compteur), OU s'il respecte la
+          // continuité de la séquence (pas de trou, pas de recul).
+          // Périmètre : par préfixe en mode normal, tous préfixes confondus en séquence continue.
           let allowManualNumber = false;
           if (input.number && !isDraft) {
-            const firstFinalizedForPrefix = await Quote.findOne({
-              workspaceId,
-              prefix,
-              status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-            }).lean();
-            allowManualNumber = !firstFinalizedForPrefix;
-            if (allowManualNumber && !/^\d{1,6}$/.test(input.number)) {
+            if (!/^\d{1,6}$/.test(input.number)) {
               throw new AppError(
                 "Le numéro de devis doit contenir entre 1 et 6 chiffres",
                 ERROR_CODES.VALIDATION_ERROR,
               );
             }
+
+            const finalizedQuery = {
+              workspaceId,
+              status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+            };
+            if (!autoNumbering) finalizedQuery.prefix = prefix;
+            const firstFinalized = await Quote.findOne(finalizedQuery).lean();
+
+            if (firstFinalized) {
+              // Des documents finalisés existent : le numéro doit suivre la séquence
+              const sequenceCheck = await validateNumberSequence(
+                "quote",
+                input.number,
+                prefix,
+                { workspaceId, autoNumbering },
+              );
+              if (!sequenceCheck.isValid) {
+                throw new AppError(
+                  sequenceCheck.message,
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+            }
+            allowManualNumber = true;
           }
 
           // Fonction unifiée appelée à chaque tentative de save (retry loop plus bas)
@@ -767,11 +793,9 @@ const quoteResolvers = {
               isDraft,
               workspaceId,
               userId: user.id,
+              autoNumbering,
             });
           };
-
-          // Récupérer les informations de l'organisation
-          const organization = await getOrganizationInfo(workspaceId);
 
           if (!organization?.companyName) {
             throw new AppError(
@@ -1175,12 +1199,14 @@ const quoteResolvers = {
               console.log("🔍 [updateQuote] Using prefix:", prefix);
 
               // Générer le prochain numéro séquentiel
+              const finalizeOrg = await getOrganizationInfo(quote.workspaceId);
               const newNumber = await generateQuoteNumber(prefix, {
                 isValidatingDraft: true,
                 currentDraftNumber: quote.number,
                 workspaceId: quote.workspaceId,
                 userId: user.id,
                 currentQuoteId: quote._id,
+                autoNumbering: finalizeOrg?.quoteAutoNumbering === true,
               });
 
               console.log("✅ [updateQuote] Generated new number:", newNumber);
@@ -1333,6 +1359,10 @@ const quoteResolvers = {
             }
           }
 
+          // Lire le flag "séquence continue" de l'organisation
+          const statusOrg = await getOrganizationInfo(quote.workspaceId);
+          const autoNumbering = statusOrg?.quoteAutoNumbering === true;
+
           // Transaction atomique pour éviter les numéros TEMP orphelins
           const MAX_RETRIES = 3;
           for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -1406,6 +1436,7 @@ const quoteResolvers = {
                         userId: user.id,
                         currentQuoteId: quote._id,
                         session,
+                        autoNumbering,
                       });
                     }
                   } else {
@@ -1419,6 +1450,7 @@ const quoteResolvers = {
                     userId: user.id,
                     currentQuoteId: quote._id,
                     session,
+                    autoNumbering,
                   });
                 }
 

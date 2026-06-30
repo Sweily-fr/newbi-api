@@ -28,13 +28,15 @@ const sessionOpts = (options) =>
  */
 const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
   const workspaceId = options.workspaceId || options.userId || "default";
+  const autoNumbering = options.autoNumbering === true;
 
-  // Si un numéro manuel est fourni et qu'il n'y a pas encore de factures pour ce préfixe, l'utiliser
+  // Si un numéro manuel est fourni et qu'il n'y a pas encore de factures, l'utiliser.
+  // En mode séquence continue, on regarde toutes les factures (tous préfixes confondus).
   if (options.manualNumber) {
     const baseQuery = {
       status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
     };
-    if (prefix) baseQuery.prefix = prefix;
+    if (prefix && !autoNumbering) baseQuery.prefix = prefix;
     if (options.workspaceId) baseQuery.workspaceId = options.workspaceId;
     else if (options.userId) baseQuery.createdBy = options.userId;
 
@@ -48,12 +50,13 @@ const generateInvoiceSequentialNumber = async (prefix, options = {}) => {
     }
   }
 
-  // Compteur atomique : génération sans race condition (par préfixe)
+  // Compteur atomique : génération sans race condition.
+  // global=true => séquence continue (indépendante du préfixe).
   const nextNumber = await DocumentCounter.getNextNumber(
     "invoice",
     prefix || "",
     workspaceId,
-    { session: options.session },
+    { session: options.session, global: autoNumbering },
   );
 
   return String(nextNumber).padStart(4, "0");
@@ -77,13 +80,15 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
     isTempNumber = true;
   }
 
-  // Vérifier s'il existe déjà des factures non-brouillons pour ce préfixe
+  // Vérifier s'il existe déjà des factures non-brouillons.
+  // En mode séquence continue, on regarde tous les préfixes ; sinon par préfixe.
+  const autoNumbering = options.autoNumbering === true;
   const existingNonDraftsQuery = {
     status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
   };
 
-  // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe
-  if (prefix) {
+  // IMPORTANT: Filtrer par préfixe pour avoir une séquence par préfixe (hors séquence continue)
+  if (prefix && !autoNumbering) {
     existingNonDraftsQuery.prefix = prefix;
   }
 
@@ -288,13 +293,15 @@ const handleDraftValidation = async (draftNumber, prefix, options = {}) => {
  */
 const generateQuoteSequentialNumber = async (prefix, options = {}) => {
   const workspaceId = options.workspaceId || options.userId || "default";
+  const autoNumbering = options.autoNumbering === true;
 
-  // Si un numéro manuel est fourni et qu'il n'y a pas encore de devis finalisés, l'utiliser
+  // Si un numéro manuel est fourni et qu'il n'y a pas encore de devis finalisés, l'utiliser.
+  // En mode séquence continue, on regarde tous les devis (tous préfixes confondus).
   if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
     const query = {
       status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
     };
-    if (prefix) query.prefix = prefix;
+    if (prefix && !autoNumbering) query.prefix = prefix;
     if (options.workspaceId) query.workspaceId = options.workspaceId;
     else if (options.userId) query.createdBy = options.userId;
 
@@ -307,12 +314,13 @@ const generateQuoteSequentialNumber = async (prefix, options = {}) => {
     }
   }
 
-  // Compteur atomique : génération sans race condition (par préfixe)
+  // Compteur atomique : génération sans race condition.
+  // global=true => séquence continue (indépendante du préfixe).
   const nextNumber = await DocumentCounter.getNextNumber(
     "quote",
     prefix || "",
     workspaceId,
-    { session: options.session },
+    { session: options.session, global: autoNumbering },
   );
 
   return String(nextNumber).padStart(4, "0");
@@ -535,21 +543,69 @@ const generateQuoteNumber = async (customPrefix, options = {}) => {
 };
 
 /**
- * Fonction utilitaire pour valider la séquence des numéros de facture
- * Utilisée par le frontend pour vérifier si un numéro est valide
+ * Statuts "finalisés" (non-brouillon) pris en compte dans la séquence, par type de document.
  */
-const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
-  // Si c'est un brouillon, pas de validation de séquence
+const FINALIZED_STATUSES = {
+  invoice: ["PENDING", "COMPLETED", "CANCELED"],
+  quote: ["PENDING", "COMPLETED", "CANCELED"],
+  purchaseOrder: [
+    "CONFIRMED",
+    "VALIDATED",
+    "IN_PROGRESS",
+    "DELIVERED",
+    "CANCELED",
+  ],
+};
+
+const MODEL_LABELS = {
+  invoice: "facture",
+  quote: "devis",
+  purchaseOrder: "bon de commande",
+};
+
+/**
+ * Valide la continuité d'un numéro saisi manuellement avant création/finalisation.
+ * Générique pour factures / devis / bons de commande.
+ *
+ * Règles :
+ * - Brouillon → toujours valide (pas de séquence).
+ * - Aucun document finalisé (pour le périmètre considéré) → numéro libre.
+ * - Sinon le numéro doit être exactement max+1 :
+ *   - <= max → recul interdit
+ *   - > max+1 → trou interdit
+ *
+ * Périmètre :
+ * - autoNumbering=false → séquence par préfixe (filtre sur le préfixe).
+ * - autoNumbering=true  → séquence continue (tous préfixes confondus).
+ *
+ * @param {("invoice"|"quote"|"purchaseOrder")} documentType
+ */
+const validateNumberSequence = async (documentType, number, prefix, options = {}) => {
+  // Brouillon : pas de validation de séquence
   if (options.isDraft) {
     return { isValid: true };
   }
 
+  const modelMap = {
+    invoice: Invoice,
+    quote: Quote,
+    purchaseOrder: PurchaseOrder,
+  };
+  const model = modelMap[documentType];
+  const statuses = FINALIZED_STATUSES[documentType];
+  if (!model || !statuses) {
+    return { isValid: true };
+  }
+
+  const autoNumbering = options.autoNumbering === true;
+  const label = MODEL_LABELS[documentType] || "document";
+
   const baseQuery = {
-    status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+    status: { $in: statuses },
   };
 
-  // Filtrer par préfixe (la séquence est par préfixe, pas par année)
-  if (prefix) {
+  // Filtrer par préfixe seulement hors mode séquence continue
+  if (prefix && !autoNumbering) {
     baseQuery.prefix = prefix;
   }
 
@@ -559,34 +615,33 @@ const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
     baseQuery.createdBy = options.userId;
   }
 
-  const existingInvoices = await Invoice.find(baseQuery).lean();
+  const existingDocs = await model
+    .find(baseQuery, { number: 1 }, sessionOpts(options))
+    .lean();
 
-  // Si aucune facture n'existe, n'importe quel numéro est valide
-  if (existingInvoices.length === 0) {
+  // Si aucun document n'existe, n'importe quel numéro est valide
+  if (existingDocs.length === 0) {
     return { isValid: true };
   }
 
   // Vérifier si le numéro est déjà utilisé
-  const numberExists = existingInvoices.some(
-    (invoice) => invoice.number === number,
-  );
+  const numberExists = existingDocs.some((doc) => doc.number === number);
   if (numberExists) {
     return {
       isValid: false,
-      message: "Ce numéro de facture est déjà utilisé",
+      message: `Ce numéro de ${label} est déjà utilisé`,
     };
   }
 
   // Vérifier la séquence
-  const numericNumbers = existingInvoices
-    .map((invoice) => {
-      if (/^\d+$/.test(invoice.number)) {
-        return parseInt(invoice.number, 10);
+  const numericNumbers = existingDocs
+    .map((doc) => {
+      if (doc.number && /^\d+$/.test(doc.number)) {
+        return parseInt(doc.number, 10);
       }
       return null;
     })
-    .filter((num) => num !== null)
-    .sort((a, b) => a - b);
+    .filter((num) => num !== null);
 
   if (numericNumbers.length > 0) {
     const maxNumber = Math.max(...numericNumbers);
@@ -609,6 +664,12 @@ const validateInvoiceNumberSequence = async (number, prefix, options = {}) => {
 
   return { isValid: true };
 };
+
+/**
+ * Compat : ancien validateur dédié aux factures, délègue au validateur générique.
+ */
+const validateInvoiceNumberSequence = async (number, prefix, options = {}) =>
+  validateNumberSequence("invoice", number, prefix, options);
 
 /**
  * Fonction pour gérer la validation des brouillons de devis lors du passage à PENDING
@@ -1156,6 +1217,7 @@ const generateCreditNoteNumber = async (customPrefix, options = {}) => {
  */
 const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
   const workspaceId = options.workspaceId || options.userId || "default";
+  const autoNumbering = options.autoNumbering === true;
 
   if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
     const query = {
@@ -1163,7 +1225,7 @@ const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
         $in: ["CONFIRMED", "VALIDATED", "IN_PROGRESS", "DELIVERED", "CANCELED"],
       },
     };
-    if (prefix) query.prefix = prefix;
+    if (prefix && !autoNumbering) query.prefix = prefix;
     if (options.workspaceId) query.workspaceId = options.workspaceId;
     else if (options.userId) query.createdBy = options.userId;
 
@@ -1180,7 +1242,7 @@ const generatePurchaseOrderSequentialNumber = async (prefix, options = {}) => {
     "purchaseOrder",
     prefix || "",
     workspaceId,
-    { session: options.session },
+    { session: options.session, global: autoNumbering },
   );
 
   return String(nextNumber).padStart(4, "0");
@@ -1218,4 +1280,5 @@ export {
   generateCreditNoteNumber,
   generatePurchaseOrderNumber,
   validateInvoiceNumberSequence,
+  validateNumberSequence,
 };
