@@ -105,6 +105,8 @@ type ManualCashflowEntry {
   endDate: String
   frequency: CashflowFrequency!
   notes: String
+  # Mois (YYYY-MM) dont l'occurrence a été supprimée individuellement.
+  excludedMonths: [String!]
   createdBy: ID
   createdAt: String
   updatedAt: String
@@ -155,6 +157,8 @@ type DetectedRecurrence {
   consecutiveMonths: Int!
   isActive: Boolean!
   isMuted: Boolean!
+  # Mois (YYYY-MM) dont l'occurrence projetée a été supprimée individuellement.
+  excludedMonths: [String!]
   lastDetectedAt: String
 }
 
@@ -211,6 +215,30 @@ extend type Query {
     workspaceId: ID
     month: String!
   ): ForecastMonthDetails!
+
+  # Liste à plat des occurrences de prévision (saisies manuelles + récurrences
+  # détectées) entre deux mois (format YYYY-MM), triées chronologiquement.
+  forecastOccurrences(
+    workspaceId: ID
+    startMonth: String!
+    endMonth: String!
+  ): [ForecastEntryItem!]!
+}
+
+enum ForecastOccurrenceKind {
+  MANUAL
+  DETECTED
+}
+
+# Une occurrence de prévision adressable individuellement (suppression par mois).
+type ForecastEntryItem {
+  id: ID!
+  kind: ForecastOccurrenceKind!
+  name: String!
+  category: String
+  type: ForecastType!
+  amount: Float!
+  date: String!
 }
 
 type ForecastInvoiceItem {
@@ -237,6 +265,8 @@ type ForecastMonthDetails {
   purchaseInvoices: [ForecastInvoiceItem!]!
   signedQuotes: [ForecastInvoiceItem!]!
   bankTransactions: [ForecastBankTransactionItem!]!
+  # Prévisions du mois (vide pour un mois passé).
+  forecastEntries: [ForecastEntryItem!]!
 }
 
 extend type Mutation {
@@ -258,6 +288,14 @@ extend type Mutation {
   # Lance la détection des récurrences immédiatement pour le workspace courant
   # (utile pour tester sans attendre le cron mensuel).
   runRecurrenceDetection(workspaceId: ID): Int!
+
+  # Supprime une seule occurrence (un mois) d'une prévision récurrente sans
+  # affecter les autres mois (ajoute le mois à excludedMonths).
+  excludeForecastOccurrence(
+    kind: ForecastOccurrenceKind!
+    id: ID!
+    month: String!
+  ): Boolean!
 
   upsertForecastScenario(input: UpsertForecastScenarioInput!): ForecastScenario!
   deleteForecastScenario(id: ID!): TreasuryDeleteResult!

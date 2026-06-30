@@ -113,6 +113,166 @@ export const expandManualEntry = (entry, rangeStart, rangeEnd) => {
   return occurrences;
 };
 
+// Project manual entries + active detected recurrences into a FLAT list of
+// per-occurrence forecast items within [rangeStart, rangeEnd). Each item keeps
+// its parent id + kind so it can be addressed individually (deletion via
+// excludeForecastOccurrence). The aggregate treasuryForecastData sums by
+// category and loses that identity, hence this dedicated projection — it mirrors
+// the same future-gating (month >= currentMonth) and real-invoice dedup as
+// sections 6b2/6c. Auto-forecast (historical average) is intentionally excluded:
+// it has no entity to delete. Returns [{ id, kind, name, category, type, amount,
+// date: Date }] sorted chronologically.
+export const projectForecastOccurrences = async (
+  workspaceId,
+  rangeStart,
+  rangeEnd,
+) => {
+  const wId = new mongoose.Types.ObjectId(workspaceId);
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const mk = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const occurrences = [];
+
+  // --- Manual cashflow entries (recurrence-expanded) ---
+  const manualEntries = await ManualCashflowEntry.find({
+    workspaceId: wId,
+    startDate: { $lt: rangeEnd },
+  }).lean();
+  for (const entry of manualEntries) {
+    for (const occ of expandManualEntry(entry, rangeStart, rangeEnd)) {
+      const month = mk(occ.date);
+      if (month < currentMonth) continue;
+      if (entry.excludedMonths?.includes(month)) continue;
+      occurrences.push({
+        id: entry._id.toString(),
+        kind: "MANUAL",
+        name: entry.name,
+        category:
+          entry.category ||
+          (entry.type === "INCOME" ? "OTHER_INCOME" : "OTHER_EXPENSE"),
+        type: entry.type,
+        amount: occ.amount,
+        date: occ.date,
+      });
+    }
+  }
+
+  // --- Active detected recurrences ---
+  const activeRecurrences = await DetectedRecurrence.find({
+    workspaceId: wId,
+    isActive: true,
+    isMuted: false,
+  }).lean();
+  if (activeRecurrences.length > 0) {
+    const PurchaseInvoice = mongoose.model("PurchaseInvoice");
+    const futurePurchaseInvoices = await PurchaseInvoice.find({
+      workspaceId: wId,
+      issueDate: { $gte: new Date(currentMonth + "-01") },
+    })
+      .select("supplierName category issueDate")
+      .lean();
+    const existingPurchaseKeys = new Set();
+    for (const pi of futurePurchaseInvoices) {
+      const m = mk(new Date(pi.issueDate));
+      existingPurchaseKeys.add(
+        `${normalizeParty(pi.supplierName)}::${pi.category || "OTHER"}::${m}`,
+      );
+    }
+    const InvoiceModel = mongoose.model("Invoice");
+    const futureInvoices = await InvoiceModel.find({
+      workspaceId: wId,
+      issueDate: { $gte: new Date(currentMonth + "-01") },
+    })
+      .select("client issueDate")
+      .lean();
+    const existingInvoiceKeys = new Set();
+    for (const inv of futureInvoices) {
+      const name =
+        inv?.client?.name ||
+        [inv?.client?.firstName, inv?.client?.lastName]
+          .filter(Boolean)
+          .join(" ") ||
+        inv?.client?.email ||
+        "";
+      existingInvoiceKeys.add(
+        `${normalizeParty(name)}::${mk(new Date(inv.issueDate))}`,
+      );
+    }
+    const invoiceRecurrenceKeys = new Set(
+      activeRecurrences
+        .filter((r) => r.source !== "TRANSACTION")
+        .map((r) => `${r.partyKey}::${r.type}`),
+    );
+    const toExpenseCat = (cat) => {
+      const c = normalizeCat(cat || "OTHER");
+      return c === "OTHER" ? "OTHER_EXPENSE" : c;
+    };
+    const monthStep = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
+    const dayStep = { WEEKLY: 7, BIWEEKLY: 14 };
+    const advance = (date, freq) => {
+      const d = new Date(date);
+      if (dayStep[freq]) d.setDate(d.getDate() + dayStep[freq]);
+      else d.setMonth(d.getMonth() + (monthStep[freq] || 1));
+      return d;
+    };
+
+    for (const rec of activeRecurrences) {
+      if (
+        rec.source === "TRANSACTION" &&
+        invoiceRecurrenceKeys.has(`${rec.partyKey}::${rec.type}`)
+      )
+        continue;
+      const freq = rec.frequency || "MONTHLY";
+      const anchor = rec.lastSeenDate
+        ? new Date(rec.lastSeenDate)
+        : new Date((rec.lastSeenMonth || currentMonth) + "-01");
+      let occ = advance(anchor, freq);
+      let guard = 0;
+      while (occ < rangeEnd && guard++ < 1000) {
+        const occDate = new Date(occ);
+        const month = mk(occDate);
+        occ = advance(occ, freq);
+        if (occDate < rangeStart) continue;
+        if (month < currentMonth) continue;
+        if (rec.excludedMonths?.includes(month)) continue;
+        let category;
+        let type = rec.type;
+        if (rec.source === "PURCHASE_INVOICE") {
+          const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
+          if (existingPurchaseKeys.has(key)) continue;
+          category = toExpenseCat(rec.category);
+          type = "EXPENSE";
+        } else if (rec.source === "TRANSACTION") {
+          category =
+            rec.type === "EXPENSE"
+              ? toExpenseCat(rec.category)
+              : INCOME_CATEGORIES.includes(rec.category)
+                ? rec.category
+                : "OTHER_INCOME";
+        } else {
+          const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${month}`;
+          if (existingInvoiceKeys.has(key)) continue;
+          category = "SALES";
+          type = "INCOME";
+        }
+        occurrences.push({
+          id: rec._id.toString(),
+          kind: "DETECTED",
+          name: rec.partyName,
+          category,
+          type,
+          amount: rec.averageAmount,
+          date: occDate,
+        });
+      }
+    }
+  }
+
+  occurrences.sort((a, b) => a.date - b.date);
+  return occurrences;
+};
+
 const treasuryForecastResolvers = {
   Query: {
     treasuryForecastData: requireRead("expenses")(
@@ -417,7 +577,12 @@ const treasuryForecastResolvers = {
           // periodicity. Weekly/biweekly advance by days (several land in a
           // month → naturally summed); the rest advance by calendar months so
           // quarterly/yearly charges only hit their actual month.
-          const monthStep = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
+          const monthStep = {
+            MONTHLY: 1,
+            QUARTERLY: 3,
+            SEMIANNUAL: 6,
+            ANNUAL: 12,
+          };
           const dayStep = { WEEKLY: 7, BIWEEKLY: 14 };
           const advance = (date, freq) => {
             const d = new Date(date);
@@ -445,6 +610,8 @@ const treasuryForecastResolvers = {
               const month = mk(occ);
               occ = advance(occ, freq);
               if (month < currentMonth || !monthSet.has(month)) continue;
+              // Occurrence supprimée individuellement pour ce mois.
+              if (rec.excludedMonths?.includes(month)) continue;
               if (rec.source === "PURCHASE_INVOICE") {
                 const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
                 if (existingPurchaseKeys.has(key)) continue;
@@ -493,6 +660,8 @@ const treasuryForecastResolvers = {
           const occurrences = expandManualEntry(entry, txStartDate, txEndDate);
           for (const occ of occurrences) {
             const m = `${occ.date.getFullYear()}-${String(occ.date.getMonth() + 1).padStart(2, "0")}`;
+            // Occurrence supprimée individuellement pour ce mois.
+            if (entry.excludedMonths?.includes(m)) continue;
             const cat =
               entry.category ||
               (entry.type === "INCOME" ? "OTHER_INCOME" : "OTHER_EXPENSE");
@@ -939,6 +1108,21 @@ const treasuryForecastResolvers = {
           client?.email ||
           "Client inconnu";
 
+        // Prévisions (saisies manuelles + récurrences détectées) projetées sur
+        // ce mois — vide pour un mois passé (month < currentMonth), cohérent
+        // avec le tableau agrégé.
+        const forecastEntries = (
+          await projectForecastOccurrences(workspaceId, start, end)
+        ).map((o) => ({
+          id: o.id,
+          kind: o.kind,
+          name: o.name,
+          category: o.category,
+          type: o.type,
+          amount: o.amount,
+          date: o.date.toISOString(),
+        }));
+
         return {
           month,
           invoices: invoices.map((i) => ({
@@ -979,7 +1163,49 @@ const treasuryForecastResolvers = {
             date: (t._effectiveDate || t.date || t.createdAt)?.toISOString?.(),
             category: t.expenseCategory || null,
           })),
+          forecastEntries,
         };
+      },
+    ),
+
+    // Liste à plat des occurrences de prévision (saisies manuelles + récurrences
+    // détectées) sur l'horizon — alimente l'onglet « Détails prévisions ».
+    forecastOccurrences: requireRead("expenses")(
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, startMonth, endMonth },
+        context,
+      ) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        if (
+          !/^\d{4}-\d{2}$/.test(startMonth) ||
+          !/^\d{4}-\d{2}$/.test(endMonth)
+        ) {
+          throw new AppError(
+            "Format de mois invalide (attendu YYYY-MM)",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        const start = new Date(startMonth + "-01");
+        const end = new Date(endMonth + "-01");
+        end.setMonth(end.getMonth() + 1);
+        const occurrences = await projectForecastOccurrences(
+          workspaceId,
+          start,
+          end,
+        );
+        return occurrences.map((o) => ({
+          id: o.id,
+          kind: o.kind,
+          name: o.name,
+          category: o.category,
+          type: o.type,
+          amount: o.amount,
+          date: o.date.toISOString(),
+        }));
       },
     ),
 
@@ -1231,6 +1457,34 @@ const treasuryForecastResolvers = {
         }
         await DetectedRecurrence.deleteOne({ _id: id });
         return { success: true, message: "Récurrence supprimée" };
+      },
+    ),
+
+    // Supprime UNE occurrence (un mois) d'une prévision récurrente sans toucher
+    // aux autres mois : ajoute le mois à excludedMonths de l'entité ciblée.
+    excludeForecastOccurrence: requireWrite("expenses")(
+      async (_, { kind, id, month }, context) => {
+        const workspaceId = context.workspaceId;
+        if (!/^\d{4}-\d{2}$/.test(month)) {
+          throw new AppError(
+            "Format de mois invalide (attendu YYYY-MM)",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        const Model =
+          kind === "MANUAL" ? ManualCashflowEntry : DetectedRecurrence;
+        const updated = await Model.findOneAndUpdate(
+          {
+            _id: id,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          },
+          { $addToSet: { excludedMonths: month } },
+          { new: true },
+        );
+        if (!updated) {
+          throw new AppError("Prévision non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+        return true;
       },
     ),
   },
