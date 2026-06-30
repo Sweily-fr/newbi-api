@@ -95,6 +95,7 @@ import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import emailTrackingRoutes from "./routes/emailTracking.js";
 import resendWebhookRoutes from "./routes/resendWebhook.js";
+import assistantRoutes from "./routes/assistant.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
 import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
@@ -327,6 +328,10 @@ async function startServer() {
 
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
+
+  // Routes assistant (télémétrie Phase 0 + chat LLM V1)
+  // Auth via betterAuthJWTMiddleware dans chaque route (pattern banking).
+  app.use("/api/assistant", assistantRoutes);
 
   // Routes banking (authentification gérée par betterAuthMiddleware dans chaque route)
   app.use("/banking", bankingRoutes); // Auth via betterAuthMiddleware dans chaque route
