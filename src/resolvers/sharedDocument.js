@@ -358,12 +358,16 @@ const sharedDocumentResolvers = {
           return canAccessFolder(userId, folder, effectiveVis);
         });
 
-        // Compter les documents en une seule agrégation au lieu de N requêtes
+        // Compter les documents en une seule agrégation au lieu de N requêtes.
+        // aggregate() ne caste PAS les types (contrairement à find/countDocuments) :
+        // workspaceId arrive en string depuis GraphQL alors qu'il est stocké en
+        // ObjectId, donc sans cast explicite le $match ne matche rien et tous les
+        // documentsCount valent 0. On caste donc workspaceId en ObjectId.
         const folderIds = accessibleFolders.map((f) => f._id);
         const countResults = await SharedDocument.aggregate([
           {
             $match: {
-              workspaceId,
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
               folderId: { $in: folderIds },
               trashedAt: null,
             },
