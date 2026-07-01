@@ -11,6 +11,7 @@ import { ObjectId } from "mongodb";
 import { sendTaskAssignmentEmail, sendMentionEmail } from "../utils/mailer.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "./notification.js";
+import { sendPushToUser } from "../services/pushNotificationService.js";
 import Client from "../models/Client.js";
 
 // Événements de subscription
@@ -1581,6 +1582,22 @@ const resolvers = {
                         logger.info(
                           `🔔 [CreateTask] Notification créée pour ${memberData.email}`,
                         );
+
+                        // Envoyer la notification push sur l'appareil
+                        sendPushToUser(memberId, {
+                          title: "Nouvelle tâche assignée",
+                          body: `${notifAssignerName} vous a assigné à « ${savedTask.title || "Sans titre"} »`,
+                          data: {
+                            type: "TASK_ASSIGNED",
+                            boardId: String(savedTask.boardId),
+                            taskId: String(savedTask._id),
+                          },
+                        }).catch((pushError) =>
+                          logger.error(
+                            "❌ [CreateTask] Erreur push:",
+                            pushError,
+                          ),
+                        );
                       } catch (notifError) {
                         logger.error(
                           "❌ [CreateTask] Erreur création notification:",
@@ -2032,6 +2049,22 @@ const resolvers = {
                             await publishNotification(notification);
                             logger.info(
                               `🔔 [UpdateTask] Notification créée pour ${memberData.email}`,
+                            );
+
+                            // Envoyer la notification push sur l'appareil
+                            sendPushToUser(memberId, {
+                              title: "Nouvelle tâche assignée",
+                              body: `${assignerName} vous a assigné à « ${oldTask.title || "Sans titre"} »`,
+                              data: {
+                                type: "TASK_ASSIGNED",
+                                boardId: String(oldTask.boardId),
+                                taskId: String(id),
+                              },
+                            }).catch((pushError) =>
+                              logger.error(
+                                "❌ [UpdateTask] Erreur push:",
+                                pushError,
+                              ),
                             );
                           } catch (notifError) {
                             logger.error(
