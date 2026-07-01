@@ -602,6 +602,7 @@ const chunkUploadR2Resolvers = {
             input?.isPaymentRequired ||
             input?.requirePayment ||
             false;
+          const title = input?.title?.trim() || null;
           const recipientEmail = input?.recipientEmail || null;
           const message = input?.message || null;
 
@@ -617,6 +618,7 @@ const chunkUploadR2Resolvers = {
           const fileTransfer = new FileTransfer({
             userId: user.id,
             workspaceId,
+            title,
             files: filesInfo,
             totalSize,
             status: "active",

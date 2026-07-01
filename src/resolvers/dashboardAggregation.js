@@ -126,7 +126,12 @@ function getCurrentFiscalYearRange(org, now = new Date()) {
 }
 
 /**
- * Récupère le solde total des comptes bancaires (avec filtre optionnel)
+ * Récupère le solde total des comptes bancaires (avec filtre optionnel).
+ *
+ * En vue globale (sans accountId), on ajoute au solde la somme signée des
+ * transactions manuelles (provider "manual") : ce sont des mouvements en
+ * espèces / hors compte bancaire connecté, qui ne sont reflétés par aucun
+ * solde de compte. Pour un compte bancaire précis, on ne renvoie que son solde.
  */
 async function getAccountsBalance(workspaceId, accountId) {
   const filter = { workspaceId };
@@ -134,14 +139,26 @@ async function getAccountsBalance(workspaceId, accountId) {
     filter.$or = [{ _id: accountId }, { externalId: accountId }];
   }
 
-  const accounts = await AccountBanking.find(filter).lean();
+  const accountsPromise = AccountBanking.find(filter).lean();
+  const cashPromise = accountId
+    ? Promise.resolve(0)
+    : Transaction.aggregate([
+        { $match: { workspaceId, deletedAt: null, provider: "manual" } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]).then((res) => res[0]?.total ?? 0);
+
+  const [accounts, cashBalance] = await Promise.all([
+    accountsPromise,
+    cashPromise,
+  ]);
+
   const balance = accounts.reduce((sum, acc) => {
     const bal =
       typeof acc.balance === "number"
         ? acc.balance
         : (acc.balance?.current ?? 0);
     return sum + bal;
-  }, 0);
+  }, cashBalance);
 
   return { accounts, balance };
 }

@@ -17,6 +17,7 @@ import {
 import {
   generatePurchaseOrderNumber,
   generateInvoiceNumber,
+  validateNumberSequence,
 } from "../utils/documentNumbers.js";
 import {
   createNotFoundError,
@@ -478,15 +479,27 @@ const purchaseOrderResolvers = {
             }
           }
 
+          // Récupérer les informations de l'organisation (avant la numérotation :
+          // le flag "séquence continue" en dépend)
+          const organization = await getOrganizationInfo(workspaceId);
+          const autoNumbering = organization?.purchaseOrderAutoNumbering === true;
+
           // === Génération du numéro (style Pennylane) ===
-          // - Préfixe nouveau (aucun BC finalisé) → numéro manuel libre accepté
-          // - Préfixe existant → numéro imposé par le compteur atomique
+          // - Aucun BC finalisé → numéro manuel libre accepté
+          // - Des BC finalisés existent → le numéro doit suivre la séquence (pas de trou/recul)
+          // Périmètre : par préfixe en mode normal, tous préfixes confondus en séquence continue.
           const isDraft = !input.status || input.status === "DRAFT";
           let allowManualPONumber = false;
           if (input.number && !isDraft) {
-            const firstFinalizedForPrefix = await PurchaseOrder.findOne({
+            if (!/^\d{1,6}$/.test(input.number)) {
+              throw new AppError(
+                "Le numéro de bon de commande doit contenir entre 1 et 6 chiffres",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+
+            const finalizedQuery = {
               workspaceId,
-              prefix,
               status: {
                 $in: [
                   "CONFIRMED",
@@ -496,14 +509,26 @@ const purchaseOrderResolvers = {
                   "CANCELED",
                 ],
               },
-            }).lean();
-            allowManualPONumber = !firstFinalizedForPrefix;
-            if (allowManualPONumber && !/^\d{1,6}$/.test(input.number)) {
-              throw new AppError(
-                "Le numéro de bon de commande doit contenir entre 1 et 6 chiffres",
-                ERROR_CODES.VALIDATION_ERROR,
+            };
+            if (!autoNumbering) finalizedQuery.prefix = prefix;
+            const firstFinalized =
+              await PurchaseOrder.findOne(finalizedQuery).lean();
+
+            if (firstFinalized) {
+              const sequenceCheck = await validateNumberSequence(
+                "purchaseOrder",
+                input.number,
+                prefix,
+                { workspaceId, autoNumbering },
               );
+              if (!sequenceCheck.isValid) {
+                throw new AppError(
+                  sequenceCheck.message,
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
             }
+            allowManualPONumber = true;
           }
 
           const generatePONumber = async () => {
@@ -518,13 +543,11 @@ const purchaseOrderResolvers = {
               isDraft,
               workspaceId,
               userId: user.id,
+              autoNumbering,
             });
           };
 
           let number = await generatePONumber();
-
-          // Récupérer les informations de l'organisation
-          const organization = await getOrganizationInfo(workspaceId);
 
           if (!organization?.companyName) {
             throw new AppError(
@@ -621,6 +644,7 @@ const purchaseOrderResolvers = {
                 isDraft,
                 workspaceId,
                 userId: user.id,
+                autoNumbering,
               });
             }
           }
@@ -881,10 +905,15 @@ const purchaseOrderResolvers = {
                     prefix = `BC-${year}${month}`;
                   }
 
+                  const poOrg = await getOrganizationInfo(po.workspaceId);
+                  const autoNumbering =
+                    poOrg?.purchaseOrderAutoNumbering === true;
+
                   const newNumber = await generatePurchaseOrderNumber(prefix, {
                     workspaceId: po.workspaceId,
                     userId: user.id,
                     session,
+                    autoNumbering,
                   });
 
                   // Utiliser un numéro temporaire pour éviter les conflits d'unicité
@@ -978,6 +1007,7 @@ const purchaseOrderResolvers = {
         const number = await generatePurchaseOrderNumber(prefix, {
           workspaceId,
           userId: user.id,
+          autoNumbering: organization?.purchaseOrderAutoNumbering === true,
         });
 
         // Convertir les sous-documents Mongoose en objets simples pour une copie correcte

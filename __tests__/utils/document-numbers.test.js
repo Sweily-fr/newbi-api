@@ -73,7 +73,7 @@ describe("generateInvoiceNumber", () => {
       "invoice",
       "F-202601",
       "ws1",
-      { session: undefined },
+      { session: undefined, global: false },
     );
   });
 

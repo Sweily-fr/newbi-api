@@ -90,6 +90,7 @@ type FileTransferAccessResponse {
 # Input pour la création d'un transfert de fichiers
 input FileTransferInput {
   workspaceId: ID
+  title: String
   expiryDays: Int
   isPaymentRequired: Boolean = false
   requirePayment: Boolean = false # Alias pour isPaymentRequired pour compatibilité avec le frontend

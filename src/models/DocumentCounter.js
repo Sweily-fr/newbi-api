@@ -24,11 +24,22 @@ documentCounterSchema.index(
 );
 
 /**
+ * Préfixe sentinelle utilisé comme clé du compteur en mode "séquence continue"
+ * (numérotation globale, indépendante du préfixe réel des documents).
+ * Ne peut pas entrer en collision avec un préfixe utilisateur (caractères interdits).
+ */
+const GLOBAL_SEQUENCE = "__GLOBAL__";
+
+/**
  * Obtient le prochain numéro séquentiel de manière atomique.
  * Utilise findOneAndUpdate avec $inc pour garantir l'atomicité.
  * Vérifie toujours la cohérence entre le compteur et les documents existants
  * pour gérer les cas de suppression de documents.
- * La séquence est par préfixe uniquement (pas par année).
+ *
+ * Deux modes :
+ * - Par défaut : séquence par préfixe (chaque préfixe a son propre compteur, pas de reset par année).
+ * - options.global === true : séquence continue/globale. Le compteur est keyé sur un préfixe
+ *   sentinelle (__GLOBAL__) et le max existant est calculé tous préfixes confondus.
  */
 documentCounterSchema.statics.getNextNumber = async function (
   documentType,
@@ -38,18 +49,23 @@ documentCounterSchema.statics.getNextNumber = async function (
 ) {
   const session = options.session || null;
   const findOpts = session ? { session } : {};
+  const isGlobal = options.global === true;
 
-  // Vérifier le max existant dans les documents réels
+  // Clé du compteur : sentinelle en mode global, préfixe réel sinon
+  const counterPrefix = isGlobal ? GLOBAL_SEQUENCE : prefix;
+
+  // Vérifier le max existant dans les documents réels.
+  // En mode global, on ignore le préfixe (max tous préfixes confondus).
   const existingMax = await getExistingMaxNumber(
     documentType,
-    prefix,
+    isGlobal ? "" : prefix,
     workspaceId,
     findOpts,
   );
 
   // Récupérer le compteur actuel (sans incrémenter encore)
   const currentCounter = await this.findOne(
-    { documentType, prefix, workspaceId },
+    { documentType, prefix: counterPrefix, workspaceId },
     null,
     findOpts,
   );
@@ -58,7 +74,7 @@ documentCounterSchema.statics.getNextNumber = async function (
   // le réinitialiser au max existant avant d'incrémenter
   if (currentCounter && currentCounter.lastNumber !== existingMax) {
     await this.findOneAndUpdate(
-      { documentType, prefix, workspaceId },
+      { documentType, prefix: counterPrefix, workspaceId },
       { $set: { lastNumber: existingMax } },
       findOpts,
     );
@@ -66,7 +82,7 @@ documentCounterSchema.statics.getNextNumber = async function (
 
   // Incrémenter atomiquement le compteur
   const counter = await this.findOneAndUpdate(
-    { documentType, prefix, workspaceId },
+    { documentType, prefix: counterPrefix, workspaceId },
     { $inc: { lastNumber: 1 } },
     { new: true, upsert: true, ...findOpts },
   );
@@ -75,7 +91,7 @@ documentCounterSchema.statics.getNextNumber = async function (
   // ajuster au max existant + 1
   if (counter.lastNumber === 1 && existingMax > 0) {
     const adjusted = await this.findOneAndUpdate(
-      { documentType, prefix, workspaceId, lastNumber: 1 },
+      { documentType, prefix: counterPrefix, workspaceId, lastNumber: 1 },
       { $set: { lastNumber: existingMax + 1 } },
       { new: true, ...findOpts },
     );
@@ -146,4 +162,5 @@ const DocumentCounter = mongoose.model(
   documentCounterSchema,
 );
 
+export { GLOBAL_SEQUENCE };
 export default DocumentCounter;
