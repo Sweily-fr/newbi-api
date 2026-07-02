@@ -214,6 +214,110 @@ describe("CreditNote Resolver — createCreditNote", () => {
   });
 });
 
+describe("CreditNote Resolver — numérotation", () => {
+  it("accepte un avoir 0001 sous deux préfixes mensuels distincts la même année (index avec prefix)", async () => {
+    // Le bug d'origine : l'index unique (number, workspaceId, issueYear) sans
+    // prefix rejetait le 2e "0001" d'une même année alors que le préfixe
+    // mensuel diffère. L'index inclut désormais prefix.
+    await CreditNote.syncIndexes();
+    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+
+    const resolver = creditNoteResolvers.Mutation.createCreditNote;
+
+    const cn1 = await resolver(
+      null,
+      {
+        input: buildCreditNoteInput(inv._id, {
+          prefix: "AV-202601",
+          number: "0001",
+          issueDate: new Date("2026-01-15"),
+          items: [{ description: "R1", quantity: 1, unitPrice: 10, vatRate: 20 }],
+        }),
+      },
+      ctx(),
+    );
+    expect(cn1.number).toBe("0001");
+    expect(cn1.prefix).toBe("AV-202601");
+
+    // Même numéro, même année, préfixe mensuel différent → doit passer
+    const cn2 = await resolver(
+      null,
+      {
+        input: buildCreditNoteInput(inv._id, {
+          prefix: "AV-202602",
+          number: "0001",
+          issueDate: new Date("2026-02-15"),
+          items: [{ description: "R2", quantity: 1, unitPrice: 10, vatRate: 20 }],
+        }),
+      },
+      ctx(),
+    );
+    expect(cn2.number).toBe("0001");
+    expect(cn2.prefix).toBe("AV-202602");
+  });
+
+  it("rejette un numéro manuel hors séquence (trou)", async () => {
+    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+    const resolver = creditNoteResolvers.Mutation.createCreditNote;
+
+    await resolver(
+      null,
+      {
+        input: buildCreditNoteInput(inv._id, {
+          prefix: "AV",
+          number: "0001",
+          items: [{ description: "R", quantity: 1, unitPrice: 10, vatRate: 20 }],
+        }),
+      },
+      ctx(),
+    );
+
+    // Sauter à 0050 alors que le max est 0001 → refusé
+    await expect(
+      resolver(
+        null,
+        {
+          input: buildCreditNoteInput(inv._id, {
+            prefix: "AV",
+            number: "0050",
+            items: [
+              { description: "R", quantity: 1, unitPrice: 10, vatRate: 20 },
+            ],
+          }),
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/0002/);
+  });
+
+  it("verrouille le numéro et le préfixe d'un avoir existant", async () => {
+    const inv = await insertInvoice();
+    const resolver = creditNoteResolvers.Mutation.createCreditNote;
+    const cn = await resolver(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+
+    const updateResolver = creditNoteResolvers.Mutation.updateCreditNote;
+    await expect(
+      updateResolver(
+        null,
+        { id: cn._id.toString(), input: { number: "9999" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/verrouillé/i);
+
+    await expect(
+      updateResolver(
+        null,
+        { id: cn._id.toString(), input: { prefix: "AV-209912" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/verrouillé/i);
+  });
+});
+
 describe("CreditNote Resolver — updateCreditNote", () => {
   it("recalculates totals when items changed", async () => {
     const inv = await insertInvoice();

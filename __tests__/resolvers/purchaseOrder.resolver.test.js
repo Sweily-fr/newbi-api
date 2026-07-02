@@ -188,6 +188,169 @@ describe("PurchaseOrder Resolver — updatePurchaseOrder", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — updatePurchaseOrder (numérotation)
+// ---------------------------------------------------------------------------
+
+describe("PurchaseOrder Resolver — updatePurchaseOrder (numérotation)", () => {
+  const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
+  const update = purchaseOrderResolvers.Mutation.updatePurchaseOrder;
+
+  const insertConfirmedPO = (data = {}) =>
+    PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "0001",
+      prefix: "BC-202607",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+      ...data,
+    });
+
+  it("conserve le numéro provisoire d'un brouillon (le numéro prévisualisé n'est pas persisté)", async () => {
+    const po = await create(null, { input: buildPOInput() }, ctx());
+    expect(po.number).toMatch(/^DRAFT-/);
+
+    const updated = await update(
+      null,
+      {
+        id: po._id.toString(),
+        input: { number: "0002", status: "DRAFT" },
+      },
+      ctx(),
+    );
+
+    expect(updated.status).toBe("DRAFT");
+    expect(updated.number).toBe(po.number);
+  });
+
+  it("verrouille le numéro d'un bon de commande finalisé", async () => {
+    const { insertedId } = await insertConfirmedPO();
+
+    await expect(
+      update(
+        null,
+        { id: insertedId.toString(), input: { number: "0009" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/verrouillé/i);
+  });
+
+  it("verrouille le préfixe d'un bon de commande finalisé", async () => {
+    const { insertedId } = await insertConfirmedPO();
+
+    await expect(
+      update(
+        null,
+        { id: insertedId.toString(), input: { prefix: "BC-202608" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/verrouillé/i);
+  });
+
+  it("rejette la finalisation DRAFT → CONFIRMED avec un numéro hors séquence", async () => {
+    await insertConfirmedPO({ number: "0001", prefix: "BC-202607" });
+    const po = await create(
+      null,
+      { input: buildPOInput({ prefix: "BC-202607" }) },
+      ctx(),
+    );
+
+    await expect(
+      update(
+        null,
+        {
+          id: po._id.toString(),
+          input: { status: "CONFIRMED", number: "0005", prefix: "BC-202607" },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/0002/);
+  });
+
+  it("accepte la finalisation DRAFT → CONFIRMED avec le numéro séquentiel suivant", async () => {
+    await insertConfirmedPO({ number: "0001", prefix: "BC-202607" });
+    const po = await create(
+      null,
+      { input: buildPOInput({ prefix: "BC-202607" }) },
+      ctx(),
+    );
+
+    const updated = await update(
+      null,
+      {
+        id: po._id.toString(),
+        input: { status: "CONFIRMED", number: "0002", prefix: "BC-202607" },
+      },
+      ctx(),
+    );
+
+    expect(updated.status).toBe("CONFIRMED");
+    expect(updated.number).toBe("0002");
+    expect(updated.prefix).toBe("BC-202607");
+  });
+
+  it("génère le numéro séquentiel quand la finalisation ne fournit pas de numéro", async () => {
+    await insertConfirmedPO({ number: "0003", prefix: "BC-202607" });
+    const po = await create(
+      null,
+      { input: buildPOInput({ prefix: "BC-202607" }) },
+      ctx(),
+    );
+
+    const updated = await update(
+      null,
+      { id: po._id.toString(), input: { status: "CONFIRMED" } },
+      ctx(),
+    );
+
+    expect(updated.status).toBe("CONFIRMED");
+    expect(updated.number).toBe("0004");
+  });
+
+  it("REJETTE une transition interdite via updatePurchaseOrder (DRAFT → CANCELED)", async () => {
+    const po = await create(null, { input: buildPOInput() }, ctx());
+    expect(po.number).toMatch(/^DRAFT-/);
+
+    await expect(
+      update(
+        null,
+        { id: po._id.toString(), input: { status: "CANCELED" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/statut non autorisé/i);
+
+    const untouched = await PurchaseOrder.findById(po._id);
+    expect(untouched.status).toBe("DRAFT");
+    expect(untouched.number).toMatch(/^DRAFT-/);
+  });
+
+  it("REJETTE la rétrogradation d'un BC finalisé en brouillon", async () => {
+    const { insertedId } = await PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "0001",
+      prefix: "BC-202607",
+      status: "CONFIRMED",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: { name: "Test", email: "t@t.fr" },
+      issueDate: new Date(),
+      createdAt: new Date(),
+    });
+
+    await expect(
+      update(
+        null,
+        { id: insertedId.toString(), input: { status: "DRAFT" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/statut non autorisé/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — deletePurchaseOrder
 // ---------------------------------------------------------------------------
 

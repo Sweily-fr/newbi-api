@@ -22,7 +22,10 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
-import { generateCreditNoteNumber } from "../utils/documentNumbers.js";
+import {
+  generateCreditNoteNumber,
+  validateNumberSequence,
+} from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
 import {
   createNotFoundError,
@@ -311,11 +314,48 @@ const creditNoteResolvers = {
             );
           }
 
+          // Préfixe effectif : le même doit servir à la validation ET à la
+          // génération, sinon le périmètre de la séquence diverge. Le préfixe
+          // par défaut est mensuel (AV-AAAAMM) — mêmes règles que la génération
+          // et le modèle. Sans ça, un numéro validé "tous préfixes confondus"
+          // pouvait être rejeté à tort quand le préfixe mensuel change de mois.
+          const now = new Date();
+          const effectivePrefix =
+            input.prefix ||
+            `AV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+          // Numéro manuel : valider la continuité de la séquence (max+1
+          // strict, pas de doublon) avant de l'accepter — même verrou que
+          // les factures/devis/BC.
+          let manualNumber = input.number;
+          if (manualNumber) {
+            if (!/^\d{1,6}$/.test(manualNumber)) {
+              throw new AppError(
+                "Le numéro d'avoir doit contenir entre 1 et 6 chiffres",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+            manualNumber = String(parseInt(manualNumber, 10)).padStart(4, "0");
+
+            const sequenceCheck = await validateNumberSequence(
+              "creditNote",
+              manualNumber,
+              effectivePrefix,
+              { workspaceId },
+            );
+            if (!sequenceCheck.isValid) {
+              throw new AppError(
+                sequenceCheck.message,
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+          }
+
           // Générer le numéro d'avoir
-          const number = await generateCreditNoteNumber(input.prefix, {
+          const number = await generateCreditNoteNumber(effectivePrefix, {
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             isDraft: false,
-            manualNumber: input.number,
+            manualNumber,
           });
 
           // Toujours snapshot companyInfo pour les avoirs (pas de statut DRAFT)
@@ -330,6 +370,10 @@ const creditNoteResolvers = {
           const creditNote = new CreditNote({
             ...input,
             number,
+            // Fixer le préfixe validé/généré (et pas seulement le défaut du
+            // modèle) pour garantir que le numéro et le préfixe stockés
+            // décrivent la même séquence.
+            prefix: effectivePrefix,
             status: "CREATED",
             companyInfo: creditNoteCompanyInfo,
             originalInvoice: originalInvoice._id,
@@ -470,6 +514,42 @@ const creditNoteResolvers = {
           }
 
           // Les avoirs avec statut CREATED peuvent toujours être modifiés
+
+          // Un avoir est toujours finalisé (pas de brouillon) : son numéro et
+          // son préfixe sont VERROUILLÉS — les renuméroter casserait la
+          // continuité de la séquence.
+          if (input.number && input.number !== creditNote.number) {
+            throw createValidationError(
+              "Le numéro d'un avoir est verrouillé",
+              {
+                number: `Impossible de remplacer le numéro "${creditNote.number}" par "${input.number}" sur un avoir émis.`,
+              },
+            );
+          }
+          if (input.prefix && input.prefix !== creditNote.prefix) {
+            throw createValidationError(
+              "Le préfixe d'un avoir est verrouillé",
+              {
+                prefix: `Impossible de remplacer le préfixe "${creditNote.prefix}" par "${input.prefix}" sur un avoir émis.`,
+              },
+            );
+          }
+
+          // Empêcher le changement d'année d'émission : issueYear fait partie
+          // de l'index unique, changer d'année déplacerait l'avoir dans une
+          // autre séquence annuelle (collision ou trou).
+          if (input.issueDate && creditNote.issueDate) {
+            const oldYear = new Date(creditNote.issueDate).getFullYear();
+            const newYear = new Date(input.issueDate).getFullYear();
+            if (oldYear !== newYear) {
+              throw createValidationError(
+                `Impossible de changer l'année d'émission d'un avoir (${oldYear} → ${newYear}). Cela casserait la séquence de numérotation.`,
+                {
+                  issueDate: `L'année d'émission ne peut pas être modifiée de ${oldYear} à ${newYear} sur un avoir émis.`,
+                },
+              );
+            }
+          }
 
           // Calculer les nouveaux totaux si les items ont changé
           let totals = {};

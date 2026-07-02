@@ -23,6 +23,7 @@ import {
   createNotFoundError,
   createResourceLockedError,
   createStatusTransitionError,
+  createValidationError,
   AppError,
   ERROR_CODES,
 } from "../utils/errors.js";
@@ -702,6 +703,27 @@ const purchaseOrderResolvers = {
             );
           }
 
+          // Garde-fou de transition : updatePurchaseOrder gère l'édition de
+          // contenu et la SEULE transition DRAFT → CONFIRMED (finalisation,
+          // numérotée plus bas). Tout autre changement de statut (rétrogradation
+          // en DRAFT, VALIDATED, IN_PROGRESS, DELIVERED, CANCELED…) doit passer
+          // par changePurchaseOrderStatus, qui applique la whitelist de
+          // transitions. Sans ce garde, un DRAFT → CANCELED consommerait un
+          // numéro séquentiel pour un brouillon abandonné, et un finalisé
+          // pouvait redevenir DRAFT en gardant son numéro.
+          if (
+            input.status &&
+            input.status !== po.status &&
+            !(po.status === "DRAFT" && input.status === "CONFIRMED")
+          ) {
+            throw createValidationError(
+              "Changement de statut non autorisé lors de la modification du bon de commande",
+              {
+                status: `Pour passer un bon de commande de "${po.status}" à "${input.status}", utilisez l'action de changement de statut.`,
+              },
+            );
+          }
+
           // Validation : empêcher le changement d'année de issueDate sur un bon de commande confirmé
           if (input.issueDate && po.status !== "DRAFT" && po.issueDate) {
             const oldYear = new Date(po.issueDate).getFullYear();
@@ -710,6 +732,29 @@ const purchaseOrderResolvers = {
               throw new AppError(
                 `Impossible de changer l'année d'émission d'un bon de commande confirmé (${oldYear} → ${newYear}). Cela casserait la séquence de numérotation.`,
                 ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+          }
+
+          // Une fois le bon de commande finalisé (CONFIRMED/VALIDATED/…),
+          // prefix et number sont VERROUILLÉS : les renuméroter casserait la
+          // continuité de la séquence. La transition DRAFT → finalisé est
+          // gérée plus bas (le numéro y est généré/validé).
+          if (po.status !== "DRAFT") {
+            if (input.number && input.number !== po.number) {
+              throw createValidationError(
+                "Le numéro d'un bon de commande finalisé est verrouillé",
+                {
+                  number: `Impossible de remplacer le numéro "${po.number}" par "${input.number}" sur un bon de commande ${po.status}.`,
+                },
+              );
+            }
+            if (input.prefix && input.prefix !== po.prefix) {
+              throw createValidationError(
+                "Le préfixe d'un bon de commande finalisé est verrouillé",
+                {
+                  prefix: `Impossible de remplacer le préfixe "${po.prefix}" par "${input.prefix}" sur un bon de commande ${po.status}.`,
+                },
               );
             }
           }
@@ -729,6 +774,105 @@ const purchaseOrderResolvers = {
 
           // Ne pas persister companyInfo pour les documents DRAFT
           delete updateData.companyInfo;
+
+          const FINALIZED_PO_STATUSES = [
+            "CONFIRMED",
+            "VALIDATED",
+            "IN_PROGRESS",
+            "DELIVERED",
+            "CANCELED",
+          ];
+          const isFinalizing =
+            po.status === "DRAFT" &&
+            FINALIZED_PO_STATUSES.includes(updateData.status);
+
+          // Un brouillon qui reste brouillon garde son numéro provisoire
+          // (DRAFT-xxx) : le numéro définitif n'est attribué qu'à la
+          // finalisation. Le numéro affiché par l'éditeur n'est qu'une
+          // prévisualisation — le persister créerait des collisions d'index
+          // unique entre brouillons partageant le même "prochain numéro".
+          if (po.status === "DRAFT" && !isFinalizing) {
+            delete updateData.number;
+          }
+
+          // Transition DRAFT → finalisé via updatePurchaseOrder (chemin
+          // utilisé par l'éditeur) : générer ou valider le numéro séquentiel,
+          // comme le fait changePurchaseOrderStatus.
+          if (isFinalizing) {
+            // Snapshot companyInfo à la finalisation
+            if (!po.companyInfo || !po.companyInfo.name) {
+              const org = await getOrganizationInfo(workspaceId);
+              updateData.companyInfo = mapOrganizationToCompanyInfo(org);
+            }
+
+            const finalizeOrg = await getOrganizationInfo(po.workspaceId);
+            const autoNumbering =
+              finalizeOrg?.purchaseOrderAutoNumbering === true;
+
+            if (!input.number || !input.prefix) {
+              // Générer automatiquement (même convention que changePurchaseOrderStatus)
+              let prefix = input.prefix || po.prefix;
+              if (!prefix) {
+                const year = (po.issueDate || new Date()).getFullYear();
+                const month = String(
+                  (po.issueDate || new Date()).getMonth() + 1,
+                ).padStart(2, "0");
+                prefix = `BC-${year}${month}`;
+              }
+
+              updateData.number = await generatePurchaseOrderNumber(prefix, {
+                workspaceId: po.workspaceId,
+                userId: user.id,
+                autoNumbering,
+              });
+              updateData.prefix = prefix;
+            } else {
+              // Numéro fourni explicitement : verrou de séquence (max+1
+              // strict, pas de doublon parmi les finalisés) + renommage des
+              // brouillons en conflit pour éviter une collision d'index unique.
+              if (!/^\d{1,6}$/.test(input.number)) {
+                throw new AppError(
+                  "Le numéro de bon de commande doit contenir entre 1 et 6 chiffres",
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+              const normalizedNumber = String(
+                parseInt(input.number, 10),
+              ).padStart(4, "0");
+
+              const sequenceCheck = await validateNumberSequence(
+                "purchaseOrder",
+                normalizedNumber,
+                input.prefix,
+                { workspaceId: po.workspaceId, autoNumbering },
+              );
+              if (!sequenceCheck.isValid) {
+                throw new AppError(
+                  sequenceCheck.message,
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+
+              const conflictingDrafts = await PurchaseOrder.find({
+                prefix: input.prefix,
+                number: normalizedNumber,
+                status: "DRAFT",
+                workspaceId: po.workspaceId,
+                _id: { $ne: po._id },
+              });
+              // Suffixe court (≤ 20 caractères, cf. validateur du modèle) :
+              // Date.now() complet faisait dépasser la limite → brouillon
+              // renommé devenait inéditable.
+              const renameStamp = Date.now().toString().slice(-6);
+              for (let i = 0; i < conflictingDrafts.length; i++) {
+                await PurchaseOrder.findByIdAndUpdate(conflictingDrafts[i]._id, {
+                  number: `${normalizedNumber}-${renameStamp}${i}`,
+                });
+              }
+
+              updateData.number = normalizedNumber;
+            }
+          }
 
           // Pour les brouillons, rafraîchir les données client depuis la
           // collection Client UNIQUEMENT si l'input ne fournit pas de client.
