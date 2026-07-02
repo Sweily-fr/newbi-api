@@ -529,7 +529,14 @@ const quoteResolvers = {
           context.workspaceId,
         );
         const wsId = new mongoose.Types.ObjectId(workspaceId);
-        const query = { workspaceId: wsId };
+        // Seuls les devis FINALISÉS comptent dans la séquence (même périmètre
+        // que DocumentCounter et validateNumberSequence). Les brouillons sont
+        // hors séquence : un brouillon portant un numéro numérique (données
+        // legacy) ne doit pas décaler la prévisualisation.
+        const query = {
+          workspaceId: wsId,
+          status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+        };
 
         if (!autoNumbering && prefix) {
           query.prefix = prefix;
@@ -725,12 +732,17 @@ const quoteResolvers = {
               workspaceId,
             });
             if (conflictingDrafts.length === 0) return;
-            const bulkOps = conflictingDrafts.map((draft) => ({
+            // Suffixe court (slice -6 + index de boucle) : le numéro doit rester
+            // ≤ 20 caractères (validateur du modèle). Date.now() complet (13
+            // chiffres) faisait dépasser 20 → le brouillon renommé devenait
+            // inéditable (échec de validation au prochain save).
+            const renameStamp = Date.now().toString().slice(-6);
+            const bulkOps = conflictingDrafts.map((draft, i) => ({
               updateOne: {
                 filter: { _id: draft._id },
                 update: {
                   $set: {
-                    number: `${newNumber}-${Date.now()}${Math.floor(Math.random() * 1000)}`,
+                    number: `${newNumber}-${renameStamp}${i}`,
                   },
                 },
               },
@@ -1036,6 +1048,27 @@ const quoteResolvers = {
           );
         }
 
+        // Garde-fou de transition : updateQuote gère l'édition de contenu et la
+        // SEULE transition DRAFT → PENDING (finalisation, numérotée plus bas).
+        // Tout autre changement de statut doit passer par changeQuoteStatus
+        // (qui applique la whitelist de transitions + snapshots). Sans ce garde,
+        // updateQuote(status: CANCELED/COMPLETED) sur un brouillon contournait
+        // toute la numérotation : le bloc de finalisation ne se déclenche que
+        // sur PENDING, donc un devis finalisé pouvait recevoir un numéro
+        // arbitraire non validé, ou porter un numéro DRAFT-… dans la séquence.
+        if (
+          input.status &&
+          input.status !== quote.status &&
+          !(quote.status === "DRAFT" && input.status === "PENDING")
+        ) {
+          throw createValidationError(
+            "Changement de statut non autorisé lors de la modification du devis",
+            {
+              status: `Pour passer un devis de "${quote.status}" à "${input.status}", utilisez l'action de changement de statut.`,
+            },
+          );
+        }
+
         // Validation : empêcher le changement d'année de issueDate sur un devis finalisé
         if (input.issueDate && quote.status !== "DRAFT" && quote.issueDate) {
           const oldYear = new Date(quote.issueDate).getFullYear();
@@ -1050,18 +1083,25 @@ const quoteResolvers = {
           }
         }
 
-        // Vérifier si un nouveau numéro est fourni
-        if (input.number && input.number !== quote.number) {
-          // Vérifier si le numéro fourni existe déjà
-          const existingQuote = await Quote.findOne({
-            number: input.number,
-            _id: { $ne: id }, // Exclure le devis actuel de la recherche
-          });
-
-          if (existingQuote) {
-            throw new AppError(
-              "Ce numéro de devis est déjà utilisé",
-              ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
+        // Une fois le devis finalisé (PENDING/CANCELED ici — COMPLETED et
+        // IMPORTED sont rejetés plus haut), prefix et number sont VERROUILLÉS :
+        // les renuméroter casserait la continuité de la séquence. La transition
+        // DRAFT → PENDING est gérée plus bas (le numéro y est généré/validé).
+        if (quote.status !== "DRAFT") {
+          if (input.number && input.number !== quote.number) {
+            throw createValidationError(
+              "Le numéro d'un devis finalisé est verrouillé",
+              {
+                number: `Impossible de remplacer le numéro "${quote.number}" par "${input.number}" sur un devis ${quote.status}.`,
+              },
+            );
+          }
+          if (input.prefix && input.prefix !== quote.prefix) {
+            throw createValidationError(
+              "Le préfixe d'un devis finalisé est verrouillé",
+              {
+                prefix: `Impossible de remplacer le préfixe "${quote.prefix}" par "${input.prefix}" sur un devis ${quote.status}.`,
+              },
             );
           }
         }
@@ -1079,6 +1119,19 @@ const quoteResolvers = {
 
         // Préparer les données à mettre à jour
         let updateData = { ...input };
+
+        // Un brouillon qui reste brouillon garde son numéro provisoire
+        // (DRAFT-xxx) : le numéro définitif n'est attribué qu'à la
+        // finalisation. Le numéro affiché par l'éditeur n'est qu'une
+        // prévisualisation du prochain numéro — le persister ici créerait des
+        // collisions (index unique) entre brouillons partageant la même
+        // prévisualisation, et des faux "numéro déjà utilisé".
+        if (
+          quote.status === "DRAFT" &&
+          (!updateData.status || updateData.status === "DRAFT")
+        ) {
+          delete updateData.number;
+        }
 
         // Vérifier si le client a une adresse de livraison différente
         if (
@@ -1214,8 +1267,60 @@ const quoteResolvers = {
               // Mettre à jour le numéro et le préfixe
               updateData.number = newNumber;
               updateData.prefix = prefix;
+            } else {
+              // Numéro fourni explicitement à la finalisation : appliquer le
+              // même verrou que createQuote (continuité de la séquence, pas de
+              // trou ni recul, pas de doublon parmi les devis finalisés).
+              if (!/^\d{1,6}$/.test(input.number)) {
+                throw new AppError(
+                  "Le numéro de devis doit contenir entre 1 et 6 chiffres",
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+              const normalizedNumber = String(
+                parseInt(input.number, 10),
+              ).padStart(4, "0");
+
+              const finalizeOrg = await getOrganizationInfo(quote.workspaceId);
+              const autoNumbering = finalizeOrg?.quoteAutoNumbering === true;
+
+              const sequenceCheck = await validateNumberSequence(
+                "quote",
+                normalizedNumber,
+                input.prefix,
+                { workspaceId: quote.workspaceId, autoNumbering },
+              );
+              if (!sequenceCheck.isValid) {
+                throw new AppError(
+                  sequenceCheck.message,
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+
+              // Renommer les brouillons qui détiennent déjà ce numéro pour
+              // éviter une collision sur l'index unique au save. Suffixe court
+              // (≤ 20 caractères, cf. validateur du modèle).
+              const conflictingDrafts = await Quote.find({
+                prefix: input.prefix,
+                number: normalizedNumber,
+                status: "DRAFT",
+                workspaceId: quote.workspaceId,
+                _id: { $ne: quote._id },
+              });
+              const renameStamp = Date.now().toString().slice(-6);
+              for (let i = 0; i < conflictingDrafts.length; i++) {
+                await Quote.findByIdAndUpdate(conflictingDrafts[i]._id, {
+                  number: `${normalizedNumber}-${renameStamp}${i}`,
+                });
+              }
+
+              updateData.number = normalizedNumber;
             }
           } catch (error) {
+            // Ne pas masquer les erreurs métier (séquence invalide, doublon…)
+            if (error instanceof AppError) {
+              throw error;
+            }
             console.error(
               "❌ [updateQuote] Error generating quote number:",
               error,

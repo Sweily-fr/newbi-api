@@ -400,3 +400,267 @@ describe("Quote Resolver - Quote.hasPurchaseOrderInvoices", () => {
     expect(await resolver({ _id: quoteId })).toBe(false);
   });
 });
+
+describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
+  const resolver = quoteResolvers.Mutation.updateQuote;
+
+  // Fixture complète pour les brouillons destinés à être finalisés :
+  // la validation Mongoose des devis PENDING exige items, client complet
+  // et companyInfo valide.
+  const finalizableDraftData = (data = {}) => ({
+    status: "DRAFT",
+    items: [
+      {
+        description: "Prestation",
+        quantity: 1,
+        unitPrice: 100,
+        vatRate: 20,
+      },
+    ],
+    client: {
+      id: "client-1",
+      name: "Acme",
+      email: "acme@test.fr",
+      type: "COMPANY",
+      address: {
+        street: "2 rue des Clients",
+        city: "Paris",
+        postalCode: "75002",
+        country: "France",
+      },
+    },
+    companyInfo: {
+      name: "Test Org",
+      email: "contact@test.fr",
+      address: {
+        street: "1 rue du Test",
+        city: "Paris",
+        postalCode: "75001",
+        country: "France",
+      },
+    },
+    ...data,
+  });
+
+  it("sauvegarde un brouillon en conservant son numéro provisoire (pas de faux « numéro déjà utilisé »)", async () => {
+    // Un devis d'un AUTRE workspace porte déjà le numéro prévisualisé "0002" :
+    // avec l'ancien check global (sans workspaceId/prefix/statut), la
+    // sauvegarde du brouillon échouait à tort.
+    await Quote.collection.insertOne({
+      workspaceId: buildOrganizationId(),
+      createdBy: userId,
+      status: "PENDING",
+      number: "0002",
+      prefix: "D-072026",
+      issueDate: new Date(),
+      client: { id: "client-x", name: "Autre" },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await insertQuote({ number: "0001", prefix: "D-072026" });
+
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        number: "DRAFT-1751400000000",
+        prefix: "D-072026",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { number: "0002", prefix: "D-072026", status: "DRAFT" },
+      },
+      ctx(),
+    );
+
+    // La sauvegarde passe et le numéro provisoire du brouillon est conservé
+    // (le numéro définitif n'est attribué qu'à la finalisation)
+    expect(result.status).toBe("DRAFT");
+    expect(result.number).toBe("DRAFT-1751400000000");
+  });
+
+  it("verrouille le numéro d'un devis finalisé", async () => {
+    const { insertedId } = await insertQuote({
+      status: "PENDING",
+      number: "0001",
+    });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), input: { number: "0002" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/verrouillé/i);
+  });
+
+  it("verrouille le préfixe d'un devis finalisé", async () => {
+    const { insertedId } = await insertQuote({
+      status: "PENDING",
+      number: "0001",
+      prefix: "D-072026",
+    });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), input: { prefix: "D-082026" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/verrouillé/i);
+  });
+
+  it("rejette la finalisation DRAFT → PENDING avec un numéro hors séquence", async () => {
+    await insertQuote({ number: "0001", prefix: "D-072026", status: "PENDING" });
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        number: "DRAFT-1751400000001",
+        prefix: "D-072026",
+      }),
+    );
+
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          input: { status: "PENDING", number: "0005", prefix: "D-072026" },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/0002/);
+  });
+
+  it("accepte la finalisation DRAFT → PENDING avec le numéro séquentiel suivant", async () => {
+    await insertQuote({ number: "0001", prefix: "D-072026", status: "PENDING" });
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        number: "DRAFT-1751400000002",
+        prefix: "D-072026",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { status: "PENDING", number: "0002", prefix: "D-072026" },
+      },
+      ctx(),
+    );
+
+    expect(result.status).toBe("PENDING");
+    expect(result.number).toBe("0002");
+    expect(result.prefix).toBe("D-072026");
+  });
+
+  it("renomme un autre brouillon qui détenait déjà le numéro attribué à la finalisation", async () => {
+    await insertQuote({ number: "0001", prefix: "D-072026", status: "PENDING" });
+    // Brouillon « pollué » (données legacy) qui détient le numéro numérique 0002
+    const { insertedId: pollutedId } = await insertQuote({
+      status: "DRAFT",
+      number: "0002",
+      prefix: "D-072026",
+    });
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        number: "DRAFT-1751400000003",
+        prefix: "D-072026",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { status: "PENDING", number: "0002", prefix: "D-072026" },
+      },
+      ctx(),
+    );
+
+    expect(result.number).toBe("0002");
+    const polluted = await Quote.collection.findOne({ _id: pollutedId });
+    expect(polluted.number).not.toBe("0002");
+    expect(polluted.status).toBe("DRAFT");
+    // I1 : le numéro renommé doit rester ≤ 20 caractères (validateur du
+    // modèle), sinon le brouillon renommé deviendrait inéditable.
+    expect(polluted.number.length).toBeLessThanOrEqual(20);
+    expect(polluted.number).toMatch(/^[A-Za-z0-9-]{1,20}$/);
+  });
+
+  it("REJETTE un changement de statut interdit via updateQuote (DRAFT → CANCELED contournait la numérotation)", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        number: "DRAFT-1751400000009",
+        prefix: "D-072026",
+      }),
+    );
+
+    // B1 : sans garde-fou, ce chemin finalisait un devis CANCELED avec un
+    // numéro arbitraire non validé (le bloc de finalisation ne se déclenche
+    // que sur PENDING).
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          input: { status: "CANCELED", number: "9999", prefix: "D-072026" },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/statut non autorisé/i);
+
+    // Le devis doit être resté un brouillon intact
+    const untouched = await Quote.collection.findOne({ _id: insertedId });
+    expect(untouched.status).toBe("DRAFT");
+    expect(untouched.number).toBe("DRAFT-1751400000009");
+  });
+
+  it("REJETTE la rétrogradation d'un devis finalisé en brouillon via updateQuote", async () => {
+    const { insertedId } = await insertQuote({
+      status: "PENDING",
+      number: "0001",
+      prefix: "D-072026",
+    });
+
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          input: { status: "DRAFT" },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/statut non autorisé/i);
+
+    const untouched = await Quote.collection.findOne({ _id: insertedId });
+    expect(untouched.status).toBe("PENDING");
+  });
+
+  it("autorise l'édition de contenu d'un devis finalisé sans changement de statut", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0001",
+        prefix: "D-072026",
+      }),
+    );
+
+    // Renvoyer le même statut (comme le fait l'éditeur) ne doit pas être bloqué
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { status: "PENDING", headerNotes: "Note ajoutée" },
+      },
+      ctx(),
+    );
+
+    expect(result.status).toBe("PENDING");
+    expect(result.number).toBe("0001");
+    expect(result.headerNotes).toBe("Note ajoutée");
+  });
+});

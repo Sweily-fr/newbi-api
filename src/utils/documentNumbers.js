@@ -555,12 +555,16 @@ const FINALIZED_STATUSES = {
     "DELIVERED",
     "CANCELED",
   ],
+  // Les avoirs n'ont pas de brouillon : tous sont finalisés (même périmètre
+  // que getExistingMaxNumber dans DocumentCounter).
+  creditNote: ["CREATED", "PENDING", "COMPLETED", "CANCELED"],
 };
 
 const MODEL_LABELS = {
   invoice: "facture",
   quote: "devis",
   purchaseOrder: "bon de commande",
+  creditNote: "avoir",
 };
 
 /**
@@ -590,6 +594,7 @@ const validateNumberSequence = async (documentType, number, prefix, options = {}
     invoice: Invoice,
     quote: Quote,
     purchaseOrder: PurchaseOrder,
+    creditNote: CreditNote,
   };
   const model = modelMap[documentType];
   const statuses = FINALIZED_STATUSES[documentType];
