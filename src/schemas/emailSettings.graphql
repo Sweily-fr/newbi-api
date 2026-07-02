@@ -29,9 +29,9 @@ input EmailSettingsInput {
 }
 
 extend type Query {
-  getEmailSettings: EmailSettings
+  getEmailSettings(workspaceId: ID): EmailSettings
 }
 
 extend type Mutation {
-  updateEmailSettings(input: EmailSettingsInput!): EmailSettings
+  updateEmailSettings(workspaceId: ID, input: EmailSettingsInput!): EmailSettings
 }
