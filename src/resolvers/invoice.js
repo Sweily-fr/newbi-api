@@ -774,9 +774,16 @@ const invoiceResolvers = {
           });
         }
 
-        // Query directe : chercher le max parmi toutes les factures (y compris brouillons)
+        // Query directe : chercher le max parmi les factures FINALISÉES
+        // uniquement (même périmètre que DocumentCounter et
+        // validateNumberSequence). Les brouillons sont hors séquence : un
+        // brouillon portant un numéro numérique (données legacy) ne doit pas
+        // décaler la prévisualisation par rapport à la validation.
         const wsId = new mongoose.Types.ObjectId(workspaceId);
-        const query = { workspaceId: wsId };
+        const query = {
+          workspaceId: wsId,
+          status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+        };
 
         // autoNumbering = tous les préfixes, sinon filtrer par préfixe
         if (!autoNumbering && prefix) {
@@ -1841,6 +1848,27 @@ const invoiceResolvers = {
             );
           }
 
+          // Garde-fou de transition : updateInvoice gère l'édition de contenu
+          // et la SEULE transition DRAFT → PENDING (finalisation, numérotée plus
+          // bas). Tout autre changement de statut (rétrogradation en DRAFT,
+          // OVERDUE, CANCELED, COMPLETED…) doit passer par changeInvoiceStatus /
+          // markInvoiceAsPaid, qui appliquent la whitelist de transitions.
+          // Sans ce garde, une facture émise pouvait redevenir DRAFT en gardant
+          // son numéro (numéro ensuite réattribuable à une autre facture) ou
+          // sortir de la séquence via un statut non finalisé.
+          if (
+            input.status &&
+            input.status !== invoiceData.status &&
+            !(invoiceData.status === "DRAFT" && input.status === "PENDING")
+          ) {
+            throw createValidationError(
+              "Changement de statut non autorisé lors de la modification de la facture",
+              {
+                status: `Pour passer une facture de "${invoiceData.status}" à "${input.status}", utilisez l'action de changement de statut dédiée.`,
+              },
+            );
+          }
+
           // §4.7 — Une fois la facture finalisée (PENDING/COMPLETED/CANCELED),
           // prefix et number sont VERROUILLÉS. Toute tentative de modification
           // doit être rejetée — compliance FR (audit trail, séquentialité).
@@ -2127,6 +2155,9 @@ const invoiceResolvers = {
 
           // Préparer les données à mettre à jour - SEULEMENT les champs modifiés
           const updateData = {};
+          // Numéro du brouillon à restaurer si la finalisation échoue après
+          // l'écriture du numéro temporaire (évite les TEMP- orphelins)
+          let draftNumberBackup = null;
 
           // Ne pas persister companyInfo pour les documents DRAFT
           // (le field resolver GraphQL le résout dynamiquement depuis l'organisation)
@@ -2268,6 +2299,15 @@ const invoiceResolvers = {
                 );
               }
             }
+            // Vérifier que la date d'émission n'est pas antérieure à celle de
+            // la dernière facture finalisée (même contrôle que createInvoice
+            // et changeInvoiceStatus — sinon inversion date/numéro possible)
+            await validateInvoiceIssueDate(
+              updatedInput.issueDate || invoiceData.issueDate,
+              workspaceId,
+              invoiceData._id,
+            );
+
             // La facture passe de brouillon à finalisée : générer un nouveau numéro séquentiel
             const now = new Date();
             const year = now.getFullYear();
@@ -2282,26 +2322,36 @@ const invoiceResolvers = {
             await Invoice.findByIdAndUpdate(invoiceData._id, {
               number: tempNumber,
             });
+            draftNumberBackup = originalDraftNumber;
 
-            // Lire le flag "séquence continue" de l'organisation
-            const finalizeOrg = await getOrganizationInfo(workspaceId);
-            const autoNumbering = finalizeOrg?.invoiceAutoNumbering === true;
+            try {
+              // Lire le flag "séquence continue" de l'organisation
+              const finalizeOrg = await getOrganizationInfo(workspaceId);
+              const autoNumbering = finalizeOrg?.invoiceAutoNumbering === true;
 
-            // Utiliser generateInvoiceNumber avec isValidatingDraft pour
-            // préserver le numéro du brouillon quand c'est le premier document finalisé
-            const newNumber = await generateInvoiceNumber(prefix, {
-              isValidatingDraft: true,
-              currentDraftNumber: tempNumber,
-              originalDraftNumber: originalDraftNumber,
-              workspaceId: workspaceId,
-              userId: context.user._id,
-              currentInvoiceId: invoiceData._id,
-              autoNumbering,
-            });
+              // Utiliser generateInvoiceNumber avec isValidatingDraft pour
+              // préserver le numéro du brouillon quand c'est le premier document finalisé
+              const newNumber = await generateInvoiceNumber(prefix, {
+                isValidatingDraft: true,
+                currentDraftNumber: tempNumber,
+                originalDraftNumber: originalDraftNumber,
+                workspaceId: workspaceId,
+                userId: context.user._id,
+                currentInvoiceId: invoiceData._id,
+                autoNumbering,
+              });
 
-            // Mettre à jour le numéro et le préfixe
-            updateData.number = newNumber;
-            updateData.prefix = prefix;
+              // Mettre à jour le numéro et le préfixe
+              updateData.number = newNumber;
+              updateData.prefix = prefix;
+            } catch (numberError) {
+              // Restaurer le numéro du brouillon : ne pas laisser un TEMP- orphelin
+              await Invoice.findByIdAndUpdate(invoiceData._id, {
+                number: originalDraftNumber,
+              });
+              draftNumberBackup = null;
+              throw numberError;
+            }
           }
 
           // Fusionner toutes les autres mises à jour
@@ -2456,6 +2506,23 @@ const invoiceResolvers = {
 
             return updatedInvoice;
           } catch (error) {
+            // Si la finalisation a échoué après l'écriture du numéro TEMP-,
+            // restaurer le numéro du brouillon (seulement si la facture porte
+            // encore un TEMP- : ne pas écraser un numéro définitif déjà posé)
+            if (draftNumberBackup) {
+              try {
+                await Invoice.findOneAndUpdate(
+                  { _id: id, number: { $regex: /^TEMP-/ } },
+                  { $set: { number: draftNumberBackup } },
+                );
+              } catch (restoreError) {
+                console.error(
+                  "Erreur lors de la restauration du numéro de brouillon:",
+                  restoreError,
+                );
+              }
+            }
+
             // Intercepter les erreurs de validation Mongoose
             console.error(
               "Erreur lors de la mise à jour de la facture:",
@@ -2607,6 +2674,17 @@ const invoiceResolvers = {
         // Vérifier si le changement de statut est autorisé
         if (invoice.status === status) {
           return invoice; // Aucun changement nécessaire
+        }
+
+        // OVERDUE est un état DÉRIVÉ (calculé à partir de dueDate), jamais
+        // stocké : le poser manuellement sortirait la facture du périmètre
+        // « finalisé » de la séquence (son numéro deviendrait réattribuable →
+        // doublon). On l'interdit explicitement comme cible.
+        if (status === "OVERDUE") {
+          throw createValidationError(
+            "Le statut « en retard » est calculé automatiquement et ne peut pas être défini manuellement.",
+            { status: "OVERDUE n'est pas un statut assignable." },
+          );
         }
 
         // Vérifier les transitions de statut autorisées

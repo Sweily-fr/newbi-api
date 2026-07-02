@@ -364,9 +364,14 @@ creditNoteSchema.add({
   },
 });
 
-// Index composé pour garantir l'unicité des numéros d'avoir par année et organisation
+// Index composé pour garantir l'unicité des numéros d'avoir par préfixe, année et organisation.
+// Le prefix DOIT faire partie de l'index : le compteur est keyé par préfixe et le
+// préfixe par défaut est mensuel (AV-AAAAMM) — sans lui, deux avoirs "0001" de
+// janvier et février de la même année provoquaient un E11000.
+// Migration : scripts/migrate-creditnote-index.js (supprime l'ancien index sans prefix).
 creditNoteSchema.index(
   {
+    prefix: 1,
     number: 1,
     workspaceId: 1,
     issueYear: 1,
@@ -374,7 +379,7 @@ creditNoteSchema.index(
   {
     unique: true,
     partialFilterExpression: { number: { $exists: true } },
-    name: "creditnote_number_workspaceId_year_unique",
+    name: "creditnote_prefix_number_workspaceId_year_unique",
   },
 );
 

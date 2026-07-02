@@ -350,4 +350,23 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
       ),
     ).rejects.toThrow(/non trouvé/i);
   });
+
+  it("REJETTE le passage manuel au statut OVERDUE (état dérivé, hors séquence)", async () => {
+    const { insertedId } = await insertInvoice({ status: "PENDING" });
+
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          workspaceId: organizationId.toString(),
+          status: "OVERDUE",
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/en retard|OVERDUE/i);
+
+    const untouched = await Invoice.collection.findOne({ _id: insertedId });
+    expect(untouched.status).toBe("PENDING");
+  });
 });
