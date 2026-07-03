@@ -43,6 +43,7 @@ import eInvoicingResolvers from "./eInvoicing.js";
 import publicBoardShareResolvers from "./publicBoardShare.js";
 import taskImageResolvers from "./taskImage.js";
 import notificationPreferencesResolvers from "./notificationPreferences.js";
+import pushTokenResolvers from "./pushToken.js";
 import userInvitedResolvers from "./userInvited.js";
 import clientAutomationResolvers from "./clientAutomation.js";
 import { clientCustomFieldResolvers } from "./clientCustomField.js";
@@ -111,6 +112,7 @@ const resolvers = mergeResolvers([
   publicBoardShareResolvers,
   taskImageResolvers,
   notificationPreferencesResolvers,
+  pushTokenResolvers,
   userInvitedResolvers,
   clientAutomationResolvers,
   clientCustomFieldResolvers,

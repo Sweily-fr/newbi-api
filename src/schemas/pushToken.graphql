@@ -1,0 +1,13 @@
+# Types pour l'enregistrement des tokens de notifications push (Expo)
+
+type PushTokenResponse {
+  success: Boolean!
+  message: String
+}
+
+extend type Mutation {
+  # Enregistre (ou rafraîchit) le token push Expo de l'appareil courant
+  registerPushToken(token: String!, platform: String): PushTokenResponse
+  # Supprime un token push (ex: au logout)
+  removePushToken(token: String!): PushTokenResponse
+}

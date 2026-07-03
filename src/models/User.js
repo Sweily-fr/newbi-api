@@ -425,6 +425,15 @@ const userSchema = new mongoose.Schema(
         push: { type: Boolean, default: true },
       },
     },
+
+    // Tokens de notifications push (Expo) — un par appareil
+    expoPushTokens: [
+      {
+        token: { type: String },
+        platform: { type: String },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   {
     timestamps: true,
