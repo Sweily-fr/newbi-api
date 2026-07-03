@@ -215,7 +215,7 @@ function generateEmailHtml(
           ? "Numéro du bon de commande"
           : "Numéro de l'avoir";
 
-  const detailRows = `${detailRow(numberLabel, variables.documentNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date d'émission", variables.issueDate)}${documentType === DOCUMENT_TYPES.INVOICE ? detailRow("Date d'échéance", dueDate) : ""}${documentType === DOCUMENT_TYPES.CREDIT_NOTE ? detailRow("Facture associée", variables.invoiceNumber) : ""}`;
+  const detailRows = `${detailRow(numberLabel, variables.documentNumber)}${detailRow("Montant total", variables.totalAmount, { strong: true })}${detailRow("Date d'émission", variables.issueDate)}${documentType === DOCUMENT_TYPES.INVOICE || documentType === DOCUMENT_TYPES.QUOTE ? detailRow("Date d'échéance", dueDate) : documentType === DOCUMENT_TYPES.PURCHASE_ORDER ? detailRow("Date de validité", dueDate) : ""}${documentType === DOCUMENT_TYPES.CREDIT_NOTE ? detailRow("Facture associée", variables.invoiceNumber) : ""}`;
 
   // Gabarit aligné sur les autres emails Newbi (cf. notification de mention) :
   // logo centré, carte blanche, badge violet, bouton noir, footer marque.
@@ -609,8 +609,9 @@ async function sendDocumentEmail({
     "",
   );
 
-  // Récupérer le nom d'entreprise actuel depuis l'organisation (pas le snapshot du document)
+  // Récupérer le nom et l'email d'entreprise actuels depuis l'organisation (pas le snapshot du document)
   let currentCompanyName = document.companyInfo?.name || "Votre Entreprise";
+  let currentCompanyEmail = document.companyInfo?.email || "";
   try {
     const db = mongoose.connection.db;
     const organizationCollection = db.collection("organization");
@@ -619,6 +620,9 @@ async function sendDocumentEmail({
     });
     if (organization?.companyName) {
       currentCompanyName = organization.companyName;
+    }
+    if (organization?.companyEmail) {
+      currentCompanyEmail = organization.companyEmail;
     }
   } catch {
     // Fallback sur le snapshot du document
@@ -654,11 +658,15 @@ async function sendDocumentEmail({
   const finalSubject = replaceVariables(emailSubject, variables);
   const finalBody = replaceVariables(emailBody, variables);
 
-  // Récupérer la date d'échéance pour les factures
+  // Récupérer la date d'échéance (factures) ou de validité (devis, bons de commande)
   const dueDate =
     documentType === DOCUMENT_TYPES.INVOICE && document.dueDate
       ? new Date(document.dueDate).toLocaleDateString("fr-FR")
-      : null;
+      : (documentType === DOCUMENT_TYPES.QUOTE ||
+            documentType === DOCUMENT_TYPES.PURCHASE_ORDER) &&
+          document.validUntil
+        ? new Date(document.validUntil).toLocaleDateString("fr-FR")
+        : null;
 
   // Récupérer les paramètres email du workspace (fallback pour le footer)
   const emailSettings = await EmailSettings.findOne({ workspaceId });
@@ -864,16 +872,12 @@ async function sendDocumentEmail({
 
   attachments.push(...normalizedExtraAttachments);
 
-  let fromEmail, fromName, replyTo;
-  if (emailSettings?.fromEmail) {
-    fromEmail = emailSettings.fromEmail;
-    fromName = emailSettings.fromName || currentCompanyName || "";
-    replyTo = emailSettings.replyTo || emailSettings.fromEmail;
-  } else {
-    fromEmail = document.companyInfo?.email || "noreply@newbi.fr";
-    fromName = currentCompanyName || "";
-    replyTo = fromEmail;
-  }
+  // L'email de l'organisation est l'identité d'expéditeur (cohérent avec le "De" affiché
+  // dans le modal d'envoi) ; les paramètres email servent de repli, replyTo reste un override
+  const fromEmail =
+    currentCompanyEmail || emailSettings?.fromEmail || "noreply@newbi.fr";
+  const fromName = currentCompanyName || emailSettings?.fromName || "";
+  const replyTo = emailSettings?.replyTo || fromEmail;
 
   const actualSenderEmail = fromName
     ? `"${fromName}" <${fromEmail}>`
