@@ -5,6 +5,10 @@ import PurchaseOrder from "../models/PurchaseOrder.js";
 import CreditNote from "../models/CreditNote.js";
 import logger from "../utils/logger.js";
 import { publishEmailTrackingUpdate } from "../resolvers/documentEmail.js";
+import {
+  cacheDocumentPdf,
+  generateDocumentPdf,
+} from "../services/documentAutomationService.js";
 
 const router = express.Router();
 
@@ -97,6 +101,8 @@ router.get("/open/:token", async (req, res) => {
 router.get("/click/:token", async (req, res) => {
   const { token } = req.params;
   let redirectUrl = null;
+  let foundDoc = null;
+  let foundType = null;
 
   try {
     for (const { model: Model, type: documentType } of DOCUMENT_MODELS) {
@@ -151,6 +157,8 @@ router.get("/click/:token", async (req, res) => {
           redirectUrl = doc.cachedPdf.url;
         }
 
+        foundDoc = doc;
+        foundType = documentType;
         break;
       }
     }
@@ -159,12 +167,50 @@ router.get("/click/:token", async (req, res) => {
   }
 
   if (redirectUrl) {
-    res.redirect(302, redirectUrl);
-  } else {
-    // Fallback : page Newbi
-    const frontendUrl = process.env.FRONTEND_URL || "https://www.newbi.fr";
-    res.redirect(302, frontendUrl);
+    return res.redirect(302, redirectUrl);
   }
+
+  // Document trouvé mais PDF absent du cache R2 (envoi antérieur à la mise en
+  // cache, échec d'upload…) : générer le PDF à la volée et le servir
+  // directement, plutôt que de renvoyer le destinataire vers la page Newbi.
+  if (foundDoc) {
+    try {
+      const pdfBuffer = await generateDocumentPdf(
+        foundDoc._id.toString(),
+        foundType,
+      );
+      if (pdfBuffer?.length) {
+        // Mise en cache pour les prochains clics — fire-and-forget.
+        cacheDocumentPdf(
+          foundDoc._id.toString(),
+          foundType,
+          pdfBuffer,
+          foundDoc.workspaceId?.toString(),
+        ).catch((err) =>
+          logger.warn(
+            `[EmailTracking] Échec cache PDF après génération: ${err.message}`,
+          ),
+        );
+
+        const baseName = `${foundDoc.prefix ? `${foundDoc.prefix}-` : ""}${
+          foundDoc.number || foundDoc._id
+        }`.replace(/[^\w.-]/g, "_");
+        res.set({
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="${baseName}.pdf"`,
+        });
+        return res.send(pdfBuffer);
+      }
+    } catch (error) {
+      logger.warn(
+        `[EmailTracking] Génération PDF à la volée impossible: ${error.message}`,
+      );
+    }
+  }
+
+  // Fallback : page Newbi
+  const frontendUrl = process.env.FRONTEND_URL || "https://www.newbi.fr";
+  res.redirect(302, frontendUrl);
 });
 
 export default router;
