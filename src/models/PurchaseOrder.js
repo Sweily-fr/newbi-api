@@ -232,6 +232,12 @@ const purchaseOrderSchema = new mongoose.Schema(
         ref: "Invoice",
       },
     ],
+    // Cache PDF pour les automatisations (copie R2 serveur-à-serveur)
+    cachedPdf: {
+      key: { type: String },
+      url: { type: String },
+      generatedAt: { type: Date },
+    },
     // Tracking d'ouverture d'email
     emailTracking: {
       emailSentAt: { type: Date },
