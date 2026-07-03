@@ -2027,4 +2027,6 @@ const documentAutomationService = {
   },
 };
 
+export { cacheDocumentPdf, generateDocumentPdf };
+
 export default documentAutomationService;
