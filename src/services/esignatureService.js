@@ -184,10 +184,12 @@ class ESignatureService {
     options = {},
     callbackConfig = {},
   ) {
-    // Placement par défaut de la signature : bas à droite d'une page A4 (595x842 pt).
+    // Placement par défaut de la signature : bas à droite d'une page A4 (595x842 pt),
+    // au-dessus du bandeau de pied de page du document (~745 pt pour un footer standard).
     // Origine des coordonnées en HAUT à gauche (confirmé par test) → bas = y élevé.
+    // Le frontend passe normalement options.signaturePlacement mesuré sur le document réel.
     const defaultPlacement = options.signaturePlacement || [
-      { page: options.signaturePage || 1, x: 400, y: 730 },
+      { page: options.signaturePage || 1, x: 400, y: 650 },
     ];
 
     // Formater les signataires
@@ -344,9 +346,10 @@ class ESignatureService {
       throw new Error("Certificate credentials required for QES OTP signature");
     }
 
-    // Placement par défaut : bas à droite (origine des coordonnées en haut à gauche)
+    // Placement par défaut : bas à droite, au-dessus du pied de page
+    // (origine des coordonnées en haut à gauche)
     const defaultPlacement = options.signaturePlacement || [
-      { page: options.signaturePage || 1, x: 400, y: 730 },
+      { page: options.signaturePage || 1, x: 400, y: 650 },
     ];
 
     // Formater les signataires (OTP par SMS si mobile fourni, sinon email)

@@ -257,7 +257,20 @@ const esignatureResolvers = {
             title,
             signatureMode,
             documentBase64,
+            signaturePlacement,
           } = input;
+
+          // Placement de la zone de signature calculé par le frontend
+          // (juste au-dessus du pied de page, sur la partie blanche).
+          const placementOption = signaturePlacement?.length
+            ? {
+                signaturePlacement: signaturePlacement.map((p) => ({
+                  page: p.page,
+                  x: Math.round(p.x),
+                  y: Math.round(p.y),
+                })),
+              }
+            : {};
 
           // Seuls les devis peuvent être signés électroniquement
           if (documentType !== "quote") {
@@ -372,6 +385,7 @@ const esignatureResolvers = {
                   `Signature ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
                 signatureMode: signatureMode || ["typed", "drawn"],
                 signerMustRead: true,
+                ...placementOption,
                 ui: {
                   completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
                   cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,
@@ -402,6 +416,7 @@ const esignatureResolvers = {
                   `Signature ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
                 signatureMode: signatureMode || ["typed", "drawn"],
                 signerMustRead: true,
+                ...placementOption,
                 ui: {
                   completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
                   cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,

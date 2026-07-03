@@ -49,6 +49,16 @@ input SignerInput {
 }
 
 """
+Position d'une zone de signature dans le PDF.
+Coordonnées en points PDF sur une page A4 (595x842), origine en HAUT à gauche.
+"""
+input SignaturePlacementInput {
+  page: Int!
+  x: Float!
+  y: Float!
+}
+
+"""
 Input pour demander une signature
 """
 input RequestSignatureInput {
@@ -59,6 +69,11 @@ input RequestSignatureInput {
   title: String
   signatureMode: [String!]
   documentBase64: String!
+  """
+  Placement de la zone de signature calculé par le frontend (juste au-dessus
+  du pied de page). Si absent, le backend applique son placement par défaut.
+  """
+  signaturePlacement: [SignaturePlacementInput!]
 }
 
 """
