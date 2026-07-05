@@ -346,14 +346,20 @@ const dashboardAggregationResolvers = {
         // émises (cf. plus bas), pas des transactions bancaires. On exclut donc
         // les transactions déjà rattachées à une facture pour éviter de
         // compter deux fois les factures payées et rapprochées.
-        if (isIncome) matchFilter.linkedInvoiceId = null;
+        if (isIncome) {
+          // N↔N : "non rattachée" = array vide.
+          matchFilter.$or = [
+            { linkedInvoiceIds: { $exists: false } },
+            { linkedInvoiceIds: { $size: 0 } },
+          ];
+        }
 
-        // T4/T5 : on a besoin de linkedInvoiceId, category, expenseCategory
+        // T4/T5 : on a besoin de linkedInvoiceIds, category, expenseCategory
         // pour respecter les catégorisations manuelles + reclasser les
         // paiements de factures clients en "Chiffre d'affaires".
         const transactions = await Transaction.find(matchFilter)
           .select(
-            "amount description metadata linkedInvoiceId category expenseCategory",
+            "amount description metadata linkedInvoiceIds category expenseCategory",
           )
           .lean();
 

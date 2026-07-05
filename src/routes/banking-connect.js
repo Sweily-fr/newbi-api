@@ -505,8 +505,8 @@ router.post("/disconnect", async (req, res) => {
 
           await Promise.all([
             Invoice.updateMany(
-              { linkedTransactionId: { $in: txIds } },
-              { $set: { linkedTransactionId: null } },
+              { linkedTransactionIds: { $in: txIds } },
+              { $pull: { linkedTransactionIds: { $in: txIds } } },
             ),
             Expense.updateMany(
               { linkedTransactionId: { $in: txIds } },

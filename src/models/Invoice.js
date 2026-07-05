@@ -390,11 +390,13 @@ const invoiceSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Rapprochement avec transaction bancaire
-    linkedTransactionId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      default: null,
+    // Rapprochement avec transactions bancaires (relation N↔N).
+    // Une facture peut être soldée par plusieurs paiements (échelonnement,
+    // acompte + solde) et une transaction peut couvrir plusieurs factures
+    // (paiement groupé côté Transaction.linkedInvoiceIds).
+    linkedTransactionIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Transaction" }],
+      default: [],
       index: true,
     },
 
