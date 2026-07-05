@@ -1130,22 +1130,23 @@ const bankingResolvers = {
         provider: parent.fees.provider || null,
       };
     },
-    // Champs de rapprochement
-    linkedInvoiceId: (parent) => parent.linkedInvoiceId?.toString() || null,
+    // Champs de rapprochement (N↔N)
+    linkedInvoiceIds: (parent) =>
+      (parent.linkedInvoiceIds || []).map((id) => id.toString()),
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
     reconciliationStatus: (parent) => {
       const status = parent.reconciliationStatus || "unmatched";
       return status.toUpperCase();
     },
     reconciliationDate: (parent) => parent.reconciliationDate || null,
-    // Resolver pour la facture liée (charge les détails de la facture)
-    linkedInvoice: async (parent) => {
-      if (!parent.linkedInvoiceId) return null;
+    // Resolver pour les factures liées (charge les détails).
+    linkedInvoices: async (parent) => {
+      const ids = parent.linkedInvoiceIds || [];
+      if (ids.length === 0) return [];
       try {
         const Invoice = (await import("../models/Invoice.js")).default;
-        const invoice = await Invoice.findById(parent.linkedInvoiceId).lean();
-        if (!invoice) return null;
-        return {
+        const invoices = await Invoice.find({ _id: { $in: ids } }).lean();
+        return invoices.map((invoice) => ({
           id: invoice._id.toString(),
           number: invoice.number,
           status: invoice.status,
@@ -1156,10 +1157,10 @@ const bankingResolvers = {
           totalTTC: invoice.finalTotalTTC || invoice.totalTTC || 0,
           issueDate: invoice.issueDate,
           dueDate: invoice.dueDate,
-        };
+        }));
       } catch (error) {
-        console.error("[BANKING] Erreur chargement facture liée:", error);
-        return null;
+        console.error("[BANKING] Erreur chargement factures liées:", error);
+        return [];
       }
     },
     userId: async (transaction) => {

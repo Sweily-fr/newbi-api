@@ -36,7 +36,10 @@ router.get("/suggestions", async (req, res) => {
       deletedAt: null,
       reconciliationStatus: { $nin: ["matched", "ignored"] },
       amount: { $gt: 0 },
-      linkedInvoiceId: null,
+      $or: [
+        { linkedInvoiceIds: { $exists: false } },
+        { linkedInvoiceIds: { $size: 0 } },
+      ],
       "receiptFiles.0": { $exists: false },
     };
 
@@ -50,7 +53,10 @@ router.get("/suggestions", async (req, res) => {
     const pendingInvoices = await Invoice.find({
       workspaceId,
       status: "PENDING",
-      linkedTransactionId: null,
+      $or: [
+        { linkedTransactionIds: { $exists: false } },
+        { linkedTransactionIds: { $size: 0 } },
+      ],
     }).sort({ dueDate: 1 });
 
     // Générer des suggestions de correspondance
@@ -240,48 +246,40 @@ router.post(
       const { default: Transaction } = await import("../models/Transaction.js");
       const { default: Invoice } = await import("../models/Invoice.js");
 
-      // Revendication ATOMIQUE de la transaction (condition linkedInvoiceId:null)
-      // → pas de race TOCTOU entre vérification et écriture.
+      // N↔N : $addToSet idempotent des deux côtés. Compensation si la
+      // 2e op échoue.
       const transaction = await Transaction.findOneAndUpdate(
-        { _id: transactionId, workspaceId, linkedInvoiceId: null },
+        { _id: transactionId, workspaceId },
         {
-          linkedInvoiceId: invoiceId,
-          reconciliationStatus: "matched",
-          reconciliationDate: new Date(),
+          $addToSet: { linkedInvoiceIds: invoiceId },
+          $set: {
+            reconciliationStatus: "matched",
+            reconciliationDate: new Date(),
+          },
         },
         { new: true },
       );
       if (!transaction) {
-        const exists = await Transaction.exists({ _id: transactionId, workspaceId });
-        return res.status(exists ? 400 : 404).json({
-          error: exists
-            ? "Cette transaction est déjà liée à une facture"
-            : "Transaction non trouvée",
-        });
+        return res.status(404).json({ error: "Transaction non trouvée" });
       }
 
-      // Revendication ATOMIQUE de la facture, avec rollback de la transaction
-      // si elle échoue (état cohérent garanti, sans transaction Mongo).
       const invoice = await Invoice.findOneAndUpdate(
-        { _id: invoiceId, workspaceId, linkedTransactionId: null },
+        { _id: invoiceId, workspaceId },
         {
-          linkedTransactionId: transactionId,
-          status: "COMPLETED",
-          paymentDate: transaction.date,
+          $addToSet: { linkedTransactionIds: transactionId },
+          $set: {
+            status: "COMPLETED",
+            paymentDate: transaction.date,
+          },
         },
         { new: true },
       );
       if (!invoice) {
-        transaction.linkedInvoiceId = null;
-        transaction.reconciliationStatus = "unmatched";
-        transaction.reconciliationDate = null;
-        await transaction.save();
-        const exists = await Invoice.exists({ _id: invoiceId, workspaceId });
-        return res.status(exists ? 400 : 404).json({
-          error: exists
-            ? "Cette facture est déjà liée à une transaction"
-            : "Facture non trouvée",
-        });
+        await Transaction.updateOne(
+          { _id: transactionId, workspaceId },
+          { $pull: { linkedInvoiceIds: invoiceId } },
+        );
+        return res.status(404).json({ error: "Facture non trouvée" });
       }
 
       // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
@@ -339,43 +337,37 @@ router.post(
 
       const { transactionId, invoiceId } = req.body;
 
-      if (!transactionId && !invoiceId) {
-        return res
-          .status(400)
-          .json({ error: "transactionId ou invoiceId requis" });
+      // N↔N : on a besoin des DEUX ids pour cibler une liaison précise.
+      if (!transactionId || !invoiceId) {
+        return res.status(400).json({
+          error:
+            "transactionId et invoiceId sont requis pour délier une liaison N↔N",
+        });
       }
 
       const { default: Transaction } = await import("../models/Transaction.js");
       const { default: Invoice } = await import("../models/Invoice.js");
 
-      let transaction, invoice;
-
-      if (transactionId) {
-        transaction = await Transaction.findOne({
-          _id: transactionId,
-          workspaceId,
-        });
-        if (transaction?.linkedInvoiceId) {
-          invoice = await Invoice.findById(transaction.linkedInvoiceId);
-        }
-      } else if (invoiceId) {
-        invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
-        if (invoice?.linkedTransactionId) {
-          transaction = await Transaction.findById(invoice.linkedTransactionId);
-        }
-      }
-
-      // Délier la transaction
-      if (transaction) {
-        transaction.linkedInvoiceId = null;
+      // Délier côté transaction ($pull idempotent). Si plus aucune facture
+      // liée → status unmatched.
+      const transaction = await Transaction.findOneAndUpdate(
+        { _id: transactionId, workspaceId },
+        { $pull: { linkedInvoiceIds: invoiceId } },
+        { new: true },
+      );
+      if (transaction && (transaction.linkedInvoiceIds || []).length === 0) {
         transaction.reconciliationStatus = "unmatched";
         transaction.reconciliationDate = null;
         await transaction.save();
       }
 
-      // Délier la facture (repasser en PENDING)
-      if (invoice) {
-        invoice.linkedTransactionId = null;
+      // Délier côté facture. Si plus aucune transaction liée → PENDING.
+      const invoice = await Invoice.findOneAndUpdate(
+        { _id: invoiceId, workspaceId },
+        { $pull: { linkedTransactionIds: transactionId } },
+        { new: true },
+      );
+      if (invoice && (invoice.linkedTransactionIds || []).length === 0) {
         invoice.status = "PENDING";
         invoice.paymentDate = null;
         await invoice.save();

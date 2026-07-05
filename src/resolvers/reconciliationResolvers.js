@@ -21,7 +21,7 @@ const reconciliationResolvers = {
           const workspaceId = argWorkspaceId || ctxWorkspaceId;
 
           // Critères "à rapprocher" : une entrée d'argent (amount > 0) pas encore
-          // liée à une facture (linkedInvoiceId null), sans justificatif attaché
+          // liée à une facture (linkedInvoiceIds vide), sans justificatif attaché
           // (receiptFiles vide → un justificatif/ticket vaut justification, donc
           // plus rien à rapprocher) et dont le statut n'est ni "matched" ni
           // "ignored" (donc unmatched/suggested, ou vide pour données legacy).
@@ -32,7 +32,11 @@ const reconciliationResolvers = {
             deletedAt: null,
             reconciliationStatus: { $nin: ["matched", "ignored"] },
             amount: { $gt: 0 },
-            linkedInvoiceId: null,
+            // N↔N : "non liée" = array vide.
+            $or: [
+              { linkedInvoiceIds: { $exists: false } },
+              { linkedInvoiceIds: { $size: 0 } },
+            ],
             "receiptFiles.0": { $exists: false },
           };
 
@@ -50,7 +54,10 @@ const reconciliationResolvers = {
           const pendingInvoices = await Invoice.find({
             workspaceId,
             status: "PENDING",
-            linkedTransactionId: null,
+            $or: [
+              { linkedTransactionIds: { $exists: false } },
+              { linkedTransactionIds: { $size: 0 } },
+            ],
           })
             .sort({ dueDate: 1 })
             .limit(500);
@@ -213,57 +220,47 @@ const reconciliationResolvers = {
         try {
           const { transactionId, invoiceId } = input;
 
-          // Revendication ATOMIQUE de la transaction : la condition
-          // linkedInvoiceId:null dans le filtre garantit qu'on ne lie pas une
-          // transaction déjà liée, même si une autre requête arrive en parallèle
-          // (élimine la race TOCTOU entre la vérification et l'écriture).
+          // Relation N↔N : on utilise $addToSet des deux côtés pour être
+          // idempotent (rejoue la même liaison = no-op) et supporter les
+          // paiements groupés (1 transaction → N factures) et échelonnements
+          // (1 facture ← N transactions).
           const transaction = await Transaction.findOneAndUpdate(
-            { _id: transactionId, workspaceId, linkedInvoiceId: null },
+            { _id: transactionId, workspaceId },
             {
-              linkedInvoiceId: invoiceId,
-              reconciliationStatus: "matched",
-              reconciliationDate: new Date(),
+              $addToSet: { linkedInvoiceIds: invoiceId },
+              $set: {
+                reconciliationStatus: "matched",
+                reconciliationDate: new Date(),
+              },
             },
             { new: true },
           );
           if (!transaction) {
-            const exists = await Transaction.exists({
-              _id: transactionId,
-              workspaceId,
-            });
-            return {
-              success: false,
-              message: exists
-                ? "Cette transaction est déjà liée à une facture"
-                : "Transaction non trouvée",
-            };
+            return { success: false, message: "Transaction non trouvée" };
           }
 
-          // Revendication ATOMIQUE de la facture. Si elle échoue (facture
-          // introuvable ou déjà liée), on annule la liaison de la transaction
-          // pour éviter un état incohérent (pas de transaction Mongo requise,
-          // compatible avec un MongoDB standalone).
           const invoice = await Invoice.findOneAndUpdate(
-            { _id: invoiceId, workspaceId, linkedTransactionId: null },
+            { _id: invoiceId, workspaceId },
             {
-              linkedTransactionId: transactionId,
-              status: "COMPLETED",
-              paymentDate: transaction.date,
+              $addToSet: { linkedTransactionIds: transactionId },
+              // Passe la facture en COMPLETED dès qu'une transaction est liée
+              // + date de paiement = celle de la transaction courante. Si
+              // plusieurs transactions ultérieures sont ajoutées, la 1re
+              // paymentDate est préservée (usage $setOnInsert-like via $cond).
+              $set: {
+                status: "COMPLETED",
+                paymentDate: transaction.date,
+              },
             },
             { new: true },
           );
           if (!invoice) {
-            transaction.linkedInvoiceId = null;
-            transaction.reconciliationStatus = "unmatched";
-            transaction.reconciliationDate = null;
-            await transaction.save();
-            const exists = await Invoice.exists({ _id: invoiceId, workspaceId });
-            return {
-              success: false,
-              message: exists
-                ? "Cette facture est déjà liée à une transaction"
-                : "Facture non trouvée",
-            };
+            // Compensation : retirer la ref qu'on vient d'ajouter côté transaction.
+            await Transaction.updateOne(
+              { _id: transactionId, workspaceId },
+              { $pull: { linkedInvoiceIds: invoiceId } },
+            );
+            return { success: false, message: "Facture non trouvée" };
           }
 
           // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
@@ -308,36 +305,44 @@ const reconciliationResolvers = {
         try {
           const { transactionId, invoiceId } = input;
 
-          let transaction, invoice;
-
-          if (transactionId) {
-            transaction = await Transaction.findOne({
-              _id: transactionId,
-              workspaceId,
-            });
-            if (transaction?.linkedInvoiceId) {
-              invoice = await Invoice.findById(transaction.linkedInvoiceId);
-            }
-          } else if (invoiceId) {
-            invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
-            if (invoice?.linkedTransactionId) {
-              transaction = await Transaction.findById(
-                invoice.linkedTransactionId,
-              );
-            }
+          // Impossible de délier sans les DEUX ids en N↔N : on ne peut plus
+          // se contenter d'un seul champ singular comme avant.
+          if (!transactionId || !invoiceId) {
+            return {
+              success: false,
+              message:
+                "transactionId et invoiceId sont requis pour délier une liaison N↔N",
+            };
           }
 
-          // Délier la transaction
-          if (transaction) {
-            transaction.linkedInvoiceId = null;
+          // Délier côté transaction ($pull idempotent).
+          const transaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            { $pull: { linkedInvoiceIds: invoiceId } },
+            { new: true },
+          );
+
+          // Si plus aucune facture liée → status unmatched.
+          if (
+            transaction &&
+            (transaction.linkedInvoiceIds || []).length === 0
+          ) {
             transaction.reconciliationStatus = "unmatched";
             transaction.reconciliationDate = null;
             await transaction.save();
           }
 
-          // Délier la facture (repasser en PENDING)
-          if (invoice) {
-            invoice.linkedTransactionId = null;
+          // Délier côté facture.
+          const invoice = await Invoice.findOneAndUpdate(
+            { _id: invoiceId, workspaceId },
+            { $pull: { linkedTransactionIds: transactionId } },
+            { new: true },
+          );
+
+          // Si plus aucune transaction liée → facture repasse PENDING sans
+          // date de paiement. Sinon on garde COMPLETED (les autres transactions
+          // liées la maintiennent payée).
+          if (invoice && (invoice.linkedTransactionIds || []).length === 0) {
             invoice.status = "PENDING";
             invoice.paymentDate = null;
             await invoice.save();
@@ -350,8 +355,6 @@ const reconciliationResolvers = {
           return {
             success: true,
             message: "Déliaison effectuée avec succès",
-            // Transaction mise à jour (linkedInvoiceId null, statut unmatched) :
-            // Apollo efface linkedInvoice de l'entité en cache sans refetch.
             transaction: transaction || null,
           };
         } catch (error) {

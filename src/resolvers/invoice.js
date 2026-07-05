@@ -6,6 +6,7 @@ import PurchaseOrder from "../models/PurchaseOrder.js";
 import Event from "../models/Event.js";
 import Client from "../models/Client.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
+import Transaction from "../models/Transaction.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
   withRBAC,
@@ -74,7 +75,14 @@ import {
  */
 export async function applyInvoicePaid(
   invoice,
-  { paymentDate, userId, workspaceId, organizationId, paymentMethod, stripe } = {},
+  {
+    paymentDate,
+    userId,
+    workspaceId,
+    organizationId,
+    paymentMethod,
+    stripe,
+  } = {},
 ) {
   const paidAt = new Date(paymentDate);
 
@@ -348,6 +356,23 @@ const invoiceResolvers = {
       } catch (error) {
         logger.error("[Invoice.paymentLink] Erreur:", error);
         return null;
+      }
+    },
+
+    // Transactions bancaires liées (rapprochement N↔N). Résolues à la volée
+    // depuis linkedTransactionIds pour éviter un round-trip côté client.
+    // Filtre par workspaceId pour empêcher tout accès cross-tenant (IDOR).
+    linkedTransactions: async (invoice) => {
+      const ids = invoice.linkedTransactionIds || [];
+      if (ids.length === 0) return [];
+      try {
+        return await Transaction.find({
+          _id: { $in: ids },
+          workspaceId: invoice.workspaceId,
+        }).sort({ date: -1 });
+      } catch (error) {
+        logger.error("[Invoice.linkedTransactions] Erreur:", error);
+        return [];
       }
     },
     companyInfo: async (invoice) => {
@@ -2795,8 +2820,7 @@ const invoiceResolvers = {
                 );
 
                 const statusOrg = await getOrganizationInfo(workspaceId);
-                const autoNumbering =
-                  statusOrg?.invoiceAutoNumbering === true;
+                const autoNumbering = statusOrg?.invoiceAutoNumbering === true;
 
                 const newNumber = await generateInvoiceNumber(prefix, {
                   isValidatingDraft: true,

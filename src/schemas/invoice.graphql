@@ -45,7 +45,12 @@ type Invoice {
   stripeInvoiceId: String
   # Lien de paiement en ligne Stripe Connect (null si Stripe non connecté ou facture non payable)
   paymentLink: String
-  linkedTransactionId: ID
+  # Transactions bancaires liées (rapprochement N↔N). Une facture peut être
+  # soldée par plusieurs paiements (échelonnement, acompte + solde).
+  linkedTransactionIds: [ID!]!
+  # Résolues à la volée depuis linkedTransactionIds — évite un round-trip
+  # côté client pour afficher nom / montant / date sur la vue détail facture.
+  linkedTransactions: [Transaction!]!
   # E-Invoicing SuperPDP
   superPdpInvoiceId: String
   eInvoiceStatus: String

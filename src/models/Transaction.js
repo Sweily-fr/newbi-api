@@ -133,11 +133,13 @@ const transactionSchema = new mongoose.Schema(
       default: {},
     },
 
-    // Rapprochement avec facture (pour les entrées d'argent)
-    linkedInvoiceId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Invoice",
-      default: null,
+    // Rapprochement avec factures (pour les entrées d'argent).
+    // Relation N↔N : une transaction peut solder plusieurs factures
+    // (paiement groupé). Utiliser $addToSet / $pull pour éviter les doublons
+    // et supporter les liaisons multiples atomiques.
+    linkedInvoiceIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Invoice" }],
+      default: [],
       index: true,
     },
 

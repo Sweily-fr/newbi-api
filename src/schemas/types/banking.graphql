@@ -23,9 +23,10 @@ type Transaction {
   metadata: JSON
   receiptRequired: Boolean
   receiptFiles: [ReceiptFile!]!
-  # Champs de rapprochement bancaire
-  linkedInvoiceId: ID
-  linkedInvoice: LinkedInvoiceSummary
+  # Champs de rapprochement bancaire (N↔N : une transaction peut couvrir
+  # plusieurs factures dans le cas d'un paiement groupé).
+  linkedInvoiceIds: [ID!]!
+  linkedInvoices: [LinkedInvoiceSummary!]!
   linkedExpenseId: ID
   reconciliationStatus: ReconciliationStatusEnum
   reconciliationDate: DateTime
