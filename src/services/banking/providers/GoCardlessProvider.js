@@ -771,9 +771,9 @@ export class GoCardlessProvider extends BankingProvider {
                 updatedTransactionData.receiptFiles = manualMatch.receiptFiles;
                 updatedTransactionData.receiptRequired = false;
               }
-              if (manualMatch.linkedInvoiceId) {
-                updatedTransactionData.linkedInvoiceId =
-                  manualMatch.linkedInvoiceId;
+              if ((manualMatch.linkedInvoiceIds || []).length > 0) {
+                updatedTransactionData.linkedInvoiceIds =
+                  manualMatch.linkedInvoiceIds;
                 updatedTransactionData.reconciliationStatus =
                   manualMatch.reconciliationStatus;
                 updatedTransactionData.reconciliationDate =

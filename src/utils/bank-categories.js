@@ -183,7 +183,7 @@ export const incomeSubcategoryLabels = {
 /**
  * Détecte la catégorie d'une transaction.
  * Ordre de priorité :
- *  1. T4 — si linkedInvoiceId est défini → "Chiffre d'affaires" (revenus)
+ *  1. T4 — si linkedInvoiceIds contient au moins une facture → "Chiffre d'affaires" (revenus)
  *  2. Si `category` est une sous-catégorie fine posée par l'utilisateur
  *     (slug du sélecteur front) → son libellé exact ("Abonnements
  *     professionnels", …), prioritaire sur l'enum large pour que le
@@ -197,7 +197,7 @@ export const getTransactionCategory = (transaction) => {
   const categories = isIncome ? incomeCategories : expenseCategories;
 
   // 1. Revenu rattaché à une facture client → Chiffre d'affaires (T4)
-  if (isIncome && transaction.linkedInvoiceId) {
+  if (isIncome && (transaction.linkedInvoiceIds?.length || 0) > 0) {
     return incomeCategories.REVENUE_INVOICE;
   }
 
