@@ -3,7 +3,7 @@ import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
 import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
-// import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
+import { reportPaymentIfNeeded } from "../utils/eInvoiceRoutingHelper.js";
 
 const router = express.Router();
 
@@ -284,14 +284,26 @@ router.post(
         });
       }
 
-      // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
-      // try {
-      //   if (evaluatePaymentReporting(invoice, transaction.date)) {
-      //     await invoice.save();
-      //   }
-      // } catch (eReportingError) {
-      //   logger.error("Erreur e-reporting payment (rapprochement REST):", eReportingError);
-      // }
+      // E-reporting paiement (TVA sur encaissements) — non bloquant, même
+      // logique que le paiement manuel (applyInvoicePaid)
+      try {
+        const reported = await reportPaymentIfNeeded(
+          invoice,
+          workspaceId,
+          transaction.date,
+        );
+        if (reported) {
+          await invoice.save();
+          logger.info(
+            `[E-INVOICE-ROUTING] E-reporting paiement (rapprochement REST) pour ${invoice._id}`,
+          );
+        }
+      } catch (eReportingError) {
+        logger.error(
+          "Erreur e-reporting paiement (rapprochement REST):",
+          eReportingError,
+        );
+      }
 
       logger.info(
         `Rapprochement effectué: Transaction ${transactionId} <-> Facture ${invoiceId}`,

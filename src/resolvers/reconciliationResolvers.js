@@ -6,7 +6,7 @@ import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
 import logger from "../utils/logger.js";
 import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
-// import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
+import { reportPaymentIfNeeded } from "../utils/eInvoiceRoutingHelper.js";
 
 const reconciliationResolvers = {
   Query: {
@@ -266,15 +266,26 @@ const reconciliationResolvers = {
             };
           }
 
-          // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
-          // try {
-          //   if (evaluatePaymentReporting(invoice, transaction.date)) {
-          //     await invoice.save();
-          //     logger.info(`[E-INVOICE-ROUTING] E-reporting payment (rapprochement GQL) pour ${invoice._id}`);
-          //   }
-          // } catch (eReportingError) {
-          //   logger.error("Erreur e-reporting payment (rapprochement):", eReportingError);
-          // }
+          // E-reporting paiement (TVA sur encaissements) — non bloquant, même
+          // logique que le paiement manuel (applyInvoicePaid)
+          try {
+            const reported = await reportPaymentIfNeeded(
+              invoice,
+              workspaceId,
+              transaction.date,
+            );
+            if (reported) {
+              await invoice.save();
+              logger.info(
+                `[E-INVOICE-ROUTING] E-reporting paiement (rapprochement GQL) pour ${invoice._id}`,
+              );
+            }
+          } catch (eReportingError) {
+            logger.error(
+              "Erreur e-reporting paiement (rapprochement):",
+              eReportingError,
+            );
+          }
 
           logger.info(
             `[RECONCILIATION-GQL] Rapprochement: Transaction ${transactionId} <-> Facture ${invoiceId}`,
