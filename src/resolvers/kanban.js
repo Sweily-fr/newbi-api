@@ -13,6 +13,10 @@ import Notification from "../models/Notification.js";
 import { publishNotification } from "./notification.js";
 import { sendPushToUser } from "../services/pushNotificationService.js";
 import Client from "../models/Client.js";
+import {
+  maybeTriggerClaudeDev,
+  hasClaudeTag,
+} from "../services/claudeDevTriggerService.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -1466,6 +1470,9 @@ const resolvers = {
           "Tâche créée",
         );
 
+        // Carte créée directement avec le tag « claude » → déclencher l'agent dev
+        maybeTriggerClaudeDev(savedTask, "createTask");
+
         // Envoyer des notifications aux membres assignés lors de la création
         if (
           cleanedInput.assignedMembers &&
@@ -2330,6 +2337,15 @@ const resolvers = {
           },
           "Tâche mise à jour",
         );
+
+        // Tag « claude » tout juste posé → déclencher l'agent dev
+        if (
+          updates.tags !== undefined &&
+          hasClaudeTag(updates.tags) &&
+          !hasClaudeTag(oldTask.tags)
+        ) {
+          maybeTriggerClaudeDev(task, "updateTask");
+        }
 
         return enrichedTask;
       },
