@@ -2646,6 +2646,16 @@ const resolvers = {
             "Commentaire ajouté",
           );
 
+          // Commentaire humain sur une carte taguée « claude » → déclencher l'agent dev
+          // (les commentaires du bot commencent par 🤖 et ne doivent pas le re-déclencher)
+          if (
+            !String(input.content || "")
+              .trimStart()
+              .startsWith("🤖")
+          ) {
+            maybeTriggerClaudeDev(task, "addComment");
+          }
+
           // Envoyer les notifications de mention (en arrière-plan)
           if (mentionedUserIds.length > 0) {
             logger.info(
