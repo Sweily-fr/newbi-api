@@ -26,7 +26,10 @@ export const hasClaudeTag = (tags) =>
 const fireWebhook = async () => {
   const url = process.env.CLAUDE_KANBAN_WEBHOOK_URL;
   const token = process.env.CLAUDE_KANBAN_WEBHOOK_TOKEN;
-  const headers = { "Content-Type": "application/json" };
+  const headers = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+  };
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetch(url, {
