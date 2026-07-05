@@ -38,6 +38,8 @@ newbi-462812-e2c47097b174.json
 scripts/temp-*
 scripts/local-*
 scripts/dev-*
+# Script one-shot avec MONGODB_URI parfois hardcodée pour migrations ciblées.
+scripts/migrate-reconciliation-to-n-to-n.js
 scripts/*.local.js
 
 
