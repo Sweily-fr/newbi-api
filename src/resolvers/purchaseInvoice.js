@@ -149,13 +149,34 @@ const purchaseInvoiceResolvers = {
           59,
         );
 
-        const [toPay, overdue, paidThisMonth, totalThisMonth] =
+        const [toPay, unpaid, overdue, paidThisMonth, totalThisMonth] =
           await Promise.all([
             PurchaseInvoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
                   status: { $in: ["TO_PAY", "OVERDUE"] },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: "$amountTTC" },
+                  count: { $sum: 1 },
+                },
+              },
+            ]),
+            // Solde "à payer" du pilotage : toutes les factures non payées,
+            // y compris TO_PROCESS (statut par défaut des factures SuperPDP
+            // et des saisies manuelles) et PENDING. Le rapprochement bancaire
+            // passe la facture en PAID, qui sort donc du total.
+            PurchaseInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: {
+                    $in: ["TO_PROCESS", "TO_PAY", "PENDING", "OVERDUE"],
+                  },
                 },
               },
               {
@@ -212,6 +233,8 @@ const purchaseInvoiceResolvers = {
         return {
           totalToPay: toPay[0]?.total || 0,
           totalToPayCount: toPay[0]?.count || 0,
+          totalUnpaid: unpaid[0]?.total || 0,
+          totalUnpaidCount: unpaid[0]?.count || 0,
           totalOverdue: overdue[0]?.total || 0,
           totalOverdueCount: overdue[0]?.count || 0,
           paidThisMonth: paidThisMonth[0]?.total || 0,

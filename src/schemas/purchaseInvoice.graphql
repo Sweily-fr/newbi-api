@@ -151,6 +151,11 @@ type PurchaseInvoicePagination {
 type PurchaseInvoiceStats {
   totalToPay: Float!
   totalToPayCount: Int!
+  # Toutes les factures non payées (TO_PROCESS, TO_PAY, PENDING, OVERDUE),
+  # y compris celles reçues via SuperPDP ou saisies manuellement ; une facture
+  # rapprochée bancairement passe en PAID et sort donc du total
+  totalUnpaid: Float!
+  totalUnpaidCount: Int!
   totalOverdue: Float!
   totalOverdueCount: Int!
   paidThisMonth: Float!
