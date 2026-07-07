@@ -23,6 +23,20 @@ const normalize = (value) =>
 export const hasClaudeTag = (tags) =>
   (tags || []).some((tag) => normalize(tag?.name ?? tag) === "claude");
 
+/**
+ * Vrai si le hook est actif sur cet environnement ET que la tâche est
+ * éligible (board configuré + tag « claude »). Sert aussi aux resolvers
+ * pour poser le marqueur claudeWorkingSince (loader « Claude répond »)
+ * uniquement quand la routine sera réellement déclenchée.
+ */
+export const claudeDevApplies = (task) => {
+  const url = process.env.CLAUDE_KANBAN_WEBHOOK_URL;
+  const boardId = process.env.CLAUDE_KANBAN_BOARD_ID;
+  if (!url || !boardId) return false;
+  if (String(task?.boardId) !== String(boardId)) return false;
+  return hasClaudeTag(task?.tags);
+};
+
 const fireWebhook = async () => {
   const url = process.env.CLAUDE_KANBAN_WEBHOOK_URL;
   const token = process.env.CLAUDE_KANBAN_WEBHOOK_TOKEN;
@@ -53,12 +67,7 @@ const fireWebhook = async () => {
  */
 export const maybeTriggerClaudeDev = (task, source = "kanban") => {
   try {
-    const url = process.env.CLAUDE_KANBAN_WEBHOOK_URL;
-    const boardId = process.env.CLAUDE_KANBAN_BOARD_ID;
-    if (!url || !boardId) return; // hook désactivé sur cet environnement
-
-    if (String(task?.boardId) !== String(boardId)) return;
-    if (!hasClaudeTag(task?.tags)) return;
+    if (!claudeDevApplies(task)) return; // hook désactivé ou tâche non éligible
 
     const now = Date.now();
     if (now - lastFiredAt < MIN_INTERVAL_MS) {

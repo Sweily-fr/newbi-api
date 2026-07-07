@@ -15,6 +15,10 @@ import {
   sendShareAccessRejectedEmail,
 } from "../utils/mailer.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  maybeTriggerClaudeDev,
+  claudeDevApplies,
+} from "../services/claudeDevTriggerService.js";
 
 // Événements de subscription (même que kanban.js)
 const TASK_UPDATED = "TASK_UPDATED";
@@ -323,6 +327,7 @@ const resolvers = {
           dueDate: task.dueDate,
           columnId: task.columnId,
           position: task.position,
+          claudeWorkingSince: task.claudeWorkingSince,
           checklist: task.checklist,
           images: (task.images || []).map((img) => ({
             id: img._id?.toString() || img.id,
@@ -1108,7 +1113,21 @@ const resolvers = {
           createdAt: new Date(),
         });
 
+        // Loader « Claude est en train de répondre » : la réponse 🤖 du bot
+        // (postée via ce lien public) efface le marqueur ; un commentaire
+        // humain externe sur une carte éligible le pose et déclenche l'agent.
+        const isBotComment = trimmedContent.startsWith("🤖");
+        if (isBotComment) {
+          task.claudeWorkingSince = null;
+        } else if (claudeDevApplies(task)) {
+          task.claudeWorkingSince = new Date();
+        }
+
         await task.save();
+
+        if (!isBotComment) {
+          maybeTriggerClaudeDev(task, "addExternalComment");
+        }
 
         // Incrémenter le compteur de commentaires
         await share.incrementCommentCount();
@@ -1136,6 +1155,7 @@ const resolvers = {
           boardId: enrichedTask.boardId,
           columnId: enrichedTask.columnId,
           position: enrichedTask.position,
+          claudeWorkingSince: enrichedTask.claudeWorkingSince,
           checklist: enrichedTask.checklist || [],
           assignedMembers: enrichedTask.assignedMembers || [],
           images: (enrichedTask.images || []).map((img) => ({
@@ -1289,6 +1309,7 @@ const resolvers = {
             dueDate: task.dueDate,
             columnId: task.columnId,
             position: task.position,
+            claudeWorkingSince: task.claudeWorkingSince,
             checklist: task.checklist,
             images: (task.images || []).map((img) => ({
               id: img._id?.toString() || img.id,
@@ -2098,6 +2119,7 @@ const resolvers = {
           dueDate: task.dueDate,
           columnId: task.columnId?.toString() || task.columnId,
           position: task.position,
+          claudeWorkingSince: task.claudeWorkingSince,
           checklist: task.checklist || [],
           images: (task.images || []).map((img) => ({
             id: img._id?.toString() || img.id,
