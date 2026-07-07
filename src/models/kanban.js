@@ -382,6 +382,14 @@ const taskSchema = new mongoose.Schema(
     activity: [activitySchema],
     // Suivi du temps et facturation
     timeTracking: timeTrackingSchema,
+    // Horodatage posé quand la routine Claude (agent dev) vient d'être déclenchée
+    // sur cette carte (tag « claude » ou commentaire humain) ; remis à null quand
+    // le bot poste sa réponse 🤖. Alimente le loader « Claude est en train de
+    // répondre » côté front, qui l'ignore au-delà d'un délai d'expiration.
+    claudeWorkingSince: {
+      type: Date,
+      default: null,
+    },
     // Référence vers l'organisation/workspace (Better Auth)
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,
