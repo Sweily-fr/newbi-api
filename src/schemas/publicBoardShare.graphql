@@ -102,6 +102,7 @@ type PublicTask {
   images: [PublicTaskImage!]
   comments: [PublicComment!]
   timeTracking: PublicTimeTracking
+  claudeWorkingSince: DateTime
   userId: ID
   createdAt: DateTime
   updatedAt: DateTime
