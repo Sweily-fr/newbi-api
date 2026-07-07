@@ -116,6 +116,7 @@ type Task {
   comments: [Comment!]
   activity: [Activity!]
   timeTracking: TimeTracking
+  claudeWorkingSince: DateTime
   userId: ID
   createdAt: DateTime!
   updatedAt: DateTime!
