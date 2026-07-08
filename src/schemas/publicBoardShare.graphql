@@ -103,6 +103,7 @@ type PublicTask {
   comments: [PublicComment!]
   timeTracking: PublicTimeTracking
   claudeWorkingSince: DateTime
+  claudeCodingSince: DateTime
   userId: ID
   createdAt: DateTime
   updatedAt: DateTime

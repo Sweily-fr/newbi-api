@@ -19,6 +19,7 @@ import {
   maybeTriggerClaudeDev,
   claudeDevApplies,
   hasClaudeMention,
+  isClaudeCodingStartComment,
 } from "../services/claudeDevTriggerService.js";
 
 // Événements de subscription (même que kanban.js)
@@ -329,6 +330,7 @@ const resolvers = {
           columnId: task.columnId,
           position: task.position,
           claudeWorkingSince: task.claudeWorkingSince,
+          claudeCodingSince: task.claudeCodingSince,
           checklist: task.checklist,
           images: (task.images || []).map((img) => ({
             id: img._id?.toString() || img.id,
@@ -1128,6 +1130,14 @@ const resolvers = {
           task.claudeWorkingSince = new Date();
         }
 
+        // Badge « Claude est en train de coder » : posé par l'accusé de
+        // développement, effacé par le prochain commentaire 🤖.
+        if (isBotComment) {
+          task.claudeCodingSince = isClaudeCodingStartComment(trimmedContent)
+            ? new Date()
+            : null;
+        }
+
         await task.save();
 
         if (mentionsClaude) {
@@ -1161,6 +1171,7 @@ const resolvers = {
           columnId: enrichedTask.columnId,
           position: enrichedTask.position,
           claudeWorkingSince: enrichedTask.claudeWorkingSince,
+          claudeCodingSince: enrichedTask.claudeCodingSince,
           checklist: enrichedTask.checklist || [],
           assignedMembers: enrichedTask.assignedMembers || [],
           images: (enrichedTask.images || []).map((img) => ({
@@ -1324,6 +1335,7 @@ const resolvers = {
             columnId: task.columnId,
             position: task.position,
             claudeWorkingSince: task.claudeWorkingSince,
+            claudeCodingSince: task.claudeCodingSince,
             checklist: task.checklist,
             images: (task.images || []).map((img) => ({
               id: img._id?.toString() || img.id,
@@ -2134,6 +2146,7 @@ const resolvers = {
           columnId: task.columnId?.toString() || task.columnId,
           position: task.position,
           claudeWorkingSince: task.claudeWorkingSince,
+          claudeCodingSince: task.claudeCodingSince,
           checklist: task.checklist || [],
           images: (task.images || []).map((img) => ({
             id: img._id?.toString() || img.id,
