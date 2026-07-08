@@ -390,6 +390,14 @@ const taskSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Horodatage posé quand la routine Claude poste son accusé de
+    // développement (« Je m'en occupe — développement en cours. ») ; remis à
+    // null quand un commentaire 🤖 suivant est posté. Alimente le badge
+    // « Claude est en train de coder » côté front pendant la phase de dev.
+    claudeCodingSince: {
+      type: Date,
+      default: null,
+    },
     // Référence vers l'organisation/workspace (Better Auth)
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,

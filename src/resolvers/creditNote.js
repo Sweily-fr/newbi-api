@@ -22,6 +22,7 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXArchiveService.js";
 import {
   generateCreditNoteNumber,
   validateNumberSequence,
@@ -414,6 +415,11 @@ const creditNoteResolvers = {
 
           await creditNote.save();
 
+          // Archivage R2 du PDF de l'avoir — non bloquant, serveur-à-serveur.
+          // Parité avec l'archivage auto des factures : fonctionne pour TOUS les
+          // clients (mobile inclus), qui n'archivent pas le PDF côté client.
+          triggerCreditNoteFacturXArchive(creditNote, workspaceId);
+
           // Créer un événement
           await Event.create({
             title: `Avoir créé: ${creditNote.prefix}${creditNote.number}`,
@@ -519,12 +525,9 @@ const creditNoteResolvers = {
           // son préfixe sont VERROUILLÉS — les renuméroter casserait la
           // continuité de la séquence.
           if (input.number && input.number !== creditNote.number) {
-            throw createValidationError(
-              "Le numéro d'un avoir est verrouillé",
-              {
-                number: `Impossible de remplacer le numéro "${creditNote.number}" par "${input.number}" sur un avoir émis.`,
-              },
-            );
+            throw createValidationError("Le numéro d'un avoir est verrouillé", {
+              number: `Impossible de remplacer le numéro "${creditNote.number}" par "${input.number}" sur un avoir émis.`,
+            });
           }
           if (input.prefix && input.prefix !== creditNote.prefix) {
             throw createValidationError(

@@ -205,7 +205,36 @@ const ocrResolvers = {
           // Générer un ID de document
           const documentId = new mongoose.Types.ObjectId();
 
-          // Construire la réponse
+          // Upload Cloudflare AWAITÉ (plus fire & forget) — le client mobile
+          // a besoin du documentUrl dans la réponse pour attacher le fichier
+          // en tant que justificatif de la facture d'achat créée juste après.
+          // Avant : documentUrl:null → le mobile ne pouvait pas appeler
+          // addFileToPurchaseInvoice → aucun justificatif visible sur la
+          // facture d'achat créée via OCR.
+          let documentUrl = null;
+          let cloudflareKey = null;
+          if (!usedFallback) {
+            try {
+              const uploadResult = await cloudflareService.uploadImage(
+                fileBuffer,
+                filename,
+                user.id,
+                "ocr",
+                contextOrgId,
+              );
+              documentUrl = uploadResult.url;
+              cloudflareKey = uploadResult.key;
+            } catch (uploadErr) {
+              console.error(
+                "❌ Erreur upload Cloudflare (OCR) :",
+                uploadErr.message,
+              );
+              // On continue quand même — l'OCR a réussi, on renvoie les data
+              // extraites. Le justificatif ne sera juste pas attaché.
+            }
+          }
+
+          // Construire la réponse avec la vraie URL Cloudflare.
           const response = {
             success: true,
             extractedText: rawResult.extractedText,
@@ -220,33 +249,17 @@ const ocrResolvers = {
               mimeType: mimetype,
               fileSize: fileBuffer.length,
               processedAt: new Date().toISOString(),
-              documentUrl: null,
-              cloudflareKey: null,
+              documentUrl,
+              cloudflareKey,
               documentId: documentId.toString(),
             },
             message: `Document traité avec succès via ${rawResult.provider || "claude-vision"}`,
           };
 
-          // Fire & forget: upload Cloudflare (si pas déjà fait) + save MongoDB + cache Redis
+          // Sauvegarde MongoDB + cache Redis en fire & forget — pas critique
+          // pour le client (les data OCR sont déjà dans la réponse).
           (async () => {
             try {
-              let documentUrl = null;
-              let cloudflareKey = null;
-
-              if (!usedFallback) {
-                // Upload vers Cloudflare uniquement si pas déjà fait par le fallback
-                const uploadResult = await cloudflareService.uploadImage(
-                  fileBuffer,
-                  filename,
-                  user.id,
-                  "ocr",
-                  contextOrgId,
-                );
-                documentUrl = uploadResult.url;
-                cloudflareKey = uploadResult.key;
-              }
-
-              // Sauvegarder en MongoDB
               const ocrDocument = new OcrDocument({
                 _id: documentId,
                 userId: user.id,
@@ -278,10 +291,7 @@ const ocrResolvers = {
               // Cache Redis
               await ocrCacheService.set(contentHash, response);
             } catch (err) {
-              console.error(
-                "❌ Erreur background (upload/save/cache):",
-                err.message,
-              );
+              console.error("❌ Erreur background (save/cache):", err.message);
             }
           })();
 
