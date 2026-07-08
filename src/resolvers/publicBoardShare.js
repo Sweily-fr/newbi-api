@@ -18,6 +18,7 @@ import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import {
   maybeTriggerClaudeDev,
   claudeDevApplies,
+  hasClaudeMention,
 } from "../services/claudeDevTriggerService.js";
 
 // Événements de subscription (même que kanban.js)
@@ -1115,17 +1116,21 @@ const resolvers = {
 
         // Loader « Claude est en train de répondre » : la réponse 🤖 du bot
         // (postée via ce lien public) efface le marqueur ; un commentaire
-        // humain externe sur une carte éligible le pose et déclenche l'agent.
+        // humain externe mentionnant @claude le pose et déclenche l'agent.
         const isBotComment = trimmedContent.startsWith("🤖");
+        const mentionsClaude =
+          !isBotComment &&
+          claudeDevApplies(task) &&
+          hasClaudeMention(trimmedContent);
         if (isBotComment) {
           task.claudeWorkingSince = null;
-        } else if (claudeDevApplies(task)) {
+        } else if (mentionsClaude) {
           task.claudeWorkingSince = new Date();
         }
 
         await task.save();
 
-        if (!isBotComment) {
+        if (mentionsClaude) {
           maybeTriggerClaudeDev(task, "addExternalComment");
         }
 
