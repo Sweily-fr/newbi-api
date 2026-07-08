@@ -117,6 +117,7 @@ type Task {
   activity: [Activity!]
   timeTracking: TimeTracking
   claudeWorkingSince: DateTime
+  claudeCodingSince: DateTime
   userId: ID
   createdAt: DateTime!
   updatedAt: DateTime!

@@ -33,6 +33,17 @@ export const hasClaudeMention = (content) => {
 };
 
 /**
+ * Vrai si ce commentaire 🤖 est l'accusé de prise en charge posté par la
+ * routine avant de développer un ticket. Sert à poser claudeCodingSince
+ * (badge « Claude est en train de coder ») ; tout autre commentaire 🤖
+ * qui suit (synthèse, demande de précisions...) referme la fenêtre.
+ */
+export const isClaudeCodingStartComment = (content) =>
+  normalize(content).startsWith(
+    normalize("🤖 Je m'en occupe — développement en cours."),
+  );
+
+/**
  * Vrai si le hook est actif sur cet environnement ET que la tâche appartient
  * au board configuré. Combiné à hasClaudeMention par les resolvers pour poser
  * le marqueur claudeWorkingSince (loader « Claude répond ») uniquement quand
