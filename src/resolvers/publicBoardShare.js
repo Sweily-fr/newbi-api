@@ -8,7 +8,7 @@ import { Board, Column, Task } from "../models/kanban.js";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
-import { getPubSub } from "../config/redis.js";
+import { getPubSub, cacheDel } from "../config/redis.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
   sendShareAccessApprovedEmail,
@@ -1229,6 +1229,15 @@ const resolvers = {
           },
           "Commentaire externe ajouté",
         );
+
+        // Invalider le cache Redis des tâches du board (le safePublish de
+        // kanban.js le fait pour les mutations internes, pas celui-ci) :
+        // sans ça, les refetch/polls du front peuvent recevoir jusqu'à 30s
+        // de données périmées après un commentaire externe (réponse du bot
+        // Claude incluse).
+        cacheDel(
+          `kanban:tasks:${share.workspaceId}:${share.boardId}`,
+        ).catch(() => {});
 
         logger.info(
           `✅ [PublicShare] Événement UPDATED publié pour tâche ${task._id}`,
