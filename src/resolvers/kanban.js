@@ -17,6 +17,7 @@ import {
   maybeTriggerClaudeDev,
   hasClaudeMention,
   claudeDevApplies,
+  isClaudeCodingStartComment,
 } from "../services/claudeDevTriggerService.js";
 
 // Événements de subscription
@@ -2631,6 +2632,17 @@ const resolvers = {
             task.claudeWorkingSince = null;
           } else if (mentionsClaude) {
             task.claudeWorkingSince = new Date();
+          }
+
+          // Badge « Claude est en train de coder » : posé par l'accusé de
+          // développement, effacé par le prochain commentaire 🤖 (synthèse,
+          // demande de précisions...).
+          if (isBotComment) {
+            task.claudeCodingSince = isClaudeCodingStartComment(
+              input.content
+            )
+              ? new Date()
+              : null;
           }
 
           await task.save();
