@@ -15,7 +15,7 @@ import { sendPushToUser } from "../services/pushNotificationService.js";
 import Client from "../models/Client.js";
 import {
   maybeTriggerClaudeDev,
-  hasClaudeTag,
+  hasClaudeMention,
   claudeDevApplies,
 } from "../services/claudeDevTriggerService.js";
 
@@ -1454,10 +1454,6 @@ const resolvers = {
           position: position,
           activity: initialActivity,
         });
-        // Carte créée directement avec le tag « claude » → loader « Claude répond »
-        if (claudeDevApplies(task)) {
-          task.claudeWorkingSince = new Date();
-        }
         const savedTask = await task.save();
 
         // Enrichir la tâche avec les infos utilisateur AVANT de publier
@@ -1474,9 +1470,6 @@ const resolvers = {
           },
           "Tâche créée",
         );
-
-        // Carte créée directement avec le tag « claude » → déclencher l'agent dev
-        maybeTriggerClaudeDev(savedTask, "createTask");
 
         // Envoyer des notifications aux membres assignés lors de la création
         if (
@@ -2294,19 +2287,6 @@ const resolvers = {
         const setFields = { ...updates, updatedAt: new Date() };
         const updateDoc = {};
 
-        // Tag « claude » tout juste posé → poser le marqueur du loader
-        // « Claude est en train de répondre » dans la même écriture
-        const claudeTagJustAdded =
-          updates.tags !== undefined &&
-          hasClaudeTag(updates.tags) &&
-          !hasClaudeTag(oldTask.tags);
-        if (
-          claudeTagJustAdded &&
-          claudeDevApplies({ boardId: oldTask.boardId, tags: updates.tags })
-        ) {
-          setFields.claudeWorkingSince = new Date();
-        }
-
         if (memberAtomicOps) {
           delete setFields.assignedMembers;
           const { add, remove, all } = memberAtomicOps;
@@ -2355,11 +2335,6 @@ const resolvers = {
           },
           "Tâche mise à jour",
         );
-
-        // Tag « claude » tout juste posé → déclencher l'agent dev
-        if (claudeTagJustAdded) {
-          maybeTriggerClaudeDev(task, "updateTask");
-        }
 
         return enrichedTask;
       },
@@ -2643,14 +2618,18 @@ const resolvers = {
           });
 
           // Loader « Claude est en train de répondre » : un commentaire humain
-          // sur une carte éligible pose le marqueur (l'agent va être déclenché),
+          // mentionnant @claude pose le marqueur (l'agent va être déclenché),
           // un commentaire 🤖 du bot (repli authentifié) l'efface.
           const isBotComment = String(input.content || "")
             .trimStart()
             .startsWith("🤖");
+          const mentionsClaude =
+            !isBotComment &&
+            claudeDevApplies(task) &&
+            hasClaudeMention(input.content);
           if (isBotComment) {
             task.claudeWorkingSince = null;
-          } else if (claudeDevApplies(task)) {
+          } else if (mentionsClaude) {
             task.claudeWorkingSince = new Date();
           }
 
@@ -2672,9 +2651,9 @@ const resolvers = {
             "Commentaire ajouté",
           );
 
-          // Commentaire humain sur une carte taguée « claude » → déclencher l'agent dev
-          // (les commentaires du bot commencent par 🤖 et ne doivent pas le re-déclencher)
-          if (!isBotComment) {
+          // Mention @claude dans un commentaire humain → déclencher l'agent dev
+          // (les commentaires du bot commencent par 🤖 et ne comptent jamais)
+          if (mentionsClaude) {
             maybeTriggerClaudeDev(task, "addComment");
           }
 

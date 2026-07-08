@@ -1,12 +1,12 @@
 // services/claudeDevTriggerService.js
 // Déclenche la routine cloud Claude Code (agent de développement automatique)
-// dès qu'une carte kanban reçoit le tag « claude ».
+// dès qu'un commentaire de carte kanban mentionne « @claude ».
 //
 // Variables d'environnement :
 // - CLAUDE_KANBAN_WEBHOOK_URL   : URL de déclenchement de la routine (obligatoire pour activer le hook)
 // - CLAUDE_KANBAN_WEBHOOK_TOKEN : token d'authentification du endpoint (optionnel selon la config de la routine)
 // - CLAUDE_KANBAN_BOARD_ID      : board autorisé (obligatoire — sans lui le hook reste inactif,
-//                                 pour éviter que le tag d'un autre workspace ne déclenche la routine)
+//                                 pour éviter qu'une mention sur un autre workspace ne déclenche la routine)
 import logger from "../utils/logger.js";
 
 const MIN_INTERVAL_MS = 60 * 1000; // anti-rafale : 1 appel max par minute
@@ -20,21 +20,29 @@ const normalize = (value) =>
     .trim()
     .toLowerCase();
 
-export const hasClaudeTag = (tags) =>
-  (tags || []).some((tag) => normalize(tag?.name ?? tag) === "claude");
+/**
+ * Vrai si le texte d'un commentaire mentionne « @claude » (insensible à la
+ * casse et aux accents ; le contenu peut être du HTML issu de l'éditeur de
+ * mentions, la détection reste textuelle). Les réponses du bot (préfixe 🤖)
+ * ne comptent jamais comme mention.
+ */
+export const hasClaudeMention = (content) => {
+  const text = normalize(content);
+  if (text.startsWith("🤖")) return false;
+  return /@claude(?![\w-])/.test(text);
+};
 
 /**
- * Vrai si le hook est actif sur cet environnement ET que la tâche est
- * éligible (board configuré + tag « claude »). Sert aussi aux resolvers
- * pour poser le marqueur claudeWorkingSince (loader « Claude répond »)
- * uniquement quand la routine sera réellement déclenchée.
+ * Vrai si le hook est actif sur cet environnement ET que la tâche appartient
+ * au board configuré. Combiné à hasClaudeMention par les resolvers pour poser
+ * le marqueur claudeWorkingSince (loader « Claude répond ») uniquement quand
+ * la routine sera réellement déclenchée.
  */
 export const claudeDevApplies = (task) => {
   const url = process.env.CLAUDE_KANBAN_WEBHOOK_URL;
   const boardId = process.env.CLAUDE_KANBAN_BOARD_ID;
   if (!url || !boardId) return false;
-  if (String(task?.boardId) !== String(boardId)) return false;
-  return hasClaudeTag(task?.tags);
+  return String(task?.boardId) === String(boardId);
 };
 
 const fireWebhook = async () => {
@@ -59,7 +67,8 @@ const fireWebhook = async () => {
 
 /**
  * Déclenche la routine Claude si la tâche appartient au board configuré
- * et porte le tag « claude ». Fire-and-forget : ne lève jamais d'erreur,
+ * (les appelants vérifient la mention @claude). Fire-and-forget : ne lève
+ * jamais d'erreur,
  * ne ralentit jamais la mutation appelante.
  *
  * @param {object} task - Tâche kanban (après sauvegarde)
