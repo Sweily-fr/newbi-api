@@ -72,6 +72,7 @@ const purchaseOrderTemplateResolvers = {
             : undefined,
           clientPositionRight: purchaseOrder.clientPositionRight || false,
           isReverseCharge: purchaseOrder.isReverseCharge || false,
+          isVatExempt: purchaseOrder.isVatExempt || false,
           showBankDetails: purchaseOrder.showBankDetails || false,
           shipping: purchaseOrder.shipping
             ? {

@@ -87,6 +87,19 @@ const invoiceSchema = new mongoose.Schema(
       min: 1,
       default: 1,
     },
+    // Mode d'avancement pour les factures de situation
+    progressMode: {
+      type: String,
+      enum: ["uniform", "individual"],
+      default: "uniform",
+    },
+    // Pourcentage d'avancement global (mode uniforme)
+    globalProgressPercentage: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 100,
+    },
     depositAmount: {
       type: Number,
       min: 0,
@@ -361,6 +374,11 @@ const invoiceSchema = new mongoose.Schema(
     },
     // Auto-liquidation de TVA (reverse charge)
     isReverseCharge: {
+      type: Boolean,
+      default: false,
+    },
+    // Exonération de TVA globale (TVA à 0% par défaut sur tous les articles)
+    isVatExempt: {
       type: Boolean,
       default: false,
     },

@@ -34,6 +34,7 @@ type Quote {
   appearance: Appearance
   shipping: Shipping
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   createdBy: User!
@@ -91,6 +92,7 @@ input CreateQuoteInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
 }
@@ -119,6 +121,7 @@ input UpdateQuoteInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
 }

@@ -1944,6 +1944,7 @@ const quoteResolvers = {
             sourceQuote: quote._id, // Référence vers le devis source
             isDeposit: isInvoiceDeposit, // Marquer comme facture d'acompte si spécifié
             isReverseCharge: quote.isReverseCharge || false, // Copier l'auto-liquidation depuis le devis
+            isVatExempt: quote.isVatExempt || false, // Copier l'exonération de TVA globale depuis le devis
             shipping: quoteObj.shipping, // Copier les informations de livraison depuis le devis
             appearance: quoteObj.appearance, // Copier l'apparence du document
             clientPositionRight: quote.clientPositionRight || false,
