@@ -71,6 +71,7 @@ const quoteTemplateResolvers = {
             : undefined,
           clientPositionRight: quote.clientPositionRight || false,
           isReverseCharge: quote.isReverseCharge || false,
+          isVatExempt: quote.isVatExempt || false,
           showBankDetails: quote.showBankDetails || false,
           shipping: quote.shipping
             ? {

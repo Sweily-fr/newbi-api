@@ -483,7 +483,8 @@ const purchaseOrderResolvers = {
           // Récupérer les informations de l'organisation (avant la numérotation :
           // le flag "séquence continue" en dépend)
           const organization = await getOrganizationInfo(workspaceId);
-          const autoNumbering = organization?.purchaseOrderAutoNumbering === true;
+          const autoNumbering =
+            organization?.purchaseOrderAutoNumbering === true;
 
           // === Génération du numéro (style Pennylane) ===
           // - Aucun BC finalisé → numéro manuel libre accepté
@@ -865,9 +866,12 @@ const purchaseOrderResolvers = {
               // renommé devenait inéditable.
               const renameStamp = Date.now().toString().slice(-6);
               for (let i = 0; i < conflictingDrafts.length; i++) {
-                await PurchaseOrder.findByIdAndUpdate(conflictingDrafts[i]._id, {
-                  number: `${normalizedNumber}-${renameStamp}${i}`,
-                });
+                await PurchaseOrder.findByIdAndUpdate(
+                  conflictingDrafts[i]._id,
+                  {
+                    number: `${normalizedNumber}-${renameStamp}${i}`,
+                  },
+                );
               }
 
               updateData.number = normalizedNumber;
@@ -1212,6 +1216,7 @@ const purchaseOrderResolvers = {
           },
           shipping: quoteObj.shipping,
           isReverseCharge: quote.isReverseCharge || false,
+          isVatExempt: quote.isVatExempt || false,
           clientPositionRight:
             organization.purchaseOrderClientPositionRight || false,
           showBankDetails: organization.showBankDetails || false,
@@ -1346,6 +1351,7 @@ const purchaseOrderResolvers = {
           workspaceId,
           createdBy: user.id,
           isReverseCharge: po.isReverseCharge || false,
+          isVatExempt: po.isVatExempt || false,
           shipping: poObj.shipping,
           appearance: {
             textColor:

@@ -291,6 +291,11 @@ const quoteSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Exonération de TVA globale (TVA à 0% par défaut sur tous les articles)
+    isVatExempt: {
+      type: Boolean,
+      default: false,
+    },
     // Position du client dans le PDF (false = centre, true = droite)
     clientPositionRight: {
       type: Boolean,
