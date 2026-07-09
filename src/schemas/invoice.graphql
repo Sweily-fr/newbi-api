@@ -10,6 +10,8 @@ type Invoice {
   isDeposit: Boolean!
   invoiceType: String
   situationNumber: Int
+  progressMode: String
+  globalProgressPercentage: Float
   situationReference: String
   client: EmbeddedClient!
   companyInfo: Company!
@@ -39,6 +41,7 @@ type Invoice {
   appearance: Appearance
   shipping: Shipping
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   createdBy: User!
@@ -142,6 +145,8 @@ input CreateInvoiceInput {
   isDeposit: Boolean
   invoiceType: String
   situationNumber: Int
+  progressMode: String
+  globalProgressPercentage: Float
   client: ClientInput!
   companyInfo: CompanyInput
   items: [ItemInput!]!
@@ -168,6 +173,7 @@ input CreateInvoiceInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   sourcePurchaseOrderId: ID
@@ -178,6 +184,8 @@ input UpdateInvoiceInput {
   isDeposit: Boolean
   invoiceType: String
   situationNumber: Int
+  progressMode: String
+  globalProgressPercentage: Float
   client: ClientInput
   companyInfo: CompanyInput
   items: [ItemInput!]
@@ -204,6 +212,7 @@ input UpdateInvoiceInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
 }

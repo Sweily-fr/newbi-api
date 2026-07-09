@@ -73,6 +73,7 @@ const invoiceTemplateResolvers = {
             : undefined,
           clientPositionRight: invoice.clientPositionRight || false,
           isReverseCharge: invoice.isReverseCharge || false,
+          isVatExempt: invoice.isVatExempt || false,
           showBankDetails: invoice.showBankDetails || false,
           bankDetails: invoice.bankDetails
             ? {
