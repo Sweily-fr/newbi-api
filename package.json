@@ -58,6 +58,7 @@
     "@graphql-tools/schema": "^10.0.25",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@react-email/render": "^2.0.0",
+    "ag-psd": "^31.0.2",
     "apollo-server-express": "^3.12.1",
     "archiver": "^7.0.1",
     "aws-sdk": "^2.1692.0",
