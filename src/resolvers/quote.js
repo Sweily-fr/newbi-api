@@ -35,6 +35,7 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 
@@ -1429,6 +1430,20 @@ const quoteResolvers = {
 
         // Si le devis passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
         if (quote.status === "DRAFT" && status === "PENDING") {
+          // Recaler les dates d'un brouillon repris plus tard : l'émission est
+          // ramenée à aujourd'hui et la validité décalée d'autant (délai
+          // d'origine conservé). Les vues affichent déjà ces dates recalées
+          // (getDraftEffectiveDates côté front) : sans ce recalage, la
+          // finalisation en un clic persisterait les dates d'origine.
+          const refreshedDates = refreshDraftDates(
+            quote.issueDate,
+            quote.validUntil,
+          );
+          if (refreshedDates.changed) {
+            quote.issueDate = refreshedDates.issueDate;
+            quote.validUntil = refreshedDates.secondDate;
+          }
+
           // Snapshot companyInfo à la finalisation
           if (!quote.companyInfo || !quote.companyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);

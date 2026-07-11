@@ -20,6 +20,7 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { refreshDraftDates } from "../utils/draftDates.js";
 import {
   generateInvoiceNumber,
   validateNumberSequence,
@@ -2724,6 +2725,19 @@ const invoiceResolvers = {
 
         // Vérifier que la date d'émission n'est pas antérieure à celle de la dernière facture existante
         if (invoice.status === "DRAFT" && status === "PENDING") {
+          // Recaler les dates d'un brouillon repris plus tard : l'émission est
+          // ramenée à aujourd'hui et l'échéance décalée d'autant (délai
+          // d'origine conservé). Les vues affichent déjà ces dates recalées
+          // (getDraftEffectiveDates côté front) : sans ce recalage, la
+          // finalisation en un clic persisterait les dates d'origine.
+          const refreshedDates = refreshDraftDates(
+            invoice.issueDate,
+            invoice.dueDate,
+          );
+          if (refreshedDates.changed) {
+            invoice.issueDate = refreshedDates.issueDate;
+            invoice.dueDate = refreshedDates.secondDate;
+          }
           await validateInvoiceIssueDate(
             invoice.issueDate,
             workspaceId,
