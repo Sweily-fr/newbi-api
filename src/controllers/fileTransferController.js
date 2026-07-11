@@ -21,7 +21,7 @@ const handleStripeWebhook = async (req, res) => {
   console.log("🔑 Signature présente:", !!sig);
   console.log(
     "🔐 Secret configuré:",
-    endpointSecret ? "Oui (whsec_...)" : "NON"
+    endpointSecret ? "Oui (whsec_...)" : "NON",
   );
   console.log("📦 Body type:", typeof req.body);
   console.log("📦 Body length:", req.body?.length || "N/A");
@@ -35,14 +35,14 @@ const handleStripeWebhook = async (req, res) => {
   } catch (err) {
     console.error("❌ Erreur de signature du webhook Stripe:", err.message);
     console.error(
-      "💡 Vérifiez que le STRIPE_WEBHOOK_SECRET correspond au webhook configuré"
+      "💡 Vérifiez que le STRIPE_WEBHOOK_SECRET correspond au webhook configuré",
     );
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   console.log(
     "Données de l'événement:",
-    JSON.stringify(event.data.object, null, 2)
+    JSON.stringify(event.data.object, null, 2),
   );
 
   let result = {
@@ -87,7 +87,7 @@ const handleStripeWebhook = async (req, res) => {
 
       // Récupérer la session de paiement associée à cette charge
       const paymentIntent = await stripe.paymentIntents.retrieve(
-        fee.originating_transaction
+        fee.originating_transaction,
       );
 
       if (
@@ -141,12 +141,12 @@ const downloadFile = async (req, res) => {
     logger.info(
       `[FileTransfer] Demande de téléchargement - shareLink: ${shareLink}, accessKey: ${
         accessKey ? "***" + accessKey.slice(-4) : "non fourni"
-      }, fileId: ${fileId}`
+      }, fileId: ${fileId}`,
     );
 
     if (!shareLink || !accessKey || !fileId) {
       logger.error(
-        "[FileTransfer] Paramètres manquants pour le téléchargement"
+        "[FileTransfer] Paramètres manquants pour le téléchargement",
       );
       return res.status(400).json({
         success: false,
@@ -164,7 +164,7 @@ const downloadFile = async (req, res) => {
 
     if (!fileTransfer) {
       logger.error(
-        `[FileTransfer] Transfert non trouvé ou expiré - shareLink: ${shareLink}`
+        `[FileTransfer] Transfert non trouvé ou expiré - shareLink: ${shareLink}`,
       );
       return res.status(404).json({
         success: false,
@@ -173,13 +173,13 @@ const downloadFile = async (req, res) => {
     }
 
     logger.info(
-      `[FileTransfer] Transfert trouvé - ID: ${fileTransfer._id}, status: ${fileTransfer.status}`
+      `[FileTransfer] Transfert trouvé - ID: ${fileTransfer._id}, status: ${fileTransfer.status}`,
     );
 
     // Vérifier si le transfert est accessible
     if (!fileTransfer.isAccessible()) {
       logger.error(
-        `[FileTransfer] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`
+        `[FileTransfer] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`,
       );
       return res.status(403).json({
         success: false,
@@ -193,7 +193,7 @@ const downloadFile = async (req, res) => {
 
     if (!file) {
       logger.error(
-        `[FileTransfer] Fichier non trouvé dans le transfert - fileId: ${fileId}`
+        `[FileTransfer] Fichier non trouvé dans le transfert - fileId: ${fileId}`,
       );
       return res.status(404).json({
         success: false,
@@ -202,7 +202,7 @@ const downloadFile = async (req, res) => {
     }
 
     console.log(
-      `[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}, Storage: ${file.storageType}`
+      `[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}, Storage: ${file.storageType}`,
     );
 
     // Incrémenter le compteur de téléchargements
@@ -219,10 +219,13 @@ const downloadFile = async (req, res) => {
 
       try {
         // Générer une URL signée pour le téléchargement (5 minutes)
-        const signedUrl = await cloudflareTransferService.getSignedUrl(file.r2Key, 300);
+        const signedUrl = await cloudflareTransferService.getSignedUrl(
+          file.r2Key,
+          300,
+        );
 
         // Rediriger vers l'URL signée
-        console.log(`[DEBUG] Redirection vers URL signée R2`);
+        console.log("[DEBUG] Redirection vers URL signée R2");
         return res.redirect(signedUrl);
       } catch (r2Error) {
         console.error("[ERROR] Erreur R2:", r2Error);
@@ -239,7 +242,7 @@ const downloadFile = async (req, res) => {
       // Vérifier si le fichier existe
       if (!fs.existsSync(filePath)) {
         console.log(
-          `[ERROR] Fichier physique non trouvé sur le serveur: ${filePath}`
+          `[ERROR] Fichier physique non trouvé sur le serveur: ${filePath}`,
         );
         return res.status(404).send("Fichier non trouvé sur le serveur");
       }
@@ -247,7 +250,7 @@ const downloadFile = async (req, res) => {
       // Vérifier la taille du fichier
       const fileStats = fs.statSync(filePath);
       console.log(
-        `[DEBUG] Taille du fichier sur disque: ${fileStats.size} octets`
+        `[DEBUG] Taille du fichier sur disque: ${fileStats.size} octets`,
       );
 
       if (fileStats.size === 0) {
@@ -256,11 +259,14 @@ const downloadFile = async (req, res) => {
       }
 
       console.log(
-        `[DEBUG] En-têtes de réponse - Content-Type: ${contentType}, fileName: ${fileName}, Content-Length: ${fileStats.size}`
+        `[DEBUG] En-têtes de réponse - Content-Type: ${contentType}, fileName: ${fileName}, Content-Length: ${fileStats.size}`,
       );
 
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`,
+      );
       res.setHeader("Content-Length", fileStats.size);
       res.setHeader("Cache-Control", "no-cache");
 
@@ -278,7 +284,7 @@ const downloadFile = async (req, res) => {
       // Gérer la fin du stream
       fileStream.on("end", () => {
         console.log(
-          `[DEBUG] Téléchargement terminé avec succès - ${file.originalName}`
+          `[DEBUG] Téléchargement terminé avec succès - ${file.originalName}`,
         );
       });
 
@@ -303,12 +309,12 @@ const downloadAllFiles = async (req, res) => {
     logger.info(
       `[FileTransfer] Demande de téléchargement groupé - shareLink: ${shareLink}, accessKey: ${
         accessKey ? "***" + accessKey.slice(-4) : "non fourni"
-      }`
+      }`,
     );
 
     if (!shareLink || !accessKey) {
       logger.error(
-        "[FileTransfer] Paramètres manquants pour le téléchargement groupé"
+        "[FileTransfer] Paramètres manquants pour le téléchargement groupé",
       );
       return res.status(400).json({
         success: false,
@@ -326,7 +332,7 @@ const downloadAllFiles = async (req, res) => {
 
     if (!fileTransfer) {
       logger.error(
-        `[FileTransfer] Transfert non trouvé ou expiré - shareLink: ${shareLink}`
+        `[FileTransfer] Transfert non trouvé ou expiré - shareLink: ${shareLink}`,
       );
       return res.status(404).json({
         success: false,
@@ -335,13 +341,13 @@ const downloadAllFiles = async (req, res) => {
     }
 
     logger.info(
-      `[FileTransfer] Transfert trouvé - ID: ${fileTransfer._id}, nombre de fichiers: ${fileTransfer.files.length}`
+      `[FileTransfer] Transfert trouvé - ID: ${fileTransfer._id}, nombre de fichiers: ${fileTransfer.files.length}`,
     );
 
     // Vérifier si le transfert est accessible
     if (!fileTransfer.isAccessible()) {
       logger.error(
-        `[FileTransfer] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`
+        `[FileTransfer] Transfert non accessible - isPaid: ${fileTransfer.isPaid}, isPaymentRequired: ${fileTransfer.isPaymentRequired}`,
       );
       return res.status(403).json({
         success: false,
@@ -358,9 +364,13 @@ const downloadAllFiles = async (req, res) => {
 
     // Séparer les fichiers locaux et R2
     const localFiles = fileTransfer.files.filter((f) => f.storageType !== "r2");
-    const r2Files = fileTransfer.files.filter((f) => f.storageType === "r2" && f.r2Key);
+    const r2Files = fileTransfer.files.filter(
+      (f) => f.storageType === "r2" && f.r2Key,
+    );
 
-    console.log(`[DEBUG] Fichiers locaux: ${localFiles.length}, Fichiers R2: ${r2Files.length}`);
+    console.log(
+      `[DEBUG] Fichiers locaux: ${localFiles.length}, Fichiers R2: ${r2Files.length}`,
+    );
 
     // Vérifier que tous les fichiers locaux existent physiquement
     const missingLocalFiles = [];
@@ -372,10 +382,14 @@ const downloadAllFiles = async (req, res) => {
     }
 
     if (missingLocalFiles.length > 0) {
-      logger.error(`Fichiers locaux manquants: ${missingLocalFiles.join(", ")}`);
+      logger.error(
+        `Fichiers locaux manquants: ${missingLocalFiles.join(", ")}`,
+      );
       return res
         .status(404)
-        .send(`Certains fichiers sont manquants: ${missingLocalFiles.join(", ")}`);
+        .send(
+          `Certains fichiers sont manquants: ${missingLocalFiles.join(", ")}`,
+        );
     }
 
     try {
@@ -388,20 +402,25 @@ const downloadAllFiles = async (req, res) => {
       res.setHeader("Content-Type", "application/zip");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${encodeURIComponent(archiveFileName)}"`
+        `attachment; filename="${encodeURIComponent(archiveFileName)}"`,
       );
       res.setHeader("Cache-Control", "no-cache");
 
-      // Créer l'archive en streaming directement vers la réponse
+      // Créer l'archive en streaming directement vers la réponse.
+      // store: true → pas de compression (les fichiers transférés sont
+      // généralement déjà compressés : images, vidéos, PDF), le streaming
+      // n'est plus limité par le CPU
       const archive = archiver("zip", {
-        zlib: { level: 6 },
+        store: true,
       });
 
       // Gérer les erreurs d'archivage
       archive.on("error", (err) => {
         logger.error("Erreur lors de la création de l'archive ZIP:", err);
         if (!res.headersSent) {
-          res.status(500).send(`Erreur lors de la création de l'archive: ${err.message}`);
+          res
+            .status(500)
+            .send(`Erreur lors de la création de l'archive: ${err.message}`);
         }
       });
 
@@ -419,23 +438,29 @@ const downloadAllFiles = async (req, res) => {
         console.log(`[ZIP] Ajout fichier local: ${file.originalName}`);
       }
 
-      // Ajouter les fichiers R2 en les streamant
-      for (const file of r2Files) {
-        try {
-          console.log(`[ZIP] Ajout fichier R2: ${file.originalName} (${file.r2Key})`);
+      // Ajouter les fichiers R2 en les streamant SÉQUENTIELLEMENT :
+      // ouvrir tous les streams R2 d'un coup laisse les sockets suivants
+      // inactifs pendant que l'archive consomme le premier fichier — R2
+      // coupe la connexion (timeout) et le ZIP est livré tronqué avec un
+      // statut 200. On n'ouvre donc chaque stream qu'au moment où l'archive
+      // est prête à le consommer, et on attend que l'entrée soit finalisée
+      // avant de passer à la suivante.
+      const { S3Client, GetObjectCommand } = await import("@aws-sdk/client-s3");
 
-          // Récupérer le fichier depuis R2
-          const { GetObjectCommand } = await import("@aws-sdk/client-s3");
-          const { S3Client } = await import("@aws-sdk/client-s3");
+      const s3Client = new S3Client({
+        region: "auto",
+        endpoint: process.env.R2_API_URL,
+        credentials: {
+          accessKeyId: process.env.R2_ACCESS_KEY_ID,
+          secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+        },
+      });
 
-          const s3Client = new S3Client({
-            region: "auto",
-            endpoint: process.env.R2_API_URL,
-            credentials: {
-              accessKeyId: process.env.R2_ACCESS_KEY_ID,
-              secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-            },
-          });
+      try {
+        for (const file of r2Files) {
+          console.log(
+            `[ZIP] Ajout fichier R2: ${file.originalName} (${file.r2Key})`,
+          );
 
           const command = new GetObjectCommand({
             Bucket: process.env.TRANSFER_BUCKET || "app-transfers-prod",
@@ -444,17 +469,35 @@ const downloadAllFiles = async (req, res) => {
 
           const response = await s3Client.send(command);
 
-          // Ajouter le stream au ZIP
+          const entryDone = new Promise((resolve, reject) => {
+            const onEntry = (entry) => {
+              if (entry.name === file.originalName) {
+                archive.off("entry", onEntry);
+                resolve();
+              }
+            };
+            archive.on("entry", onEntry);
+            response.Body.once("error", reject);
+          });
+
           archive.append(response.Body, { name: file.originalName });
-        } catch (r2Error) {
-          console.error(`[ZIP] Erreur récupération R2 pour ${file.originalName}:`, r2Error);
-          // Continuer avec les autres fichiers
+          await entryDone;
         }
+      } catch (r2Error) {
+        // Les headers sont déjà partis : impossible de renvoyer une erreur
+        // HTTP. On coupe la connexion pour que le client voie un échec de
+        // téléchargement plutôt qu'un ZIP incomplet marqué "terminé".
+        logger.error(
+          "[ZIP] Erreur streaming R2, archive interrompue:",
+          r2Error,
+        );
+        archive.abort();
+        res.destroy(r2Error);
+        return;
       }
 
       // Finaliser l'archive
       await archive.finalize();
-
     } catch (zipError) {
       logger.error("Erreur lors de la création de l'archive ZIP:", zipError);
       if (!res.headersSent) {
@@ -591,7 +634,7 @@ const previewFile = async (req, res) => {
 
     // Trouver le fichier
     const file = fileTransfer.files.find(
-      (f) => f.fileId === fileId || f._id.toString() === fileId
+      (f) => f.fileId === fileId || f._id.toString() === fileId,
     );
 
     if (!file) {
@@ -605,7 +648,7 @@ const previewFile = async (req, res) => {
     if (file.storageType === "r2" && file.r2Key) {
       const presignedUrl = await cloudflareTransferService.getSignedUrl(
         file.r2Key,
-        3600 // 1 heure
+        3600, // 1 heure
       );
 
       // Rediriger vers l'URL signée
@@ -625,7 +668,7 @@ const previewFile = async (req, res) => {
     res.setHeader("Content-Type", file.mimeType);
     res.setHeader(
       "Content-Disposition",
-      `inline; filename="${file.originalName}"`
+      `inline; filename="${file.originalName}"`,
     );
 
     const fileStream = fs.createReadStream(filePath);
