@@ -1,5 +1,9 @@
 import express from "express";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  GetObjectCommand,
+  PutObjectCommand,
+} from "@aws-sdk/client-s3";
 import convert from "heic-convert";
 import sharp from "sharp";
 import { readPsd, initializeCanvas } from "ag-psd";
@@ -317,7 +321,38 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       res.end(jpegBuffer);
     } else if (isLargeRasterImage || isPsdByName) {
       const cacheKey = `${transferId}:${fileId}`;
+      // Preview persistée sur R2 : partagée entre les workers et les
+      // redémarrages, contrairement au cache mémoire — la génération peut
+      // prendre des dizaines de secondes sur de très gros fichiers
+      const previewKey = `${file.r2Key}.preview.jpg`;
       let jpegBuffer = getCachedHeicPreview(cacheKey);
+      let previewAlreadyPersisted = false;
+
+      if (jpegBuffer) {
+        // Consommer le stream R2 puisqu'on utilise le cache
+        previewAlreadyPersisted = true;
+        response.Body.destroy();
+        logger.info("🖼️ Preview servie depuis le cache mémoire", { cacheKey });
+      } else {
+        try {
+          const persisted = await s3Client.send(
+            new GetObjectCommand({
+              Bucket: process.env.TRANSFER_BUCKET,
+              Key: previewKey,
+            }),
+          );
+          const chunks = [];
+          for await (const chunk of persisted.Body) {
+            chunks.push(chunk);
+          }
+          jpegBuffer = Buffer.concat(chunks);
+          previewAlreadyPersisted = true;
+          response.Body.destroy();
+          logger.info("🖼️ Preview servie depuis R2", { previewKey });
+        } catch {
+          // Pas encore générée
+        }
+      }
 
       if (!jpegBuffer) {
         try {
@@ -400,17 +435,33 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
           }
         }
 
-        setCachedHeicPreview(cacheKey, jpegBuffer);
-        logger.info("🖼️ Grande image redimensionnée et mise en cache", {
+        logger.info("🖼️ Grande image redimensionnée", {
           cacheKey,
           originalSize: file.size,
           previewSize: jpegBuffer.length,
         });
-      } else {
-        // Consommer le stream R2 puisqu'on utilise le cache
-        response.Body.destroy();
-        logger.info("🖼️ Preview servie depuis le cache", { cacheKey });
       }
+
+      // Persister la preview sur R2 (best-effort)
+      if (!previewAlreadyPersisted) {
+        try {
+          await s3Client.send(
+            new PutObjectCommand({
+              Bucket: process.env.TRANSFER_BUCKET,
+              Key: previewKey,
+              Body: jpegBuffer,
+              ContentType: "image/jpeg",
+            }),
+          );
+        } catch (putError) {
+          logger.warn("🖼️ Impossible de persister la preview sur R2", {
+            previewKey,
+            error: putError.message,
+          });
+        }
+      }
+
+      setCachedHeicPreview(cacheKey, jpegBuffer);
 
       const displayName = (file.originalName || "image").replace(
         /\.[^.]+$/,
