@@ -208,6 +208,17 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       ["image/heic", "image/heif"].includes(file.mimeType?.toLowerCase()) ||
       /\.(heic|heif)$/i.test(file.originalName || "");
 
+    // Grandes images raster : servir l'original (parfois plusieurs centaines
+    // de Mo) rend la preview inutilisable, surtout sur mobile — on sert une
+    // version redimensionnée et mise en cache
+    const isLargeRasterImage =
+      !isHeic &&
+      (file.size || 0) > 3 * 1024 * 1024 &&
+      (/\.(jpe?g|png|webp|tiff?)$/i.test(file.originalName || "") ||
+        ["image/jpeg", "image/png", "image/webp", "image/tiff"].includes(
+          file.mimeType?.toLowerCase(),
+        ));
+
     if (isHeic) {
       // Convertir HEIC → JPEG pour compatibilité navigateur
       const cacheKey = `${transferId}:${fileId}`;
@@ -245,6 +256,59 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
 
       const displayName = (file.originalName || "image").replace(
         /\.(heic|heif)$/i,
+        ".jpg",
+      );
+
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(displayName)}"`,
+      );
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Content-Length", jpegBuffer.length);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      // CRUCIAL: sans CORP cross-origin, les <img>/<object>/<iframe>
+      // cross-origin sont bloques par le navigateur (ERR_BLOCKED_BY_RESPONSE.NotSameOrigin)
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader(
+        "Content-Security-Policy",
+        `frame-ancestors 'self' ${frontendUrl}`,
+      );
+      res.removeHeader("X-Frame-Options");
+
+      res.end(jpegBuffer);
+    } else if (isLargeRasterImage) {
+      const cacheKey = `${transferId}:${fileId}`;
+      let jpegBuffer = getCachedHeicPreview(cacheKey);
+
+      if (!jpegBuffer) {
+        // limitInputPixels: false → accepte les très grandes affiches ;
+        // pour le JPEG, libvips réduit à la volée (shrink-on-load) sans
+        // charger toute l'image décodée en mémoire
+        const transformer = sharp({ limitInputPixels: false })
+          .rotate()
+          .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 80, progressive: true });
+
+        response.Body.pipe(transformer);
+        jpegBuffer = await transformer.toBuffer();
+
+        setCachedHeicPreview(cacheKey, jpegBuffer);
+        logger.info("🖼️ Grande image redimensionnée et mise en cache", {
+          cacheKey,
+          originalSize: file.size,
+          previewSize: jpegBuffer.length,
+        });
+      } else {
+        // Consommer le stream R2 puisqu'on utilise le cache
+        response.Body.destroy();
+        logger.info("🖼️ Preview servie depuis le cache", { cacheKey });
+      }
+
+      const displayName = (file.originalName || "image").replace(
+        /\.[^.]+$/,
         ".jpg",
       );
 
