@@ -32,6 +32,7 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 
 // Fonction utilitaire pour calculer les totaux
@@ -996,6 +997,20 @@ const purchaseOrderResolvers = {
 
           // Si transition DRAFT → CONFIRMED, snapshot companyInfo + client et générer un numéro séquentiel
           if (po.status === "DRAFT" && status === "CONFIRMED") {
+            // Recaler les dates d'un brouillon repris plus tard : l'émission
+            // est ramenée à aujourd'hui et la validité décalée d'autant (délai
+            // d'origine conservé). Les vues affichent déjà ces dates recalées
+            // (getDraftEffectiveDates côté front) : sans ce recalage, la
+            // finalisation en un clic persisterait les dates d'origine.
+            const refreshedDates = refreshDraftDates(
+              po.issueDate,
+              po.validUntil,
+            );
+            if (refreshedDates.changed) {
+              po.issueDate = refreshedDates.issueDate;
+              po.validUntil = refreshedDates.secondDate;
+            }
+
             // Snapshot companyInfo à la finalisation
             if (!po.companyInfo || !po.companyInfo.name) {
               const org = await getOrganizationInfo(workspaceId);
