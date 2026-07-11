@@ -2,12 +2,37 @@ import express from "express";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import convert from "heic-convert";
 import sharp from "sharp";
+import { readPsd, initializeCanvas } from "ag-psd";
 import FileTransfer from "../models/FileTransfer.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
 import { sendDownloadNotificationEmail } from "../utils/mailer.js";
 
 const router = express.Router();
+
+// ag-psd sans canvas : seule une factory ImageData est nécessaire pour
+// extraire le composite aplati d'un PSD (données RGBA brutes)
+initializeCanvas(
+  () => {
+    throw new Error("canvas non disponible côté serveur");
+  },
+  (width, height) => ({
+    width,
+    height,
+    data: new Uint8ClampedArray(width * height * 4),
+  }),
+);
+
+// Taille max d'un PSD pour tenter l'extraction du composite (mémoire)
+const PSD_PREVIEW_MAX_BYTES = 450 * 1024 * 1024;
+
+// Une seule conversion PSD à la fois pour borner la consommation mémoire
+let psdConversionQueue = Promise.resolve();
+const withPsdLock = (fn) => {
+  const run = psdConversionQueue.then(fn, fn);
+  psdConversionQueue = run.catch(() => {});
+  return run;
+};
 
 // Cache mémoire pour les previews HEIC convertis (LRU simple, max 50 entrées, TTL 30 min)
 const heicPreviewCache = new Map();
@@ -219,6 +244,17 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
           file.mimeType?.toLowerCase(),
         ));
 
+    // Fichiers Photoshop déclarés (les PSD renommés en .jpg sont détectés
+    // plus loin via leurs octets magiques quand sharp échoue)
+    const isPsdByName =
+      !isHeic &&
+      (/\.psd$/i.test(file.originalName || "") ||
+        [
+          "image/vnd.adobe.photoshop",
+          "application/x-photoshop",
+          "application/photoshop",
+        ].includes(file.mimeType?.toLowerCase()));
+
     if (isHeic) {
       // Convertir HEIC → JPEG pour compatibilité navigateur
       const cacheKey = `${transferId}:${fileId}`;
@@ -279,21 +315,90 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       res.removeHeader("X-Frame-Options");
 
       res.end(jpegBuffer);
-    } else if (isLargeRasterImage) {
+    } else if (isLargeRasterImage || isPsdByName) {
       const cacheKey = `${transferId}:${fileId}`;
       let jpegBuffer = getCachedHeicPreview(cacheKey);
 
       if (!jpegBuffer) {
-        // limitInputPixels: false → accepte les très grandes affiches ;
-        // pour le JPEG, libvips réduit à la volée (shrink-on-load) sans
-        // charger toute l'image décodée en mémoire
-        const transformer = sharp({ limitInputPixels: false })
-          .rotate()
-          .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
-          .jpeg({ quality: 80, progressive: true });
+        try {
+          // limitInputPixels: false → accepte les très grandes affiches ;
+          // pour le JPEG, libvips réduit à la volée (shrink-on-load) sans
+          // charger toute l'image décodée en mémoire
+          const transformer = sharp({ limitInputPixels: false })
+            .rotate()
+            .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
+            .jpeg({ quality: 80, progressive: true });
 
-        response.Body.pipe(transformer);
-        jpegBuffer = await transformer.toBuffer();
+          response.Body.pipe(transformer);
+          jpegBuffer = await transformer.toBuffer();
+        } catch (sharpError) {
+          // Fichier non décodable par sharp : peut-être un PSD (souvent
+          // renommé en .jpg par les utilisateurs). On tente d'extraire le
+          // composite aplati Photoshop.
+          response.Body.destroy();
+
+          if ((file.size || 0) > PSD_PREVIEW_MAX_BYTES) {
+            logger.warn("🖼️ Preview impossible, fichier trop volumineux", {
+              fileName: file.originalName,
+              size: file.size,
+            });
+            return res
+              .status(415)
+              .json({ error: "Format d'image non prévisualisable" });
+          }
+
+          try {
+            jpegBuffer = await withPsdLock(async () => {
+              // Nouveau stream R2 : le premier a été consommé par sharp
+              const retry = await s3Client.send(command);
+              const chunks = [];
+              for await (const chunk of retry.Body) {
+                chunks.push(chunk);
+              }
+              const inputBuffer = Buffer.concat(chunks);
+
+              if (inputBuffer.subarray(0, 4).toString("latin1") !== "8BPS") {
+                throw new Error("ni image raster ni PSD");
+              }
+
+              const psd = readPsd(inputBuffer, {
+                skipLayerImageData: true,
+                skipThumbnail: true,
+                useImageData: true,
+              });
+              if (!psd?.imageData?.data) {
+                throw new Error(
+                  "PSD sans composite aplati (enregistré sans compatibilité)",
+                );
+              }
+
+              const { width, height, data } = psd.imageData;
+              return sharp(
+                Buffer.from(data.buffer, data.byteOffset, data.byteLength),
+                {
+                  raw: { width, height, channels: 4 },
+                  limitInputPixels: false,
+                },
+              )
+                .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
+                .jpeg({ quality: 80, progressive: true })
+                .toBuffer();
+            });
+            logger.info("🖼️ Composite PSD extrait pour la preview", {
+              fileName: file.originalName,
+              previewSize: jpegBuffer.length,
+            });
+          } catch (psdError) {
+            logger.warn("🖼️ Preview impossible, format non décodable", {
+              fileName: file.originalName,
+              sharpError: sharpError.message,
+              psdError: psdError.message,
+            });
+            return res
+              .status(415)
+              .json({ error: "Format d'image non prévisualisable" });
+          }
+        }
 
         setCachedHeicPreview(cacheKey, jpegBuffer);
         logger.info("🖼️ Grande image redimensionnée et mise en cache", {
