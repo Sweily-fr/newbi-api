@@ -406,6 +406,41 @@ const downloadAllFiles = async (req, res) => {
       );
       res.setHeader("Cache-Control", "no-cache");
 
+      // En mode store (aucune compression), la taille du ZIP est exactement
+      // prévisible : par fichier, en-tête local 30+n octets, data descriptor
+      // 16, entrée du répertoire central 46+n (n = longueur du nom), plus
+      // EOCD 22 octets. Annoncer un Content-Length exact permet au navigateur
+      // et au client d'afficher une vraie progression de téléchargement.
+      // On ne l'annonce que dans le cas sûr : uniquement des fichiers R2,
+      // noms ASCII, tailles connues, pas de zip64 (< 4 Go).
+      const sizesKnown = r2Files.every(
+        (f) => Number.isFinite(f.size) && f.size >= 0,
+      );
+      const asciiNames = r2Files.every((f) =>
+        /^[\x20-\x7e]+$/.test(f.originalName || ""),
+      );
+      let expectedZipSize = null;
+      if (
+        localFiles.length === 0 &&
+        r2Files.length > 0 &&
+        sizesKnown &&
+        asciiNames
+      ) {
+        expectedZipSize =
+          r2Files.reduce(
+            (acc, f) => acc + f.size + 92 + 2 * f.originalName.length,
+            0,
+          ) + 22;
+        if (
+          expectedZipSize < 0xfffffffe &&
+          r2Files.every((f) => f.size < 0xfffffffe)
+        ) {
+          res.setHeader("Content-Length", expectedZipSize);
+        } else {
+          expectedZipSize = null;
+        }
+      }
+
       // Créer l'archive en streaming directement vers la réponse.
       // store: true → pas de compression (les fichiers transférés sont
       // généralement déjà compressés : images, vidéos, PDF), le streaming
@@ -425,7 +460,15 @@ const downloadAllFiles = async (req, res) => {
       });
 
       archive.on("end", () => {
-        logger.info(`Archive ZIP terminée: ${archiveFileName}`);
+        const written = archive.pointer();
+        logger.info(
+          `Archive ZIP terminée: ${archiveFileName} (${written} octets)`,
+        );
+        if (expectedZipSize !== null && written !== expectedZipSize) {
+          logger.error(
+            `[ZIP] Taille réelle (${written}) ≠ Content-Length annoncé (${expectedZipSize})`,
+          );
+        }
       });
 
       // Pipe l'archive vers la réponse
