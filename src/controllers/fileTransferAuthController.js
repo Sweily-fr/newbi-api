@@ -68,7 +68,7 @@ export const authorizeDownload = async (req, res) => {
         fileId,
         email,
         buyerIp,
-        buyerUserAgent
+        buyerUserAgent,
       );
     }
 
@@ -136,7 +136,7 @@ export const authorizeDownload = async (req, res) => {
       email,
       buyerIp,
       buyerUserAgent,
-      null
+      null,
     );
   } catch (error) {
     console.error("❌ ERREUR DÉTAILLÉE dans authorizeDownload:", error);
@@ -156,7 +156,7 @@ async function generateDownloadUrls(
   email,
   buyerIp,
   buyerUserAgent,
-  accessGrant = null
+  accessGrant = null,
 ) {
   try {
     // Vérifier la configuration R2/S3
@@ -169,7 +169,9 @@ async function generateDownloadUrls(
     }
     const downloadUrls = [];
     const filesToProcess = fileId
-      ? fileTransfer.files.filter((f) => f._id.toString() === fileId || f.fileId === fileId)
+      ? fileTransfer.files.filter(
+          (f) => f._id.toString() === fileId || f.fileId === fileId,
+        )
       : fileTransfer.files;
 
     if (filesToProcess.length === 0) {
@@ -187,12 +189,10 @@ async function generateDownloadUrls(
     for (const file of filesToProcess) {
       let downloadUrl;
 
-      // Générer l'URL selon le type de stockage
-      if (file.downloadUrl && !file.downloadUrl.includes("undefined")) {
-        // URL publique directe (temporaire)
-        downloadUrl = file.downloadUrl;
-      } else if (file.storageType === "r2" && file.r2Key) {
-        // URL signée R2 courte
+      // Générer l'URL selon le type de stockage. Toujours signer une URL
+      // fraîche pour R2 : l'URL stockée sur le fichier (file.downloadUrl)
+      // est signée 24 h à l'upload et expire donc avant le transfert.
+      if (file.storageType === "r2" && file.r2Key) {
         const command = new GetObjectCommand({
           Bucket: process.env.TRANSFER_BUCKET,
           Key: file.r2Key,
@@ -201,6 +201,9 @@ async function generateDownloadUrls(
         downloadUrl = await getSignedUrl(s3Client, command, {
           expiresIn: urlExpirationMinutes * 60, // en secondes
         });
+      } else if (file.downloadUrl && !file.downloadUrl.includes("undefined")) {
+        // URL publique directe (temporaire)
+        downloadUrl = file.downloadUrl;
       } else {
         logger.error("❌ Impossible de générer URL pour fichier", {
           fileId: file._id,
@@ -284,14 +287,19 @@ export const markDownloadCompleted = async (req, res) => {
     // Incrémenter le compteur + notification SEULEMENT pour le dernier fichier
     if (isLastFile) {
       try {
-        const fileTransfer = await FileTransfer.findById(downloadEvent.transferId);
+        const fileTransfer = await FileTransfer.findById(
+          downloadEvent.transferId,
+        );
         if (fileTransfer) {
           // Incrémenter le compteur de téléchargements
           await fileTransfer.incrementDownloadCount();
-          logger.info("📊 Compteur de téléchargements incrémenté (via lien public)", {
-            transferId: downloadEvent.transferId,
-            newCount: fileTransfer.downloadCount,
-          });
+          logger.info(
+            "📊 Compteur de téléchargements incrémenté (via lien public)",
+            {
+              transferId: downloadEvent.transferId,
+              newCount: fileTransfer.downloadCount,
+            },
+          );
 
           // Envoyer notification si activée
           if (fileTransfer.notifyOnDownload) {
@@ -302,7 +310,8 @@ export const markDownloadCompleted = async (req, res) => {
                 const displayName =
                   fileTransfer.files.length > 1
                     ? `${fileTransfer.files.length} fichiers`
-                    : fileTransfer.files[0]?.originalName || downloadEvent.fileName;
+                    : fileTransfer.files[0]?.originalName ||
+                      downloadEvent.fileName;
 
                 await sendDownloadNotificationEmail(owner.email, {
                   fileName: displayName,
@@ -317,7 +326,10 @@ export const markDownloadCompleted = async (req, res) => {
                 });
               }
             } catch (emailError) {
-              logger.error("❌ Erreur envoi notification téléchargement:", emailError);
+              logger.error(
+                "❌ Erreur envoi notification téléchargement:",
+                emailError,
+              );
             }
           }
         }
@@ -344,7 +356,7 @@ export const getDownloadStats = async (req, res) => {
     const stats = await DownloadEvent.getDownloadStats(transferId);
     const recentDownloads = await DownloadEvent.getRecentDownloads(
       transferId,
-      20
+      20,
     );
 
     res.json({
