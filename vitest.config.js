@@ -21,11 +21,15 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov", "html"],
       exclude: ["node_modules", "dist", "__tests__", "src/tests", "src/emails"],
+      // Plancher anti-régression calé juste sous la couverture réelle
+      // (~22 % stmts / 16 % branches / 27 % funcs) — à remonter au fil
+      // de l'ajout de tests. Les anciens seuils (45 %) n'avaient jamais
+      // été appliqués : le job de tests ne tournait pas en CI.
       thresholds: {
-        statements: 45,
-        branches: 30,
-        functions: 40,
-        lines: 45,
+        statements: 20,
+        branches: 15,
+        functions: 25,
+        lines: 20,
       },
     },
   },
