@@ -140,12 +140,12 @@ export function mapOrganizationToCompanyInfo(organization) {
     rcs: organization.rcs || "",
   };
 
-  // Inclure bankDetails seulement si les 3 champs sont présents
-  if (organization.bankIban && organization.bankBic && organization.bankName) {
+  // Inclure bankDetails dès qu'au moins un champ est renseigné
+  if (organization.bankIban || organization.bankBic || organization.bankName) {
     companyInfo.bankDetails = {
-      iban: organization.bankIban,
-      bic: organization.bankBic,
-      bankName: organization.bankName,
+      iban: organization.bankIban || "",
+      bic: organization.bankBic || "",
+      bankName: organization.bankName || "",
     };
   }
 
