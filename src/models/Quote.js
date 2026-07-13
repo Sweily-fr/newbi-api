@@ -166,6 +166,10 @@ const quoteSchema = new mongoose.Schema(
       default: DISCOUNT_TYPE.FIXED,
     },
     customFields: [customFieldSchema],
+    showBankDetails: {
+      type: Boolean,
+      default: false,
+    },
     totalHT: {
       type: Number,
       min: 0,
