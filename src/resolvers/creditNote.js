@@ -303,10 +303,12 @@ const creditNoteResolvers = {
           // Montant total de la facture originale
           const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
-          // Vérifier que la somme totale ne dépasse pas le montant de la facture
+          // Vérifier que la somme totale ne dépasse pas le montant de la facture.
+          // Comparaison en centimes arrondis : un avoir dont le montant ÉGALE la
+          // facture doit passer (l'écart d'arrondi flottant ne doit pas bloquer).
           if (
-            existingCreditNotesTotal + newCreditNoteAmount >
-            invoiceTotalAmount
+            Math.round((existingCreditNotesTotal + newCreditNoteAmount) * 100) >
+            Math.round(invoiceTotalAmount * 100)
           ) {
             const remainingAmount =
               invoiceTotalAmount - existingCreditNotesTotal;
@@ -591,10 +593,12 @@ const creditNoteResolvers = {
             // Montant total de la facture originale
             const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
-            // Vérifier que la somme totale ne dépasse pas le montant de la facture
+            // Vérifier que la somme totale ne dépasse pas le montant de la facture.
+            // Comparaison en centimes arrondis (cf. création) : l'égalité passe.
             if (
-              otherCreditNotesTotal + updatedCreditNoteAmount >
-              invoiceTotalAmount
+              Math.round(
+                (otherCreditNotesTotal + updatedCreditNoteAmount) * 100,
+              ) > Math.round(invoiceTotalAmount * 100)
             ) {
               const remainingAmount =
                 invoiceTotalAmount - otherCreditNotesTotal;
