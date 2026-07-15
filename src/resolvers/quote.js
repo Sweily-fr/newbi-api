@@ -7,7 +7,6 @@ import {
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
-import SignatureRequest from "../models/SignatureRequest.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
@@ -38,6 +37,7 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
+import { cancelActiveQuoteSignatures } from "../services/quoteSignatureSync.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 export const calculateQuoteTotals = (
@@ -1407,25 +1407,6 @@ const quoteResolvers = {
           throw createStatusTransitionError("Devis", quote.status, status);
         }
 
-        // Un devis natif (PENDING) ne peut être accepté que si le CLIENT l'a signé
-        // (SES ou QES_otp = « bon pour accord »). Le QES automatique est un cachet de
-        // la société et ne vaut pas acceptation. Les devis importés (IMPORTED) restent
-        // acceptables manuellement sans signature.
-        if (status === "COMPLETED" && quote.status === "PENDING") {
-          const clientSignature = await SignatureRequest.findOne({
-            documentType: "quote",
-            documentId: quote._id,
-            signatureType: { $ne: "QES_automatic" },
-            status: "DONE",
-          });
-
-          if (!clientSignature) {
-            throw createValidationError(
-              "Ce devis doit être signé par le client avant de pouvoir être accepté. Envoyez-le pour signature : il sera accepté automatiquement une fois signé.",
-            );
-          }
-        }
-
         const oldStatus = quote.status;
 
         // Si le devis passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
@@ -1611,6 +1592,20 @@ const quoteResolvers = {
         } else {
           quote.status = status;
           await quote.save();
+        }
+
+        // Décision manuelle (accepté/refusé) : annuler toute demande de
+        // signature encore active, le client ne doit plus pouvoir signer.
+        if (status === "COMPLETED" || status === "CANCELED") {
+          try {
+            await cancelActiveQuoteSignatures(quote._id);
+          } catch (err) {
+            console.error(
+              "Erreur annulation des signatures actives (devis):",
+              err,
+            );
+            // Ne pas faire échouer le changement de statut
+          }
         }
 
         // Enregistrer l'activité dans le client si c'est un client existant

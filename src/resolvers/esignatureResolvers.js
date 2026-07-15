@@ -299,6 +299,14 @@ const esignatureResolvers = {
             );
           }
 
+          // Un devis déjà accepté ou refusé ne peut plus être envoyé en signature
+          if (document.status !== "PENDING") {
+            throw new AppError(
+              "Seul un devis en attente peut être envoyé en signature.",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+
           // Vérifier qu'il n'y a pas déjà une signature en cours
           const existingSignature = await SignatureRequest.findOne({
             documentType,
@@ -762,6 +770,19 @@ const esignatureResolvers = {
               "Seules les signatures en erreur peuvent être relancées",
               ERROR_CODES.VALIDATION_ERROR,
             );
+          }
+
+          // Un devis déjà accepté ou refusé ne peut plus être signé
+          if (signatureRequest.documentType === "quote") {
+            const quoteDoc = await Quote.findById(
+              signatureRequest.documentId,
+            ).select("status");
+            if (quoteDoc && quoteDoc.status !== "PENDING") {
+              throw new AppError(
+                "Ce devis n'est plus en attente : la signature ne peut plus être relancée.",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
           }
 
           // Supprimer l'ancienne signature côté API
