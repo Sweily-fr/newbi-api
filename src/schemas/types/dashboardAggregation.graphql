@@ -67,5 +67,7 @@ extend type Query {
     type: String!
     period: DashboardPeriodInput!
     accountId: String
+    # Exclut les transactions manuelles (provider "manual") des catégories.
+    excludeManual: Boolean
   ): CategoryAggregation!
 }

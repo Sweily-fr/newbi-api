@@ -343,7 +343,10 @@ const dashboardAggregationResolvers = {
      * Agrégation par catégorie pour les pie charts (income ou expense)
      */
     dashboardCategoryAggregation: withWorkspace(
-      async (parent, { workspaceId, type, period, accountId }) => {
+      async (
+        parent,
+        { workspaceId, type, period, accountId, excludeManual },
+      ) => {
         const { startDate, endDate } = resolvePeriodDates(period);
         const isIncome = type === "income";
 
@@ -354,6 +357,9 @@ const dashboardAggregationResolvers = {
           amount: isIncome ? { $gt: 0 } : { $lt: 0 },
         };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Bridge-only : exclut les transactions manuelles (provider "manual").
+        // Le CA injecté depuis les factures émises (plus bas) n'est pas concerné.
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         // Entrées : la tranche "Chiffre d'affaires" est dérivée des factures
         // émises (cf. plus bas), pas des transactions bancaires. On exclut donc
