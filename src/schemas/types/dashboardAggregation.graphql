@@ -48,6 +48,9 @@ extend type Query {
   dashboardSummary(
     workspaceId: ID!
     accountId: String
+    # Exclut les transactions manuelles (provider "manual") du solde et des
+    # revenus/dépenses → cohérent avec le graph Bridge-only (dashboardTreasuryChart).
+    excludeManual: Boolean
   ): DashboardSummary!
 
   dashboardTreasuryChart(

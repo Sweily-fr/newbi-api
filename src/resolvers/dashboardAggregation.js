@@ -176,9 +176,12 @@ const dashboardAggregationResolvers = {
      * Stats résumées pour les cartes du dashboard
      */
     dashboardSummary: withWorkspace(
-      async (parent, { workspaceId, accountId }) => {
+      async (parent, { workspaceId, accountId, excludeManual }) => {
         const matchFilter = { workspaceId, deletedAt: null };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Bridge-only : exclut les transactions manuelles (provider "manual")
+        // des revenus/dépenses. Le solde suit le même filtre (getAccountsBalance).
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         // Encaissements / décaissements bornés à l'exercice comptable en cours
         // (défaut : année civile). Le solde et le nombre de transactions restent
@@ -228,7 +231,7 @@ const dashboardAggregationResolvers = {
               },
             },
           ]),
-          getAccountsBalance(workspaceId, accountId),
+          getAccountsBalance(workspaceId, accountId, { excludeManual }),
         ]);
 
         const stats = transactionStats[0] || {
