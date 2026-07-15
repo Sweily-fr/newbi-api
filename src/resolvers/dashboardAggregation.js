@@ -176,9 +176,12 @@ const dashboardAggregationResolvers = {
      * Stats résumées pour les cartes du dashboard
      */
     dashboardSummary: withWorkspace(
-      async (parent, { workspaceId, accountId }) => {
+      async (parent, { workspaceId, accountId, excludeManual }) => {
         const matchFilter = { workspaceId, deletedAt: null };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Bridge-only : exclut les transactions manuelles (provider "manual")
+        // des revenus/dépenses. Le solde suit le même filtre (getAccountsBalance).
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         // Encaissements / décaissements bornés à l'exercice comptable en cours
         // (défaut : année civile). Le solde et le nombre de transactions restent
@@ -228,7 +231,7 @@ const dashboardAggregationResolvers = {
               },
             },
           ]),
-          getAccountsBalance(workspaceId, accountId),
+          getAccountsBalance(workspaceId, accountId, { excludeManual }),
         ]);
 
         const stats = transactionStats[0] || {
@@ -340,7 +343,10 @@ const dashboardAggregationResolvers = {
      * Agrégation par catégorie pour les pie charts (income ou expense)
      */
     dashboardCategoryAggregation: withWorkspace(
-      async (parent, { workspaceId, type, period, accountId }) => {
+      async (
+        parent,
+        { workspaceId, type, period, accountId, excludeManual },
+      ) => {
         const { startDate, endDate } = resolvePeriodDates(period);
         const isIncome = type === "income";
 
@@ -351,6 +357,9 @@ const dashboardAggregationResolvers = {
           amount: isIncome ? { $gt: 0 } : { $lt: 0 },
         };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Bridge-only : exclut les transactions manuelles (provider "manual").
+        // Le CA injecté depuis les factures émises (plus bas) n'est pas concerné.
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         // Entrées : la tranche "Chiffre d'affaires" est dérivée des factures
         // émises (cf. plus bas), pas des transactions bancaires. On exclut donc
