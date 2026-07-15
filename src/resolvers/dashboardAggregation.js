@@ -133,19 +133,26 @@ function getCurrentFiscalYearRange(org, now = new Date()) {
  * espèces / hors compte bancaire connecté, qui ne sont reflétés par aucun
  * solde de compte. Pour un compte bancaire précis, on ne renvoie que son solde.
  */
-async function getAccountsBalance(workspaceId, accountId) {
+async function getAccountsBalance(
+  workspaceId,
+  accountId,
+  { excludeManual = false } = {},
+) {
   const filter = { workspaceId };
   if (accountId) {
     filter.$or = [{ _id: accountId }, { externalId: accountId }];
   }
 
   const accountsPromise = AccountBanking.find(filter).lean();
-  const cashPromise = accountId
-    ? Promise.resolve(0)
-    : Transaction.aggregate([
-        { $match: { workspaceId, deletedAt: null, provider: "manual" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-      ]).then((res) => res[0]?.total ?? 0);
+  // excludeManual : solde strictement Bridge (on n'ajoute pas la somme des
+  // transactions manuelles / espèces). Idem quand un compte précis est ciblé.
+  const cashPromise =
+    accountId || excludeManual
+      ? Promise.resolve(0)
+      : Transaction.aggregate([
+          { $match: { workspaceId, deletedAt: null, provider: "manual" } },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]).then((res) => res[0]?.total ?? 0);
 
   const [accounts, cashBalance] = await Promise.all([
     accountsPromise,
@@ -243,7 +250,7 @@ const dashboardAggregationResolvers = {
      * Données pour le graphique de trésorerie (un point par jour)
      */
     dashboardTreasuryChart: withWorkspace(
-      async (parent, { workspaceId, period, accountId }) => {
+      async (parent, { workspaceId, period, accountId, excludeManual }) => {
         const { startDate, endDate } = resolvePeriodDates(period);
 
         const matchFilter = {
@@ -252,6 +259,9 @@ const dashboardAggregationResolvers = {
           date: { $gte: startDate, $lte: endDate },
         };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Courbe Bridge-only : on écarte les transactions ajoutées manuellement
+        // pour que le graph suive uniquement le solde des comptes connectés.
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         const [dailyData, { balance: currentBalance }] = await Promise.all([
           Transaction.aggregate([
@@ -271,7 +281,7 @@ const dashboardAggregationResolvers = {
             },
             { $sort: { _id: 1 } },
           ]),
-          getAccountsBalance(workspaceId, accountId),
+          getAccountsBalance(workspaceId, accountId, { excludeManual }),
         ]);
 
         // Map des données par jour

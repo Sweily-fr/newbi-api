@@ -54,6 +54,9 @@ extend type Query {
     workspaceId: ID!
     period: DashboardPeriodInput!
     accountId: String
+    # Exclut les transactions manuelles (provider "manual") : la courbe reflète
+    # alors uniquement le solde des comptes bancaires connectés (Bridge).
+    excludeManual: Boolean
   ): TreasuryChartData!
 
   dashboardCategoryAggregation(
