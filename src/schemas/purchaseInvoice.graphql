@@ -189,6 +189,30 @@ type PurchaseInvoiceReconciliationMatch {
   confidence: Float!
 }
 
+# Suggestions de rapprochement transaction (débit) -> facture d'achat.
+# Réutilise ReconciliationTransaction / ReconciliationConfidence (reconciliation.graphql).
+type PurchaseInvoiceReconciliationInvoice {
+  id: ID!
+  invoiceNumber: String
+  supplierName: String
+  amountTTC: Float
+  issueDate: DateTime
+  status: String
+}
+
+type PurchaseInvoiceReconciliationSuggestion {
+  transaction: ReconciliationTransaction!
+  matchingPurchaseInvoices: [PurchaseInvoiceReconciliationInvoice!]!
+  confidence: ReconciliationConfidence!
+}
+
+type PurchaseInvoiceReconciliationSuggestionsResponse {
+  success: Boolean!
+  suggestions: [PurchaseInvoiceReconciliationSuggestion!]!
+  unmatchedCount: Int!
+  pendingInvoicesCount: Int!
+}
+
 # --- SUPPLIER ---
 
 type Supplier {
@@ -335,6 +359,12 @@ extend type Query {
   purchaseInvoiceStats(workspaceId: ID!): PurchaseInvoiceStats!
 
   purchaseInvoiceReconciliationMatches(purchaseInvoiceId: ID!): [PurchaseInvoiceReconciliationMatch!]!
+
+  # Suggestions globales (toast de rapprochement) : débits non rapprochés
+  # rapprochés à des factures d'achat non payées.
+  purchaseInvoiceReconciliationSuggestions(
+    workspaceId: ID!
+  ): PurchaseInvoiceReconciliationSuggestionsResponse!
 
   supplier(id: ID!): Supplier!
 
