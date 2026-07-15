@@ -792,6 +792,26 @@ async function sendDocumentEmail({
     }
   }
 
+  // 2 bis) Réutiliser le PDF déjà archivé sur R2 (archivedPdfKey) : un document
+  // finalisé y est déjà stocké, inutile de le régénérer. Le desktop passe
+  // toujours pdfBase64 (étape 1), donc ce fallback ne concerne que les clients
+  // qui n'envoient pas de base64 (mobile) — sans altérer la logique desktop.
+  if (!pdfBuffer && document.archivedPdfKey) {
+    try {
+      pdfBuffer = await cloudflareService.getDocumentObjectBuffer(
+        documentType,
+        document.archivedPdfKey,
+      );
+      pdfFromCache = true; // déjà durable sur R2 : pas besoin de re-cacher
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "⚠️ [DocumentEmail] Échec lecture du PDF archivé R2:",
+        err.message,
+      );
+    }
+  }
+
   // 3) En dernier recours : génération côté serveur via Puppeteer (Next.js)
   if (!pdfBuffer) {
     pdfBuffer = await generateDocumentPdf(documentId, documentType);
