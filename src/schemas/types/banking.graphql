@@ -471,21 +471,6 @@ extend type Query {
   ): [Transaction!]!
 }
 
-# Input pour créer une transaction manuelle
-input CreateTransactionInput {
-  workspaceId: ID!
-  amount: Float!
-  currency: String
-  description: String!
-  type: TransactionType!
-  date: DateTime
-  category: String
-  vendor: String
-  paymentMethod: String
-  notes: String
-  tags: [String!]
-}
-
 input UpdateTransactionInput {
   amount: Float
   currency: String
@@ -535,13 +520,9 @@ type UploadTransactionReceiptResult {
 }
 
 extend type Mutation {
-  # Transactions manuelles
-  createTransaction(input: CreateTransactionInput!): Transaction!
+  # Les transactions proviennent du flux bancaire Bridge : seule la mise à jour
+  # (catégorie / description) est permise, pas de création ni de suppression.
   updateTransaction(id: ID!, input: UpdateTransactionInput!): Transaction!
-  deleteTransaction(id: ID!): Boolean!
-
-  # Mettre à jour le compte PCG d'une transaction
-  updateTransactionPCG(transactionId: ID!, pcgNumero: String!, workspaceId: ID!): Transaction!
 
   # Upload de justificatifs (multi-fichiers)
   uploadTransactionReceipt(transactionId: ID!, workspaceId: ID!, files: [Upload!]!): UploadTransactionReceiptResult!
