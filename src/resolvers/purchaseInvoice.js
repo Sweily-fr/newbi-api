@@ -914,45 +914,20 @@ const purchaseInvoiceResolvers = {
         invoice.status = "PAID";
         invoice.paymentDate = invoice.paymentDate || new Date();
 
-        // Justificatif de la facture d'achat -> receiptFiles de la transaction.
-        // Le lien copie le fichier sur la transaction (source de vérité Bridge),
-        // en mappant les champs du fileSchema (path -> key, originalFilename ->
-        // filename).
-        const receiptFilesFromInvoice = (invoice.files || [])
-          .filter((f) => f && f.url)
-          .map((f) => ({
-            url: f.url,
-            key: f.path,
-            filename: f.originalFilename || f.filename,
-            mimetype: f.mimetype,
-            size: f.size,
-            uploadedAt: new Date(),
-            uploadedBy: context.user?.id,
-          }));
-
-        // Marquer les transactions comme rapprochées et y attacher le
-        // justificatif (dédupliqué par key pour rester idempotent).
-        const linkedTxs = await Transaction.find({
-          _id: { $in: transactionIds },
-          workspaceId: new mongoose.Types.ObjectId(workspaceId),
-        });
-        for (const tx of linkedTxs) {
-          tx.reconciliationStatus = "matched";
-          if (receiptFilesFromInvoice.length) {
-            if (!Array.isArray(tx.receiptFiles)) tx.receiptFiles = [];
-            const existingKeys = new Set(
-              tx.receiptFiles.map((r) => r.key).filter(Boolean),
-            );
-            const toAdd = receiptFilesFromInvoice.filter(
-              (r) => r.key && !existingKeys.has(r.key),
-            );
-            if (toAdd.length) {
-              tx.receiptFiles.push(...toAdd);
-              tx.receiptRequired = false;
-            }
-          }
-          await tx.save();
-        }
+        // Lien N↔N par référence : la transaction "porte" la facture d'achat
+        // (linkedPurchaseInvoiceIds). Le justificatif reste sur la facture et
+        // est accessible via le lien — pas de copie de fichier. Le lien
+        // fonctionne donc même si la facture n'a pas de justificatif.
+        await Transaction.updateMany(
+          {
+            _id: { $in: transactionIds },
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          },
+          {
+            $set: { reconciliationStatus: "matched" },
+            $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
+          },
+        );
 
         // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
         await reportPurchaseInvoicePaymentIfNeeded(invoice, workspaceId);
@@ -996,26 +971,20 @@ const purchaseInvoiceResolvers = {
 
         if (invoice.linkedTransactionIds?.length) {
           const Transaction = mongoose.model("Transaction");
-          // Retirer le justificatif copié depuis cette facture (par key), pour
-          // que le délien soit le strict inverse de la liaison.
-          const invoiceKeys = new Set(
-            (invoice.files || []).map((f) => f.path).filter(Boolean),
-          );
+          // Retirer le lien vers cette facture d'achat. La transaction ne
+          // repasse "unmatched" que si elle n'a plus AUCUN lien (ni facture
+          // d'achat, ni facture client).
           const linkedTxs = await Transaction.find({
             _id: { $in: invoice.linkedTransactionIds },
           });
           for (const tx of linkedTxs) {
-            tx.reconciliationStatus = "unmatched";
-            if (
-              invoiceKeys.size &&
-              Array.isArray(tx.receiptFiles) &&
-              tx.receiptFiles.length
-            ) {
-              tx.receiptFiles = tx.receiptFiles.filter(
-                (r) => !invoiceKeys.has(r.key),
-              );
-              if (tx.receiptFiles.length === 0) tx.receiptRequired = true;
-            }
+            tx.linkedPurchaseInvoiceIds = (
+              tx.linkedPurchaseInvoiceIds || []
+            ).filter((id) => id.toString() !== invoice._id.toString());
+            const stillLinked =
+              tx.linkedPurchaseInvoiceIds.length > 0 ||
+              (tx.linkedInvoiceIds || []).length > 0;
+            if (!stillLinked) tx.reconciliationStatus = "unmatched";
             await tx.save();
           }
         }
