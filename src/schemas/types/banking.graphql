@@ -27,6 +27,10 @@ type Transaction {
   # plusieurs factures dans le cas d'un paiement groupé).
   linkedInvoiceIds: [ID!]!
   linkedInvoices: [LinkedInvoiceSummary!]!
+  # Factures d'achat liées (débits). Le justificatif est accessible via la
+  # facture liée (files), sans copie sur la transaction.
+  linkedPurchaseInvoiceIds: [ID!]!
+  linkedPurchaseInvoices: [LinkedPurchaseInvoiceSummary!]!
   linkedExpenseId: ID
   reconciliationStatus: ReconciliationStatusEnum
   reconciliationDate: DateTime
@@ -45,6 +49,26 @@ type LinkedInvoiceSummary {
   totalTTC: Float
   issueDate: DateTime
   dueDate: DateTime
+}
+
+"""
+Résumé d'une facture d'achat liée à une transaction. Inclut les fichiers pour
+accéder au justificatif via le lien (sans copie sur la transaction).
+"""
+type LinkedPurchaseInvoiceSummary {
+  id: ID!
+  invoiceNumber: String
+  supplierName: String
+  status: String
+  amountTTC: Float
+  issueDate: DateTime
+  files: [LinkedPurchaseInvoiceFile!]!
+}
+
+type LinkedPurchaseInvoiceFile {
+  url: String
+  filename: String
+  mimetype: String
 }
 
 enum ReconciliationStatusEnum {

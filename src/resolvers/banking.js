@@ -965,6 +965,39 @@ const bankingResolvers = {
         return [];
       }
     },
+    // Factures d'achat liées (lien par référence, justificatif inclus).
+    linkedPurchaseInvoiceIds: (parent) =>
+      (parent.linkedPurchaseInvoiceIds || []).map((id) => id.toString()),
+    linkedPurchaseInvoices: async (parent) => {
+      const ids = parent.linkedPurchaseInvoiceIds || [];
+      if (ids.length === 0) return [];
+      try {
+        const PurchaseInvoice = (await import("../models/PurchaseInvoice.js"))
+          .default;
+        const invoices = await PurchaseInvoice.find({
+          _id: { $in: ids },
+        }).lean();
+        return invoices.map((inv) => ({
+          id: inv._id.toString(),
+          invoiceNumber: inv.invoiceNumber,
+          supplierName: inv.supplierName,
+          status: inv.status,
+          amountTTC: inv.amountTTC,
+          issueDate: inv.issueDate,
+          files: (inv.files || []).map((f) => ({
+            url: f.url,
+            filename: f.originalFilename || f.filename,
+            mimetype: f.mimetype,
+          })),
+        }));
+      } catch (error) {
+        console.error(
+          "[BANKING] Erreur chargement factures d'achat liées:",
+          error,
+        );
+        return [];
+      }
+    },
     userId: async (transaction) => {
       if (transaction.userId && typeof transaction.userId === "object") {
         return transaction.userId; // Déjà populé

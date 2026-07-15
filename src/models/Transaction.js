@@ -143,6 +143,15 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
+    // Rapprochement avec des factures d'achat (sorties d'argent / débits).
+    // Lien N↔N par référence : la transaction "porte" ses factures d'achat
+    // (le justificatif est accessible via la facture liée, sans copie).
+    linkedPurchaseInvoiceIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "PurchaseInvoice" }],
+      default: [],
+      index: true,
+    },
+
     // Rapprochement avec justificatif/dépense (pour les sorties d'argent)
     linkedExpenseId: {
       type: mongoose.Schema.Types.ObjectId,
