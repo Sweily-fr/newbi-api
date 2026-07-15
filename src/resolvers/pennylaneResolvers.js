@@ -6,6 +6,7 @@ import Quote from "../models/Quote.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import logger from "../utils/logger.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 const pennylaneResolvers = {
   PennylaneAccount: {
@@ -24,8 +25,9 @@ const pennylaneResolvers = {
      */
     myPennylaneAccount: async (_, args, { user, organizationId }) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour accéder à cette ressource",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -49,7 +51,10 @@ const pennylaneResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -77,7 +82,10 @@ const pennylaneResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -156,7 +164,10 @@ const pennylaneResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -209,7 +220,10 @@ const pennylaneResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -265,7 +279,10 @@ const pennylaneResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -320,7 +337,10 @@ const pennylaneResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -375,7 +395,10 @@ const pennylaneResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -423,7 +446,10 @@ const pennylaneResolvers = {
      */
     syncAllToPennylane: async (_, args, { user, organizationId, userRole }) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {

@@ -4,9 +4,9 @@
  * et une analyse multi-passes pour une précision maximale
  */
 
-import fetch from 'node-fetch';
-import dotenv from 'dotenv';
-import VendorCache from '../models/VendorCache.js';
+import fetch from "node-fetch";
+import dotenv from "dotenv";
+import VendorCache from "../models/VendorCache.js";
 
 dotenv.config();
 
@@ -27,14 +27,14 @@ const FRENCH_INVOICE_PATTERNS = {
 
   // Dates - formats français (JJ/MM/AAAA, JJ-MM-AAAA, etc.)
   DATE: [
-    /(?:Date\s*(?:de\s*)?(?:facture|émission|facturation)?)[:\s]*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})/i,
-    /(?:Le|Du|Émise?\s*le)[:\s]*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})/i,
-    /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/,
+    /(?:Date\s*(?:de\s*)?(?:facture|émission|facturation)?)[:\s]*(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})/i,
+    /(?:Le|Du|Émise?\s*le)[:\s]*(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})/i,
+    /(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4})/,
   ],
 
   // Date d'échéance
   DUE_DATE: [
-    /(?:Échéance|Date\s*d['']échéance|Date\s*limite|Payable\s*(?:avant\s*le|le)|À\s*payer\s*avant)[:\s]*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})/i,
+    /(?:Échéance|Date\s*d['']échéance|Date\s*limite|Payable\s*(?:avant\s*le|le)|À\s*payer\s*avant)[:\s]*(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})/i,
     /(?:Net\s*à|Paiement\s*à)\s*(\d+)\s*jours/i,
   ],
 
@@ -64,13 +64,13 @@ const FRENCH_INVOICE_PATTERNS = {
   ],
 
   TVA_AMOUNT: [
-    /(?:TVA|Montant\s*TVA|Total\s*TVA)[:\s€]*([0-9\s]+[,\.]\d{2})\s*€?/i,
-    /(?:TVA\s*(?:\d+(?:[,\.]\d+)?%?))[:\s€]*([0-9\s]+[,\.]\d{2})\s*€?/i,
+    /(?:TVA|Montant\s*TVA|Total\s*TVA)[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:TVA\s*(?:\d+(?:[,.]\d+)?%?))[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
   ],
 
   TVA_RATE: [
-    /(?:TVA|Taux\s*TVA)[:\s]*(\d+(?:[,\.]\d+)?)\s*%/i,
-    /(\d+(?:[,\.]\d+)?)\s*%\s*(?:TVA)?/i,
+    /(?:TVA|Taux\s*TVA)[:\s]*(\d+(?:[,.]\d+)?)\s*%/i,
+    /(\d+(?:[,.]\d+)?)\s*%\s*(?:TVA)?/i,
   ],
 
   // SIRET (14 chiffres)
@@ -111,19 +111,15 @@ const FRENCH_INVOICE_PATTERNS = {
   ],
 
   // BIC/SWIFT
-  BIC: [
-    /(?:BIC|SWIFT)[:\s]*([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)/i,
-  ],
+  BIC: [/(?:BIC|SWIFT)[:\s]*([A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)/i],
 
   // Email
-  EMAIL: [
-    /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i,
-  ],
+  EMAIL: [/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i],
 
   // Téléphone français
   PHONE: [
-    /(?:Tél\.?|Téléphone|Tel\.?|Phone)[:\s]*((?:0|\+33)[1-9](?:[\s\.\-]?\d{2}){4})/i,
-    /((?:0|\+33)[1-9](?:[\s\.\-]?\d{2}){4})/,
+    /(?:Tél\.?|Téléphone|Tel\.?|Phone)[:\s]*((?:0|\+33)[1-9](?:[\s.-]?\d{2}){4})/i,
+    /((?:0|\+33)[1-9](?:[\s.-]?\d{2}){4})/,
   ],
 
   // Moyen de paiement
@@ -135,22 +131,103 @@ const FRENCH_INVOICE_PATTERNS = {
 
 // Catégories de dépenses avec mots-clés
 const EXPENSE_CATEGORIES = {
-  RENT: ['loyer', 'location', 'bail', 'charges locatives'],
-  SUBSCRIPTIONS: ['abonnement', 'licence', 'saas'],
-  OFFICE_SUPPLIES: ['fourniture', 'bureau', 'papeterie', 'cartouche', 'encre', 'stylo', 'classeur', 'papier'],
-  SERVICES: ['prestation', 'service', 'conseil', 'consulting', 'nettoyage', 'sous-traitance'],
-  TRANSPORT: ['transport', 'train', 'avion', 'taxi', 'uber', 'vtc', 'essence', 'carburant', 'péage', 'parking', 'hôtel', 'hébergement', 'déplacement'],
-  MEALS: ['restaurant', 'repas', 'déjeuner', 'dîner', 'café', 'traiteur', 'restauration'],
-  TELECOMMUNICATIONS: ['télécom', 'téléphone', 'internet', 'fibre', 'mobile', 'forfait', 'opérateur'],
-  INSURANCE: ['assurance', 'mutuelle', 'prévoyance'],
-  ENERGY: ['électricité', 'gaz', 'eau', 'edf', 'engie', 'énergie'],
-  SOFTWARE: ['logiciel', 'software', 'application', 'plugin'],
-  HARDWARE: ['ordinateur', 'écran', 'clavier', 'souris', 'imprimante', 'scanner', 'matériel', 'équipement', 'informatique'],
-  MARKETING: ['publicité', 'marketing', 'communication', 'flyer', 'affiche', 'pub', 'google ads', 'facebook'],
-  TRAINING: ['formation', 'cours', 'séminaire', 'conférence', 'atelier', 'coaching'],
-  MAINTENANCE: ['maintenance', 'réparation', 'entretien', 'dépannage', 'sav'],
-  TAXES: ['impôt', 'taxe', 'cfe', 'cvae', 'cotisation', 'urssaf', 'tva', 'contribution'],
-  UTILITIES: ['service public', 'collectivité', 'mairie', 'préfecture'],
+  RENT: ["loyer", "location", "bail", "charges locatives"],
+  SUBSCRIPTIONS: ["abonnement", "licence", "saas"],
+  OFFICE_SUPPLIES: [
+    "fourniture",
+    "bureau",
+    "papeterie",
+    "cartouche",
+    "encre",
+    "stylo",
+    "classeur",
+    "papier",
+  ],
+  SERVICES: [
+    "prestation",
+    "service",
+    "conseil",
+    "consulting",
+    "nettoyage",
+    "sous-traitance",
+  ],
+  TRANSPORT: [
+    "transport",
+    "train",
+    "avion",
+    "taxi",
+    "uber",
+    "vtc",
+    "essence",
+    "carburant",
+    "péage",
+    "parking",
+    "hôtel",
+    "hébergement",
+    "déplacement",
+  ],
+  MEALS: [
+    "restaurant",
+    "repas",
+    "déjeuner",
+    "dîner",
+    "café",
+    "traiteur",
+    "restauration",
+  ],
+  TELECOMMUNICATIONS: [
+    "télécom",
+    "téléphone",
+    "internet",
+    "fibre",
+    "mobile",
+    "forfait",
+    "opérateur",
+  ],
+  INSURANCE: ["assurance", "mutuelle", "prévoyance"],
+  ENERGY: ["électricité", "gaz", "eau", "edf", "engie", "énergie"],
+  SOFTWARE: ["logiciel", "software", "application", "plugin"],
+  HARDWARE: [
+    "ordinateur",
+    "écran",
+    "clavier",
+    "souris",
+    "imprimante",
+    "scanner",
+    "matériel",
+    "équipement",
+    "informatique",
+  ],
+  MARKETING: [
+    "publicité",
+    "marketing",
+    "communication",
+    "flyer",
+    "affiche",
+    "pub",
+    "google ads",
+    "facebook",
+  ],
+  TRAINING: [
+    "formation",
+    "cours",
+    "séminaire",
+    "conférence",
+    "atelier",
+    "coaching",
+  ],
+  MAINTENANCE: ["maintenance", "réparation", "entretien", "dépannage", "sav"],
+  TAXES: [
+    "impôt",
+    "taxe",
+    "cfe",
+    "cvae",
+    "cotisation",
+    "urssaf",
+    "tva",
+    "contribution",
+  ],
+  UTILITIES: ["service public", "collectivité", "mairie", "préfecture"],
 };
 
 // Cache des fournisseurs connus (SIRET -> infos fournisseur)
@@ -159,12 +236,12 @@ const vendorCache = new Map();
 class InvoiceExtractionService {
   constructor() {
     this.apiKey = process.env.MISTRAL_API_KEY;
-    this.chatEndpoint = 'https://api.mistral.ai/v1/chat/completions';
+    this.chatEndpoint = "https://api.mistral.ai/v1/chat/completions";
     // Modèle principal - mistral-large pour meilleure précision sur factures complexes
     // Peut être overridé via MISTRAL_MODEL env var si besoin de vitesse
-    this.model = process.env.MISTRAL_MODEL || 'mistral-large-latest';
+    this.model = process.env.MISTRAL_MODEL || "mistral-large-latest";
     // Modèle de fallback (même modèle, mais avec température différente)
-    this.fallbackModel = 'mistral-large-latest';
+    this.fallbackModel = "mistral-large-latest";
     // Nombre max de tentatives
     this.maxRetries = 3;
     // Seuil de confiance pour skip l'IA (désactivé pour les factures BTP complexes)
@@ -177,20 +254,21 @@ class InvoiceExtractionService {
    */
   isRegexSufficient(regexData) {
     const hasTTC = regexData.totalTTC && regexData.totalTTC > 0;
-    const hasInvoiceId = regexData.invoiceNumber && regexData.invoiceNumber.length > 2;
+    const hasInvoiceId =
+      regexData.invoiceNumber && regexData.invoiceNumber.length > 2;
     const hasDate = regexData.invoiceDate;
     const hasSiret = regexData.siret && regexData.siret.length === 14;
     const hasVendorInCache = hasSiret && vendorCache.has(regexData.siret);
-    
+
     // Si on a le TTC + identifiant + fournisseur connu = pas besoin d'IA
     if (hasTTC && (hasInvoiceId || hasDate) && hasVendorInCache) {
       return true;
     }
-    
+
     // Si on a tous les champs critiques = pas besoin d'IA
     const criticalFields = [hasTTC, hasInvoiceId, hasDate, hasSiret];
     const filledCount = criticalFields.filter(Boolean).length;
-    
+
     return filledCount >= 4; // Tous les champs critiques remplis
   }
 
@@ -199,12 +277,12 @@ class InvoiceExtractionService {
    */
   async getVendorFromCache(siret) {
     if (!siret || siret.length !== 14) return null;
-    
+
     // D'abord vérifier le cache mémoire (plus rapide)
     if (vendorCache.has(siret)) {
       return vendorCache.get(siret);
     }
-    
+
     // Sinon, vérifier en base de données
     try {
       const dbVendor = await VendorCache.getBySiret(siret);
@@ -224,7 +302,7 @@ class InvoiceExtractionService {
     } catch (error) {
       // Silencieux - le cache DB est optionnel
     }
-    
+
     return null;
   }
 
@@ -233,7 +311,7 @@ class InvoiceExtractionService {
    */
   async cacheVendor(siret, vendorData) {
     if (!siret || siret.length !== 14 || !vendorData.name) return;
-    
+
     const cacheData = {
       name: vendorData.name,
       address: vendorData.address,
@@ -243,10 +321,10 @@ class InvoiceExtractionService {
       email: vendorData.email,
       phone: vendorData.phone,
     };
-    
+
     // Cache mémoire (instantané)
     vendorCache.set(siret, cacheData);
-    
+
     // Cache DB (persistant) - en arrière-plan
     VendorCache.getOrCreate(siret, cacheData).catch(() => {
       // Silencieux - le cache DB est optionnel
@@ -260,11 +338,11 @@ class InvoiceExtractionService {
    */
   async extractInvoiceData(ocrResult) {
     try {
-      const extractedText = ocrResult.extractedText || '';
-      
+      const extractedText = ocrResult.extractedText || "";
+
       if (!extractedText || extractedText.trim().length < 50) {
-        console.warn('⚠️ Texte OCR trop court pour analyse');
-        return this.getEmptyResult('Texte insuffisant pour analyse');
+        console.warn("⚠️ Texte OCR trop court pour analyse");
+        return this.getEmptyResult("Texte insuffisant pour analyse");
       }
 
       // Passe 1: Extraction par patterns regex (instantané ~50ms)
@@ -279,7 +357,7 @@ class InvoiceExtractionService {
       // Optimisation: Skip l'IA si regex suffit + fournisseur connu
       let aiExtraction = {};
       let skippedAI = false;
-      
+
       if (this.isRegexSufficient(regexExtraction) && cachedVendor) {
         // Pas besoin d'IA - utiliser les données regex + cache
         skippedAI = true;
@@ -302,7 +380,11 @@ class InvoiceExtractionService {
       }
 
       // Passe 3: Fusion et validation croisée
-      const mergedData = this.mergeAndValidate(regexExtraction, aiExtraction, extractedText);
+      const mergedData = this.mergeAndValidate(
+        regexExtraction,
+        aiExtraction,
+        extractedText,
+      );
 
       // Passe 4: Post-traitement et normalisation
       const finalData = this.postProcess(mergedData);
@@ -322,9 +404,8 @@ class InvoiceExtractionService {
           cacheSize: vendorCache.size,
         },
       };
-
     } catch (error) {
-      console.error('❌ Erreur extraction facture:', error);
+      console.error("❌ Erreur extraction facture:", error);
       return this.getEmptyResult(error.message);
     }
   }
@@ -361,38 +442,39 @@ class InvoiceExtractionService {
     const textLower = text.toLowerCase();
     const reverseChargePatterns = [
       // Orthographe correcte
-      'autoliquidation',
-      'auto-liquidation',
-      'auto liquidation',
+      "autoliquidation",
+      "auto-liquidation",
+      "auto liquidation",
       // Fautes d'orthographe courantes (ex: M.G.E COUVERTURE écrit "AUTOLIQIDATION")
-      'autoliqidation',    // Sans le U
-      'autoliquidaton',    // Sans le I final
-      'autoliqudation',    // Sans le I du milieu
-      'auto liqidation',   // Avec espace + sans U
-      'autoliquiation',    // Avec I en trop
+      "autoliqidation", // Sans le U
+      "autoliquidaton", // Sans le I final
+      "autoliqudation", // Sans le I du milieu
+      "auto liqidation", // Avec espace + sans U
+      "autoliquiation", // Avec I en trop
       // Anglais
-      'reverse charge',
+      "reverse charge",
       // Mentions légales
-      'tva non applicable',
-      'tva à 0',
-      'exonération de tva',
-      'exoneration de tva',
-      'article 283-2',     // Article du CGI pour l'autoliquidation BTP
-      'article 262',       // Exportations
+      "tva non applicable",
+      "tva à 0",
+      "exonération de tva",
+      "exoneration de tva",
+      "article 283-2", // Article du CGI pour l'autoliquidation BTP
+      "article 262", // Exportations
       // Autres variantes
-      'tva autoliquid',    // Début de mot
-      'régime autoliquid', // Régime d'autoliquidation
+      "tva autoliquid", // Début de mot
+      "régime autoliquid", // Régime d'autoliquidation
     ];
-    
+
     // Aussi détecter avec une regex plus souple (capture les fautes)
     const autoliquidRegex = /auto[\s-]?liqu?i?d?ation/i;
-    const hasAutoliquidation = reverseChargePatterns.some(pattern => textLower.includes(pattern)) 
-                               || autoliquidRegex.test(textLower);
-    
+    const hasAutoliquidation =
+      reverseChargePatterns.some((pattern) => textLower.includes(pattern)) ||
+      autoliquidRegex.test(textLower);
+
     if (hasAutoliquidation) {
       result.isReverseCharge = true;
       // eslint-disable-next-line no-console
-      console.log('🔄 Autoliquidation détectée - TVA sera mise à 0');
+      console.log("🔄 Autoliquidation détectée - TVA sera mise à 0");
     }
 
     // Appliquer chaque pattern
@@ -401,7 +483,7 @@ class InvoiceExtractionService {
         const match = text.match(pattern);
         if (match) {
           const fieldKey = this.patternToFieldKey(field);
-          if (field === 'POSTAL_CODE_CITY' && match[1] && match[2]) {
+          if (field === "POSTAL_CODE_CITY" && match[1] && match[2]) {
             result.postalCode = match[1].trim();
             result.city = match[2].trim();
           } else if (match[1]) {
@@ -420,24 +502,24 @@ class InvoiceExtractionService {
    */
   patternToFieldKey(patternName) {
     const mapping = {
-      'INVOICE_NUMBER': 'invoiceNumber',
-      'DATE': 'invoiceDate',
-      'DUE_DATE': 'dueDate',
-      'NET_TO_PAY': 'netToPay',
-      'TOTAL_HT_MOIS': 'totalHtMois',
-      'TOTAL_TTC': 'totalTTC',
-      'TOTAL_HT': 'totalHT',
-      'TVA_AMOUNT': 'tvaAmount',
-      'TVA_RATE': 'tvaRate',
-      'SIRET': 'siret',
-      'SIREN': 'siren',
-      'VAT_NUMBER': 'vatNumber',
-      'RCS': 'rcs',
-      'IBAN': 'iban',
-      'BIC': 'bic',
-      'EMAIL': 'email',
-      'PHONE': 'phone',
-      'PAYMENT_METHOD': 'paymentMethod',
+      INVOICE_NUMBER: "invoiceNumber",
+      DATE: "invoiceDate",
+      DUE_DATE: "dueDate",
+      NET_TO_PAY: "netToPay",
+      TOTAL_HT_MOIS: "totalHtMois",
+      TOTAL_TTC: "totalTTC",
+      TOTAL_HT: "totalHT",
+      TVA_AMOUNT: "tvaAmount",
+      TVA_RATE: "tvaRate",
+      SIRET: "siret",
+      SIREN: "siren",
+      VAT_NUMBER: "vatNumber",
+      RCS: "rcs",
+      IBAN: "iban",
+      BIC: "bic",
+      EMAIL: "email",
+      PHONE: "phone",
+      PAYMENT_METHOD: "paymentMethod",
     };
     return mapping[patternName] || patternName.toLowerCase();
   }
@@ -447,34 +529,42 @@ class InvoiceExtractionService {
    */
   cleanExtractedValue(value, field) {
     if (!value) return null;
-    
+
     let cleaned = value.toString().trim();
-    
+
     // Nettoyer les espaces multiples
-    cleaned = cleaned.replace(/\s+/g, ' ');
-    
+    cleaned = cleaned.replace(/\s+/g, " ");
+
     // Nettoyer les montants
-    if (['TOTAL_TTC', 'TOTAL_HT', 'TOTAL_HT_MOIS', 'TVA_AMOUNT', 'NET_TO_PAY'].includes(field)) {
-      cleaned = cleaned.replace(/\s/g, '').replace(',', '.');
+    if (
+      [
+        "TOTAL_TTC",
+        "TOTAL_HT",
+        "TOTAL_HT_MOIS",
+        "TVA_AMOUNT",
+        "NET_TO_PAY",
+      ].includes(field)
+    ) {
+      cleaned = cleaned.replace(/\s/g, "").replace(",", ".");
       return parseFloat(cleaned) || null;
     }
-    
+
     // Nettoyer les taux
-    if (field === 'TVA_RATE') {
-      cleaned = cleaned.replace(',', '.');
+    if (field === "TVA_RATE") {
+      cleaned = cleaned.replace(",", ".");
       return parseFloat(cleaned) || null;
     }
-    
+
     // Nettoyer SIRET/SIREN
-    if (['SIRET', 'SIREN'].includes(field)) {
-      return cleaned.replace(/\s/g, '');
+    if (["SIRET", "SIREN"].includes(field)) {
+      return cleaned.replace(/\s/g, "");
     }
-    
+
     // Nettoyer numéro TVA
-    if (field === 'VAT_NUMBER') {
-      return cleaned.replace(/\s/g, '').toUpperCase();
+    if (field === "VAT_NUMBER") {
+      return cleaned.replace(/\s/g, "").toUpperCase();
     }
-    
+
     return cleaned;
   }
 
@@ -483,7 +573,7 @@ class InvoiceExtractionService {
    */
   async extractWithAI(text, regexHints) {
     if (!this.apiKey) {
-      console.warn('⚠️ Clé API Mistral non configurée');
+      console.warn("⚠️ Clé API Mistral non configurée");
       return {};
     }
 
@@ -496,25 +586,31 @@ class InvoiceExtractionService {
     for (let attempt = 1; attempt <= this.maxRetries + 1; attempt++) {
       const isLastAttempt = attempt > this.maxRetries;
       const currentModel = isLastAttempt ? this.fallbackModel : this.model;
-      const currentPrompt = attempt === 2 ? this.buildDetailedPrompt(text) : prompt;
+      const currentPrompt =
+        attempt === 2 ? this.buildDetailedPrompt(text) : prompt;
 
       try {
-        const result = await this.callMistralAPI(currentModel, currentPrompt, attempt);
-        
+        const result = await this.callMistralAPI(
+          currentModel,
+          currentPrompt,
+          attempt,
+        );
+
         // Valider que l'extraction a des données minimales
         if (this.isValidExtraction(result)) {
           return result;
         }
 
         // Extraction incomplète, on retry
-        lastError = 'Extraction incomplète';
-        
+        lastError = "Extraction incomplète";
       } catch (error) {
         lastError = error.message;
       }
     }
 
-    console.warn(`⚠️ Extraction échouée après ${this.maxRetries + 1} tentatives: ${lastError}`);
+    console.warn(
+      `⚠️ Extraction échouée après ${this.maxRetries + 1} tentatives: ${lastError}`,
+    );
     return {};
   }
 
@@ -523,25 +619,26 @@ class InvoiceExtractionService {
    */
   async callMistralAPI(model, prompt, attempt) {
     const response = await fetch(this.chatEndpoint, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         model: model,
         messages: [
           {
-            role: 'system',
-            content: 'Expert extraction factures FR. Montants: virgule→point. DATES CRITIQUES: les factures françaises utilisent TOUJOURS le format JJ/MM/AAAA (jour/mois/année). 02/11/2025 = 2 novembre 2025, PAS le 11 février. Convertir en YYYY-MM-DD. JSON uniquement.'
+            role: "system",
+            content:
+              "Expert extraction factures FR. Montants: virgule→point. DATES CRITIQUES: les factures françaises utilisent TOUJOURS le format JJ/MM/AAAA (jour/mois/année). 02/11/2025 = 2 novembre 2025, PAS le 11 février. Convertir en YYYY-MM-DD. JSON uniquement.",
           },
           {
-            role: 'user',
-            content: prompt
-          }
+            role: "user",
+            content: prompt,
+          },
         ],
         temperature: attempt > 1 ? 0.2 : 0.1, // Légèrement plus créatif sur retry
-        response_format: { type: 'json_object' },
+        response_format: { type: "json_object" },
         max_tokens: attempt > 1 ? 3500 : 2500, // Plus de tokens sur retry
       }),
     });
@@ -555,7 +652,7 @@ class InvoiceExtractionService {
     const content = result.choices[0]?.message?.content;
 
     if (!content) {
-      throw new Error('Réponse vide de l\'API');
+      throw new Error("Réponse vide de l'API");
     }
 
     return JSON.parse(content);
@@ -565,13 +662,14 @@ class InvoiceExtractionService {
    * Vérifie si l'extraction contient les données minimales requises
    */
   isValidExtraction(data) {
-    if (!data || typeof data !== 'object') return false;
-    
+    if (!data || typeof data !== "object") return false;
+
     // Au minimum, on doit avoir un montant OU un numéro de facture OU un nom de vendeur
     const hasAmount = data.amounts?.totalTTC > 0 || data.amounts?.totalHT > 0;
-    const hasInvoiceNumber = data.invoice?.number && data.invoice.number.length > 0;
+    const hasInvoiceNumber =
+      data.invoice?.number && data.invoice.number.length > 0;
     const hasVendor = data.vendor?.name && data.vendor.name.length > 2;
-    
+
     return hasAmount || hasInvoiceNumber || hasVendor;
   }
 
@@ -580,8 +678,9 @@ class InvoiceExtractionService {
    * Optimisé pour les factures BTP, situations, et autoliquidation TVA
    */
   buildDetailedPrompt(text) {
-    const truncatedText = text.length > 12000 ? text.substring(0, 12000) + '...' : text;
-    
+    const truncatedText =
+      text.length > 12000 ? text.substring(0, 12000) + "..." : text;
+
     return `Tu dois analyser cette facture française avec une EXTRÊME PRÉCISION.
 
 DOCUMENT À ANALYSER:
@@ -669,46 +768,76 @@ RÉPONDS UNIQUEMENT EN JSON VALIDE:
    * - Footer (dernière page): totaux, NET A PAYER, pied de page
    */
   extractRelevantParts(text) {
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     const relevantLines = [];
     let inTotalsSection = false;
-    
+
     // Mots-clés indiquant le début de la section totaux
     const totalsKeywords = [
-      'total', 'cumul', 'montant', 'net a payer', 'net à payer', 
-      'paiement', 'autoliquidation', 'tva', 'ttc', 'ht', 
-      'retenue', 'escompte', 'rg', 'siret', 'capital'
+      "total",
+      "cumul",
+      "montant",
+      "net a payer",
+      "net à payer",
+      "paiement",
+      "autoliquidation",
+      "tva",
+      "ttc",
+      "ht",
+      "retenue",
+      "escompte",
+      "rg",
+      "siret",
+      "capital",
     ];
-    
+
     // Mots-clés du header (infos importantes)
     const headerKeywords = [
-      'facture', 'numéro', 'numero', 'date', 'client', 'chantier',
-      'siret', 'tva', 'siren', 'rcs', 'email', 'tel', 'adresse',
-      'situation', 'commande', 'contrat', 'dossier', 'marche'
+      "facture",
+      "numéro",
+      "numero",
+      "date",
+      "client",
+      "chantier",
+      "siret",
+      "tva",
+      "siren",
+      "rcs",
+      "email",
+      "tel",
+      "adresse",
+      "situation",
+      "commande",
+      "contrat",
+      "dossier",
+      "marche",
     ];
-    
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       const lineLower = line.toLowerCase();
-      
+
       if (!line) continue;
-      
+
       // Toujours inclure les 50 premières lignes (header/page 1)
       if (i < 50) {
         relevantLines.push(line);
         continue;
       }
-      
+
       // Détecter la section totaux
-      if (totalsKeywords.some(kw => lineLower.includes(kw))) {
+      if (totalsKeywords.some((kw) => lineLower.includes(kw))) {
         inTotalsSection = true;
       }
-      
+
       // Inclure si dans section totaux ou contient des infos importantes
-      if (inTotalsSection || headerKeywords.some(kw => lineLower.includes(kw))) {
+      if (
+        inTotalsSection ||
+        headerKeywords.some((kw) => lineLower.includes(kw))
+      ) {
         relevantLines.push(line);
       }
-      
+
       // Toujours inclure les 30 dernières lignes (pied de page)
       if (i >= lines.length - 30) {
         if (!relevantLines.includes(line)) {
@@ -716,8 +845,8 @@ RÉPONDS UNIQUEMENT EN JSON VALIDE:
         }
       }
     }
-    
-    return relevantLines.join('\n');
+
+    return relevantLines.join("\n");
   }
 
   /**
@@ -727,12 +856,14 @@ RÉPONDS UNIQUEMENT EN JSON VALIDE:
   buildOptimizedPrompt(text) {
     // Extraire uniquement header + totaux + footer (ignorer détail travaux)
     const relevantText = this.extractRelevantParts(text);
-    
+
     // Log si réduction significative
     if (text.length > relevantText.length * 1.5) {
-      console.log(`📄 Facture optimisée: ${text.length} → ${relevantText.length} car. (header + totaux uniquement)`);
+      console.log(
+        `📄 Facture optimisée: ${text.length} → ${relevantText.length} car. (header + totaux uniquement)`,
+      );
     }
-    
+
     return `Tu es un expert-comptable spécialisé dans les factures BTP françaises.
 Analyse cette facture et extrais les données avec une précision de 100%.
 
@@ -897,14 +1028,21 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
     // Fusionner les données vendor
     const vendor = aiData.vendor || {};
     merged.transaction_data.vendor_name = vendor.name || null;
-    merged.extracted_fields.vendor_siret = this.validateSiret(vendor.siret || regexData.siret);
-    merged.extracted_fields.vendor_siren = this.validateSiren(vendor.siren || regexData.siren);
-    merged.extracted_fields.vendor_vat_number = this.validateVatNumber(vendor.vatNumber || regexData.vatNumber);
+    merged.extracted_fields.vendor_siret = this.validateSiret(
+      vendor.siret || regexData.siret,
+    );
+    merged.extracted_fields.vendor_siren = this.validateSiren(
+      vendor.siren || regexData.siren,
+    );
+    merged.extracted_fields.vendor_vat_number = this.validateVatNumber(
+      vendor.vatNumber || regexData.vatNumber,
+    );
     merged.extracted_fields.vendor_rcs = vendor.rcs || regexData.rcs;
     merged.extracted_fields.vendor_ape = vendor.ape;
     merged.extracted_fields.vendor_address = vendor.address || vendor.street;
     merged.extracted_fields.vendor_city = vendor.city || regexData.city;
-    merged.extracted_fields.vendor_postal_code = vendor.postalCode || regexData.postalCode;
+    merged.extracted_fields.vendor_postal_code =
+      vendor.postalCode || regexData.postalCode;
     merged.extracted_fields.vendor_country = vendor.country || "France";
     merged.extracted_fields.vendor_email = vendor.email || regexData.email;
     merged.extracted_fields.vendor_phone = vendor.phone || regexData.phone;
@@ -924,50 +1062,67 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
 
     // Fusionner les données facture
     const invoice = aiData.invoice || {};
-    merged.transaction_data.document_number = invoice.number || regexData.invoiceNumber;
+    merged.transaction_data.document_number =
+      invoice.number || regexData.invoiceNumber;
     // Priorité aux dates regex (toujours format français JJ/MM/AAAA) sur les dates IA (risque d'inversion)
-    merged.transaction_data.transaction_date = this.validateDate(regexData.invoiceDate, originalText)
-      || this.validateDate(invoice.date, originalText);
-    merged.transaction_data.due_date = this.validateDate(regexData.dueDate, originalText)
-      || this.validateDate(invoice.dueDate, originalText);
-    merged.transaction_data.payment_date = this.validateDate(invoice.paymentDate, originalText);
+    merged.transaction_data.transaction_date =
+      this.validateDate(regexData.invoiceDate, originalText) ||
+      this.validateDate(invoice.date, originalText);
+    merged.transaction_data.due_date =
+      this.validateDate(regexData.dueDate, originalText) ||
+      this.validateDate(invoice.dueDate, originalText);
+    merged.transaction_data.payment_date = this.validateDate(
+      invoice.paymentDate,
+      originalText,
+    );
 
     // Fusionner les montants - priorité à l'IA, fallback regex
     const amounts = aiData.amounts || {};
-    const isReverseCharge = amounts.isReverseCharge === true || 
-                            regexData.isReverseCharge === true ||
-                            originalText.toLowerCase().includes('autoliquidation');
-    
+    const isReverseCharge =
+      amounts.isReverseCharge === true ||
+      regexData.isReverseCharge === true ||
+      originalText.toLowerCase().includes("autoliquidation");
+
     // Pour les factures de situation BTP: priorité au "TOTAL H.T. MOIS" (montant de la situation)
     // Sinon utiliser le totalHT classique
-    const totalHtMois = this.validateAmount(amounts.totalHT) || regexData.totalHtMois;
+    const totalHtMois =
+      this.validateAmount(amounts.totalHT) || regexData.totalHtMois;
     const totalHtCumul = regexData.totalHT; // CUMUL FIN DE MOIS (informatif seulement)
-    
+
     // Le HT à utiliser est celui du MOIS (situation) ou le HT classique
     merged.extracted_fields.totals.total_ht = totalHtMois || totalHtCumul;
-    merged.extracted_fields.totals.total_tax = isReverseCharge ? 0 : (this.validateAmount(amounts.totalTVA) || regexData.tvaAmount);
-    
+    merged.extracted_fields.totals.total_tax = isReverseCharge
+      ? 0
+      : this.validateAmount(amounts.totalTVA) || regexData.tvaAmount;
+
     // Pour le TTC: utiliser netToPay si disponible (montant final après déductions)
     // Priorité: IA netToPay > regex netToPay > IA totalTTC > regex totalTTC
-    const netToPay = this.validateAmount(amounts.netToPay) || regexData.netToPay;
-    const totalTTC = this.validateAmount(amounts.totalTTC) || regexData.totalTTC;
-    
+    const netToPay =
+      this.validateAmount(amounts.netToPay) || regexData.netToPay;
+    const totalTTC =
+      this.validateAmount(amounts.totalTTC) || regexData.totalTTC;
+
     // Si autoliquidation, TTC = HT (pas de TVA)
     if (isReverseCharge && merged.extracted_fields.totals.total_ht) {
-      merged.extracted_fields.totals.total_ttc = netToPay || merged.extracted_fields.totals.total_ht;
+      merged.extracted_fields.totals.total_ttc =
+        netToPay || merged.extracted_fields.totals.total_ht;
     } else {
       merged.extracted_fields.totals.total_ttc = netToPay || totalTTC;
     }
-    
+
     // Le montant à payer est le netToPay ou le TTC
-    merged.transaction_data.amount = netToPay || merged.extracted_fields.totals.total_ttc;
-    merged.transaction_data.tax_amount = merged.extracted_fields.totals.total_tax;
-    merged.transaction_data.tax_rate = isReverseCharge ? 0 : (regexData.tvaRate || this.inferTaxRate(merged.extracted_fields.totals));
+    merged.transaction_data.amount =
+      netToPay || merged.extracted_fields.totals.total_ttc;
+    merged.transaction_data.tax_amount =
+      merged.extracted_fields.totals.total_tax;
+    merged.transaction_data.tax_rate = isReverseCharge
+      ? 0
+      : regexData.tvaRate || this.inferTaxRate(merged.extracted_fields.totals);
     merged.transaction_data.is_reverse_charge = isReverseCharge;
 
     // Fusionner les taxes
     if (Array.isArray(aiData.taxes)) {
-      merged.extracted_fields.tax_details = aiData.taxes.map(tax => ({
+      merged.extracted_fields.tax_details = aiData.taxes.map((tax) => ({
         type: "TVA",
         rate: this.validateAmount(tax.rate) || 0,
         base_amount: this.validateAmount(tax.baseHT),
@@ -977,7 +1132,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
 
     // Fusionner les articles
     if (Array.isArray(aiData.items)) {
-      merged.extracted_fields.items = aiData.items.map(item => ({
+      merged.extracted_fields.items = aiData.items.map((item) => ({
         code: item.code,
         description: item.description || "Article",
         quantity: this.validateAmount(item.quantity) || 1,
@@ -992,9 +1147,14 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
 
     // Fusionner les données de paiement
     const payment = aiData.payment || {};
-    merged.transaction_data.payment_method = this.normalizePaymentMethod(payment.method || regexData.paymentMethod);
-    merged.extracted_fields.payment_details.method = payment.method || regexData.paymentMethod;
-    merged.extracted_fields.payment_details.iban = this.validateIban(payment.iban || regexData.iban);
+    merged.transaction_data.payment_method = this.normalizePaymentMethod(
+      payment.method || regexData.paymentMethod,
+    );
+    merged.extracted_fields.payment_details.method =
+      payment.method || regexData.paymentMethod;
+    merged.extracted_fields.payment_details.iban = this.validateIban(
+      payment.iban || regexData.iban,
+    );
     merged.extracted_fields.payment_details.bic = payment.bic || regexData.bic;
     merged.extracted_fields.payment_details.bank_name = payment.bankName;
 
@@ -1009,7 +1169,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
    */
   validateSiret(siret) {
     if (!siret) return null;
-    const cleaned = siret.toString().replace(/\s/g, '');
+    const cleaned = siret.toString().replace(/\s/g, "");
     return /^\d{14}$/.test(cleaned) ? cleaned : null;
   }
 
@@ -1018,7 +1178,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
    */
   validateSiren(siren) {
     if (!siren) return null;
-    const cleaned = siren.toString().replace(/\s/g, '');
+    const cleaned = siren.toString().replace(/\s/g, "");
     return /^\d{9}$/.test(cleaned) ? cleaned : null;
   }
 
@@ -1027,7 +1187,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
    */
   validateVatNumber(vatNumber) {
     if (!vatNumber) return null;
-    const cleaned = vatNumber.toString().replace(/\s/g, '').toUpperCase();
+    const cleaned = vatNumber.toString().replace(/\s/g, "").toUpperCase();
     return /^FR\d{11}$/.test(cleaned) ? cleaned : null;
   }
 
@@ -1036,7 +1196,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
    */
   validateIban(iban) {
     if (!iban) return null;
-    const cleaned = iban.toString().replace(/\s/g, '').toUpperCase();
+    const cleaned = iban.toString().replace(/\s/g, "").toUpperCase();
     return /^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(cleaned) ? cleaned : null;
   }
 
@@ -1045,16 +1205,16 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
    * @param {string} dateStr - Date à valider (YYYY-MM-DD ou JJ/MM/AAAA)
    * @param {string} originalText - Texte OCR original pour cross-vérification
    */
-  validateDate(dateStr, originalText = '') {
+  validateDate(dateStr, originalText = "") {
     if (!dateStr) return null;
 
     // Si déjà au format YYYY-MM-DD (retourné par l'IA)
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-      const [year, month, day] = dateStr.split('-').map(Number);
+      const [year, month, day] = dateStr.split("-").map(Number);
 
       // Mois > 12 = l'IA a inversé jour et mois, corriger
       if (month > 12 && day <= 12) {
-        const corrected = `${year}-${String(day).padStart(2, '0')}-${String(month).padStart(2, '0')}`;
+        const corrected = `${year}-${String(day).padStart(2, "0")}-${String(month).padStart(2, "0")}`;
         const date = new Date(corrected);
         console.log(`📅 Date corrigée (mois > 12): ${dateStr} → ${corrected}`);
         return isNaN(date.getTime()) ? null : corrected;
@@ -1063,17 +1223,17 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
       // Ambiguïté possible (jour <= 12 ET mois <= 12)
       // Vérifier dans le texte original si la date apparaît en format français
       if (day <= 12 && month <= 12 && day !== month && originalText) {
-        const dayStr = String(day).padStart(2, '0');
-        const monthStr = String(month).padStart(2, '0');
+        const dayStr = String(day).padStart(2, "0");
+        const monthStr = String(month).padStart(2, "0");
 
         // Chercher la version "month/day/year" dans le texte (= l'IA a lu en américain)
         // Si on trouve month/day/year dans le texte, c'est que la date originale est month/day/year
         // et en français ça veut dire jour=month, mois=day → il faut swapper
         const americanReadPattern = new RegExp(
-          `${monthStr}[/\\-\\.]${dayStr}[/\\-\\.]${year}`
+          `${monthStr}[/\\-\\.]${dayStr}[/\\-\\.]${year}`,
         );
         const frenchReadPattern = new RegExp(
-          `${dayStr}[/\\-\\.]${monthStr}[/\\-\\.]${year}`
+          `${dayStr}[/\\-\\.]${monthStr}[/\\-\\.]${year}`,
         );
 
         const foundAmerican = americanReadPattern.test(originalText);
@@ -1084,7 +1244,9 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
           // L'IA a lu en américain, il faut swapper
           const corrected = `${year}-${dayStr}-${monthStr}`;
           const date = new Date(corrected);
-          console.log(`📅 Date corrigée (inversion jour/mois détectée): ${dateStr} → ${corrected}`);
+          console.log(
+            `📅 Date corrigée (inversion jour/mois détectée): ${dateStr} → ${corrected}`,
+          );
           return isNaN(date.getTime()) ? null : corrected;
         }
       }
@@ -1094,7 +1256,9 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
     }
 
     // Format français JJ/MM/AAAA ou JJ-MM-AAAA ou JJ.MM.AAAA
-    const frenchMatch = dateStr.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+    const frenchMatch = dateStr.match(
+      /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$/,
+    );
     if (frenchMatch) {
       let [, day, month, year] = frenchMatch;
       if (year.length === 2) {
@@ -1105,10 +1269,12 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
         // Pas d'inversion, format correct : day est bien le jour
       } else if (parseInt(day) <= 12 && parseInt(month) > 12) {
         // Inversion évidente : swapper
-        console.log(`📅 Date française corrigée (inversion): ${day}/${month}/${year} → ${month}/${day}/${year}`);
+        console.log(
+          `📅 Date française corrigée (inversion): ${day}/${month}/${year} → ${month}/${day}/${year}`,
+        );
         [day, month] = [month, day];
       }
-      const formatted = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      const formatted = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
       const date = new Date(formatted);
       return isNaN(date.getTime()) ? null : formatted;
     }
@@ -1121,9 +1287,10 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
    */
   validateAmount(amount) {
     if (amount === null || amount === undefined) return null;
-    if (typeof amount === 'number') return isNaN(amount) ? null : Math.round(amount * 100) / 100;
-    if (typeof amount === 'string') {
-      const cleaned = amount.replace(/\s/g, '').replace(',', '.');
+    if (typeof amount === "number")
+      return isNaN(amount) ? null : Math.round(amount * 100) / 100;
+    if (typeof amount === "string") {
+      const cleaned = amount.replace(/\s/g, "").replace(",", ".");
       const parsed = parseFloat(cleaned);
       return isNaN(parsed) ? null : Math.round(parsed * 100) / 100;
     }
@@ -1152,11 +1319,11 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
   normalizePaymentMethod(method) {
     if (!method) return "unknown";
     const lower = method.toLowerCase();
-    if (lower.includes('carte') || lower.includes('cb')) return "card";
-    if (lower.includes('virement')) return "transfer";
-    if (lower.includes('chèque') || lower.includes('cheque')) return "check";
-    if (lower.includes('espèce') || lower.includes('cash')) return "cash";
-    if (lower.includes('prélèvement')) return "direct_debit";
+    if (lower.includes("carte") || lower.includes("cb")) return "card";
+    if (lower.includes("virement")) return "transfer";
+    if (lower.includes("chèque") || lower.includes("cheque")) return "check";
+    if (lower.includes("espèce") || lower.includes("cash")) return "cash";
+    if (lower.includes("prélèvement")) return "direct_debit";
     return "unknown";
   }
 
@@ -1170,7 +1337,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
     }
 
     const lowerText = text.toLowerCase();
-    
+
     for (const [category, keywords] of Object.entries(EXPENSE_CATEGORIES)) {
       for (const keyword of keywords) {
         if (lowerText.includes(keyword)) {
@@ -1187,22 +1354,22 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
    */
   generateDescription(data) {
     const parts = [];
-    
+
     if (data.transaction_data.vendor_name) {
       parts.push(data.transaction_data.vendor_name);
     }
-    
+
     if (data.extracted_fields.items && data.extracted_fields.items.length > 0) {
       const itemDescs = data.extracted_fields.items
         .slice(0, 3)
-        .map(i => i.description)
+        .map((i) => i.description)
         .filter(Boolean);
       if (itemDescs.length > 0) {
-        parts.push(`(${itemDescs.join(', ')})`);
+        parts.push(`(${itemDescs.join(", ")})`);
       }
     }
 
-    return parts.join(' ') || "Facture importée";
+    return parts.join(" ") || "Facture importée";
   }
 
   /**
@@ -1212,7 +1379,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
     // Vérifier la cohérence des montants
     const totals = data.extracted_fields.totals;
     const isReverseCharge = data.transaction_data.is_reverse_charge === true;
-    
+
     // Si autoliquidation, forcer TVA à 0 et ne pas calculer
     if (isReverseCharge) {
       totals.total_tax = 0;
@@ -1223,24 +1390,31 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
         totals.total_ttc = totals.total_ht;
       }
       // eslint-disable-next-line no-console
-      console.log('🔄 Post-process: Autoliquidation - TVA forcée à 0');
+      console.log("🔄 Post-process: Autoliquidation - TVA forcée à 0");
     } else {
       // Calculs normaux seulement si pas d'autoliquidation
-      
+
       // Si on a HT et TVA mais pas TTC, calculer
       if (totals.total_ht && totals.total_tax && !totals.total_ttc) {
-        totals.total_ttc = Math.round((totals.total_ht + totals.total_tax) * 100) / 100;
+        totals.total_ttc =
+          Math.round((totals.total_ht + totals.total_tax) * 100) / 100;
         data.transaction_data.amount = totals.total_ttc;
       }
-      
+
       // Si on a TTC et TVA mais pas HT, calculer
       if (totals.total_ttc && totals.total_tax && !totals.total_ht) {
-        totals.total_ht = Math.round((totals.total_ttc - totals.total_tax) * 100) / 100;
+        totals.total_ht =
+          Math.round((totals.total_ttc - totals.total_tax) * 100) / 100;
       }
-      
+
       // Si on a TTC et HT mais pas TVA, calculer (seulement si différence positive)
-      if (totals.total_ttc && totals.total_ht && (totals.total_tax === null || totals.total_tax === undefined)) {
-        const calculatedTax = Math.round((totals.total_ttc - totals.total_ht) * 100) / 100;
+      if (
+        totals.total_ttc &&
+        totals.total_ht &&
+        (totals.total_tax === null || totals.total_tax === undefined)
+      ) {
+        const calculatedTax =
+          Math.round((totals.total_ttc - totals.total_ht) * 100) / 100;
         // Ne pas mettre de TVA négative - c'est probablement une autoliquidation non détectée
         if (calculatedTax >= 0) {
           totals.total_tax = calculatedTax;
@@ -1250,7 +1424,9 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
           totals.total_tax = 0;
           data.transaction_data.tax_amount = 0;
           // eslint-disable-next-line no-console
-          console.log('⚠️ Post-process: TVA calculée négative, mise à 0 (probable autoliquidation)');
+          console.log(
+            "⚠️ Post-process: TVA calculée négative, mise à 0 (probable autoliquidation)",
+          );
         }
       }
     }
@@ -1260,19 +1436,42 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
     let fieldsFound = 0;
     let totalFields = 10;
 
-    if (data.transaction_data.vendor_name) { fieldsFound++; }
-    if (data.transaction_data.document_number) { fieldsFound++; }
-    if (data.transaction_data.transaction_date) { fieldsFound++; }
-    if (totals.total_ttc) { fieldsFound++; }
-    if (totals.total_ht) { fieldsFound++; }
-    if (totals.total_tax) { fieldsFound++; }
-    if (data.extracted_fields.vendor_siret) { fieldsFound++; }
-    if (data.extracted_fields.items.length > 0) { fieldsFound++; }
-    if (data.transaction_data.payment_method !== "unknown") { fieldsFound++; }
-    if (data.extracted_fields.vendor_address) { fieldsFound++; }
+    if (data.transaction_data.vendor_name) {
+      fieldsFound++;
+    }
+    if (data.transaction_data.document_number) {
+      fieldsFound++;
+    }
+    if (data.transaction_data.transaction_date) {
+      fieldsFound++;
+    }
+    if (totals.total_ttc) {
+      fieldsFound++;
+    }
+    if (totals.total_ht) {
+      fieldsFound++;
+    }
+    if (totals.total_tax) {
+      fieldsFound++;
+    }
+    if (data.extracted_fields.vendor_siret) {
+      fieldsFound++;
+    }
+    if (data.extracted_fields.items.length > 0) {
+      fieldsFound++;
+    }
+    if (data.transaction_data.payment_method !== "unknown") {
+      fieldsFound++;
+    }
+    if (data.extracted_fields.vendor_address) {
+      fieldsFound++;
+    }
 
     confidence = Math.round((fieldsFound / totalFields) * 100) / 100;
-    data.document_analysis.confidence = Math.max(confidence, data.document_analysis.confidence || 0);
+    data.document_analysis.confidence = Math.max(
+      confidence,
+      data.document_analysis.confidence || 0,
+    );
 
     return data;
   }

@@ -281,6 +281,117 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
+    // Suggestions globales pour le toast de rapprochement (miroir de
+    // reconciliationSuggestions côté factures client) : on scanne les
+    // transactions débit non rapprochées et on cherche une facture d'achat
+    // correspondante (montant ±1 %, nom fournisseur dans le libellé, n° de
+    // facture dans le libellé).
+    purchaseInvoiceReconciliationSuggestions: requireRead("expenses")(
+      async (_, { workspaceId: argWorkspaceId }, context) => {
+        const workspaceId =
+          argWorkspaceId || context.workspaceId || context.organizationId;
+        const wsId = new mongoose.Types.ObjectId(workspaceId);
+        const Transaction = mongoose.model("Transaction");
+
+        // Débits non rapprochés, sans justificatif déjà attaché.
+        const reconcileQuery = {
+          workspaceId: wsId,
+          deletedAt: null,
+          reconciliationStatus: { $nin: ["matched", "ignored"] },
+          amount: { $lt: 0 },
+          "receiptFiles.0": { $exists: false },
+        };
+
+        const unmatchedCount = await Transaction.countDocuments(reconcileQuery);
+        const unmatchedTransactions = await Transaction.find(reconcileQuery)
+          .sort({ date: -1 })
+          .limit(50)
+          .lean();
+
+        // Factures d'achat non payées / non rapprochées.
+        const pendingInvoices = await PurchaseInvoice.find({
+          workspaceId: wsId,
+          deletedAt: null,
+          isReconciled: { $ne: true },
+          status: { $nin: ["PAID", "ARCHIVED"] },
+          $or: [
+            { linkedTransactionIds: { $exists: false } },
+            { linkedTransactionIds: { $size: 0 } },
+          ],
+        })
+          .sort({ issueDate: -1 })
+          .limit(500)
+          .lean();
+
+        const normalizeRef = (s) =>
+          (s || "")
+            .toString()
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "");
+
+        const evaluate = (transaction, invoice) => {
+          const txAbs = Math.abs(transaction.amount);
+          const invoiceAmount = invoice.amountTTC || 0;
+          const amountMatch =
+            invoiceAmount > 0 &&
+            Math.abs(txAbs - invoiceAmount) <= invoiceAmount * 0.01;
+
+          const supplier = (invoice.supplierName || "").toLowerCase();
+          const descriptionMatch =
+            !!supplier &&
+            !!transaction.description &&
+            transaction.description.toLowerCase().includes(supplier);
+
+          const invRef = normalizeRef(invoice.invoiceNumber);
+          const txRef = normalizeRef(transaction.description);
+          const referenceMatch = invRef.length >= 6 && txRef.includes(invRef);
+
+          return { amountMatch, descriptionMatch, referenceMatch };
+        };
+
+        const suggestions = [];
+        for (const transaction of unmatchedTransactions) {
+          const matching = pendingInvoices
+            .map((invoice) => ({ invoice, m: evaluate(transaction, invoice) }))
+            .filter(
+              ({ m }) =>
+                m.amountMatch || m.descriptionMatch || m.referenceMatch,
+            );
+
+          if (matching.length > 0) {
+            const high = matching.some(
+              ({ m }) => m.amountMatch || m.referenceMatch,
+            );
+            suggestions.push({
+              transaction: {
+                id: transaction._id.toString(),
+                amount: transaction.amount,
+                description: transaction.description,
+                date: transaction.date,
+                reconciliationStatus: transaction.reconciliationStatus,
+              },
+              matchingPurchaseInvoices: matching.map(({ invoice }) => ({
+                id: invoice._id.toString(),
+                invoiceNumber: invoice.invoiceNumber,
+                supplierName: invoice.supplierName,
+                amountTTC: invoice.amountTTC,
+                issueDate: invoice.issueDate,
+                status: invoice.status,
+              })),
+              confidence: high ? "high" : "medium",
+            });
+          }
+        }
+
+        return {
+          success: true,
+          suggestions,
+          unmatchedCount,
+          pendingInvoicesCount: pendingInvoices.length,
+        };
+      },
+    ),
+
     supplier: requireRead("expenses")(async (_, { id }, context) => {
       const supplier = await Supplier.findOne({
         _id: id,
@@ -803,10 +914,19 @@ const purchaseInvoiceResolvers = {
         invoice.status = "PAID";
         invoice.paymentDate = invoice.paymentDate || new Date();
 
-        // Mark transactions as matched
+        // Lien N↔N par référence : la transaction "porte" la facture d'achat
+        // (linkedPurchaseInvoiceIds). Le justificatif reste sur la facture et
+        // est accessible via le lien — pas de copie de fichier. Le lien
+        // fonctionne donc même si la facture n'a pas de justificatif.
         await Transaction.updateMany(
-          { _id: { $in: transactionIds } },
-          { $set: { reconciliationStatus: "matched" } },
+          {
+            _id: { $in: transactionIds },
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          },
+          {
+            $set: { reconciliationStatus: "matched" },
+            $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
+          },
         );
 
         // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
@@ -851,10 +971,22 @@ const purchaseInvoiceResolvers = {
 
         if (invoice.linkedTransactionIds?.length) {
           const Transaction = mongoose.model("Transaction");
-          await Transaction.updateMany(
-            { _id: { $in: invoice.linkedTransactionIds } },
-            { $set: { reconciliationStatus: "unmatched" } },
-          );
+          // Retirer le lien vers cette facture d'achat. La transaction ne
+          // repasse "unmatched" que si elle n'a plus AUCUN lien (ni facture
+          // d'achat, ni facture client).
+          const linkedTxs = await Transaction.find({
+            _id: { $in: invoice.linkedTransactionIds },
+          });
+          for (const tx of linkedTxs) {
+            tx.linkedPurchaseInvoiceIds = (
+              tx.linkedPurchaseInvoiceIds || []
+            ).filter((id) => id.toString() !== invoice._id.toString());
+            const stillLinked =
+              tx.linkedPurchaseInvoiceIds.length > 0 ||
+              (tx.linkedInvoiceIds || []).length > 0;
+            if (!stillLinked) tx.reconciliationStatus = "unmatched";
+            await tx.save();
+          }
         }
 
         invoice.linkedTransactionIds = [];

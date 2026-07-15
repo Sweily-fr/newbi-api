@@ -4,6 +4,7 @@ import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 // In-memory rate limit for payment session creation
 const RATE_LIMIT_IP_WINDOW = 60 * 1000; // 1 minute
@@ -58,8 +59,9 @@ const stripeConnectResolvers = {
      */
     myStripeConnectAccount: async (_, args, { user, organizationId }) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour accéder à cette ressource",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -135,8 +137,9 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour créer un compte Stripe Connect",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -185,8 +188,9 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour générer un lien d'onboarding",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -255,8 +259,9 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour vérifier le statut d'un compte",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -329,7 +334,10 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -389,7 +397,10 @@ const stripeConnectResolvers = {
      */
     disconnectStripe: async (_, args, { user, organizationId, userRole }) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {

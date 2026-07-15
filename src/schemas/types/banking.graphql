@@ -27,6 +27,10 @@ type Transaction {
   # plusieurs factures dans le cas d'un paiement groupé).
   linkedInvoiceIds: [ID!]!
   linkedInvoices: [LinkedInvoiceSummary!]!
+  # Factures d'achat liées (débits). Le justificatif est accessible via la
+  # facture liée (files), sans copie sur la transaction.
+  linkedPurchaseInvoiceIds: [ID!]!
+  linkedPurchaseInvoices: [LinkedPurchaseInvoiceSummary!]!
   linkedExpenseId: ID
   reconciliationStatus: ReconciliationStatusEnum
   reconciliationDate: DateTime
@@ -45,6 +49,26 @@ type LinkedInvoiceSummary {
   totalTTC: Float
   issueDate: DateTime
   dueDate: DateTime
+}
+
+"""
+Résumé d'une facture d'achat liée à une transaction. Inclut les fichiers pour
+accéder au justificatif via le lien (sans copie sur la transaction).
+"""
+type LinkedPurchaseInvoiceSummary {
+  id: ID!
+  invoiceNumber: String
+  supplierName: String
+  status: String
+  amountTTC: Float
+  issueDate: DateTime
+  files: [LinkedPurchaseInvoiceFile!]!
+}
+
+type LinkedPurchaseInvoiceFile {
+  url: String
+  filename: String
+  mimetype: String
 }
 
 enum ReconciliationStatusEnum {
@@ -471,21 +495,6 @@ extend type Query {
   ): [Transaction!]!
 }
 
-# Input pour créer une transaction manuelle
-input CreateTransactionInput {
-  workspaceId: ID!
-  amount: Float!
-  currency: String
-  description: String!
-  type: TransactionType!
-  date: DateTime
-  category: String
-  vendor: String
-  paymentMethod: String
-  notes: String
-  tags: [String!]
-}
-
 input UpdateTransactionInput {
   amount: Float
   currency: String
@@ -535,13 +544,9 @@ type UploadTransactionReceiptResult {
 }
 
 extend type Mutation {
-  # Transactions manuelles
-  createTransaction(input: CreateTransactionInput!): Transaction!
+  # Les transactions proviennent du flux bancaire Bridge : seule la mise à jour
+  # (catégorie / description) est permise, pas de création ni de suppression.
   updateTransaction(id: ID!, input: UpdateTransactionInput!): Transaction!
-  deleteTransaction(id: ID!): Boolean!
-
-  # Mettre à jour le compte PCG d'une transaction
-  updateTransactionPCG(transactionId: ID!, pcgNumero: String!, workspaceId: ID!): Transaction!
 
   # Upload de justificatifs (multi-fichiers)
   uploadTransactionReceipt(transactionId: ID!, workspaceId: ID!, files: [Upload!]!): UploadTransactionReceiptResult!
