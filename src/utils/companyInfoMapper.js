@@ -21,8 +21,16 @@ const VALID_COMPANY_STATUSES = [
   "EI",
   "EIRL",
   "SA",
+  "SCA",
   "SNC",
+  "SCS",
+  "SELARL",
+  "SELAS",
+  "SELAFA",
+  "SELCA",
   "SCI",
+  "SCM",
+  "SCP",
   "SCOP",
   "ASSOCIATION",
   "AUTO_ENTREPRENEUR",
@@ -72,6 +80,7 @@ function mapActivityToTransactionCategory(activityCategory) {
     liberale: "SERVICES",
     agricole: "GOODS",
     industrielle: "GOODS",
+    mixte: "MIXED",
   };
 
   return mapping[activityCategory.toLowerCase().trim()] || "SERVICES";
@@ -113,6 +122,26 @@ export function mapOrganizationToCompanyInfo(organization) {
 
   const companyInfo = {
     name: organization.companyName || "",
+    // Nom commercial : inclus uniquement si l'affichage est activé dans les paramètres
+    commercialName: organization.showCommercialName
+      ? organization.commercialName || ""
+      : "",
+    // Activité réglementée : titre professionnel, organisme de rattachement, numéro professionnel
+    professionalTitle: organization.isRegulatedActivity
+      ? organization.professionalTitle || ""
+      : "",
+    regulatoryBody: organization.isRegulatedActivity
+      ? organization.regulatoryBody || ""
+      : "",
+    professionalNumber: organization.isRegulatedActivity
+      ? organization.professionalNumber || ""
+      : "",
+    decennialInsurance: organization.isRegulatedActivity
+      ? organization.decennialInsurance || ""
+      : "",
+    professionalLiabilityInsurance: organization.isRegulatedActivity
+      ? organization.professionalLiabilityInsurance || ""
+      : "",
     email: organization.companyEmail || "",
     phone: organization.companyPhone || "",
     website:

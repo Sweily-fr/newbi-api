@@ -68,6 +68,14 @@ input AppearanceInput {
 
 input CompanyInput {
   name: String
+  # Nom commercial (affiché sur les documents si l'option est activée)
+  commercialName: String
+  # Activité réglementée
+  professionalTitle: String
+  regulatoryBody: String
+  professionalNumber: String
+  decennialInsurance: String
+  professionalLiabilityInsurance: String
   email: String
   phone: String
   website: String
