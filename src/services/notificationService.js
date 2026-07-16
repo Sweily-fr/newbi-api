@@ -250,7 +250,9 @@ async function sendPaymentReceivedNotification({
     }
 
     // Préparer les données pour le template
-    const invoiceNumber = `${invoice.prefix || ""}${invoice.number || ""}`;
+    const invoiceNumber = [invoice.prefix, invoice.number]
+      .filter(Boolean)
+      .join("-");
     const clientName =
       invoice.client?.name || invoice.client?.company || "Client";
     const totalAmount = formatAmount(
