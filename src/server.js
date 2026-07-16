@@ -129,6 +129,21 @@ mongoose
     const legacyIndexes = [
       { collection: "quotes", index: "workspaceId_1_number_1" },
       { collection: "quotes", index: "number_1_createdBy_1" },
+      // Anciens index uniques sans le préfixe : ils bloquaient la réutilisation
+      // d'un même numéro avec un préfixe différent (E11000 à la création)
+      { collection: "quotes", index: "number_createdBy_year_unique" },
+      { collection: "quotes", index: "number_workspaceId_year_unique" },
+      { collection: "invoices", index: "number_createdBy_year_unique" },
+      { collection: "invoices", index: "number_workspaceId_year_unique" },
+      {
+        collection: "creditnotes",
+        index: "creditnote_number_createdBy_year_unique",
+      },
+      {
+        collection: "creditnotes",
+        index: "creditnote_number_workspaceId_year_unique",
+      },
+      { collection: "purchaseorders", index: "number_createdBy_year_unique" },
     ];
 
     for (const { collection, index } of legacyIndexes) {
