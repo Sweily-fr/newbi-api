@@ -275,7 +275,7 @@ async function sendPaymentReceivedNotification({
     await transporter.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: user.email,
-      subject: `💰 Paiement reçu - Facture ${invoiceNumber}`,
+      subject: `Paiement reçu - Facture ${invoiceNumber}`,
       html: emailHtml,
     });
 

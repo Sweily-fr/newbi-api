@@ -883,7 +883,7 @@ const sendFileTransferPaymentNotification = async (
     from: "Newbi <contact@newbi.fr>",
     replyTo: process.env.FROM_EMAIL,
     to: senderEmail,
-    subject: `💰 Paiement reçu - ${paidAmount}${currency.toUpperCase()}`,
+    subject: `Paiement reçu - ${paidAmount}${currency.toUpperCase()}`,
     html: `
       <!DOCTYPE html>
       <html>
