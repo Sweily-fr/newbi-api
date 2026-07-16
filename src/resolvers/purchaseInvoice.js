@@ -1311,6 +1311,16 @@ const purchaseInvoiceResolvers = {
 
   Supplier: {
     id: (parent) => parent._id?.toString() || parent.id,
+    // Le type GraphQL Address a des champs non-nullables (street/city/…). Les
+    // fournisseurs créés avant le correctif (ou par un autre client) peuvent
+    // avoir un sous-document address vide ou partiel (street: null) → GraphQL
+    // plantait à la lecture de la liste. On ne renvoie l'adresse QUE si elle est
+    // complète ; sinon null (Supplier.address est nullable).
+    address: (parent) => {
+      const a = parent.address;
+      if (a && a.street && a.city && a.postalCode && a.country) return a;
+      return null;
+    },
     createdAt: (parent) =>
       parent.createdAt instanceof Date
         ? parent.createdAt.toISOString()
