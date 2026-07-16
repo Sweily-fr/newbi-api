@@ -22,6 +22,36 @@ const companyInfoSchema = new mongoose.Schema({
     trim: true,
     match: [NAME_REGEX, "Le nom de l'entreprise est invalide"],
   },
+  // Nom commercial (affiché sur les documents si l'option est activée dans les paramètres)
+  commercialName: {
+    type: String,
+    trim: true,
+  },
+  // Activité réglementée : titre professionnel (affiché dans les infos entreprise)
+  professionalTitle: {
+    type: String,
+    trim: true,
+  },
+  // Activité réglementée : organisme de rattachement (affiché en bas de page)
+  regulatoryBody: {
+    type: String,
+    trim: true,
+  },
+  // Activité réglementée : numéro professionnel (affiché en bas de page)
+  professionalNumber: {
+    type: String,
+    trim: true,
+  },
+  // Activité réglementée : assurance décennale, si applicable (affichée en bas de page)
+  decennialInsurance: {
+    type: String,
+    trim: true,
+  },
+  // Activité réglementée : assurance RC Pro, si applicable (affichée en bas de page)
+  professionalLiabilityInsurance: {
+    type: String,
+    trim: true,
+  },
   address: {
     type: addressSchema,
     required: true,
@@ -66,8 +96,16 @@ const companyInfoSchema = new mongoose.Schema({
           "EURL",
           "SASU",
           "SA",
+          "SCA",
           "SNC",
+          "SCS",
+          "SELARL",
+          "SELAS",
+          "SELAFA",
+          "SELCA",
           "SCI",
+          "SCM",
+          "SCP",
           "SCOP",
         ];
         if (requiredForStatuses.includes(this.companyStatus) && !v) {
@@ -122,8 +160,16 @@ const companyInfoSchema = new mongoose.Schema({
       "EI",
       "EIRL",
       "SA",
+      "SCA",
       "SNC",
+      "SCS",
+      "SELARL",
+      "SELAS",
+      "SELAFA",
+      "SELCA",
       "SCI",
+      "SCM",
+      "SCP",
       "SCOP",
       "ASSOCIATION",
       "AUTO_ENTREPRENEUR",
@@ -147,7 +193,13 @@ const companyInfoSchema = new mongoose.Schema({
           "EURL",
           "SASU",
           "SA",
+          "SCA",
           "SNC",
+          "SCS",
+          "SELARL",
+          "SELAS",
+          "SELAFA",
+          "SELCA",
           "SCOP",
         ];
         if (requiredForStatuses.includes(this.companyStatus) && !v) {
@@ -175,8 +227,16 @@ const companyInfoSchema = new mongoose.Schema({
           "EURL",
           "SASU",
           "SA",
+          "SCA",
           "SNC",
+          "SCS",
+          "SELARL",
+          "SELAS",
+          "SELAFA",
+          "SELCA",
           "SCI",
+          "SCM",
+          "SCP",
           "SCOP",
         ];
         if (requiredForStatuses.includes(this.companyStatus) && !v) {
