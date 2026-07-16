@@ -1003,18 +1003,30 @@ const purchaseInvoiceResolvers = {
         context.workspaceId,
       );
 
+      // L'adresse est facultative pour un fournisseur. On ne crée le
+      // sous-document `address` QUE si au moins un champ est renseigné : sinon
+      // Mongoose stocke un objet avec des champs null, et le type GraphQL
+      // Address (street/city/postalCode/country non-nullables) plante au retour
+      // (« Cannot return null for non-nullable field Address.street »).
+      const hasAddress =
+        input.street || input.city || input.postalCode || input.country;
+
       const supplier = new Supplier({
         name: input.name,
         email: input.email,
         phone: input.phone,
         siret: input.siret,
         vatNumber: input.vatNumber,
-        address: {
-          street: input.street,
-          city: input.city,
-          postalCode: input.postalCode,
-          country: input.country,
-        },
+        ...(hasAddress
+          ? {
+              address: {
+                street: input.street,
+                city: input.city,
+                postalCode: input.postalCode,
+                country: input.country,
+              },
+            }
+          : {}),
         iban: input.iban,
         bic: input.bic,
         defaultCategory: input.defaultCategory,
