@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
 import { AuthenticationError, UserInputError } from "apollo-server-express";
 import { requireRead, requireWrite } from "../middlewares/rbac.js";
@@ -11,7 +12,7 @@ const invoiceReminderSettingsResolvers = {
       async (_, __, context) => {
         const { user, workspaceId, organization } = context;
 
-        console.log("🔔 [InvoiceReminderSettings] Context:", {
+        logger.debug("🔔 [InvoiceReminderSettings] Context:", {
           hasUser: !!user,
           workspaceId,
           organizationId: organization?.id,
@@ -27,9 +28,9 @@ const invoiceReminderSettingsResolvers = {
         const actualWorkspaceId =
           workspaceId || organization?.id || user?.activeOrganizationId;
 
-        console.log(
+        logger.debug(
           "🔔 [InvoiceReminderSettings] actualWorkspaceId:",
-          actualWorkspaceId
+          actualWorkspaceId,
         );
 
         if (!actualWorkspaceId) {
@@ -70,7 +71,7 @@ Cordialement,
         }
 
         return settings;
-      }
+      },
     ),
   },
 
@@ -97,13 +98,13 @@ Cordialement,
         // Validation des données
         if (input.firstReminderDays && input.firstReminderDays < 1) {
           throw new UserInputError(
-            "Le délai de première relance doit être au moins 1 jour"
+            "Le délai de première relance doit être au moins 1 jour",
           );
         }
 
         if (input.secondReminderDays && input.secondReminderDays < 1) {
           throw new UserInputError(
-            "Le délai de deuxième relance doit être au moins 1 jour"
+            "Le délai de deuxième relance doit être au moins 1 jour",
           );
         }
 
@@ -113,13 +114,13 @@ Cordialement,
           input.secondReminderDays <= input.firstReminderDays
         ) {
           throw new UserInputError(
-            "Le délai de deuxième relance doit être supérieur au délai de première relance"
+            "Le délai de deuxième relance doit être supérieur au délai de première relance",
           );
         }
 
         if (input.useCustomSender && !input.customSenderEmail) {
           throw new UserInputError(
-            "Email personnalisé requis si useCustomSender est activé"
+            "Email personnalisé requis si useCustomSender est activé",
           );
         }
 
@@ -127,11 +128,11 @@ Cordialement,
         const settings = await InvoiceReminderSettings.findOneAndUpdate(
           { workspaceId: actualWorkspaceId },
           { ...input, workspaceId: actualWorkspaceId },
-          { new: true, upsert: true, runValidators: true }
+          { new: true, upsert: true, runValidators: true },
         );
 
         return settings;
-      }
+      },
     ),
   },
 };
