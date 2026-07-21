@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
 import {
@@ -344,7 +345,7 @@ const quoteResolvers = {
           .skip(skip)
           .limit(limit);
 
-        console.log(
+        logger.debug(
           "📋 [QUOTES RESOLVER] Devis récupérés:",
           quotes.map((q) => ({
             id: q.id,
@@ -563,7 +564,7 @@ const quoteResolvers = {
           inputWorkspaceId,
           context.workspaceId,
         );
-        console.log("📋 [quoteByNumber] Recherche devis:", {
+        logger.debug("📋 [quoteByNumber] Recherche devis:", {
           workspaceId,
           number,
         });
@@ -589,7 +590,7 @@ const quoteResolvers = {
           ],
         }).populate("createdBy");
 
-        console.log(
+        logger.debug(
           "📋 [quoteByNumber] Première recherche:",
           quote
             ? {
@@ -607,7 +608,7 @@ const quoteResolvers = {
           const possiblePrefix = trimmedNumber.substring(0, lastDashIndex);
           const possibleNumber = trimmedNumber.substring(lastDashIndex + 1);
 
-          console.log("📋 [quoteByNumber] Parsing:", {
+          logger.debug("📋 [quoteByNumber] Parsing:", {
             possiblePrefix,
             possibleNumber,
           });
@@ -618,7 +619,7 @@ const quoteResolvers = {
             number: possibleNumber,
           }).populate("createdBy");
 
-          console.log(
+          logger.debug(
             "📋 [quoteByNumber] Deuxième recherche:",
             quote
               ? {
@@ -689,7 +690,7 @@ const quoteResolvers = {
             );
           }
 
-          console.log("🔍 [createQuote] Input received:", {
+          logger.debug("🔍 [createQuote] Input received:", {
             prefix: input.prefix,
             number: input.number,
             status: input.status,
@@ -1219,10 +1220,10 @@ const quoteResolvers = {
               );
             }
           }
-          console.log("🔍 [updateQuote] DRAFT → PENDING transition detected");
-          console.log("🔍 [updateQuote] Current number:", quote.number);
-          console.log("🔍 [updateQuote] Input number:", input.number);
-          console.log("🔍 [updateQuote] Input prefix:", input.prefix);
+          logger.debug("🔍 [updateQuote] DRAFT → PENDING transition detected");
+          logger.debug("🔍 [updateQuote] Current number:", quote.number);
+          logger.debug("🔍 [updateQuote] Input number:", input.number);
+          logger.debug("🔍 [updateQuote] Input prefix:", input.prefix);
 
           try {
             // Si le numéro ou le prefix ne sont pas fournis dans l'input, générer automatiquement
@@ -1250,7 +1251,7 @@ const quoteResolvers = {
                 prefix = `D-${month}${year}`;
               }
 
-              console.log("🔍 [updateQuote] Using prefix:", prefix);
+              logger.debug("🔍 [updateQuote] Using prefix:", prefix);
 
               // Générer le prochain numéro séquentiel
               const finalizeOrg = await getOrganizationInfo(quote.workspaceId);
@@ -1263,7 +1264,7 @@ const quoteResolvers = {
                 autoNumbering: finalizeOrg?.quoteAutoNumbering === true,
               });
 
-              console.log("✅ [updateQuote] Generated new number:", newNumber);
+              logger.debug("✅ [updateQuote] Generated new number:", newNumber);
 
               // Mettre à jour le numéro et le préfixe
               updateData.number = newNumber;
@@ -1496,7 +1497,7 @@ const quoteResolvers = {
                   prefix = `D-${month}${year}`;
                 }
 
-                console.log(
+                logger.debug(
                   "🔍 [changeQuoteStatus] DRAFT → PENDING, prefix:",
                   prefix,
                 );
@@ -1581,7 +1582,7 @@ const quoteResolvers = {
             } catch (err) {
               session.endSession();
               if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
-                console.log(
+                logger.debug(
                   `⚠️ [changeQuoteStatus] E11000 retry attempt ${attempt + 1}`,
                 );
                 continue;
