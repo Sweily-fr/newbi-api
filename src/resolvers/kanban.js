@@ -2638,9 +2638,7 @@ const resolvers = {
           // développement, effacé par le prochain commentaire 🤖 (synthèse,
           // demande de précisions...).
           if (isBotComment) {
-            task.claudeCodingSince = isClaudeCodingStartComment(
-              input.content
-            )
+            task.claudeCodingSince = isClaudeCodingStartComment(input.content)
               ? new Date()
               : null;
           }
@@ -3985,9 +3983,6 @@ const resolvers = {
 
     // Enrichir les commentaires avec les infos utilisateur dynamiquement
     comments: async (task) => {
-      logger.info(
-        `🔄 [Task.comments] Enrichissement des commentaires pour la tâche ${task._id || task.id}`,
-      );
       if (!task.comments || task.comments.length === 0) return [];
 
       const db = mongoose.connection.db;
