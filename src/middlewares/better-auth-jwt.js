@@ -51,13 +51,17 @@ const betterAuthJWTMiddleware = async (req) => {
       decoded = await jwksValidator.validateJWT(token, clientIP);
 
       if (!decoded) {
-        logger.warn("JWT validation failed - decoded is null");
-        return null;
+        // JWT expiré ou invalide : tenter le fallback cookie avant d'abandonner
+        // (cas attendu — le front rafraîchira son JWT et retentera).
+        logger.debug("JWT non valide — tentative fallback cookie session");
+        return await betterAuthMiddleware(req);
       }
       logger.debug(`JWT validé avec succès pour utilisateur: ${decoded.sub}`);
     } catch (jwtError) {
-      logger.warn("JWT invalide ou malformé:", jwtError.message);
-      return null;
+      logger.debug(
+        `JWT invalide ou malformé (${jwtError.message}) — tentative fallback cookie session`,
+      );
+      return await betterAuthMiddleware(req);
     }
 
     if (!decoded || !decoded.sub) {

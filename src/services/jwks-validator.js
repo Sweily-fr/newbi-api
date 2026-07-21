@@ -355,8 +355,23 @@ class JWKSValidator {
         this.failedAttempts.delete(clientIP);
         return verifiedPayload;
       } catch (verifyError) {
-        logger.warn("JWT crypto verification failed:", verifyError.message);
-        logger.debug(`Détails erreur: ${verifyError.code || "unknown"}`);
+        // JWT expiré = cycle de vie normal (tokens de 5 min) : le front va
+        // en redemander un et retenter. Ni erreur loguée, ni tentative
+        // suspecte comptée (sinon 10 requêtes d'un onglet inactif suffisent
+        // à bloquer l'IP 15 min).
+        const isExpired =
+          verifyError?.code === "ERR_JWT_EXPIRED" ||
+          verifyError?.name === "JWTExpired";
+        if (isExpired) {
+          logger.debug(
+            `JWT expiré pour ${payload?.sub || "?"} — refresh attendu côté client`,
+          );
+          return null;
+        }
+
+        logger.warn(
+          `JWT crypto verification failed: ${verifyError?.name || "?"} — ${verifyError?.message || "?"} (code: ${verifyError?.code || "unknown"})`,
+        );
 
         // Strict mode: no issuer-based bypass. If crypto fails, reject.
         // The JWKS key cache (5 min hot + 24h extended) ensures availability

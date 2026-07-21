@@ -720,10 +720,26 @@ function setupRoutes(app) {
 
 // Gestion des erreurs
 function formatError(error) {
-  console.error("❌ [GraphQL Error]:", error.message);
-  console.error("Path:", error.path);
-  console.error("Extensions:", error.extensions);
   const originalError = error.originalError;
+
+  // Erreur d'auth attendue (JWT expiré entre deux refreshs, session révoquée) :
+  // le front la gère par un retry silencieux avec un nouveau JWT — log discret,
+  // pas d'❌ [GraphQL Error] qui pollue les logs pour un cas nominal.
+  const appErrorCode =
+    originalError?.name === "AppError"
+      ? originalError.code
+      : error.extensions?.exception?.name === "AppError"
+        ? error.extensions.exception.code
+        : null;
+  if (appErrorCode === "UNAUTHENTICATED") {
+    logger.debug(
+      `[GraphQL] UNAUTHENTICATED sur ${Array.isArray(error.path) ? error.path.join(".") : error.path} — retry attendu côté client`,
+    );
+  } else {
+    console.error("❌ [GraphQL Error]:", error.message);
+    console.error("Path:", error.path);
+    console.error("Extensions:", error.extensions);
+  }
 
   // Cas 1: originalError est une AppError directe
   if (originalError?.name === "AppError") {
