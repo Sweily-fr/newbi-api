@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour les documents partagés
  */
@@ -677,7 +678,7 @@ const sharedDocumentResolvers = {
         { user },
       ) => {
         try {
-          console.log(
+          logger.debug(
             "📤 Upload document partagé pour workspace:",
             workspaceId,
           );
@@ -776,7 +777,7 @@ const sharedDocumentResolvers = {
           // Mémoriser les tags dans le registre du workspace
           await ensureTagsRegistered(workspaceId, document.tags);
 
-          console.log("✅ Document partagé créé:", document._id);
+          logger.debug("✅ Document partagé créé:", document._id);
 
           const docObj = document.toObject();
           return {

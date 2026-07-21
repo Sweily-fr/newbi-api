@@ -1,3 +1,4 @@
+import logger from "../../utils/logger.js";
 import { BankingProviderFactory } from "./factory/BankingProviderFactory.js";
 import Transaction from "../../models/Transaction.js";
 import AccountBanking from "../../models/AccountBanking.js";
@@ -26,7 +27,7 @@ export class BankingService {
         BankingProviderFactory.createProvider(defaultProvider);
       await this.currentProvider.initialize();
       this.initialized = true;
-      console.log(
+      logger.debug(
         `✅ BankingService initialisé avec le provider: ${this.currentProvider.providerName}`,
       );
     } catch (error) {
@@ -50,7 +51,7 @@ export class BankingService {
       const oldProviderName = this.currentProvider?.providerName || "none";
       this.currentProvider = newProvider;
 
-      console.log(
+      logger.debug(
         `🔄 Provider switché de ${oldProviderName} vers ${providerName}`,
       );
       return true;
@@ -106,7 +107,7 @@ export class BankingService {
       success = true;
       cost = this._calculateCost("processPayment", paymentOptions.amount);
 
-      console.log(
+      logger.debug(
         `✅ Paiement traité: ${transaction.id} (${paymentOptions.amount} ${paymentOptions.currency})`,
       );
 
@@ -192,7 +193,7 @@ export class BankingService {
       success = true;
       cost = this._calculateCost("processRefund", refundOptions.amount);
 
-      console.log(`✅ Remboursement traité: ${refundTransaction.id}`);
+      logger.debug(`✅ Remboursement traité: ${refundTransaction.id}`);
 
       return refundTransaction;
     } catch (error) {

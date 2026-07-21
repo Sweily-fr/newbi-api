@@ -1,3 +1,4 @@
+import logger from "../../../utils/logger.js";
 import { BankingProvider } from "../interfaces/BankingProvider.js";
 import axios from "axios";
 import crypto from "crypto";
@@ -51,7 +52,7 @@ export class GoCardlessProvider extends BankingProvider {
       // Obtenir un access token
       await this._authenticate();
       this.isInitialized = true;
-      console.log("✅ GoCardless provider initialisé");
+      logger.debug("✅ GoCardless provider initialisé");
     } catch (error) {
       console.error("❌ Erreur initialisation GoCardless:", error.message);
       throw error;
@@ -78,7 +79,7 @@ export class GoCardlessProvider extends BankingProvider {
       this.client.defaults.headers.common["Authorization"] =
         `Bearer ${this.accessToken}`;
 
-      console.log("✅ Authentification GoCardless réussie");
+      logger.debug("✅ Authentification GoCardless réussie");
     } catch (error) {
       console.error(
         "❌ Erreur authentification GoCardless:",
@@ -111,7 +112,7 @@ export class GoCardlessProvider extends BankingProvider {
       this.client.defaults.headers.common["Authorization"] =
         `Bearer ${this.accessToken}`;
 
-      console.log("✅ Token GoCardless rafraîchi");
+      logger.debug("✅ Token GoCardless rafraîchi");
     } catch (error) {
       // Si le refresh échoue, on se ré-authentifie
       await this._authenticate();
@@ -225,7 +226,7 @@ export class GoCardlessProvider extends BankingProvider {
    * Workflow complet: Agreement + Requisition
    */
   async generateConnectUrl(userId, workspaceId, institutionId) {
-    console.log(
+    logger.debug(
       "🔍 generateConnectUrl GoCardless - workspaceId:",
       workspaceId,
       "institutionId:",
@@ -235,7 +236,7 @@ export class GoCardlessProvider extends BankingProvider {
     try {
       // 1. Créer un End User Agreement
       const agreement = await this.createEndUserAgreement(institutionId);
-      console.log("✅ Agreement créé:", agreement.id);
+      logger.debug("✅ Agreement créé:", agreement.id);
 
       // 2. Créer une Requisition avec l'agreement
       const requisition = await this.createRequisition(
@@ -243,7 +244,7 @@ export class GoCardlessProvider extends BankingProvider {
         workspaceId,
         agreement.id,
       );
-      console.log("✅ Requisition créée:", requisition.id);
+      logger.debug("✅ Requisition créée:", requisition.id);
 
       // 3. Sauvegarder les infos pour le callback
       await this._saveRequisitionInfo(userId, workspaceId, {
@@ -410,7 +411,7 @@ export class GoCardlessProvider extends BankingProvider {
       // Sauvegarder en base de données
       await this._saveTransactionsToDatabase(transactions, workspaceId);
 
-      console.log(
+      logger.debug(
         `✅ ${transactions.length} transactions synchronisées pour compte ${accountId}`,
       );
       return transactions;
@@ -534,7 +535,7 @@ export class GoCardlessProvider extends BankingProvider {
       // Sauvegarder en base de données
       await this._saveAccountsToDatabase(accounts, workspaceId);
 
-      console.log(
+      logger.debug(
         `✅ ${accounts.length} comptes synchronisés pour workspace ${workspaceId}`,
       );
       return accounts;
@@ -569,7 +570,7 @@ export class GoCardlessProvider extends BankingProvider {
         }
       }
 
-      console.log(
+      logger.debug(
         `✅ Synchronisation terminée: ${totalTransactions} transactions pour ${accounts.length} comptes`,
       );
       return { accounts: accounts.length, transactions: totalTransactions };
@@ -591,7 +592,7 @@ export class GoCardlessProvider extends BankingProvider {
         await this.client.delete(
           `/requisitions/${requisitionInfo.requisitionId}/`,
         );
-        console.log(
+        logger.debug(
           `✅ Requisition ${requisitionInfo.requisitionId} supprimée`,
         );
       }
@@ -792,7 +793,7 @@ export class GoCardlessProvider extends BankingProvider {
               }
 
               await Transaction.deleteOne({ _id: manualMatch._id });
-              console.log(
+              logger.debug(
                 `🔄 Doublon manuel fusionné dans transaction bancaire ${transactionData.externalId} (manualId=${manualMatch._id})`,
               );
             }

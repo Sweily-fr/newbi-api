@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour les devis importés
  */
@@ -545,7 +546,7 @@ const importedQuoteResolvers = {
             }
           }
 
-          console.log(
+          logger.debug(
             `☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`,
           );
           const uploadResult = await cloudflareService.uploadImage(
@@ -576,7 +577,9 @@ const importedQuoteResolvers = {
               .update(fileBuffer)
               .digest("hex");
 
-            console.log(`🔍 importQuoteDirect: Claude Vision pour ${filename}`);
+            logger.debug(
+              `🔍 importQuoteDirect: Claude Vision pour ${filename}`,
+            );
             const rawResult = await claudeVisionOcrService.processFromBase64(
               base64Data,
               mimetype,

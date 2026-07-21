@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Service d'analyse intelligente avec l'API Chat de Mistral
  * Utilise l'IA pour extraire les données structurées des documents OCR
@@ -25,7 +26,7 @@ class MistralIntelligentAnalysisService {
     try {
       if (!this.apiKey) {
         console.warn(
-          "⚠️ Clé API Mistral non configurée, utilisation du fallback"
+          "⚠️ Clé API Mistral non configurée, utilisation du fallback",
         );
         return this.getFallbackAnalysis(ocrData);
       }
@@ -70,7 +71,7 @@ class MistralIntelligentAnalysisService {
         console.error(
           "❌ Erreur API Mistral Chat:",
           response.status,
-          errorText
+          errorText,
         );
         return this.getFallbackAnalysis(ocrData);
       }
@@ -89,7 +90,7 @@ class MistralIntelligentAnalysisService {
       // Valider et nettoyer les données
       const validatedAnalysis = this.validateAndCleanAnalysis(analysis);
 
-      console.log("✅ Analyse intelligente Mistral réussie");
+      logger.debug("✅ Analyse intelligente Mistral réussie");
       return validatedAnalysis;
     } catch (error) {
       console.error("❌ Erreur lors de l'analyse intelligente:", error);
@@ -251,12 +252,12 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
           this.parseAmount(analysis.transaction_data?.tax_amount) || 0,
         tax_rate: this.parseAmount(analysis.transaction_data?.tax_rate) || 0,
         transaction_date: this.validateDate(
-          analysis.transaction_data?.transaction_date
+          analysis.transaction_data?.transaction_date,
         ),
         transaction_time: analysis.transaction_data?.transaction_time || null,
         due_date: this.validateDate(analysis.transaction_data?.due_date),
         payment_date: this.validateDate(
-          analysis.transaction_data?.payment_date
+          analysis.transaction_data?.payment_date,
         ),
         document_number: analysis.transaction_data?.document_number || null,
         barcode: analysis.transaction_data?.barcode || null,
@@ -327,7 +328,7 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
             this.parseAmount(analysis.extracted_fields?.totals?.total_ttc) || 0,
           eco_part_deee:
             this.parseAmount(
-              analysis.extracted_fields?.totals?.eco_part_deee
+              analysis.extracted_fields?.totals?.eco_part_deee,
             ) || null,
         },
 
@@ -337,11 +338,11 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
             analysis.extracted_fields?.payment_details?.method || "unknown",
           amount_paid:
             this.parseAmount(
-              analysis.extracted_fields?.payment_details?.amount_paid
+              analysis.extracted_fields?.payment_details?.amount_paid,
             ) || 0,
           change_returned:
             this.parseAmount(
-              analysis.extracted_fields?.payment_details?.change_returned
+              analysis.extracted_fields?.payment_details?.change_returned,
             ) || 0,
         },
 
@@ -423,7 +424,7 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
    * Analyse de secours si l'API échoue
    */
   getFallbackAnalysis(ocrData) {
-    console.log("📋 Utilisation de l'analyse de secours");
+    logger.debug("📋 Utilisation de l'analyse de secours");
 
     return {
       success: false,

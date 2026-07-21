@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { Queue, Worker } from "bullmq";
 import Invoice from "../models/Invoice.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
@@ -46,7 +47,7 @@ function startReminderWorker() {
     async (job) => {
       const { invoiceId, reminderType, workspaceId } = job.data;
 
-      console.log(
+      logger.debug(
         `📧 [Queue] Traitement relance ${reminderType} pour facture ${invoiceId}`,
       );
 
@@ -65,7 +66,7 @@ function startReminderWorker() {
         });
 
         if (alreadySent) {
-          console.log(
+          logger.debug(
             `⏭️ [Queue] Relance ${reminderType} déjà envoyée pour ${invoice.number}`,
           );
           return { skipped: true, reason: "already_sent" };
@@ -82,7 +83,7 @@ function startReminderWorker() {
         // Envoyer la relance
         await sendReminderEmail(invoice, settings, reminderType);
 
-        console.log(
+        logger.debug(
           `✅ [Queue] Relance ${reminderType} envoyée pour ${invoice.number}`,
         );
         return { success: true, invoiceNumber: invoice.number };
@@ -104,7 +105,7 @@ function startReminderWorker() {
   // Événements du worker
   reminderWorker.on("completed", (job, result) => {
     if (!result?.skipped) {
-      console.log(`✅ [Queue] Job ${job.id} terminé:`, result);
+      logger.debug(`✅ [Queue] Job ${job.id} terminé:`, result);
     }
   });
 
@@ -119,7 +120,7 @@ function startReminderWorker() {
     console.error("❌ [Queue] Erreur worker:", error);
   });
 
-  console.log(
+  logger.debug(
     "🚀 [Queue] Worker de relances démarré (concurrency: 5, rate: 10/s)",
   );
 
@@ -143,7 +144,7 @@ async function queueReminder(invoiceId, reminderType, workspaceId, delay = 0) {
     },
   );
 
-  console.log(
+  logger.debug(
     `📥 [Queue] Relance ${reminderType} ajoutée pour ${invoiceId} (job: ${job.id})`,
   );
   return job;
@@ -188,14 +189,14 @@ async function scheduleWorkspaceReminders(workspaceId, settings) {
   // Client, alors que excludedClientIds contient des ObjectIds → conversion.
   if (excludedClientIds.length > 0) {
     query["client.id"] = { $nin: excludedClientIds.map(String) };
-    console.log(
+    logger.debug(
       `🚫 [Queue] ${excludedClientIds.length} client(s) exclu(s) des relances`,
     );
   }
 
   const overdueInvoices = await Invoice.find(query);
 
-  console.log(
+  logger.debug(
     `📄 [Queue] ${overdueInvoices.length} facture(s) en retard pour workspace ${workspaceId}`,
   );
 
@@ -300,7 +301,7 @@ async function sendReminderEmail(invoice, settings, reminderType) {
       { responseType: "arraybuffer", timeout: pdfTimeout, headers },
     );
     pdfBuffer = Buffer.from(response.data);
-    console.log(`📄 [Queue] PDF généré (${pdfBuffer.length} bytes)`);
+    logger.debug(`📄 [Queue] PDF généré (${pdfBuffer.length} bytes)`);
   } catch (pdfError) {
     console.warn("⚠️ [Queue] Erreur génération PDF:", pdfError.message);
   }
@@ -354,7 +355,7 @@ async function sendReminderEmail(invoice, settings, reminderType) {
     if (error) {
       throw new Error(`Resend: ${error.message}`);
     }
-    console.log(
+    logger.debug(
       `📧 [Queue] Relance envoyée via Resend (id: ${data?.id}) à ${clientEmail}`,
     );
     mailResult = data;
@@ -427,10 +428,10 @@ async function getQueueStats() {
 async function stopReminderWorker() {
   if (reminderWorker) {
     await reminderWorker.close();
-    console.log("🛑 [Queue] Worker de relances arrêté");
+    logger.debug("🛑 [Queue] Worker de relances arrêté");
   }
   await reminderQueue.close();
-  console.log("🛑 [Queue] Queue de relances fermée");
+  logger.debug("🛑 [Queue] Queue de relances fermée");
 }
 
 export {

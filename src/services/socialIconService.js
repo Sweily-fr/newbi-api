@@ -1,20 +1,24 @@
+import logger from "../utils/logger.js";
 /**
  * Service pour générer des icônes de réseaux sociaux personnalisées
  * Télécharge les SVG depuis Cloudflare et les combine avec le logo de l'entreprise
  */
 
-import sharp from 'sharp';
-import fetch from 'node-fetch';
-import cloudflareService from './cloudflareService.js';
+import sharp from "sharp";
+import fetch from "node-fetch";
+import cloudflareService from "./cloudflareService.js";
 
 class SocialIconService {
   constructor() {
     // URLs des SVG des réseaux sociaux sur Cloudflare
     this.socialSvgUrls = {
-      facebook: 'https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/facebook.svg',
-      instagram: 'https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/instagram.svg',
-      linkedin: 'https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/linkedin.svg',
-      x: 'https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/x.svg'
+      facebook:
+        "https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/facebook.svg",
+      instagram:
+        "https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/instagram.svg",
+      linkedin:
+        "https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/linkedin.svg",
+      x: "https://pub-4ab56834c87d44b9a4fee1c84196b095.r2.dev/x.svg",
     };
 
     // Taille des icônes générées
@@ -29,15 +33,17 @@ class SocialIconService {
    */
   async downloadSvg(url) {
     try {
-      console.log(`📥 Téléchargement SVG: ${url}`);
+      logger.debug(`📥 Téléchargement SVG: ${url}`);
       const response = await fetch(url);
-      
+
       if (!response.ok) {
-        throw new Error(`Erreur HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(
+          `Erreur HTTP ${response.status}: ${response.statusText}`,
+        );
       }
 
       const buffer = await response.buffer();
-      console.log(`✅ SVG téléchargé: ${buffer.length} bytes`);
+      logger.debug(`✅ SVG téléchargé: ${buffer.length} bytes`);
       return buffer;
     } catch (error) {
       console.error(`❌ Erreur téléchargement SVG ${url}:`, error.message);
@@ -53,21 +59,21 @@ class SocialIconService {
    */
   async svgToPng(svgBuffer, size = this.iconSize) {
     try {
-      console.log(`🔄 Conversion SVG vers PNG (${size}x${size})`);
-      
+      logger.debug(`🔄 Conversion SVG vers PNG (${size}x${size})`);
+
       const pngBuffer = await sharp(svgBuffer)
         .resize(size, size)
         .png({
           quality: 100,
           compressionLevel: 6,
-          adaptiveFiltering: false
+          adaptiveFiltering: false,
         })
         .toBuffer();
 
-      console.log(`✅ PNG généré: ${pngBuffer.length} bytes`);
+      logger.debug(`✅ PNG généré: ${pngBuffer.length} bytes`);
       return pngBuffer;
     } catch (error) {
-      console.error('❌ Erreur conversion SVG vers PNG:', error.message);
+      console.error("❌ Erreur conversion SVG vers PNG:", error.message);
       throw new Error(`Échec conversion SVG vers PNG: ${error.message}`);
     }
   }
@@ -79,25 +85,27 @@ class SocialIconService {
    */
   async downloadAndResizeLogo(logoUrl) {
     try {
-      console.log(`📥 Téléchargement logo entreprise: ${logoUrl}`);
+      logger.debug(`📥 Téléchargement logo entreprise: ${logoUrl}`);
       const response = await fetch(logoUrl);
-      
+
       if (!response.ok) {
-        throw new Error(`Erreur HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(
+          `Erreur HTTP ${response.status}: ${response.statusText}`,
+        );
       }
 
       const logoBuffer = await response.buffer();
-      
+
       // Redimensionner le logo pour qu'il s'intègre dans l'icône
       const resizedLogo = await sharp(logoBuffer)
         .resize(this.logoSize, this.logoSize, {
-          fit: 'inside',
-          withoutEnlargement: true
+          fit: "inside",
+          withoutEnlargement: true,
         })
         .png()
         .toBuffer();
 
-      console.log(`✅ Logo redimensionné: ${resizedLogo.length} bytes`);
+      logger.debug(`✅ Logo redimensionné: ${resizedLogo.length} bytes`);
       return resizedLogo;
     } catch (error) {
       console.error(`❌ Erreur téléchargement logo:`, error.message);
@@ -113,8 +121,8 @@ class SocialIconService {
    */
   async combineIconWithLogo(socialIconBuffer, logoBuffer) {
     try {
-      console.log('🎨 Combinaison icône sociale + logo entreprise');
-      
+      logger.debug("🎨 Combinaison icône sociale + logo entreprise");
+
       // Créer l'icône combinée avec le logo en overlay
       const combinedIcon = await sharp(socialIconBuffer)
         .composite([
@@ -122,19 +130,19 @@ class SocialIconService {
             input: logoBuffer,
             top: this.iconSize - this.logoSize - 2, // Position en bas à droite
             left: this.iconSize - this.logoSize - 2,
-            blend: 'over'
-          }
+            blend: "over",
+          },
         ])
         .png({
           quality: 100,
-          compressionLevel: 6
+          compressionLevel: 6,
         })
         .toBuffer();
 
-      console.log(`✅ Icône combinée générée: ${combinedIcon.length} bytes`);
+      logger.debug(`✅ Icône combinée générée: ${combinedIcon.length} bytes`);
       return combinedIcon;
     } catch (error) {
-      console.error('❌ Erreur combinaison icône + logo:', error.message);
+      console.error("❌ Erreur combinaison icône + logo:", error.message);
       throw new Error(`Échec combinaison icône + logo: ${error.message}`);
     }
   }
@@ -148,31 +156,36 @@ class SocialIconService {
    */
   async generateCustomSocialIcons(userId, signatureId, logoUrl) {
     try {
-      console.log(`🚀 Génération icônes sociales personnalisées pour signature ${signatureId}`);
-      
+      logger.debug(
+        `🚀 Génération icônes sociales personnalisées pour signature ${signatureId}`,
+      );
+
       if (!logoUrl) {
-        throw new Error('URL du logo entreprise requise');
+        throw new Error("URL du logo entreprise requise");
       }
 
       // Télécharger et redimensionner le logo de l'entreprise
       const logoBuffer = await this.downloadAndResizeLogo(logoUrl);
-      
+
       const generatedIcons = {};
 
       // Générer chaque icône sociale
       for (const [platform, svgUrl] of Object.entries(this.socialSvgUrls)) {
         try {
-          console.log(`🔄 Génération icône ${platform}`);
-          
+          logger.debug(`🔄 Génération icône ${platform}`);
+
           // 1. Télécharger le SVG de la plateforme
           const svgBuffer = await this.downloadSvg(svgUrl);
-          
+
           // 2. Convertir le SVG en PNG
           const socialIconBuffer = await this.svgToPng(svgBuffer);
-          
+
           // 3. Combiner avec le logo de l'entreprise
-          const combinedIconBuffer = await this.combineIconWithLogo(socialIconBuffer, logoBuffer);
-          
+          const combinedIconBuffer = await this.combineIconWithLogo(
+            socialIconBuffer,
+            logoBuffer,
+          );
+
           // 4. Uploader vers Cloudflare dans le dossier logo/platform/
           const fileName = `${platform}-custom.png`;
           const uploadResult = await cloudflareService.uploadSocialLogo(
@@ -180,27 +193,30 @@ class SocialIconService {
             fileName,
             userId,
             signatureId,
-            platform // Type de logo social (facebook, instagram, etc.)
+            platform, // Type de logo social (facebook, instagram, etc.)
           );
-          
+
           generatedIcons[platform] = {
             url: uploadResult.url,
-            key: uploadResult.key
+            key: uploadResult.key,
           };
-          
-          console.log(`✅ Icône ${platform} générée: ${uploadResult.url}`);
-          
+
+          logger.debug(`✅ Icône ${platform} générée: ${uploadResult.url}`);
         } catch (error) {
-          console.error(`❌ Erreur génération icône ${platform}:`, error.message);
+          console.error(
+            `❌ Erreur génération icône ${platform}:`,
+            error.message,
+          );
           // Continuer avec les autres icônes même si une échoue
         }
       }
 
-      console.log(`✅ Génération terminée: ${Object.keys(generatedIcons).length} icônes créées`);
+      logger.debug(
+        `✅ Génération terminée: ${Object.keys(generatedIcons).length} icônes créées`,
+      );
       return generatedIcons;
-      
     } catch (error) {
-      console.error('❌ Erreur génération icônes sociales:', error.message);
+      console.error("❌ Erreur génération icônes sociales:", error.message);
       throw new Error(`Échec génération icônes sociales: ${error.message}`);
     }
   }
@@ -213,16 +229,20 @@ class SocialIconService {
    */
   async deleteCustomSocialIcons(userId, signatureId) {
     try {
-      console.log(`🗑️ Suppression icônes sociales pour signature ${signatureId}`);
-      
+      logger.debug(
+        `🗑️ Suppression icônes sociales pour signature ${signatureId}`,
+      );
+
       // Supprimer le dossier logo qui contient toutes les icônes sociales
-      const result = await cloudflareService.deleteSocialLogos(userId, signatureId);
-      
-      console.log(`✅ Icônes sociales supprimées: ${result}`);
+      const result = await cloudflareService.deleteSocialLogos(
+        userId,
+        signatureId,
+      );
+
+      logger.debug(`✅ Icônes sociales supprimées: ${result}`);
       return result;
-      
     } catch (error) {
-      console.error('❌ Erreur suppression icônes sociales:', error.message);
+      console.error("❌ Erreur suppression icônes sociales:", error.message);
       return false;
     }
   }
@@ -236,19 +256,24 @@ class SocialIconService {
    */
   async updateCustomSocialIcons(userId, signatureId, newLogoUrl) {
     try {
-      console.log(`🔄 Mise à jour icônes sociales pour signature ${signatureId}`);
-      
+      logger.debug(
+        `🔄 Mise à jour icônes sociales pour signature ${signatureId}`,
+      );
+
       // Supprimer les anciennes icônes
       await this.deleteCustomSocialIcons(userId, signatureId);
-      
+
       // Générer les nouvelles icônes
-      const newIcons = await this.generateCustomSocialIcons(userId, signatureId, newLogoUrl);
-      
-      console.log(`✅ Icônes sociales mises à jour`);
+      const newIcons = await this.generateCustomSocialIcons(
+        userId,
+        signatureId,
+        newLogoUrl,
+      );
+
+      logger.debug(`✅ Icônes sociales mises à jour`);
       return newIcons;
-      
     } catch (error) {
-      console.error('❌ Erreur mise à jour icônes sociales:', error.message);
+      console.error("❌ Erreur mise à jour icônes sociales:", error.message);
       throw new Error(`Échec mise à jour icônes sociales: ${error.message}`);
     }
   }

@@ -1,8 +1,9 @@
+import logger from "../utils/logger.js";
 /**
  * Google Document AI Service
  * Alternative OCR plus précise pour les factures
  * Gratuit: 1000 pages/mois
- * 
+ *
  * Setup:
  * 1. Créer un projet Google Cloud
  * 2. Activer Document AI API
@@ -11,14 +12,14 @@
  * 5. Définir GOOGLE_APPLICATION_CREDENTIALS dans .env
  */
 
-import { DocumentProcessorServiceClient } from '@google-cloud/documentai';
+import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
 
 class GoogleDocumentAIService {
   constructor() {
     this.projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
-    this.location = process.env.GOOGLE_DOCUMENT_AI_LOCATION || 'eu'; // 'us' ou 'eu'
+    this.location = process.env.GOOGLE_DOCUMENT_AI_LOCATION || "eu"; // 'us' ou 'eu'
     this.processorId = process.env.GOOGLE_DOCUMENT_AI_PROCESSOR_ID;
-    
+
     if (this.projectId && this.processorId) {
       // Configurer l'endpoint selon la région
       const apiEndpoint = `${this.location}-documentai.googleapis.com`;
@@ -28,14 +29,16 @@ class GoogleDocumentAIService {
       this.processorName = `projects/${this.projectId}/locations/${this.location}/processors/${this.processorId}`;
       this.enabled = true;
       // eslint-disable-next-line no-console
-      console.log(`🔧 Google Document AI configuré:`);
+      logger.debug(`🔧 Google Document AI configuré:`);
       // eslint-disable-next-line no-console
-      console.log(`   - Endpoint: ${apiEndpoint}`);
+      logger.debug(`   - Endpoint: ${apiEndpoint}`);
       // eslint-disable-next-line no-console
-      console.log(`   - Processor: ${this.processorName}`);
+      logger.debug(`   - Processor: ${this.processorName}`);
     } else {
       this.enabled = false;
-      console.warn('⚠️ Google Document AI non configuré. Variables manquantes: GOOGLE_CLOUD_PROJECT_ID, GOOGLE_DOCUMENT_AI_PROCESSOR_ID');
+      console.warn(
+        "⚠️ Google Document AI non configuré. Variables manquantes: GOOGLE_CLOUD_PROJECT_ID, GOOGLE_DOCUMENT_AI_PROCESSOR_ID",
+      );
     }
   }
 
@@ -51,53 +54,59 @@ class GoogleDocumentAIService {
    * @param {Buffer|string} document - Buffer du fichier ou URL
    * @param {string} mimeType - Type MIME (application/pdf, image/png, etc.)
    */
-  async processDocument(document, mimeType = 'application/pdf') {
+  async processDocument(document, mimeType = "application/pdf") {
     if (!this.enabled) {
-      throw new Error('Google Document AI non configuré');
+      throw new Error("Google Document AI non configuré");
     }
 
     try {
       let contentBuffer;
       let finalMimeType = mimeType;
-      
+
       // Normaliser le mimeType
-      if (!finalMimeType || finalMimeType === 'undefined') {
-        finalMimeType = 'application/pdf';
+      if (!finalMimeType || finalMimeType === "undefined") {
+        finalMimeType = "application/pdf";
       }
-      
+
       // Si c'est une URL, télécharger le fichier
-      if (typeof document === 'string' && document.startsWith('http')) {
+      if (typeof document === "string" && document.startsWith("http")) {
         // eslint-disable-next-line no-console
-        console.log(`📥 Google Document AI: Téléchargement depuis ${document.substring(0, 50)}...`);
-        
+        logger.debug(
+          `📥 Google Document AI: Téléchargement depuis ${document.substring(0, 50)}...`,
+        );
+
         const response = await fetch(document);
         if (!response.ok) {
-          throw new Error(`Échec téléchargement: ${response.status} ${response.statusText}`);
+          throw new Error(
+            `Échec téléchargement: ${response.status} ${response.statusText}`,
+          );
         }
-        
+
         // Récupérer le content-type de la réponse si disponible
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType !== 'application/octet-stream') {
-          finalMimeType = contentType.split(';')[0].trim();
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType !== "application/octet-stream") {
+          finalMimeType = contentType.split(";")[0].trim();
         }
-        
+
         const arrayBuffer = await response.arrayBuffer();
         contentBuffer = Buffer.from(arrayBuffer);
-        
+
         // eslint-disable-next-line no-console
-        console.log(`📄 Google Document AI: Document téléchargé (${contentBuffer.length} bytes, type: ${finalMimeType})`);
+        logger.debug(
+          `📄 Google Document AI: Document téléchargé (${contentBuffer.length} bytes, type: ${finalMimeType})`,
+        );
       } else if (Buffer.isBuffer(document)) {
         contentBuffer = document;
-      } else if (typeof document === 'string') {
+      } else if (typeof document === "string") {
         // Assume it's base64
-        contentBuffer = Buffer.from(document, 'base64');
+        contentBuffer = Buffer.from(document, "base64");
       } else {
-        throw new Error('Format de document non supporté');
+        throw new Error("Format de document non supporté");
       }
 
       // Vérifier que le contenu n'est pas vide
       if (!contentBuffer || contentBuffer.length === 0) {
-        throw new Error('Contenu du document vide');
+        throw new Error("Contenu du document vide");
       }
 
       // Le SDK Google attend le contenu brut (Buffer)
@@ -110,30 +119,39 @@ class GoogleDocumentAIService {
       };
 
       // eslint-disable-next-line no-console
-      console.log(`🔄 Google Document AI: Envoi au processeur ${this.processorId}...`);
+      logger.debug(
+        `🔄 Google Document AI: Envoi au processeur ${this.processorId}...`,
+      );
       // eslint-disable-next-line no-console
-      console.log(`   - Processor Name: ${this.processorName}`);
+      logger.debug(`   - Processor Name: ${this.processorName}`);
       // eslint-disable-next-line no-console
-      console.log(`   - Content length: ${contentBuffer.length} bytes`);
+      logger.debug(`   - Content length: ${contentBuffer.length} bytes`);
       // eslint-disable-next-line no-console
-      console.log(`   - MimeType: ${finalMimeType}`);
+      logger.debug(`   - MimeType: ${finalMimeType}`);
       // eslint-disable-next-line no-console
-      console.log(`   - Content type: Buffer (${Buffer.isBuffer(contentBuffer)})`);
-      
+      logger.debug(
+        `   - Content type: Buffer (${Buffer.isBuffer(contentBuffer)})`,
+      );
+
       const [result] = await this.client.processDocument(request);
-      
+
       const entitiesCount = result.document?.entities?.length || 0;
       // eslint-disable-next-line no-console
-      console.log(`✅ Google Document AI: Document traité (${result.document?.text?.length || 0} caractères, ${entitiesCount} entités)`);
+      logger.debug(
+        `✅ Google Document AI: Document traité (${result.document?.text?.length || 0} caractères, ${entitiesCount} entités)`,
+      );
 
       return this.parseResult(result.document);
     } catch (error) {
       // eslint-disable-next-line no-console
-      console.error('❌ Erreur Google Document AI:', error.message);
+      console.error("❌ Erreur Google Document AI:", error.message);
       // eslint-disable-next-line no-console
-      console.error('   - Code:', error.code);
+      console.error("   - Code:", error.code);
       // eslint-disable-next-line no-console
-      console.error('   - Details:', JSON.stringify(error.details || error.metadata?.internalRepr, null, 2));
+      console.error(
+        "   - Details:",
+        JSON.stringify(error.details || error.metadata?.internalRepr, null, 2),
+      );
       throw error;
     }
   }
@@ -143,7 +161,7 @@ class GoogleDocumentAIService {
    */
   parseResult(document) {
     const extractedData = {
-      text: document.text || '',
+      text: document.text || "",
       entities: {},
       confidence: 0,
     };
@@ -151,27 +169,27 @@ class GoogleDocumentAIService {
     // Extraire les entités détectées
     if (document.entities && document.entities.length > 0) {
       let totalConfidence = 0;
-      
+
       for (const entity of document.entities) {
-        const type = entity.type.toLowerCase().replace(/_/g, '');
-        const value = entity.mentionText || entity.normalizedValue?.text || '';
+        const type = entity.type.toLowerCase().replace(/_/g, "");
+        const value = entity.mentionText || entity.normalizedValue?.text || "";
         const confidence = entity.confidence || 0;
-        
+
         // Mapper les types Google vers nos champs
         const fieldMapping = {
-          'invoiceid': 'invoiceNumber',
-          'invoicenumber': 'invoiceNumber',
-          'invoicedate': 'invoiceDate',
-          'duedate': 'dueDate',
-          'totalamount': 'totalTTC',
-          'netamount': 'totalHT',
-          'taxamount': 'totalTVA',
-          'suppliername': 'vendorName',
-          'supplieraddress': 'vendorAddress',
-          'receivername': 'clientName',
-          'receiveraddress': 'clientAddress',
-          'currencycode': 'currency',
-          'paymentterms': 'paymentTerms',
+          invoiceid: "invoiceNumber",
+          invoicenumber: "invoiceNumber",
+          invoicedate: "invoiceDate",
+          duedate: "dueDate",
+          totalamount: "totalTTC",
+          netamount: "totalHT",
+          taxamount: "totalTVA",
+          suppliername: "vendorName",
+          supplieraddress: "vendorAddress",
+          receivername: "clientName",
+          receiveraddress: "clientAddress",
+          currencycode: "currency",
+          paymentterms: "paymentTerms",
         };
 
         const fieldName = fieldMapping[type] || type;
@@ -179,10 +197,10 @@ class GoogleDocumentAIService {
           value: value,
           confidence: confidence,
         };
-        
+
         totalConfidence += confidence;
       }
-      
+
       extractedData.confidence = totalConfidence / document.entities.length;
     }
 
@@ -202,16 +220,16 @@ class GoogleDocumentAIService {
    */
   extractPageText(page, fullText) {
     if (!page.layout?.textAnchor?.textSegments) {
-      return '';
+      return "";
     }
-    
+
     return page.layout.textAnchor.textSegments
-      .map(segment => {
+      .map((segment) => {
         const start = parseInt(segment.startIndex) || 0;
         const end = parseInt(segment.endIndex) || fullText.length;
         return fullText.substring(start, end);
       })
-      .join('');
+      .join("");
   }
 
   /**
@@ -225,30 +243,30 @@ class GoogleDocumentAIService {
       success: true,
       extractedText: result.text,
       transaction_data: {
-        vendor_name: entities.vendorName?.value || '',
+        vendor_name: entities.vendorName?.value || "",
         amount: this.parseAmount(entities.totalTTC?.value) || 0,
         amount_ht: this.parseAmount(entities.totalHT?.value) || 0,
         tax_amount: this.parseAmount(entities.totalTVA?.value) || 0,
         transaction_date: entities.invoiceDate?.value || null,
         due_date: entities.dueDate?.value || null,
         document_number: entities.invoiceNumber?.value || null,
-        currency: entities.currency?.value || 'EUR',
-        category: 'OTHER',
-        payment_method: '',
+        currency: entities.currency?.value || "EUR",
+        category: "OTHER",
+        payment_method: "",
       },
       extracted_fields: {
-        vendor_address: entities.vendorAddress?.value || '',
-        vendor_city: '',
-        vendor_postal_code: '',
-        vendor_country: 'France',
+        vendor_address: entities.vendorAddress?.value || "",
+        vendor_city: "",
+        vendor_postal_code: "",
+        vendor_country: "France",
         vendor_siret: entities.vendorSiret?.value || null,
         vendor_vat_number: entities.vendorVatNumber?.value || null,
         vendor_email: null,
         vendor_phone: null,
         client_name: entities.clientName?.value || null,
         client_address: entities.clientAddress?.value || null,
-        items: (entities.items || []).map(item => ({
-          description: item.description || '',
+        items: (entities.items || []).map((item) => ({
+          description: item.description || "",
           quantity: 1,
           unit_price: 0,
           total: 0,
@@ -262,7 +280,7 @@ class GoogleDocumentAIService {
       },
       confidence: result.confidence,
       metadata: {
-        provider: 'google-document-ai',
+        provider: "google-document-ai",
         pagesProcessed: result.pages?.length || 1,
       },
     };
@@ -274,9 +292,10 @@ class GoogleDocumentAIService {
   parseAmount(value) {
     if (!value) return null;
     // Nettoyer le montant (espaces, symboles monétaires)
-    const cleaned = value.toString()
-      .replace(/[€$£\s]/g, '')
-      .replace(/,/g, '.');
+    const cleaned = value
+      .toString()
+      .replace(/[€$£\s]/g, "")
+      .replace(/,/g, ".");
     return parseFloat(cleaned) || null;
   }
 }

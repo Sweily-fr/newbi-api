@@ -17,8 +17,8 @@ const envFile =
 const envPath = path.resolve(process.cwd(), envFile);
 dotenv.config({ path: envPath });
 
-console.log(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
-console.log(`📄 Fichier .env chargé: ${envFile}`);
+logger.debug(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
+logger.debug(`📄 Fichier .env chargé: ${envFile}`);
 
 // Handlers globaux pour éviter les crashes silencieux
 process.on("unhandledRejection", (reason, promise) => {

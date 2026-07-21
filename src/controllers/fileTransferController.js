@@ -16,22 +16,22 @@ const handleStripeWebhook = async (req, res) => {
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   // 🔍 DEBUG: Logs pour diagnostiquer le problème
-  console.log("🔔 Webhook reçu");
-  console.log("📝 Headers:", JSON.stringify(req.headers, null, 2));
-  console.log("🔑 Signature présente:", !!sig);
-  console.log(
+  logger.debug("🔔 Webhook reçu");
+  logger.debug("📝 Headers:", JSON.stringify(req.headers, null, 2));
+  logger.debug("🔑 Signature présente:", !!sig);
+  logger.debug(
     "🔐 Secret configuré:",
     endpointSecret ? "Oui (whsec_...)" : "NON",
   );
-  console.log("📦 Body type:", typeof req.body);
-  console.log("📦 Body length:", req.body?.length || "N/A");
+  logger.debug("📦 Body type:", typeof req.body);
+  logger.debug("📦 Body length:", req.body?.length || "N/A");
 
   let event;
 
   try {
     // Vérifier la signature du webhook
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-    console.log("✅ Signature vérifiée avec succès");
+    logger.debug("✅ Signature vérifiée avec succès");
   } catch (err) {
     console.error("❌ Erreur de signature du webhook Stripe:", err.message);
     console.error(
@@ -40,7 +40,7 @@ const handleStripeWebhook = async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  console.log(
+  logger.debug(
     "Données de l'événement:",
     JSON.stringify(event.data.object, null, 2),
   );
@@ -126,7 +126,7 @@ const handleStripeWebhook = async (req, res) => {
     }
   }
 
-  console.log("Résultat du traitement:", result);
+  logger.debug("Résultat du traitement:", result);
 
   // Répondre pour confirmer la réception
   res.status(200).json({ received: true, result });
@@ -201,7 +201,7 @@ const downloadFile = async (req, res) => {
       });
     }
 
-    console.log(
+    logger.debug(
       `[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}, Storage: ${file.storageType}`,
     );
 
@@ -215,7 +215,7 @@ const downloadFile = async (req, res) => {
     // Gérer selon le type de stockage
     if (file.storageType === "r2" && file.r2Key) {
       // Fichier stocké sur Cloudflare R2
-      console.log(`[DEBUG] Téléchargement depuis R2: ${file.r2Key}`);
+      logger.debug(`[DEBUG] Téléchargement depuis R2: ${file.r2Key}`);
 
       try {
         // Générer une URL signée pour le téléchargement (5 minutes)
@@ -225,7 +225,7 @@ const downloadFile = async (req, res) => {
         );
 
         // Rediriger vers l'URL signée
-        console.log("[DEBUG] Redirection vers URL signée R2");
+        logger.debug("[DEBUG] Redirection vers URL signée R2");
         return res.redirect(signedUrl);
       } catch (r2Error) {
         console.error("[ERROR] Erreur R2:", r2Error);
@@ -237,11 +237,11 @@ const downloadFile = async (req, res) => {
     } else {
       // Fichier stocké localement
       const filePath = path.join(process.cwd(), "public", file.filePath);
-      console.log(`[DEBUG] Chemin du fichier local: ${filePath}`);
+      logger.debug(`[DEBUG] Chemin du fichier local: ${filePath}`);
 
       // Vérifier si le fichier existe
       if (!fs.existsSync(filePath)) {
-        console.log(
+        logger.debug(
           `[ERROR] Fichier physique non trouvé sur le serveur: ${filePath}`,
         );
         return res.status(404).send("Fichier non trouvé sur le serveur");
@@ -249,16 +249,16 @@ const downloadFile = async (req, res) => {
 
       // Vérifier la taille du fichier
       const fileStats = fs.statSync(filePath);
-      console.log(
+      logger.debug(
         `[DEBUG] Taille du fichier sur disque: ${fileStats.size} octets`,
       );
 
       if (fileStats.size === 0) {
-        console.log(`[ERROR] Fichier vide sur le serveur: ${filePath}`);
+        logger.debug(`[ERROR] Fichier vide sur le serveur: ${filePath}`);
         return res.status(500).send("Fichier vide sur le serveur");
       }
 
-      console.log(
+      logger.debug(
         `[DEBUG] En-têtes de réponse - Content-Type: ${contentType}, fileName: ${fileName}, Content-Length: ${fileStats.size}`,
       );
 
@@ -283,7 +283,7 @@ const downloadFile = async (req, res) => {
 
       // Gérer la fin du stream
       fileStream.on("end", () => {
-        console.log(
+        logger.debug(
           `[DEBUG] Téléchargement terminé avec succès - ${file.originalName}`,
         );
       });
@@ -368,7 +368,7 @@ const downloadAllFiles = async (req, res) => {
       (f) => f.storageType === "r2" && f.r2Key,
     );
 
-    console.log(
+    logger.debug(
       `[DEBUG] Fichiers locaux: ${localFiles.length}, Fichiers R2: ${r2Files.length}`,
     );
 
@@ -478,7 +478,7 @@ const downloadAllFiles = async (req, res) => {
       for (const file of localFiles) {
         const filePath = path.join(process.cwd(), "public", file.filePath);
         archive.file(filePath, { name: file.originalName });
-        console.log(`[ZIP] Ajout fichier local: ${file.originalName}`);
+        logger.debug(`[ZIP] Ajout fichier local: ${file.originalName}`);
       }
 
       // Ajouter les fichiers R2 en les streamant SÉQUENTIELLEMENT :
@@ -501,7 +501,7 @@ const downloadAllFiles = async (req, res) => {
 
       try {
         for (const file of r2Files) {
-          console.log(
+          logger.debug(
             `[ZIP] Ajout fichier R2: ${file.originalName} (${file.r2Key})`,
           );
 

@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import Client from "../models/Client.js";
 import ClientCustomField from "../models/ClientCustomField.js";
 import Invoice from "../models/Invoice.js";
@@ -136,10 +137,7 @@ const clientResolvers = {
               );
             }
             // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
-            if (
-              !/^\d{9}$/.test(input.siret) &&
-              !/^\d{14}$/.test(input.siret)
-            ) {
+            if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
               throw new Error(
                 "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
               );
@@ -263,10 +261,7 @@ const clientResolvers = {
               );
             }
             // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
-            if (
-              !/^\d{9}$/.test(input.siret) &&
-              !/^\d{14}$/.test(input.siret)
-            ) {
+            if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
               throw new Error(
                 "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
               );
@@ -457,7 +452,7 @@ const clientResolvers = {
             Invoice.countDocuments(clientFilter),
             PurchaseOrder.countDocuments(clientFilter),
           ]);
-          console.log(
+          logger.debug(
             `[updateClient] Sync documents pour client ${clientId}: ${quotesCount} devis, ${invoicesCount} factures, ${poCount} BC`,
           );
 
@@ -484,7 +479,7 @@ const clientResolvers = {
               { $set: { client: clientSnapshot } },
             ),
           ]);
-          console.log(
+          logger.debug(
             `[updateClient] Résultat sync: devis=${results[0].modifiedCount}, factures=${results[1].modifiedCount}, BC=${results[2].modifiedCount}`,
           );
         }

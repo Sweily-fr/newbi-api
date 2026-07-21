@@ -322,7 +322,7 @@ const emailSignatureResolvers = {
               otherSignature.isDefault = true;
               await otherSignature.save();
             } else {
-              console.log(
+              logger.debug(
                 "ℹ️ [BACKEND] Aucune autre signature trouvée pour définir comme par défaut",
               );
             }
@@ -355,7 +355,7 @@ const emailSignatureResolvers = {
               }
             }
           } else {
-            console.log("ℹ️ [BACKEND] Aucun fichier à supprimer");
+            logger.debug("ℹ️ [BACKEND] Aucun fichier à supprimer");
           }
 
           const deleteResult = await EmailSignature.deleteOne({
@@ -403,7 +403,7 @@ const emailSignatureResolvers = {
       async (_, { ids }, context) => {
         const { user } = context;
         try {
-          console.log(
+          logger.debug(
             `🗑️ [BACKEND] Suppression multiple de ${ids.length} signatures pour l'utilisateur ${user.id}`,
           );
 
@@ -451,7 +451,7 @@ const emailSignatureResolvers = {
             createdBy: user.id,
           });
 
-          console.log(
+          logger.debug(
             `✅ [BACKEND] ${deleteResult.deletedCount} signatures supprimées`,
           );
 
@@ -519,11 +519,11 @@ const emailSignatureResolvers = {
       async (_, { userId, newSignatureId }, context) => {
         const { user } = context;
         try {
-          console.log(
+          logger.debug(
             "🗑️ Nettoyage des fichiers temporaires pour utilisateur:",
             userId,
           );
-          console.log("🆔 Nouveau signatureId:", newSignatureId);
+          logger.debug("🆔 Nouveau signatureId:", newSignatureId);
 
           // Vérifier que l'utilisateur peut nettoyer ses propres fichiers
           if (userId !== user.id) {
@@ -555,7 +555,7 @@ const emailSignatureResolvers = {
                   );
                 if (deleteResult.success) {
                   deletedCount += deleteResult.deletedCount || 1;
-                  console.log(
+                  logger.debug(
                     `✅ Dossier temporaire supprimé: ${folder.signatureId}`,
                   );
                 }
@@ -568,7 +568,7 @@ const emailSignatureResolvers = {
             }
           }
 
-          console.log(
+          logger.debug(
             `✅ Nettoyage terminé. ${deletedCount} éléments supprimés.`,
           );
 

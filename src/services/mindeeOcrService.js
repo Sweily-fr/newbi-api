@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Mindee OCR Service
  * Service OCR utilisant le SDK Mindee pour l'extraction de données de factures
@@ -36,13 +37,13 @@ class MindeeOcrService {
           "..." +
           this.apiKey.substring(this.apiKey.length - 4);
         console.warn(
-          `⚠️ Mindee OCR DÉSACTIVÉ (clé: ${maskedKey}, erreur 401 Authorization)`
+          `⚠️ Mindee OCR DÉSACTIVÉ (clé: ${maskedKey}, erreur 401 Authorization)`,
         );
         console.warn(
-          `⚠️ Vérifiez: 1) Clé API active, 2) Email vérifié, 3) Compte trial validé`
+          `⚠️ Vérifiez: 1) Clé API active, 2) Email vérifié, 3) Compte trial validé`,
         );
         console.warn(
-          `⚠️ Note: Mindee n'a pas de plan gratuit permanent (Trial 14j puis 44€/mois)`
+          `⚠️ Note: Mindee n'a pas de plan gratuit permanent (Trial 14j puis 44€/mois)`,
         );
       } catch (error) {
         console.error("❌ Erreur initialisation Mindee SDK:", error.message);
@@ -50,7 +51,7 @@ class MindeeOcrService {
       }
     } else {
       console.warn(
-        "⚠️ Mindee OCR non configuré. Variable manquante: MINDEE_API_KEY"
+        "⚠️ Mindee OCR non configuré. Variable manquante: MINDEE_API_KEY",
       );
     }
   }
@@ -74,28 +75,28 @@ class MindeeOcrService {
     }
 
     try {
-      console.log(
-        `📄 Mindee OCR: Traitement de ${documentUrl.substring(0, 60)}...`
+      logger.debug(
+        `📄 Mindee OCR: Traitement de ${documentUrl.substring(0, 60)}...`,
       );
 
       // Télécharger le fichier depuis Cloudflare
-      console.log(`📥 Mindee OCR: Téléchargement du document...`);
+      logger.debug(`📥 Mindee OCR: Téléchargement du document...`);
       const downloadResponse = await fetch(documentUrl);
 
       if (!downloadResponse.ok) {
         throw new Error(
-          `Échec téléchargement: ${downloadResponse.status} ${downloadResponse.statusText}`
+          `Échec téléchargement: ${downloadResponse.status} ${downloadResponse.statusText}`,
         );
       }
 
       const arrayBuffer = await downloadResponse.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-      console.log(
-        `📄 Mindee OCR: Document téléchargé (${buffer.length} bytes)`
+      logger.debug(
+        `📄 Mindee OCR: Document téléchargé (${buffer.length} bytes)`,
       );
 
       // Utiliser le SDK Mindee avec docFromBuffer
-      console.log(`🔄 Mindee OCR: Envoi au SDK Mindee...`);
+      logger.debug(`🔄 Mindee OCR: Envoi au SDK Mindee...`);
 
       // Créer l'input source depuis le buffer
       const inputSource = this.client.docFromBuffer(buffer, "invoice.pdf");
@@ -103,10 +104,10 @@ class MindeeOcrService {
       // Parser avec l'API Invoice V4
       const response = await this.client.parse(
         mindee.product.InvoiceV4,
-        inputSource
+        inputSource,
       );
 
-      console.log(`✅ Mindee OCR: Document traité avec succès`);
+      logger.debug(`✅ Mindee OCR: Document traité avec succès`);
 
       return this.parseResult(response);
     } catch (error) {
@@ -154,7 +155,7 @@ class MindeeOcrService {
       vendorEmail: prediction.supplierEmail?.value || null,
       vendorVatNumber:
         prediction.supplierCompanyRegistrations?.find(
-          (r) => r.type === "VAT NUMBER"
+          (r) => r.type === "VAT NUMBER",
         )?.value || null,
       vendorSiret:
         prediction.supplierCompanyRegistrations?.find((r) => r.type === "SIRET")
@@ -228,7 +229,7 @@ class MindeeOcrService {
       parts.push("\nArticles:");
       prediction.lineItems.forEach((item, index) => {
         parts.push(
-          `${index + 1}. ${item.description || "Article"} - Qté: ${item.quantity || 1} - Prix: ${item.totalAmount || 0}€`
+          `${index + 1}. ${item.description || "Article"} - Qté: ${item.quantity || 1} - Prix: ${item.totalAmount || 0}€`,
         );
       });
     }

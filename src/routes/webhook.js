@@ -73,7 +73,7 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
         console.error("❌ Signature webhook invalide");
         return res.status(401).json({ error: "Invalid webhook signature" });
       }
-      console.log("✅ Signature webhook valide");
+      logger.debug("✅ Signature webhook valide");
     }
 
     // Parser le JSON selon le type de body
@@ -89,19 +89,19 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
 
     // Log des informations importantes
     // if (payload.type) {
-    //   console.log(`🎯 Type d'événement: ${payload.type}`);
+    //   logger.debug(`🎯 Type d'événement: ${payload.type}`);
     // }
 
     // if (payload.data) {
-    //   console.log("📊 Données:", JSON.stringify(payload.data, null, 2));
+    //   logger.debug("📊 Données:", JSON.stringify(payload.data, null, 2));
     // }
 
     // if (payload.account) {
-    //   console.log(`🏦 Compte: ${payload.account.name} (${payload.account.id})`);
+    //   logger.debug(`🏦 Compte: ${payload.account.name} (${payload.account.id})`);
     // }
 
     // if (payload.item) {
-    //   console.log(`💳 Item: ${payload.item.id} - ${payload.item.status}`);
+    //   logger.debug(`💳 Item: ${payload.item.id} - ${payload.item.status}`);
     // }
 
     // Traitement selon le type d'événement

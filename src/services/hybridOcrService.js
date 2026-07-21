@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Hybrid OCR Service
  * Utilise le meilleur OCR disponible avec fallback automatique
@@ -48,7 +49,7 @@ class HybridOcrService {
       if (providerName === this.defaultProvider) return 0;
       const basePriorities = {
         "claude-vision": 1,
-        "mindee": 2,
+        mindee: 2,
         "google-document-ai": 3,
         "mistral-ocr": 4,
       };
@@ -63,11 +64,11 @@ class HybridOcrService {
         service: claudeVisionOcrService,
         priority: getPriority("claude-vision"),
       });
-      console.log(
-        `✅ Claude Vision OCR disponible (priorité ${getPriority("claude-vision")}) - Provider Anthropic`
+      logger.debug(
+        `✅ Claude Vision OCR disponible (priorité ${getPriority("claude-vision")}) - Provider Anthropic`,
       );
     } else if (claudeDisabled) {
-      console.log("ℹ️ Claude Vision OCR désactivé via OCR_DISABLE_CLAUDE");
+      logger.debug("ℹ️ Claude Vision OCR désactivé via OCR_DISABLE_CLAUDE");
     }
 
     // Mindee OCR - Gratuit 250/mois, très précis pour les factures françaises
@@ -92,12 +93,12 @@ class HybridOcrService {
           service: mindeeOcrService,
           priority: getPriority("mindee"),
         });
-        console.log(
-          `✅ Mindee OCR disponible (priorité ${getPriority("mindee")}) - ${mindeeUsage}/250 utilisés ce mois`
+        logger.debug(
+          `✅ Mindee OCR disponible (priorité ${getPriority("mindee")}) - ${mindeeUsage}/250 utilisés ce mois`,
         );
       } else {
-        console.log(
-          `⚠️ Mindee OCR: quota atteint (${mindeeUsage}/250) - basculement vers fallback`
+        logger.debug(
+          `⚠️ Mindee OCR: quota atteint (${mindeeUsage}/250) - basculement vers fallback`,
         );
       }
     }
@@ -109,7 +110,9 @@ class HybridOcrService {
         service: googleDocumentAI,
         priority: getPriority("google-document-ai"),
       });
-      console.log(`✅ Google Document AI disponible (priorité ${getPriority("google-document-ai")})`);
+      logger.debug(
+        `✅ Google Document AI disponible (priorité ${getPriority("google-document-ai")})`,
+      );
     }
 
     // Mistral OCR - Fallback
@@ -119,14 +122,16 @@ class HybridOcrService {
         service: mistralOcrService,
         priority: getPriority("mistral-ocr"),
       });
-      console.log(`✅ Mistral OCR disponible (priorité ${getPriority("mistral-ocr")})`);
+      logger.debug(
+        `✅ Mistral OCR disponible (priorité ${getPriority("mistral-ocr")})`,
+      );
     }
 
     // Trier par priorité
     this.providers.sort((a, b) => a.priority - b.priority);
 
-    console.log(
-      `🔧 OCR Hybride: ${this.providers.length} provider(s) - Ordre: ${this.providers.map((p) => p.name).join(" → ")} (défaut: ${this.defaultProvider})`
+    logger.debug(
+      `🔧 OCR Hybride: ${this.providers.length} provider(s) - Ordre: ${this.providers.map((p) => p.name).join(" → ")} (défaut: ${this.defaultProvider})`,
     );
 
     this.initialized = true;
@@ -144,7 +149,7 @@ class HybridOcrService {
     documentUrl,
     fileName,
     mimeType,
-    workspaceId = null
+    workspaceId = null,
   ) {
     // Initialiser les providers au premier appel (avec vérification quota)
     await this.initProviders(workspaceId);
@@ -153,7 +158,7 @@ class HybridOcrService {
 
     for (const provider of this.providers) {
       try {
-        console.log(`📄 OCR: Tentative avec ${provider.name}...`);
+        logger.debug(`📄 OCR: Tentative avec ${provider.name}...`);
 
         let result;
 
@@ -161,7 +166,7 @@ class HybridOcrService {
           // Claude Vision OCR - Provider par défaut (Anthropic API)
           const rawResult = await provider.service.processDocument(
             documentUrl,
-            mimeType
+            mimeType,
           );
           result = provider.service.toInvoiceFormat(rawResult);
 
@@ -171,15 +176,16 @@ class HybridOcrService {
               await OcrUsage.incrementUsage(workspaceId, "claude-vision", {
                 fileName,
                 success: true,
-                tokensUsed: rawResult.usage?.inputTokens + rawResult.usage?.outputTokens,
+                tokensUsed:
+                  rawResult.usage?.inputTokens + rawResult.usage?.outputTokens,
               });
-              console.log(
-                `📊 Claude Vision: Usage incrémenté pour workspace ${workspaceId}`
+              logger.debug(
+                `📊 Claude Vision: Usage incrémenté pour workspace ${workspaceId}`,
               );
             } catch (usageError) {
               console.warn(
                 "⚠️ Erreur incrémentation usage Claude Vision:",
-                usageError.message
+                usageError.message,
               );
             }
           }
@@ -187,7 +193,7 @@ class HybridOcrService {
           // Mindee OCR - Fallback 1
           const rawResult = await provider.service.processDocument(
             documentUrl,
-            mimeType
+            mimeType,
           );
           result = provider.service.toInvoiceFormat(rawResult);
 
@@ -198,13 +204,13 @@ class HybridOcrService {
                 fileName,
                 success: true,
               });
-              console.log(
-                `📊 Mindee: Usage incrémenté pour workspace ${workspaceId}`
+              logger.debug(
+                `📊 Mindee: Usage incrémenté pour workspace ${workspaceId}`,
               );
             } catch (usageError) {
               console.warn(
                 "⚠️ Erreur incrémentation usage Mindee:",
-                usageError.message
+                usageError.message,
               );
             }
           }
@@ -212,7 +218,7 @@ class HybridOcrService {
           // Google Document AI - Priorité 2
           const rawResult = await provider.service.processDocument(
             documentUrl,
-            mimeType
+            mimeType,
           );
           result = provider.service.toInvoiceFormat(rawResult);
           result.success = true;
@@ -220,27 +226,32 @@ class HybridOcrService {
 
           // Si Google Document AI n'a pas renvoyé d'entités structurées
           // (processeur OCR basique vs Invoice Parser), extraire via regex
-          const hasEntities = result.transaction_data?.vendor_name ||
+          const hasEntities =
+            result.transaction_data?.vendor_name ||
             result.transaction_data?.amount ||
             result.transaction_data?.document_number;
           if (!hasEntities && result.extractedText) {
             try {
-              const regex = invoiceExtractionService.extractWithPatterns(result.extractedText);
+              const regex = invoiceExtractionService.extractWithPatterns(
+                result.extractedText,
+              );
               if (regex) {
-                const totalTTC = parseFloat(regex.netToPay || regex.totalTTC) || 0;
-                const totalHT = parseFloat(regex.totalHT || regex.totalHtMois) || 0;
+                const totalTTC =
+                  parseFloat(regex.netToPay || regex.totalTTC) || 0;
+                const totalHT =
+                  parseFloat(regex.totalHT || regex.totalHtMois) || 0;
                 const totalTVA = parseFloat(regex.tvaAmount) || 0;
                 result.transaction_data = {
-                  vendor_name: '',
+                  vendor_name: "",
                   amount: totalTTC,
                   amount_ht: totalHT,
                   tax_amount: totalTVA,
                   transaction_date: regex.invoiceDate || null,
                   due_date: regex.dueDate || null,
                   document_number: regex.invoiceNumber || null,
-                  currency: 'EUR',
-                  category: 'OTHER',
-                  payment_method: regex.paymentMethod || '',
+                  currency: "EUR",
+                  category: "OTHER",
+                  payment_method: regex.paymentMethod || "",
                 };
                 result.extracted_fields = {
                   ...result.extracted_fields,
@@ -248,18 +259,23 @@ class HybridOcrService {
                   vendor_vat_number: regex.vatNumber || null,
                   vendor_email: regex.email || null,
                   vendor_phone: regex.phone || null,
-                  vendor_city: regex.city || '',
-                  vendor_postal_code: regex.postalCode || '',
+                  vendor_city: regex.city || "",
+                  vendor_postal_code: regex.postalCode || "",
                   totals: {
                     total_ht: totalHT,
                     total_tax: totalTVA,
                     total_ttc: totalTTC,
                   },
                 };
-                console.log(`📝 Google Document AI: données extraites via regex fallback (TTC: ${totalTTC}, N°: ${regex.invoiceNumber})`);
+                logger.debug(
+                  `📝 Google Document AI: données extraites via regex fallback (TTC: ${totalTTC}, N°: ${regex.invoiceNumber})`,
+                );
               }
             } catch (extractionError) {
-              console.warn(`⚠️ Regex extraction fallback échoué:`, extractionError.message);
+              console.warn(
+                `⚠️ Regex extraction fallback échoué:`,
+                extractionError.message,
+              );
             }
           }
 
@@ -273,7 +289,7 @@ class HybridOcrService {
             } catch (usageError) {
               console.warn(
                 "⚠️ Erreur incrémentation usage Google:",
-                usageError.message
+                usageError.message,
               );
             }
           }
@@ -283,7 +299,7 @@ class HybridOcrService {
             documentUrl,
             fileName,
             mimeType,
-            {}
+            {},
           );
 
           // Incrémenter le compteur d'usage Mistral
@@ -296,7 +312,7 @@ class HybridOcrService {
             } catch (usageError) {
               console.warn(
                 "⚠️ Erreur incrémentation usage Mistral:",
-                usageError.message
+                usageError.message,
               );
             }
           }
@@ -304,8 +320,8 @@ class HybridOcrService {
 
         if (result && (result.extractedText || result.text)) {
           const textLength = (result.extractedText || result.text || "").length;
-          console.log(
-            `✅ OCR réussi avec ${provider.name} (${textLength} caractères)`
+          logger.debug(
+            `✅ OCR réussi avec ${provider.name} (${textLength} caractères)`,
           );
           result.provider = provider.name;
           result.success = true;
@@ -317,7 +333,7 @@ class HybridOcrService {
 
         // Si Mindee échoue à cause du quota, on continue avec le fallback
         if (error.message?.includes("MINDEE_QUOTA_EXCEEDED")) {
-          console.log("📊 Mindee quota atteint, basculement vers fallback...");
+          logger.debug("📊 Mindee quota atteint, basculement vers fallback...");
           // Forcer la réinitialisation pour exclure Mindee
           this.initialized = false;
           continue;
@@ -347,7 +363,9 @@ class HybridOcrService {
     const primaryProvider = this.providers[0];
 
     if (primaryProvider?.name === "claude-vision") {
-      console.log(`🚀 Batch OCR avec Claude Vision (${files.length} fichiers)...`);
+      logger.debug(
+        `🚀 Batch OCR avec Claude Vision (${files.length} fichiers)...`,
+      );
 
       // Utiliser le batch processing optimisé de Claude Vision
       const documents = files.map((f) => ({
@@ -358,7 +376,7 @@ class HybridOcrService {
 
       const results = await claudeVisionOcrService.batchProcessDocuments(
         documents,
-        ocrCacheService
+        ocrCacheService,
       );
 
       // Incrémenter l'usage pour chaque succès
@@ -369,10 +387,13 @@ class HybridOcrService {
             await OcrUsage.incrementUsage(workspaceId, "claude-vision", {
               fileName: r.fileName,
               success: true,
-              tokensUsed: r.result?.usage?.inputTokens + r.result?.usage?.outputTokens,
+              tokensUsed:
+                r.result?.usage?.inputTokens + r.result?.usage?.outputTokens,
             });
           }
-          console.log(`📊 Claude Vision: ${successResults.length} usages enregistrés`);
+          logger.debug(
+            `📊 Claude Vision: ${successResults.length} usages enregistrés`,
+          );
         } catch (usageError) {
           console.warn("⚠️ Erreur enregistrement usage:", usageError.message);
         }
@@ -400,7 +421,9 @@ class HybridOcrService {
     }
 
     // Fallback: traitement séquentiel avec les autres providers
-    console.log(`🔄 Batch OCR séquentiel avec ${primaryProvider?.name || "fallback"}...`);
+    logger.debug(
+      `🔄 Batch OCR séquentiel avec ${primaryProvider?.name || "fallback"}...`,
+    );
 
     const results = [];
     for (const file of files) {
@@ -409,7 +432,7 @@ class HybridOcrService {
           file.cloudflareUrl,
           file.fileName,
           file.mimeType,
-          workspaceId
+          workspaceId,
         );
         results.push({
           success: true,

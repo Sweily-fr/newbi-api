@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Service pour gérer l'upload et la récupération de fichiers de transfert sur Cloudflare R2
  * Bucket: app-transfers-prod
@@ -155,7 +156,7 @@ class CloudflareTransferService {
     fileId,
     chunkIndex,
     originalName,
-    expiresIn = 3600
+    expiresIn = 3600,
   ) {
     try {
       // Générer le chemin pour le chunk temporaire
@@ -185,7 +186,9 @@ class CloudflareTransferService {
         expiresIn,
       });
 
-      console.log(`✅ URL signée générée pour chunk ${chunkIndex}: ${uploadUrl.substring(0, 100)}...`);
+      logger.debug(
+        `✅ URL signée générée pour chunk ${chunkIndex}: ${uploadUrl.substring(0, 100)}...`,
+      );
 
       return {
         uploadUrl,
@@ -195,11 +198,9 @@ class CloudflareTransferService {
     } catch (error) {
       console.error(
         `Erreur génération presigned URL pour chunk ${chunkIndex}:`,
-        error
+        error,
       );
-      throw new Error(
-        `Échec génération presigned URL: ${error.message}`
-      );
+      throw new Error(`Échec génération presigned URL: ${error.message}`);
     }
   }
 
@@ -246,7 +247,7 @@ class CloudflareTransferService {
     } catch (error) {
       console.error(`Erreur upload chunk ${chunkIndex}:`, error);
       throw new Error(
-        `Échec de l'upload du chunk ${chunkIndex}: ${error.message}`
+        `Échec de l'upload du chunk ${chunkIndex}: ${error.message}`,
       );
     }
   }
@@ -267,16 +268,17 @@ class CloudflareTransferService {
     fileName,
     fileSize,
     mimeType,
-    totalParts
+    totalParts,
   ) {
     try {
-      console.log(
-        `🚀 Démarrage Multipart Upload: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB) en ${totalParts} parts`
+      logger.debug(
+        `🚀 Démarrage Multipart Upload: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB) en ${totalParts} parts`,
       );
 
       // Générer le chemin final du fichier (pas de temp/)
       const finalKey = this.generateR2Path(transferId, fileId, fileName);
-      const contentType = mimeType || this.getContentType(path.extname(fileName));
+      const contentType =
+        mimeType || this.getContentType(path.extname(fileName));
 
       // Créer le multipart upload
       const createCommand = new CreateMultipartUploadCommand({
@@ -294,7 +296,7 @@ class CloudflareTransferService {
       const createResponse = await this.client.send(createCommand);
       const uploadId = createResponse.UploadId;
 
-      console.log(`📦 Multipart Upload créé: ${uploadId}`);
+      logger.debug(`📦 Multipart Upload créé: ${uploadId}`);
 
       // Générer des presigned URLs pour chaque part
       const presignedUrls = [];
@@ -313,22 +315,24 @@ class CloudflareTransferService {
             const presignedUrl = await getSignedUrl(
               this.client,
               uploadPartCommand,
-              { expiresIn: 3600 }
+              { expiresIn: 3600 },
             );
 
             return { partNumber, uploadUrl: presignedUrl };
-          })()
+          })(),
         );
       }
 
       presignedUrls.push(...(await Promise.all(urlPromises)));
 
-      console.log(`✅ ${presignedUrls.length} URLs presigned générées`);
+      logger.debug(`✅ ${presignedUrls.length} URLs presigned générées`);
 
       return {
         uploadId,
         key: finalKey,
-        presignedUrls: presignedUrls.sort((a, b) => a.partNumber - b.partNumber),
+        presignedUrls: presignedUrls.sort(
+          (a, b) => a.partNumber - b.partNumber,
+        ),
       };
     } catch (error) {
       console.error("❌ Erreur démarrage multipart upload:", error);
@@ -345,8 +349,8 @@ class CloudflareTransferService {
    */
   async completeMultipartUpload(uploadId, key, parts) {
     try {
-      console.log(
-        `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`
+      logger.debug(
+        `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`,
       );
 
       // Trier les parts par numéro
@@ -376,8 +380,8 @@ class CloudflareTransferService {
       const headResponse = await this.client.send(headCommand);
       const fileSize = headResponse.ContentLength;
 
-      console.log(
-        `✅ Multipart Upload complété: ${key} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`
+      logger.debug(
+        `✅ Multipart Upload complété: ${key} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`,
       );
 
       // Générer l'URL d'accès
@@ -417,7 +421,7 @@ class CloudflareTransferService {
       });
 
       await this.client.send(abortCommand);
-      console.log(`🗑️ Multipart Upload annulé: ${uploadId}`);
+      logger.debug(`🗑️ Multipart Upload annulé: ${uploadId}`);
     } catch (error) {
       console.error("❌ Erreur annulation multipart upload:", error);
       throw error;
@@ -439,16 +443,19 @@ class CloudflareTransferService {
     fileId,
     originalName,
     totalChunks,
-    mimeType
+    mimeType,
   ) {
     let uploadId = null;
 
     try {
-      console.log(`🔧 Reconstruction du fichier ${originalName} avec Multipart Upload (${totalChunks} chunks)`);
+      logger.debug(
+        `🔧 Reconstruction du fichier ${originalName} avec Multipart Upload (${totalChunks} chunks)`,
+      );
 
       // Générer le chemin final du fichier
       const finalKey = this.generateR2Path(transferId, fileId, originalName);
-      const contentType = mimeType || this.getContentType(path.extname(originalName));
+      const contentType =
+        mimeType || this.getContentType(path.extname(originalName));
 
       // Étape 1 : Créer un multipart upload
       const createCommand = new CreateMultipartUploadCommand({
@@ -466,7 +473,7 @@ class CloudflareTransferService {
       const createResponse = await this.client.send(createCommand);
       uploadId = createResponse.UploadId;
 
-      console.log(`📦 Multipart Upload créé: ${uploadId}`);
+      logger.debug(`📦 Multipart Upload créé: ${uploadId}`);
 
       // Étape 2 : Copier chaque chunk comme une part du multipart upload
       const now = new Date();
@@ -496,7 +503,7 @@ class CloudflareTransferService {
 
                 const response = await this.client.send(getCommand);
                 const chunkBuffer = Buffer.from(
-                  await response.Body.transformToByteArray()
+                  await response.Body.transformToByteArray(),
                 );
 
                 // Uploader comme part du multipart upload (les parts commencent à 1)
@@ -508,7 +515,8 @@ class CloudflareTransferService {
                   Body: chunkBuffer,
                 });
 
-                const uploadPartResponse = await this.client.send(uploadPartCommand);
+                const uploadPartResponse =
+                  await this.client.send(uploadPartCommand);
 
                 return {
                   PartNumber: j + 1,
@@ -519,7 +527,7 @@ class CloudflareTransferService {
                 console.error(`❌ Erreur upload part ${j + 1}:`, error);
                 throw new Error(`Part ${j + 1} échec: ${error.message}`);
               }
-            })()
+            })(),
           );
         }
 
@@ -528,11 +536,13 @@ class CloudflareTransferService {
         uploadedParts.push(...batchResults);
 
         // Calculer la taille totale
-        batchResults.forEach(part => {
+        batchResults.forEach((part) => {
           totalSize += part.size;
         });
 
-        console.log(`✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(totalChunks / BATCH_SIZE)} uploadé (${uploadedParts.length}/${totalChunks} parts)`);
+        logger.debug(
+          `✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(totalChunks / BATCH_SIZE)} uploadé (${uploadedParts.length}/${totalChunks} parts)`,
+        );
       }
 
       // Étape 3 : Compléter le multipart upload
@@ -549,7 +559,9 @@ class CloudflareTransferService {
 
       await this.client.send(completeCommand);
 
-      console.log(`✅ Multipart Upload complété: ${finalKey} (${totalSize} octets)`);
+      logger.debug(
+        `✅ Multipart Upload complété: ${finalKey} (${totalSize} octets)`,
+      );
 
       // Étape 4 : Nettoyer les chunks temporaires
       await this.cleanupChunks(transferId, fileId, totalChunks);
@@ -583,14 +595,17 @@ class CloudflareTransferService {
             UploadId: uploadId,
           });
           await this.client.send(abortCommand);
-          console.log(`🗑️ Multipart Upload annulé: ${uploadId}`);
+          logger.debug(`🗑️ Multipart Upload annulé: ${uploadId}`);
         } catch (abortError) {
-          console.error("Erreur lors de l'annulation du multipart upload:", abortError);
+          console.error(
+            "Erreur lors de l'annulation du multipart upload:",
+            abortError,
+          );
         }
       }
 
       throw new Error(
-        `Échec de la reconstruction du fichier: ${error.message}`
+        `Échec de la reconstruction du fichier: ${error.message}`,
       );
     }
   }
@@ -605,7 +620,9 @@ class CloudflareTransferService {
    */
   async cleanupChunks(transferId, fileId, totalChunks = 0) {
     try {
-      console.log(`🧹 Nettoyage des chunks pour transfert ${transferId}, fichier ${fileId}`);
+      logger.debug(
+        `🧹 Nettoyage des chunks pour transfert ${transferId}, fichier ${fileId}`,
+      );
 
       // Approche 1: Lister tous les objets correspondant au pattern
       // Cela fonctionne quel que soit le jour d'upload
@@ -617,17 +634,19 @@ class CloudflareTransferService {
       const matchingChunks = objects.filter((obj) => pattern.test(obj.key));
 
       if (matchingChunks.length === 0) {
-        console.log(`ℹ️ Aucun chunk trouvé pour fichier ${fileId}`);
+        logger.debug(`ℹ️ Aucun chunk trouvé pour fichier ${fileId}`);
         return { deleted: 0, errors: 0 };
       }
 
-      console.log(`🗑️ ${matchingChunks.length} chunks à supprimer`);
+      logger.debug(`🗑️ ${matchingChunks.length} chunks à supprimer`);
 
       // Supprimer les chunks
       const keysToDelete = matchingChunks.map((obj) => obj.key);
       const result = await this.deleteFiles(keysToDelete);
 
-      console.log(`✅ Chunks supprimés: ${result.deleted}/${keysToDelete.length}`);
+      logger.debug(
+        `✅ Chunks supprimés: ${result.deleted}/${keysToDelete.length}`,
+      );
 
       return result;
     } catch (error) {
@@ -635,7 +654,7 @@ class CloudflareTransferService {
 
       // Fallback: essayer avec la date actuelle si listObjects échoue
       if (totalChunks > 0) {
-        console.log("⚠️ Fallback vers suppression par date actuelle");
+        logger.debug("⚠️ Fallback vers suppression par date actuelle");
         const now = new Date();
         const year = now.getFullYear();
         const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -657,7 +676,10 @@ class CloudflareTransferService {
             deleted++;
           } catch (deleteError) {
             errors++;
-            console.warn(`⚠️ Erreur suppression chunk ${i}:`, deleteError.message);
+            console.warn(
+              `⚠️ Erreur suppression chunk ${i}:`,
+              deleteError.message,
+            );
           }
         }
 
@@ -842,7 +864,7 @@ class CloudflareTransferService {
               key: obj.Key,
               lastModified: obj.LastModified,
               size: obj.Size,
-            }))
+            })),
           );
         }
 
@@ -889,7 +911,10 @@ class CloudflareTransferService {
         totalErrors += response.Errors?.length || 0;
 
         if (response.Errors && response.Errors.length > 0) {
-          console.warn("⚠️ Erreurs lors de la suppression batch:", response.Errors);
+          console.warn(
+            "⚠️ Erreurs lors de la suppression batch:",
+            response.Errors,
+          );
         }
       }
 
@@ -907,38 +932,41 @@ class CloudflareTransferService {
    */
   async cleanupOrphanChunks(maxAgeHours = 24) {
     try {
-      console.log(`🧹 Recherche des chunks orphelins (> ${maxAgeHours}h)...`);
+      logger.debug(`🧹 Recherche des chunks orphelins (> ${maxAgeHours}h)...`);
 
       // Lister tous les objets dans temp/
       const objects = await this.listObjects("temp/");
 
       if (objects.length === 0) {
-        console.log("✅ Aucun chunk temporaire trouvé");
+        logger.debug("✅ Aucun chunk temporaire trouvé");
         return { deleted: 0, errors: 0, freedBytes: 0 };
       }
 
-      console.log(`📦 ${objects.length} objets temporaires trouvés`);
+      logger.debug(`📦 ${objects.length} objets temporaires trouvés`);
 
       // Filtrer les objets plus vieux que maxAgeHours
       const cutoffDate = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000);
       const oldChunks = objects.filter((obj) => obj.lastModified < cutoffDate);
 
       if (oldChunks.length === 0) {
-        console.log(`✅ Aucun chunk orphelin (> ${maxAgeHours}h)`);
+        logger.debug(`✅ Aucun chunk orphelin (> ${maxAgeHours}h)`);
         return { deleted: 0, errors: 0, freedBytes: 0 };
       }
 
-      console.log(`🗑️ ${oldChunks.length} chunks orphelins à supprimer`);
+      logger.debug(`🗑️ ${oldChunks.length} chunks orphelins à supprimer`);
 
       // Calculer l'espace à libérer
-      const freedBytes = oldChunks.reduce((acc, obj) => acc + (obj.size || 0), 0);
+      const freedBytes = oldChunks.reduce(
+        (acc, obj) => acc + (obj.size || 0),
+        0,
+      );
 
       // Supprimer les chunks
       const keysToDelete = oldChunks.map((obj) => obj.key);
       const result = await this.deleteFiles(keysToDelete);
 
-      console.log(
-        `✅ Nettoyage terminé: ${result.deleted} chunks supprimés, ${(freedBytes / 1024 / 1024).toFixed(2)} MB libérés`
+      logger.debug(
+        `✅ Nettoyage terminé: ${result.deleted} chunks supprimés, ${(freedBytes / 1024 / 1024).toFixed(2)} MB libérés`,
       );
 
       return {
@@ -962,7 +990,14 @@ class CloudflareTransferService {
    * @param {string} mimeType - Type MIME du fichier
    * @returns {Promise<{key: string, url: string, size: number, contentType: string}>}
    */
-  async copyFileFromExternalBucket(sourceBucket, sourceKey, transferId, fileId, originalName, mimeType) {
+  async copyFileFromExternalBucket(
+    sourceBucket,
+    sourceKey,
+    transferId,
+    fileId,
+    originalName,
+    mimeType,
+  ) {
     try {
       // 1. Récupérer le fichier depuis le bucket source
       const getCommand = new GetObjectCommand({
@@ -971,12 +1006,15 @@ class CloudflareTransferService {
       });
 
       const response = await this.client.send(getCommand);
-      const fileBuffer = Buffer.from(await response.Body.transformToByteArray());
+      const fileBuffer = Buffer.from(
+        await response.Body.transformToByteArray(),
+      );
       const fileSize = fileBuffer.length;
 
       // 2. Générer le chemin de destination dans le bucket transfers
       const destKey = this.generateR2Path(transferId, fileId, originalName);
-      const contentType = mimeType || this.getContentType(path.extname(originalName));
+      const contentType =
+        mimeType || this.getContentType(path.extname(originalName));
 
       // 3. Upload vers le bucket transfers
       const putCommand = new PutObjectCommand({
@@ -997,7 +1035,10 @@ class CloudflareTransferService {
 
       // 4. Générer l'URL d'accès
       let fileUrl;
-      if (this.publicUrl && this.publicUrl !== "https://your_transfer_bucket_public_url") {
+      if (
+        this.publicUrl &&
+        this.publicUrl !== "https://your_transfer_bucket_public_url"
+      ) {
         fileUrl = `${this.publicUrl}/${destKey}`;
       } else {
         fileUrl = await this.getSignedUrl(destKey, 86400);
@@ -1010,7 +1051,10 @@ class CloudflareTransferService {
         contentType,
       };
     } catch (error) {
-      console.error(`Erreur copie cross-bucket (${sourceBucket} → ${this.bucketName}):`, error);
+      console.error(
+        `Erreur copie cross-bucket (${sourceBucket} → ${this.bucketName}):`,
+        error,
+      );
       throw new Error(`Échec de la copie cross-bucket: ${error.message}`);
     }
   }

@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import CreditNote from "../models/CreditNote.js";
 import {
   archiveDocumentPdf,
@@ -461,11 +462,11 @@ const creditNoteResolvers = {
               });
 
               await client.save();
-              console.log(
+              logger.debug(
                 `✅ Activité ajoutée au client ${client.name} pour l'avoir ${creditNote.prefix}${creditNote.number}`,
               );
             } else {
-              console.log(
+              logger.debug(
                 `⚠️ Client non trouvé avec l'email ${creditNote.client.email} dans le workspace ${workspaceId}`,
               );
             }

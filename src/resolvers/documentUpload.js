@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour l'upload de documents vers Cloudflare
  */
@@ -18,7 +19,7 @@ const documentUploadResolvers = {
      */
     uploadDocument: async (_, { file, folderType }, { user }) => {
       try {
-        console.log(
+        logger.debug(
           "🚀 DocumentUpload - Début upload avec folderType:",
           folderType,
         );
@@ -71,7 +72,7 @@ const documentUploadResolvers = {
               .toBuffer();
             finalFilename = filename.replace(/\.[^.]+$/, "") + ".png";
             finalMimetype = "image/png";
-            console.log(
+            logger.debug(
               "🖼️ DocumentUpload - HEIC converti en PNG:",
               finalFilename,
             );
@@ -168,12 +169,12 @@ const documentUploadResolvers = {
 
               if (memberRecord && memberRecord.organizationId) {
                 organizationId = memberRecord.organizationId.toString();
-                console.log(
+                logger.debug(
                   "🔍 DocumentUpload - Organization trouvée via collection member:",
                   organizationId,
                 );
               } else {
-                console.log(
+                logger.debug(
                   "🔍 DocumentUpload - Aucun member trouvé pour userId:",
                   user.id,
                 );
@@ -196,7 +197,7 @@ const documentUploadResolvers = {
             organizationId = user.id;
           }
 
-          console.log(
+          logger.debug(
             "🏢 DocumentUpload - Organization ID récupéré:",
             organizationId,
             "pour type:",
@@ -205,7 +206,7 @@ const documentUploadResolvers = {
         }
 
         // Upload vers Cloudflare R2
-        console.log(
+        logger.debug(
           "📤 DocumentUpload - Appel cloudflareService avec finalFolderType:",
           finalFolderType,
         );
@@ -246,7 +247,7 @@ const documentUploadResolvers = {
      */
     promoteTemporaryFile: isAuthenticated(async (_, { tempKey }, { user }) => {
       try {
-        console.log(
+        logger.debug(
           "🚀 DocumentUpload - Promotion du fichier temporaire:",
           tempKey,
         );

@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour les bons de commande importés
  */
@@ -539,7 +540,7 @@ const importedPurchaseOrderResolvers = {
 
           // Upload Cloudflare en premier (indispensable, on a toujours besoin
           // de stocker le PDF même si l'OCR n'aboutit pas).
-          console.log(
+          logger.debug(
             `☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`,
           );
           const uploadResult = await cloudflareService.uploadImage(
@@ -571,7 +572,7 @@ const importedPurchaseOrderResolvers = {
               .update(fileBuffer)
               .digest("hex");
 
-            console.log(
+            logger.debug(
               `🔍 importPurchaseOrderDirect: Claude Vision pour ${filename}`,
             );
             const rawResult = await claudeVisionOcrService.processFromBase64(

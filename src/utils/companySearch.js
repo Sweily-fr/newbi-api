@@ -1,3 +1,4 @@
+import logger from "./logger.js";
 import axios from "axios";
 // Importer les données mock
 import { findCompanyBySiret, findCompaniesByName } from "./mockCompanyData.js";
@@ -68,7 +69,7 @@ async function makeApiRequest(endpoint) {
   // Tentatives avec retry
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      console.log(
+      logger.debug(
         `Tentative d'appel API ${attempt}/${MAX_RETRIES}: ${API_URL}${endpoint}`,
       );
       return await apiClient.get(`${API_URL}${endpoint}`);
@@ -93,7 +94,7 @@ async function makeApiRequest(endpoint) {
 
       // Attendre avant la prochaine tentative (délai exponentiel)
       const delay = RETRY_DELAY * Math.pow(2, attempt - 1);
-      console.log(`Attente de ${delay}ms avant la prochaine tentative...`);
+      logger.debug(`Attente de ${delay}ms avant la prochaine tentative...`);
       await sleep(delay);
     }
   }
@@ -156,7 +157,7 @@ const searchCompanyBySiret = async (siret) => {
   try {
     // En mode mock, utiliser les données fictives
     if (MODE === "mock") {
-      console.log("Mode mock: recherche entreprise par SIRET", siret);
+      logger.debug("Mode mock: recherche entreprise par SIRET", siret);
       const company = findCompanyBySiret(siret);
 
       // Simuler un délai réseau pour une expérience plus réaliste
@@ -225,7 +226,7 @@ const searchCompaniesByName = async (name) => {
   try {
     // En mode mock, utiliser les données fictives
     if (MODE === "mock") {
-      console.log("Mode mock: recherche entreprises par nom", name);
+      logger.debug("Mode mock: recherche entreprises par nom", name);
       const companies = findCompaniesByName(name);
 
       // Simuler un délai réseau pour une expérience plus réaliste

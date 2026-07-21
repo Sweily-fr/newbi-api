@@ -20,15 +20,15 @@ const s3Client = new S3Client({
 // Autoriser le téléchargement après vérification du paiement
 export const authorizeDownload = async (req, res) => {
   try {
-    console.log("🔐 Route authorize appelée avec params:", req.params);
-    console.log("🔐 Route authorize appelée avec body:", req.body);
+    logger.debug("🔐 Route authorize appelée avec params:", req.params);
+    logger.debug("🔐 Route authorize appelée avec body:", req.body);
 
     const { transferId } = req.params;
     const { fileId, email } = req.body;
 
     // Vérifier que transferId est valide
     if (!transferId) {
-      console.log("❌ transferId manquant");
+      logger.debug("❌ transferId manquant");
       return res.status(400).json({
         success: false,
         error: "ID de transfert manquant",
@@ -47,12 +47,12 @@ export const authorizeDownload = async (req, res) => {
       buyerIp,
     });
 
-    console.log("🔍 Recherche du transfert avec ID:", transferId);
+    logger.debug("🔍 Recherche du transfert avec ID:", transferId);
 
     // Vérifier que le transfert existe
     const fileTransfer =
       await FileTransfer.findById(transferId).populate("files");
-    console.log("🔍 Transfert trouvé:", fileTransfer ? "OUI" : "NON");
+    logger.debug("🔍 Transfert trouvé:", fileTransfer ? "OUI" : "NON");
     if (!fileTransfer) {
       return res.status(404).json({
         success: false,
@@ -94,7 +94,7 @@ export const authorizeDownload = async (req, res) => {
     //   });
     // }
 
-    console.log("🔍 Statut du transfert:", {
+    logger.debug("🔍 Statut du transfert:", {
       isPaymentRequired: fileTransfer.isPaymentRequired,
       isPaid: fileTransfer.isPaid,
       paymentAmount: fileTransfer.paymentAmount,
@@ -102,7 +102,7 @@ export const authorizeDownload = async (req, res) => {
 
     // Vérifier seulement si le transfert est payé globalement
     if (fileTransfer.isPaymentRequired && !fileTransfer.isPaid) {
-      console.log("❌ Paiement requis mais non effectué");
+      logger.debug("❌ Paiement requis mais non effectué");
       return res.status(402).json({
         success: false,
         error: "Paiement requis",
@@ -112,11 +112,11 @@ export const authorizeDownload = async (req, res) => {
       });
     }
 
-    console.log("✅ Vérification paiement OK, détection activité suspecte...");
+    logger.debug("✅ Vérification paiement OK, détection activité suspecte...");
 
     // Détecter une activité suspecte
     const isSuspicious = await DownloadEvent.detectSuspiciousActivity(buyerIp);
-    console.log("🔍 Activité suspecte détectée:", isSuspicious);
+    logger.debug("🔍 Activité suspecte détectée:", isSuspicious);
 
     if (isSuspicious) {
       logger.warn("🚨 Activité suspecte détectée", { buyerIp, email });
@@ -126,7 +126,7 @@ export const authorizeDownload = async (req, res) => {
       });
     }
 
-    console.log("✅ Génération des URLs de téléchargement...");
+    logger.debug("✅ Génération des URLs de téléchargement...");
 
     // Générer les URLs de téléchargement (sans AccessGrant)
     return await generateDownloadUrls(
