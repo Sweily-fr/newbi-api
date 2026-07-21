@@ -6,35 +6,15 @@ import { getJWKSValidator } from "../services/jwks-validator.js";
 import { betterAuthMiddleware } from "./better-auth.js";
 import { getActiveOrganization } from "./org-resolver.js";
 
-// Cache LRU en mémoire pour User.findById — évite une query DB par requête authentifiée
-const USER_CACHE_TTL = 30_000; // 30 secondes
-const USER_CACHE_MAX = 500;
-const _userCache = new Map();
+// Cache LRU user partagé avec le chemin cookie (voir user-cache.js) :
+// une invalidation couvre les deux chemins d'authentification.
+import {
+  getCachedUser,
+  setCachedUser,
+  invalidateUserCache,
+} from "./user-cache.js";
 
-function getCachedUser(userId) {
-  const entry = _userCache.get(userId);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > USER_CACHE_TTL) {
-    _userCache.delete(userId);
-    return null;
-  }
-  return entry.user;
-}
-
-function setCachedUser(userId, user) {
-  // Eviction LRU simple : supprimer la plus ancienne entrée si la taille max est atteinte
-  if (_userCache.size >= USER_CACHE_MAX) {
-    const oldestKey = _userCache.keys().next().value;
-    _userCache.delete(oldestKey);
-  }
-  _userCache.set(userId, { user, ts: Date.now() });
-}
-
-// Permet d'invalider le cache depuis l'extérieur (ex: après updateUser)
-export function invalidateUserCache(userId) {
-  if (userId) _userCache.delete(userId);
-  else _userCache.clear();
-}
+export { invalidateUserCache };
 
 /**
  * Middleware d'authentification unifié

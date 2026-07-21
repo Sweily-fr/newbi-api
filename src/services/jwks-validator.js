@@ -74,19 +74,27 @@ class JWKSValidator {
         logger.debug("🔑 Utilisation du bypass token Vercel");
       }
 
+      // redirect: "follow" — une redirection (apex↔www, migration de domaine)
+      // ne doit pas faire tomber la validation des JWT de toute la prod.
       const response = await fetch(this.jwksUrl, {
         method: "GET",
         headers: headers,
         signal: controller.signal,
-        redirect: "error",
+        redirect: "follow",
         referrerPolicy: "no-referrer",
       });
 
       clearTimeout(timeoutId);
 
+      if (response.url && response.url !== this.jwksUrl) {
+        logger.warn(
+          `JWKS récupéré via redirection: ${this.jwksUrl} → ${response.url}. Mettre à jour FRONTEND_URL pour éviter ce détour.`,
+        );
+      }
+
       if (!response.ok) {
         throw new Error(
-          `Erreur HTTP ${response.status} lors de la récupération JWKS`,
+          `Erreur HTTP ${response.status} lors de la récupération JWKS (${this.jwksUrl})`,
         );
       }
 
@@ -99,7 +107,9 @@ class JWKSValidator {
       logger.info(` JWKS récupéré avec succès: ${jwks.keys.length} clé(s)`);
       return jwks;
     } catch (error) {
-      logger.error("Erreur récupération JWKS :", error.message);
+      logger.error(
+        `Erreur récupération JWKS (${this.jwksUrl}) : ${error.message} — si cette erreur persiste, les utilisateurs paraîtront déconnectés (validation JWT impossible).`,
+      );
       throw error;
     }
   }
