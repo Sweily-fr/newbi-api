@@ -416,7 +416,7 @@ export const withRBAC = (resolver, options = {}) => {
             : args.workspaceId
               ? "args.workspaceId"
               : "args.organizationId";
-        logger.warn(
+        logger.debug(
           `🔍 RBAC requestedOrgId=${requestedOrgId} source=${source} userId=${userId} op=${info?.fieldName || "?"}`,
         );
       }

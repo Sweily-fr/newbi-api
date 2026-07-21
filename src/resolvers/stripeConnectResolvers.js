@@ -66,11 +66,9 @@ const stripeConnectResolvers = {
       }
 
       try {
-        console.log(
-          "🔍 Recherche compte Stripe Connect pour organizationId:",
-          organizationId,
+        logger.debug(
+          `🔍 Recherche compte Stripe Connect pour organizationId: ${organizationId}`,
         );
-        console.log("👤 User email:", user.email);
 
         // Essayer d'abord avec organizationId (nouveau système)
         let account = null;
@@ -80,13 +78,13 @@ const stripeConnectResolvers = {
 
         // Fallback: Si pas de compte trouvé avec organizationId, essayer avec userId (ancien système)
         if (!account) {
-          console.log("⚠️ Fallback: Recherche par userId pour compatibilité");
+          logger.debug("⚠️ Fallback: Recherche par userId pour compatibilité");
           account = await StripeConnectAccount.findOne({ userId: user._id });
         }
 
-        console.log("📊 Compte trouvé:", account ? "OUI" : "NON");
+        logger.debug(`📊 Compte trouvé: ${account ? "OUI" : "NON"}`);
         if (account) {
-          console.log("✅ Détails (avant mise à jour):", {
+          logger.debug("✅ Détails (avant mise à jour):", {
             accountId: account.accountId,
             isOnboarded: account.isOnboarded,
             chargesEnabled: account.chargesEnabled,
@@ -95,13 +93,13 @@ const stripeConnectResolvers = {
           });
 
           // Mettre à jour le statut depuis Stripe pour avoir les dernières informations
-          console.log("🔄 Mise à jour du statut depuis Stripe...");
+          logger.debug("🔄 Mise à jour du statut depuis Stripe...");
           const statusUpdate = await stripeConnectService.checkAccountStatus(
             account.accountId,
           );
 
           if (statusUpdate.success) {
-            console.log("✅ Statut mis à jour:", {
+            logger.debug("✅ Statut mis à jour:", {
               isOnboarded: statusUpdate.isOnboarded,
               chargesEnabled: statusUpdate.chargesEnabled,
             });

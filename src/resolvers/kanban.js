@@ -3785,7 +3785,7 @@ const resolvers = {
     boardMembers: (board) => {
       return board.members || [];
     },
-    members: async (board) => {
+    members: async (board, _args, context) => {
       try {
         const db = mongoose.connection.db;
 
@@ -3795,25 +3795,69 @@ const resolvers = {
             ? new mongoose.Types.ObjectId(board.workspaceId)
             : board.workspaceId;
 
-        logger.info(
-          `🔍 [Kanban Board.members] Recherche membres pour organisation: ${orgId}`,
-        );
+        // Données organisation/membres/users partagées entre tous les boards
+        // d'une même requête : les resolvers tournent en parallèle, on met donc
+        // en cache la promesse (pas le résultat) pour dédupliquer les queries.
+        const loadOrgData = async () => {
+          const [organization, workspaceMembers] = await Promise.all([
+            db.collection("organization").findOne({ _id: orgId }),
+            db.collection("member").find({ organizationId: orgId }).toArray(),
+          ]);
 
-        // 1. Récupérer l'organisation
-        const organization = await db
-          .collection("organization")
-          .findOne({ _id: orgId });
+          if (!organization) {
+            logger.warn(
+              `⚠️ [Kanban Board.members] Organisation non trouvée: ${orgId}`,
+            );
+            return {
+              organization: null,
+              workspaceMembers: [],
+              usersById: new Map(),
+            };
+          }
 
-        if (!organization) {
-          logger.warn(
-            `⚠️ [Kanban Board.members] Organisation non trouvée: ${orgId}`,
-          );
-          return [];
+          const userIds = workspaceMembers
+            .map((m) =>
+              typeof m.userId === "string"
+                ? new mongoose.Types.ObjectId(m.userId)
+                : m.userId,
+            )
+            .filter(Boolean);
+
+          const users = userIds.length
+            ? await db
+                .collection("user")
+                .find({ _id: { $in: userIds } })
+                .toArray()
+            : [];
+
+          return {
+            organization,
+            workspaceMembers,
+            usersById: new Map(users.map((u) => [u._id.toString(), u])),
+          };
+        };
+
+        let orgDataPromise;
+        if (context && typeof context === "object") {
+          if (!(context._kanbanOrgMembersCache instanceof Map)) {
+            context._kanbanOrgMembersCache = new Map();
+          }
+          const cacheKey = orgId.toString();
+          orgDataPromise = context._kanbanOrgMembersCache.get(cacheKey);
+          if (!orgDataPromise) {
+            orgDataPromise = loadOrgData();
+            context._kanbanOrgMembersCache.set(cacheKey, orgDataPromise);
+          }
+        } else {
+          orgDataPromise = loadOrgData();
         }
 
-        logger.info(
-          `🏢 [Kanban Board.members] Organisation trouvée: ${organization.name}`,
-        );
+        const { organization, workspaceMembers, usersById } =
+          await orgDataPromise;
+
+        if (!organization) {
+          return [];
+        }
 
         // Liste des userIds autorisés sur ce board.
         // - Si board.members est vide : aucune restriction → tous les membres
@@ -3828,57 +3872,21 @@ const resolvers = {
           ? new Set([ownerId, ...assignedIds].filter(Boolean))
           : null;
 
-        // 2. Récupérer les membres workspace
-        const allWorkspaceMembers = await db
-          .collection("member")
-          .find({
-            organizationId: orgId,
-          })
-          .toArray();
         const members = hasRestriction
-          ? allWorkspaceMembers.filter((m) =>
+          ? workspaceMembers.filter((m) =>
               allowedUserIds.has(m.userId?.toString()),
             )
-          : allWorkspaceMembers;
-
-        logger.info(
-          `📋 [Kanban Board.members] ${members.length} membres trouvés`,
-        );
+          : workspaceMembers;
 
         if (members.length === 0) {
-          logger.warn("⚠️ [Kanban Board.members] Aucun membre trouvé");
           return [];
         }
 
-        // 3. Récupérer les IDs utilisateurs
-        const userIds = members.map((m) => {
-          const userId = m.userId;
-          return typeof userId === "string"
-            ? new mongoose.Types.ObjectId(userId)
-            : userId;
-        });
-
-        logger.info(
-          `👥 [Kanban Board.members] Recherche de ${userIds.length} utilisateurs`,
-        );
-
-        // 4. Récupérer les informations des utilisateurs avec leurs photos
-        const users = await db
-          .collection("user")
-          .find({
-            _id: { $in: userIds },
-          })
-          .toArray();
-
-        logger.info(
-          `✅ [Kanban Board.members] ${users.length} utilisateurs trouvés`,
-        );
-
-        // 5. Créer le résultat en combinant membres et users
-        const result = members
+        // Combiner membres et users
+        return members
           .map((member) => {
             const memberUserId = member.userId?.toString();
-            const user = users.find((u) => u._id.toString() === memberUserId);
+            const user = usersById.get(memberUserId);
 
             if (!user) {
               logger.warn(
@@ -3894,17 +3902,6 @@ const resolvers = {
               user.profile?.profilePicture ||
               user.profile?.profilePictureUrl ||
               null;
-
-            logger.info(
-              `📸 [Kanban Board.members] Utilisateur: ${user.email}`,
-              {
-                image: user.image || "null",
-                avatar: user.avatar || "null",
-                profilePicture: user.profile?.profilePicture || "null",
-                profilePictureUrl: user.profile?.profilePictureUrl || "null",
-                finalImage: userImage || "null",
-              },
-            );
 
             // Construire le nom complet
             let displayName = "";
@@ -3928,12 +3925,6 @@ const resolvers = {
             };
           })
           .filter(Boolean); // Retirer les null
-
-        logger.info(
-          `✅ [Kanban Board.members] Retour de ${result.length} membres avec photos`,
-        );
-
-        return result;
       } catch (error) {
         logger.error("❌ [Kanban Board.members] Erreur:", error);
         logger.error("Stack:", error.stack);

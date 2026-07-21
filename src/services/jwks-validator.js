@@ -104,7 +104,7 @@ class JWKSValidator {
         throw new Error("Format JWKS invalide ou vide");
       }
 
-      logger.info(` JWKS récupéré avec succès: ${jwks.keys.length} clé(s)`);
+      logger.debug(`JWKS récupéré avec succès: ${jwks.keys.length} clé(s)`);
       return jwks;
     } catch (error) {
       logger.error(
@@ -124,7 +124,7 @@ class JWKSValidator {
       const cached = this.keyCache.get(cacheKey);
 
       if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
-        logger.info(`Clé récupérée depuis le cache pour kid: ${kid}`);
+        logger.debug(`Clé récupérée depuis le cache pour kid: ${kid}`);
         this.cacheHits++;
         return cached.key;
       }
@@ -175,7 +175,7 @@ class JWKSValidator {
         algorithm: jwk.alg || "EdDSA",
       });
 
-      logger.info(`Clé JWKS mise en cache pour kid: ${kid}`);
+      logger.debug(`Clé JWKS mise en cache pour kid: ${kid}`);
       return keyLike;
     } catch (error) {
       // Laisser remonter l'indispo JWKS (gérée sans blocage dans validateJWT)
@@ -348,7 +348,7 @@ class JWKSValidator {
           clockTolerance: "60s", // Augmenté pour s'adapter à l'expiration de session d'1 heure
         });
 
-        logger.info(
+        logger.debug(
           `✓ JWT validé avec succès (crypto complète) pour l'utilisateur ${verifiedPayload.sub}`,
         );
         // Reset les tentatives échouées après une validation réussie
