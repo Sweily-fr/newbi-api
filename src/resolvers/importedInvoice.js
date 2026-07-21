@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour les factures importées
  */
@@ -100,7 +101,7 @@ async function getUserPlan(userId, workspaceId) {
       ? PLAN_NAME_MAP[subscription.plan] || defaultPlan
       : defaultPlan;
 
-    console.log(
+    logger.debug(
       `📋 getUserPlan: workspace=${cacheKey}, subscription=${subscription?.plan || "none"}, plan=${plan}`,
     );
 
@@ -950,7 +951,7 @@ const importedInvoiceResolvers = {
 
           // Upload Cloudflare en premier (indispensable, même si l'OCR échoue
           // on doit garder le PDF stocké pour saisie manuelle).
-          console.log(
+          logger.debug(
             `☁️ importInvoiceDirect: Upload Cloudflare pour ${filename}`,
           );
           const uploadResult = await cloudflareService.uploadImage(
@@ -982,7 +983,7 @@ const importedInvoiceResolvers = {
                 .update(fileBuffer)
                 .digest("hex");
 
-              console.log(
+              logger.debug(
                 `🔍 importInvoiceDirect: Claude Vision pour ${filename}`,
               );
               const rawResult = await claudeVisionOcrService.processFromBase64(
@@ -1018,7 +1019,7 @@ const importedInvoiceResolvers = {
               }
               ocrProvider = rawResult.provider || "claude-vision";
             } else {
-              console.log(
+              logger.debug(
                 `🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`,
               );
               invoiceData = await processInvoiceWithOcr(
@@ -1162,7 +1163,7 @@ const importedInvoiceResolvers = {
           workspaceId,
           files.length,
         );
-        console.log(
+        logger.debug(
           `📊 Quota OCR: ${quotaInfo.remaining} imports disponibles, ${files.length} demandés`,
         );
 
@@ -1172,7 +1173,9 @@ const importedInvoiceResolvers = {
         let errorCount = 0;
 
         // ========== PHASE 1: Batch OCR optimisé ==========
-        console.log(`🚀 Démarrage import batch de ${files.length} factures...`);
+        logger.debug(
+          `🚀 Démarrage import batch de ${files.length} factures...`,
+        );
 
         const ocrResults = await hybridOcrService.batchProcessDocuments(
           files,
@@ -1195,7 +1198,7 @@ const importedInvoiceResolvers = {
           });
         });
 
-        console.log(
+        logger.debug(
           `📊 OCR: ${successfulOcr.length} réussis, ${failedOcr.length} échoués`,
         );
 
@@ -1332,10 +1335,10 @@ const importedInvoiceResolvers = {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         const cacheHits = successfulOcr.filter((r) => r.fromCache).length;
 
-        console.log(`✅ Import batch terminé en ${elapsed}s`);
-        console.log(`   - Succès: ${successCount}/${files.length}`);
-        console.log(`   - Depuis cache: ${cacheHits}`);
-        console.log(`   - Erreurs: ${errorCount}`);
+        logger.debug(`✅ Import batch terminé en ${elapsed}s`);
+        logger.debug(`   - Succès: ${successCount}/${files.length}`);
+        logger.debug(`   - Depuis cache: ${cacheHits}`);
+        logger.debug(`   - Erreurs: ${errorCount}`);
 
         return {
           success: errorCount === 0,
@@ -1464,7 +1467,7 @@ const importedInvoiceResolvers = {
               cloudflareKey,
               cloudflareService.importedInvoicesBucketName,
             );
-            console.log(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
+            logger.debug(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
           } catch (error) {
             console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
             // On continue la suppression même si Cloudflare échoue
@@ -1496,7 +1499,7 @@ const importedInvoiceResolvers = {
                 cloudflareKey,
                 cloudflareService.importedInvoicesBucketName,
               );
-              console.log(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
+              logger.debug(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
             } catch (error) {
               console.error(
                 `⚠️ Erreur suppression Cloudflare: ${error.message}`,

@@ -1,5 +1,6 @@
-import { createClient } from 'redis';
-import { RedisPubSub } from 'graphql-redis-subscriptions';
+import logger from "../utils/logger.js";
+import { createClient } from "redis";
+import { RedisPubSub } from "graphql-redis-subscriptions";
 
 class RedisService {
   constructor() {
@@ -12,20 +13,20 @@ class RedisService {
 
   async connect() {
     try {
-      const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-      
+      const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+
       // Client principal pour les opérations générales
       this.client = createClient({
         url: redisUrl,
         socket: {
           reconnectStrategy: (retries) => {
             if (retries > 10) {
-              console.error('❌ Redis: Trop de tentatives de reconnexion');
-              return new Error('Trop de tentatives de reconnexion');
+              console.error("❌ Redis: Trop de tentatives de reconnexion");
+              return new Error("Trop de tentatives de reconnexion");
             }
             return Math.min(retries * 100, 3000);
-          }
-        }
+          },
+        },
       });
 
       // Client pour les publications
@@ -39,15 +40,21 @@ class RedisService {
       });
 
       // Gestion des erreurs
-      this.client.on('error', (err) => console.error('❌ Redis Client Error:', err));
-      this.publisher.on('error', (err) => console.error('❌ Redis Publisher Error:', err));
-      this.subscriber.on('error', (err) => console.error('❌ Redis Subscriber Error:', err));
+      this.client.on("error", (err) =>
+        console.error("❌ Redis Client Error:", err),
+      );
+      this.publisher.on("error", (err) =>
+        console.error("❌ Redis Publisher Error:", err),
+      );
+      this.subscriber.on("error", (err) =>
+        console.error("❌ Redis Subscriber Error:", err),
+      );
 
       // Connexion
       await Promise.all([
         this.client.connect(),
         this.publisher.connect(),
-        this.subscriber.connect()
+        this.subscriber.connect(),
       ]);
 
       // Initialiser PubSub pour GraphQL Subscriptions
@@ -57,10 +64,10 @@ class RedisService {
       });
       this.isConnected = true;
       // Redis connecté
-      
+
       return true;
     } catch (error) {
-      console.error('Redis: Erreur de connexion', error);
+      console.error("Redis: Erreur de connexion", error);
       this.isConnected = false;
       return false;
     }
@@ -72,23 +79,23 @@ class RedisService {
       if (this.publishers) await this.publishers.quit();
       if (this.subscriber) await this.subscriber.quit();
       this.isConnected = false;
-      console.log('✅ Redis déconnecté');
+      logger.debug("✅ Redis déconnecté");
     } catch (error) {
-      console.error('❌ Erreur lors de la déconnexion Redis:', error);
+      console.error("❌ Erreur lors de la déconnexion Redis:", error);
     }
   }
   async publish(channel, data) {
     try {
       if (!this.isConnected || !this.pubsub) {
-        console.warn('⚠️ Redis non connecté, impossible de publier');
+        console.warn("⚠️ Redis non connecté, impossible de publier");
         return false;
       }
-      
+
       await this.pubsub.publish(channel, data);
       // Événement publié
       return true;
     } catch (error) {
-      console.error('❌ Erreur lors de la publication:', error);
+      console.error("❌ Erreur lors de la publication:", error);
       return false;
     }
   }
@@ -102,18 +109,18 @@ class RedisService {
   async set(key, value, expirationInSeconds = null) {
     try {
       if (!this.isConnected) return false;
-      
+
       const serializedValue = JSON.stringify(value);
-      
+
       if (expirationInSeconds) {
         await this.client.setEx(key, expirationInSeconds, serializedValue);
       } else {
         await this.client.set(key, serializedValue);
       }
-      
+
       return true;
     } catch (error) {
-      console.error('❌ Erreur Redis SET:', error);
+      console.error("❌ Erreur Redis SET:", error);
       return false;
     }
   }
@@ -122,11 +129,11 @@ class RedisService {
   async get(key) {
     try {
       if (!this.isConnected) return null;
-      
+
       const value = await this.client.get(key);
       return value ? JSON.parse(value) : null;
     } catch (error) {
-      console.error('❌ Erreur Redis GET:', error);
+      console.error("❌ Erreur Redis GET:", error);
       return null;
     }
   }
@@ -135,11 +142,11 @@ class RedisService {
   async delete(key) {
     try {
       if (!this.isConnected) return false;
-      
+
       await this.client.del(key);
       return true;
     } catch (error) {
-      console.error('❌ Erreur Redis DELETE:', error);
+      console.error("❌ Erreur Redis DELETE:", error);
       return false;
     }
   }
@@ -151,7 +158,7 @@ class RedisService {
       await this.client.ping();
       return true;
     } catch (error) {
-      console.error('❌ Redis PING failed:', error);
+      console.error("❌ Redis PING failed:", error);
       return false;
     }
   }

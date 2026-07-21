@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour l'upload d'images vers Cloudflare
  */
@@ -95,7 +96,7 @@ const imageUploadResolvers = {
             );
           }
 
-          console.log(
+          logger.debug(
             `🔄 Upload ${imageType} pour signature ${signatureId} par utilisateur ${user.id}`,
           );
 
@@ -279,7 +280,7 @@ const imageUploadResolvers = {
      * Supprime l'image de profil utilisateur de Cloudflare R2
      */
     deleteUserProfileImage: isAuthenticated(async (_, __, { user }) => {
-      console.log(
+      logger.debug(
         `🗑️ [DELETE_PROFILE_IMAGE] Début suppression pour utilisateur: ${user.id}`,
       );
 
@@ -291,10 +292,12 @@ const imageUploadResolvers = {
         }
 
         const imageUrl = userDoc.avatar || userDoc.profilePictureUrl;
-        console.log(`🖼️ [DELETE_PROFILE_IMAGE] URL image trouvée: ${imageUrl}`);
+        logger.debug(
+          `🖼️ [DELETE_PROFILE_IMAGE] URL image trouvée: ${imageUrl}`,
+        );
 
         if (!imageUrl) {
-          console.log("⚠️ [DELETE_PROFILE_IMAGE] Aucune image à supprimer");
+          logger.debug("⚠️ [DELETE_PROFILE_IMAGE] Aucune image à supprimer");
           return {
             success: true,
             message: "Aucune image de profil à supprimer",
@@ -305,10 +308,10 @@ const imageUploadResolvers = {
         // URL format: https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev/68cad81bb22506f4c701424d/image/034e23b0-7d87-4a8a-8e4f-dfdf87204131.webp
         const urlParts = imageUrl.split("/");
         const key = urlParts.slice(-3).join("/"); // userId/image/uniqueId.extension
-        console.log(`🔑 [DELETE_PROFILE_IMAGE] Clé extraite: ${key}`);
+        logger.debug(`🔑 [DELETE_PROFILE_IMAGE] Clé extraite: ${key}`);
 
         const success = await cloudflareService.deleteImage(key);
-        console.log(
+        logger.debug(
           `☁️ [DELETE_PROFILE_IMAGE] Suppression Cloudflare: ${success}`,
         );
 
@@ -323,10 +326,10 @@ const imageUploadResolvers = {
               "profile.profilePictureKey": 1,
             },
           });
-          console.log("💾 [DELETE_PROFILE_IMAGE] Base de données mise à jour");
+          logger.debug("💾 [DELETE_PROFILE_IMAGE] Base de données mise à jour");
         }
 
-        console.log(
+        logger.debug(
           `✅ [DELETE_PROFILE_IMAGE] Suppression terminée, succès: ${success}`,
         );
         return {

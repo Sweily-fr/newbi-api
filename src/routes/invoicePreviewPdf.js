@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import express from "express";
 import fetch from "node-fetch";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
@@ -14,14 +15,14 @@ const router = express.Router();
  */
 router.post("/invoice-preview-pdf", validateJWT, async (req, res) => {
   try {
-    console.log("[Preview PDF Proxy] Request received");
+    logger.debug("[Preview PDF Proxy] Request received");
     const { invoiceData } = req.body;
 
     if (!invoiceData) {
       return res.status(400).json({ error: "invoiceData est requis" });
     }
 
-    console.log("[Preview PDF Proxy] Forwarding to Next.js...");
+    logger.debug("[Preview PDF Proxy] Forwarding to Next.js...");
     // Forward to Next.js preview-pdf endpoint
     const nextjsUrl =
       process.env.NEXT_PUBLIC_APP_URL ||

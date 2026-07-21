@@ -864,14 +864,14 @@ const invoiceResolvers = {
           context.workspaceId,
         );
         if (!purchaseOrderNumber || purchaseOrderNumber.trim() === "") {
-          console.log(
+          logger.debug(
             "⚠️ Aucune référence fournie pour la recherche de factures de situation",
           );
           return [];
         }
 
         const reference = purchaseOrderNumber.trim();
-        console.log("🔍 Recherche des factures de situation:", {
+        logger.debug("🔍 Recherche des factures de situation:", {
           workspaceId,
           situationReference: reference,
         });
@@ -885,7 +885,7 @@ const invoiceResolvers = {
           .populate("createdBy")
           .sort({ createdAt: 1 }); // Trier par date de création croissante
 
-        console.log(
+        logger.debug(
           `✅ ${invoices.length} facture(s) de situation trouvée(s) avec situationReference="${reference}"`,
         );
 
@@ -900,7 +900,7 @@ const invoiceResolvers = {
           inputWorkspaceId,
           context.workspaceId,
         );
-        console.log(
+        logger.debug(
           `🔍 Recherche des références de situation pour workspace: ${workspaceId}`,
         );
 
@@ -1052,11 +1052,11 @@ const invoiceResolvers = {
           };
         });
 
-        console.log(
+        logger.debug(
           `✅ ${referencesWithContract.length} référence(s) de situation trouvée(s)`,
         );
         if (referencesWithContract.length > 0) {
-          console.log(
+          logger.debug(
             "📋 Références:",
             referencesWithContract.map((r) => ({
               ref: r.reference,
@@ -1488,7 +1488,7 @@ const invoiceResolvers = {
 
             // Log pour vérifier les champs de situation
             if (input.invoiceType === "situation") {
-              console.log("📝 Création facture de situation:", {
+              logger.debug("📝 Création facture de situation:", {
                 invoiceType: input.invoiceType,
                 situationReference: input.situationReference,
                 contractTotal: input.contractTotal,
@@ -1574,13 +1574,13 @@ const invoiceResolvers = {
               }
             }
 
-            console.log(
+            logger.debug(
               `✅ Facture sauvegardée avec succès: ${prefix}${number}`,
             );
 
             // Log pour les factures de situation
             if (invoice.invoiceType === "situation") {
-              console.log("📊 Facture de situation sauvegardée:", {
+              logger.debug("📊 Facture de situation sauvegardée:", {
                 id: invoice._id,
                 situationReference: invoice.situationReference,
                 contractTotal: invoice.contractTotal,
@@ -2828,7 +2828,7 @@ const invoiceResolvers = {
                   prefix = `F-${month}${year}`;
                 }
 
-                console.log(
+                logger.debug(
                   "🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:",
                   prefix,
                 );
@@ -2857,7 +2857,7 @@ const invoiceResolvers = {
               session.endSession();
               if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
                 // Duplicate key error, réessayer
-                console.log(
+                logger.debug(
                   `⚠️ [changeInvoiceStatus] E11000 retry attempt ${attempt + 1}`,
                 );
                 continue;

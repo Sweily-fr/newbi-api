@@ -84,7 +84,7 @@ router.get(
           .json({ error: "InstitutionId requis (banque à connecter)" });
       }
 
-      console.log(
+      logger.debug(
         "🔍 Route /gocardless/connect - workspaceId:",
         workspaceId,
         "institutionId:",
@@ -220,7 +220,7 @@ router.get(
       const providerId = req.query.providerId || req.query.bankId; // Provider pré-sélectionné (optionnel)
       const source = req.query.source || "web"; // "web" (default) or "mobile"
 
-      console.log(
+      logger.debug(
         "🔍 Route /bridge/connect - workspaceId:",
         workspaceId,
         "providerId:",
@@ -243,7 +243,7 @@ router.get(
         existingBridgeUser =
           await provider.getBridgeUserByExternalId(workspaceId);
         if (existingBridgeUser) {
-          console.log(
+          logger.debug(
             "ℹ️ Utilisateur Bridge existant trouvé:",
             existingBridgeUser.uuid,
           );

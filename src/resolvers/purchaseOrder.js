@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import {
@@ -1093,7 +1094,7 @@ const purchaseOrderResolvers = {
               } catch (err) {
                 session.endSession();
                 if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
-                  console.log(
+                  logger.debug(
                     `⚠️ [changePurchaseOrderStatus] E11000 retry attempt ${attempt + 1}`,
                   );
                   continue;

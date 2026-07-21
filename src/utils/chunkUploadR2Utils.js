@@ -1,3 +1,4 @@
+import logger from "./logger.js";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
@@ -14,7 +15,7 @@ const TEMP_CHUNKS_DIR = path.join(
   process.cwd(),
   "public",
   "uploads",
-  "temp-chunks"
+  "temp-chunks",
 );
 
 /**
@@ -31,7 +32,7 @@ export const saveChunkToR2 = async (
   fileId,
   chunkIndex,
   fileName,
-  transferId = null
+  transferId = null,
 ) => {
   try {
     const { createReadStream } = await chunk;
@@ -49,8 +50,8 @@ export const saveChunkToR2 = async (
     }
     const chunkBuffer = Buffer.concat(chunks);
 
-    console.log(
-      `📤 Sauvegarde chunk ${chunkIndex} pour fichier ${fileId} (${chunkBuffer.length} octets)`
+    logger.debug(
+      `📤 Sauvegarde chunk ${chunkIndex} pour fichier ${fileId} (${chunkBuffer.length} octets)`,
     );
 
     // Upload du chunk vers R2
@@ -59,7 +60,7 @@ export const saveChunkToR2 = async (
       transferId,
       fileId,
       chunkIndex,
-      fileName
+      fileName,
     );
 
     return {
@@ -71,7 +72,7 @@ export const saveChunkToR2 = async (
   } catch (error) {
     console.error(
       `Erreur lors de la sauvegarde du chunk ${chunkIndex} pour le fichier ${fileId}:`,
-      error
+      error,
     );
     throw error;
   }
@@ -88,7 +89,7 @@ export const saveChunkToR2 = async (
 export const areAllChunksReceivedOnR2 = async (
   transferId,
   fileId,
-  totalChunks
+  totalChunks,
 ) => {
   try {
     // Utiliser listObjects pour trouver tous les chunks
@@ -101,8 +102,8 @@ export const areAllChunksReceivedOnR2 = async (
 
     // Vérifier si on a tous les chunks
     if (matchingChunks.length < totalChunks) {
-      console.log(
-        `❌ Chunks manquants pour fichier ${fileId}: ${matchingChunks.length}/${totalChunks}`
+      logger.debug(
+        `❌ Chunks manquants pour fichier ${fileId}: ${matchingChunks.length}/${totalChunks}`,
       );
       return false;
     }
@@ -118,19 +119,19 @@ export const areAllChunksReceivedOnR2 = async (
 
     for (let i = 0; i < totalChunks; i++) {
       if (!foundIndices.has(i)) {
-        console.log(`❌ Chunk ${i} manquant pour fichier ${fileId}`);
+        logger.debug(`❌ Chunk ${i} manquant pour fichier ${fileId}`);
         return false;
       }
     }
 
-    console.log(
-      `✅ Tous les chunks (${totalChunks}) présents pour fichier ${fileId}`
+    logger.debug(
+      `✅ Tous les chunks (${totalChunks}) présents pour fichier ${fileId}`,
     );
     return true;
   } catch (error) {
     console.error(
       `Erreur lors de la vérification des chunks pour ${fileId}:`,
-      error
+      error,
     );
     return false;
   }
@@ -150,11 +151,11 @@ export const reconstructFileFromR2 = async (
   fileId,
   fileName,
   totalChunks,
-  mimeType
+  mimeType,
 ) => {
   try {
-    console.log(
-      `🔧 Reconstruction du fichier ${fileName} (${fileId}) à partir de ${totalChunks} chunks`
+    logger.debug(
+      `🔧 Reconstruction du fichier ${fileName} (${fileId}) à partir de ${totalChunks} chunks`,
     );
 
     // Déterminer le type MIME si non fourni
@@ -169,11 +170,11 @@ export const reconstructFileFromR2 = async (
       fileId,
       fileName,
       totalChunks,
-      mimeType
+      mimeType,
     );
 
-    console.log(
-      `✅ Fichier reconstruit: ${result.key} (${result.size} octets)`
+    logger.debug(
+      `✅ Fichier reconstruit: ${result.key} (${result.size} octets)`,
     );
 
     // ✅ CORRECTION #2: Séparer le nom original (sans ID) du nom de stockage (avec ID)
@@ -196,7 +197,7 @@ export const reconstructFileFromR2 = async (
   } catch (error) {
     console.error(
       `Erreur lors de la reconstruction du fichier ${fileId}:`,
-      error
+      error,
     );
     throw error;
   }
@@ -211,20 +212,20 @@ export const reconstructFileFromR2 = async (
  */
 export const cleanupChunksFromR2 = async (transferId, fileId, totalChunks) => {
   try {
-    console.log(`🧹 Nettoyage des chunks pour fichier ${fileId}`);
+    logger.debug(`🧹 Nettoyage des chunks pour fichier ${fileId}`);
 
     await cloudflareTransferService.cleanupChunks(
       transferId,
       fileId,
-      totalChunks
+      totalChunks,
     );
 
-    console.log(`✅ Nettoyage terminé pour fichier ${fileId}`);
+    logger.debug(`✅ Nettoyage terminé pour fichier ${fileId}`);
     return true;
   } catch (error) {
     console.error(
       `Erreur lors du nettoyage des chunks pour le fichier ${fileId}:`,
-      error
+      error,
     );
     return false;
   }
@@ -249,8 +250,8 @@ export const uploadFileDirectToR2 = async (file, transferId, fileId) => {
     }
     const fileBuffer = Buffer.concat(chunks);
 
-    console.log(
-      `📤 Upload direct du fichier ${filename} (${fileBuffer.length} octets)`
+    logger.debug(
+      `📤 Upload direct du fichier ${filename} (${fileBuffer.length} octets)`,
     );
 
     // Vérifier la taille du fichier
@@ -264,14 +265,14 @@ export const uploadFileDirectToR2 = async (file, transferId, fileId) => {
       transferId,
       fileId,
       filename,
-      mimetype
+      mimetype,
     );
 
     return {
       originalName: filename,
       displayName: filename,
       fileName: `${fileId}_${cloudflareTransferService.sanitizeFileName(
-        filename
+        filename,
       )}`,
       filePath: result.url,
       r2Key: result.key,
@@ -296,8 +297,8 @@ export const uploadBase64FileToR2 = async (fileInput, transferId, fileId) => {
   try {
     const { name, type, size, base64 } = fileInput;
 
-    console.log(
-      `📤 Upload base64 du fichier ${name} (taille déclarée: ${size})`
+    logger.debug(
+      `📤 Upload base64 du fichier ${name} (taille déclarée: ${size})`,
     );
 
     // Décoder le base64
@@ -329,7 +330,7 @@ export const uploadBase64FileToR2 = async (fileInput, transferId, fileId) => {
     // Décoder en buffer
     const fileBuffer = Buffer.from(base64Data, "base64");
 
-    console.log(`📊 Fichier décodé: ${fileBuffer.length} octets`);
+    logger.debug(`📊 Fichier décodé: ${fileBuffer.length} octets`);
 
     // Vérifier la taille du fichier
     if (!cloudflareTransferService.isValidFileSize(fileBuffer)) {
@@ -342,7 +343,7 @@ export const uploadBase64FileToR2 = async (fileInput, transferId, fileId) => {
       transferId,
       fileId,
       name,
-      contentType
+      contentType,
     );
 
     return {
@@ -374,12 +375,12 @@ export const deleteFileFromR2 = async (r2Key) => {
     }
 
     await cloudflareTransferService.deleteFile(r2Key);
-    console.log(`🗑️ Fichier supprimé de R2: ${r2Key}`);
+    logger.debug(`🗑️ Fichier supprimé de R2: ${r2Key}`);
     return true;
   } catch (error) {
     console.error(
       `Erreur lors de la suppression du fichier R2 ${r2Key}:`,
-      error
+      error,
     );
     return false;
   }
@@ -401,7 +402,7 @@ export const generateFileAccessUrl = async (r2Key, expiresIn = 3600) => {
   } catch (error) {
     console.error(
       `Erreur lors de la génération de l'URL d'accès pour ${r2Key}:`,
-      error
+      error,
     );
     throw error;
   }

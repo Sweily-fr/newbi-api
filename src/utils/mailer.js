@@ -1,3 +1,4 @@
+import logger from "./logger.js";
 import nodemailer from "nodemailer";
 import emailReminderService from "../services/emailReminderService.js";
 
@@ -603,7 +604,7 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
       if (error) {
         throw new Error(error.message || "Resend error");
       }
-      console.log(
+      logger.debug(
         `📧 Email de transfert envoyé via Resend (id: ${data?.id}) à ${recipientEmail}`,
       );
       return true;
@@ -1450,7 +1451,7 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(
+    logger.debug(
       `✅ Email d'assignation envoyé à ${assigneeEmail} pour la tâche "${taskTitle}"`,
     );
     return true;
@@ -1589,7 +1590,7 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(
+    logger.debug(
       `✅ Email de mention envoyé à ${recipientEmail} pour la tâche "${taskTitle}"`,
     );
     return true;
@@ -1651,7 +1652,7 @@ const sendShareAccessApprovedEmail = async (
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(
+    logger.debug(
       `✅ Email d'approbation d'accès envoyé à ${recipientEmail} pour le tableau "${safeBoard}"`,
     );
     return true;
@@ -1713,7 +1714,7 @@ const sendShareAccessRejectedEmail = async (
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(
+    logger.debug(
       `✅ Email de refus d'accès envoyé à ${recipientEmail} pour le tableau "${safeBoard}"`,
     );
     return true;

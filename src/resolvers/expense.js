@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import Expense from "../models/Expense.js";
 import {
   UserInputError,
@@ -32,18 +33,18 @@ const deleteFile = async (file) => {
   try {
     // Vérifier si c'est une URL Cloudflare
     if (file.url && file.url.includes("r2.dev")) {
-      console.log("🗑️ Suppression du fichier Cloudflare:", file.url);
+      logger.debug("🗑️ Suppression du fichier Cloudflare:", file.url);
       // Extraire la clé du fichier de l'URL
       // Format: https://pub-xxx.r2.dev/{key}
       const urlParts = file.url.split("/");
       const key = urlParts.slice(3).join("/");
       await cloudflareService.deleteImage(key);
-      console.log("✅ Fichier Cloudflare supprimé");
+      logger.debug("✅ Fichier Cloudflare supprimé");
     } else if (file.path) {
       // Fichier local
-      console.log("🗑️ Suppression du fichier local:", file.path);
+      logger.debug("🗑️ Suppression du fichier local:", file.path);
       await unlinkAsync(file.path);
-      console.log("✅ Fichier local supprimé");
+      logger.debug("✅ Fichier local supprimé");
     }
   } catch (error) {
     console.warn("⚠️ Impossible de supprimer le fichier:", error.message);

@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import SharedDocument from "../models/SharedDocument.js";
@@ -886,7 +887,7 @@ const fileTransferResolvers = {
               };
 
               await sendFileTransferEmail(recipientEmail, transferData);
-              console.log(
+              logger.debug(
                 "📧 Email de transfert (shared docs ZIP) envoyé à:",
                 recipientEmail,
               );

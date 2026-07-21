@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import DocumentAutomation from "../models/DocumentAutomation.js";
 import DocumentAutomationLog from "../models/DocumentAutomationLog.js";
 import SharedDocument from "../models/SharedDocument.js";
@@ -180,12 +181,12 @@ async function resolveTargetFolder(
   const createSubfolder = actionConfig.createSubfolder;
   const targetFolderId = actionConfig.targetFolderId;
 
-  console.log(
+  logger.debug(
     `📁 [resolveTargetFolder] createSubfolder=${createSubfolder}, pattern=${actionConfig.subfolderPattern}, targetFolderId=${targetFolderId}`,
   );
 
   if (!createSubfolder) {
-    console.log(
+    logger.debug(
       `📁 [resolveTargetFolder] Pas de sous-dossier, retour targetFolderId=${targetFolderId}`,
     );
     return targetFolderId;
@@ -211,7 +212,7 @@ async function resolveTargetFolder(
   }
 
   const levels = [folderName];
-  console.log(
+  logger.debug(
     `📁 [resolveTargetFolder] Pattern: "${pattern}" → dossier: "${folderName}"`,
   );
 
@@ -223,7 +224,7 @@ async function resolveTargetFolder(
 
     if (cached && Date.now() - cached.ts < FOLDER_CACHE_TTL) {
       currentParentId = cached.id;
-      console.log(
+      logger.debug(
         `📁 [resolveTargetFolder] Cache hit: "${levelName}" → ${cached.id}`,
       );
       continue;
@@ -245,11 +246,11 @@ async function resolveTargetFolder(
         isSharedWithAccountant: true,
       });
       await folder.save();
-      console.log(
+      logger.debug(
         `📁 [resolveTargetFolder] Dossier CRÉÉ: "${levelName}" (${folder._id}) sous parentId=${currentParentId}`,
       );
     } else {
-      console.log(
+      logger.debug(
         `📁 [resolveTargetFolder] Dossier existant: "${levelName}" (${folder._id})`,
       );
     }
@@ -258,7 +259,7 @@ async function resolveTargetFolder(
     currentParentId = folder._id;
   }
 
-  console.log(
+  logger.debug(
     `📁 [resolveTargetFolder] Résultat final: folderId=${currentParentId}`,
   );
   return currentParentId;
@@ -1908,7 +1909,7 @@ const documentAutomationService = {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    console.log("🔍 [OverdueCron] Vérification des documents en retard...");
+    logger.debug("🔍 [OverdueCron] Vérification des documents en retard...");
 
     // Trouver tous les workspaces ayant des automatisations OVERDUE actives
     const overdueAutomations = await DocumentAutomation.find({
@@ -1917,7 +1918,7 @@ const documentAutomationService = {
     }).lean();
 
     if (overdueAutomations.length === 0) {
-      console.log("ℹ️ [OverdueCron] Aucune automatisation OVERDUE active.");
+      logger.debug("ℹ️ [OverdueCron] Aucune automatisation OVERDUE active.");
       return { processed: 0 };
     }
 
@@ -2020,7 +2021,7 @@ const documentAutomationService = {
       }
     }
 
-    console.log(
+    logger.debug(
       `✅ [OverdueCron] ${totalProcessed} document(s) en retard traité(s).`,
     );
     return { processed: totalProcessed };

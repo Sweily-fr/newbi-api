@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour l'OCR (Hybrid: Claude Vision + fallbacks)
  */
@@ -87,7 +88,7 @@ const ocrResolvers = {
           // Vérifier le cache Redis
           const cached = await ocrCacheService.get(contentHash);
           if (cached) {
-            console.log(`💾 OCR Cache HIT pour ${filename} — retour immédiat`);
+            logger.debug(`💾 OCR Cache HIT pour ${filename} — retour immédiat`);
             return cached;
           }
 
@@ -101,7 +102,7 @@ const ocrResolvers = {
 
           // Tentative 1: OCR direct via Claude Vision
           try {
-            console.log(`🔍 OCR direct (processFromBase64) pour ${filename}`);
+            logger.debug(`🔍 OCR direct (processFromBase64) pour ${filename}`);
             rawResult = await claudeVisionOcrService.processFromBase64(
               base64Data,
               mimetype,
@@ -127,7 +128,7 @@ const ocrResolvers = {
           } catch (claudeError) {
             // Tentative 2: Fallback — upload Cloudflare + OCR hybride (Mistral, etc.)
             console.warn(`⚠️ Claude Vision échoué: ${claudeError.message}`);
-            console.log(
+            logger.debug(
               `🔄 Fallback: upload Cloudflare + OCR hybride pour ${filename}`,
             );
 
@@ -148,7 +149,7 @@ const ocrResolvers = {
                 throw new Error("Échec upload Cloudflare");
               }
 
-              console.log(`☁️ Upload Cloudflare OK: ${uploadResult.url}`);
+              logger.debug(`☁️ Upload Cloudflare OK: ${uploadResult.url}`);
 
               // OCR via service hybride (Mistral, Google, etc.)
               const hybridResult =
@@ -171,7 +172,7 @@ const ocrResolvers = {
                   document_analysis: hybridResult.document_analysis,
                 };
               } else {
-                console.log("🤖 Analyse intelligente Mistral (fallback)...");
+                logger.debug("🤖 Analyse intelligente Mistral (fallback)...");
                 financialAnalysis =
                   await mistralIntelligentAnalysisService.analyzeDocument(
                     hybridResult,
@@ -193,7 +194,7 @@ const ocrResolvers = {
               };
               usedFallback = true;
 
-              console.log(`✅ Fallback OCR réussi via ${rawResult.provider}`);
+              logger.debug(`✅ Fallback OCR réussi via ${rawResult.provider}`);
             } catch (fallbackError) {
               console.error(`❌ Fallback OCR échoué: ${fallbackError.message}`);
               throw createInternalServerError(
@@ -284,7 +285,7 @@ const ocrResolvers = {
               });
 
               await ocrDocument.save();
-              console.log(
+              logger.debug(
                 `✅ OCR document sauvegardé (background): ${documentId}`,
               );
 
@@ -370,7 +371,7 @@ const ocrResolvers = {
           const cached = await ocrCacheService.get(urlHash);
 
           if (cached) {
-            console.log(`💾 OCR Cache HIT pour ${fileName} — retour immédiat`);
+            logger.debug(`💾 OCR Cache HIT pour ${fileName} — retour immédiat`);
             return cached;
           }
 
@@ -395,7 +396,7 @@ const ocrResolvers = {
 
           if (ocrResult.provider === "claude-vision") {
             // Claude Vision fournit déjà transaction_data, extracted_fields, document_analysis
-            console.log(
+            logger.debug(
               "⚡ Claude Vision: données structurées disponibles, skip analyse Mistral",
             );
             financialAnalysis = {
@@ -405,14 +406,14 @@ const ocrResolvers = {
             };
           } else {
             // Fallback: analyse avec Mistral AI
-            console.log(
+            logger.debug(
               "🤖 Démarrage de l'analyse intelligente avec Mistral AI...",
             );
             financialAnalysis =
               await mistralIntelligentAnalysisService.analyzeDocument(
                 ocrResult,
               );
-            console.log(
+            logger.debug(
               "✅ Analyse intelligente terminée:",
               financialAnalysis.transaction_data?.vendor_name,
             );

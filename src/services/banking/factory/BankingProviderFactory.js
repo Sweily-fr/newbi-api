@@ -1,3 +1,4 @@
+import logger from "../../../utils/logger.js";
 import { BankingProvider } from "../interfaces/BankingProvider.js";
 
 /**
@@ -30,7 +31,7 @@ export class BankingProviderFactory {
       process.env.DEFAULT_BANKING_PROVIDER ||
       "gocardless";
 
-    console.log(`🏦 Création du provider banking: ${selectedProvider}`);
+    logger.debug(`🏦 Création du provider banking: ${selectedProvider}`);
 
     const ProviderClass = this.providers.get(selectedProvider);
 
@@ -46,7 +47,7 @@ export class BankingProviderFactory {
     // Validation de la configuration
     if (!instance.validateConfig()) {
       throw new Error(
-        `Configuration invalide pour le provider: ${selectedProvider}`
+        `Configuration invalide pour le provider: ${selectedProvider}`,
       );
     }
 
@@ -141,7 +142,7 @@ export class BankingProviderFactory {
       } catch (error) {
         console.warn(
           `Impossible de créer le provider ${providerName}:`,
-          error.message
+          error.message,
         );
       }
     }
@@ -159,7 +160,7 @@ export class BankingProviderFactory {
     }
 
     this.defaultProvider = newProviderName;
-    console.log(`🔄 Provider par défaut changé pour: ${newProviderName}`);
+    logger.debug(`🔄 Provider par défaut changé pour: ${newProviderName}`);
   }
 
   /**
@@ -167,9 +168,9 @@ export class BankingProviderFactory {
    */
   static async initialize() {
     // Les providers seront enregistrés lors de leur import
-    console.log("🏭 Factory Banking initialisée");
-    console.log(
-      `📋 Providers disponibles: ${this.getAvailableProviders().join(", ")}`
+    logger.debug("🏭 Factory Banking initialisée");
+    logger.debug(
+      `📋 Providers disponibles: ${this.getAvailableProviders().join(", ")}`,
     );
   }
 }

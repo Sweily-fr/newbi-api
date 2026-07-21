@@ -2423,7 +2423,7 @@ const resolvers = {
             _id: { $ne: id }, // Exclure la tâche qu'on déplace
           }).sort("position");
 
-          console.log(
+          logger.debug(
             "📊 [moveTask] Tâches de la colonne cible AVANT update (sans la tâche déplacée):",
             {
               columnId: columnId,
@@ -2532,7 +2532,7 @@ const resolvers = {
           // Publier UN SEUL événement pour la tâche principale déplacée
           // Les autres tâches réorganisées ne nécessitent pas de publication
           const updatedTask = await Task.findOne({ _id: id });
-          console.log(
+          logger.debug(
             "📢 [moveTask] Publication événement pour la tâche principale:",
             {
               taskId: updatedTask._id.toString(),

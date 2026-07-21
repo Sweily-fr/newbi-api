@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Service d'extraction de factures amélioré
  * Utilise des patterns spécialisés pour les factures françaises
@@ -474,7 +475,7 @@ class InvoiceExtractionService {
     if (hasAutoliquidation) {
       result.isReverseCharge = true;
       // eslint-disable-next-line no-console
-      console.log("🔄 Autoliquidation détectée - TVA sera mise à 0");
+      logger.debug("🔄 Autoliquidation détectée - TVA sera mise à 0");
     }
 
     // Appliquer chaque pattern
@@ -859,7 +860,7 @@ RÉPONDS UNIQUEMENT EN JSON VALIDE:
 
     // Log si réduction significative
     if (text.length > relevantText.length * 1.5) {
-      console.log(
+      logger.debug(
         `📄 Facture optimisée: ${text.length} → ${relevantText.length} car. (header + totaux uniquement)`,
       );
     }
@@ -1216,7 +1217,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
       if (month > 12 && day <= 12) {
         const corrected = `${year}-${String(day).padStart(2, "0")}-${String(month).padStart(2, "0")}`;
         const date = new Date(corrected);
-        console.log(`📅 Date corrigée (mois > 12): ${dateStr} → ${corrected}`);
+        logger.debug(`📅 Date corrigée (mois > 12): ${dateStr} → ${corrected}`);
         return isNaN(date.getTime()) ? null : corrected;
       }
 
@@ -1244,7 +1245,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
           // L'IA a lu en américain, il faut swapper
           const corrected = `${year}-${dayStr}-${monthStr}`;
           const date = new Date(corrected);
-          console.log(
+          logger.debug(
             `📅 Date corrigée (inversion jour/mois détectée): ${dateStr} → ${corrected}`,
           );
           return isNaN(date.getTime()) ? null : corrected;
@@ -1269,7 +1270,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
         // Pas d'inversion, format correct : day est bien le jour
       } else if (parseInt(day) <= 12 && parseInt(month) > 12) {
         // Inversion évidente : swapper
-        console.log(
+        logger.debug(
           `📅 Date française corrigée (inversion): ${day}/${month}/${year} → ${month}/${day}/${year}`,
         );
         [day, month] = [month, day];
@@ -1390,7 +1391,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
         totals.total_ttc = totals.total_ht;
       }
       // eslint-disable-next-line no-console
-      console.log("🔄 Post-process: Autoliquidation - TVA forcée à 0");
+      logger.debug("🔄 Post-process: Autoliquidation - TVA forcée à 0");
     } else {
       // Calculs normaux seulement si pas d'autoliquidation
 
@@ -1424,7 +1425,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte avant ou après.`;
           totals.total_tax = 0;
           data.transaction_data.tax_amount = 0;
           // eslint-disable-next-line no-console
-          console.log(
+          logger.debug(
             "⚠️ Post-process: TVA calculée négative, mise à 0 (probable autoliquidation)",
           );
         }
