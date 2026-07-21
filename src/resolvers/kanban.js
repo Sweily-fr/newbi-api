@@ -115,7 +115,7 @@ const enrichTaskWithUserInfo = async (task) => {
         .collection("user")
         .find({ _id: { $in: [...userStringIds, ...userObjectIds] } })
         .toArray();
-      logger.info(
+      logger.debug(
         `🔍 [enrichTask] ${users.length} utilisateurs trouvés pour ${userStringIds.length} IDs demandés`,
       );
       users.forEach((u) => {
@@ -132,7 +132,7 @@ const enrichTaskWithUserInfo = async (task) => {
         }
         // Prioriser u.image (Better Auth) avant u.avatar (ancien système)
         const userImage = u.image || u.avatar || null;
-        logger.info(
+        logger.debug(
           `📋 [enrichTask] User ${u._id.toString()}: name=${displayName}, image=${userImage ? "oui" : "non"}, u.image=${u.image ? "oui" : "non"}, u.avatar=${u.avatar ? "oui" : "non"}`,
         );
         usersMap[u._id.toString()] = { name: displayName, image: userImage };
@@ -155,7 +155,7 @@ const enrichTaskWithUserInfo = async (task) => {
 
   // Récupérer les infos des visiteurs externes depuis PublicBoardShare et UserInvited
   let visitorsMap = {};
-  logger.info(
+  logger.debug(
     `🔍 [enrichTask] externalEmails: ${externalEmails.size}, visitorIds: ${visitorIds.size}, boardId: ${taskObj.boardId}`,
   );
   if ((externalEmails.size > 0 || visitorIds.size > 0) && taskObj.boardId) {
@@ -166,7 +166,7 @@ const enrichTaskWithUserInfo = async (task) => {
         boardId: taskObj.boardId,
         isActive: true,
       });
-      logger.info(
+      logger.debug(
         `🔍 [enrichTask] Share trouvé: ${!!share}, visiteurs: ${share?.visitors?.length || 0}`,
       );
       if (share?.visitors) {
@@ -199,7 +199,7 @@ const enrichTaskWithUserInfo = async (task) => {
             email: { $in: Array.from(externalEmails) },
           }).lean();
 
-          logger.info(
+          logger.debug(
             `🔍 [enrichTask] ${invitedUsers.length} utilisateurs invités trouvés pour ${externalEmails.size} emails`,
           );
 
@@ -225,7 +225,7 @@ const enrichTaskWithUserInfo = async (task) => {
 
             // Indexer par email (clé primaire dans UserInvited)
             visitorsMap[u.email.toLowerCase()] = visitorData;
-            logger.info(
+            logger.debug(
               `📋 [enrichTask] UserInvited indexé: ${u.email} -> ${displayName}, image: ${u.image ? "oui" : "non"}`,
             );
           });
@@ -578,11 +578,11 @@ const resolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         try {
-          logger.info("🔍 [Kanban] organizationMembers appelé");
-          logger.info(`🔍 [Kanban] workspaceId (args): ${workspaceId}`);
-          logger.info(`🔍 [Kanban] contextWorkspaceId: ${contextWorkspaceId}`);
-          logger.info(`🔍 [Kanban] finalWorkspaceId: ${finalWorkspaceId}`);
-          logger.info(`🔍 [Kanban] db disponible: ${!!db}`);
+          logger.debug("🔍 [Kanban] organizationMembers appelé");
+          logger.debug(`🔍 [Kanban] workspaceId (args): ${workspaceId}`);
+          logger.debug(`🔍 [Kanban] contextWorkspaceId: ${contextWorkspaceId}`);
+          logger.debug(`🔍 [Kanban] finalWorkspaceId: ${finalWorkspaceId}`);
+          logger.debug(`🔍 [Kanban] db disponible: ${!!db}`);
 
           // Convertir le workspaceId en ObjectId pour la recherche
           let orgId;
@@ -591,7 +591,7 @@ const resolvers = {
               typeof finalWorkspaceId === "string"
                 ? new ObjectId(finalWorkspaceId)
                 : finalWorkspaceId;
-            logger.info(`✅ [Kanban] orgId converti: ${orgId}`);
+            logger.debug(`✅ [Kanban] orgId converti: ${orgId}`);
           } catch (conversionError) {
             logger.error(
               `❌ [Kanban] Erreur conversion ObjectId: ${conversionError.message}`,
@@ -599,7 +599,7 @@ const resolvers = {
             return [];
           }
 
-          logger.info(
+          logger.debug(
             `🔍 [Kanban] Recherche membres pour organisation: ${orgId}`,
           );
 
@@ -608,7 +608,7 @@ const resolvers = {
             .collection("organization")
             .findOne({ _id: orgId });
 
-          logger.info(
+          logger.debug(
             `🔍 [Kanban] Résultat findOne organisation: ${
               organization ? "trouvée" : "non trouvée"
             }`,
@@ -622,7 +622,7 @@ const resolvers = {
               .find({})
               .limit(5)
               .toArray();
-            logger.info(
+            logger.debug(
               `📋 [Kanban] Organisations en base (premiers 5): ${allOrgs
                 .map((o) => o._id)
                 .join(", ")}`,
@@ -630,7 +630,9 @@ const resolvers = {
             return [];
           }
 
-          logger.info(`🏢 [Kanban] Organisation trouvée: ${organization.name}`);
+          logger.debug(
+            `🏢 [Kanban] Organisation trouvée: ${organization.name}`,
+          );
 
           // 2. Récupérer TOUS les membres (y compris owner) via la collection member
           // Better Auth stocke TOUS les membres dans la collection member, même l'owner
@@ -641,7 +643,7 @@ const resolvers = {
             })
             .toArray();
 
-          logger.info(
+          logger.debug(
             `📋 [Kanban] ${members.length} membres trouvés (incluant owner)`,
           );
 
@@ -658,7 +660,7 @@ const resolvers = {
             return typeof userId === "string" ? new ObjectId(userId) : userId;
           });
 
-          logger.info(
+          logger.debug(
             `👥 [Kanban] Recherche de ${userIds.length} utilisateurs`,
           );
 
@@ -670,7 +672,7 @@ const resolvers = {
             })
             .toArray();
 
-          logger.info(`✅ [Kanban] ${users.length} utilisateurs trouvés`);
+          logger.debug(`✅ [Kanban] ${users.length} utilisateurs trouvés`);
 
           // 5. Créer le résultat en combinant membres et users
           const result = members
@@ -715,8 +717,8 @@ const resolvers = {
             })
             .filter(Boolean); // Retirer les null
 
-          logger.info(`✅ [Kanban] Retour de ${result.length} membres`);
-          logger.info(
+          logger.debug(`✅ [Kanban] Retour de ${result.length} membres`);
+          logger.debug(
             "📋 [Kanban] Détails:",
             result.map((r) => ({
               email: r.email,
@@ -765,7 +767,7 @@ const resolvers = {
           })
           .toArray();
 
-        logger.info(
+        logger.debug(
           `✅ [Kanban] Récupéré ${users.length} utilisateurs sur ${userIds.length} demandés`,
         );
 
