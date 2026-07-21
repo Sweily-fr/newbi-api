@@ -1,30 +1,9 @@
+import crypto from "crypto";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
 import mongoose from "mongoose";
-
-// ✅ Cache LRU partagé pour éviter User.findById à chaque requête cookie
-const USER_CACHE_TTL = 30_000; // 30 secondes
-const USER_CACHE_MAX = 500;
-const _cookieUserCache = new Map();
-
-function getCachedUser(userId) {
-  const entry = _cookieUserCache.get(userId);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > USER_CACHE_TTL) {
-    _cookieUserCache.delete(userId);
-    return null;
-  }
-  return entry.user;
-}
-
-function setCachedUser(userId, user) {
-  if (_cookieUserCache.size >= USER_CACHE_MAX) {
-    const oldestKey = _cookieUserCache.keys().next().value;
-    _cookieUserCache.delete(oldestKey);
-  }
-  _cookieUserCache.set(userId, { user, ts: Date.now() });
-}
+import { getCachedUser, setCachedUser } from "./user-cache.js";
 
 /**
  * Extrait le token de session depuis les cookies
@@ -60,14 +39,45 @@ const extractSessionToken = (cookieHeader) => {
         decodedValue = rawValue;
       }
 
-      // Better Auth signe les cookies : rawToken.base64HmacSignature
-      // La signature HMAC-SHA256 en base64 fait toujours 44 caractères et finit par '='
+      // Better Auth (via better-call) signe les cookies :
+      // rawToken.base64(HMAC-SHA256(secret, rawToken))
       const lastDotIndex = decodedValue.lastIndexOf(".");
       if (lastDotIndex > 0) {
+        const candidateToken = decodedValue.substring(0, lastDotIndex);
         const signature = decodedValue.substring(lastDotIndex + 1);
-        if (signature.length === 44 && signature.endsWith("=")) {
-          // Cookie signé : retourner uniquement le token brut (avant la signature)
-          return decodedValue.substring(0, lastDotIndex);
+
+        // Vérification cryptographique réelle avec le secret partagé.
+        const secret = process.env.BETTER_AUTH_SECRET;
+        if (secret) {
+          try {
+            const expected = crypto
+              .createHmac("sha256", secret)
+              .update(candidateToken)
+              .digest();
+            const provided = Buffer.from(
+              signature.replace(/-/g, "+").replace(/_/g, "/"),
+              "base64",
+            );
+            if (
+              provided.length === expected.length &&
+              crypto.timingSafeEqual(provided, expected)
+            ) {
+              return candidateToken;
+            }
+          } catch {
+            // Signature illisible : on retombe sur l'heuristique de format
+          }
+        }
+
+        // Fallback format (secret absent ou différent du front) : signature
+        // HMAC-SHA256 en base64/base64url, avec ou sans padding (43-44 chars).
+        if (/^[A-Za-z0-9+/_-]{43,44}={0,2}$/.test(signature)) {
+          if (secret) {
+            logger.warn(
+              "Cookie session: signature au format HMAC mais vérification échouée — BETTER_AUTH_SECRET différent du frontend ?",
+            );
+          }
+          return candidateToken;
         }
       }
 
