@@ -217,6 +217,14 @@ const quoteResolvers = {
       }
       return [];
     },
+    // Bons de commande créés depuis ce devis — résolus à l'inverse via
+    // PurchaseOrder.sourceQuoteId (le devis ne stocke pas de référence vers les BC)
+    linkedPurchaseOrders: async (quote) => {
+      return await PurchaseOrder.find({
+        sourceQuoteId: quote._id,
+        workspaceId: quote.workspaceId,
+      }).sort({ createdAt: -1 });
+    },
     // true si une facture existe déjà via un bon de commande issu de ce devis.
     // Sert au front à masquer/désactiver les boutons de conversion pour éviter
     // les doublons devis→facture vs devis→BC→facture.

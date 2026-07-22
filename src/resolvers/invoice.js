@@ -355,6 +355,42 @@ const invoiceResolvers = {
       }
     },
 
+    // Devis source. Lien direct via invoice.sourceQuote quand il existe, sinon
+    // recherche inverse dans Quote.linkedInvoices (factures créées avant l'ajout
+    // du champ sourceQuote ou liées via purchaseOrderNumber).
+    sourceQuote: async (invoice) => {
+      try {
+        if (invoice.sourceQuote) {
+          const quote = await Quote.findOne({
+            _id: invoice.sourceQuote,
+            workspaceId: invoice.workspaceId,
+          });
+          if (quote) return quote;
+        }
+        return await Quote.findOne({
+          linkedInvoices: invoice._id,
+          workspaceId: invoice.workspaceId,
+        });
+      } catch (error) {
+        logger.error("[Invoice.sourceQuote] Erreur:", error);
+        return null;
+      }
+    },
+
+    // Bon de commande source — résolu à l'inverse via PurchaseOrder.linkedInvoices
+    // (le modèle Invoice ne stocke pas de référence vers le BC).
+    sourcePurchaseOrder: async (invoice) => {
+      try {
+        return await PurchaseOrder.findOne({
+          linkedInvoices: invoice._id,
+          workspaceId: invoice.workspaceId,
+        });
+      } catch (error) {
+        logger.error("[Invoice.sourcePurchaseOrder] Erreur:", error);
+        return null;
+      }
+    },
+
     // Transactions bancaires liées (rapprochement N↔N). Résolues à la volée
     // depuis linkedTransactionIds pour éviter un round-trip côté client.
     // Filtre par workspaceId pour empêcher tout accès cross-tenant (IDOR).
