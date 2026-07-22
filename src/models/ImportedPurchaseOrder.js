@@ -194,7 +194,8 @@ importedPurchaseOrderSchema.index({
   originalPurchaseOrderNumber: 1,
 });
 
-importedPurchaseOrderSchema.methods.validate = function () {
+// Méthode métier — ne pas écraser le validate() natif de Mongoose
+importedPurchaseOrderSchema.methods.markValidated = function () {
   this.status = "VALIDATED";
   return this.save();
 };

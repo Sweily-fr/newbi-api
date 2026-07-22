@@ -757,7 +757,7 @@ const importedPurchaseOrderResolvers = {
     validateImportedPurchaseOrder: requireWrite("importedPurchaseOrders")(
       async (_, { id }, { workspaceId }) => {
         const po = await checkPurchaseOrderAccess(id, workspaceId);
-        return po.validate();
+        return po.markValidated();
       },
     ),
 

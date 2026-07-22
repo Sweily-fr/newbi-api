@@ -799,7 +799,7 @@ const importedQuoteResolvers = {
     validateImportedQuote: requireWrite("importedQuotes")(
       async (_, { id }, context) => {
         const quote = await checkQuoteAccess(id, context.workspaceId);
-        return quote.validate();
+        return quote.markValidated();
       },
     ),
 

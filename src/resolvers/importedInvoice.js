@@ -1428,7 +1428,7 @@ const importedInvoiceResolvers = {
     validateImportedInvoice: requireWrite("importedInvoices")(
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
-        return invoice.validate();
+        return invoice.markValidated();
       },
     ),
 
