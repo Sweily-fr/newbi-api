@@ -2391,7 +2391,7 @@ const resolvers = {
         );
         if (!task) throw new Error("Task not found");
 
-        logger.info("📝 [UpdateTask] Task après sauvegarde:", {
+        logger.debug("📝 [UpdateTask] Task après sauvegarde:", {
           dueDate: task.dueDate,
           dueDateType: typeof task.dueDate,
           dueDateISO: task.dueDate ? task.dueDate.toISOString() : null,
