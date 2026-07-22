@@ -50,8 +50,8 @@ class MindeeOcrService {
         this.enabled = false;
       }
     } else {
-      console.warn(
-        "⚠️ Mindee OCR non configuré. Variable manquante: MINDEE_API_KEY",
+      logger.debug(
+        "ℹ️ Mindee OCR non configuré (optionnel, Claude Vision est le provider principal). Variable: MINDEE_API_KEY",
       );
     }
   }

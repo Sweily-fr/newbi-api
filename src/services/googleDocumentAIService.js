@@ -36,8 +36,8 @@ class GoogleDocumentAIService {
       logger.debug(`   - Processor: ${this.processorName}`);
     } else {
       this.enabled = false;
-      console.warn(
-        "⚠️ Google Document AI non configuré. Variables manquantes: GOOGLE_CLOUD_PROJECT_ID, GOOGLE_DOCUMENT_AI_PROCESSOR_ID",
+      logger.debug(
+        "ℹ️ Google Document AI non configuré (optionnel, Claude Vision est le provider principal). Variables: GOOGLE_CLOUD_PROJECT_ID, GOOGLE_DOCUMENT_AI_PROCESSOR_ID",
       );
     }
   }
