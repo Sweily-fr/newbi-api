@@ -219,8 +219,8 @@ router.get("/accounts", async (req, res) => {
     if (!skipCache) {
       const cached = await bankingCacheService.getAccounts(workspaceId);
       if (cached.fromCache && cached.data) {
-        logger.info(
-          ` Cache HIT: ${cached.data.length} comptes pour workspace ${workspaceId}`,
+        logger.debug(
+          `Cache HIT: ${cached.data.length} comptes pour workspace ${workspaceId}`,
         );
         return res.json({
           success: true,
@@ -243,8 +243,8 @@ router.get("/accounts", async (req, res) => {
     // Mettre en cache
     await bankingCacheService.setAccounts(workspaceId, accounts);
 
-    logger.info(
-      ` BDD: ${accounts.length} comptes pour workspace ${workspaceId}`,
+    logger.debug(
+      `BDD: ${accounts.length} comptes pour workspace ${workspaceId}`,
     );
 
     res.json({

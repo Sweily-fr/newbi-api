@@ -248,8 +248,9 @@ importedInvoiceSchema.pre("save", function (next) {
   next();
 });
 
-// Méthode pour valider une facture
-importedInvoiceSchema.methods.validate = function () {
+// Méthode pour valider une facture (métier — ne pas écraser le
+// validate() natif de Mongoose)
+importedInvoiceSchema.methods.markValidated = function () {
   this.status = "VALIDATED";
   return this.save();
 };
