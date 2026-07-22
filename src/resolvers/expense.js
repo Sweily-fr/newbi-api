@@ -1,10 +1,6 @@
 import logger from "../utils/logger.js";
 import Expense from "../models/Expense.js";
-import {
-  UserInputError,
-  ForbiddenError,
-  ApolloError,
-} from "apollo-server-express";
+import { UserInputError, ApolloError } from "apollo-server-express";
 import mongoose from "mongoose";
 import fs from "fs";
 import path from "path";
@@ -19,7 +15,6 @@ import {
   requireDelete,
   requirePermission,
   requireActiveSubscription,
-  withOrganization,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";

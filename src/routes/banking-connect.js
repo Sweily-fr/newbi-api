@@ -3,7 +3,6 @@ import { bankingService } from "../services/banking/index.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
-import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();

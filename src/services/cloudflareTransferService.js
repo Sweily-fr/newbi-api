@@ -20,9 +20,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
-import crypto from "crypto";
 
 // Charger les variables d'environnement
 dotenv.config();

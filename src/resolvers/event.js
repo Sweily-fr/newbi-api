@@ -4,10 +4,7 @@ import Invoice from "../models/Invoice.js";
 import Client from "../models/Client.js";
 import CalendarConnection from "../models/CalendarConnection.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
-import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
+import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import emailReminderService from "../services/emailReminderService.js";
 import {
   deleteEventFromExternalCalendars,
@@ -35,9 +32,7 @@ function buildAssignedMemberInfo(idStr, user) {
   const image =
     rawImage && rawImage !== "null" && rawImage !== "" ? rawImage : null;
   const name =
-    [user.name, user.lastName].filter(Boolean).join(" ") ||
-    user.email ||
-    idStr;
+    [user.name, user.lastName].filter(Boolean).join(" ") || user.email || idStr;
   return { id: idStr, userId: idStr, name, email: user.email || null, image };
 }
 

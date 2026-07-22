@@ -19,7 +19,6 @@ import GmailConnection from "../models/GmailConnection.js";
 import Notification from "../models/Notification.js";
 import DocumentSettings from "../models/DocumentSettings.js";
 import EmailSettings from "../models/EmailSettings.js";
-import DeletionRequest from "../models/DeletionRequest.js";
 
 /**
  * ========================================
@@ -48,8 +47,11 @@ const ANONYMIZED_LABEL = "Utilisateur supprimé";
 function hashEmail(email) {
   if (!email) return "anonymized@deleted.local";
   return (
-    crypto.createHash("sha256").update(email.toLowerCase()).digest("hex").substring(0, 16) +
-    "@deleted.local"
+    crypto
+      .createHash("sha256")
+      .update(email.toLowerCase())
+      .digest("hex")
+      .substring(0, 16) + "@deleted.local"
   );
 }
 
@@ -108,7 +110,9 @@ export async function deleteUserAccount(userId, organizationId) {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const orgObjectId = new mongoose.Types.ObjectId(organizationId);
 
-    logger.info(`[RGPD] Début de la suppression du compte utilisateur ${userId} (org: ${organizationId})`);
+    logger.info(
+      `[RGPD] Début de la suppression du compte utilisateur ${userId} (org: ${organizationId})`,
+    );
 
     // ================================================================
     // 1. ANONYMISATION DES DOCUMENTS COMPTABLES (conservation 10 ans)
@@ -123,7 +127,9 @@ export async function deleteUserAccount(userId, organizationId) {
     for (const invoice of invoices) {
       if (invoice.companyInfo) {
         invoice.companyInfo = anonymizeCompanyInfo(
-          invoice.companyInfo.toObject ? invoice.companyInfo.toObject() : invoice.companyInfo
+          invoice.companyInfo.toObject
+            ? invoice.companyInfo.toObject()
+            : invoice.companyInfo,
         );
       }
       // Anonymiser les coordonnées bancaires au niveau facture
@@ -147,7 +153,7 @@ export async function deleteUserAccount(userId, organizationId) {
     for (const cn of creditNotes) {
       if (cn.companyInfo) {
         cn.companyInfo = anonymizeCompanyInfo(
-          cn.companyInfo.toObject ? cn.companyInfo.toObject() : cn.companyInfo
+          cn.companyInfo.toObject ? cn.companyInfo.toObject() : cn.companyInfo,
         );
       }
       if (cn.bankDetails) {
@@ -169,7 +175,9 @@ export async function deleteUserAccount(userId, organizationId) {
     for (const quote of quotes) {
       if (quote.companyInfo) {
         quote.companyInfo = anonymizeCompanyInfo(
-          quote.companyInfo.toObject ? quote.companyInfo.toObject() : quote.companyInfo
+          quote.companyInfo.toObject
+            ? quote.companyInfo.toObject()
+            : quote.companyInfo,
         );
       }
       if (quote.cachedPdf) {
@@ -271,58 +279,55 @@ export async function deleteUserAccount(userId, organizationId) {
 
     // --- Kanban (projets et tâches) ---
     const db = mongoose.connection.db;
-    const kanbanResult = await db.collection("kanbanprojects").deleteMany(
-      { workspaceId: orgObjectId },
-      { session }
-    );
+    const kanbanResult = await db
+      .collection("kanbanprojects")
+      .deleteMany({ workspaceId: orgObjectId }, { session });
     summary.kanbanProjectsDeleted = kanbanResult.deletedCount || 0;
 
     // --- Supprimer les tâches kanban associées ---
-    await db.collection("kanbantasks").deleteMany(
-      { workspaceId: orgObjectId },
-      { session }
-    );
+    await db
+      .collection("kanbantasks")
+      .deleteMany({ workspaceId: orgObjectId }, { session });
 
     // ================================================================
     // 3. SUPPRESSION DES COLLECTIONS BETTER AUTH
     // ================================================================
 
     // --- Sessions ---
-    await db.collection("session").deleteMany(
-      { userId: userObjectId },
-      { session }
-    );
+    await db
+      .collection("session")
+      .deleteMany({ userId: userObjectId }, { session });
 
     // --- Comptes OAuth (Better Auth) ---
-    await db.collection("account").deleteMany(
-      { userId: userObjectId },
-      { session }
-    );
+    await db
+      .collection("account")
+      .deleteMany({ userId: userObjectId }, { session });
 
     // --- Vérifier si l'utilisateur est le seul membre de l'organisation ---
-    const memberCount = await db.collection("member").countDocuments(
-      { organizationId: orgObjectId },
-      { session }
-    );
+    const memberCount = await db
+      .collection("member")
+      .countDocuments({ organizationId: orgObjectId }, { session });
 
     // --- Supprimer l'adhésion de l'utilisateur ---
-    await db.collection("member").deleteMany(
-      { userId: userObjectId, organizationId: orgObjectId },
-      { session }
-    );
+    await db
+      .collection("member")
+      .deleteMany(
+        { userId: userObjectId, organizationId: orgObjectId },
+        { session },
+      );
 
     // Si l'utilisateur est le seul membre, supprimer l'organisation et les invitations
     if (memberCount <= 1) {
-      await db.collection("organization").deleteOne(
-        { _id: orgObjectId },
-        { session }
-      );
-      await db.collection("invitation").deleteMany(
-        { organizationId: orgObjectId },
-        { session }
-      );
+      await db
+        .collection("organization")
+        .deleteOne({ _id: orgObjectId }, { session });
+      await db
+        .collection("invitation")
+        .deleteMany({ organizationId: orgObjectId }, { session });
       summary.organizationDeleted = true;
-      logger.info(`[RGPD] Organisation ${organizationId} supprimée (dernier membre)`);
+      logger.info(
+        `[RGPD] Organisation ${organizationId} supprimée (dernier membre)`,
+      );
     }
 
     // ================================================================
@@ -376,23 +381,30 @@ export async function deleteUserAccount(userId, organizationId) {
 
     for (const col of collectionsToClean) {
       try {
-        const collections = await db.listCollections({ name: col.name }).toArray();
+        const collections = await db
+          .listCollections({ name: col.name })
+          .toArray();
         if (collections.length > 0) {
           await db.collection(col.name).deleteMany(col.filter, { session });
         }
       } catch (err) {
         // Collection might not exist — not critical
-        logger.warn(`[RGPD] Collection ${col.name} introuvable ou erreur: ${err.message}`);
+        logger.warn(
+          `[RGPD] Collection ${col.name} introuvable ou erreur: ${err.message}`,
+        );
       }
     }
 
     await session.commitTransaction();
-    logger.info(`[RGPD] Suppression du compte ${userId} terminée avec succès`, summary);
+    logger.info(
+      `[RGPD] Suppression du compte ${userId} terminée avec succès`,
+      summary,
+    );
 
     // Log R2 keys that need cleanup (async, outside transaction)
     if (r2KeysToCleanup.length > 0) {
       logger.info(
-        `[RGPD] ${r2KeysToCleanup.length} fichiers R2 à nettoyer pour l'utilisateur ${userId}`
+        `[RGPD] ${r2KeysToCleanup.length} fichiers R2 à nettoyer pour l'utilisateur ${userId}`,
       );
       // TODO: Implement async R2 cleanup via queue/worker
       // For now, these keys are logged for manual or future automated cleanup
@@ -401,7 +413,10 @@ export async function deleteUserAccount(userId, organizationId) {
     return summary;
   } catch (error) {
     await session.abortTransaction();
-    logger.error(`[RGPD] Erreur lors de la suppression du compte ${userId}:`, error);
+    logger.error(
+      `[RGPD] Erreur lors de la suppression du compte ${userId}:`,
+      error,
+    );
     throw error;
   } finally {
     session.endSession();
@@ -419,7 +434,9 @@ export async function exportUserData(userId, organizationId) {
   const userObjectId = new mongoose.Types.ObjectId(userId);
   const orgObjectId = new mongoose.Types.ObjectId(organizationId);
 
-  logger.info(`[RGPD] Export des données pour l'utilisateur ${userId} (org: ${organizationId})`);
+  logger.info(
+    `[RGPD] Export des données pour l'utilisateur ${userId} (org: ${organizationId})`,
+  );
 
   const db = mongoose.connection.db;
 
@@ -660,7 +677,9 @@ export async function exportUserData(userId, organizationId) {
     gmailConnections,
   };
 
-  logger.info(`[RGPD] Export terminé pour l'utilisateur ${userId}: ${invoices.length} factures, ${quotes.length} devis, ${clients.length} clients, ${expenses.length} dépenses`);
+  logger.info(
+    `[RGPD] Export terminé pour l'utilisateur ${userId}: ${invoices.length} factures, ${quotes.length} devis, ${clients.length} clients, ${expenses.length} dépenses`,
+  );
 
   return exportData;
 }

@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 import { requireRead, resolveWorkspaceId } from "../middlewares/rbac.js";
-import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { Board, Task } from "../models/kanban.js";
 
 /**

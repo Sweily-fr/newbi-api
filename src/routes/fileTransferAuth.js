@@ -4,10 +4,7 @@ import {
   markDownloadCompleted,
   getDownloadStats,
 } from "../controllers/fileTransferAuthController.js";
-import {
-  verifyTransferPassword,
-  previewFile,
-} from "../controllers/fileTransferController.js";
+import { verifyTransferPassword } from "../controllers/fileTransferController.js";
 
 const router = express.Router();
 

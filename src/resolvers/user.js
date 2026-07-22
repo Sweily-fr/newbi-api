@@ -15,7 +15,6 @@ import {
 } from "../utils/mailer.js";
 import { saveBase64Image, deleteFile } from "../utils/fileUpload.js";
 import cloudflareService from "../services/cloudflareService.js";
-import path from "path";
 import CryptoJS from "crypto-js";
 import {
   AppError,

@@ -1,5 +1,3 @@
-import logger from "../utils/logger.js";
-
 /**
  * Service de routage e-invoicing / e-reporting
  *

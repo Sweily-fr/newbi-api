@@ -1,4 +1,3 @@
-import jwt from "jsonwebtoken";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";

@@ -1,13 +1,18 @@
-import mongoose from 'mongoose';
-import { EMAIL_REGEX, SIRET_REGEX, VAT_FR_REGEX, NAME_REGEX, isInternationalEntity } from '../../utils/validators.js';
-import addressSchema from './address.js';
+import mongoose from "mongoose";
+import {
+  EMAIL_REGEX,
+  VAT_FR_REGEX,
+  NAME_REGEX,
+  isInternationalEntity,
+} from "../../utils/validators.js";
+import addressSchema from "./address.js";
 
 /**
  * Types de client
  */
 const CLIENT_TYPES = {
-  INDIVIDUAL: 'INDIVIDUAL',
-  COMPANY: 'COMPANY'
+  INDIVIDUAL: "INDIVIDUAL",
+  COMPANY: "COMPANY",
 };
 
 /**
@@ -24,7 +29,7 @@ const clientSchema = new mongoose.Schema({
     type: String,
     enum: Object.values(CLIENT_TYPES),
     default: CLIENT_TYPES.COMPANY,
-    required: true
+    required: true,
   },
   // Champs spécifiques aux particuliers
   firstName: {
@@ -32,33 +37,37 @@ const clientSchema = new mongoose.Schema({
     trim: true,
     // Requis uniquement pour les particuliers
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         // Si c'est un particulier, le prénom est obligatoire
-        return this.type !== CLIENT_TYPES.INDIVIDUAL || (v && v.trim().length > 0);
+        return (
+          this.type !== CLIENT_TYPES.INDIVIDUAL || (v && v.trim().length > 0)
+        );
       },
-      message: 'Le prénom est requis pour un client particulier'
-    }
+      message: "Le prénom est requis pour un client particulier",
+    },
   },
   lastName: {
     type: String,
     trim: true,
     // Requis uniquement pour les particuliers
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         // Si c'est un particulier, le nom est obligatoire
-        return this.type !== CLIENT_TYPES.INDIVIDUAL || (v && v.trim().length > 0);
+        return (
+          this.type !== CLIENT_TYPES.INDIVIDUAL || (v && v.trim().length > 0)
+        );
       },
-      message: 'Le nom est requis pour un client particulier'
-    }
+      message: "Le nom est requis pour un client particulier",
+    },
   },
   // Nom (obligatoire pour les entreprises, généré pour les particuliers)
   name: {
     type: String,
     trim: true,
-    match: [NAME_REGEX, 'Le nom du client est invalide'],
+    match: [NAME_REGEX, "Le nom du client est invalide"],
     // Validation conditionnelle: obligatoire pour les entreprises, généré pour les particuliers
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         // Pour les entreprises, le nom est obligatoire
         if (this.type === CLIENT_TYPES.COMPANY) {
           return v && v.trim().length > 0;
@@ -66,41 +75,44 @@ const clientSchema = new mongoose.Schema({
         // Pour les particuliers, le nom peut être généré automatiquement
         return true;
       },
-      message: 'Le nom de l\'entreprise est requis'
-    }
+      message: "Le nom de l'entreprise est requis",
+    },
   },
   email: {
     type: String,
     required: true,
     trim: true,
     lowercase: true,
-    match: [EMAIL_REGEX, 'Veuillez fournir une adresse email valide']
+    match: [EMAIL_REGEX, "Veuillez fournir une adresse email valide"],
   },
   address: {
     type: addressSchema,
-    required: true
+    required: true,
   },
   // Indique si l'adresse de livraison est différente de l'adresse de facturation
   hasDifferentShippingAddress: {
     type: Boolean,
-    default: false
+    default: false,
   },
   // Adresse de livraison (obligatoire si hasDifferentShippingAddress est true)
   shippingAddress: {
     type: addressSchema,
     // Validation conditionnelle: obligatoire uniquement si hasDifferentShippingAddress est true
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         // Si hasDifferentShippingAddress est true, shippingAddress doit être défini
-        return !this.hasDifferentShippingAddress || (v && Object.keys(v).length > 0);
+        return (
+          !this.hasDifferentShippingAddress || (v && Object.keys(v).length > 0)
+        );
       },
-      message: 'L\'adresse de livraison est requise lorsque l\'option "Adresse de livraison différente" est activée'
-    }
+      message:
+        "L'adresse de livraison est requise lorsque l'option \"Adresse de livraison différente\" est activée",
+    },
   },
   // Indique si l'entreprise est hors France (pas de validation SIRET/TVA stricte)
   isInternational: {
     type: Boolean,
-    default: false
+    default: false,
   },
   // Champs spécifiques aux entreprises (SIRET/SIREN pour FR, autre identifiant pour international)
   siret: {
@@ -108,7 +120,7 @@ const clientSchema = new mongoose.Schema({
     trim: true,
     // Obligatoire pour les entreprises, mais pas de validation de format strict
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         // Si ce n'est pas une entreprise, pas besoin de SIRET
         if (this.type !== CLIENT_TYPES.COMPANY) return true;
         // Entreprise hors France : SIREN/TVA = notions FR → non requis
@@ -116,25 +128,27 @@ const clientSchema = new mongoose.Schema({
         // Pour les entreprises françaises, un identifiant est obligatoire
         return v && v.trim().length > 0;
       },
-      message: 'Un numéro d\'identification (SIRET/SIREN ou équivalent) est requis pour une entreprise'
-    }
+      message:
+        "Un numéro d'identification (SIRET/SIREN ou équivalent) est requis pour une entreprise",
+    },
   },
   vatNumber: {
     type: String,
     trim: true,
     // Validation du format uniquement si une valeur est fournie et client non international
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         // Pour les entreprises internationales, pas de validation stricte
         if (this.isInternational) return true;
         // Si le champ est vide ou undefined, c'est valide (optionnel)
-        if (!v || v.trim() === '') return true;
+        if (!v || v.trim() === "") return true;
         // Si une valeur est fournie, elle doit respecter le format FR
         return VAT_FR_REGEX.test(v);
       },
-      message: 'Veuillez fournir un numéro de TVA valide (format FR, ex: FR12345678901)'
-    }
-  }
+      message:
+        "Veuillez fournir un numéro de TVA valide (format FR, ex: FR12345678901)",
+    },
+  },
 });
 
 export default clientSchema;

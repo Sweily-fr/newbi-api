@@ -8,10 +8,7 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import Event from "../models/Event.js";
-import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
+import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireCompanyInfo,
   getOrganizationInfo,
@@ -20,7 +17,6 @@ import {
   requireWrite,
   requireDelete,
   checkSubscriptionActive,
-  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXArchiveService.js";

@@ -9,10 +9,7 @@ import { createPseudoMap } from "../services/assistant/PseudonymMap.js";
 import { createStreamHydrator } from "../services/assistant/streamHydrator.js";
 import { preparePayloadForLLM } from "../services/assistant/toolResultPipeline.js";
 import { buildResolverContext } from "../services/assistant/buildResolverContext.js";
-import {
-  checkAndConsume,
-  RATE_LIMITS,
-} from "../services/assistant/rateLimit.js";
+import { checkAndConsume } from "../services/assistant/rateLimit.js";
 import {
   SYSTEM_BLOCKS,
   TOOL_SCHEMAS_CACHED,
@@ -198,11 +195,9 @@ router.post("/log", async (req, res) => {
 router.post("/chat", async (req, res) => {
   try {
     if (!anthropic) {
-      return res
-        .status(503)
-        .json({
-          error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
-        });
+      return res.status(503).json({
+        error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
+      });
     }
 
     const user = await betterAuthJWTMiddleware(req);
@@ -374,11 +369,9 @@ const ASSISTANT_TOOL_LOOP_MAX_ITERS = 4; // garde-fou anti-boucle infinie
 router.post("/chat/stream", async (req, res) => {
   // ─── 1. Vérifs préalables ────────────────────────────────────────
   if (!anthropic) {
-    return res
-      .status(503)
-      .json({
-        error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
-      });
+    return res.status(503).json({
+      error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
+    });
   }
   const user = await betterAuthJWTMiddleware(req);
   if (!user) return res.status(401).json({ error: "Non authentifié" });

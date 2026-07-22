@@ -1,11 +1,9 @@
 import path from "path";
 import fs from "fs";
 import FileTransfer from "../models/FileTransfer.js";
-import { createZipArchive } from "../utils/fileTransferUtils.js";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import Stripe from "stripe";
 import archiver from "archiver";
-import { Readable } from "stream";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const logger = console; // Utilisation de console comme logger de base
