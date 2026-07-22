@@ -525,7 +525,11 @@ const buildUserDisplayInfo = (u) => {
   } else {
     displayName = u.email?.split("@")[0] || "Utilisateur";
   }
-  return { name: displayName, image: u.avatar || u.image || null };
+  return {
+    name: displayName,
+    image: u.avatar || u.image || null,
+    email: u.email || null,
+  };
 };
 
 // Loader par requête des infos utilisateur : les resolvers Task.comments
@@ -4101,6 +4105,7 @@ const resolvers = {
           id: comment._id?.toString() || comment.id,
           // IMPORTANT: Toujours utiliser userInfo en priorité, ignorer comment.userName stocké
           userName: userInfo?.name || "Utilisateur",
+          userEmail: comment.userEmail || userInfo?.email || null,
           userImage: userInfo?.image || null,
           // Préserver les images du commentaire
           images: (comment.images || []).map((img) => {

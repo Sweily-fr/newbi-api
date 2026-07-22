@@ -66,10 +66,12 @@ type Comment {
   id: ID!
   userId: String!
   userName: String
+  userEmail: String
   userImage: String
   content: String
   mentions: [String!]
   images: [TaskImage!]
+  isExternal: Boolean
   createdAt: DateTime!
   updatedAt: DateTime!
 }
