@@ -691,12 +691,20 @@ export class BridgeProvider extends BankingProvider {
 
       do {
         // Construire les paramètres de requête
+        // Bridge v3: min_date/max_date filtrent sur la date de la transaction.
+        // Ne PAS utiliser "since" (filtre sur updated_at) ni "until" (inexistant en v3),
+        // sinon l'API renvoie tout l'historique à chaque sync.
         const params = {
           account_id: accountId,
           limit: this.config.sync.transactionsPerPage,
-          since,
-          until,
+          min_date: since,
         };
+
+        // Ne borner la fin que si demandé explicitement (max_date exclut
+        // potentiellement le jour même, on laisse ouvert par défaut)
+        if (options.until) {
+          params.max_date = until;
+        }
 
         // Ajouter le curseur pour la pagination
         if (cursor) {
@@ -729,15 +737,17 @@ export class BridgeProvider extends BankingProvider {
         }
 
         // Vérifier s'il y a une page suivante
-        // Bridge utilise le champ "pagination.next_uri" ou le dernier ID
-        const pagination = response.data.pagination;
-        if (
-          pagination?.next_uri ||
-          (resources.length === this.config.sync.transactionsPerPage &&
-            resources.length > 0)
-        ) {
-          // Utiliser l'ID de la dernière transaction comme curseur
-          cursor = resources[resources.length - 1]?.id?.toString();
+        // Bridge v3: le curseur "after" est opaque et fourni dans
+        // pagination.next_uri (la doc interdit de forger ses propres curseurs)
+        const nextUri = response.data.pagination?.next_uri;
+        if (nextUri) {
+          try {
+            cursor = new URL(nextUri, this.config.baseUrl).searchParams.get(
+              "after",
+            );
+          } catch {
+            cursor = null;
+          }
         } else {
           cursor = null;
         }
