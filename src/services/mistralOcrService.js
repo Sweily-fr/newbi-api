@@ -3,7 +3,6 @@
  */
 
 import fetch from "node-fetch";
-import FormData from "form-data";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -16,7 +15,7 @@ class MistralOcrService {
 
     if (!this.apiKey) {
       console.warn(
-        "⚠️ MISTRAL_API_KEY non définie dans les variables d'environnement"
+        "⚠️ MISTRAL_API_KEY non définie dans les variables d'environnement",
       );
     }
   }
@@ -118,12 +117,14 @@ class MistralOcrService {
 
         // Gestion des erreurs
         const errorText = await response.text();
-        
+
         // Rate limiting (429) - retry avec backoff
         if (response.status === 429 && attempt < MAX_RETRIES) {
           const delay = INITIAL_DELAY * Math.pow(2, attempt - 1); // 3s, 6s, 12s
-          console.warn(`⚠️ Rate limit Mistral OCR (tentative ${attempt}/${MAX_RETRIES}), retry dans ${delay/1000}s...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          console.warn(
+            `⚠️ Rate limit Mistral OCR (tentative ${attempt}/${MAX_RETRIES}), retry dans ${delay / 1000}s...`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
           lastError = `Rate limit (429)`;
           continue;
         }
@@ -131,14 +132,14 @@ class MistralOcrService {
         // Autre erreur ou dernière tentative
         console.error("Erreur API Mistral:", response.status, errorText);
         throw new Error(
-          `Erreur API Mistral (${response.status}): ${errorText}`
+          `Erreur API Mistral (${response.status}): ${errorText}`,
         );
       }
 
       // Si on arrive ici, toutes les tentatives ont échoué
       throw new Error(`Échec après ${MAX_RETRIES} tentatives: ${lastError}`);
     } catch (error) {
-      console.error('Erreur lors du traitement OCR:', error);
+      console.error("Erreur lors du traitement OCR:", error);
       throw new Error(`Échec de l'OCR: ${error.message}`);
     }
   }
@@ -163,7 +164,7 @@ class MistralOcrService {
         mimeType,
         documentUrl,
         processedAt: new Date().toISOString(),
-        model: result.model || 'mistral-ocr-latest',
+        model: result.model || "mistral-ocr-latest",
         pagesProcessed: result.usage_info?.pages_processed || 0,
         docSizeBytes: result.usage_info?.doc_size_bytes || 0,
       },
@@ -219,7 +220,7 @@ class MistralOcrService {
       }
 
       console.warn(
-        "⚠️ Aucun texte trouvé dans la structure, utilisation du fallback JSON"
+        "⚠️ Aucun texte trouvé dans la structure, utilisation du fallback JSON",
       );
       return JSON.stringify(result, null, 2);
     } catch (error) {
@@ -350,7 +351,7 @@ class MistralOcrService {
     // Validation des pages
     if (options.pages && Array.isArray(options.pages)) {
       validatedOptions.pages = options.pages.filter(
-        (page) => typeof page === "number" && page >= 0
+        (page) => typeof page === "number" && page >= 0,
       );
     }
 

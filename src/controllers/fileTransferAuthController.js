@@ -1,5 +1,4 @@
 import FileTransfer from "../models/FileTransfer.js";
-import AccessGrant from "../models/AccessGrant.js";
 import DownloadEvent from "../models/DownloadEvent.js";
 import User from "../models/User.js";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";

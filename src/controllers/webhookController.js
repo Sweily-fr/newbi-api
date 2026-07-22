@@ -1,6 +1,5 @@
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
-import Invoice from "../models/Invoice.js";
 import FileTransfer from "../models/FileTransfer.js";
 import PartnerCommission from "../models/PartnerCommission.js";
 import { AppError } from "../utils/errors.js";

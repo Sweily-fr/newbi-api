@@ -7,7 +7,6 @@ import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import mongoose from "mongoose";
-import mistralOcrService from "../services/mistralOcrService.js";
 import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";

@@ -6,7 +6,6 @@ import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { getPubSub, cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
-import User from "../models/User.js";
 import { ObjectId } from "mongodb";
 import { sendTaskAssignmentEmail, sendMentionEmail } from "../utils/mailer.js";
 import Notification from "../models/Notification.js";
@@ -511,6 +510,77 @@ const enrichTasksWithUserInfo = async (tasks) => {
       activity: enrichedActivity,
     };
   });
+};
+
+// Infos d'affichage d'un utilisateur pour l'enrichissement des
+// commentaires et de l'activité des tâches
+const buildUserDisplayInfo = (u) => {
+  let displayName = "";
+  if (u.name && u.lastName) {
+    displayName = `${u.name} ${u.lastName}`;
+  } else if (u.name) {
+    displayName = u.name;
+  } else if (u.lastName) {
+    displayName = u.lastName;
+  } else {
+    displayName = u.email?.split("@")[0] || "Utilisateur";
+  }
+  return { name: displayName, image: u.avatar || u.image || null };
+};
+
+// Loader par requête des infos utilisateur : les resolvers Task.comments
+// et Task.activity tournent en parallèle sur des dizaines de tâches, on
+// déduplique donc les lookups Mongo via un cache de promesses porté par
+// le contexte GraphQL.
+const loadTaskUsersInfo = async (context, userIds) => {
+  const ids = Array.from(userIds);
+  if (ids.length === 0) return {};
+
+  const cache =
+    context && typeof context === "object"
+      ? (context._taskUserInfoCache ??= new Map())
+      : new Map();
+
+  // Pas d'await entre la détection des ids manquants et le remplissage du
+  // cache : les resolvers concurrents du même tick partagent le batch.
+  const missing = ids.filter((id) => !cache.has(id));
+  if (missing.length > 0) {
+    const batch = mongoose.connection.db
+      .collection("user")
+      .find({
+        _id: {
+          $in: missing.map((id) => {
+            try {
+              return new mongoose.Types.ObjectId(id);
+            } catch {
+              return id;
+            }
+          }),
+        },
+      })
+      .toArray()
+      .then(
+        (users) =>
+          new Map(
+            users.map((u) => [u._id.toString(), buildUserDisplayInfo(u)]),
+          ),
+      );
+    for (const id of missing) {
+      cache.set(
+        id,
+        batch.then((m) => m.get(id) || null),
+      );
+    }
+  }
+
+  const usersMap = {};
+  await Promise.all(
+    ids.map(async (id) => {
+      const info = await cache.get(id);
+      if (info) usersMap[id] = info;
+    }),
+  );
+  return usersMap;
 };
 
 const resolvers = {
@@ -3975,10 +4045,8 @@ const resolvers = {
     },
 
     // Enrichir les commentaires avec les infos utilisateur dynamiquement
-    comments: async (task) => {
+    comments: async (task, _args, context) => {
       if (!task.comments || task.comments.length === 0) return [];
-
-      const db = mongoose.connection.db;
 
       // Collecter tous les userIds des commentaires (sauf externes)
       const userIds = new Set();
@@ -3988,48 +4056,15 @@ const resolvers = {
         }
       });
 
-      // Récupérer les infos des utilisateurs
+      // Récupérer les infos des utilisateurs (loader partagé par requête)
       let usersMap = {};
-      if (userIds.size > 0) {
-        try {
-          const userObjectIds = Array.from(userIds).map((id) => {
-            try {
-              return new mongoose.Types.ObjectId(id);
-            } catch {
-              return id;
-            }
-          });
-
-          const users = await db
-            .collection("user")
-            .find({
-              _id: { $in: userObjectIds },
-            })
-            .toArray();
-
-          users.forEach((u) => {
-            // Construire le nom complet
-            let displayName = "";
-            if (u.name && u.lastName) {
-              displayName = `${u.name} ${u.lastName}`;
-            } else if (u.name) {
-              displayName = u.name;
-            } else if (u.lastName) {
-              displayName = u.lastName;
-            } else {
-              displayName = u.email?.split("@")[0] || "Utilisateur";
-            }
-            usersMap[u._id.toString()] = {
-              name: displayName,
-              image: u.avatar || u.image || null,
-            };
-          });
-        } catch (error) {
-          logger.error(
-            "❌ [Task.comments] Erreur récupération utilisateurs:",
-            error,
-          );
-        }
+      try {
+        usersMap = await loadTaskUsersInfo(context, userIds);
+      } catch (error) {
+        logger.error(
+          "❌ [Task.comments] Erreur récupération utilisateurs:",
+          error,
+        );
       }
 
       // Enrichir les commentaires
@@ -4080,10 +4115,8 @@ const resolvers = {
     },
 
     // Enrichir l'activité avec les infos utilisateur dynamiquement
-    activity: async (task) => {
+    activity: async (task, _args, context) => {
       if (!task.activity || task.activity.length === 0) return [];
-
-      const db = mongoose.connection.db;
 
       // Collecter tous les userIds de l'activité
       const userIds = new Set();
@@ -4091,48 +4124,15 @@ const resolvers = {
         if (a.userId) userIds.add(a.userId);
       });
 
-      // Récupérer les infos des utilisateurs
+      // Récupérer les infos des utilisateurs (loader partagé par requête)
       let usersMap = {};
-      if (userIds.size > 0) {
-        try {
-          const userObjectIds = Array.from(userIds).map((id) => {
-            try {
-              return new mongoose.Types.ObjectId(id);
-            } catch {
-              return id;
-            }
-          });
-
-          const users = await db
-            .collection("user")
-            .find({
-              _id: { $in: userObjectIds },
-            })
-            .toArray();
-
-          users.forEach((u) => {
-            // Construire le nom complet
-            let displayName = "";
-            if (u.name && u.lastName) {
-              displayName = `${u.name} ${u.lastName}`;
-            } else if (u.name) {
-              displayName = u.name;
-            } else if (u.lastName) {
-              displayName = u.lastName;
-            } else {
-              displayName = u.email?.split("@")[0] || "Utilisateur";
-            }
-            usersMap[u._id.toString()] = {
-              name: displayName,
-              image: u.avatar || u.image || null,
-            };
-          });
-        } catch (error) {
-          logger.error(
-            "❌ [Task.activity] Erreur récupération utilisateurs:",
-            error,
-          );
-        }
+      try {
+        usersMap = await loadTaskUsersInfo(context, userIds);
+      } catch (error) {
+        logger.error(
+          "❌ [Task.activity] Erreur récupération utilisateurs:",
+          error,
+        );
       }
 
       // Enrichir l'activité

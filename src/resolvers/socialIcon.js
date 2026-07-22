@@ -5,7 +5,7 @@ import logger from "../utils/logger.js";
 
 import socialIconService from "../services/socialIconService.js";
 import { isAuthenticated } from "../middlewares/better-auth.js";
-import { createValidationError, createNotFoundError } from "../utils/errors.js";
+import { createValidationError } from "../utils/errors.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const socialIconResolvers = {

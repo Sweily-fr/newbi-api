@@ -9,9 +9,7 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
-  withRBAC,
   requireWrite,
   requireRead,
   requireDelete,
