@@ -75,6 +75,12 @@ type Invoice {
   eReportingError: String
   # Email tracking
   emailTracking: EmailTracking
+  # Devis source — lien direct (sourceQuote) avec fallback inverse via
+  # Quote.linkedInvoices pour les factures liées avant l'ajout du champ
+  sourceQuote: Quote
+  # Bon de commande source — résolu à l'inverse via PurchaseOrder.linkedInvoices
+  # (le modèle Invoice ne stocke pas de référence vers le BC)
+  sourcePurchaseOrder: PurchaseOrder
   createdAt: String!
   updatedAt: String!
 }
