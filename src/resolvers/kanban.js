@@ -1717,8 +1717,8 @@ const resolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { id, ...updates } = input;
 
-        logger.info("📝 [UpdateTask] dueDate reçue:", input.dueDate);
-        logger.info("📝 [UpdateTask] dueDate type:", typeof input.dueDate);
+        logger.debug("📝 [UpdateTask] dueDate reçue:", input.dueDate);
+        logger.debug("📝 [UpdateTask] dueDate type:", typeof input.dueDate);
 
         // Récupérer la tâche avant modification pour comparer
         const oldTask = await Task.findOne({
@@ -1943,7 +1943,7 @@ const resolvers = {
         // mutations concurrentes (ou arrivées dans le désordre) s'écrasent en
         // "last-write-wins" et un membre retiré peut réapparaître.
         let memberAtomicOps = null; // { add: [], remove: [], all: [] } | null
-        logger.info(
+        logger.debug(
           `📧 [UpdateTask] updates.assignedMembers reçu: ${JSON.stringify(updates.assignedMembers)}`,
         );
         if (updates.assignedMembers !== undefined) {
@@ -1968,7 +1968,7 @@ const resolvers = {
           const oldMembers = normalizeMembers(oldTask.assignedMembers);
           const newMembers = normalizeMembers(updates.assignedMembers);
 
-          logger.info(
+          logger.debug(
             `📧 [UpdateTask] oldMembers: ${JSON.stringify(oldMembers)}, newMembers: ${JSON.stringify(newMembers)}`,
           );
 
@@ -1977,13 +1977,13 @@ const resolvers = {
             oldMembers.length !== newMembers.length ||
             oldMembers.some((m, i) => m !== newMembers[i]);
 
-          logger.info(`📧 [UpdateTask] hasChanged: ${hasChanged}`);
+          logger.debug(`📧 [UpdateTask] hasChanged: ${hasChanged}`);
 
           if (hasChanged) {
             const addedMembers = newMembers.filter(
               (m) => !oldMembers.includes(m),
             );
-            logger.info(
+            logger.debug(
               `📧 [UpdateTask] addedMembers: ${JSON.stringify(addedMembers)}`,
             );
             const removedMembers = oldMembers.filter(
@@ -2017,21 +2017,21 @@ const resolvers = {
               ];
 
               // Envoyer des emails de notification aux membres assignés
-              logger.info(
+              logger.debug(
                 `📧 [UpdateTask] Début envoi emails pour ${addedMembers.length} membres assignés: ${addedMembers.join(", ")}`,
               );
               (async () => {
                 try {
                   // Récupérer les infos du board et de la colonne
                   const board = await Board.findById(oldTask.boardId);
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? "OUI" : "NON"}, Board name: ${board?.title}`,
                   );
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`,
                   );
                   const column = await Column.findById(oldTask.columnId);
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] Column trouvée: ${column ? "OUI" : "NON"}, Column title: ${column?.title}`,
                   );
                   const assignerName =
@@ -2041,7 +2041,7 @@ const resolvers = {
                     "Un membre de l'équipe";
                   const boardName = board?.title || "Tableau sans nom";
                   const columnName = column?.title || "Colonne";
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`,
                   );
 
@@ -2093,11 +2093,11 @@ const resolvers = {
                                 : oldTask.priority || "",
                             taskUrl: taskUrl,
                           });
-                          logger.info(
+                          logger.debug(
                             `📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`,
                           );
                         } else {
-                          logger.info(
+                          logger.debug(
                             `📧 [UpdateTask] Email désactivé par préférences pour ${memberData.email}`,
                           );
                         }
@@ -2125,7 +2125,7 @@ const resolvers = {
 
                             // Publier la notification en temps réel
                             await publishNotification(notification);
-                            logger.info(
+                            logger.debug(
                               `🔔 [UpdateTask] Notification créée pour ${memberData.email}`,
                             );
 
@@ -2151,7 +2151,7 @@ const resolvers = {
                             );
                           }
                         } else {
-                          logger.info(
+                          logger.debug(
                             `🔔 [UpdateTask] Notification push désactivée par préférences pour ${memberData.email}`,
                           );
                         }
