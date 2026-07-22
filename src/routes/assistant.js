@@ -44,15 +44,13 @@ const ASSISTANT_MODEL =
 const ASSISTANT_MAX_TOKENS = 500;
 
 // Log de démarrage : confirme que la clé est lue dans CE process + valide le
-// slug attendu. On masque la clé : préfixe (7 char) + longueur — assez pour
-// diagnostiquer "vide / mal collée / format inconnu" sans la fuiter.
+// slug attendu. Longueur + préfixe attendu (booléen) suffisent pour
+// diagnostiquer "vide / mal collée / format inconnu" sans logger la clé.
 if (anthropic) {
   const k = process.env.ANTHROPIC_API_KEY || "";
-  const masked =
-    k.length >= 11 ? `${k.slice(0, 7)}…${k.slice(-4)}` : "(trop courte)";
   const prefixOk = k.startsWith("sk-ant-");
   logger.info(
-    `[assistant] LLM client ready — model=${ASSISTANT_MODEL} key_prefix=${masked} key_len=${k.length} prefix_ok=${prefixOk}`,
+    `[assistant] LLM client ready — model=${ASSISTANT_MODEL} key_len=${k.length} prefix_ok=${prefixOk}`,
   );
 } else {
   logger.warn(
