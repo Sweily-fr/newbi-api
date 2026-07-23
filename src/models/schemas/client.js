@@ -139,7 +139,7 @@ const clientSchema = new mongoose.Schema({
     validate: {
       validator: function (v) {
         // Pour les entreprises internationales, pas de validation stricte
-        if (this.isInternational) return true;
+        if (isInternationalEntity(this)) return true;
         // Si le champ est vide ou undefined, c'est valide (optionnel)
         if (!v || v.trim() === "") return true;
         // Si une valeur est fournie, elle doit respecter le format FR
