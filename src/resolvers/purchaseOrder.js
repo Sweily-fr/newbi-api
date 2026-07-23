@@ -1180,6 +1180,9 @@ const purchaseOrderResolvers = {
         const purchaseOrder = new PurchaseOrder({
           number,
           prefix,
+          purchaseOrderNumber: quote.prefix
+            ? `${quote.prefix.replace(/-$/, "")}-${quote.number}`
+            : quote.number,
           client: quoteObj.client,
           companyInfo: mapOrganizationToCompanyInfo(organization),
           items: quoteObj.items,
