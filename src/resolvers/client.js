@@ -124,12 +124,9 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // International si le flag est coché OU si le pays renseigné n'est pas la France
           const isIntl = isInternationalEntity(input);
-          if (isIntl) {
-            // Entreprise hors France : SIREN/TVA sont des notions franco-françaises
-            // → champs non requis et non stockés en base
-            clientData.siret = undefined;
-            clientData.vatNumber = undefined;
-          } else {
+          // Entreprise hors France : numéro fiscal local et n° TVA optionnels,
+          // format libre → stockés tels quels, aucune validation FR
+          if (!isIntl) {
             // Entreprise française : le SIREN/SIRET est obligatoire
             if (!input.siret || input.siret.trim() === "") {
               throw new Error(
@@ -248,12 +245,9 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // International si le flag est coché OU si le pays renseigné n'est pas la France
           const isIntl = isInternationalEntity(input);
-          if (isIntl) {
-            // Entreprise hors France : SIREN/TVA sont des notions franco-françaises
-            // → champs non requis et vidés en base (le client était peut-être FR avant)
-            updateData.siret = "";
-            updateData.vatNumber = "";
-          } else {
+          // Entreprise hors France : numéro fiscal local et n° TVA optionnels,
+          // format libre → stockés tels quels, aucune validation FR
+          if (!isIntl) {
             // Entreprise française : le SIREN/SIRET est obligatoire
             if (!input.siret || input.siret.trim() === "") {
               throw new Error(
