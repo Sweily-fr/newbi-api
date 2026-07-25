@@ -162,8 +162,10 @@ export function mapOrganizationToCompanyInfo(organization) {
     transactionCategory: mapActivityToTransactionCategory(
       organization.activityCategory,
     ),
+    // Priorité au régime de TVA choisi explicitement (vatMode: debits/encaissements),
+    // fallback sur le régime fiscal (reel-normal/reel-simplifie -> DEBITS)
     vatPaymentCondition: mapFiscalRegimeToVatCondition(
-      organization.fiscalRegime,
+      organization.vatMode || organization.fiscalRegime,
     ),
     capitalSocial: organization.capitalSocial || "",
     rcs: organization.rcs || "",
