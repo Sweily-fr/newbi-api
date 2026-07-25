@@ -378,21 +378,15 @@ async function startServer() {
 
   app.use(graphqlUploadExpress({ maxFileSize: 104857600, maxFiles: 20 }));
 
-  // DEBUG: Log les requêtes GraphQL qui retournent 400
+  // Trace les requêtes GraphQL qui retournent 400 (requêtes malformées,
+  // scanners, introspection refusée...) : faute du client, pas du serveur,
+  // donc en debug — visible en staging, silencieux en prod.
   app.use("/graphql", (req, res, next) => {
     const originalSend = res.send;
     res.send = function (body) {
       if (res.statusCode === 400) {
-        console.error("⚠️ [DEBUG 400] Requête GraphQL retournant 400:");
-        console.error(
-          "  Body reçu:",
-          JSON.stringify(req.body)?.substring(0, 500),
-        );
-        console.error(
-          "  Réponse:",
-          typeof body === "string"
-            ? body.substring(0, 500)
-            : JSON.stringify(body)?.substring(0, 500),
+        logger.debug(
+          `[GraphQL 400] body=${JSON.stringify(req.body)?.substring(0, 500)} réponse=${(typeof body === "string" ? body : JSON.stringify(body))?.substring(0, 500)}`,
         );
       }
       return originalSend.call(this, body);
@@ -731,10 +725,19 @@ function formatError(error) {
       : error.extensions?.exception?.name === "AppError"
         ? error.extensions.exception.code
         : null;
+  // Erreurs 100% côté client (requête malformée, champ inexistant,
+  // introspection refusée) : le serveur les rejette proprement, inutile de
+  // les logger en erreur — debug suffit pour diagnostiquer au besoin.
+  const clientErrorCodes = [
+    "GRAPHQL_PARSE_FAILED",
+    "GRAPHQL_VALIDATION_FAILED",
+  ];
   if (appErrorCode === "UNAUTHENTICATED") {
     logger.debug(
       `[GraphQL] UNAUTHENTICATED sur ${Array.isArray(error.path) ? error.path.join(".") : error.path} — retry attendu côté client`,
     );
+  } else if (clientErrorCodes.includes(error.extensions?.code)) {
+    logger.debug(`[GraphQL] ${error.extensions.code}: ${error.message}`);
   } else {
     console.error("❌ [GraphQL Error]:", error.message);
     console.error("Path:", error.path);
