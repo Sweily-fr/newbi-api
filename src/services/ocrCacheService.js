@@ -52,10 +52,9 @@ class OcrCacheService {
         redisOptions = {
           url: redisUrl,
           socket: {
-            reconnectStrategy: (retries) => {
-              if (retries > 5) return false; // Stop après 5 tentatives
-              return Math.min(retries * 100, 500);
-            },
+            // Retry sans limite (backoff plafonné) : ne pas mourir sur un
+            // restart Redis plus long que quelques tentatives
+            reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
           },
         };
       } else {
@@ -64,10 +63,8 @@ class OcrCacheService {
           socket: {
             host: redisHost || "localhost",
             port: parseInt(process.env.REDIS_PORT || "6379"),
-            reconnectStrategy: (retries) => {
-              if (retries > 5) return false;
-              return Math.min(retries * 100, 500);
-            },
+            // Retry sans limite (backoff plafonné), même raison que ci-dessus
+            reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
           },
           database: parseInt(process.env.REDIS_DB || "0"),
         };

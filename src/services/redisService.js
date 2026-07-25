@@ -19,10 +19,13 @@ class RedisService {
       this.client = createClient({
         url: redisUrl,
         socket: {
+          // Ne jamais abandonner : PubSub et cache doivent survivre à un
+          // restart Redis (ex: auto-refresh snap), quitte à retenter longtemps
           reconnectStrategy: (retries) => {
-            if (retries > 10) {
-              console.error("❌ Redis: Trop de tentatives de reconnexion");
-              return new Error("Trop de tentatives de reconnexion");
+            if (retries % 10 === 0) {
+              console.error(
+                `❌ Redis injoignable, nouvelle tentative (essai ${retries})`,
+              );
             }
             return Math.min(retries * 100, 3000);
           },
