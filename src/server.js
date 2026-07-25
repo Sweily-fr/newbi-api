@@ -732,9 +732,17 @@ function formatError(error) {
     "GRAPHQL_PARSE_FAILED",
     "GRAPHQL_VALIDATION_FAILED",
   ];
-  if (appErrorCode === "UNAUTHENTICATED") {
+  // Erreurs "métier" attendues (AppError levée volontairement : abonnement
+  // inactif, permission refusée, ressource introuvable, validation...) : ce ne
+  // sont PAS des bugs mais des refus normaux — log discret. Seuls
+  // INTERNAL_ERROR / DATABASE_ERROR (et les exceptions non-AppError) sont de
+  // vrais incidents à remonter.
+  const systemErrorCodes = ["INTERNAL_ERROR", "DATABASE_ERROR"];
+  const isExpectedBusinessError =
+    appErrorCode && !systemErrorCodes.includes(appErrorCode);
+  if (isExpectedBusinessError) {
     logger.debug(
-      `[GraphQL] UNAUTHENTICATED sur ${Array.isArray(error.path) ? error.path.join(".") : error.path} — retry attendu côté client`,
+      `[GraphQL] ${appErrorCode} sur ${Array.isArray(error.path) ? error.path.join(".") : error.path} — refus métier attendu: ${error.message}`,
     );
   } else if (clientErrorCodes.includes(error.extensions?.code)) {
     logger.debug(`[GraphQL] ${error.extensions.code}: ${error.message}`);
