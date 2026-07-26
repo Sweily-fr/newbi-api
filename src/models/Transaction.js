@@ -167,6 +167,14 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
 
+    // Vrai si la catégorie a été choisie manuellement par l'utilisateur.
+    // Les syncs bancaires (Bridge/GoCardless) ne doivent alors plus écraser
+    // category/expenseCategory avec la catégorie du provider.
+    categoryIsManual: {
+      type: Boolean,
+      default: false,
+    },
+
     // Catégorie de dépense (pour les sorties d'argent) - enum interne
     expenseCategory: {
       type: String,
@@ -187,6 +195,8 @@ const transactionSchema = new mongoose.Schema(
         "MAINTENANCE",
         "TRAINING",
         "SUBSCRIPTIONS",
+        "SALES",
+        "GRANTS",
         "OTHER",
       ],
       default: null,
