@@ -229,6 +229,9 @@ const bankingResolvers = {
         if (input.date) updateData.date = input.date;
         if (input.category) {
           updateData.category = input.category; // Catégorie fine (ex: "parking", "carburant") ou large (ex: "TRAVEL")
+          // Marquer la catégorie comme choisie manuellement pour que les
+          // syncs bancaires ne l'écrasent plus (même logique que pcgAccount.isManual)
+          updateData.categoryIsManual = true;
 
           // Mapper vers la catégorie large pour expenseCategory (enum validé)
           const VALID_EXPENSE_CATEGORIES = [

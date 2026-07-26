@@ -112,6 +112,8 @@ enum ExpenseCategory {
   MAINTENANCE
   TRAINING
   SUBSCRIPTIONS
+  SALES
+  GRANTS
   OTHER
 }
 
