@@ -940,6 +940,21 @@ export class BridgeProvider extends BankingProvider {
           workspaceId: workspaceStringId,
         };
 
+        // Préserver une catégorie choisie manuellement : ne pas l'écraser avec
+        // la catégorie Bridge. Le flag categoryIsManual est posé par le resolveur
+        // updateTransaction ; l'heuristique sur bridgeCategoryMapped couvre les
+        // transactions modifiées avant l'introduction du flag.
+        const hasManualCategory =
+          existing &&
+          (existing.categoryIsManual ||
+            (existing.category &&
+              existing.metadata?.bridgeCategoryMapped &&
+              existing.category !== existing.metadata.bridgeCategoryMapped));
+        if (hasManualCategory) {
+          delete updatedTransactionData.category;
+          delete updatedTransactionData.expenseCategory;
+        }
+
         // Pré-remplir le PCG seulement si pas de correction manuelle existante
         if (!existing?.pcgAccount?.isManual) {
           const pcgSuggestion = suggestPCGAccount(transactionData);
@@ -995,12 +1010,15 @@ export class BridgeProvider extends BankingProvider {
                 updatedTransactionData.linkedExpenseId =
                   manualMatch.linkedExpenseId;
               }
-              if (
-                manualMatch.expenseCategory &&
-                !updatedTransactionData.expenseCategory
-              ) {
-                updatedTransactionData.expenseCategory =
-                  manualMatch.expenseCategory;
+              // La catégorie d'une transaction manuelle est une saisie
+              // utilisateur : la reporter sur la transaction bancaire fusionnée
+              if (manualMatch.category) {
+                updatedTransactionData.category = manualMatch.category;
+                if (manualMatch.expenseCategory) {
+                  updatedTransactionData.expenseCategory =
+                    manualMatch.expenseCategory;
+                }
+                updatedTransactionData.categoryIsManual = true;
               }
               const carriedNotes = manualMatch.metadata?.notes;
               const carriedVendor = manualMatch.metadata?.vendor;

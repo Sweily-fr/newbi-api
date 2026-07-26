@@ -743,6 +743,14 @@ export class GoCardlessProvider extends BankingProvider {
           provider: this.name,
         };
 
+        // Préserver une catégorie existante : GoCardless ne fournit pas de
+        // catégorie (category: null) et ne doit jamais écraser un choix
+        // utilisateur ni une catégorie déjà en base.
+        if (existing && (existing.categoryIsManual || existing.category)) {
+          delete updatedTransactionData.category;
+          delete updatedTransactionData.expenseCategory;
+        }
+
         // Déduplication: fusionner avec une éventuelle transaction manuelle
         // saisie avant le rapprochement bancaire (même montant/devise, ±3 jours).
         if (!existing) {
@@ -784,12 +792,15 @@ export class GoCardlessProvider extends BankingProvider {
                 updatedTransactionData.linkedExpenseId =
                   manualMatch.linkedExpenseId;
               }
-              if (
-                manualMatch.expenseCategory &&
-                !updatedTransactionData.expenseCategory
-              ) {
-                updatedTransactionData.expenseCategory =
-                  manualMatch.expenseCategory;
+              // La catégorie d'une transaction manuelle est une saisie
+              // utilisateur : la reporter sur la transaction bancaire fusionnée
+              if (manualMatch.category) {
+                updatedTransactionData.category = manualMatch.category;
+                if (manualMatch.expenseCategory) {
+                  updatedTransactionData.expenseCategory =
+                    manualMatch.expenseCategory;
+                }
+                updatedTransactionData.categoryIsManual = true;
               }
 
               await Transaction.deleteOne({ _id: manualMatch._id });
