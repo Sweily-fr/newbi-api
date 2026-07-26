@@ -345,6 +345,23 @@ const financialAnalyticsResolvers = {
             workspaceId: wId,
           })
         ).filter(Boolean);
+
+        // Factures importées converties en factures d'achat : la conversion
+        // (convertSingleImportedInvoice) les repasse en VALIDATED alors que ce
+        // sont des factures FOURNISSEUR — elles ne doivent compter ni dans les
+        // factures émises ni dans le CA encaissé. Pas de back-ref en base : on
+        // les retrouve par leur clé Cloudflare, recopiée telle quelle dans
+        // PurchaseInvoice.files.filename à la conversion (source OCR).
+        const convertedImportedKeys = (
+          await PurchaseInvoice.distinct("files.filename", {
+            workspaceId: wId,
+            source: "OCR",
+          })
+        ).filter(Boolean);
+        const notConvertedImportedMatch =
+          convertedImportedKeys.length > 0
+            ? { "file.cloudflareKey": { $nin: convertedImportedKeys } }
+            : {};
         const outgoingTxMatch = {
           workspaceId: String(workspaceId),
           amount: { $lt: 0 },
@@ -950,6 +967,7 @@ const financialAnalyticsResolvers = {
             const importedMatch = {
               workspaceId: wId,
               status: { $in: ["VALIDATED", "COMPLETED"] },
+              ...notConvertedImportedMatch,
             };
             const pipeline = [
               { $match: importedMatch },
@@ -1005,7 +1023,10 @@ const financialAnalyticsResolvers = {
             return ImportedInvoice.aggregate(pipeline);
           })(),
 
-          // 8. Imported invoices — encaissées (COMPLETED). Mois de rattachement =
+          // 8. Imported invoices — encaissées. Une facture importée VALIDATED
+          // est considérée payée (aucun flux ne produit COMPLETED : le statut
+          // « Encaissée » n'est jamais atteint, et une facture importée est par
+          // nature une facture réglée hors Newbi). Mois de rattachement =
           // paymentDate, avec REPLI sur invoiceDate quand la facture importée est
           // payée sans date de paiement, pour que toutes les factures payées du
           // mois entrent dans le CA (avec ou sans justificatif/rapprochement).
@@ -1019,7 +1040,8 @@ const financialAnalyticsResolvers = {
               {
                 $match: {
                   workspaceId: wId,
-                  status: "COMPLETED",
+                  status: { $in: ["VALIDATED", "COMPLETED"] },
+                  ...notConvertedImportedMatch,
                 },
               },
               {
@@ -2088,13 +2110,15 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
-            // Encaissé N-1 (importées) — repli paymentDate→invoiceDate (cohérent
-            // avec la période courante) ; DSO strict (paymentDate réelle).
+            // Encaissé N-1 (importées) — VALIDATED = payée + repli
+            // paymentDate→invoiceDate (cohérent avec la période courante) ;
+            // DSO strict (paymentDate réelle).
             ImportedInvoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
-                  status: "COMPLETED",
+                  status: { $in: ["VALIDATED", "COMPLETED"] },
+                  ...notConvertedImportedMatch,
                 },
               },
               {
