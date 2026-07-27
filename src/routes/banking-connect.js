@@ -490,35 +490,13 @@ router.post("/disconnect", async (req, res) => {
         );
 
         // 2) Détacher les liens de réconciliation (best-effort, on conserve
-        //    les factures/dépenses, on retire juste le lien orphelin).
+        //    les factures/dépenses, on retire juste le lien orphelin ;
+        //    isReconciled n'est remis à false que si plus AUCUNE transaction
+        //    liée ne subsiste).
         try {
-          const [
-            { default: Invoice },
-            { default: Expense },
-            { default: PurchaseInvoice },
-          ] = await Promise.all([
-            import("../models/Invoice.js"),
-            import("../models/Expense.js"),
-            import("../models/PurchaseInvoice.js"),
-          ]);
-
-          await Promise.all([
-            Invoice.updateMany(
-              { linkedTransactionIds: { $in: txIds } },
-              { $pull: { linkedTransactionIds: { $in: txIds } } },
-            ),
-            Expense.updateMany(
-              { linkedTransactionId: { $in: txIds } },
-              { $set: { linkedTransactionId: null, isReconciled: false } },
-            ),
-            PurchaseInvoice.updateMany(
-              { linkedTransactionIds: { $in: txIds } },
-              {
-                $pull: { linkedTransactionIds: { $in: txIds } },
-                $set: { isReconciled: false },
-              },
-            ),
-          ]);
+          const { detachTransactionsFromDocuments } =
+            await import("../utils/reconciliation-cleanup.js");
+          await detachTransactionsFromDocuments(txIds, workspaceId);
         } catch (unlinkErr) {
           logger.warn(
             `Cascade: liens de réconciliation non nettoyés: ${unlinkErr.message}`,

@@ -3,6 +3,7 @@ import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
 import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
+import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const router = express.Router();
@@ -11,18 +12,46 @@ const router = express.Router();
  * Routes pour le rapprochement factures/transactions bancaires
  */
 
+/**
+ * Authentifie la requête et vérifie que l'utilisateur appartient bien au
+ * workspace demandé (le workspaceId vient du client : sans cette vérification
+ * n'importe quel utilisateur authentifié pourrait lire/écrire les données
+ * d'une autre organisation).
+ *
+ * Retourne { user, workspaceId } ou null (la réponse HTTP a alors déjà été
+ * envoyée).
+ */
+async function authenticateWorkspaceRequest(req, res) {
+  const user = await betterAuthJWTMiddleware(req);
+  if (!user) {
+    res.status(401).json({ error: "Non authentifié" });
+    return null;
+  }
+
+  const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
+  if (!workspaceId) {
+    res.status(400).json({ error: "WorkspaceId requis" });
+    return null;
+  }
+
+  const isMember = await userBelongsToWorkspace(
+    user._id || user.id,
+    workspaceId,
+  );
+  if (!isMember) {
+    res.status(403).json({ error: "Accès refusé à ce workspace" });
+    return null;
+  }
+
+  return { user, workspaceId };
+}
+
 // Récupérer les transactions non rapprochées avec suggestions
 router.get("/suggestions", async (req, res) => {
   try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
+    const auth = await authenticateWorkspaceRequest(req, res);
+    if (!auth) return;
+    const { workspaceId } = auth;
 
     const { default: Transaction } = await import("../models/Transaction.js");
     const { default: Invoice } = await import("../models/Invoice.js");
@@ -136,23 +165,18 @@ router.get("/suggestions", async (req, res) => {
 // Récupérer les transactions non rapprochées pour une facture spécifique
 router.get("/transactions-for-invoice/:invoiceId", async (req, res) => {
   try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
+    const auth = await authenticateWorkspaceRequest(req, res);
+    if (!auth) return;
+    const { workspaceId } = auth;
 
     const { invoiceId } = req.params;
 
     const { default: Transaction } = await import("../models/Transaction.js");
     const { default: Invoice } = await import("../models/Invoice.js");
 
-    // Récupérer la facture
-    const invoice = await Invoice.findById(invoiceId);
+    // Récupérer la facture (scopée workspace pour éviter toute lecture
+    // cross-tenant)
+    const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
     if (!invoice) {
       return res.status(404).json({ error: "Facture non trouvée" });
     }
@@ -224,16 +248,9 @@ router.post(
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
-      const user = await betterAuthJWTMiddleware(req);
-      if (!user) {
-        return res.status(401).json({ error: "Non authentifié" });
-      }
-
-      const workspaceId =
-        req.headers["x-workspace-id"] || req.query.workspaceId;
-      if (!workspaceId) {
-        return res.status(400).json({ error: "WorkspaceId requis" });
-      }
+      const auth = await authenticateWorkspaceRequest(req, res);
+      if (!auth) return;
+      const { workspaceId } = auth;
 
       const { transactionId, invoiceId } = req.body;
 
@@ -246,10 +263,26 @@ router.post(
       const { default: Transaction } = await import("../models/Transaction.js");
       const { default: Invoice } = await import("../models/Invoice.js");
 
+      // Garde-fou : on ne rapproche que des factures émises. Une DRAFT
+      // contournerait la numérotation DRAFT→PENDING, une CANCELED ne doit
+      // pas redevenir COMPLETED.
+      const targetInvoice = await Invoice.findOne({
+        _id: invoiceId,
+        workspaceId,
+      });
+      if (!targetInvoice) {
+        return res.status(404).json({ error: "Facture non trouvée" });
+      }
+      if (["DRAFT", "CANCELED"].includes(targetInvoice.status)) {
+        return res.status(400).json({
+          error: `Impossible de rapprocher une facture au statut ${targetInvoice.status}`,
+        });
+      }
+
       // N↔N : $addToSet idempotent des deux côtés. Compensation si la
       // 2e op échoue.
       const transaction = await Transaction.findOneAndUpdate(
-        { _id: transactionId, workspaceId },
+        { _id: transactionId, workspaceId, deletedAt: null },
         {
           $addToSet: { linkedInvoiceIds: invoiceId },
           $set: {
@@ -269,7 +302,8 @@ router.post(
           $addToSet: { linkedTransactionIds: transactionId },
           $set: {
             status: "COMPLETED",
-            paymentDate: transaction.date,
+            // Première date de paiement préservée (liaisons multiples)
+            paymentDate: targetInvoice.paymentDate || transaction.date,
           },
         },
         { new: true },
@@ -324,16 +358,9 @@ router.post(
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
-      const user = await betterAuthJWTMiddleware(req);
-      if (!user) {
-        return res.status(401).json({ error: "Non authentifié" });
-      }
-
-      const workspaceId =
-        req.headers["x-workspace-id"] || req.query.workspaceId;
-      if (!workspaceId) {
-        return res.status(400).json({ error: "WorkspaceId requis" });
-      }
+      const auth = await authenticateWorkspaceRequest(req, res);
+      if (!auth) return;
+      const { workspaceId } = auth;
 
       const { transactionId, invoiceId } = req.body;
 
@@ -348,17 +375,27 @@ router.post(
       const { default: Transaction } = await import("../models/Transaction.js");
       const { default: Invoice } = await import("../models/Invoice.js");
 
-      // Délier côté transaction ($pull idempotent). Si plus aucune facture
-      // liée → status unmatched.
+      // Délier côté transaction ($pull idempotent). Si plus aucun lien
+      // (ni facture de vente, ni facture d'achat) → status unmatched.
       const transaction = await Transaction.findOneAndUpdate(
         { _id: transactionId, workspaceId },
         { $pull: { linkedInvoiceIds: invoiceId } },
         { new: true },
       );
-      if (transaction && (transaction.linkedInvoiceIds || []).length === 0) {
-        transaction.reconciliationStatus = "unmatched";
-        transaction.reconciliationDate = null;
-        await transaction.save();
+      if (
+        transaction &&
+        (transaction.linkedInvoiceIds || []).length === 0 &&
+        (transaction.linkedPurchaseInvoiceIds || []).length === 0
+      ) {
+        await Transaction.updateOne(
+          { _id: transactionId, workspaceId },
+          {
+            $set: {
+              reconciliationStatus: "unmatched",
+              reconciliationDate: null,
+            },
+          },
+        );
       }
 
       // Délier côté facture. Si plus aucune transaction liée → PENDING.
@@ -397,16 +434,9 @@ router.post(
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
-      const user = await betterAuthJWTMiddleware(req);
-      if (!user) {
-        return res.status(401).json({ error: "Non authentifié" });
-      }
-
-      const workspaceId =
-        req.headers["x-workspace-id"] || req.query.workspaceId;
-      if (!workspaceId) {
-        return res.status(400).json({ error: "WorkspaceId requis" });
-      }
+      const auth = await authenticateWorkspaceRequest(req, res);
+      if (!auth) return;
+      const { workspaceId } = auth;
 
       const { transactionId } = req.body;
 
