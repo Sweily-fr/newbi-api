@@ -23,6 +23,7 @@ import {
 } from "../services/assistant/conversationHelpers.js";
 import ClientModel from "../models/Client.js";
 import { generateConversationTitle } from "../services/assistant/titleSummary.js";
+import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
@@ -58,32 +59,8 @@ if (anthropic) {
   );
 }
 
-/**
- * Vérifie que l'utilisateur fait partie du workspace cible. Pattern aligné
- * sur rbac.getMemberRole : query collection `member` (Better Auth orga plugin)
- * sur (organizationId, userId).
- *
- * Retourne `true` si membre, `false` sinon (et logge un warn en cas de tentative
- * cross-tenant — utile pour détecter un client mal configuré ou un abus).
- */
-async function userBelongsToWorkspace(userId, workspaceId) {
-  try {
-    const { ObjectId } = mongoose.Types;
-    const orgObjectId =
-      typeof workspaceId === "string" ? new ObjectId(workspaceId) : workspaceId;
-    const userObjectId =
-      typeof userId === "string" ? new ObjectId(userId) : userId;
-    const member = await mongoose.connection.db.collection("member").findOne({
-      organizationId: orgObjectId,
-      userId: userObjectId,
-    });
-    return !!member;
-  } catch (err) {
-    // workspaceId/userId non-ObjectId valide → on traite comme non membre
-    logger.warn(`userBelongsToWorkspace: validation failed (${err.message})`);
-    return false;
-  }
-}
+// Vérification d'appartenance au workspace factorisée dans
+// utils/workspace-membership.js (partagée avec les routes reconciliation).
 
 /**
  * POST /assistant/log

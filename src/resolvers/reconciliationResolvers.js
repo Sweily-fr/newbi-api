@@ -1,6 +1,7 @@
 import {
   withOrganization,
   checkSubscriptionActive,
+  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
@@ -27,8 +28,12 @@ const reconciliationResolvers = {
         { user, workspaceId: ctxWorkspaceId },
       ) => {
         try {
-          // Utiliser le workspaceId passé en argument ou celui du contexte
-          const workspaceId = argWorkspaceId || ctxWorkspaceId;
+          // resolveWorkspaceId privilégie le workspace validé par le RBAC :
+          // un argument workspaceId arbitraire ne peut pas cibler une autre org
+          const workspaceId = resolveWorkspaceId(
+            argWorkspaceId,
+            ctxWorkspaceId,
+          );
 
           // Critères "à rapprocher" : une entrée d'argent (amount > 0) pas encore
           // liée à une facture (linkedInvoiceIds vide), sans justificatif attaché
@@ -365,12 +370,29 @@ const reconciliationResolvers = {
         try {
           const { transactionId, invoiceId } = input;
 
+          // Garde-fou : on ne rapproche que des factures émises. Une DRAFT
+          // contournerait la numérotation DRAFT→PENDING, une CANCELED ne doit
+          // pas redevenir COMPLETED.
+          const targetInvoice = await Invoice.findOne({
+            _id: invoiceId,
+            workspaceId,
+          });
+          if (!targetInvoice) {
+            return { success: false, message: "Facture non trouvée" };
+          }
+          if (["DRAFT", "CANCELED"].includes(targetInvoice.status)) {
+            return {
+              success: false,
+              message: `Impossible de rapprocher une facture au statut ${targetInvoice.status}`,
+            };
+          }
+
           // Relation N↔N : on utilise $addToSet des deux côtés pour être
           // idempotent (rejoue la même liaison = no-op) et supporter les
           // paiements groupés (1 transaction → N factures) et échelonnements
           // (1 facture ← N transactions).
           const transaction = await Transaction.findOneAndUpdate(
-            { _id: transactionId, workspaceId },
+            { _id: transactionId, workspaceId, deletedAt: null },
             {
               $addToSet: { linkedInvoiceIds: invoiceId },
               $set: {
@@ -388,13 +410,12 @@ const reconciliationResolvers = {
             { _id: invoiceId, workspaceId },
             {
               $addToSet: { linkedTransactionIds: transactionId },
-              // Passe la facture en COMPLETED dès qu'une transaction est liée
-              // + date de paiement = celle de la transaction courante. Si
-              // plusieurs transactions ultérieures sont ajoutées, la 1re
-              // paymentDate est préservée (usage $setOnInsert-like via $cond).
+              // Passe la facture en COMPLETED dès qu'une transaction est liée.
+              // La 1re paymentDate est préservée si des transactions
+              // ultérieures sont ajoutées (paiements échelonnés).
               $set: {
                 status: "COMPLETED",
-                paymentDate: transaction.date,
+                paymentDate: targetInvoice.paymentDate || transaction.date,
               },
             },
             { new: true },
@@ -467,14 +488,25 @@ const reconciliationResolvers = {
             { new: true },
           );
 
-          // Si plus aucune facture liée → status unmatched.
+          // Si plus aucun lien (ni facture de vente, ni facture d'achat) →
+          // status unmatched. updateOne ciblé plutôt que save() : ne revalide
+          // pas tout le document (données legacy hors enum).
           if (
             transaction &&
-            (transaction.linkedInvoiceIds || []).length === 0
+            (transaction.linkedInvoiceIds || []).length === 0 &&
+            (transaction.linkedPurchaseInvoiceIds || []).length === 0
           ) {
+            await Transaction.updateOne(
+              { _id: transactionId, workspaceId },
+              {
+                $set: {
+                  reconciliationStatus: "unmatched",
+                  reconciliationDate: null,
+                },
+              },
+            );
             transaction.reconciliationStatus = "unmatched";
             transaction.reconciliationDate = null;
-            await transaction.save();
           }
 
           // Délier côté facture.

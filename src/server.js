@@ -406,6 +406,13 @@ async function startServer() {
   // Configuration Apollo Server
   const server = new ApolloServer({
     schema,
+    // Introspection désactivée partout sauf dev local, pour ne pas exposer
+    // publiquement le schéma complet (surface d'attaque). Le staging étant
+    // accessible sur Internet, on n'autorise que NODE_ENV=development, avec
+    // une porte de sortie explicite via ENABLE_GRAPHQL_INTROSPECTION=true.
+    introspection:
+      process.env.NODE_ENV === "development" ||
+      process.env.ENABLE_GRAPHQL_INTROSPECTION === "true",
     // Limiter la profondeur des queries à 10 niveaux pour protéger le backend
     validationRules: [depthLimit(10)],
     context: async ({ req }) => {

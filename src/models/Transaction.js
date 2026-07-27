@@ -13,7 +13,7 @@ const transactionSchema = new mongoose.Schema(
     provider: {
       type: String,
       required: true,
-      enum: ["bridge", "stripe", "paypal", "mock", "manual"],
+      enum: ["bridge", "gocardless", "stripe", "paypal", "mock", "manual"],
       index: true,
     },
 
@@ -256,6 +256,18 @@ const transactionSchema = new mongoose.Schema(
         size: { type: Number },
         uploadedAt: { type: Date, default: Date.now },
         uploadedBy: { type: String },
+        // Suivi de la création automatique de facture d'achat par OCR
+        // (transactionReceiptOcrService) — évite les doubles traitements.
+        // ocrClaimedAt : horodatage du claim, permet de retraiter un fichier
+        // dont le traitement a été interrompu (crash/restart PM2) sans jamais
+        // avoir produit de facture.
+        ocrProcessed: { type: Boolean, default: false },
+        ocrClaimedAt: { type: Date, default: null },
+        purchaseInvoiceId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "PurchaseInvoice",
+          default: null,
+        },
       },
     ],
 
@@ -292,6 +304,8 @@ transactionSchema.index({ provider: 1, externalId: 1 }, { unique: true });
 transactionSchema.index({ fromAccount: 1, createdAt: -1 });
 transactionSchema.index({ toAccount: 1, createdAt: -1 });
 transactionSchema.index({ workspaceId: 1, date: -1, amount: 1 });
+// Filtre par compte + tri par date de la liste paginée (transactionsPage)
+transactionSchema.index({ workspaceId: 1, fromAccount: 1, date: -1 });
 
 // Méthodes d'instance
 transactionSchema.methods.isCompleted = function () {
