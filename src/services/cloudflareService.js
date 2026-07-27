@@ -904,6 +904,64 @@ class CloudflareService {
    * @param {string} bucketName - Nom du bucket (optionnel, utilise le bucket par défaut si non spécifié)
    * @returns {Promise<boolean>}
    */
+  /**
+   * Retrouve le bucket R2 et la clé d'un objet à partir de son URL publique
+   * stockée en base. Nécessaire pour supprimer un fichier dont on ne connaît
+   * que l'URL : les buckets diffèrent selon le type (ocr, receipts,
+   * documents...) et les URLs peuvent être en domaine custom (pas seulement
+   * *.r2.dev).
+   *
+   * @param {string} url URL publique stockée
+   * @returns {{bucket: string, key: string}|null} null si l'URL est invalide
+   */
+  resolveBucketAndKeyFromUrl(url) {
+    if (!url) return null;
+
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return null;
+    }
+    const key = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+    if (!key) return null;
+
+    const prefixToBucket = [
+      [this.ocrPublicUrl, this.ocrBucketName],
+      [this.receiptsPublicUrl, this.receiptsBucketName],
+      [this.signaturePublicUrl, this.signatureBucketName],
+      [this.companyImagesPublicUrl, this.companyImagesBucketName],
+      [this.profilePublicUrl, this.profileBucketName],
+      [this.importedInvoicesPublicUrl, this.importedInvoicesBucketName],
+      [this.sharedDocumentsPublicUrl, this.sharedDocumentsBucketName],
+      [this.publicUrl, this.bucketName],
+    ];
+
+    for (const [publicUrl, bucket] of prefixToBucket) {
+      if (publicUrl && bucket && url.startsWith(publicUrl)) {
+        return { bucket, key };
+      }
+    }
+
+    // URL r2.dev directe : <bucket>.<account>.r2.dev/<key>
+    if (parsed.hostname.endsWith(".r2.dev")) {
+      const bucket = parsed.hostname.split(".")[0];
+      if (bucket) return { bucket, key };
+    }
+
+    return { bucket: this.bucketName, key };
+  }
+
+  /**
+   * Supprime un objet R2 à partir de son URL publique (résolution automatique
+   * du bucket). Best-effort : retourne false si l'URL n'est pas résoluble.
+   */
+  async deleteImageByUrl(url) {
+    const resolved = this.resolveBucketAndKeyFromUrl(url);
+    if (!resolved) return false;
+    return this.deleteImage(resolved.key, resolved.bucket);
+  }
+
   async deleteImage(key, bucketName = null) {
     try {
       const targetBucket = bucketName || this.bucketName;

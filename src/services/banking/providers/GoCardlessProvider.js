@@ -2,6 +2,10 @@ import logger from "../../../utils/logger.js";
 import { BankingProvider } from "../interfaces/BankingProvider.js";
 import axios from "axios";
 import crypto from "crypto";
+import {
+  repointTransactionReferences,
+  detachTransactionsFromDocuments,
+} from "../../../utils/reconciliation-cleanup.js";
 
 /**
  * Provider GoCardless Bank Account Data (anciennement Nordigen)
@@ -430,12 +434,34 @@ export class GoCardlessProvider extends BankingProvider {
   _mapTransaction(transaction, accountId, workspaceId, status) {
     const amount = parseFloat(transaction.transactionAmount?.amount || 0);
 
+    // Fallback d'externalId DÉTERMINISTE pour les transactions sans
+    // identifiant (fréquent sur les pending Berlin Group) : un id aléatoire
+    // recréait un doublon à chaque sync. Le hash (compte + date + montant +
+    // libellé) reste stable d'un sync à l'autre.
+    const deterministicFallbackId = () => {
+      const fingerprint = [
+        accountId,
+        transaction.bookingDate || transaction.valueDate || "",
+        transaction.transactionAmount?.amount || "",
+        transaction.remittanceInformationUnstructured ||
+          transaction.remittanceInformationStructured ||
+          transaction.creditorName ||
+          transaction.debtorName ||
+          "",
+      ].join("|");
+      return `gc-${crypto.createHash("sha1").update(fingerprint).digest("hex")}`;
+    };
+
     return {
       externalId:
         transaction.transactionId ||
         transaction.internalTransactionId ||
-        `gc-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`,
-      amount: Math.abs(amount),
+        transaction.entryReference ||
+        deterministicFallbackId(),
+      // Montant SIGNÉ, comme Bridge : toutes les requêtes de rapprochement
+      // (suggestions achats amount < 0, encaissements amount > 0) supposent
+      // un signe. Math.abs cassait le rapprochement des débits GoCardless.
+      amount,
       currency: transaction.transactionAmount?.currency || "EUR",
       description:
         transaction.remittanceInformationUnstructured ||
@@ -605,13 +631,20 @@ export class GoCardlessProvider extends BankingProvider {
         provider: this.name,
       });
 
-      // Supprimer les transactions
+      // Supprimer les transactions (avec détachement préalable des
+      // factures/dépenses rapprochées pour ne pas laisser de liens orphelins)
       const { default: Transaction } =
         await import("../../../models/Transaction.js");
-      const deletedTransactions = await Transaction.deleteMany({
+      const txFilter = {
         workspaceId: workspaceId.toString(),
         provider: this.name,
-      });
+      };
+      const txToDelete = await Transaction.find(txFilter).select("_id");
+      await detachTransactionsFromDocuments(
+        txToDelete.map((t) => t._id),
+        workspaceId,
+      );
+      const deletedTransactions = await Transaction.deleteMany(txFilter);
 
       return {
         success: true,
@@ -751,8 +784,26 @@ export class GoCardlessProvider extends BankingProvider {
           delete updatedTransactionData.expenseCategory;
         }
 
+        // Préserver les champs metadata saisis par l'utilisateur
+        // (updateTransaction) : le $set du metadata complet du provider les
+        // écraserait à chaque re-sync.
+        if (existing?.metadata) {
+          const userMetadataKeys = ["notes", "vendor", "paymentMethod", "tags"];
+          const preserved = {};
+          for (const key of userMetadataKeys) {
+            if (existing.metadata[key] !== undefined) {
+              preserved[key] = existing.metadata[key];
+            }
+          }
+          updatedTransactionData.metadata = {
+            ...updatedTransactionData.metadata,
+            ...preserved,
+          };
+        }
+
         // Déduplication: fusionner avec une éventuelle transaction manuelle
         // saisie avant le rapprochement bancaire (même montant/devise, ±3 jours).
+        let mergedManualTxId = null;
         if (!existing) {
           const txDate = new Date(transactionData.date);
           if (!isNaN(txDate.getTime())) {
@@ -788,6 +839,14 @@ export class GoCardlessProvider extends BankingProvider {
                 updatedTransactionData.reconciliationDate =
                   manualMatch.reconciliationDate;
               }
+              if ((manualMatch.linkedPurchaseInvoiceIds || []).length > 0) {
+                updatedTransactionData.linkedPurchaseInvoiceIds =
+                  manualMatch.linkedPurchaseInvoiceIds;
+                updatedTransactionData.reconciliationStatus =
+                  manualMatch.reconciliationStatus;
+                updatedTransactionData.reconciliationDate =
+                  manualMatch.reconciliationDate;
+              }
               if (manualMatch.linkedExpenseId) {
                 updatedTransactionData.linkedExpenseId =
                   manualMatch.linkedExpenseId;
@@ -804,6 +863,7 @@ export class GoCardlessProvider extends BankingProvider {
               }
 
               await Transaction.deleteOne({ _id: manualMatch._id });
+              mergedManualTxId = manualMatch._id;
               logger.debug(
                 `🔄 Doublon manuel fusionné dans transaction bancaire ${transactionData.externalId} (manualId=${manualMatch._id})`,
               );
@@ -811,7 +871,7 @@ export class GoCardlessProvider extends BankingProvider {
           }
         }
 
-        await Transaction.findOneAndUpdate(
+        const savedTransaction = await Transaction.findOneAndUpdate(
           {
             externalId: transactionData.externalId,
             workspaceId: workspaceStringId,
@@ -820,6 +880,16 @@ export class GoCardlessProvider extends BankingProvider {
           updatedTransactionData,
           { upsert: true, new: true, setDefaultsOnInsert: true },
         );
+
+        // Fusion manuelle → bancaire : repointer les références des
+        // factures/dépenses vers la transaction bancaire (sinon elles
+        // pointent vers la transaction manuelle supprimée)
+        if (mergedManualTxId && savedTransaction) {
+          await repointTransactionReferences(
+            mergedManualTxId,
+            savedTransaction._id,
+          );
+        }
       }
     } catch (error) {
       console.error("❌ Erreur sauvegarde transactions:", error.message);

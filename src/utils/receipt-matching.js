@@ -27,12 +27,16 @@ export function matchReceiptToTransactions(
     let score = 0;
     const txAmount = Math.abs(tx.amount);
 
-    // Score par montant (valeur absolue, tolérance relative)
+    // Score par montant (valeur absolue, tolérance relative). Sans aucune
+    // correspondance de montant, la transaction est écartée : date + vendeur
+    // seuls (30 + 20 = seuil) suggéraient des transactions au montant
+    // totalement différent.
     if (targetAmount > 0 && txAmount > 0) {
       const amountDiff = Math.abs(txAmount - targetAmount) / targetAmount;
       if (amountDiff < 0.01) score += 50;
       else if (amountDiff < 0.05) score += 30;
       else if (amountDiff < 0.1) score += 10;
+      else continue;
     }
 
     // Score par date (tolérance en jours)

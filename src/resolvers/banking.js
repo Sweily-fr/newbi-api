@@ -8,6 +8,10 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
+import { buildPageQuery } from "../utils/transaction-page-query.js";
 import {
   getMappingTable,
   getAllPCGAccounts,
@@ -54,6 +58,47 @@ const bankingResolvers = {
           .limit(limit)
           .skip(offset)
           .lean();
+      },
+    ),
+
+    // Liste paginée serveur pour la page Transactions : la page demandée +
+    // totalCount + compteurs d'onglets calculés sur toute la base (les
+    // prédicats d'onglets sont dans utils/transaction-page-query.js)
+    transactionsPage: withWorkspace(
+      async (
+        parent,
+        { workspaceId, filters = {}, tab = "ALL", page = 1, limit = 20 },
+      ) => {
+        const now = new Date();
+        const safeLimit = Math.min(Math.max(limit, 1), 100);
+        const safePage = Math.max(page, 1);
+
+        const pageQuery = buildPageQuery(workspaceId, filters, tab, now);
+        const countFor = (tabName) =>
+          Transaction.countDocuments(
+            buildPageQuery(workspaceId, filters, tabName, now),
+          );
+
+        const [items, totalCount, all, lastMonth, toReconcile, missingReceipt] =
+          await Promise.all([
+            Transaction.find(pageQuery)
+              .sort({ date: -1, createdAt: -1 })
+              .skip((safePage - 1) * safeLimit)
+              .limit(safeLimit)
+              .lean(),
+            Transaction.countDocuments(pageQuery),
+            countFor("ALL"),
+            countFor("LAST_MONTH"),
+            countFor("TO_RECONCILE"),
+            countFor("MISSING_RECEIPT"),
+          ]);
+
+        return {
+          items,
+          totalCount,
+          hasNextPage: safePage * safeLimit < totalCount,
+          tabCounts: { all, lastMonth, toReconcile, missingReceipt },
+        };
       },
     ),
 
@@ -220,6 +265,26 @@ const bankingResolvers = {
       async (parent, { id, input }, { user, workspaceId }) => {
         const updateData = {};
 
+        // Garde-fou d'intégrité : le montant d'une transaction rapprochée ne
+        // peut pas changer (la facture liée ne correspondrait plus). Délier
+        // d'abord, modifier ensuite.
+        if (input.amount !== undefined) {
+          const existing = await Transaction.findOne({
+            _id: id,
+            workspaceId,
+          }).select("amount reconciliationStatus");
+          if (
+            existing &&
+            existing.reconciliationStatus === "matched" &&
+            existing.amount !== input.amount
+          ) {
+            throw new AppError(
+              "Impossible de modifier le montant d'une transaction rapprochée. Déliez d'abord la facture.",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+        }
+
         if (input.amount !== undefined) updateData.amount = input.amount;
         if (input.currency) updateData.currency = input.currency;
         if (input.description) updateData.description = input.description;
@@ -360,6 +425,29 @@ const bankingResolvers = {
           throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
         }
 
+        // Si la transaction est (devenue) une dépense et porte des
+        // justificatifs pas encore traités, créer les factures d'achat par
+        // OCR (fire-and-forget, non bloquant)
+        if (
+          transactionReceiptOcrService.isExpenseTransaction(transaction) &&
+          (transaction.receiptFiles || []).some(
+            (f) => f.url && !f.ocrProcessed && !f.purchaseInvoiceId,
+          )
+        ) {
+          transactionReceiptOcrService
+            .processReceiptsForTransaction({
+              transactionId: id,
+              workspaceId,
+              userId: user._id || user.id,
+            })
+            .catch((err) => {
+              console.error(
+                "⚠️ [UPDATE TRANSACTION] Erreur OCR facture d'achat (non bloquante):",
+                err.message,
+              );
+            });
+        }
+
         return transaction;
       },
     ),
@@ -401,6 +489,8 @@ const bankingResolvers = {
           ];
 
           const uploadedReceiptFiles = [];
+          // Buffers conservés pour l'OCR (création auto de facture d'achat)
+          const receiptBuffersByKey = {};
 
           for (const fileInput of filesArray) {
             const { createReadStream, filename, mimetype } = await fileInput;
@@ -448,6 +538,7 @@ const bankingResolvers = {
               uploadedAt: new Date(),
               uploadedBy: String(user._id || user.id),
             });
+            receiptBuffersByKey[uploadResult.key] = fileBuffer;
           }
 
           const updatedTransaction = await Transaction.findOneAndUpdate(
@@ -478,6 +569,22 @@ const bankingResolvers = {
             .catch((err) => {
               console.error(
                 "⚠️ [UPLOAD RECEIPT] Erreur automation (non bloquante):",
+                err.message,
+              );
+            });
+
+          // Création automatique de factures d'achat par OCR pour les
+          // transactions de type dépense (fire-and-forget, non bloquant)
+          transactionReceiptOcrService
+            .processReceiptsForTransaction({
+              transactionId,
+              workspaceId,
+              userId: user._id || user.id,
+              buffersByKey: receiptBuffersByKey,
+            })
+            .catch((err) => {
+              console.error(
+                "⚠️ [UPLOAD RECEIPT] Erreur OCR facture d'achat (non bloquante):",
                 err.message,
               );
             });
@@ -534,10 +641,58 @@ const bankingResolvers = {
             };
           }
 
-          // Best-effort suppression R2
-          if (fileToRemove.key) {
+          // Si ce justificatif a généré une facture d'achat par OCR, annuler
+          // proprement : si la facture est restée telle quelle (source OCR,
+          // uniquement ce fichier, uniquement cette transaction), on la
+          // supprime avec son lien de rapprochement. Sinon (facture enrichie
+          // ou liée ailleurs), on la conserve et on garde l'objet R2 qu'elle
+          // référence encore.
+          let deleteR2Object = true;
+          if (fileToRemove.purchaseInvoiceId) {
+            const linkedInvoice = await PurchaseInvoice.findOne({
+              _id: fileToRemove.purchaseInvoiceId,
+              workspaceId,
+            });
+            if (linkedInvoice) {
+              const onlyThisTransaction =
+                (linkedInvoice.linkedTransactionIds || []).length <= 1 &&
+                (linkedInvoice.linkedTransactionIds || []).every(
+                  (txId) => String(txId) === String(transactionId),
+                );
+              const onlyThisFile =
+                (linkedInvoice.files || []).length <= 1 &&
+                (linkedInvoice.files || []).every(
+                  (f) => f.path === fileToRemove.key,
+                );
+              if (
+                linkedInvoice.source === "OCR" &&
+                onlyThisTransaction &&
+                onlyThisFile
+              ) {
+                await detachPurchaseInvoicesFromTransactions(
+                  [linkedInvoice._id],
+                  workspaceId,
+                );
+                await PurchaseInvoice.deleteOne({ _id: linkedInvoice._id });
+              } else {
+                deleteR2Object = false;
+              }
+            }
+          }
+
+          // Best-effort suppression R2 (bucket résolu depuis l'URL : les
+          // justificatifs vivent dans le bucket receipts, pas le bucket par
+          // défaut)
+          if (deleteR2Object && (fileToRemove.url || fileToRemove.key)) {
             try {
-              await cloudflareService.deleteImage(fileToRemove.key);
+              if (fileToRemove.url) {
+                await cloudflareService.deleteImageByUrl(fileToRemove.url);
+              } else {
+                await cloudflareService.deleteImage(
+                  fileToRemove.key,
+                  cloudflareService.receiptsBucketName,
+                );
+              }
             } catch (err) {
               console.warn(
                 "⚠️ [REMOVE RECEIPT] Suppression R2 échouée:",
@@ -1078,6 +1233,7 @@ const bankingResolvers = {
   // Résolveurs d'enums
   BankingProvider: {
     BRIDGE: "bridge",
+    GOCARDLESS: "gocardless",
     STRIPE: "stripe",
     PAYPAL: "paypal",
     MOCK: "mock",
