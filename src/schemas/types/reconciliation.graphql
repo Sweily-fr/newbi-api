@@ -22,6 +22,7 @@ type ReconciliationInvoice {
   totalTTC: Float
   dueDate: DateTime
   status: String
+  score: Int
 }
 
 type ReconciliationSuggestionsResponse {
@@ -35,6 +36,12 @@ type TransactionsForInvoiceResponse {
   success: Boolean!
   transactions: [ReconciliationTransaction!]!
   invoiceAmount: Float!
+}
+
+type InvoicesForTransactionResponse {
+  success: Boolean!
+  invoices: [ReconciliationInvoice!]!
+  transactionAmount: Float!
 }
 
 # transaction renvoie le type Transaction complet (et non ReconciliationTransaction)
@@ -87,8 +94,19 @@ extend type Query {
     workspaceId: ID!
   ): ReconciliationSuggestionsResponse!
 
-  # Transactions pour une facture spécifique
-  transactionsForInvoice(invoiceId: ID!): TransactionsForInvoiceResponse!
+  # Transactions pour une facture spécifique (rattachement manuel côté facture).
+  # search : filtre serveur sur description/libellé brut, ou montant si numérique.
+  transactionsForInvoice(
+    invoiceId: ID!
+    search: String
+  ): TransactionsForInvoiceResponse!
+
+  # Factures PENDING rattachables à une transaction (rattachement manuel côté
+  # transaction). search : numéro, nom du client, ou montant si numérique.
+  invoicesForTransaction(
+    transactionId: ID!
+    search: String
+  ): InvoicesForTransactionResponse!
 }
 
 # Mutations

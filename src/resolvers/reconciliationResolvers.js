@@ -8,6 +8,16 @@ import logger from "../utils/logger.js";
 import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// "1 200,50" → 1200.5 ; null si la saisie n'est pas un montant.
+const parseAmountSearch = (term) => {
+  const normalized = term.replace(/\s/g, "").replace(",", ".");
+  if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
+  const amount = parseFloat(normalized);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+};
+
 const reconciliationResolvers = {
   Query: {
     reconciliationSuggestions: withOrganization(
@@ -137,7 +147,7 @@ const reconciliationResolvers = {
     ),
 
     transactionsForInvoice: withOrganization(
-      async (parent, { invoiceId }, { user, workspaceId }) => {
+      async (parent, { invoiceId, search }, { user, workspaceId }) => {
         try {
           // IDOR fix: filtre par workspaceId pour empêcher l'accès cross-tenant
           const invoice = await Invoice.findOne({
@@ -151,14 +161,36 @@ const reconciliationResolvers = {
           const invoiceAmount = invoice.finalTotalTTC || invoice.totalTTC || 0;
 
           // Récupérer les transactions non rapprochées (crédits uniquement)
-          const transactions = await Transaction.find({
+          const txQuery = {
             workspaceId,
             deletedAt: null,
             reconciliationStatus: { $in: ["unmatched", "suggested"] },
             amount: { $gt: 0 },
-          })
+          };
+
+          // Recherche serveur : description ou libellé brut (reference), et
+          // montant à ±1 % si la saisie est numérique. Permet de retrouver une
+          // transaction hors du top scoré (montant différent de la facture).
+          const term = (search || "").trim();
+          if (term) {
+            const regex = { $regex: escapeRegex(term), $options: "i" };
+            const or = [{ description: regex }, { reference: regex }];
+            const searchAmount = parseAmountSearch(term);
+            if (searchAmount !== null) {
+              const tolerance = Math.max(searchAmount * 0.01, 0.01);
+              or.push({
+                amount: {
+                  $gte: searchAmount - tolerance,
+                  $lte: searchAmount + tolerance,
+                },
+              });
+            }
+            txQuery.$or = or;
+          }
+
+          const transactions = await Transaction.find(txQuery)
             .sort({ date: -1 })
-            .limit(100);
+            .limit(200);
 
           // Trier par pertinence
           const scoredTransactions = transactions.map((tx) => {
@@ -195,17 +227,130 @@ const reconciliationResolvers = {
             };
           });
 
-          // Trier par score décroissant
-          scoredTransactions.sort((a, b) => b.score - a.score);
+          // Trier par score décroissant, puis par date décroissante à score égal
+          scoredTransactions.sort(
+            (a, b) => b.score - a.score || new Date(b.date) - new Date(a.date),
+          );
 
           return {
             success: true,
-            transactions: scoredTransactions.slice(0, 20),
+            transactions: scoredTransactions.slice(0, 50),
             invoiceAmount,
           };
         } catch (error) {
           logger.error(
             "[RECONCILIATION-GQL] Erreur transactions pour facture:",
+            error,
+          );
+          throw error;
+        }
+      },
+    ),
+
+    invoicesForTransaction: withOrganization(
+      async (parent, { transactionId, search }, { user, workspaceId }) => {
+        try {
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+            deletedAt: null,
+          });
+          if (!transaction) {
+            throw new Error("Transaction non trouvée");
+          }
+
+          const invoiceQuery = {
+            workspaceId,
+            status: "PENDING",
+            _id: { $nin: transaction.linkedInvoiceIds || [] },
+          };
+
+          // Recherche serveur : numéro de facture, nom du client, et montant
+          // TTC à ±1 % si la saisie est numérique.
+          const term = (search || "").trim();
+          if (term) {
+            const regex = { $regex: escapeRegex(term), $options: "i" };
+            const or = [
+              { number: regex },
+              { "client.name": regex },
+              { "client.firstName": regex },
+              { "client.lastName": regex },
+            ];
+            const searchAmount = parseAmountSearch(term);
+            if (searchAmount !== null) {
+              const tolerance = Math.max(searchAmount * 0.01, 0.01);
+              const range = {
+                $gte: searchAmount - tolerance,
+                $lte: searchAmount + tolerance,
+              };
+              or.push({ finalTotalTTC: range }, { totalTTC: range });
+            }
+            invoiceQuery.$or = or;
+          }
+
+          const invoices = await Invoice.find(invoiceQuery)
+            .sort({ dueDate: 1 })
+            .limit(200);
+
+          // Même scoring que reconciliationSuggestions : montant, nom du client
+          // dans le libellé, référence facture dans le libellé brut.
+          const scoredInvoices = invoices.map((inv) => {
+            const amount = inv.finalTotalTTC || inv.totalTTC || 0;
+            let score = 0;
+
+            if (amount > 0) {
+              const tolerance = amount * 0.01;
+              if (Math.abs(transaction.amount - amount) <= tolerance) {
+                score += 100;
+              } else if (
+                Math.abs(transaction.amount - amount) <=
+                amount * 0.1
+              ) {
+                score += 50;
+              }
+            }
+
+            const clientName = inv.client?.name || inv.client?.firstName || "";
+            if (
+              clientName &&
+              transaction.description
+                ?.toLowerCase()
+                .includes(clientName.toLowerCase())
+            ) {
+              score += 50;
+            }
+
+            if (invoiceReferenceMatches(transaction, inv)) {
+              score += 100;
+            }
+
+            return {
+              id: inv._id.toString(),
+              number: inv.number,
+              clientName:
+                inv.client?.name ||
+                `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
+              totalTTC: amount,
+              dueDate: inv.dueDate,
+              status: inv.status,
+              score,
+            };
+          });
+
+          // Score décroissant, puis échéance la plus proche à score égal
+          scoredInvoices.sort(
+            (a, b) =>
+              b.score - a.score || new Date(a.dueDate) - new Date(b.dueDate),
+          );
+
+          return {
+            success: true,
+            invoices: scoredInvoices.slice(0, 50),
+            transactionAmount: transaction.amount,
+          };
+        } catch (error) {
+          logger.error(
+            "[RECONCILIATION-GQL] Erreur factures pour transaction:",
             error,
           );
           throw error;
