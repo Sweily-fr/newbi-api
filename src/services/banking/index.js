@@ -4,7 +4,6 @@
  */
 
 // Import des providers pour les enregistrer automatiquement
-import "./providers/GoCardlessProvider.js";
 import "./providers/BridgeProvider.js";
 import "./providers/MockProvider.js";
 
@@ -24,21 +23,7 @@ export async function initializeBankingSystem() {
     const defaultProvider = process.env.BANKING_PROVIDER || "mock";
 
     // Vérifier la configuration avant d'initialiser
-    if (defaultProvider === "gocardless") {
-      const GoCardlessProvider = (
-        await import("./providers/GoCardlessProvider.js")
-      ).GoCardlessProvider;
-      const tempProvider = new GoCardlessProvider();
-
-      if (!tempProvider.validateConfig()) {
-        console.warn(
-          "⚠️ Configuration GoCardless invalide, fallback vers mock"
-        );
-        await bankingService.initialize("mock");
-      } else {
-        await bankingService.initialize(defaultProvider);
-      }
-    } else if (defaultProvider === "bridge") {
+    if (defaultProvider === "bridge") {
       const BridgeProvider = (await import("./providers/BridgeProvider.js"))
         .BridgeProvider;
       const tempProvider = new BridgeProvider();
@@ -57,7 +42,7 @@ export async function initializeBankingSystem() {
   } catch (error) {
     console.error(
       "❌ Erreur lors de l'initialisation du système banking:",
-      error
+      error,
     );
 
     // Fallback vers le provider mock en cas d'erreur

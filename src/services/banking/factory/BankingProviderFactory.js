@@ -29,7 +29,7 @@ export class BankingProviderFactory {
       providerName ||
       process.env.BANKING_PROVIDER ||
       process.env.DEFAULT_BANKING_PROVIDER ||
-      "gocardless";
+      "bridge";
 
     logger.debug(`🏦 Création du provider banking: ${selectedProvider}`);
 
@@ -69,14 +69,6 @@ export class BankingProviderFactory {
     };
 
     const providerConfigs = {
-      gocardless: {
-        secretId: process.env.GOCARDLESS_SECRET_ID,
-        secretKey: process.env.GOCARDLESS_SECRET_KEY,
-        baseUrl:
-          process.env.GOCARDLESS_BASE_URL ||
-          "https://bankaccountdata.gocardless.com/api/v2",
-        redirectUri: process.env.GOCARDLESS_REDIRECT_URI,
-      },
       bridge: {
         clientId: process.env.BRIDGE_CLIENT_ID,
         clientSecret: process.env.BRIDGE_CLIENT_SECRET,
