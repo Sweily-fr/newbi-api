@@ -308,7 +308,6 @@ type CostComparison {
 
 enum BankingProvider {
   BRIDGE
-  GOCARDLESS
   STRIPE
   PAYPAL
   MOCK

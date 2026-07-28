@@ -13,7 +13,7 @@ const transactionSchema = new mongoose.Schema(
     provider: {
       type: String,
       required: true,
-      enum: ["bridge", "gocardless", "stripe", "paypal", "mock", "manual"],
+      enum: ["bridge", "stripe", "paypal", "mock", "manual"],
       index: true,
     },
 
@@ -168,7 +168,7 @@ const transactionSchema = new mongoose.Schema(
     },
 
     // Vrai si la catégorie a été choisie manuellement par l'utilisateur.
-    // Les syncs bancaires (Bridge/GoCardless) ne doivent alors plus écraser
+    // Les syncs bancaires (Bridge) ne doivent alors plus écraser
     // category/expenseCategory avec la catégorie du provider.
     categoryIsManual: {
       type: Boolean,
@@ -284,7 +284,7 @@ const transactionSchema = new mongoose.Schema(
     },
 
     // Soft delete: si défini, la transaction est masquée et ne sera pas
-    // recréée par les synchros bancaires suivantes (Bridge/GoCardless).
+    // recréée par les synchros bancaires suivantes (Bridge).
     deletedAt: {
       type: Date,
       default: null,

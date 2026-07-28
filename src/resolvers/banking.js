@@ -1233,7 +1233,6 @@ const bankingResolvers = {
   // Résolveurs d'enums
   BankingProvider: {
     BRIDGE: "bridge",
-    GOCARDLESS: "gocardless",
     STRIPE: "stripe",
     PAYPAL: "paypal",
     MOCK: "mock",
@@ -1276,7 +1275,7 @@ const bankingResolvers = {
   },
 };
 
-// ✅ Phase A.1 — Subscription check sur toutes les mutations banking (fail-closed: coûts Bridge/GoCardless)
+// ✅ Phase A.1 — Subscription check sur toutes les mutations banking (fail-closed: coûts Bridge)
 const originalBankingMutations = bankingResolvers.Mutation;
 bankingResolvers.Mutation = Object.fromEntries(
   Object.entries(originalBankingMutations).map(([name, fn]) => [
