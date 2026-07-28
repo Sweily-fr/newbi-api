@@ -8,151 +8,7 @@ import logger from "../utils/logger.js";
 const router = express.Router();
 
 // Provider par défaut (peut être changé via variable d'environnement)
-const DEFAULT_PROVIDER = process.env.BANKING_PROVIDER || "gocardless";
-
-// ============================================
-// ROUTES GOCARDLESS
-// ============================================
-
-/**
- * Liste les institutions bancaires disponibles
- * GET /banking-connect/gocardless/institutions
- */
-router.get("/gocardless/institutions", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
-
-    const country = req.query.country || "FR";
-
-    await bankingService.initialize("gocardless");
-    const provider = bankingService.currentProvider;
-
-    const institutions = await provider.listInstitutions(country);
-
-    res.json({
-      institutions,
-      country,
-      count: institutions.length,
-    });
-  } catch (error) {
-    logger.error("Erreur liste institutions:", error);
-    res.status(500).json({
-      error: "Erreur lors de la récupération des institutions",
-      details: error.message,
-    });
-  }
-});
-
-/**
- * Génère l'URL de connexion bancaire pour GoCardless
- * GET /banking-connect/gocardless/connect
- */
-router.get(
-  "/gocardless/connect",
-  requireActiveSubscriptionREST({ failClosed: true }),
-  async (req, res) => {
-    try {
-      const user = await betterAuthJWTMiddleware(req);
-      if (!user) {
-        return res.status(401).json({ error: "Non authentifié" });
-      }
-
-      // Vérifier que l'email est vérifié
-      if (!user.isEmailVerified && !user.emailVerified) {
-        return res.status(403).json({
-          error:
-            "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
-          code: "EMAIL_NOT_VERIFIED",
-        });
-      }
-
-      const workspaceId =
-        req.headers["x-workspace-id"] || req.query.workspaceId;
-      const institutionId = req.query.institutionId;
-
-      if (!workspaceId) {
-        return res.status(400).json({ error: "WorkspaceId requis" });
-      }
-
-      if (!institutionId) {
-        return res
-          .status(400)
-          .json({ error: "InstitutionId requis (banque à connecter)" });
-      }
-
-      logger.debug(
-        "🔍 Route /gocardless/connect - workspaceId:",
-        workspaceId,
-        "institutionId:",
-        institutionId,
-      );
-
-      await bankingService.initialize("gocardless");
-      const provider = bankingService.currentProvider;
-
-      // Générer l'URL de connexion
-      const connectUrl = await provider.generateConnectUrl(
-        user._id.toString(),
-        workspaceId,
-        institutionId,
-      );
-
-      logger.info(`URL de connexion GoCardless générée pour user ${user._id}`);
-
-      res.json({
-        connectUrl,
-        provider: "gocardless",
-        institutionId,
-      });
-    } catch (error) {
-      logger.error("Erreur génération URL GoCardless:", error);
-      res.status(500).json({
-        error: "Erreur lors de la génération de l'URL de connexion",
-        details: error.message,
-      });
-    }
-  },
-);
-
-/**
- * Callback GoCardless (redirection après connexion)
- * GET /banking-connect/gocardless/callback
- */
-router.get("/gocardless/callback", async (req, res) => {
-  try {
-    const { ref, error } = req.query;
-
-    if (error) {
-      logger.error("Erreur GoCardless callback:", error);
-      return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error)}`,
-      );
-    }
-
-    if (!ref) {
-      return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?banking_error=missing_reference`,
-      );
-    }
-
-    // Le ref correspond au workspaceId (reference de la requisition)
-    logger.info(`Callback GoCardless reçu pour workspace: ${ref}`);
-
-    // Rediriger vers le dashboard avec succès
-    // La synchronisation sera déclenchée côté frontend
-    res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&provider=gocardless&ref=${ref}`,
-    );
-  } catch (error) {
-    logger.error("Erreur callback GoCardless:", error);
-    res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error.message)}`,
-    );
-  }
-});
+const DEFAULT_PROVIDER = process.env.BANKING_PROVIDER || "bridge";
 
 // ============================================
 // ROUTES BRIDGE
@@ -371,10 +227,6 @@ router.get("/status", async (req, res) => {
     // Récupérer les infos utilisateur pour lastSync
     const userData = await User.findById(user._id);
 
-    // Vérifier les requisitions GoCardless
-    const gocardlessRequisition =
-      userData?.gocardlessRequisitions?.[workspaceId];
-
     // Vérifier les tokens Bridge (legacy)
     const bridgeTokens = userData?.bridgeTokens?.[workspaceId];
 
@@ -383,15 +235,8 @@ router.get("/status", async (req, res) => {
       provider: activeProvider,
       accountsCount,
       hasAccounts: accountsCount > 0,
-      lastSync:
-        gocardlessRequisition?.createdAt || bridgeTokens?.lastSync || null,
+      lastSync: bridgeTokens?.lastSync || null,
       // Infos spécifiques par provider
-      gocardless: gocardlessRequisition
-        ? {
-            requisitionId: gocardlessRequisition.requisitionId,
-            institutionId: gocardlessRequisition.institutionId,
-          }
-        : null,
       bridge: bridgeTokens
         ? {
             hasTokens: true,
@@ -616,17 +461,10 @@ router.post("/disconnect", async (req, res) => {
     }
 
     // Cas 3: Déconnexion par provider ou tous les providers
-    const providersToDisconnect = provider
-      ? [provider]
-      : ["gocardless", "bridge"];
+    const providersToDisconnect = provider ? [provider] : ["bridge"];
 
     for (const p of providersToDisconnect) {
-      if (p === "gocardless") {
-        // Supprimer les requisitions GoCardless
-        await User.findByIdAndUpdate(user._id, {
-          $unset: { [`gocardlessRequisitions.${workspaceId}`]: 1 },
-        });
-      } else if (p === "bridge") {
+      if (p === "bridge") {
         // Supprimer les tokens Bridge
         await User.findByIdAndUpdate(user._id, {
           $unset: { [`bridgeTokens.${workspaceId}`]: 1 },
