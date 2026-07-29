@@ -1,8 +1,41 @@
 import mongoose from "mongoose";
 import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
+import {
+  withOrganization,
+  resolveWorkspaceId,
+  checkSubscriptionActive,
+} from "../middlewares/rbac.js";
+
+// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation et impose le
+// workspace validé par RBAC à la place de l'ID brut fourni dans les args.
+const scopedQuery = (fn) =>
+  withOrganization(async (parent, args, context, info) =>
+    fn(
+      parent,
+      {
+        ...args,
+        workspaceId: resolveWorkspaceId(args.workspaceId, context.workspaceId),
+      },
+      context,
+      info,
+    ),
+  );
+
+const scopedMutation = (fn) =>
+  withOrganization(async (parent, args, context, info) => {
+    await checkSubscriptionActive(context);
+    return fn(
+      parent,
+      {
+        ...args,
+        workspaceId: resolveWorkspaceId(args.workspaceId, context.workspaceId),
+      },
+      context,
+      info,
+    );
+  });
 
 const buildActivityActor = (user) => ({
   userId: user?.id || user?._id,
@@ -39,7 +72,7 @@ const pushListActivity = async (clientId, type, list, user) => {
 export const clientListResolvers = {
   Query: {
     // Récupère toutes les listes d'un workspace
-    clientLists: isAuthenticated(async (_, { workspaceId }, context) => {
+    clientLists: scopedQuery(async (_, { workspaceId }, context) => {
       try {
         const lists = await ClientList.find({ workspaceId })
           .populate("clients")
@@ -53,7 +86,7 @@ export const clientListResolvers = {
     }),
 
     // Récupère une liste spécifique par ID
-    clientList: isAuthenticated(async (_, { workspaceId, id }, context) => {
+    clientList: scopedQuery(async (_, { workspaceId, id }, context) => {
       try {
         const list = await ClientList.findOne({
           _id: id,
@@ -72,7 +105,7 @@ export const clientListResolvers = {
     }),
 
     // Récupère les clients d'une liste avec pagination
-    clientsInList: isAuthenticated(
+    clientsInList: scopedQuery(
       async (
         _,
         { workspaceId, listId, page = 1, limit = 10, search = "" },
@@ -96,8 +129,8 @@ export const clientListResolvers = {
               { _id: { $in: clientIds } },
               {
                 $or: [
-                  { name: { $regex: search, $options: "i" } },
-                  { email: { $regex: search, $options: "i" } },
+                  { name: { $regex: escapeRegex(search), $options: "i" } },
+                  { email: { $regex: escapeRegex(search), $options: "i" } },
                 ],
               },
             ];
@@ -128,7 +161,7 @@ export const clientListResolvers = {
     ),
 
     // Récupère les listes auxquelles appartient un client
-    clientListsByClient: isAuthenticated(
+    clientListsByClient: scopedQuery(
       async (_, { workspaceId, clientId }, context) => {
         try {
           const lists = await ClientList.find({
@@ -150,7 +183,7 @@ export const clientListResolvers = {
 
   Mutation: {
     // Crée une nouvelle liste de clients
-    createClientList: isAuthenticated(
+    createClientList: scopedMutation(
       async (_, { workspaceId, input }, context) => {
         try {
           const newList = new ClientList({
@@ -173,7 +206,7 @@ export const clientListResolvers = {
     ),
 
     // Met à jour une liste existante
-    updateClientList: isAuthenticated(
+    updateClientList: scopedMutation(
       async (_, { workspaceId, id, input }, context) => {
         try {
           const list = await ClientList.findOne({ _id: id, workspaceId });
@@ -204,7 +237,7 @@ export const clientListResolvers = {
     ),
 
     // Supprime une liste
-    deleteClientList: isAuthenticated(
+    deleteClientList: scopedMutation(
       async (_, { workspaceId, id }, context) => {
         try {
           const list = await ClientList.findOne({ _id: id, workspaceId });
@@ -240,7 +273,7 @@ export const clientListResolvers = {
     ),
 
     // Supprime plusieurs listes en une seule opération (ignore les listes par défaut)
-    deleteClientLists: isAuthenticated(
+    deleteClientLists: scopedMutation(
       async (_, { workspaceId, ids }, context) => {
         try {
           const lists = await ClientList.find({
@@ -283,7 +316,7 @@ export const clientListResolvers = {
     ),
 
     // Ajoute un client à une liste
-    addClientToList: isAuthenticated(
+    addClientToList: scopedMutation(
       async (_, { workspaceId, listId, clientId }, context) => {
         try {
           const list = await ClientList.findOne({ _id: listId, workspaceId });
@@ -320,7 +353,7 @@ export const clientListResolvers = {
     ),
 
     // Retire un client d'une liste
-    removeClientFromList: isAuthenticated(
+    removeClientFromList: scopedMutation(
       async (_, { workspaceId, listId, clientId }, context) => {
         try {
           const list = await ClientList.findOne({ _id: listId, workspaceId });
@@ -359,7 +392,7 @@ export const clientListResolvers = {
     ),
 
     // Ajoute plusieurs clients à une liste
-    addClientsToList: isAuthenticated(
+    addClientsToList: scopedMutation(
       async (_, { workspaceId, listId, clientIds }, context) => {
         try {
           const list = await ClientList.findOne({ _id: listId, workspaceId });
@@ -405,7 +438,7 @@ export const clientListResolvers = {
     ),
 
     // Retire plusieurs clients d'une liste
-    removeClientsFromList: isAuthenticated(
+    removeClientsFromList: scopedMutation(
       async (_, { workspaceId, listId, clientIds }, context) => {
         try {
           const list = await ClientList.findOne({ _id: listId, workspaceId });
@@ -443,7 +476,7 @@ export const clientListResolvers = {
     ),
 
     // Ajoute un client à plusieurs listes
-    addClientToLists: isAuthenticated(
+    addClientToLists: scopedMutation(
       async (_, { workspaceId, clientId, listIds }, context) => {
         try {
           // Vérifier que le client existe
@@ -493,7 +526,7 @@ export const clientListResolvers = {
     ),
 
     // Retire un client de plusieurs listes
-    removeClientFromLists: isAuthenticated(
+    removeClientFromLists: scopedMutation(
       async (_, { workspaceId, clientId, listIds }, context) => {
         try {
           // Vérifier que le client existe
@@ -559,14 +592,5 @@ export const clientListResolvers = {
   },
 };
 
-// ✅ Phase A.3 — Subscription check sur toutes les mutations clientList
-const originalClientListMutations = clientListResolvers.Mutation;
-clientListResolvers.Mutation = Object.fromEntries(
-  Object.entries(originalClientListMutations).map(([name, fn]) => [
-    name,
-    async (parent, args, context, info) => {
-      await checkSubscriptionActive(context);
-      return fn(parent, args, context, info);
-    },
-  ]),
-);
+// Le contrôle d'abonnement est fait dans scopedMutation, APRÈS l'enrichissement
+// RBAC (context.workspaceId validé), plus via un wrapper externe pré-RBAC.

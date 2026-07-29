@@ -14,6 +14,7 @@ process.env.DATA_ENCRYPTION_KEY ||= "test-encryption-key-pennylane";
 
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
+import { seedOrgMembership, buildContext } from "../helpers/auth.js";
 
 const { testConnectionMock } = vi.hoisted(() => ({
   testConnectionMock: vi.fn(),
@@ -39,11 +40,12 @@ import resolvers from "../../src/resolvers/pennylaneResolvers.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
-const baseCtx = {
-  user: { _id: userId, id: userId.toString() },
-  organizationId: organizationId.toString(),
-  userRole: "owner",
-};
+const memberUserId = buildUserId();
+
+// Le contexte est désormais construit comme en production : RBAC (withOrganization)
+// résout l'org et le rôle depuis les collections member/organization, plutôt que
+// de faire confiance à un userRole/organizationId injectés dans le contexte.
+const baseCtx = () => buildContext({ userId, organizationId });
 
 beforeAll(async () => {
   await startMongo();
@@ -56,17 +58,27 @@ afterAll(async () => {
 beforeEach(async () => {
   await clearMongo();
   testConnectionMock.mockReset();
+  // Owner de l'organisation (rôle validé en base par RBAC)
+  await seedOrgMembership({ userId, organizationId, role: "owner" });
+  // Un membre simple de la même org, pour les tests de permission
+  await seedOrgMembership({
+    userId: memberUserId,
+    organizationId,
+    role: "member",
+  });
 });
 
 describe("pennylane.Query.myPennylaneAccount", () => {
   it("requires authentication", async () => {
+    // isAuthenticated (wrapper externe RBAC) lève de façon synchrone
     await expect(
-      resolvers.Query.myPennylaneAccount(null, {}, { user: null }),
+      (async () =>
+        resolvers.Query.myPennylaneAccount(null, {}, { user: null }))(),
     ).rejects.toThrow(/connecté/);
   });
 
   it("returns null when no account exists", async () => {
-    const out = await resolvers.Query.myPennylaneAccount(null, {}, baseCtx);
+    const out = await resolvers.Query.myPennylaneAccount(null, {}, baseCtx());
     expect(out).toBeNull();
   });
 
@@ -77,7 +89,7 @@ describe("pennylane.Query.myPennylaneAccount", () => {
       isConnected: true,
       connectedBy: userId,
     });
-    const out = await resolvers.Query.myPennylaneAccount(null, {}, baseCtx);
+    const out = await resolvers.Query.myPennylaneAccount(null, {}, baseCtx());
     expect(out).toBeTruthy();
     expect(out.isConnected).toBe(true);
   });
@@ -85,10 +97,11 @@ describe("pennylane.Query.myPennylaneAccount", () => {
 
 describe("pennylane.Mutation.testPennylaneConnection", () => {
   it("rejects non-owner/admin", async () => {
+    // Rôle "member" résolu en base par RBAC (plus injecté dans le contexte)
     const out = await resolvers.Mutation.testPennylaneConnection(
       null,
       { apiToken: "tok" },
-      { ...baseCtx, userRole: "member" },
+      buildContext({ userId: memberUserId, organizationId }),
     );
     expect(out.success).toBe(false);
     expect(out.message).toMatch(/propriétaires et administrateurs/i);
@@ -103,19 +116,22 @@ describe("pennylane.Mutation.testPennylaneConnection", () => {
     const out = await resolvers.Mutation.testPennylaneConnection(
       null,
       { apiToken: "tok" },
-      baseCtx,
+      baseCtx(),
     );
     expect(out.success).toBe(true);
     expect(testConnectionMock).toHaveBeenCalledWith("tok");
   });
 
-  it("returns 'Aucune organisation' when org missing", async () => {
-    const out = await resolvers.Mutation.testPennylaneConnection(
-      null,
-      { apiToken: "tok" },
-      { ...baseCtx, organizationId: null },
-    );
-    expect(out.success).toBe(false);
+  it("refuse un utilisateur non membre de l'organisation (RBAC)", async () => {
+    // Un utilisateur qui n'est membre d'aucune organisation est désormais
+    // rejeté par RBAC (plus de fallback silencieux) avant d'atteindre le resolver.
+    await expect(
+      resolvers.Mutation.testPennylaneConnection(
+        null,
+        { apiToken: "tok" },
+        buildContext({ userId: buildUserId(), organizationId }),
+      ),
+    ).rejects.toThrow();
   });
 });
 
@@ -129,7 +145,7 @@ describe("pennylane.Mutation.connectPennylane", () => {
     const out = await resolvers.Mutation.connectPennylane(
       null,
       { apiToken: "tok", environment: "sandbox" },
-      baseCtx,
+      baseCtx(),
     );
     expect(out.success).toBe(true);
     expect(out.account).toBeTruthy();
@@ -148,7 +164,7 @@ describe("pennylane.Mutation.connectPennylane", () => {
     const out = await resolvers.Mutation.connectPennylane(
       null,
       { apiToken: "new", environment: "production" },
-      baseCtx,
+      baseCtx(),
     );
     expect(out.success).toBe(false);
     expect(out.message).toMatch(/déjà connecté/);
@@ -162,7 +178,7 @@ describe("pennylane.Mutation.connectPennylane", () => {
     const out = await resolvers.Mutation.connectPennylane(
       null,
       { apiToken: "bad", environment: "production" },
-      baseCtx,
+      baseCtx(),
     );
     expect(out.success).toBe(false);
     expect(out.message).toBe("Bad token");
@@ -177,13 +193,21 @@ describe("pennylane.Mutation.disconnectPennylane", () => {
       isConnected: true,
       connectedBy: userId,
     });
-    const out = await resolvers.Mutation.disconnectPennylane(null, {}, baseCtx);
+    const out = await resolvers.Mutation.disconnectPennylane(
+      null,
+      {},
+      baseCtx(),
+    );
     expect(out.success).toBe(true);
     expect(await PennylaneAccount.countDocuments({ organizationId })).toBe(0);
   });
 
   it("returns success=false when no account exists", async () => {
-    const out = await resolvers.Mutation.disconnectPennylane(null, {}, baseCtx);
+    const out = await resolvers.Mutation.disconnectPennylane(
+      null,
+      {},
+      baseCtx(),
+    );
     expect(out.success).toBe(false);
   });
 });
@@ -199,7 +223,7 @@ describe("pennylane.Mutation.updatePennylaneAutoSync", () => {
     const out = await resolvers.Mutation.updatePennylaneAutoSync(
       null,
       { autoSync: { invoices: true, supplierInvoices: false, quotes: true } },
-      baseCtx,
+      baseCtx(),
     );
     expect(out.success).toBe(true);
     const fresh = await PennylaneAccount.findOne({ organizationId });
@@ -212,7 +236,7 @@ describe("pennylane.Mutation.updatePennylaneAutoSync", () => {
     const out = await resolvers.Mutation.updatePennylaneAutoSync(
       null,
       { autoSync: { invoices: true } },
-      baseCtx,
+      baseCtx(),
     );
     expect(out.success).toBe(false);
   });

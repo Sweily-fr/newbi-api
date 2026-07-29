@@ -373,7 +373,10 @@ describe("Quote Resolver - Quote.hasPurchaseOrderInvoices", () => {
       linkedInvoices: [new mongoose.Types.ObjectId()],
     });
 
-    expect(await resolver({ _id: quoteId })).toBe(true);
+    // Le parent est le document devis complet (scoping workspace du resolver)
+    expect(await resolver({ _id: quoteId, workspaceId: organizationId })).toBe(
+      true,
+    );
   });
 
   it("false quand le BC issu du devis n'a aucune facture", async () => {
@@ -392,12 +395,16 @@ describe("Quote Resolver - Quote.hasPurchaseOrderInvoices", () => {
       linkedInvoices: [],
     });
 
-    expect(await resolver({ _id: quoteId })).toBe(false);
+    expect(await resolver({ _id: quoteId, workspaceId: organizationId })).toBe(
+      false,
+    );
   });
 
   it("false quand le devis n'a aucun bon de commande", async () => {
     const { insertedId: quoteId } = await insertQuote({ status: "COMPLETED" });
-    expect(await resolver({ _id: quoteId })).toBe(false);
+    expect(await resolver({ _id: quoteId, workspaceId: organizationId })).toBe(
+      false,
+    );
   });
 });
 
@@ -513,7 +520,11 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
   });
 
   it("rejette la finalisation DRAFT → PENDING avec un numéro hors séquence", async () => {
-    await insertQuote({ number: "0001", prefix: "D-072026", status: "PENDING" });
+    await insertQuote({
+      number: "0001",
+      prefix: "D-072026",
+      status: "PENDING",
+    });
     const { insertedId } = await insertQuote(
       finalizableDraftData({
         number: "DRAFT-1751400000001",
@@ -534,7 +545,11 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
   });
 
   it("accepte la finalisation DRAFT → PENDING avec le numéro séquentiel suivant", async () => {
-    await insertQuote({ number: "0001", prefix: "D-072026", status: "PENDING" });
+    await insertQuote({
+      number: "0001",
+      prefix: "D-072026",
+      status: "PENDING",
+    });
     const { insertedId } = await insertQuote(
       finalizableDraftData({
         number: "DRAFT-1751400000002",
@@ -557,7 +572,11 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
   });
 
   it("renomme un autre brouillon qui détenait déjà le numéro attribué à la finalisation", async () => {
-    await insertQuote({ number: "0001", prefix: "D-072026", status: "PENDING" });
+    await insertQuote({
+      number: "0001",
+      prefix: "D-072026",
+      status: "PENDING",
+    });
     // Brouillon « pollué » (données legacy) qui détient le numéro numérique 0002
     const { insertedId: pollutedId } = await insertQuote({
       status: "DRAFT",

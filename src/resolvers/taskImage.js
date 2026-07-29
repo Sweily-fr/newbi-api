@@ -338,6 +338,14 @@ const taskImageResolvers = {
             throw new Error("Tâche non trouvée");
           }
 
+          // 🔐 La clé R2 vient du client : exiger qu'elle appartienne au préfixe
+          // de CETTE tâche (`${taskId}/…`). Sinon un attaquant pouvait enregistrer
+          // la clé d'une image d'un autre workspace puis la supprimer (bucket
+          // kanban partagé).
+          if (!input.key || !String(input.key).startsWith(`${taskId}/`)) {
+            throw new Error("Clé d'image invalide pour cette tâche");
+          }
+
           const newImage = {
             _id: new mongoose.Types.ObjectId(),
             key: input.key,

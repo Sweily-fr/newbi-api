@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { assertSafeDownloadUrl } from "../utils/ssrfGuard.js";
 /**
  * Service OCR utilisant Claude Vision API (Anthropic)
  * Provider par défaut pour l'extraction de données de factures
@@ -195,6 +196,9 @@ class ClaudeVisionOcrService {
    * Télécharge un document depuis une URL et le convertit en base64
    */
   async downloadAndConvertToBase64(url) {
+    // 🔐 Anti-SSRF : n'autoriser que les hôtes R2 configurés, bloquer les IP
+    // internes / métadonnées cloud avant toute requête sortante côté serveur.
+    assertSafeDownloadUrl(url);
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Échec du téléchargement: ${response.status}`);

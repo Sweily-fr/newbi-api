@@ -3,8 +3,12 @@ import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
+import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
 
 const router = express.Router();
+
+// 🔐 Toutes les routes exigent l'appartenance au workspace (ferme l'IDOR REST).
+router.use(requireWorkspaceMembership);
 
 /**
  * Obtenir le statut du cache pour un workspace
