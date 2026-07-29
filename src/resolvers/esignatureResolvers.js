@@ -832,8 +832,33 @@ const esignatureResolvers = {
   Subscription: {
     // Mises à jour temps réel du statut de signature d'un document.
     signatureStatusUpdated: {
-      subscribe: (_, { documentId }) =>
-        getPubSub().asyncIterableIterator([signatureChannel(documentId)]),
+      // 🔐 Authentification + appartenance : sans ce contrôle, un client WebSocket
+      // anonyme pouvait suivre la signature du devis de n'importe quelle organisation.
+      subscribe: async (_, { documentId }, context) => {
+        if (!context?.user) {
+          throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
+        }
+        const request = await SignatureRequest.findOne({ documentId })
+          .select("organizationId")
+          .lean();
+        if (request) {
+          const { getActiveOrganization } =
+            await import("../middlewares/org-resolver.js");
+          const org = await getActiveOrganization(
+            context.user._id.toString(),
+            String(request.organizationId),
+          );
+          if (!org) {
+            throw new AppError(
+              "Vous n'êtes pas membre de cette organisation.",
+              ERROR_CODES.FORBIDDEN,
+            );
+          }
+        }
+        return getPubSub().asyncIterableIterator([
+          signatureChannel(documentId),
+        ]);
+      },
     },
   },
 };

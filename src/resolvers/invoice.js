@@ -10,13 +10,17 @@ import {
   requireWrite,
   requireRead,
   requireDelete,
+  requirePermission,
   resolveWorkspaceId,
+  checkSubscriptionActive,
 } from "../middlewares/rbac.js";
 import {
   requireCompanyInfo,
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
+import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import {
   generateInvoiceNumber,
@@ -454,14 +458,18 @@ const invoiceResolvers = {
         };
       }
     },
-    client: async (invoice) => {
+    client: async (invoice, _args, context) => {
       // Pour les brouillons, résoudre depuis la collection Client (données à jour)
       if (
         (!invoice.status || invoice.status === "DRAFT") &&
         invoice.client?.id
       ) {
         try {
-          const freshClient = await Client.findById(invoice.client.id);
+          const freshClient = await loadWorkspaceClient(
+            context,
+            invoice.client.id,
+            invoice.workspaceId,
+          );
           if (freshClient) {
             return {
               id: freshClient._id.toString(),
@@ -549,7 +557,7 @@ const invoiceResolvers = {
         }
 
         if (search) {
-          const searchRegex = new RegExp(search, "i");
+          const searchRegex = new RegExp(escapeRegex(search), "i");
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },
@@ -945,7 +953,7 @@ const invoiceResolvers = {
         // Ajouter le filtre de recherche si fourni
         if (search && search.trim() !== "") {
           matchFilter.situationReference = {
-            $regex: search.trim(),
+            $regex: escapeRegex(search.trim()),
             $options: "i",
           };
         }
@@ -1674,25 +1682,28 @@ const invoiceResolvers = {
             // Enregistrer l'activité dans le client si c'est un client existant
             if (clientData.id) {
               try {
-                await Client.findByIdAndUpdate(clientData.id, {
-                  $push: {
-                    activity: {
-                      id: new mongoose.Types.ObjectId().toString(),
-                      type: "invoice_created",
-                      description: `a créé la facture ${prefix}${number}`,
-                      userId: user._id,
-                      userName: user.name || user.email,
-                      userImage: user.image || null,
-                      metadata: {
-                        documentType: "invoice",
-                        documentId: invoice._id.toString(),
-                        documentNumber: `${prefix}-${number}`,
-                        status: invoice.status,
+                await Client.findOneAndUpdate(
+                  { _id: clientData.id, workspaceId: invoice.workspaceId },
+                  {
+                    $push: {
+                      activity: {
+                        id: new mongoose.Types.ObjectId().toString(),
+                        type: "invoice_created",
+                        description: `a créé la facture ${prefix}${number}`,
+                        userId: user._id,
+                        userName: user.name || user.email,
+                        userImage: user.image || null,
+                        metadata: {
+                          documentType: "invoice",
+                          documentId: invoice._id.toString(),
+                          documentNumber: `${prefix}-${number}`,
+                          status: invoice.status,
+                        },
+                        createdAt: new Date(),
                       },
-                      createdAt: new Date(),
                     },
                   },
-                });
+                );
               } catch (activityError) {
                 console.error(
                   "Erreur lors de l'enregistrement de l'activité:",
@@ -1769,9 +1780,15 @@ const invoiceResolvers = {
             // Lier la facture au bon de commande source
             if (sourcePurchaseOrderId) {
               try {
-                await PurchaseOrder.findByIdAndUpdate(sourcePurchaseOrderId, {
-                  $addToSet: { linkedInvoices: invoice._id },
-                });
+                await PurchaseOrder.findOneAndUpdate(
+                  {
+                    _id: sourcePurchaseOrderId,
+                    workspaceId: invoice.workspaceId,
+                  },
+                  {
+                    $addToSet: { linkedInvoices: invoice._id },
+                  },
+                );
               } catch (err) {
                 console.error("Erreur lien BC→Facture:", err);
               }
@@ -1780,15 +1797,21 @@ const invoiceResolvers = {
             // Lier la facture au devis source (si pas déjà lié par purchaseOrderNumber)
             if (sourceQuoteId) {
               try {
-                const sourceQuote = await Quote.findById(sourceQuoteId);
+                const sourceQuote = await Quote.findOne({
+                  _id: sourceQuoteId,
+                  workspaceId: invoice.workspaceId,
+                });
                 if (sourceQuote) {
                   const alreadyLinked = sourceQuote.linkedInvoices?.some(
                     (id) => id.toString() === invoice._id.toString(),
                   );
                   if (!alreadyLinked) {
-                    await Quote.findByIdAndUpdate(sourceQuoteId, {
-                      $addToSet: { linkedInvoices: invoice._id },
-                    });
+                    await Quote.findOneAndUpdate(
+                      { _id: sourceQuoteId, workspaceId: invoice.workspaceId },
+                      {
+                        $addToSet: { linkedInvoices: invoice._id },
+                      },
+                    );
                   }
                 }
               } catch (err) {
@@ -1932,7 +1955,10 @@ const invoiceResolvers = {
           // Le cas DRAFT → PENDING via input.status est géré séparément plus
           // bas (lignes 1900+), il regénère number/prefix sans passer ici.
           if (invoiceData.status !== "DRAFT") {
-            if (input.number && input.number !== invoiceData.number) {
+            if (
+              input.number !== undefined &&
+              input.number !== invoiceData.number
+            ) {
               throw createValidationError(
                 "Le numéro d'une facture finalisée est verrouillé (§4.7)",
                 {
@@ -1942,7 +1968,10 @@ const invoiceResolvers = {
                 },
               );
             }
-            if (input.prefix && input.prefix !== invoiceData.prefix) {
+            if (
+              input.prefix !== undefined &&
+              input.prefix !== invoiceData.prefix
+            ) {
               throw createValidationError(
                 "Le préfixe d'une facture finalisée est verrouillé (§4.7)",
                 {
@@ -1958,7 +1987,10 @@ const invoiceResolvers = {
           // (DRAFT uniquement à ce stade — les non-DRAFT ont été rejetées
           // ci-dessus). On garde le check duplicate pour éviter qu'un DRAFT
           // se voit assigner le numéro d'une facture déjà finalisée.
-          if (input.number && input.number !== invoiceData.number) {
+          if (
+            input.number !== undefined &&
+            input.number !== invoiceData.number
+          ) {
             // Vérifier si des factures avec le statut PENDING ou COMPLETED existent déjà
             const pendingInvoicesCount = await Invoice.countDocuments({
               workspaceId: workspaceId,
@@ -2242,7 +2274,10 @@ const invoiceResolvers = {
               clientId
             ) {
               try {
-                const freshClient = await Client.findById(clientId);
+                const freshClient = await Client.findOne({
+                  _id: clientId,
+                  workspaceId: invoiceData.workspaceId,
+                });
                 if (freshClient) {
                   updateData.client = {
                     id: freshClient._id.toString(),
@@ -2331,7 +2366,10 @@ const invoiceResolvers = {
             const clientId = updateData.client?.id || invoiceData.client?.id;
             if (clientId && !updateData.client) {
               try {
-                const freshClient = await Client.findById(clientId);
+                const freshClient = await Client.findOne({
+                  _id: clientId,
+                  workspaceId: invoiceData.workspaceId,
+                });
                 if (freshClient) {
                   updateData.client = {
                     id: freshClient._id.toString(),
@@ -2642,7 +2680,10 @@ const invoiceResolvers = {
 
         // Si sourceQuote n'existe pas, chercher le devis qui contient cette facture
         if (!sourceQuoteId) {
-          const quote = await Quote.findOne({ linkedInvoices: invoice._id });
+          const quote = await Quote.findOne({
+            linkedInvoices: invoice._id,
+            workspaceId: invoice.workspaceId,
+          });
           if (quote) {
             sourceQuoteId = quote._id;
             // Mettre à jour la facture avec le sourceQuote manquant
@@ -2654,7 +2695,7 @@ const invoiceResolvers = {
         // Supprimer le lien du devis si un devis source a été trouvé
         if (sourceQuoteId) {
           await Quote.updateOne(
-            { _id: sourceQuoteId },
+            { _id: sourceQuoteId, workspaceId: invoice.workspaceId },
             { $pull: { linkedInvoices: invoice._id } },
           );
         }
@@ -2794,7 +2835,10 @@ const invoiceResolvers = {
           // Snapshot client à la finalisation (données à jour depuis la collection Client)
           if (invoice.client?.id) {
             try {
-              const freshClient = await Client.findById(invoice.client.id);
+              const freshClient = await Client.findOne({
+                _id: invoice.client.id,
+                workspaceId: invoice.workspaceId,
+              });
               if (freshClient) {
                 invoice.client = {
                   id: freshClient._id.toString(),
@@ -2968,25 +3012,28 @@ const invoiceResolvers = {
               CANCELED: "Annulée",
             };
 
-            await Client.findByIdAndUpdate(invoice.client.id, {
-              $push: {
-                activity: {
-                  id: new mongoose.Types.ObjectId().toString(),
-                  type: "invoice_status_changed",
-                  description: `a changé le statut de la facture ${invoice.prefix}${invoice.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
-                  userId: user._id,
-                  userName: user.name || user.email,
-                  userImage: user.image || null,
-                  metadata: {
-                    documentType: "invoice",
-                    documentId: invoice._id.toString(),
-                    documentNumber: `${invoice.prefix}-${invoice.number}`,
-                    status: status,
+            await Client.findOneAndUpdate(
+              { _id: invoice.client.id, workspaceId: invoice.workspaceId },
+              {
+                $push: {
+                  activity: {
+                    id: new mongoose.Types.ObjectId().toString(),
+                    type: "invoice_status_changed",
+                    description: `a changé le statut de la facture ${invoice.prefix}${invoice.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                    userId: user._id,
+                    userName: user.name || user.email,
+                    userImage: user.image || null,
+                    metadata: {
+                      documentType: "invoice",
+                      documentId: invoice._id.toString(),
+                      documentNumber: `${invoice.prefix}-${invoice.number}`,
+                      status: status,
+                    },
+                    createdAt: new Date(),
                   },
-                  createdAt: new Date(),
                 },
               },
-            });
+            );
           } catch (activityError) {
             console.error(
               "Erreur lors de l'enregistrement de l'activité:",
@@ -3039,12 +3086,20 @@ const invoiceResolvers = {
       },
     ),
 
-    markInvoiceAsPaid: requireWrite("invoices")(
+    // Permission dédiée "mark-paid" (owner/admin/accountant) au lieu de
+    // requireWrite qui, via write=create|edit, laissait passer un member sans
+    // droit d'encaissement et bloquait à tort l'accountant (dont c'est la permission).
+    markInvoiceAsPaid: requirePermission(
+      "invoices",
+      "mark-paid",
+    )(
       async (
         _,
         { id, workspaceId: inputWorkspaceId, paymentDate },
         context,
       ) => {
+        // requirePermission n'inclut pas le contrôle d'abonnement : le conserver.
+        await checkSubscriptionActive(context);
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -3433,7 +3488,7 @@ const invoiceResolvers = {
         // Retirer la facture de la liste des factures liées du devis
 
         await Quote.updateOne(
-          { _id: sourceQuoteId },
+          { _id: sourceQuoteId, workspaceId: invoice.workspaceId },
           { $pull: { linkedInvoices: invoice._id } },
         );
 

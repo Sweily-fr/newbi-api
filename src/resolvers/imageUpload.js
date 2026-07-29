@@ -26,7 +26,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!key.includes(`${user.id}/`)) {
+        if (!String(key).startsWith(`${user.id}/`)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -141,7 +141,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!key.includes(`${user.id}/`)) {
+        if (!String(key).startsWith(`${user.id}/`)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -172,7 +172,7 @@ const imageUploadResolvers = {
           }
 
           // Vérifier que l'image appartient à l'utilisateur (sécurité)
-          if (!key.includes(`${user.id}/`)) {
+          if (!String(key).startsWith(`${user.id}/`)) {
             throw createValidationError("Accès non autorisé à cette image");
           }
 
@@ -349,7 +349,7 @@ const imageUploadResolvers = {
     /**
      * Upload un logo social vers le bucket logo-rs
      */
-    uploadSocialLogo: async (_, { file, logoType, color }) => {
+    uploadSocialLogo: isAuthenticated(async (_, { file, logoType, color }) => {
       try {
         const { createReadStream, filename, mimetype } = await file;
 
@@ -419,7 +419,7 @@ const imageUploadResolvers = {
           "Erreur lors de l'upload du logo social",
         );
       }
-    },
+    }),
   },
 };
 

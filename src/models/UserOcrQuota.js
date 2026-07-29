@@ -12,7 +12,7 @@ import mongoose from "mongoose";
 export const PLAN_QUOTAS = {
   FREE: {
     monthlyQuota: parseInt(process.env.OCR_QUOTA_FREE) || 5,
-    extraImportPrice: 0.30, // Prix par import supplémentaire
+    extraImportPrice: 0.3, // Prix par import supplémentaire
     name: "Gratuit",
   },
   FREELANCE: {
@@ -22,7 +22,7 @@ export const PLAN_QUOTAS = {
   },
   TPE: {
     monthlyQuota: parseInt(process.env.OCR_QUOTA_TPE) || 999999,
-    extraImportPrice: 0.20,
+    extraImportPrice: 0.2,
     name: "TPE",
   },
   ENTREPRISE: {
@@ -32,7 +32,7 @@ export const PLAN_QUOTAS = {
   },
   UNLIMITED: {
     monthlyQuota: 999999,
-    extraImportPrice: 0.10,
+    extraImportPrice: 0.1,
     name: "Illimité",
   },
 };
@@ -109,7 +109,12 @@ const userOcrQuotaSchema = new mongoose.Schema(
         fileName: String,
         provider: {
           type: String,
-          enum: ["claude-vision", "mindee", "google-document-ai", "mistral-ocr"],
+          enum: [
+            "claude-vision",
+            "mindee",
+            "google-document-ai",
+            "mistral-ocr",
+          ],
         },
         success: { type: Boolean, default: true },
         tokensUsed: Number, // Pour Claude Vision
@@ -130,17 +135,20 @@ const userOcrQuotaSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index composé pour requêtes rapides
 userOcrQuotaSchema.index(
   { userId: 1, workspaceId: 1, month: 1 },
-  { unique: true }
+  { unique: true },
 );
 
 // Index pour les requêtes par workspace
 userOcrQuotaSchema.index({ workspaceId: 1, month: 1 });
+
+// Index pour la vérification d'idempotence des achats (paymentId Stripe)
+userOcrQuotaSchema.index({ "purchaseHistory.paymentId": 1 });
 
 /**
  * Méthodes statiques
@@ -152,7 +160,7 @@ userOcrQuotaSchema.index({ workspaceId: 1, month: 1 });
 userOcrQuotaSchema.statics.getOrCreateCurrentQuota = async function (
   userId,
   workspaceId,
-  plan = "FREE"
+  plan = "FREE",
 ) {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -192,7 +200,7 @@ userOcrQuotaSchema.statics.getOrCreateCurrentQuota = async function (
 userOcrQuotaSchema.statics.checkQuotaAvailable = async function (
   userId,
   workspaceId,
-  plan = "FREE"
+  plan = "FREE",
 ) {
   const quota = await this.getOrCreateCurrentQuota(userId, workspaceId, plan);
   const planConfig = PLAN_QUOTAS[plan] || PLAN_QUOTAS.FREE;
@@ -212,9 +220,10 @@ userOcrQuotaSchema.statics.checkQuotaAvailable = async function (
     plan: planConfig.name,
     canBuyExtra: true,
     extraImportPrice: planConfig.extraImportPrice,
-    message: totalRemaining > 0
-      ? null
-      : `Quota OCR épuisé. Passez à un plan supérieur ou achetez des imports supplémentaires (${planConfig.extraImportPrice}€/import).`,
+    message:
+      totalRemaining > 0
+        ? null
+        : `Quota OCR épuisé. Passez à un plan supérieur ou achetez des imports supplémentaires (${planConfig.extraImportPrice}€/import).`,
   };
 };
 
@@ -225,13 +234,16 @@ userOcrQuotaSchema.statics.recordUsage = async function (
   userId,
   workspaceId,
   plan,
-  documentInfo = {}
+  documentInfo = {},
 ) {
   const quota = await this.getOrCreateCurrentQuota(userId, workspaceId, plan);
   const planConfig = PLAN_QUOTAS[plan] || PLAN_QUOTAS.FREE;
 
   // Déterminer si on utilise le quota du plan ou les extras
-  const remainingFromPlan = Math.max(0, planConfig.monthlyQuota - quota.usedQuota);
+  const remainingFromPlan = Math.max(
+    0,
+    planConfig.monthlyQuota - quota.usedQuota,
+  );
   const isExtra = remainingFromPlan <= 0;
 
   // Mettre à jour les compteurs
@@ -274,7 +286,7 @@ userOcrQuotaSchema.statics.addExtraImports = async function (
   workspaceId,
   plan,
   quantity,
-  paymentId = null
+  paymentId = null,
 ) {
   const quota = await this.getOrCreateCurrentQuota(userId, workspaceId, plan);
   const planConfig = PLAN_QUOTAS[plan] || PLAN_QUOTAS.FREE;
@@ -308,7 +320,7 @@ userOcrQuotaSchema.statics.addExtraImports = async function (
 userOcrQuotaSchema.statics.getUserStats = async function (
   userId,
   workspaceId,
-  plan = "FREE"
+  plan = "FREE",
 ) {
   const currentMonth = new Date().toISOString().slice(0, 7);
   const quota = await this.findOne({
@@ -336,7 +348,10 @@ userOcrQuotaSchema.statics.getUserStats = async function (
     };
   }
 
-  const remainingFromPlan = Math.max(0, planConfig.monthlyQuota - quota.usedQuota);
+  const remainingFromPlan = Math.max(
+    0,
+    planConfig.monthlyQuota - quota.usedQuota,
+  );
   const extraAvailable = quota.extraImportsPurchased - quota.extraImportsUsed;
 
   return {

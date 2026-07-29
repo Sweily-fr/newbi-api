@@ -1,4 +1,6 @@
 import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
+import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import mongoose from "mongoose";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import {
@@ -152,11 +154,15 @@ const purchaseOrderResolvers = {
         };
       }
     },
-    client: async (po) => {
+    client: async (po, _args, context) => {
       // Pour les brouillons, résoudre depuis la collection Client (données à jour)
       if ((!po.status || po.status === "DRAFT") && po.client?.id) {
         try {
-          const freshClient = await Client.findById(po.client.id);
+          const freshClient = await loadWorkspaceClient(
+            context,
+            po.client.id,
+            po.workspaceId,
+          );
           if (freshClient) {
             return {
               id: freshClient._id.toString(),
@@ -190,11 +196,17 @@ const purchaseOrderResolvers = {
     },
     sourceQuote: async (po) => {
       if (!po.sourceQuoteId) return null;
-      return await Quote.findById(po.sourceQuoteId);
+      return await Quote.findOne({
+        _id: po.sourceQuoteId,
+        workspaceId: po.workspaceId,
+      });
     },
     linkedInvoices: async (po) => {
       if (po.linkedInvoices && po.linkedInvoices.length > 0) {
-        return await Invoice.find({ _id: { $in: po.linkedInvoices } });
+        return await Invoice.find({
+          _id: { $in: po.linkedInvoices },
+          workspaceId: po.workspaceId,
+        });
       }
       return [];
     },
@@ -266,7 +278,7 @@ const purchaseOrderResolvers = {
         if (status) query.status = status;
 
         if (search) {
-          const searchRegex = new RegExp(search, "i");
+          const searchRegex = new RegExp(escapeRegex(search), "i");
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },
@@ -744,7 +756,7 @@ const purchaseOrderResolvers = {
           // continuité de la séquence. La transition DRAFT → finalisé est
           // gérée plus bas (le numéro y est généré/validé).
           if (po.status !== "DRAFT") {
-            if (input.number && input.number !== po.number) {
+            if (input.number !== undefined && input.number !== po.number) {
               throw createValidationError(
                 "Le numéro d'un bon de commande finalisé est verrouillé",
                 {
@@ -752,7 +764,7 @@ const purchaseOrderResolvers = {
                 },
               );
             }
-            if (input.prefix && input.prefix !== po.prefix) {
+            if (input.prefix !== undefined && input.prefix !== po.prefix) {
               throw createValidationError(
                 "Le préfixe d'un bon de commande finalisé est verrouillé",
                 {
@@ -893,7 +905,10 @@ const purchaseOrderResolvers = {
             po.client?.id
           ) {
             try {
-              const freshClient = await Client.findById(po.client.id);
+              const freshClient = await Client.findOne({
+                _id: po.client.id,
+                workspaceId: po.workspaceId,
+              });
               if (freshClient) {
                 updateData.client = {
                   id: freshClient._id.toString(),
@@ -1027,7 +1042,10 @@ const purchaseOrderResolvers = {
               const clientId = po.client?.id || po.clientId;
               if (clientId) {
                 try {
-                  const freshClient = await Client.findById(clientId);
+                  const freshClient = await Client.findOne({
+                    _id: clientId,
+                    workspaceId: po.workspaceId,
+                  });
                   if (freshClient) {
                     po.client = {
                       id: freshClient._id.toString(),
@@ -1283,6 +1301,7 @@ const purchaseOrderResolvers = {
             if (sourceQuote.linkedInvoices?.length > 0) {
               const existingInvoices = await Invoice.find({
                 _id: { $in: sourceQuote.linkedInvoices },
+                workspaceId: sourceQuote.workspaceId,
               });
               const validIds = existingInvoices.map((inv) => inv._id);
               if (validIds.length !== sourceQuote.linkedInvoices.length) {

@@ -252,6 +252,18 @@ const documentUploadResolvers = {
           tempKey,
         );
 
+        // 🔐 La clé temporaire est fournie par le client. N'autoriser que les
+        // fichiers du propre préfixe de l'utilisateur (`temp/${user.id}/…`) pour
+        // empêcher la lecture/déplacement + suppression du fichier d'un tiers.
+        const uid = String(user.id || user._id);
+        if (
+          !tempKey ||
+          String(tempKey).includes("..") ||
+          !String(tempKey).startsWith(`temp/${uid}/`)
+        ) {
+          throw new Error("Clé temporaire invalide");
+        }
+
         // Récupérer l'ID de l'organisation de l'utilisateur
         let organizationId = null;
         organizationId =
@@ -316,6 +328,24 @@ const documentUploadResolvers = {
      */
     deleteDocument: isAuthenticated(async (_, { key }, { user }) => {
       try {
+        // 🔐 La clé est fournie par le client : n'autoriser que les documents du
+        // propre préfixe de l'utilisateur, pour ne pas supprimer un objet R2 d'un
+        // tiers. Bloquer aussi le path traversal.
+        const uid = String(user.id || user._id);
+        if (
+          !key ||
+          String(key).includes("..") ||
+          !(
+            String(key).startsWith(`documents/${uid}/`) ||
+            String(key).startsWith(`temp/${uid}/`)
+          )
+        ) {
+          return {
+            success: false,
+            message: "Clé de document invalide",
+          };
+        }
+
         // Supprimer de Cloudflare R2
         await cloudflareService.deleteImage(key);
 

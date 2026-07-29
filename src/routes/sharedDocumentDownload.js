@@ -8,6 +8,7 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import convert from "heic-convert";
 import sharp from "sharp";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
+import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import {
   streamFolderAsZip,
   streamSelectionAsZip,
@@ -55,6 +56,32 @@ const s3Client = new S3Client({
 const router = express.Router();
 
 /**
+ * 🔐 Vérifie que l'utilisateur authentifié est bien membre du workspace demandé.
+ * Sans ce contrôle, le workspaceId fourni par le client suffisait à télécharger
+ * les documents partagés de n'importe quelle organisation (IDOR).
+ * Renvoie true si l'accès est autorisé, sinon répond 403 et renvoie false.
+ */
+async function ensureWorkspaceMember(user, workspaceId, res) {
+  try {
+    const org = await getActiveOrganization(String(user._id), workspaceId);
+    if (!org) {
+      res.status(403).json({
+        success: false,
+        message: "Accès non autorisé à cet espace de travail",
+      });
+      return false;
+    }
+    return true;
+  } catch {
+    res.status(403).json({
+      success: false,
+      message: "Accès non autorisé à cet espace de travail",
+    });
+    return false;
+  }
+}
+
+/**
  * GET /download-folder
  * Télécharge un dossier complet en ZIP
  * Query params: folderId, workspaceId
@@ -79,6 +106,8 @@ router.get("/download-folder", async (req, res) => {
         message: "folderId et workspaceId sont requis",
       });
     }
+
+    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
 
     logger.info("📥 Demande téléchargement dossier ZIP", {
       folderId,
@@ -136,6 +165,8 @@ router.get("/folder-info", async (req, res) => {
       });
     }
 
+    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+
     // Vérifier l'accès au dossier
     const folder = await verifyFolderAccess(folderId, workspaceId);
     if (!folder) {
@@ -146,10 +177,8 @@ router.get("/folder-info", async (req, res) => {
     }
 
     // Récupérer les informations
-    const { totalSize, totalFiles, rootFolderName } = await getDocumentsWithPaths(
-      folderId,
-      workspaceId
-    );
+    const { totalSize, totalFiles, rootFolderName } =
+      await getDocumentsWithPaths(folderId, workspaceId);
 
     return res.json({
       success: true,
@@ -164,7 +193,8 @@ router.get("/folder-info", async (req, res) => {
     logger.error("❌ Erreur récupération info dossier:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Erreur lors de la récupération des informations",
+      message:
+        error.message || "Erreur lors de la récupération des informations",
     });
   }
 });
@@ -184,7 +214,12 @@ router.post("/download-selection", async (req, res) => {
       });
     }
 
-    const { folderIds = [], documentIds = [], excludedFolderIds = [], workspaceId } = req.body;
+    const {
+      folderIds = [],
+      documentIds = [],
+      excludedFolderIds = [],
+      workspaceId,
+    } = req.body;
 
     if (!workspaceId) {
       return res.status(400).json({
@@ -199,6 +234,8 @@ router.post("/download-selection", async (req, res) => {
         message: "Au moins un dossier ou document doit être sélectionné",
       });
     }
+
+    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
 
     logger.info("📥 Demande téléchargement sélection ZIP", {
       folderIds,
@@ -228,12 +265,16 @@ router.post("/download-selection", async (req, res) => {
       if (docs.length !== documentIds.length) {
         return res.status(404).json({
           success: false,
-          message: "Un ou plusieurs documents non trouvés ou accès non autorisé",
+          message:
+            "Un ou plusieurs documents non trouvés ou accès non autorisé",
         });
       }
     }
 
-    await streamSelectionAsZip({ folderIds, documentIds, excludedFolderIds, workspaceId }, res);
+    await streamSelectionAsZip(
+      { folderIds, documentIds, excludedFolderIds, workspaceId },
+      res,
+    );
   } catch (error) {
     logger.error("❌ Erreur téléchargement sélection ZIP:", error);
     if (!res.headersSent) {
@@ -269,6 +310,8 @@ router.post("/selection-info", async (req, res) => {
       });
     }
 
+    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+
     // Verify access
     for (const folderId of folderIds) {
       const folder = await verifyFolderAccess(folderId, workspaceId);
@@ -280,7 +323,11 @@ router.post("/selection-info", async (req, res) => {
       }
     }
 
-    const info = await getSelectionInfo({ folderIds, documentIds, workspaceId });
+    const info = await getSelectionInfo({
+      folderIds,
+      documentIds,
+      workspaceId,
+    });
 
     return res.json({
       success: true,
@@ -290,7 +337,8 @@ router.post("/selection-info", async (req, res) => {
     logger.error("❌ Erreur récupération info sélection:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Erreur lors de la récupération des informations",
+      message:
+        error.message || "Erreur lors de la récupération des informations",
     });
   }
 });
@@ -320,6 +368,8 @@ router.get("/download-file/:documentId", async (req, res) => {
       });
     }
 
+    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+
     const document = await SharedDocument.findOne({
       _id: documentId,
       workspaceId,
@@ -346,9 +396,12 @@ router.get("/download-file/:documentId", async (req, res) => {
 
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(document.originalName || document.name)}"`
+      `attachment; filename="${encodeURIComponent(document.originalName || document.name)}"`,
     );
-    res.setHeader("Content-Type", document.mimeType || "application/octet-stream");
+    res.setHeader(
+      "Content-Type",
+      document.mimeType || "application/octet-stream",
+    );
     if (document.fileSize) {
       res.setHeader("Content-Length", document.fileSize);
     }
@@ -401,6 +454,8 @@ router.get("/preview-file/:documentId", async (req, res) => {
       });
     }
 
+    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+
     const document = await SharedDocument.findOne({
       _id: documentId,
       workspaceId,
@@ -425,9 +480,9 @@ router.get("/preview-file/:documentId", async (req, res) => {
 
     const response = await s3Client.send(command);
 
-    const isHeic = ["image/heic", "image/heif"].includes(
-      document.mimeType?.toLowerCase()
-    ) || /\.(heic|heif)$/i.test(document.originalName || "");
+    const isHeic =
+      ["image/heic", "image/heif"].includes(document.mimeType?.toLowerCase()) ||
+      /\.(heic|heif)$/i.test(document.originalName || "");
 
     if (isHeic) {
       const cacheKey = `preview:${documentId}`;
@@ -455,17 +510,25 @@ router.get("/preview-file/:documentId", async (req, res) => {
         setCachedPreview(cacheKey, jpegBuffer);
       }
 
-      const displayName = (document.originalName || document.name)
-        .replace(/\.(heic|heif)$/i, ".jpg");
+      const displayName = (document.originalName || document.name).replace(
+        /\.(heic|heif)$/i,
+        ".jpg",
+      );
 
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(displayName)}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(displayName)}"`,
+      );
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Content-Length", jpegBuffer.length);
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Content-Security-Policy", `frame-ancestors 'self' ${frontendUrl}`);
+      res.setHeader(
+        "Content-Security-Policy",
+        `frame-ancestors 'self' ${frontendUrl}`,
+      );
       res.removeHeader("X-Frame-Options");
 
       res.end(jpegBuffer);
@@ -477,7 +540,7 @@ router.get("/preview-file/:documentId", async (req, res) => {
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       res.setHeader(
         "Content-Disposition",
-        `inline; filename="${encodeURIComponent(document.originalName || document.name)}"`
+        `inline; filename="${encodeURIComponent(document.originalName || document.name)}"`,
       );
       res.setHeader("Content-Type", contentType);
       if (document.fileSize) {
@@ -486,7 +549,10 @@ router.get("/preview-file/:documentId", async (req, res) => {
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Content-Security-Policy", `frame-ancestors 'self' ${frontendUrl}`);
+      res.setHeader(
+        "Content-Security-Policy",
+        `frame-ancestors 'self' ${frontendUrl}`,
+      );
       res.removeHeader("X-Frame-Options");
 
       response.Body.pipe(res);

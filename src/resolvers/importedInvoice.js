@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 /**
  * Resolvers GraphQL pour les factures importées
  */
@@ -28,6 +29,7 @@ import {
 import documentAutomationService from "../services/documentAutomationService.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
+import stripe from "../utils/stripe.js";
 
 // Limite maximale d'import en lot
 const MAX_BATCH_IMPORT = 100;
@@ -160,6 +162,11 @@ async function recordOcrUsage(userId, workspaceId, plan, documentInfo) {
  * Vérifie l'accès à une facture importée (IDOR fix: filtre par workspaceId)
  */
 async function checkInvoiceAccess(invoiceId, workspaceId) {
+  // Garde : Mongoose retire les clés `undefined` d'un filtre. Sans workspaceId,
+  // la requête deviendrait findOne({ _id }) → IDOR. On refuse explicitement.
+  if (!workspaceId) {
+    throw createValidationError("Contexte d'organisation requis");
+  }
   const invoice = await ImportedInvoice.findOne({
     _id: invoiceId,
     workspaceId,
@@ -620,7 +627,7 @@ const importedInvoiceResolvers = {
         }
         if (filters.vendorName) {
           query["vendor.name"] = {
-            $regex: new RegExp(filters.vendorName, "i"),
+            $regex: new RegExp(escapeRegex(filters.vendorName), "i"),
           };
         }
         if (filters.dateFrom || filters.dateTo) {
@@ -794,6 +801,17 @@ const importedInvoiceResolvers = {
           inputWorkspaceId,
           context.workspaceId,
         );
+        // 🔐 La clé R2 est fournie par le client : exiger qu'elle appartienne au
+        // préfixe de l'organisation (`${workspaceId}/…`). Sinon un attaquant
+        // pouvait stocker la clé d'un fichier d'une autre org puis la supprimer.
+        if (
+          cloudflareKey &&
+          !String(cloudflareKey).startsWith(`${workspaceId}/`)
+        ) {
+          throw createValidationError(
+            "Clé de fichier invalide pour cet espace de travail",
+          );
+        }
         try {
           // Vérifier le quota utilisateur avant l'import
           const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
@@ -1459,9 +1477,15 @@ const importedInvoiceResolvers = {
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
 
-        // Supprimer le fichier PDF sur Cloudflare si présent
+        // Supprimer le fichier PDF sur Cloudflare si présent.
+        // 🔐 Ne supprimer que si la clé appartient bien au préfixe du workspace,
+        // pour ne jamais détruire un objet R2 d'une autre organisation même si une
+        // clé forgée a pu être stockée par une version antérieure.
         const cloudflareKey = invoice.file?.cloudflareKey;
-        if (cloudflareKey) {
+        if (
+          cloudflareKey &&
+          String(cloudflareKey).startsWith(`${workspaceId}/`)
+        ) {
           try {
             await cloudflareService.deleteImage(
               cloudflareKey,
@@ -1493,7 +1517,11 @@ const importedInvoiceResolvers = {
         // Supprimer les fichiers PDF sur Cloudflare
         for (const invoice of invoices) {
           const cloudflareKey = invoice.file?.cloudflareKey;
-          if (cloudflareKey) {
+          // 🔐 Ne supprimer que les objets R2 du préfixe du workspace.
+          if (
+            cloudflareKey &&
+            String(cloudflareKey).startsWith(`${workspaceId}/`)
+          ) {
             try {
               await cloudflareService.deleteImage(
                 cloudflareKey,
@@ -1537,6 +1565,41 @@ const importedInvoiceResolvers = {
           throw createValidationError(
             "Quantité invalide. Minimum 1, maximum 1000 imports.",
           );
+        }
+
+        // 🔐 Vérification du paiement : sans ce contrôle, n'importe quel membre
+        // pouvait s'octroyer du quota OCR gratuitement en passant un paymentId
+        // arbitraire (coût direct : Claude Vision / Mindee / Google facturés).
+        if (!paymentId) {
+          throw createValidationError("Paiement requis pour cet achat.");
+        }
+
+        // Idempotence : un même paiement ne peut créditer qu'une fois.
+        const alreadyUsed = await UserOcrQuota.findOne({
+          "purchaseHistory.paymentId": paymentId,
+        }).lean();
+        if (alreadyUsed) {
+          throw createValidationError("Ce paiement a déjà été utilisé.");
+        }
+
+        // Confirmer auprès de Stripe que le paiement existe et a réussi.
+        let paymentConfirmed = false;
+        try {
+          if (String(paymentId).startsWith("cs_")) {
+            const session = await stripe.checkout.sessions.retrieve(paymentId);
+            paymentConfirmed = session?.payment_status === "paid";
+          } else {
+            const intent = await stripe.paymentIntents.retrieve(paymentId);
+            paymentConfirmed = intent?.status === "succeeded";
+          }
+        } catch (stripeErr) {
+          logger.warn(
+            `[purchaseExtraOcrImports] Paiement Stripe invalide ${paymentId}: ${stripeErr.message}`,
+          );
+          throw createValidationError("Paiement introuvable ou invalide.");
+        }
+        if (!paymentConfirmed) {
+          throw createValidationError("Paiement non confirmé.");
         }
 
         const plan = await getUserPlan(user.id, workspaceId);

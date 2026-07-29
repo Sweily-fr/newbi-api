@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 /**
  * Resolvers GraphQL pour les bons de commande importés
  */
@@ -132,6 +133,10 @@ async function recordOcrUsage(userId, workspaceId, plan, documentInfo) {
 }
 
 async function checkPurchaseOrderAccess(poId, workspaceId) {
+  // Garde : sans workspaceId le filtre deviendrait findOne({ _id }) → IDOR.
+  if (!workspaceId) {
+    throw createValidationError("Contexte d'organisation requis");
+  }
   const po = await ImportedPurchaseOrder.findOne({ _id: poId, workspaceId });
   if (!po) {
     throw createNotFoundError("Bon de commande importé non trouvé");
@@ -409,7 +414,7 @@ const importedPurchaseOrderResolvers = {
         if (filters.category) query.category = filters.category;
         if (filters.vendorName) {
           query["vendor.name"] = {
-            $regex: new RegExp(filters.vendorName, "i"),
+            $regex: new RegExp(escapeRegex(filters.vendorName), "i"),
           };
         }
         if (filters.dateFrom || filters.dateTo) {

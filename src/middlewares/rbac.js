@@ -428,12 +428,18 @@ export const withRBAC = (resolver, options = {}) => {
       if (!organization) {
         organization = await getActiveOrganization(userId, requestedOrgId);
 
-        // Fallback sur l'org par défaut si l'org demandée n'est pas accessible
+        // Sécurité : si une organisation précise est demandée (header/args) mais
+        // que l'utilisateur n'en est pas membre, on REFUSE. Le fallback silencieux
+        // vers l'org par défaut laissait passer des accès cross-organisation et
+        // empoisonnait le cache sous la clé de l'org non autorisée.
         if (!organization && requestedOrgId) {
           logger.warn(
-            `⚠️ RBAC: userId=${userId} n'est pas membre de org=${requestedOrgId}, fallback sur org par défaut`,
+            `⛔ RBAC: userId=${userId} n'est pas membre de org=${requestedOrgId} — accès refusé`,
           );
-          organization = await getActiveOrganization(userId, null);
+          throw new AppError(
+            "Vous n'êtes pas membre de l'organisation demandée.",
+            ERROR_CODES.FORBIDDEN,
+          );
         }
 
         if (organization) {
@@ -488,6 +494,10 @@ export const withRBAC = (resolver, options = {}) => {
       const enrichedContext = {
         ...context,
         workspaceId: organization.id,
+        // Exposer l'org VALIDÉE par RBAC (et non le header client brut) pour tous
+        // les resolvers qui lisent context.organizationId. Ferme les IDOR où un
+        // resolver filtrait sur context.organizationId = x-organization-id non vérifié.
+        organizationId: organization.id,
         organization,
         userRole,
         permissions: {

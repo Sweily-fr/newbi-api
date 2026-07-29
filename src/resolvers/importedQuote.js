@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 /**
  * Resolvers GraphQL pour les devis importés
  */
@@ -418,7 +419,7 @@ const importedQuoteResolvers = {
         if (filters.category) query.category = filters.category;
         if (filters.vendorName) {
           query["vendor.name"] = {
-            $regex: new RegExp(filters.vendorName, "i"),
+            $regex: new RegExp(escapeRegex(filters.vendorName), "i"),
           };
         }
         if (filters.dateFrom || filters.dateTo) {

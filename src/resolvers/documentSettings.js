@@ -1,20 +1,23 @@
 import DocumentSettings from "../models/DocumentSettings.js";
 import { UserInputError } from "apollo-server-express";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  withOrganization,
+  checkSubscriptionActive,
+} from "../middlewares/rbac.js";
 
 const documentSettingsResolvers = {
   Query: {
-    // Récupérer les paramètres d'un type de document (facture ou devis)
-    getDocumentSettings: isAuthenticated(
-      async (_, { documentType }, { user }) => {
-        // Rechercher les paramètres existants pour ce type de document et cet utilisateur
+    // Récupérer les paramètres d'un type de document (facture ou devis).
+    // 🔐 Scopé par workspace (org validée par RBAC) et non plus par createdBy :
+    // évite qu'un utilisateur multi-org croise les mentions légales entre entités,
+    // et qu'un ex-membre reste propriétaire des paramètres.
+    getDocumentSettings: withOrganization(
+      async (_, { documentType }, { workspaceId }) => {
         const settings = await DocumentSettings.findOne({
           documentType,
-          createdBy: user.id || user._id,
+          workspaceId,
         });
 
-        // Si aucun paramètre n'existe, retourner null
         return settings;
       },
     ),
@@ -22,42 +25,37 @@ const documentSettingsResolvers = {
 
   Mutation: {
     // Créer ou mettre à jour les paramètres d'un document
-    saveDocumentSettings: isAuthenticated(async (_, { input }, { user }) => {
-      const { documentType, ...settingsData } = input;
-      const userId = user.id || user._id;
+    saveDocumentSettings: withOrganization(
+      async (_, { input }, { user, workspaceId }) => {
+        await checkSubscriptionActive({ workspaceId });
+        const { documentType, ...settingsData } = input;
+        const userId = user.id || user._id;
 
-      try {
-        // Rechercher les paramètres existants ou créer un nouveau document
-        const settings = await DocumentSettings.findOneAndUpdate(
-          { documentType, createdBy: userId },
-          { ...settingsData, createdBy: userId },
-          { new: true, upsert: true, runValidators: true },
-        );
+        try {
+          // Paramètres scopés par workspace (index unique { workspaceId, documentType })
+          const settings = await DocumentSettings.findOneAndUpdate(
+            { documentType, workspaceId },
+            { ...settingsData, workspaceId, createdBy: userId },
+            { new: true, upsert: true, runValidators: true },
+          );
 
-        return settings;
-      } catch (error) {
-        console.error("Erreur lors de la sauvegarde des paramètres:", error);
-        throw new UserInputError(
-          "Erreur lors de la sauvegarde des paramètres",
-          {
-            invalidArgs: Object.keys(error.errors || {}),
-          },
-        );
-      }
-    }),
+          return settings;
+        } catch (error) {
+          console.error("Erreur lors de la sauvegarde des paramètres:", error);
+          throw new UserInputError(
+            "Erreur lors de la sauvegarde des paramètres",
+            {
+              invalidArgs: Object.keys(error.errors || {}),
+            },
+          );
+        }
+      },
+    ),
   },
 };
 
-// ✅ Phase A.3 — Subscription check sur toutes les mutations documentSettings
-const originalDocSettingsMutations = documentSettingsResolvers.Mutation;
-documentSettingsResolvers.Mutation = Object.fromEntries(
-  Object.entries(originalDocSettingsMutations).map(([name, fn]) => [
-    name,
-    async (parent, args, context, info) => {
-      await checkSubscriptionActive(context);
-      return fn(parent, args, context, info);
-    },
-  ]),
-);
+// Le contrôle d'abonnement est fait à l'intérieur de saveDocumentSettings,
+// APRÈS l'enrichissement RBAC (context.workspaceId validé), plutôt que via un
+// wrapper externe qui lisait l'org depuis un header client non vérifié.
 
 export default documentSettingsResolvers;
