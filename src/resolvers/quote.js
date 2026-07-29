@@ -1,4 +1,6 @@
 import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
+import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
 import {
@@ -163,11 +165,15 @@ const quoteResolvers = {
         };
       }
     },
-    client: async (quote) => {
+    client: async (quote, _args, context) => {
       // Pour les brouillons, résoudre depuis la collection Client (données à jour)
       if ((!quote.status || quote.status === "DRAFT") && quote.client?.id) {
         try {
-          const freshClient = await Client.findById(quote.client.id);
+          const freshClient = await loadWorkspaceClient(
+            context,
+            quote.client.id,
+            quote.workspaceId,
+          );
           if (freshClient) {
             return {
               id: freshClient._id.toString(),
@@ -204,15 +210,22 @@ const quoteResolvers = {
     },
     convertedToInvoice: async (quote) => {
       if (!quote.convertedToInvoice) return null;
-      return await Invoice.findById(quote.convertedToInvoice);
+      return await Invoice.findOne({
+        _id: quote.convertedToInvoice,
+        workspaceId: quote.workspaceId,
+      });
     },
     linkedInvoices: async (quote) => {
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
         return await Invoice.find({
           _id: { $in: quote.linkedInvoices },
+          workspaceId: quote.workspaceId,
         });
       } else if (quote.convertedToInvoice) {
-        const invoice = await Invoice.findById(quote.convertedToInvoice);
+        const invoice = await Invoice.findOne({
+          _id: quote.convertedToInvoice,
+          workspaceId: quote.workspaceId,
+        });
         return invoice ? [invoice] : [];
       }
       return [];
@@ -231,6 +244,7 @@ const quoteResolvers = {
     hasPurchaseOrderInvoices: async (quote) => {
       const count = await PurchaseOrder.countDocuments({
         sourceQuoteId: quote._id,
+        workspaceId: quote.workspaceId,
         linkedInvoices: { $exists: true, $not: { $size: 0 } },
       });
       return count > 0;
@@ -333,7 +347,7 @@ const quoteResolvers = {
         if (status) query.status = status;
 
         if (search) {
-          const searchRegex = new RegExp(search, "i");
+          const searchRegex = new RegExp(escapeRegex(search), "i");
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },
@@ -964,25 +978,28 @@ const quoteResolvers = {
           // Enregistrer l'activité dans le client si c'est un client existant
           if (clientData.id) {
             try {
-              await Client.findByIdAndUpdate(clientData.id, {
-                $push: {
-                  activity: {
-                    id: new mongoose.Types.ObjectId().toString(),
-                    type: "quote_created",
-                    description: `a créé le devis ${prefix}${number}`,
-                    userId: user._id,
-                    userName: user.name || user.email,
-                    userImage: user.image || null,
-                    metadata: {
-                      documentType: "quote",
-                      documentId: quote._id.toString(),
-                      documentNumber: `${prefix}-${number}`,
-                      status: quote.status,
+              await Client.findOneAndUpdate(
+                { _id: clientData.id, workspaceId },
+                {
+                  $push: {
+                    activity: {
+                      id: new mongoose.Types.ObjectId().toString(),
+                      type: "quote_created",
+                      description: `a créé le devis ${prefix}${number}`,
+                      userId: user._id,
+                      userName: user.name || user.email,
+                      userImage: user.image || null,
+                      metadata: {
+                        documentType: "quote",
+                        documentId: quote._id.toString(),
+                        documentNumber: `${prefix}-${number}`,
+                        status: quote.status,
+                      },
+                      createdAt: new Date(),
                     },
-                    createdAt: new Date(),
                   },
                 },
-              });
+              );
             } catch (activityError) {
               console.error(
                 "Erreur lors de l'enregistrement de l'activité:",
@@ -1096,7 +1113,7 @@ const quoteResolvers = {
         // les renuméroter casserait la continuité de la séquence. La transition
         // DRAFT → PENDING est gérée plus bas (le numéro y est généré/validé).
         if (quote.status !== "DRAFT") {
-          if (input.number && input.number !== quote.number) {
+          if (input.number !== undefined && input.number !== quote.number) {
             throw createValidationError(
               "Le numéro d'un devis finalisé est verrouillé",
               {
@@ -1104,7 +1121,7 @@ const quoteResolvers = {
               },
             );
           }
-          if (input.prefix && input.prefix !== quote.prefix) {
+          if (input.prefix !== undefined && input.prefix !== quote.prefix) {
             throw createValidationError(
               "Le préfixe d'un devis finalisé est verrouillé",
               {
@@ -1163,7 +1180,10 @@ const quoteResolvers = {
         ) {
           const clientId = updateData.client?.id || quote.client?.id;
           try {
-            const freshClient = await Client.findById(clientId);
+            const freshClient = await Client.findOne({
+              _id: clientId,
+              workspaceId: quote.workspaceId,
+            });
             if (freshClient) {
               updateData.client = {
                 id: freshClient._id.toString(),
@@ -1201,7 +1221,10 @@ const quoteResolvers = {
           const clientId = updateData.client?.id || quote.client?.id;
           if (clientId && !updateData.client) {
             try {
-              const freshClient = await Client.findById(clientId);
+              const freshClient = await Client.findOne({
+                _id: clientId,
+                workspaceId: quote.workspaceId,
+              });
               if (freshClient) {
                 updateData.client = {
                   id: freshClient._id.toString(),
@@ -1441,7 +1464,10 @@ const quoteResolvers = {
           // Snapshot client à la finalisation (données à jour depuis la collection Client)
           if (quote.client?.id) {
             try {
-              const freshClient = await Client.findById(quote.client.id);
+              const freshClient = await Client.findOne({
+                _id: quote.client.id,
+                workspaceId: quote.workspaceId,
+              });
               if (freshClient) {
                 quote.client = {
                   id: freshClient._id.toString(),
@@ -1625,25 +1651,28 @@ const quoteResolvers = {
               CANCELED: "Refusé",
             };
 
-            await Client.findByIdAndUpdate(quote.client.id, {
-              $push: {
-                activity: {
-                  id: new mongoose.Types.ObjectId().toString(),
-                  type: "quote_status_changed",
-                  description: `a changé le statut du devis ${quote.prefix}-${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
-                  userId: user._id,
-                  userName: user.name || user.email,
-                  userImage: user.image || null,
-                  metadata: {
-                    documentType: "quote",
-                    documentId: quote._id.toString(),
-                    documentNumber: `${quote.prefix}-${quote.number}`,
-                    status: status,
+            await Client.findOneAndUpdate(
+              { _id: quote.client.id, workspaceId: quote.workspaceId },
+              {
+                $push: {
+                  activity: {
+                    id: new mongoose.Types.ObjectId().toString(),
+                    type: "quote_status_changed",
+                    description: `a changé le statut du devis ${quote.prefix}-${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                    userId: user._id,
+                    userName: user.name || user.email,
+                    userImage: user.image || null,
+                    metadata: {
+                      documentType: "quote",
+                      documentId: quote._id.toString(),
+                      documentNumber: `${quote.prefix}-${quote.number}`,
+                      status: status,
+                    },
+                    createdAt: new Date(),
                   },
-                  createdAt: new Date(),
                 },
               },
-            });
+            );
           } catch (activityError) {
             console.error(
               "Erreur lors de l'enregistrement de l'activité:",
@@ -1728,6 +1757,7 @@ const quoteResolvers = {
           // Récupérer toutes les factures déjà liées au devis qui existent encore
           const existingInvoices = await Invoice.find({
             _id: { $in: quote.linkedInvoices },
+            workspaceId: quote.workspaceId,
           });
 
           // Mettre à jour la liste des factures liées valides

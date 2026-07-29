@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import FileTransfer from "../models/FileTransfer.js";
 import DownloadEvent from "../models/DownloadEvent.js";
 import User from "../models/User.js";
@@ -5,6 +6,36 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import logger from "../utils/logger.js";
 import { sendDownloadNotificationEmail } from "../utils/mailer.js";
+
+// 🔐 Comparaison à temps constant du secret de partage (shareLink / accessKey).
+function timingSafeEq(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+/**
+ * Vérifie que la requête porte le vrai secret de partage du transfert et que
+ * celui-ci est encore accessible. Renvoie null si OK, sinon { status, error }.
+ */
+function checkTransferShareSecret(fileTransfer, req) {
+  const link = req.body?.link || req.query?.link;
+  const key = req.body?.key || req.query?.key;
+  if (
+    !timingSafeEq(String(link || ""), fileTransfer.shareLink || "") ||
+    !timingSafeEq(String(key || ""), fileTransfer.accessKey || "")
+  ) {
+    return { status: 403, error: "Lien ou clé d'accès invalide" };
+  }
+  if (
+    typeof fileTransfer.isAccessible === "function" &&
+    !fileTransfer.isAccessible()
+  ) {
+    return { status: 410, error: "Transfert expiré ou indisponible" };
+  }
+  return null;
+}
 
 // Configuration R2
 const s3Client = new S3Client({
@@ -57,6 +88,15 @@ export const authorizeDownload = async (req, res) => {
         success: false,
         error: "Transfert non trouvé",
       });
+    }
+
+    // 🔐 Exiger le secret de partage (shareLink + accessKey) + expiration :
+    // le seul transferId (ObjectId devinable) ne suffit plus.
+    const secretErr = checkTransferShareSecret(fileTransfer, req);
+    if (secretErr) {
+      return res
+        .status(secretErr.status)
+        .json({ success: false, error: secretErr.error });
     }
 
     // Si pas de paiement requis, autoriser directement
@@ -274,6 +314,20 @@ export const markDownloadCompleted = async (req, res) => {
       });
     }
 
+    // 🔐 Exiger le secret de partage du transfert lié (anti-spam de notifications
+    // et de faux compteurs à partir d'un downloadEventId deviné).
+    const relatedTransfer = await FileTransfer.findById(
+      downloadEvent.transferId,
+    );
+    if (relatedTransfer) {
+      const secretErr = checkTransferShareSecret(relatedTransfer, req);
+      if (secretErr) {
+        return res
+          .status(secretErr.status)
+          .json({ success: false, error: secretErr.error });
+      }
+    }
+
     await downloadEvent.markCompleted(duration);
 
     logger.info("✅ Téléchargement marqué comme terminé", {
@@ -351,6 +405,21 @@ export const markDownloadCompleted = async (req, res) => {
 export const getDownloadStats = async (req, res) => {
   try {
     const { transferId } = req.params;
+
+    // 🔐 Ces stats contiennent des PII de destinataires (emails, IP) : exiger le
+    // secret de partage du transfert (pas seulement un transferId devinable).
+    const fileTransfer = await FileTransfer.findById(transferId);
+    if (!fileTransfer) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Transfert non trouvé" });
+    }
+    const secretErr = checkTransferShareSecret(fileTransfer, req);
+    if (secretErr) {
+      return res
+        .status(secretErr.status)
+        .json({ success: false, error: secretErr.error });
+    }
 
     const stats = await DownloadEvent.getDownloadStats(transferId);
     const recentDownloads = await DownloadEvent.getRecentDownloads(

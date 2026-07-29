@@ -1,6 +1,7 @@
 import logger from "../utils/logger.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 import {
   saveChunkToR2,
   areAllChunksReceivedOnR2,
@@ -446,6 +447,19 @@ const chunkUploadR2Resolvers = {
             );
           }
 
+          // 🔐 fileId injecté dans une clé R2 et un motif regex : format sûr requis.
+          if (!/^[a-zA-Z0-9_-]{1,128}$/.test(fileId)) {
+            throw new UserInputError("Identifiant de fichier invalide");
+          }
+
+          if (
+            !Number.isInteger(totalChunks) ||
+            totalChunks < 1 ||
+            totalChunks > 100000
+          ) {
+            throw new UserInputError("Nombre de chunks invalide");
+          }
+
           if (chunkIndex < 0 || chunkIndex >= totalChunks) {
             throw new UserInputError("Index de chunk invalide");
           }
@@ -594,6 +608,18 @@ const chunkUploadR2Resolvers = {
           // Définir les options du transfert de fichier
           const expiryDays = input?.expiryDays || 7;
           const workspaceId = input?.workspaceId || null;
+          // 🔐 Appartenance requise si un workspace est fourni.
+          if (
+            workspaceId &&
+            !(await userBelongsToWorkspace(
+              String(user.id || user._id),
+              String(workspaceId),
+            ))
+          ) {
+            throw new UserInputError(
+              "Accès non autorisé à cet espace de travail",
+            );
+          }
           const paymentAmount = input?.paymentAmount || 0;
           const paymentCurrency =
             input?.paymentCurrency || input?.currency || "EUR";

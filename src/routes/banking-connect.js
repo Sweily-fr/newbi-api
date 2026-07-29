@@ -3,6 +3,7 @@ import { bankingService } from "../services/banking/index.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
+import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -53,6 +54,7 @@ router.get("/bridge/institutions", async (req, res) => {
  */
 router.get(
   "/bridge/connect",
+  requireWorkspaceMembership,
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
@@ -192,7 +194,7 @@ router.get("/bridge/callback", async (req, res) => {
  * Statut de la connexion bancaire (multi-provider)
  * GET /banking-connect/status
  */
-router.get("/status", async (req, res) => {
+router.get("/status", requireWorkspaceMembership, async (req, res) => {
   try {
     const user = await betterAuthJWTMiddleware(req);
     if (!user) {
@@ -263,7 +265,7 @@ router.get("/status", async (req, res) => {
  *
  * Priorité: accountId > itemId > provider > tous
  */
-router.post("/disconnect", async (req, res) => {
+router.post("/disconnect", requireWorkspaceMembership, async (req, res) => {
   try {
     const user = await betterAuthJWTMiddleware(req);
     if (!user) {

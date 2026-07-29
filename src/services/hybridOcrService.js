@@ -21,6 +21,7 @@ import mistralOcrService from "./mistralOcrService.js";
 import ocrCacheService from "./ocrCacheService.js";
 import OcrUsage from "../models/OcrUsage.js";
 import invoiceExtractionService from "./invoiceExtractionService.js";
+import { assertSafeDownloadUrl } from "../utils/ssrfGuard.js";
 
 class HybridOcrService {
   constructor() {
@@ -151,6 +152,10 @@ class HybridOcrService {
     mimeType,
     workspaceId = null,
   ) {
+    // 🔐 Anti-SSRF : valider l'URL fournie (souvent client-contrôlée) avant tout
+    // téléchargement serveur, quel que soit le provider OCR retenu.
+    assertSafeDownloadUrl(documentUrl);
+
     // Initialiser les providers au premier appel (avec vérification quota)
     await this.initProviders(workspaceId);
 

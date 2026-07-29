@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import CreditNote from "../models/CreditNote.js";
 import {
   archiveDocumentPdf,
@@ -157,10 +158,11 @@ const creditNoteResolvers = {
 
       // Recherche textuelle
       if (search) {
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { number: { $regex: search, $options: "i" } },
-          { "client.name": { $regex: search, $options: "i" } },
-          { reason: { $regex: search, $options: "i" } },
+          { number: { $regex: safeSearch, $options: "i" } },
+          { "client.name": { $regex: safeSearch, $options: "i" } },
+          { reason: { $regex: safeSearch, $options: "i" } },
         ];
       }
 
@@ -557,9 +559,10 @@ const creditNoteResolvers = {
           let totals = {};
           if (input.items) {
             // Récupérer la facture originale pour obtenir isReverseCharge
-            const originalInvoice = await Invoice.findById(
-              creditNote.originalInvoice,
-            );
+            const originalInvoice = await Invoice.findOne({
+              _id: creditNote.originalInvoice,
+              workspaceId: creditNote.workspaceId,
+            });
             if (!originalInvoice) {
               throw createNotFoundError("Facture originale non trouvée");
             }

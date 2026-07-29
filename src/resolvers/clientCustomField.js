@@ -1,11 +1,43 @@
 import ClientCustomField from "../models/ClientCustomField.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  withOrganization,
+  resolveWorkspaceId,
+  checkSubscriptionActive,
+} from "../middlewares/rbac.js";
+
+// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (withOrganization)
+// et impose le workspace validé par RBAC à la place de l'ID brut des args.
+const scopedQuery = (fn) =>
+  withOrganization(async (parent, args, context, info) =>
+    fn(
+      parent,
+      {
+        ...args,
+        workspaceId: resolveWorkspaceId(args.workspaceId, context.workspaceId),
+      },
+      context,
+      info,
+    ),
+  );
+
+const scopedMutation = (fn) =>
+  withOrganization(async (parent, args, context, info) => {
+    await checkSubscriptionActive(context);
+    return fn(
+      parent,
+      {
+        ...args,
+        workspaceId: resolveWorkspaceId(args.workspaceId, context.workspaceId),
+      },
+      context,
+      info,
+    );
+  });
 
 export const clientCustomFieldResolvers = {
   Query: {
     // Récupère tous les champs personnalisés d'un workspace
-    clientCustomFields: isAuthenticated(async (_, { workspaceId }, context) => {
+    clientCustomFields: scopedQuery(async (_, { workspaceId }, context) => {
       try {
         const fields = await ClientCustomField.find({ workspaceId }).sort({
           order: 1,
@@ -23,33 +55,31 @@ export const clientCustomFieldResolvers = {
     }),
 
     // Récupère un champ personnalisé par ID
-    clientCustomField: isAuthenticated(
-      async (_, { workspaceId, id }, context) => {
-        try {
-          const field = await ClientCustomField.findOne({
-            _id: id,
-            workspaceId,
-          });
+    clientCustomField: scopedQuery(async (_, { workspaceId, id }, context) => {
+      try {
+        const field = await ClientCustomField.findOne({
+          _id: id,
+          workspaceId,
+        });
 
-          if (!field) {
-            throw new Error("Champ personnalisé non trouvé");
-          }
-
-          return field;
-        } catch (error) {
-          console.error(
-            "Erreur lors de la récupération du champ personnalisé:",
-            error,
-          );
-          throw error;
+        if (!field) {
+          throw new Error("Champ personnalisé non trouvé");
         }
-      },
-    ),
+
+        return field;
+      } catch (error) {
+        console.error(
+          "Erreur lors de la récupération du champ personnalisé:",
+          error,
+        );
+        throw error;
+      }
+    }),
   },
 
   Mutation: {
     // Créer un nouveau champ personnalisé
-    createClientCustomField: isAuthenticated(
+    createClientCustomField: scopedMutation(
       async (_, { workspaceId, input }, context) => {
         try {
           const userId = context.user.id;
@@ -91,7 +121,7 @@ export const clientCustomFieldResolvers = {
     ),
 
     // Modifier un champ personnalisé
-    updateClientCustomField: isAuthenticated(
+    updateClientCustomField: scopedMutation(
       async (_, { workspaceId, id, input }, context) => {
         try {
           // Vérifier si un autre champ avec le même nom existe
@@ -129,7 +159,7 @@ export const clientCustomFieldResolvers = {
     ),
 
     // Supprimer un champ personnalisé
-    deleteClientCustomField: isAuthenticated(
+    deleteClientCustomField: scopedMutation(
       async (_, { workspaceId, id }, context) => {
         try {
           const result = await ClientCustomField.findOneAndDelete({
@@ -153,7 +183,7 @@ export const clientCustomFieldResolvers = {
     ),
 
     // Réordonner les champs personnalisés
-    reorderClientCustomFields: isAuthenticated(
+    reorderClientCustomFields: scopedMutation(
       async (_, { workspaceId, fieldIds }, context) => {
         try {
           // Mettre à jour l'ordre de chaque champ
@@ -187,14 +217,5 @@ export const clientCustomFieldResolvers = {
   },
 };
 
-// ✅ Phase A.3 — Subscription check sur toutes les mutations clientCustomField
-const originalClientCFMutations = clientCustomFieldResolvers.Mutation;
-clientCustomFieldResolvers.Mutation = Object.fromEntries(
-  Object.entries(originalClientCFMutations).map(([name, fn]) => [
-    name,
-    async (parent, args, context, info) => {
-      await checkSubscriptionActive(context);
-      return fn(parent, args, context, info);
-    },
-  ]),
-);
+// Le contrôle d'abonnement est fait dans scopedMutation, APRÈS l'enrichissement
+// RBAC (context.workspaceId validé), plus via un wrapper externe pré-RBAC.

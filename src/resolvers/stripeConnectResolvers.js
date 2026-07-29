@@ -3,7 +3,10 @@ import stripeConnectService from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  withOrganization,
+} from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 // In-memory rate limit for payment session creation
@@ -667,6 +670,32 @@ STRIPE_CONNECT_BLOCK.forEach((name) => {
       return original(parent, args, context, info);
     };
   }
+});
+
+// 🔐 Sécurité : envelopper les resolvers Stripe Connect org-scopés dans
+// withOrganization (position externe, après le check d'abonnement) pour valider
+// l'appartenance à l'organisation en base et remplacer le rôle/l'org lus depuis
+// les headers client (x-user-role / x-organization-id) par les valeurs vérifiées
+// par RBAC (context.organizationId et context.userRole). Empêche l'escalade de
+// rôle et la suppression du Stripe Connect d'une autre organisation.
+// createPaymentSessionForFileTransfer / consumePaymentReturnToken restent publics
+// (paiement par un client externe), donc volontairement non enveloppés.
+const STRIPE_CONNECT_ORG_SCOPED_QUERIES = ["myStripeConnectAccount"];
+const STRIPE_CONNECT_ORG_SCOPED_MUTATIONS = [
+  "createStripeConnectAccount",
+  "generateStripeOnboardingLink",
+  "checkStripeConnectAccountStatus",
+  "generateStripeDashboardLink",
+  "disconnectStripe",
+];
+STRIPE_CONNECT_ORG_SCOPED_QUERIES.forEach((name) => {
+  const original = stripeConnectResolvers.Query[name];
+  if (original) stripeConnectResolvers.Query[name] = withOrganization(original);
+});
+STRIPE_CONNECT_ORG_SCOPED_MUTATIONS.forEach((name) => {
+  const original = stripeConnectResolvers.Mutation[name];
+  if (original)
+    stripeConnectResolvers.Mutation[name] = withOrganization(original);
 });
 
 export default stripeConnectResolvers;
