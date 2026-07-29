@@ -959,6 +959,14 @@ export class BridgeProvider extends BankingProvider {
           delete updatedTransactionData.expenseCategory;
         }
 
+        // Préserver une description modifiée manuellement : ne pas l'écraser
+        // avec clean_description de Bridge à chaque re-sync. Le flag
+        // descriptionIsManual est posé par le resolveur updateTransaction.
+        // `reference` (libellé brut) reste synchronisé normalement.
+        if (existing?.descriptionIsManual) {
+          delete updatedTransactionData.description;
+        }
+
         // Pré-remplir le PCG seulement si pas de correction manuelle existante
         if (!existing?.pcgAccount?.isManual) {
           const pcgSuggestion = suggestPCGAccount(transactionData);
