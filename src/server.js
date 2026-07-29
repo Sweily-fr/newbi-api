@@ -272,7 +272,9 @@ async function startServer() {
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
-          callback(new Error(`Origine non autorisée: ${origin}`));
+          // Pas d'Error ici : elle deviendrait un 500 renvoyé au client.
+          // `false` = réponse sans headers CORS, le navigateur bloque quand même.
+          callback(null, false);
         }
       },
       credentials: true,
