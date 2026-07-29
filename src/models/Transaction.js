@@ -71,6 +71,14 @@ const transactionSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Vrai si la description a été modifiée manuellement par l'utilisateur.
+    // Les syncs bancaires (Bridge) ne doivent alors plus l'écraser avec
+    // clean_description (même logique que categoryIsManual).
+    descriptionIsManual: {
+      type: Boolean,
+      default: false,
+    },
+
     // Comptes impliqués
     fromAccount: {
       type: String,
