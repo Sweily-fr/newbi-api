@@ -265,29 +265,51 @@ const bankingResolvers = {
       async (parent, { id, input }, { user, workspaceId }) => {
         const updateData = {};
 
+        const existing = await Transaction.findOne({
+          _id: id,
+          workspaceId,
+        }).select("amount reconciliationStatus provider description");
+
+        if (!existing) {
+          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+
+        // Les transactions synchronisées (Bridge, etc.) reflètent le compte
+        // bancaire : montant, devise, date, type et statut ne sont pas
+        // modifiables. Seuls description, catégorie, PCG et metadata restent
+        // éditables. Les transactions manuelles gardent l'édition complète.
+        if (existing.provider !== "manual") {
+          delete input.amount;
+          delete input.currency;
+          delete input.date;
+          delete input.type;
+          delete input.status;
+        }
+
         // Garde-fou d'intégrité : le montant d'une transaction rapprochée ne
         // peut pas changer (la facture liée ne correspondrait plus). Délier
         // d'abord, modifier ensuite.
-        if (input.amount !== undefined) {
-          const existing = await Transaction.findOne({
-            _id: id,
-            workspaceId,
-          }).select("amount reconciliationStatus");
-          if (
-            existing &&
-            existing.reconciliationStatus === "matched" &&
-            existing.amount !== input.amount
-          ) {
-            throw new AppError(
-              "Impossible de modifier le montant d'une transaction rapprochée. Déliez d'abord la facture.",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
+        if (
+          input.amount !== undefined &&
+          existing.reconciliationStatus === "matched" &&
+          existing.amount !== input.amount
+        ) {
+          throw new AppError(
+            "Impossible de modifier le montant d'une transaction rapprochée. Déliez d'abord la facture.",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
         }
 
         if (input.amount !== undefined) updateData.amount = input.amount;
         if (input.currency) updateData.currency = input.currency;
-        if (input.description) updateData.description = input.description;
+        if (input.description) {
+          updateData.description = input.description;
+          // Marquer la description comme éditée manuellement pour que les
+          // syncs bancaires ne l'écrasent plus (même logique que categoryIsManual)
+          if (input.description !== existing.description) {
+            updateData.descriptionIsManual = true;
+          }
+        }
         if (input.type) updateData.type = input.type.toLowerCase();
         // Statut stocké en minuscules (cohérent avec createTransaction et l'enum du modèle)
         if (input.status) updateData.status = input.status.toLowerCase();
