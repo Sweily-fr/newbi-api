@@ -10,7 +10,7 @@ jobs:
   deploy:
     name: Deploy to Production Server
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,13 +27,13 @@ jobs:
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
         run: |
           echo "🚀 Déploiement PRODUCTION en cours..."
-          
+
           # Sync files
           rsync -avz --exclude='uploads' --exclude='node_modules' --exclude='.git' \
             --exclude='.env' --exclude='.env.*' --exclude='ecosystem.config.cjs' \
             -e 'ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no' \
             ./* joaquim@51.91.254.74:~/api.newbi.fr
-          
+
           # Execute deployment commands
           ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no joaquim@51.91.254.74 << 'ENDSSH'
             source ~/.nvm/nvm.sh
@@ -57,8 +57,15 @@ jobs:
             npm ci --omit=dev
             npm install
             
-            echo "🔄 Rechargement PM2..."
-            pm2 reload newbi
+            echo "🔄 Redémarrage PM2 (env rechargé depuis .env.production)..."
+            # pm2 reload/restart --update-env ne réapplique PAS .env.production :
+            # l'env stocké par PM2 (figé au dernier start) persiste et dotenv
+            # n'écrase jamais une variable déjà présente dans process.env
+            # (cf. incident buckets R2 corrompus, résolu le 30/07/2026).
+            # Seul delete + start reconstruit l'env depuis le fichier.
+            pm2 delete newbi
+            pm2 start ecosystem.config.cjs
+            pm2 save
             
             echo "✅ Vérification du statut..."
             pm2 status newbi
