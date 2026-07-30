@@ -28,6 +28,14 @@ const eInvoicingResolvers = {
         if (invoice.status === "DRAFT") return null;
         if (!invoice.superPdpInvoiceId && !invoice.archivedPdfKey) return null;
 
+        // Aperçu iframe des PDF archivés désactivé par défaut : le cookie de
+        // session est host-only (www.newbi.fr) et n'est jamais envoyé à
+        // api.newbi.fr par l'iframe en prod → 401 → ERR_BLOCKED_BY_RESPONSE.
+        // null = le front rebascule sur le rendu live. À réactiver quand
+        // l'aperçu passera par un proxy same-origin côté front.
+        if (process.env.ENABLE_ARCHIVED_PDF_IFRAME_PREVIEW !== "true")
+          return null;
+
         const base = (
           process.env.BACKEND_URL ||
           process.env.NEXT_PUBLIC_API_URL ||
