@@ -953,6 +953,28 @@ class CloudflareService {
   }
 
   /**
+   * Lit un objet R2 à partir de son URL publique stockée en base (résolution
+   * automatique du bucket) et renvoie son contenu. Utilisé par la route de
+   * streaming des fichiers importés : le navigateur ne charge jamais l'URL
+   * publique directement (CSP stricte côté frontend).
+   * @param {string} url URL publique stockée
+   * @returns {Promise<{buffer: Buffer, contentType: string|undefined}>}
+   */
+  async getObjectByUrl(url) {
+    const resolved = this.resolveBucketAndKeyFromUrl(url);
+    if (!resolved) {
+      throw new Error(`URL R2 non résoluble: ${url}`);
+    }
+    const response = await this.client.send(
+      new GetObjectCommand({ Bucket: resolved.bucket, Key: resolved.key }),
+    );
+    return {
+      buffer: Buffer.from(await response.Body.transformToByteArray()),
+      contentType: response.ContentType,
+    };
+  }
+
+  /**
    * Supprime un objet R2 à partir de son URL publique (résolution automatique
    * du bucket). Best-effort : retourne false si l'URL n'est pas résoluble.
    */
