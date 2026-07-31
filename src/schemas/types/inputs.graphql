@@ -85,6 +85,8 @@ input CompanyInput {
   vatNumber: String
   transactionCategory: TransactionCategory
   vatPaymentCondition: String
+  # Franchise en base de TVA (art. 293 B du CGI) : pilote la mention en pied de page
+  vatFranchise: Boolean
   companyStatus: CompanyStatus
   address: AddressInput
   bankDetails: BankDetailsInput
