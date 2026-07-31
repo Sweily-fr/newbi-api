@@ -181,9 +181,10 @@ export function mapOrganizationToCompanyInfo(organization) {
     // Aucun repli sur le régime fiscal : il ressuscitait la mention « Paiement
     // de la TVA » alors que l'utilisateur avait décoché l'assujettissement ou
     // choisi « Aucun » (reel-normal/reel-simplifie donnaient DEBITS).
-    vatPaymentCondition: organization.isVatSubject
-      ? mapFiscalRegimeToVatCondition(organization.vatMode)
-      : "NONE",
+    // vatMode suffit : les deux écrans de réglages le vident déjà quand
+    // l'organisation n'est pas assujettie. Ne pas conditionner à isVatSubject,
+    // qui est undefined pour toute organisation ne l'ayant jamais enregistré.
+    vatPaymentCondition: mapFiscalRegimeToVatCondition(organization.vatMode),
     // Franchise en base de TVA : repli sur le régime fiscal micro pour les
     // organisations antérieures à l'introduction de la case dédiée.
     vatFranchise: isVatFranchise(organization),
