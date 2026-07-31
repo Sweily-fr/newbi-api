@@ -108,6 +108,21 @@ function mapFiscalRegimeToVatCondition(fiscalRegime) {
 }
 
 /**
+ * Détermine si l'organisation est en franchise en base de TVA (art. 293 B).
+ * La case dédiée fait foi ; à défaut (organisations créées avant son
+ * introduction), un régime fiscal micro vaut franchise en base.
+ * @param {Object} organization
+ * @returns {boolean}
+ */
+function isVatFranchise(organization) {
+  if (typeof organization.vatFranchise === "boolean") {
+    return organization.vatFranchise;
+  }
+  const regime = (organization.fiscalRegime || "").toLowerCase();
+  return regime.includes("micro") || regime.includes("franchise");
+}
+
+/**
  * Convertit un document organization (Better Auth) en objet companyInfo
  * compatible avec le schéma companyInfoSchema (utilisé dans Quote, Invoice, PurchaseOrder, CreditNote).
  * @param {Object} organization - Document de la collection 'organization' (Better Auth)
@@ -167,6 +182,9 @@ export function mapOrganizationToCompanyInfo(organization) {
     vatPaymentCondition: mapFiscalRegimeToVatCondition(
       organization.vatMode || organization.fiscalRegime,
     ),
+    // Franchise en base de TVA : repli sur le régime fiscal micro pour les
+    // organisations antérieures à l'introduction de la case dédiée.
+    vatFranchise: isVatFranchise(organization),
     capitalSocial: organization.capitalSocial || "",
     rcs: organization.rcs || "",
   };

@@ -150,6 +150,13 @@ const companyInfoSchema = new mongoose.Schema({
     enum: ["ENCAISSEMENTS", "DEBITS", "EXONERATION", "NONE"],
     default: "NONE",
   },
+  // Franchise en base de TVA (art. 293 B du CGI). Embarqué dans le document
+  // car la mention est obligatoire en pied de page : la déduire de
+  // l'organisation au moment du rendu ferait varier un document déjà émis.
+  vatFranchise: {
+    type: Boolean,
+    default: false,
+  },
   companyStatus: {
     type: String,
     enum: [
