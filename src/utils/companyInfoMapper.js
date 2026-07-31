@@ -177,11 +177,13 @@ export function mapOrganizationToCompanyInfo(organization) {
     transactionCategory: mapActivityToTransactionCategory(
       organization.activityCategory,
     ),
-    // Priorité au régime de TVA choisi explicitement (vatMode: debits/encaissements),
-    // fallback sur le régime fiscal (reel-normal/reel-simplifie -> DEBITS)
-    vatPaymentCondition: mapFiscalRegimeToVatCondition(
-      organization.vatMode || organization.fiscalRegime,
-    ),
+    // Régime de TVA explicitement choisi (vatMode: debits/encaissements).
+    // Aucun repli sur le régime fiscal : il ressuscitait la mention « Paiement
+    // de la TVA » alors que l'utilisateur avait décoché l'assujettissement ou
+    // choisi « Aucun » (reel-normal/reel-simplifie donnaient DEBITS).
+    vatPaymentCondition: organization.isVatSubject
+      ? mapFiscalRegimeToVatCondition(organization.vatMode)
+      : "NONE",
     // Franchise en base de TVA : repli sur le régime fiscal micro pour les
     // organisations antérieures à l'introduction de la case dédiée.
     vatFranchise: isVatFranchise(organization),
