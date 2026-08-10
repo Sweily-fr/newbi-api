@@ -567,6 +567,28 @@ const MODEL_LABELS = {
   creditNote: "avoir",
 };
 
+// Formulations "dernier document" utilisées dans les messages de séquence :
+// le genre change selon le document, on ne peut pas le dériver du libellé.
+const MODEL_LAST_LABELS = {
+  invoice: "La dernière facture",
+  quote: "Le dernier devis",
+  purchaseOrder: "Le dernier bon de commande",
+  creditNote: "Le dernier avoir",
+};
+
+/**
+ * Construit le début de phrase des messages de séquence, ex :
+ * « La dernière facture avec le préfixe "F-082026" est la 0012. »
+ * En séquence continue (autoNumbering), la séquence ignore le préfixe : on ne
+ * le mentionne pas, sinon le message laisse croire à une séquence par préfixe.
+ */
+const buildLastDocumentSentence = (documentType, prefix, maxNumber, scoped) => {
+  const lastLabel = MODEL_LAST_LABELS[documentType] || "Le dernier document";
+  const isFeminine = lastLabel.startsWith("La ");
+  const scope = scoped && prefix ? ` avec le préfixe "${prefix}"` : "";
+  return `${lastLabel}${scope} est ${isFeminine ? "la" : "le"} ${String(maxNumber).padStart(4, "0")}`;
+};
+
 /**
  * Valide la continuité d'un numéro saisi manuellement avant création/finalisation.
  * Générique pour factures / devis / bons de commande.
@@ -584,7 +606,12 @@ const MODEL_LABELS = {
  *
  * @param {("invoice"|"quote"|"purchaseOrder")} documentType
  */
-const validateNumberSequence = async (documentType, number, prefix, options = {}) => {
+const validateNumberSequence = async (
+  documentType,
+  number,
+  prefix,
+  options = {},
+) => {
   // Brouillon : pas de validation de séquence
   if (options.isDraft) {
     return { isValid: true };
@@ -651,18 +678,27 @@ const validateNumberSequence = async (documentType, number, prefix, options = {}
   if (numericNumbers.length > 0) {
     const maxNumber = Math.max(...numericNumbers);
     const inputNumber = parseInt(number, 10);
+    // Message explicite : dire quel est le dernier numéro utilisé et pourquoi
+    // celui saisi est refusé, plutôt qu'un « impossible de créer » opaque.
+    const lastSentence = buildLastDocumentSentence(
+      documentType,
+      prefix,
+      maxNumber,
+      !autoNumbering,
+    );
+    const expected = String(maxNumber + 1).padStart(4, "0");
 
     if (inputNumber <= maxNumber) {
       return {
         isValid: false,
-        message: `Le numéro doit être supérieur à ${String(maxNumber).padStart(4, "0")}`,
+        message: `${lastSentence}. Le numéro ${String(inputNumber).padStart(4, "0")} est déjà passé : le prochain numéro doit être ${expected}.`,
       };
     }
 
     if (inputNumber > maxNumber + 1) {
       return {
         isValid: false,
-        message: `Le numéro doit être ${String(maxNumber + 1).padStart(4, "0")} pour maintenir la séquence`,
+        message: `${lastSentence}. Il y a un trou dans la séquence : le prochain numéro doit être ${expected}.`,
       };
     }
   }
