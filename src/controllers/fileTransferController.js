@@ -2,6 +2,7 @@ import path from "path";
 import fs from "fs";
 import FileTransfer from "../models/FileTransfer.js";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
+import { registerTransferDownload } from "../services/transferDownloadService.js";
 import Stripe from "stripe";
 import archiver from "archiver";
 
@@ -203,8 +204,11 @@ const downloadFile = async (req, res) => {
       `[DEBUG] Fichier trouvé - Nom: ${file.originalName}, Type: ${file.mimeType}, Taille: ${file.size}, Storage: ${file.storageType}`,
     );
 
-    // Incrémenter le compteur de téléchargements
-    await fileTransfer.incrementDownloadCount();
+    // Comptage + notification au propriétaire (dédupliqués par le service)
+    await registerTransferDownload(fileTransfer, {
+      req,
+      fileName: file.originalName,
+    });
 
     // Définir les en-têtes appropriés pour le téléchargement
     const contentType = file.mimeType || "application/octet-stream";
@@ -391,8 +395,10 @@ const downloadAllFiles = async (req, res) => {
     }
 
     try {
-      // Incrémenter le compteur de téléchargements
-      await fileTransfer.incrementDownloadCount();
+      // Comptage + notification : ce chemin (ZIP streamé par le backend pour
+      // les très gros transferts) ne passe ni par la route proxy ni par le
+      // marquage de fin côté public — sans ceci, aucun mail ne partait.
+      await registerTransferDownload(fileTransfer, { req });
 
       const archiveFileName = `newbi-files-${Date.now()}.zip`;
 

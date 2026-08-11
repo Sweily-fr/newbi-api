@@ -9,9 +9,8 @@ import convert from "heic-convert";
 import sharp from "sharp";
 import { readPsd, initializeCanvas } from "ag-psd";
 import FileTransfer from "../models/FileTransfer.js";
-import User from "../models/User.js";
 import logger from "../utils/logger.js";
-import { sendDownloadNotificationEmail } from "../utils/mailer.js";
+import { registerTransferDownload } from "../services/transferDownloadService.js";
 
 const router = express.Router();
 
@@ -169,40 +168,14 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
 
     const response = await s3Client.send(command);
 
-    // ✅ CORRECTION #1: Incrémenter le compteur de téléchargements
-    // Cette ligne était manquante, causant le compteur toujours à 0
-    await fileTransfer.incrementDownloadCount();
-    logger.info("📊 Compteur de téléchargements incrémenté", {
-      transferId,
-      newCount: fileTransfer.downloadCount,
+    // Comptage + notification. Cette route est appelée une fois PAR FICHIER,
+    // et la page publique appelle ensuite /download-event/:id/complete qui
+    // enregistre aussi : le service dédoublonne sur la session de
+    // téléchargement, un clic ne vaut donc qu'un incrément et un mail.
+    await registerTransferDownload(fileTransfer, {
+      req,
+      fileName: file.originalName,
     });
-
-    // ✅ Envoyer notification de téléchargement si activée
-    if (fileTransfer.notifyOnDownload) {
-      try {
-        const owner = await User.findById(fileTransfer.userId);
-        if (owner && owner.email) {
-          const transferUrl = `${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers`;
-          await sendDownloadNotificationEmail(owner.email, {
-            fileName: file.originalName,
-            downloadDate: new Date(),
-            filesCount: fileTransfer.files.length,
-            shareLink: fileTransfer.shareLink,
-            transferUrl,
-          });
-          logger.info("📧 Notification de téléchargement envoyée", {
-            ownerEmail: owner.email,
-            fileName: file.originalName,
-          });
-        }
-      } catch (emailError) {
-        logger.error(
-          "❌ Erreur envoi notification téléchargement:",
-          emailError,
-        );
-        // Ne pas bloquer le téléchargement si l'email échoue
-      }
-    }
 
     // Configurer les headers pour forcer le téléchargement
     res.setHeader(
