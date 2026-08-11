@@ -38,6 +38,48 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 
+/**
+ * Libère un numéro définitif occupé par un brouillon (même mécanique que
+ * createInvoice / createQuote).
+ *
+ * L'index unique du modèle (prefix + number + workspaceId + issueYear) couvre
+ * TOUS les statuts, alors que la numérotation (nextPurchaseOrderNumber,
+ * validateNumberSequence) ignore les brouillons. Un brouillon peut donc occuper
+ * le numéro visé sans être visible : cas typique, un BC finalisé repassé en
+ * brouillon conserve son numéro. Sans ce renommage préalable, le save part en
+ * E11000 et l'utilisateur reste bloqué, puisque le seul numéro accepté par la
+ * séquence est justement celui du brouillon.
+ *
+ * Suffixe court (stamp 6 chiffres + index) : le numéro doit rester ≤ 20
+ * caractères (validateur du modèle), sinon le brouillon renommé devient
+ * inéditable au prochain save.
+ */
+const renameConflictingDrafts = async (
+  { prefix, number, workspaceId, excludeId = null },
+  options = {},
+) => {
+  const query = { prefix, number, status: "DRAFT", workspaceId };
+  if (excludeId) query._id = { $ne: excludeId };
+
+  const conflictingDrafts = await PurchaseOrder.find(
+    query,
+    { _id: 1 },
+    options,
+  ).lean();
+  if (conflictingDrafts.length === 0) return;
+
+  const renameStamp = Date.now().toString().slice(-6);
+  await PurchaseOrder.bulkWrite(
+    conflictingDrafts.map((draft, i) => ({
+      updateOne: {
+        filter: { _id: draft._id },
+        update: { $set: { number: `${number}-${renameStamp}${i}` } },
+      },
+    })),
+    options,
+  );
+};
+
 // Fonction utilitaire pour calculer les totaux
 const calculatePurchaseOrderTotals = (
   items,
@@ -600,6 +642,13 @@ const purchaseOrderResolvers = {
           const PO_MAX_SAVE_RETRIES = 5;
           let purchaseOrder;
           for (let attempt = 1; attempt <= PO_MAX_SAVE_RETRIES; attempt++) {
+            // Les brouillons portent un numéro DRAFT-<timestamp> qui n'entre
+            // en conflit avec rien : seuls les numéros définitifs sont à
+            // libérer.
+            if (!isDraft) {
+              await renameConflictingDrafts({ prefix, number, workspaceId });
+            }
+
             purchaseOrder = new PurchaseOrder({
               ...input,
               number,
@@ -841,6 +890,16 @@ const purchaseOrderResolvers = {
                 autoNumbering,
               });
               updateData.prefix = prefix;
+
+              // Le numéro séquentiel généré peut être occupé par un autre
+              // brouillon (invisible pour la numérotation) : le libérer avant
+              // le save, comme dans la branche « numéro fourni » ci-dessous.
+              await renameConflictingDrafts({
+                prefix,
+                number: updateData.number,
+                workspaceId: po.workspaceId,
+                excludeId: po._id,
+              });
             } else {
               // Numéro fourni explicitement : verrou de séquence (max+1
               // strict, pas de doublon parmi les finalisés) + renommage des
@@ -868,25 +927,12 @@ const purchaseOrderResolvers = {
                 );
               }
 
-              const conflictingDrafts = await PurchaseOrder.find({
+              await renameConflictingDrafts({
                 prefix: input.prefix,
                 number: normalizedNumber,
-                status: "DRAFT",
                 workspaceId: po.workspaceId,
-                _id: { $ne: po._id },
+                excludeId: po._id,
               });
-              // Suffixe court (≤ 20 caractères, cf. validateur du modèle) :
-              // Date.now() complet faisait dépasser la limite → brouillon
-              // renommé devenait inéditable.
-              const renameStamp = Date.now().toString().slice(-6);
-              for (let i = 0; i < conflictingDrafts.length; i++) {
-                await PurchaseOrder.findByIdAndUpdate(
-                  conflictingDrafts[i]._id,
-                  {
-                    number: `${normalizedNumber}-${renameStamp}${i}`,
-                  },
-                );
-              }
 
               updateData.number = normalizedNumber;
             }
@@ -1098,6 +1144,19 @@ const purchaseOrderResolvers = {
                     autoNumbering,
                   });
 
+                  // Libérer le numéro s'il est occupé par un brouillon : sans
+                  // ça, le retry E11000 consommait un numéro suivant et laissait
+                  // un trou dans la séquence.
+                  await renameConflictingDrafts(
+                    {
+                      prefix,
+                      number: newNumber,
+                      workspaceId: po.workspaceId,
+                      excludeId: po._id,
+                    },
+                    { session },
+                  );
+
                   // Utiliser un numéro temporaire pour éviter les conflits d'unicité
                   po.number = `TEMP-${Date.now()}`;
                   await po.save({ session });
@@ -1260,6 +1319,10 @@ const purchaseOrderResolvers = {
           retenueGarantie: quote.retenueGarantie || 0,
           escompte: quote.escompte || 0,
         });
+
+        // Le BC issu du devis est créé finalisé (CONFIRMED) : libérer le numéro
+        // s'il est occupé par un brouillon.
+        await renameConflictingDrafts({ prefix, number, workspaceId });
 
         await purchaseOrder.save();
         return await purchaseOrder.populate("createdBy");

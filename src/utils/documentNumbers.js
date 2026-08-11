@@ -713,6 +713,48 @@ const validateInvoiceNumberSequence = async (number, prefix, options = {}) =>
   validateNumberSequence("invoice", number, prefix, options);
 
 /**
+ * Libère un numéro définitif occupé par des brouillons, en les renommant, pour
+ * que le devis en cours de finalisation puisse le prendre sans collision sur
+ * l'index unique (qui couvre TOUS les statuts, brouillons compris).
+ *
+ * Même mécanique que `handleDraftConflicts` de createQuote et que
+ * `renameConflictingDrafts` des bons de commande. Suffixe court : le numéro
+ * doit rester ≤ 20 caractères (validateur du modèle), sinon le brouillon
+ * renommé devient inéditable.
+ */
+const freeQuoteNumberFromDrafts = async (number, prefix, options = {}) => {
+  const query = { number, status: "DRAFT" };
+  if (prefix) query.prefix = prefix;
+  if (options.workspaceId) {
+    query.workspaceId = options.workspaceId;
+  } else if (options.userId) {
+    query.createdBy = options.userId;
+  }
+  if (options.currentQuoteId) {
+    query._id = { $ne: options.currentQuoteId };
+  }
+
+  const conflictingDrafts = await Quote.find(
+    query,
+    { _id: 1 },
+    sessionOpts(options),
+  ).lean();
+  if (conflictingDrafts.length === 0) return number;
+
+  const renameStamp = Date.now().toString().slice(-6);
+  await Quote.bulkWrite(
+    conflictingDrafts.map((draft, i) => ({
+      updateOne: {
+        filter: { _id: draft._id },
+        update: { $set: { number: `${number}-${renameStamp}${i}` } },
+      },
+    })),
+    sessionOpts(options),
+  );
+  return number;
+};
+
+/**
  * Fonction pour gérer la validation des brouillons de devis lors du passage à PENDING
  * Similaire à handleDraftValidation mais pour les devis
  */
@@ -811,36 +853,8 @@ const handleQuoteDraftValidation = async (
       options,
     );
 
-    // Vérifier s'il existe un brouillon avec ce numéro séquentiel
-    const conflictQuery = {
-      number: nextSequentialNumber,
-      status: "DRAFT",
-    };
-
-    if (prefix) conflictQuery.prefix = prefix;
-
-    if (options.workspaceId) {
-      conflictQuery.workspaceId = options.workspaceId;
-    } else if (options.userId) {
-      conflictQuery.createdBy = options.userId;
-    }
-
-    if (options.currentQuoteId) {
-      conflictQuery._id = { $ne: options.currentQuoteId };
-    }
-
-    const conflictingDraft = await Quote.findOne(conflictQuery, null, sOpts);
-
-    if (conflictingDraft) {
-      const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-      await Quote.findByIdAndUpdate(
-        conflictingDraft._id,
-        {
-          number: `${conflictingDraft.number}-${timestamp}`,
-        },
-        sOpts,
-      );
-    }
+    // Libérer le numéro si un brouillon l'occupe déjà
+    await freeQuoteNumberFromDrafts(nextSequentialNumber, prefix, options);
 
     return nextSequentialNumber;
   }
@@ -862,82 +876,32 @@ const handleQuoteDraftValidation = async (
   const existingFinalized = await Quote.findOne(finalizedQuery, null, sOpts);
 
   if (existingFinalized) {
-    const uniqueSuffix = Date.now().toString().slice(-6);
-    await Quote.findByIdAndUpdate(
-      existingFinalized._id,
-      {
-        number: `DRAFT-${draftNumber}-${uniqueSuffix}`,
-        status: "DRAFT",
-      },
-      sOpts,
+    // Un devis FINALISÉ porte déjà ce numéro (cas d'un devis repassé en
+    // brouillon qui a conservé son numéro, puis dont le numéro a été réattribué).
+    //
+    // L'ancien comportement rétrogradait ce devis finalisé en brouillon
+    // (`status: "DRAFT"`) pour lui prendre son numéro, sans la moindre erreur :
+    // un devis déjà envoyé, voire accepté, redevenait brouillon. On ne
+    // rétrograde plus jamais un document finalisé ; le brouillon en cours de
+    // validation prend simplement le numéro séquentiel suivant, comme le font
+    // les bons de commande.
+    const nextSequentialNumber = await generateQuoteSequentialNumber(
+      prefix,
+      options,
     );
-
-    const duplicateDraftQuery = {
-      number: draftNumber,
-      status: "DRAFT",
-    };
-
-    if (options.workspaceId) {
-      duplicateDraftQuery.workspaceId = options.workspaceId;
-    } else if (options.userId) {
-      duplicateDraftQuery.createdBy = options.userId;
-    }
-
-    if (options.currentQuoteId) {
-      duplicateDraftQuery._id = { $ne: options.currentQuoteId };
-    }
-
-    const duplicateDrafts = await Quote.find(duplicateDraftQuery, null, sOpts);
-
-    for (const draft of duplicateDrafts) {
-      const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-      await Quote.findByIdAndUpdate(
-        draft._id,
-        {
-          number: `${draft.number}-${timestamp}`,
-        },
-        sOpts,
-      );
-    }
-
-    return draftNumber;
+    await freeQuoteNumberFromDrafts(nextSequentialNumber, prefix, options);
+    return nextSequentialNumber;
   }
 
-  // Vérifier s'il y a des brouillons avec le même numéro exact (sans devis finalisé)
-  const duplicateDraftQuery = {
-    number: draftNumber,
-    status: "DRAFT",
-  };
-
-  if (options.workspaceId) {
-    duplicateDraftQuery.workspaceId = options.workspaceId;
-  } else if (options.userId) {
-    duplicateDraftQuery.createdBy = options.userId;
-  }
-
-  if (options.currentQuoteId) {
-    duplicateDraftQuery._id = { $ne: options.currentQuoteId };
-  }
-
-  const duplicateDrafts = await Quote.find(duplicateDraftQuery, null, sOpts);
-
-  for (const draft of duplicateDrafts) {
-    const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-    await Quote.findByIdAndUpdate(
-      draft._id,
-      {
-        number: `${draft.number}-${timestamp}`,
-      },
-      sOpts,
-    );
-  }
-
-  // Sinon, passer le numéro actuel comme manualNumber
-  // pour qu'il soit utilisé comme point de départ si aucun devis finalisé n'existe
-  return await generateQuoteSequentialNumber(prefix, {
+  // Aucun devis finalisé ne porte ce numéro : le brouillon le conserve s'il
+  // ouvre la séquence, sinon il prend le prochain numéro du compteur. Dans les
+  // deux cas on libère le numéro retenu des brouillons qui l'occuperaient.
+  const finalNumber = await generateQuoteSequentialNumber(prefix, {
     ...options,
     manualNumber: draftNumber,
   });
+  await freeQuoteNumberFromDrafts(finalNumber, prefix, options);
+  return finalNumber;
 };
 
 /**

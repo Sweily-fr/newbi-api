@@ -103,7 +103,13 @@ const quoteSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: Object.values(QUOTE_STATUS),
-      default: QUOTE_STATUS.PENDING,
+      // DRAFT comme la facture et le bon de commande. Le défaut PENDING était
+      // incohérent avec le reste de la chaîne : le schéma GraphQL applique
+      // DRAFT (CreateQuoteInput.status = DRAFT) et createQuote numérote en
+      // DRAFT-<timestamp> quand le statut est absent. Un appel qui omettait le
+      // statut créait donc un devis « En attente » portant un numéro de
+      // brouillon, hors séquence et impossible à renuméroter.
+      default: QUOTE_STATUS.DRAFT,
     },
     headerNotes: {
       type: String,
