@@ -1,11 +1,10 @@
 import crypto from "crypto";
 import FileTransfer from "../models/FileTransfer.js";
 import DownloadEvent from "../models/DownloadEvent.js";
-import User from "../models/User.js";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import logger from "../utils/logger.js";
-import { sendDownloadNotificationEmail } from "../utils/mailer.js";
+import { registerTransferDownload } from "../services/transferDownloadService.js";
 
 // 🔐 Comparaison à temps constant du secret de partage (shareLink / accessKey).
 function timingSafeEq(a, b) {
@@ -337,57 +336,18 @@ export const markDownloadCompleted = async (req, res) => {
       isLastFile,
     });
 
-    // Incrémenter le compteur + notification SEULEMENT pour le dernier fichier
+    // Comptage + notification une seule fois par téléchargement : au dernier
+    // fichier, et dédoublonnés avec la route proxy déjà traversée pour chaque
+    // fichier de la même session.
     if (isLastFile) {
-      try {
-        const fileTransfer = await FileTransfer.findById(
-          downloadEvent.transferId,
-        );
-        if (fileTransfer) {
-          // Incrémenter le compteur de téléchargements
-          await fileTransfer.incrementDownloadCount();
-          logger.info(
-            "📊 Compteur de téléchargements incrémenté (via lien public)",
-            {
-              transferId: downloadEvent.transferId,
-              newCount: fileTransfer.downloadCount,
-            },
-          );
-
-          // Envoyer notification si activée
-          if (fileTransfer.notifyOnDownload) {
-            try {
-              const owner = await User.findById(fileTransfer.userId);
-              if (owner && owner.email) {
-                const transferUrl = `${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers`;
-                const displayName =
-                  fileTransfer.files.length > 1
-                    ? `${fileTransfer.files.length} fichiers`
-                    : fileTransfer.files[0]?.originalName ||
-                      downloadEvent.fileName;
-
-                await sendDownloadNotificationEmail(owner.email, {
-                  fileName: displayName,
-                  downloadDate: new Date(),
-                  filesCount: fileTransfer.files.length,
-                  shareLink: fileTransfer.shareLink,
-                  transferUrl,
-                });
-                logger.info("📧 Notification de téléchargement envoyée", {
-                  ownerEmail: owner.email,
-                  filesCount: fileTransfer.files.length,
-                });
-              }
-            } catch (emailError) {
-              logger.error(
-                "❌ Erreur envoi notification téléchargement:",
-                emailError,
-              );
-            }
-          }
-        }
-      } catch (countError) {
-        logger.error("❌ Erreur incrémentation compteur:", countError);
+      const fileTransfer = await FileTransfer.findById(
+        downloadEvent.transferId,
+      );
+      if (fileTransfer) {
+        await registerTransferDownload(fileTransfer, {
+          req,
+          fileName: downloadEvent.fileName,
+        });
       }
     }
 

@@ -56,6 +56,10 @@ type FileTransfer {
   createdAt: Date
   updatedAt: Date
   zipDownloadUrl: String
+  # Jeton remis au seul propriétaire authentifié : il lui permet de télécharger
+  # depuis son tableau de bord sans déclencher la notification ni le compteur
+  # de téléchargements, destinés aux destinataires
+  ownerDownloadToken: String
 }
 
 # Type pour la réponse paginée des transferts de fichiers
