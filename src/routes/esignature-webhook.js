@@ -5,6 +5,7 @@ import logger from "../utils/logger.js";
 import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
 import { publishSignatureStatus } from "../services/esignaturePubsub.js";
+import { mapExternalStatus } from "../services/esignatureStatus.js";
 
 const router = express.Router();
 
@@ -68,11 +69,25 @@ router.post("/", express.json(), async (req, res) => {
       JSON.stringify(payload, null, 2),
     );
 
-    // Extraire les infos de la signature
-    const externalSignatureId = payload.id || payload._id;
-    const state = payload.state;
-    const custom = payload.custom || {};
+    // Extraire les infos de la signature. L'API encapsule ses réponses REST
+    // dans `.data` et le callback observé en production suit la même forme :
+    // lire `payload.state` seul faisait arriver l'état à `undefined`.
+    const body =
+      payload?.data && typeof payload.data === "object" ? payload.data : {};
+    const externalSignatureId =
+      payload.id || payload._id || body.id || body._id;
+    const state = payload.state ?? body.state;
+    const custom = payload.custom || body.custom || {};
     const signatureRequestId = custom.signatureRequestId;
+
+    // Clés seulement, jamais les valeurs (le payload porte les coordonnées des
+    // signataires) : de quoi identifier la forme réelle du callback en cas de
+    // nouvel écart, sans écrire de données personnelles dans les logs.
+    logger.info(
+      `Webhook eSignature: clés=[${Object.keys(payload || {}).join(",")}]` +
+        `${payload?.data ? ` data=[${Object.keys(body).join(",")}]` : ""}` +
+        ` state=${state ?? "absent"}`,
+    );
 
     if (!externalSignatureId && !signatureRequestId) {
       logger.warn("Webhook eSignature sans ID de signature");
@@ -103,9 +118,17 @@ router.post("/", express.json(), async (req, res) => {
       });
     }
 
-    // Mapper le statut
+    // Mapper le statut. Un état inexploitable ne doit JAMAIS rétrograder la
+    // demande : le statut courant est conservé (cf. esignatureStatus.js).
     const previousStatus = signatureRequest.status;
-    const newStatus = mapExternalStatus(state);
+    const mappedStatus = mapExternalStatus(state);
+    const newStatus = mappedStatus || previousStatus;
+
+    if (!mappedStatus) {
+      logger.warn(
+        `Webhook eSignature: état "${state}" inexploitable pour ${signatureRequest._id}, statut ${previousStatus} conservé`,
+      );
+    }
 
     logger.info(
       `Signature ${signatureRequest._id}: ${previousStatus} → ${newStatus}`,
@@ -115,11 +138,13 @@ router.post("/", express.json(), async (req, res) => {
     signatureRequest.status = newStatus;
     signatureRequest.callbackReceived = true;
 
-    if (payload.errorMessage) {
-      signatureRequest.errorMessage = payload.errorMessage;
+    const errorMessage = payload.errorMessage ?? body.errorMessage;
+    const errorNumber = payload.errorNumber ?? body.errorNumber;
+    if (errorMessage) {
+      signatureRequest.errorMessage = errorMessage;
     }
-    if (payload.errorNumber) {
-      signatureRequest.errorNumber = payload.errorNumber;
+    if (errorNumber) {
+      signatureRequest.errorNumber = errorNumber;
     }
 
     await signatureRequest.save();
@@ -131,8 +156,12 @@ router.post("/", express.json(), async (req, res) => {
 
     logger.info(`Signature ${signatureRequest._id} mise à jour: ${newStatus}`);
 
-    // Une fois terminé : récupérer le document signé/cacheté puis auto-accepter le devis
-    if (newStatus === "DONE") {
+    // Une fois terminé : récupérer le document signé/cacheté puis auto-accepter
+    // le devis. On teste le statut RÉELLEMENT mappé, pas celui conservé par
+    // défaut : les relances du fournisseur sur un vrai DONE doivent continuer à
+    // repasser ici (le stockage du document a pu échouer au premier appel),
+    // mais un callback à l'état illisible ne doit rien redéclencher.
+    if (mappedStatus === "DONE") {
       try {
         await storeSignedDocuments(signatureRequest);
       } catch (downloadError) {
@@ -164,31 +193,6 @@ router.post("/", express.json(), async (req, res) => {
     });
   }
 });
-
-/**
- * Mapper le statut externe vers le statut interne
- */
-function mapExternalStatus(externalState) {
-  const statusMap = {
-    WAIT_VALIDATION: "WAIT_VALIDATION",
-    WAIT_SIGN: "WAIT_SIGN",
-    WAIT_SIGNER: "WAIT_SIGNER",
-    DONE: "DONE",
-    ERROR: "ERROR",
-  };
-  // Normaliser la casse : l'API peut renvoyer l'état en minuscules/casse mixte
-  const key = String(externalState || "")
-    .trim()
-    .toUpperCase();
-  const mapped = statusMap[key];
-  if (!mapped) {
-    logger.warn(
-      `mapExternalStatus: état eSignature inconnu "${externalState}", repli sur PENDING`,
-    );
-    return "PENDING";
-  }
-  return mapped;
-}
 
 /**
  * GET /api/esignature/webhook/health
