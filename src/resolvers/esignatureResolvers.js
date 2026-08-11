@@ -8,6 +8,7 @@ import logger from "../utils/logger.js";
 import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
 import { sendSignatureInvitations } from "../services/esignatureEmail.js";
+import { mapExternalStatus } from "../services/esignatureStatus.js";
 import {
   publishSignatureStatus,
   signatureChannel,
@@ -29,31 +30,6 @@ function getDocumentModel(documentType) {
         ERROR_CODES.VALIDATION_ERROR,
       );
   }
-}
-
-/**
- * Mapper le statut de l'API eSignature vers notre statut interne
- */
-function mapExternalStatus(externalState) {
-  const statusMap = {
-    WAIT_VALIDATION: "WAIT_VALIDATION",
-    WAIT_SIGN: "WAIT_SIGN",
-    WAIT_SIGNER: "WAIT_SIGNER",
-    DONE: "DONE",
-    ERROR: "ERROR",
-  };
-  // Normaliser la casse : l'API peut renvoyer l'état en minuscules/casse mixte
-  const key = String(externalState || "")
-    .trim()
-    .toUpperCase();
-  const mapped = statusMap[key];
-  if (!mapped) {
-    logger.warn(
-      `mapExternalStatus: état eSignature inconnu "${externalState}", repli sur PENDING`,
-    );
-    return "PENDING";
-  }
-  return mapped;
 }
 
 // Helper pour récupérer la dernière SignatureRequest d'un document (filtre optionnel)
@@ -197,8 +173,9 @@ const esignatureResolvers = {
                 // L'API OpenAPI encapsule les données dans .data
                 const detail = externalStatus?.data || externalStatus || {};
 
+                // null = état inexploitable : on conserve le statut courant
                 const newStatus = mapExternalStatus(detail.state);
-                if (newStatus !== signatureRequest.status) {
+                if (newStatus && newStatus !== signatureRequest.status) {
                   signatureRequest.status = newStatus;
                   if (detail.errorMessage) {
                     signatureRequest.errorMessage = detail.errorMessage;
@@ -461,9 +438,10 @@ const esignatureResolvers = {
           const resultData = apiResult.data || apiResult;
           signatureRequest.externalSignatureId =
             resultData.id || resultData._id;
-          signatureRequest.status = mapExternalStatus(
-            resultData.state || "WAIT_VALIDATION",
-          );
+          // La demande vient d'être acceptée par le fournisseur : à défaut
+          // d'état exploitable, elle est vivante, jamais PENDING.
+          signatureRequest.status =
+            mapExternalStatus(resultData.state) || "WAIT_VALIDATION";
           // L'URL de signature est dans le premier signataire
           const firstSignerUrl = resultData.signers?.[0]?.url || null;
           signatureRequest.signingUrl = resultData.signingUrl || firstSignerUrl;
@@ -659,9 +637,8 @@ const esignatureResolvers = {
 
           const resultData = apiResult.data || apiResult;
           sealRequest.externalSignatureId = resultData.id || resultData._id;
-          sealRequest.status = mapExternalStatus(
-            resultData.state || "WAIT_VALIDATION",
-          );
+          sealRequest.status =
+            mapExternalStatus(resultData.state) || "WAIT_VALIDATION";
           await sealRequest.save();
           publishSignatureStatus(sealRequest);
 
