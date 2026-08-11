@@ -5,6 +5,7 @@ import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { getPubSub } from "../config/redis.js";
 import logger from "../utils/logger.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 const BOARD_UPDATED = "BOARD_UPDATED";
 
@@ -45,7 +46,13 @@ const kanbanTemplateResolvers = {
           _id: boardId,
           workspaceId: finalWorkspaceId,
         });
-        if (!board) throw new Error("Board not found");
+        // Refus métier attendu, pas un incident : cf. boardNotFoundError dans
+        // resolvers/kanban.js. Le message reste en anglais (filtré côté front).
+        if (!board) {
+          throw new AppError("Board not found", ERROR_CODES.NOT_FOUND, {
+            resource: "Board",
+          });
+        }
 
         const columns = await Column.find({
           boardId,

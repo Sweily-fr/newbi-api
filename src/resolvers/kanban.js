@@ -3,6 +3,7 @@ import { Board, Column, Task } from "../models/kanban.js";
 import { AuthenticationError } from "apollo-server-express";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getPubSub, cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
@@ -23,6 +24,15 @@ import {
 const BOARD_UPDATED = "BOARD_UPDATED";
 const TASK_UPDATED = "TASK_UPDATED";
 const COLUMN_UPDATED = "COLUMN_UPDATED";
+
+// Board introuvable = refus métier attendu (board supprimé par un collègue,
+// changement d'organisation en cours, accès retiré au tableau), pas un
+// incident. Une AppError NOT_FOUND est loggée en debug par formatError, là où
+// une Error nue sortait un "❌ [GraphQL Error]" ramassé par l'alerting.
+// Le message reste en anglais : le front le filtre tel quel pour ne pas
+// afficher de toast (NewbiV2/src/lib/apolloClient.js).
+const boardNotFoundError = () =>
+  new AppError("Board not found", ERROR_CODES.NOT_FOUND, { resource: "Board" });
 
 // Clé de cache Redis pour les tâches d'un board
 const boardTasksCacheKey = (boardId, workspaceId) =>
@@ -894,7 +904,7 @@ const resolvers = {
           _id: id,
           workspaceId: finalWorkspaceId,
         });
-        if (!board) throw new Error("Board not found");
+        if (!board) throw boardNotFoundError();
 
         // Vérifier l'accès : si aucune restriction de membres → tout le monde
         // peut voir. Sinon, l'utilisateur doit être propriétaire, listé dans
@@ -933,7 +943,7 @@ const resolvers = {
               );
             }
             if (!isWorkspaceAdmin) {
-              throw new Error("Board not found");
+              throw boardNotFoundError();
             }
           }
         }
@@ -1183,7 +1193,7 @@ const resolvers = {
             _id: input.id,
             workspaceId: finalWorkspaceId,
           }).select("userId");
-          if (!existing) throw new Error("Board not found");
+          if (!existing) throw boardNotFoundError();
           if (!user?.id || existing.userId?.toString() !== user.id.toString()) {
             throw new Error(
               "Seul le créateur du tableau peut modifier la liste des membres autorisés",
@@ -1198,7 +1208,7 @@ const resolvers = {
           updateData,
           { new: true },
         );
-        if (!board) throw new Error("Board not found");
+        if (!board) throw boardNotFoundError();
 
         // Publier l'événement de mise à jour de board
         safePublish(
@@ -1267,7 +1277,7 @@ const resolvers = {
           _id: boardId,
           workspaceId: finalWorkspaceId,
         });
-        if (!board) throw new Error("Board not found");
+        if (!board) throw boardNotFoundError();
 
         const favs = board.favoritedBy || [];
         const isFav = favs.includes(user.id);
