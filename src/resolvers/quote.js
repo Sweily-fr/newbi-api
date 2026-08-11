@@ -1271,14 +1271,14 @@ const quoteResolvers = {
               const year = now.getFullYear();
               const month = String(now.getMonth() + 1).padStart(2, "0");
 
-              let prefix;
-              if (lastQuote && lastQuote.prefix) {
-                // Utiliser le préfixe du dernier devis
-                prefix = lastQuote.prefix;
-              } else {
-                // Aucun devis existant, utiliser le préfixe par défaut
-                prefix = `D-${month}${year}`;
-              }
+              // Priorité au préfixe fourni puis à celui du devis : le déduire
+              // du dernier devis finalisé faisait perdre le préfixe du
+              // brouillon en cours de finalisation (cf. changeQuoteStatus).
+              const prefix =
+                input.prefix ||
+                quote.prefix ||
+                lastQuote?.prefix ||
+                `D-${month}${year}`;
 
               logger.debug("🔍 [updateQuote] Using prefix:", prefix);
 
@@ -1522,12 +1522,13 @@ const quoteResolvers = {
                   (quote.issueDate || new Date()).getMonth() + 1,
                 ).padStart(2, "0");
 
-                let prefix;
-                if (lastQuote && lastQuote.prefix) {
-                  prefix = lastQuote.prefix;
-                } else {
-                  prefix = `D-${month}${year}`;
-                }
+                // Le préfixe du devis prime : le reconstruire à partir du
+                // dernier devis finalisé faisait perdre le préfixe personnalisé
+                // du brouillon (et retombait sur D-<mois><année> quand aucun
+                // devis n'était encore finalisé). Même règle que les bons de
+                // commande, qui partent de `po.prefix`.
+                const prefix =
+                  quote.prefix || lastQuote?.prefix || `D-${month}${year}`;
 
                 logger.debug(
                   "🔍 [changeQuoteStatus] DRAFT → PENDING, prefix:",

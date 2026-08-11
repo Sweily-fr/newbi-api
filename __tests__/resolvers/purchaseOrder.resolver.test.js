@@ -69,18 +69,16 @@ beforeEach(async () => {
   await seedOrgMembership({ userId, organizationId, role: "owner" });
   // requireCompanyInfo validates capitalSocial + rcs for SASU
   const db = mongoose.connection.db;
-  await db
-    .collection("organization")
-    .updateOne(
-      { _id: organizationId },
-      {
-        $set: {
-          capitalSocial: "10000",
-          rcs: "Paris B 123 456 789",
-          vatNumber: "FR12345678901",
-        },
+  await db.collection("organization").updateOne(
+    { _id: organizationId },
+    {
+      $set: {
+        capitalSocial: "10000",
+        rcs: "Paris B 123 456 789",
+        vatNumber: "FR12345678901",
       },
-    );
+    },
+  );
 });
 
 const ctx = () => buildContext({ userId, organizationId });
@@ -134,6 +132,194 @@ describe("PurchaseOrder Resolver — createPurchaseOrder", () => {
     const result = await resolver(null, { input }, ctx());
 
     expect(result.prefix).toMatch(/^BC-/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — createPurchaseOrder (conflits de brouillons)
+// ---------------------------------------------------------------------------
+
+describe("PurchaseOrder Resolver — createPurchaseOrder (conflits de brouillons)", () => {
+  const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
+
+  // Brouillon qui occupe un numéro définitif : c'est l'état d'un BC finalisé
+  // repassé en brouillon (il conserve son numéro), invisible pour
+  // nextPurchaseOrderNumber et validateNumberSequence mais présent dans
+  // l'index unique.
+  const insertNumberedDraft = (data = {}) =>
+    PurchaseOrder.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "0001",
+      prefix: "BC-202607",
+      status: "DRAFT",
+      items: [{ description: "X", quantity: 1, unitPrice: 100, vatRate: 20 }],
+      client: {
+        name: "Test",
+        email: "t@t.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+      },
+      issueDate: new Date(),
+      issueYear: new Date().getFullYear(),
+      createdAt: new Date(),
+      ...data,
+    });
+
+  it("crée un BC finalisé sur un numéro occupé par un brouillon (le brouillon est renommé)", async () => {
+    const { insertedId } = await insertNumberedDraft();
+
+    const created = await create(
+      null,
+      {
+        input: buildPOInput({
+          prefix: "BC-202607",
+          number: "0001",
+          status: "CONFIRMED",
+        }),
+      },
+      ctx(),
+    );
+
+    expect(created.status).toBe("CONFIRMED");
+    expect(created.number).toBe("0001");
+
+    const renamedDraft = await PurchaseOrder.findById(insertedId);
+    expect(renamedDraft.status).toBe("DRAFT");
+    expect(renamedDraft.number).not.toBe("0001");
+    expect(renamedDraft.number).toMatch(/^0001-\d+$/);
+  });
+
+  it("renomme le brouillon avec un numéro qui reste éditable (≤ 20 caractères)", async () => {
+    const { insertedId } = await insertNumberedDraft();
+
+    await create(
+      null,
+      {
+        input: buildPOInput({
+          prefix: "BC-202607",
+          number: "0001",
+          status: "CONFIRMED",
+        }),
+      },
+      ctx(),
+    );
+
+    const renamedDraft = await PurchaseOrder.findById(insertedId);
+    expect(renamedDraft.number.length).toBeLessThanOrEqual(20);
+    // Le brouillon renommé doit rester sauvegardable (validateur du modèle)
+    renamedDraft.headerNotes = "édition après renommage";
+    await expect(renamedDraft.save()).resolves.toBeDefined();
+  });
+
+  it("libère aussi le numéro sur le chemin séquentiel (sans numéro fourni)", async () => {
+    const { insertedId } = await insertNumberedDraft();
+
+    const created = await create(
+      null,
+      { input: buildPOInput({ prefix: "BC-202607", status: "CONFIRMED" }) },
+      ctx(),
+    );
+
+    expect(created.status).toBe("CONFIRMED");
+    expect(created.number).toBe("0001");
+
+    const renamedDraft = await PurchaseOrder.findById(insertedId);
+    expect(renamedDraft.number).toMatch(/^0001-\d+$/);
+  });
+
+  it("finalise un brouillon (DRAFT → CONFIRMED sans numéro fourni) malgré un brouillon squatteur", async () => {
+    const { insertedId } = await insertNumberedDraft();
+    const update = purchaseOrderResolvers.Mutation.updatePurchaseOrder;
+
+    const po = await create(
+      null,
+      { input: buildPOInput({ prefix: "BC-202607" }) },
+      ctx(),
+    );
+    expect(po.number).toMatch(/^DRAFT-/);
+
+    const finalized = await update(
+      null,
+      { id: po._id.toString(), input: { status: "CONFIRMED" } },
+      ctx(),
+    );
+
+    expect(finalized.status).toBe("CONFIRMED");
+    expect(finalized.number).toBe("0001");
+
+    const renamedDraft = await PurchaseOrder.findById(insertedId);
+    expect(renamedDraft.number).toMatch(/^0001-\d+$/);
+  });
+
+  it("convertit un devis en BC malgré un brouillon squatteur", async () => {
+    const now = new Date();
+    const convertPrefix = `BC-${now.getFullYear()}${String(
+      now.getMonth() + 1,
+    ).padStart(2, "0")}`;
+    const { insertedId } = await insertNumberedDraft({
+      prefix: convertPrefix,
+    });
+
+    const quoteId = new mongoose.Types.ObjectId();
+    await Quote.collection.insertOne({
+      _id: quoteId,
+      workspaceId: organizationId,
+      createdBy: userId,
+      number: "0100",
+      prefix: "D-CONV",
+      status: "COMPLETED",
+      items: [
+        { description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 },
+      ],
+      client: {
+        name: "Client Test",
+        email: "c@test.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+      },
+      issueDate: new Date(),
+      validUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      createdAt: new Date(),
+      finalTotalTTC: 1200,
+    });
+
+    const convertQuote =
+      purchaseOrderResolvers.Mutation.convertQuoteToPurchaseOrder;
+    const converted = await convertQuote(null, { quoteId }, ctx());
+
+    expect(converted.status).toBe("CONFIRMED");
+    expect(converted.number).toBe("0001");
+
+    const renamedDraft = await PurchaseOrder.findById(insertedId);
+    expect(renamedDraft.number).toMatch(/^0001-\d+$/);
+  });
+
+  it("ne touche pas aux brouillons d'un autre préfixe", async () => {
+    const { insertedId } = await insertNumberedDraft({ prefix: "BC-202606" });
+
+    await create(
+      null,
+      {
+        input: buildPOInput({
+          prefix: "BC-202607",
+          number: "0001",
+          status: "CONFIRMED",
+        }),
+      },
+      ctx(),
+    );
+
+    const untouched = await PurchaseOrder.findById(insertedId);
+    expect(untouched.number).toBe("0001");
   });
 });
 
@@ -415,28 +601,9 @@ describe("PurchaseOrder Resolver — deletePurchaseOrder", () => {
 // ---------------------------------------------------------------------------
 
 describe("PurchaseOrder Resolver — changePurchaseOrderStatus", () => {
-  // DRAFT→CONFIRMED uses MongoDB transactions (atomic number generation)
-  // which require a replica set — MongoMemoryServer standalone cannot run them.
-  it.skip("transitions DRAFT → CONFIRMED (requires replica set)", async () => {
-    const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
-    const po = await create(
-      null,
-      { input: buildPOInput({ prefix: "BC-CONF" }) },
-      ctx(),
-    );
-
-    expect(po.status).toBe("DRAFT");
-
-    const change = purchaseOrderResolvers.Mutation.changePurchaseOrderStatus;
-    const updated = await change(
-      null,
-      { id: po._id.toString(), status: "CONFIRMED" },
-      ctx(),
-    );
-
-    expect(updated.status).toBe("CONFIRMED");
-  });
-
+  // La transition DRAFT → CONFIRMED s'exécute dans une transaction MongoDB,
+  // impossible sur le mongod standalone de ce fichier. Elle est couverte par
+  // purchaseOrder.simulation.test.js, qui tourne sur un replica set.
   it("rejects invalid transition (DRAFT → DELIVERED)", async () => {
     const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
     const po = await create(
@@ -457,32 +624,10 @@ describe("PurchaseOrder Resolver — changePurchaseOrderStatus", () => {
 // ---------------------------------------------------------------------------
 
 describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice", () => {
-  // Conversion requires CONFIRMED status which uses transactions (replica set).
-  it.skip("creates a DRAFT invoice from a CONFIRMED PO (requires replica set)", async () => {
-    const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
-    const po = await create(
-      null,
-      { input: buildPOInput({ prefix: "BC-CONV" }) },
-      ctx(),
-    );
-
-    // Transition to CONFIRMED first
-    const change = purchaseOrderResolvers.Mutation.changePurchaseOrderStatus;
-    await change(null, { id: po._id.toString(), status: "CONFIRMED" }, ctx());
-
-    const convert =
-      purchaseOrderResolvers.Mutation.convertPurchaseOrderToInvoice;
-    const invoice = await convert(null, { id: po._id.toString() }, ctx());
-
-    expect(invoice).toBeDefined();
-    expect(invoice.status).toBe("DRAFT");
-    expect(invoice.prefix).toMatch(/^F-/);
-
-    // PO should now have the invoice in linkedInvoices
-    const updatedPO = await PurchaseOrder.findById(po._id);
-    expect(updatedPO.linkedInvoices).toHaveLength(1);
-  });
-
+  // La conversion depuis un BC CONFIRMED est couverte plus bas par le bloc
+  // « convertPurchaseOrderToInvoice & devis source », qui part d'un BC
+  // finalisé inséré directement et n'a donc pas besoin de la transaction de
+  // changePurchaseOrderStatus.
   it("rejects conversion of a DRAFT purchase order", async () => {
     const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
     const po = await create(
@@ -516,7 +661,9 @@ async function seedConfirmedPO({ sourceQuoteId, prefix, number }) {
     prefix,
     status: "CONFIRMED",
     sourceQuoteId,
-    items: [{ description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 }],
+    items: [
+      { description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 },
+    ],
     client: {
       name: "Client Test",
       email: "c@test.fr",
@@ -540,8 +687,7 @@ async function seedConfirmedPO({ sourceQuoteId, prefix, number }) {
 }
 
 describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice & devis source", () => {
-  const convert =
-    purchaseOrderResolvers.Mutation.convertPurchaseOrderToInvoice;
+  const convert = purchaseOrderResolvers.Mutation.convertPurchaseOrderToInvoice;
 
   it("synchronise le devis source : sourceQuote + linkedInvoices", async () => {
     const quoteId = new mongoose.Types.ObjectId();
@@ -552,17 +698,19 @@ describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice & devis sourc
       number: "200",
       prefix: "D-SYNC",
       status: "COMPLETED",
-      items: [{ description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 }],
+      items: [
+        { description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 },
+      ],
       client: {
-      name: "Client Test",
-      email: "c@test.fr",
-      address: {
-        street: "1 rue Test",
-        city: "Paris",
-        postalCode: "75001",
-        country: "France",
+        name: "Client Test",
+        email: "c@test.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
       },
-    },
       issueDate: new Date(),
       createdAt: new Date(),
       finalTotalTTC: 1200,
@@ -613,17 +761,19 @@ describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice & devis sourc
       number: "300",
       prefix: "D-FULL",
       status: "COMPLETED",
-      items: [{ description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 }],
+      items: [
+        { description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 },
+      ],
       client: {
-      name: "Client Test",
-      email: "c@test.fr",
-      address: {
-        street: "1 rue Test",
-        city: "Paris",
-        postalCode: "75001",
-        country: "France",
+        name: "Client Test",
+        email: "c@test.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
       },
-    },
       issueDate: new Date(),
       createdAt: new Date(),
       finalTotalTTC: 1200,
