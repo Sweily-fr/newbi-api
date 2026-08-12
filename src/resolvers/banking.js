@@ -1069,6 +1069,10 @@ const bankingResolvers = {
     amount: (parent) => parent.amount ?? 0,
     currency: (parent) => parent.currency || "EUR",
     description: (parent) => parent.description || "",
+    // Libellé brut : fallback sur metadata pour les transactions synchronisées
+    // avant l'ajout du champ reference (26/06/2026) et non encore backfillées.
+    reference: (parent) =>
+      parent.reference || parent.metadata?.bridgeProviderDescription || null,
     // receiptFiles : fallback sur le legacy receiptFile (objet) si pas encore migré
     // Génère un id synthétique stable si _id manque (subdocs migrés via raw driver)
     receiptFiles: (parent) => {

@@ -9,6 +9,9 @@ type Transaction {
   amount: Float!
   currency: String!
   description: String!
+  # Libellé brut de la banque (Bridge provider_description) : conserve les
+  # références de virement que description (clean_description) tronque.
+  reference: String
   category: String
   expenseCategory: ExpenseCategory
   pcgAccount: PCGAccount

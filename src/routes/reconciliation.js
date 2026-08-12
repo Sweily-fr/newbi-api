@@ -2,7 +2,11 @@ import express from "express";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
-import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
+import {
+  findReconciliationSuggestions,
+  findTransactionsForInvoice,
+  setReconciliationIgnored,
+} from "../utils/reconciliationMatching.js";
 import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
@@ -53,70 +57,15 @@ router.get("/suggestions", async (req, res) => {
     if (!auth) return;
     const { workspaceId } = auth;
 
-    const { default: Transaction } = await import("../models/Transaction.js");
-    const { default: Invoice } = await import("../models/Invoice.js");
+    // Logique partagée avec le resolver GraphQL reconciliationSuggestions
+    // (utils/reconciliationMatching.js) : mêmes candidats, mêmes règles.
+    const { suggestions, unmatchedCount, pendingInvoicesCount } =
+      await findReconciliationSuggestions(workspaceId);
 
-    // Critères "à rapprocher" : IDENTIQUES au resolver GraphQL
-    // (reconciliationResolvers.js). Entrée d'argent (amount > 0), non liée à une
-    // facture, sans justificatif (receiptFiles vide = déjà justifiée), statut ni
-    // "matched" ni "ignored".
-    const reconcileQuery = {
-      workspaceId,
-      deletedAt: null,
-      reconciliationStatus: { $nin: ["matched", "ignored"] },
-      amount: { $gt: 0 },
-      $or: [
-        { linkedInvoiceIds: { $exists: false } },
-        { linkedInvoiceIds: { $size: 0 } },
-      ],
-      "receiptFiles.0": { $exists: false },
-    };
-
-    // Comptage complet (countDocuments) → le compteur n'est plus tronqué à 50.
-    const unmatchedCount = await Transaction.countDocuments(reconcileQuery);
-    const unmatchedTransactions = await Transaction.find(reconcileQuery)
-      .sort({ date: -1 })
-      .limit(50);
-
-    // Récupérer les factures en attente de paiement
-    const pendingInvoices = await Invoice.find({
-      workspaceId,
-      status: "PENDING",
-      $or: [
-        { linkedTransactionIds: { $exists: false } },
-        { linkedTransactionIds: { $size: 0 } },
-      ],
-    }).sort({ dueDate: 1 });
-
-    // Générer des suggestions de correspondance
-    const suggestions = [];
-
-    for (const transaction of unmatchedTransactions) {
-      const matchingInvoices = pendingInvoices.filter((invoice) => {
-        // Correspondance par montant (avec tolérance de 1%)
-        const invoiceAmount = invoice.finalTotalTTC || invoice.totalTTC || 0;
-        const tolerance = invoiceAmount * 0.01;
-        const amountMatch =
-          Math.abs(transaction.amount - invoiceAmount) <= tolerance;
-
-        // Correspondance par nom du client dans la description
-        const clientName =
-          invoice.client?.name || invoice.client?.firstName || "";
-        const descriptionMatch =
-          clientName &&
-          transaction.description
-            ?.toLowerCase()
-            .includes(clientName.toLowerCase());
-
-        // Correspondance par numéro de facture présent dans le libellé brut
-        // de la transaction (référence Bridge non tronquée).
-        const referenceMatch = invoiceReferenceMatches(transaction, invoice);
-
-        return amountMatch || descriptionMatch || referenceMatch;
-      });
-
-      if (matchingInvoices.length > 0) {
-        suggestions.push({
+    res.json({
+      success: true,
+      suggestions: suggestions.map(
+        ({ transaction, matchingInvoices, confidence }) => ({
           transaction: {
             _id: transaction._id,
             amount: transaction.amount,
@@ -134,24 +83,11 @@ router.get("/suggestions", async (req, res) => {
             dueDate: inv.dueDate,
             status: inv.status,
           })),
-          confidence: matchingInvoices.some((inv) => {
-            const invoiceAmount = inv.finalTotalTTC || inv.totalTTC || 0;
-            const amtMatch =
-              Math.abs(transaction.amount - invoiceAmount) <=
-              invoiceAmount * 0.01;
-            return amtMatch || invoiceReferenceMatches(transaction, inv);
-          })
-            ? "high"
-            : "medium",
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      suggestions,
+          confidence,
+        }),
+      ),
       unmatchedCount,
-      pendingInvoicesCount: pendingInvoices.length,
+      pendingInvoicesCount,
     });
   } catch (error) {
     logger.error("Erreur récupération suggestions:", error);
@@ -171,7 +107,6 @@ router.get("/transactions-for-invoice/:invoiceId", async (req, res) => {
 
     const { invoiceId } = req.params;
 
-    const { default: Transaction } = await import("../models/Transaction.js");
     const { default: Invoice } = await import("../models/Invoice.js");
 
     // Récupérer la facture (scopée workspace pour éviter toute lecture
@@ -181,56 +116,25 @@ router.get("/transactions-for-invoice/:invoiceId", async (req, res) => {
       return res.status(404).json({ error: "Facture non trouvée" });
     }
 
-    const invoiceAmount = invoice.finalTotalTTC || invoice.totalTTC || 0;
-
-    // Récupérer les transactions non rapprochées (crédits uniquement)
-    const transactions = await Transaction.find({
+    // Logique partagée avec le resolver GraphQL transactionsForInvoice :
+    // fenêtre de dates par défaut, contournée par ?search= (ex. acompte
+    // encaissé avant l'émission de la facture).
+    const { scored, invoiceAmount } = await findTransactionsForInvoice(
+      invoice,
       workspaceId,
-      deletedAt: null,
-      reconciliationStatus: { $in: ["unmatched", "suggested"] },
-      amount: { $gt: 0 },
-    })
-      .sort({ date: -1 })
-      .limit(100);
+      req.query.search,
+    );
 
-    // Trier par pertinence
-    const scoredTransactions = transactions.map((tx) => {
-      let score = 0;
-
-      // Score par montant
-      const tolerance = invoiceAmount * 0.01;
-      if (Math.abs(tx.amount - invoiceAmount) <= tolerance) {
-        score += 100; // Correspondance exacte
-      } else if (Math.abs(tx.amount - invoiceAmount) <= invoiceAmount * 0.1) {
-        score += 50; // Proche
-      }
-
-      // Score par nom du client
-      const clientName =
-        invoice.client?.name || invoice.client?.firstName || "";
-      if (
-        clientName &&
-        tx.description?.toLowerCase().includes(clientName.toLowerCase())
-      ) {
-        score += 50;
-      }
-
-      return {
+    res.json({
+      success: true,
+      transactions: scored.map(({ transaction: tx, score }) => ({
         _id: tx._id,
         amount: tx.amount,
         description: tx.description,
         date: tx.date,
         reconciliationStatus: tx.reconciliationStatus,
         score,
-      };
-    });
-
-    // Trier par score décroissant
-    scoredTransactions.sort((a, b) => b.score - a.score);
-
-    res.json({
-      success: true,
-      transactions: scoredTransactions.slice(0, 20),
+      })),
       invoiceAmount,
     });
   } catch (error) {
@@ -444,12 +348,10 @@ router.post(
         return res.status(400).json({ error: "transactionId requis" });
       }
 
-      const { default: Transaction } = await import("../models/Transaction.js");
-
-      const transaction = await Transaction.findOneAndUpdate(
-        { _id: transactionId, workspaceId },
-        { reconciliationStatus: "ignored" },
-        { new: true },
+      const transaction = await setReconciliationIgnored(
+        transactionId,
+        workspaceId,
+        true,
       );
 
       if (!transaction) {
@@ -464,6 +366,48 @@ router.post(
       logger.error("Erreur ignorer transaction:", error);
       res.status(500).json({
         error: "Erreur lors de l'ignorance de la transaction",
+        details: error.message,
+      });
+    }
+  },
+);
+
+// Réintégrer au rapprochement une transaction ignorée (inverse de /ignore)
+router.post(
+  "/unignore",
+  requireActiveSubscriptionREST({ failClosed: true }),
+  async (req, res) => {
+    try {
+      const auth = await authenticateWorkspaceRequest(req, res);
+      if (!auth) return;
+      const { workspaceId } = auth;
+
+      const { transactionId } = req.body;
+
+      if (!transactionId) {
+        return res.status(400).json({ error: "transactionId requis" });
+      }
+
+      const transaction = await setReconciliationIgnored(
+        transactionId,
+        workspaceId,
+        false,
+      );
+
+      if (!transaction) {
+        return res
+          .status(404)
+          .json({ error: "Transaction non trouvée ou non ignorée" });
+      }
+
+      res.json({
+        success: true,
+        message: "Transaction réintégrée au rapprochement",
+      });
+    } catch (error) {
+      logger.error("Erreur dé-ignorer transaction:", error);
+      res.status(500).json({
+        error: "Erreur lors de la réintégration de la transaction",
         details: error.message,
       });
     }
