@@ -101,8 +101,9 @@ extend type Query {
     search: String
   ): TransactionsForInvoiceResponse!
 
-  # Factures PENDING rattachables à une transaction (rattachement manuel côté
-  # transaction). search : numéro, nom du client, ou montant si numérique.
+  # Factures rattachables à une transaction (rattachement manuel côté
+  # transaction) : PENDING, ou COMPLETED sans transaction liée (marquée payée
+  # à la main). search : numéro, nom du client, ou montant si numérique.
   invoicesForTransaction(
     transactionId: ID!
     search: String
@@ -123,6 +124,11 @@ extend type Mutation {
 
   # Ignorer une transaction (ne plus la suggérer)
   ignoreTransaction(
+    input: ReconciliationIgnoreInput!
+  ): ReconciliationIgnoreResponse!
+
+  # Réintégrer au rapprochement une transaction ignorée (inverse d'ignoreTransaction)
+  unignoreTransaction(
     input: ReconciliationIgnoreInput!
   ): ReconciliationIgnoreResponse!
 }
