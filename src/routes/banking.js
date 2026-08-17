@@ -5,6 +5,7 @@ import { bankingService } from "../services/banking/BankingService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
+import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
 
 const router = express.Router();
 
@@ -201,6 +202,11 @@ router.get("/status", async (req, res) => {
  * Routes pour récupérer les données bancaires
  */
 
+// 🔐 À partir d'ici, toutes les routes exposent/modifient des données bancaires
+// d'un workspace : on exige l'appartenance (ferme l'IDOR cross-org). Les
+// webhooks signés (au-dessus) et /status ne sont pas concernés.
+router.use(requireWorkspaceMembership);
+
 // Récupérer les comptes bancaires (avec cache)
 router.get("/accounts", async (req, res) => {
   try {
@@ -219,8 +225,8 @@ router.get("/accounts", async (req, res) => {
     if (!skipCache) {
       const cached = await bankingCacheService.getAccounts(workspaceId);
       if (cached.fromCache && cached.data) {
-        logger.info(
-          ` Cache HIT: ${cached.data.length} comptes pour workspace ${workspaceId}`,
+        logger.debug(
+          `Cache HIT: ${cached.data.length} comptes pour workspace ${workspaceId}`,
         );
         return res.json({
           success: true,
@@ -243,8 +249,8 @@ router.get("/accounts", async (req, res) => {
     // Mettre en cache
     await bankingCacheService.setAccounts(workspaceId, accounts);
 
-    logger.info(
-      ` BDD: ${accounts.length} comptes pour workspace ${workspaceId}`,
+    logger.debug(
+      `BDD: ${accounts.length} comptes pour workspace ${workspaceId}`,
     );
 
     res.json({

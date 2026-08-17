@@ -89,7 +89,14 @@ const closeRedis = async () => {
     }
     logger.info("✅ [Redis] Connexions fermées proprement");
   } catch (error) {
-    logger.error("❌ [Redis] Erreur lors de la fermeture:", error);
+    // "Connection is closed" à l'arrêt = la connexion est déjà tombée pendant
+    // le shutdown (fréquent lors d'un reload PM2 multi-instances) : c'est
+    // normal, pas un incident. On ne remonte en erreur que le reste.
+    if (error?.message?.includes("Connection is closed")) {
+      logger.debug("[Redis] Connexion déjà fermée à l'arrêt (normal)");
+    } else {
+      logger.error("❌ [Redis] Erreur lors de la fermeture:", error);
+    }
   }
 };
 

@@ -1,5 +1,7 @@
+import logger from "../utils/logger.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 import {
   saveChunkToR2,
   areAllChunksReceivedOnR2,
@@ -142,7 +144,7 @@ const chunkUploadR2Resolvers = {
           const finalMimeType =
             mimeType || mimeTypes[ext] || "application/octet-stream";
 
-          console.log(
+          logger.debug(
             `🚀 Démarrage Multipart Upload pour ${fileName} (${(
               fileSize /
               1024 /
@@ -189,7 +191,7 @@ const chunkUploadR2Resolvers = {
             );
           }
 
-          console.log(
+          logger.debug(
             `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`,
           );
 
@@ -204,7 +206,7 @@ const chunkUploadR2Resolvers = {
           const keyFileName = key.split("/").pop(); // Ex: f_99bc5d90-b713-4250-be02-ab0ff68203d9_Capture.png
           const cleanOriginalName = keyFileName.replace(/^f_[a-f0-9-]+_/, ""); // Retirer f_fileId_
 
-          console.log(
+          logger.debug(
             `📝 Nettoyage du nom: "${keyFileName}" → "${cleanOriginalName}"`,
           );
 
@@ -278,7 +280,7 @@ const chunkUploadR2Resolvers = {
           // Générer un transferId temporaire
           const transferId = `temp_${fileId}`;
 
-          console.log(
+          logger.debug(
             `🔑 Génération de ${totalChunks} URLs signées pour ${fileName}`,
           );
 
@@ -307,7 +309,7 @@ const chunkUploadR2Resolvers = {
 
           const uploadUrls = await Promise.all(urlPromises);
 
-          console.log(
+          logger.debug(
             `✅ ${uploadUrls.length} URLs signées générées pour ${fileName}`,
           );
 
@@ -443,6 +445,19 @@ const chunkUploadR2Resolvers = {
             throw new UserInputError(
               "Identifiant de fichier ou nom de fichier manquant",
             );
+          }
+
+          // 🔐 fileId injecté dans une clé R2 et un motif regex : format sûr requis.
+          if (!/^[a-zA-Z0-9_-]{1,128}$/.test(fileId)) {
+            throw new UserInputError("Identifiant de fichier invalide");
+          }
+
+          if (
+            !Number.isInteger(totalChunks) ||
+            totalChunks < 1 ||
+            totalChunks > 100000
+          ) {
+            throw new UserInputError("Nombre de chunks invalide");
           }
 
           if (chunkIndex < 0 || chunkIndex >= totalChunks) {
@@ -593,6 +608,18 @@ const chunkUploadR2Resolvers = {
           // Définir les options du transfert de fichier
           const expiryDays = input?.expiryDays || 7;
           const workspaceId = input?.workspaceId || null;
+          // 🔐 Appartenance requise si un workspace est fourni.
+          if (
+            workspaceId &&
+            !(await userBelongsToWorkspace(
+              String(user.id || user._id),
+              String(workspaceId),
+            ))
+          ) {
+            throw new UserInputError(
+              "Accès non autorisé à cet espace de travail",
+            );
+          }
           const paymentAmount = input?.paymentAmount || 0;
           const paymentCurrency =
             input?.paymentCurrency || input?.currency || "EUR";
@@ -681,7 +708,7 @@ const chunkUploadR2Resolvers = {
               );
 
               if (emailSent) {
-                console.log(
+                logger.debug(
                   "📧 Email de transfert envoyé avec succès à:",
                   recipientEmail,
                 );
@@ -699,7 +726,7 @@ const chunkUploadR2Resolvers = {
               // Ne pas faire échouer la création du transfert si l'email échoue
             }
           } else if (recipientEmail) {
-            console.log(
+            logger.debug(
               "📧 Email destinataire fourni mais SMTP non configuré. Lien de partage:",
               `${
                 process.env.FRONTEND_URL || "http://localhost:3000"

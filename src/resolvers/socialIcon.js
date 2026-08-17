@@ -1,10 +1,11 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour la génération d'icônes sociales personnalisées
  */
 
 import socialIconService from "../services/socialIconService.js";
 import { isAuthenticated } from "../middlewares/better-auth.js";
-import { createValidationError, createNotFoundError } from "../utils/errors.js";
+import { createValidationError } from "../utils/errors.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 const socialIconResolvers = {
@@ -15,7 +16,7 @@ const socialIconResolvers = {
     generateCustomSocialIcons: isAuthenticated(
       async (_, { signatureId, logoUrl }, { user }) => {
         try {
-          console.log(
+          logger.debug(
             `🚀 Génération icônes sociales - User: ${user.id}, Signature: ${signatureId}`,
           );
 
@@ -36,7 +37,7 @@ const socialIconResolvers = {
               logoUrl,
             );
 
-          console.log("✅ Icônes générées:", Object.keys(generatedIcons));
+          logger.debug("✅ Icônes générées:", Object.keys(generatedIcons));
 
           return {
             success: true,
@@ -60,7 +61,7 @@ const socialIconResolvers = {
     updateCustomSocialIcons: isAuthenticated(
       async (_, { signatureId, newLogoUrl }, { user }) => {
         try {
-          console.log(
+          logger.debug(
             `🔄 Mise à jour icônes sociales - User: ${user.id}, Signature: ${signatureId}`,
           );
 
@@ -80,7 +81,7 @@ const socialIconResolvers = {
             newLogoUrl,
           );
 
-          console.log("✅ Icônes mises à jour:", Object.keys(updatedIcons));
+          logger.debug("✅ Icônes mises à jour:", Object.keys(updatedIcons));
 
           return {
             success: true,
@@ -107,7 +108,7 @@ const socialIconResolvers = {
     deleteCustomSocialIcons: isAuthenticated(
       async (_, { signatureId }, { user }) => {
         try {
-          console.log(
+          logger.debug(
             `🗑️ Suppression icônes sociales - User: ${user.id}, Signature: ${signatureId}`,
           );
 

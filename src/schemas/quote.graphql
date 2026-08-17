@@ -34,6 +34,7 @@ type Quote {
   appearance: Appearance
   shipping: Shipping
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   createdBy: User!
@@ -53,6 +54,8 @@ type Quote {
   updatedAt: String!
   convertedToInvoice: Invoice
   linkedInvoices: [Invoice]
+  # Bons de commande créés à partir de ce devis (résolus via PurchaseOrder.sourceQuoteId)
+  linkedPurchaseOrders: [PurchaseOrder]
   # true si au moins une facture a été créée via un bon de commande issu de ce devis
   hasPurchaseOrderInvoices: Boolean
   situationInvoicedTotal: Float
@@ -91,6 +94,7 @@ input CreateQuoteInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
 }
@@ -119,6 +123,7 @@ input UpdateQuoteInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
 }

@@ -228,12 +228,10 @@ FileTransferSchema.methods.isAccessible = function () {
   return !this.isExpired() && this.status === "active";
 };
 
-// Méthode pour incrémenter le compteur de téléchargements
-FileTransferSchema.methods.incrementDownloadCount = function () {
-  this.downloadCount += 1;
-  this.lastDownloadDate = new Date();
-  return this.save();
-};
+// Le comptage des téléchargements passe par transferDownloadService :
+// il dédoublonne les endpoints traversés par un même téléchargement et
+// incrémente atomiquement ($inc), là où un save() concurrent perdait des
+// incréments entre les workers.
 
 // Méthode pour marquer comme payé
 FileTransferSchema.methods.markAsPaid = function (paymentId) {

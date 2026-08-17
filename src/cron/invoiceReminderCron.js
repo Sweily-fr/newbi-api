@@ -1,11 +1,12 @@
-import cron from 'node-cron';
-import InvoiceReminderSettings from '../models/InvoiceReminderSettings.js';
-import { 
-  startReminderWorker, 
+import logger from "../utils/logger.js";
+import cron from "node-cron";
+import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
+import {
+  startReminderWorker,
   stopReminderWorker,
   scheduleWorkspaceReminders,
-  getQueueStats 
-} from '../queues/reminderQueue.js';
+  getQueueStats,
+} from "../queues/reminderQueue.js";
 
 let workerStarted = false;
 
@@ -19,34 +20,43 @@ function startInvoiceReminderCron() {
     startReminderWorker();
     workerStarted = true;
   }
-  
-  // Cron expression: '0 * * * *' = toutes les heures à la minute 0
-  const cronExpression = '0 * * * *';
-  
-  const task = cron.schedule(cronExpression, async () => {
-    const currentHour = new Date().getHours();
-    console.log(`⏰ [Cron] Vérification des relances pour l'heure ${currentHour}h`);
-    
-    try {
-      await scheduleRemindersForHour(currentHour);
-      
-      // Afficher les stats de la queue
-      const stats = await getQueueStats();
-      if (stats.waiting > 0 || stats.delayed > 0) {
-        console.log(`📊 [Cron] Queue stats: ${stats.waiting} en attente, ${stats.delayed} différés`);
-      }
-      
-    } catch (error) {
-      console.error('❌ [Cron] Erreur lors de la planification:', error);
-    }
-  }, {
-    scheduled: true,
-    timezone: 'Europe/Paris',
-  });
 
-  console.log(`🕐 [Cron] Job de relance automatique configuré (toutes les heures)`);
-  console.log('🚀 [Cron] Worker de traitement des relances actif');
-  
+  // Cron expression: '0 * * * *' = toutes les heures à la minute 0
+  const cronExpression = "0 * * * *";
+
+  const task = cron.schedule(
+    cronExpression,
+    async () => {
+      const currentHour = new Date().getHours();
+      logger.debug(
+        `⏰ [Cron] Vérification des relances pour l'heure ${currentHour}h`,
+      );
+
+      try {
+        await scheduleRemindersForHour(currentHour);
+
+        // Afficher les stats de la queue
+        const stats = await getQueueStats();
+        if (stats.waiting > 0 || stats.delayed > 0) {
+          logger.debug(
+            `📊 [Cron] Queue stats: ${stats.waiting} en attente, ${stats.delayed} différés`,
+          );
+        }
+      } catch (error) {
+        console.error("❌ [Cron] Erreur lors de la planification:", error);
+      }
+    },
+    {
+      scheduled: true,
+      timezone: "Europe/Paris",
+    },
+  );
+
+  logger.debug(
+    `🕐 [Cron] Job de relance automatique configuré (toutes les heures)`,
+  );
+  logger.debug("🚀 [Cron] Worker de traitement des relances actif");
+
   return task;
 }
 
@@ -55,35 +65,47 @@ function startInvoiceReminderCron() {
  */
 async function scheduleRemindersForHour(hour) {
   // Trouver les workspaces dont l'heure de relance correspond
-  const activeSettings = await InvoiceReminderSettings.find({ 
+  const activeSettings = await InvoiceReminderSettings.find({
     enabled: true,
-    reminderHour: hour 
+    reminderHour: hour,
   });
-  
+
   if (activeSettings.length === 0) {
     return 0;
   }
-  
-  console.log(`📊 [Cron] ${activeSettings.length} workspace(s) configuré(s) pour ${hour}h`);
-  
+
+  logger.debug(
+    `📊 [Cron] ${activeSettings.length} workspace(s) configuré(s) pour ${hour}h`,
+  );
+
   let totalScheduled = 0;
-  
+
   for (const settings of activeSettings) {
     try {
-      const count = await scheduleWorkspaceReminders(settings.workspaceId, settings);
+      const count = await scheduleWorkspaceReminders(
+        settings.workspaceId,
+        settings,
+      );
       totalScheduled += count;
       if (count > 0) {
-        console.log(`✅ [Cron] Workspace ${settings.workspaceId}: ${count} relance(s) planifiée(s)`);
+        logger.debug(
+          `✅ [Cron] Workspace ${settings.workspaceId}: ${count} relance(s) planifiée(s)`,
+        );
       }
     } catch (error) {
-      console.error(`❌ [Cron] Erreur workspace ${settings.workspaceId}:`, error.message);
+      console.error(
+        `❌ [Cron] Erreur workspace ${settings.workspaceId}:`,
+        error.message,
+      );
     }
   }
-  
+
   if (totalScheduled > 0) {
-    console.log(`📧 [Cron] Total: ${totalScheduled} relance(s) ajoutée(s) à la queue`);
+    logger.debug(
+      `📧 [Cron] Total: ${totalScheduled} relance(s) ajoutée(s) à la queue`,
+    );
   }
-  
+
   return totalScheduled;
 }
 
@@ -92,23 +114,35 @@ async function scheduleRemindersForHour(hour) {
  */
 async function scheduleAllReminders() {
   const activeSettings = await InvoiceReminderSettings.find({ enabled: true });
-  
-  console.log(`📊 [Cron] ${activeSettings.length} workspace(s) avec relances activées`);
-  
+
+  logger.debug(
+    `📊 [Cron] ${activeSettings.length} workspace(s) avec relances activées`,
+  );
+
   let totalScheduled = 0;
-  
+
   for (const settings of activeSettings) {
     try {
-      const count = await scheduleWorkspaceReminders(settings.workspaceId, settings);
+      const count = await scheduleWorkspaceReminders(
+        settings.workspaceId,
+        settings,
+      );
       totalScheduled += count;
-      console.log(`✅ [Cron] Workspace ${settings.workspaceId}: ${count} relance(s) planifiée(s)`);
+      logger.debug(
+        `✅ [Cron] Workspace ${settings.workspaceId}: ${count} relance(s) planifiée(s)`,
+      );
     } catch (error) {
-      console.error(`❌ [Cron] Erreur workspace ${settings.workspaceId}:`, error.message);
+      console.error(
+        `❌ [Cron] Erreur workspace ${settings.workspaceId}:`,
+        error.message,
+      );
     }
   }
-  
-  console.log(`📧 [Cron] Total: ${totalScheduled} relance(s) ajoutée(s) à la queue`);
-  
+
+  logger.debug(
+    `📧 [Cron] Total: ${totalScheduled} relance(s) ajoutée(s) à la queue`,
+  );
+
   return totalScheduled;
 }
 
@@ -117,25 +151,29 @@ async function scheduleAllReminders() {
  * Utile pour les tests
  */
 async function runManualReminder() {
-  console.log('🔧 [Manual] Exécution manuelle de la planification des relances');
-  
+  logger.debug(
+    "🔧 [Manual] Exécution manuelle de la planification des relances",
+  );
+
   // S'assurer que le worker est démarré
   if (!workerStarted) {
     startReminderWorker();
     workerStarted = true;
   }
-  
+
   try {
     const count = await scheduleAllReminders();
     const stats = await getQueueStats();
-    
-    console.log('✅ [Manual] Planification terminée');
-    console.log(`📊 [Manual] ${count} relance(s) planifiée(s)`);
-    console.log(`📊 [Manual] Queue: ${stats.waiting} en attente, ${stats.active} en cours`);
-    
+
+    logger.debug("✅ [Manual] Planification terminée");
+    logger.debug(`📊 [Manual] ${count} relance(s) planifiée(s)`);
+    logger.debug(
+      `📊 [Manual] Queue: ${stats.waiting} en attente, ${stats.active} en cours`,
+    );
+
     return { scheduled: count, stats };
   } catch (error) {
-    console.error('❌ [Manual] Erreur:', error);
+    console.error("❌ [Manual] Erreur:", error);
     throw error;
   }
 }

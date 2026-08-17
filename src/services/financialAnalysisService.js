@@ -17,11 +17,11 @@ class FinancialAnalysisService {
       dates: {
         // Différents formats de dates
         emission:
-          /(?:date?\s*(?:d'émission|émission|emission)|émis\s*le|date)\s*:?\s*([0-9]{1,2}[-\/\.][0-9]{1,2}[-\/\.][0-9]{2,4})/gi,
+          /(?:date?\s*(?:d'émission|émission|emission)|émis\s*le|date)\s*:?\s*([0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4})/gi,
         echeance:
-          /(?:échéance|due\s*date|à\s*payer\s*avant)\s*:?\s*([0-9]{1,2}[-\/\.][0-9]{1,2}[-\/\.][0-9]{2,4})/gi,
+          /(?:échéance|due\s*date|à\s*payer\s*avant)\s*:?\s*([0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4})/gi,
         paiement:
-          /(?:payé\s*le|payment\s*date|date\s*de\s*paiement)\s*:?\s*([0-9]{1,2}[-\/\.][0-9]{1,2}[-\/\.][0-9]{2,4})/gi,
+          /(?:payé\s*le|payment\s*date|date\s*de\s*paiement)\s*:?\s*([0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4})/gi,
       },
       document: {
         number: /(?:n°|num|facture|invoice|ref)\s*:?\s*([A-Z0-9\-_]+)/gi,
@@ -107,20 +107,20 @@ class FinancialAnalysisService {
       // Analyse du type de document
       const documentAnalysis = this.analyzeDocumentType(
         rawText,
-        structuredData
+        structuredData,
       );
 
       // Extraction des données de transaction
       const transactionData = this.extractTransactionData(
         rawText,
         structuredData,
-        documentAnalysis
+        documentAnalysis,
       );
 
       // Extraction des champs supplémentaires
       const extractedFields = this.extractAdditionalFields(
         rawText,
-        structuredData
+        structuredData,
       );
 
       const result = {
@@ -229,7 +229,7 @@ class FinancialAnalysisService {
       description: this.generateDescription(
         vendorName,
         category.main,
-        amounts.total
+        amounts.total,
       ),
     };
   }
@@ -253,10 +253,10 @@ class FinancialAnalysisService {
 
     // Vérification des indicateurs
     const hasIncomeIndicators = incomeIndicators.some((indicator) =>
-      text.includes(indicator)
+      text.includes(indicator),
     );
     const hasExpenseIndicators = expenseIndicators.some((indicator) =>
-      text.includes(indicator)
+      text.includes(indicator),
     );
 
     if (hasIncomeIndicators && !hasExpenseIndicators) {
@@ -359,15 +359,15 @@ class FinancialAnalysisService {
   extractDates(rawText) {
     const transaction = this.extractDateByPattern(
       rawText,
-      this.patterns.dates.emission
+      this.patterns.dates.emission,
     );
     const due = this.extractDateByPattern(
       rawText,
-      this.patterns.dates.echeance
+      this.patterns.dates.echeance,
     );
     const payment = this.extractDateByPattern(
       rawText,
-      this.patterns.dates.paiement
+      this.patterns.dates.paiement,
     );
 
     return {

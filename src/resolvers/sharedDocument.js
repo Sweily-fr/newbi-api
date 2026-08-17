@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour les documents partagés
  */
@@ -7,18 +8,60 @@ import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import SharedTag, { getDefaultTagColor } from "../models/SharedTag.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
-import { withOrganization } from "../middlewares/rbac.js";
+  withOrganization,
+  resolveWorkspaceId,
+  checkSubscriptionActive,
+  getMemberRole,
+} from "../middlewares/rbac.js";
 import { GraphQLUpload } from "graphql-upload";
 import path from "path";
 import crypto from "crypto";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { getPubSub } from "../config/redis.js";
 
 const { ObjectId } = mongoose.Types;
+
+// 🔐 Ferme l'IDOR cross-org de façon uniforme : valide l'appartenance à l'org
+// (withOrganization) ET force le workspace VALIDÉ par RBAC à la place de
+// args.workspaceId. Nécessaire car le header x-organization-id prime sur les
+// args dans RBAC : sans ce forçage, header=orgA (dont on est membre) +
+// args.workspaceId=orgB permettait d'atteindre orgB.
+const scopedQuery = (fn) =>
+  withOrganization(async (parent, args, context, info) =>
+    fn(
+      parent,
+      {
+        ...args,
+        workspaceId: resolveWorkspaceId(args.workspaceId, context.workspaceId),
+      },
+      context,
+      info,
+    ),
+  );
+
+// checkSub : contrôle d'abonnement APRÈS RBAC (context.workspaceId validé).
+// publish : notification temps réel sur le workspace validé.
+// Le nettoyage corbeille (emptyTrash / permanentlyDelete*) reste accessible sans
+// abonnement actif — on le passe par scopedMutationNoSub.
+const makeScopedMutation =
+  ({ checkSub }) =>
+  (fn) =>
+    withOrganization(async (parent, args, context, info) => {
+      if (checkSub) await checkSubscriptionActive(context);
+      const workspaceId = resolveWorkspaceId(
+        args.workspaceId,
+        context.workspaceId,
+      );
+      const result = await fn(parent, { ...args, workspaceId }, context, info);
+      if (checkSub) {
+        publishSharedDocsChanged(workspaceId, info?.fieldName || "UPDATED");
+      }
+      return result;
+    });
+
+const scopedMutation = makeScopedMutation({ checkSub: true });
+const scopedMutationNoSub = makeScopedMutation({ checkSub: false });
 
 // === Subscription temps réel ===
 const SHARED_DOCUMENTS_CHANGED = "SHARED_DOCUMENTS_CHANGED";
@@ -124,7 +167,7 @@ const sharedDocumentResolvers = {
     /**
      * Récupère les documents partagés d'un workspace (filtrés par visibilité des dossiers)
      */
-    sharedDocuments: withOrganization(
+    sharedDocuments: scopedQuery(
       async (
         _,
         {
@@ -299,41 +342,39 @@ const sharedDocumentResolvers = {
     /**
      * Récupère un document par ID
      */
-    sharedDocument: isAuthenticated(
-      async (_, { id, workspaceId }, { user }) => {
-        try {
-          const document = await SharedDocument.findOne({
-            _id: id,
-            workspaceId,
-          });
+    sharedDocument: scopedQuery(async (_, { id, workspaceId }, { user }) => {
+      try {
+        const document = await SharedDocument.findOne({
+          _id: id,
+          workspaceId,
+        });
 
-          if (!document) {
-            return {
-              success: false,
-              message: "Document non trouvé",
-              document: null,
-            };
-          }
-
-          return {
-            success: true,
-            document,
-          };
-        } catch (error) {
-          console.error("❌ Erreur récupération document:", error);
+        if (!document) {
           return {
             success: false,
-            message: error.message,
+            message: "Document non trouvé",
             document: null,
           };
         }
-      },
-    ),
+
+        return {
+          success: true,
+          document,
+        };
+      } catch (error) {
+        console.error("❌ Erreur récupération document:", error);
+        return {
+          success: false,
+          message: error.message,
+          document: null,
+        };
+      }
+    }),
 
     /**
      * Récupère les dossiers d'un workspace (filtrés par visibilité)
      */
-    sharedFolders: withOrganization(async (_, { workspaceId }, { user }) => {
+    sharedFolders: scopedQuery(async (_, { workspaceId }, { user }) => {
       try {
         const userId = user._id?.toString() || user.id?.toString();
 
@@ -401,7 +442,7 @@ const sharedDocumentResolvers = {
     /**
      * Récupère un dossier par ID
      */
-    sharedFolder: isAuthenticated(async (_, { id, workspaceId }, { user }) => {
+    sharedFolder: scopedQuery(async (_, { id, workspaceId }, { user }) => {
       try {
         const folder = await SharedFolder.findOne({ _id: id, workspaceId });
 
@@ -439,106 +480,104 @@ const sharedDocumentResolvers = {
     /**
      * Statistiques des documents partagés
      */
-    sharedDocumentsStats: isAuthenticated(
-      async (_, { workspaceId }, { user }) => {
-        try {
-          // Convertir workspaceId en ObjectId pour l'aggregation
-          const workspaceObjectId = new ObjectId(workspaceId);
+    sharedDocumentsStats: scopedQuery(async (_, { workspaceId }, { user }) => {
+      try {
+        // Convertir workspaceId en ObjectId pour l'aggregation
+        const workspaceObjectId = new ObjectId(workspaceId);
 
-          const [
-            totalDocuments,
-            pendingDocuments,
-            classifiedDocuments,
-            archivedDocuments,
-            totalFolders,
-            sizeAggregation,
-            trashedDocuments,
-            trashedFolders,
-            trashedSizeAggregation,
-          ] = await Promise.all([
-            // Documents actifs (non en corbeille)
-            SharedDocument.countDocuments({ workspaceId, trashedAt: null }),
-            SharedDocument.countDocuments({
-              workspaceId,
-              status: "pending",
-              trashedAt: null,
-            }),
-            SharedDocument.countDocuments({
-              workspaceId,
-              status: "classified",
-              trashedAt: null,
-            }),
-            SharedDocument.countDocuments({
-              workspaceId,
-              status: "archived",
-              trashedAt: null,
-            }),
-            SharedFolder.countDocuments({ workspaceId, trashedAt: null }),
-            SharedDocument.aggregate([
-              { $match: { workspaceId: workspaceObjectId, trashedAt: null } },
-              { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
-            ]),
-            // Stats corbeille
-            SharedDocument.countDocuments({
-              workspaceId,
-              trashedAt: { $ne: null },
-            }),
-            SharedFolder.countDocuments({
-              workspaceId,
-              trashedAt: { $ne: null },
-            }),
-            SharedDocument.aggregate([
-              {
-                $match: {
-                  workspaceId: workspaceObjectId,
-                  trashedAt: { $ne: null },
-                },
+        const [
+          totalDocuments,
+          pendingDocuments,
+          classifiedDocuments,
+          archivedDocuments,
+          totalFolders,
+          sizeAggregation,
+          trashedDocuments,
+          trashedFolders,
+          trashedSizeAggregation,
+        ] = await Promise.all([
+          // Documents actifs (non en corbeille)
+          SharedDocument.countDocuments({ workspaceId, trashedAt: null }),
+          SharedDocument.countDocuments({
+            workspaceId,
+            status: "pending",
+            trashedAt: null,
+          }),
+          SharedDocument.countDocuments({
+            workspaceId,
+            status: "classified",
+            trashedAt: null,
+          }),
+          SharedDocument.countDocuments({
+            workspaceId,
+            status: "archived",
+            trashedAt: null,
+          }),
+          SharedFolder.countDocuments({ workspaceId, trashedAt: null }),
+          SharedDocument.aggregate([
+            { $match: { workspaceId: workspaceObjectId, trashedAt: null } },
+            { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
+          ]),
+          // Stats corbeille
+          SharedDocument.countDocuments({
+            workspaceId,
+            trashedAt: { $ne: null },
+          }),
+          SharedFolder.countDocuments({
+            workspaceId,
+            trashedAt: { $ne: null },
+          }),
+          SharedDocument.aggregate([
+            {
+              $match: {
+                workspaceId: workspaceObjectId,
+                trashedAt: { $ne: null },
               },
-              { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
-            ]),
-          ]);
+            },
+            { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
+          ]),
+        ]);
 
-          const totalSize =
-            sizeAggregation.length > 0 ? sizeAggregation[0].totalSize : 0;
-          const trashedSize =
-            trashedSizeAggregation.length > 0
-              ? trashedSizeAggregation[0].totalSize
-              : 0;
+        const totalSize =
+          sizeAggregation.length > 0 ? sizeAggregation[0].totalSize : 0;
+        const trashedSize =
+          trashedSizeAggregation.length > 0
+            ? trashedSizeAggregation[0].totalSize
+            : 0;
 
-          return {
-            success: true,
-            totalDocuments,
-            pendingDocuments,
-            classifiedDocuments,
-            archivedDocuments,
-            totalFolders,
-            totalSize,
-            trashedDocuments,
-            trashedFolders,
-            trashedSize,
-          };
-        } catch (error) {
-          console.error("❌ Erreur stats documents:", error);
-          return {
-            success: false,
-            totalDocuments: 0,
-            pendingDocuments: 0,
-            classifiedDocuments: 0,
-            archivedDocuments: 0,
-            totalFolders: 0,
-            totalSize: 0,
-            trashedDocuments: 0,
-            trashedFolders: 0,
-            trashedSize: 0,
-          };
-        }
-      },
-    ),
+        return {
+          success: true,
+          totalDocuments,
+          pendingDocuments,
+          classifiedDocuments,
+          archivedDocuments,
+          totalFolders,
+          totalSize,
+          trashedDocuments,
+          trashedFolders,
+          trashedSize,
+        };
+      } catch (error) {
+        console.error("❌ Erreur stats documents:", error);
+        return {
+          success: false,
+          totalDocuments: 0,
+          pendingDocuments: 0,
+          classifiedDocuments: 0,
+          archivedDocuments: 0,
+          totalFolders: 0,
+          totalSize: 0,
+          trashedDocuments: 0,
+          trashedFolders: 0,
+          trashedSize: 0,
+        };
+      }
+    }),
 
     /**
      * Récupère les éléments de la corbeille
      */
-    trashItems: isAuthenticated(async (_, { workspaceId }, { user }) => {
+    trashItems: scopedQuery(async (_, { workspaceId }, { user }) => {
       try {
         const workspaceObjectId = new ObjectId(workspaceId);
 
@@ -615,7 +654,7 @@ const sharedDocumentResolvers = {
      * présents sur des documents mais absents du registre (legacy) sont
      * surfacés et auto-enregistrés.
      */
-    documentTags: withOrganization(async (_, { workspaceId }, { user }) => {
+    documentTags: scopedQuery(async (_, { workspaceId }, { user }) => {
       try {
         const wsId = new ObjectId(workspaceId);
 
@@ -670,14 +709,14 @@ const sharedDocumentResolvers = {
     /**
      * Upload un document partagé
      */
-    uploadSharedDocument: isAuthenticated(
+    uploadSharedDocument: scopedMutation(
       async (
         _,
         { workspaceId, file, folderId, name, description, tags },
         { user },
       ) => {
         try {
-          console.log(
+          logger.debug(
             "📤 Upload document partagé pour workspace:",
             workspaceId,
           );
@@ -776,7 +815,7 @@ const sharedDocumentResolvers = {
           // Mémoriser les tags dans le registre du workspace
           await ensureTagsRegistered(workspaceId, document.tags);
 
-          console.log("✅ Document partagé créé:", document._id);
+          logger.debug("✅ Document partagé créé:", document._id);
 
           const docObj = document.toObject();
           return {
@@ -805,7 +844,7 @@ const sharedDocumentResolvers = {
     /**
      * Met à jour un document
      */
-    updateSharedDocument: isAuthenticated(
+    updateSharedDocument: scopedMutation(
       async (_, { id, workspaceId, input }, { user }) => {
         try {
           const document = await SharedDocument.findOneAndUpdate(
@@ -849,7 +888,7 @@ const sharedDocumentResolvers = {
     /**
      * Supprime un document
      */
-    deleteSharedDocument: isAuthenticated(
+    deleteSharedDocument: scopedMutation(
       async (_, { id, workspaceId }, { user }) => {
         try {
           const document = await SharedDocument.findOne({
@@ -893,7 +932,7 @@ const sharedDocumentResolvers = {
     /**
      * Supprime plusieurs documents
      */
-    deleteSharedDocuments: isAuthenticated(
+    deleteSharedDocuments: scopedMutation(
       async (_, { ids, workspaceId }, { user }) => {
         try {
           const documents = await SharedDocument.find({
@@ -941,7 +980,7 @@ const sharedDocumentResolvers = {
     /**
      * Déplace des documents vers un dossier
      */
-    moveSharedDocuments: isAuthenticated(
+    moveSharedDocuments: scopedMutation(
       async (_, { ids, workspaceId, targetFolderId }, { user }) => {
         try {
           const result = await SharedDocument.updateMany(
@@ -973,7 +1012,7 @@ const sharedDocumentResolvers = {
     /**
      * Ajoute un commentaire à un document
      */
-    addDocumentComment: isAuthenticated(
+    addDocumentComment: scopedMutation(
       async (_, { workspaceId, input }, { user }) => {
         try {
           const document = await SharedDocument.findOneAndUpdate(
@@ -1021,7 +1060,7 @@ const sharedDocumentResolvers = {
     /**
      * Met à jour les tags de plusieurs documents
      */
-    bulkUpdateTags: isAuthenticated(
+    bulkUpdateTags: scopedMutation(
       async (_, { ids, workspaceId, addTags, removeTags }, { user }) => {
         try {
           const updateOperations = {};
@@ -1084,7 +1123,7 @@ const sharedDocumentResolvers = {
     /**
      * Crée un tag dans le registre du workspace
      */
-    createDocumentTag: withOrganization(
+    createDocumentTag: scopedMutation(
       async (_, { workspaceId, name, color }, { user }) => {
         try {
           const trimmed = (name || "").trim();
@@ -1128,7 +1167,7 @@ const sharedDocumentResolvers = {
      * Met à jour un tag (renommage et/ou couleur). Le renommage est propagé
      * sur tous les documents du workspace.
      */
-    updateDocumentTag: withOrganization(
+    updateDocumentTag: scopedMutation(
       async (_, { workspaceId, id, name, color }, { user }) => {
         try {
           const tag = await SharedTag.findOne({ _id: id, workspaceId });
@@ -1199,7 +1238,7 @@ const sharedDocumentResolvers = {
     /**
      * Supprime un tag du registre et le retire de tous les documents
      */
-    deleteDocumentTag: withOrganization(
+    deleteDocumentTag: scopedMutation(
       async (_, { workspaceId, id }, { user }) => {
         try {
           const tag = await SharedTag.findOne({ _id: id, workspaceId });
@@ -1224,7 +1263,7 @@ const sharedDocumentResolvers = {
     /**
      * Crée un dossier
      */
-    createSharedFolder: withOrganization(
+    createSharedFolder: scopedMutation(
       async (_, { workspaceId, input }, { user }) => {
         try {
           // Vérifier si un dossier avec le même nom existe déjà
@@ -1279,7 +1318,7 @@ const sharedDocumentResolvers = {
     /**
      * Met à jour un dossier
      */
-    updateSharedFolder: isAuthenticated(
+    updateSharedFolder: scopedMutation(
       async (_, { id, workspaceId, input }, { user }) => {
         try {
           const folder = await SharedFolder.findOne({ _id: id, workspaceId });
@@ -1343,7 +1382,7 @@ const sharedDocumentResolvers = {
      * Met un dossier en corbeille (soft delete)
      * Les documents et sous-dossiers sont aussi mis en corbeille
      */
-    deleteSharedFolder: isAuthenticated(
+    deleteSharedFolder: scopedMutation(
       async (_, { id, workspaceId }, { user }) => {
         try {
           const folder = await SharedFolder.findOne({
@@ -1446,7 +1485,7 @@ const sharedDocumentResolvers = {
     /**
      * Met à jour la visibilité d'un dossier
      */
-    updateFolderVisibility: withOrganization(
+    updateFolderVisibility: scopedMutation(
       async (_, { id, workspaceId, visibility, allowedUserIds }, context) => {
         const { user } = context;
         try {
@@ -1498,7 +1537,7 @@ const sharedDocumentResolvers = {
     /**
      * Restaure des éléments depuis la corbeille
      */
-    restoreFromTrash: isAuthenticated(
+    restoreFromTrash: scopedMutation(
       async (_, { workspaceId, documentIds, folderIds }, { user }) => {
         try {
           let restoredDocuments = 0;
@@ -1666,7 +1705,7 @@ const sharedDocumentResolvers = {
     /**
      * Vide complètement la corbeille (suppression définitive)
      */
-    emptyTrash: isAuthenticated(async (_, { workspaceId }, { user }) => {
+    emptyTrash: scopedMutationNoSub(async (_, { workspaceId }, { user }) => {
       try {
         // Récupérer tous les documents en corbeille pour supprimer de R2
         const trashedDocs = await SharedDocument.find({
@@ -1714,7 +1753,7 @@ const sharedDocumentResolvers = {
     /**
      * Supprime définitivement des documents (de la corbeille)
      */
-    permanentlyDeleteDocuments: isAuthenticated(
+    permanentlyDeleteDocuments: scopedMutationNoSub(
       async (_, { ids, workspaceId }, { user }) => {
         try {
           const documents = await SharedDocument.find({
@@ -1758,7 +1797,7 @@ const sharedDocumentResolvers = {
     /**
      * Supprime définitivement des dossiers (de la corbeille)
      */
-    permanentlyDeleteFolders: isAuthenticated(
+    permanentlyDeleteFolders: scopedMutationNoSub(
       async (_, { ids, workspaceId }, { user }) => {
         try {
           // Récupérer les documents dans ces dossiers pour supprimer de R2
@@ -1848,14 +1887,28 @@ const sharedDocumentResolvers = {
       const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
       return Math.max(0, diffDays);
     },
-    canManageVisibility: (parent, _, context) => {
+    canManageVisibility: async (parent, _, context) => {
       if (!context.user) return false;
-      // Les dossiers système : seul un admin/owner peut gérer la visibilité
-      if (parent.isSystem) {
-        return context.userRole === "admin" || context.userRole === "owner";
-      }
       const userId =
         context.user._id?.toString() || context.user.id?.toString();
+      // Les dossiers système : seul un admin/owner peut gérer la visibilité.
+      // 🔐 Le rôle est résolu en base (pas depuis le header x-user-role, qui est
+      // client-contrôlé) — ce field resolver ne passe pas par RBAC.
+      if (parent.isSystem) {
+        if (!parent.workspaceId) return false;
+        const wsId = parent.workspaceId.toString();
+        // ⚡ Mémoïsation par requête : tous les dossiers d'une même liste
+        // partagent (user, workspace), on évite ainsi un getMemberRole par dossier.
+        const cacheKey = `${wsId}:${userId}`;
+        context._memberRoleCache ||= new Map();
+        let role = context._memberRoleCache.get(cacheKey);
+        if (role === undefined) {
+          const member = await getMemberRole(wsId, userId);
+          role = member?.role ?? null;
+          context._memberRoleCache.set(cacheKey, role);
+        }
+        return role === "admin" || role === "owner";
+      }
       return parent.createdBy?.toString() === userId;
     },
   },
@@ -1889,26 +1942,8 @@ const sharedDocumentResolvers = {
   },
 };
 
-// ✅ Phase A.4 — Subscription check on shared document mutations (exclude trash cleanup: emptyTrash, permanentlyDeleteDocuments, permanentlyDeleteFolders)
-const SHARED_DOC_EXCLUDE = [
-  "emptyTrash",
-  "permanentlyDeleteDocuments",
-  "permanentlyDeleteFolders",
-];
-const originalSharedDocMutations = sharedDocumentResolvers.Mutation;
-sharedDocumentResolvers.Mutation = Object.fromEntries(
-  Object.entries(originalSharedDocMutations).map(([name, fn]) => [
-    name,
-    SHARED_DOC_EXCLUDE.includes(name)
-      ? fn
-      : async (parent, args, context, info) => {
-          await checkSubscriptionActive(context);
-          const result = await fn(parent, args, context, info);
-          // Notifier les clients abonnés (mise à jour temps réel des listes)
-          publishSharedDocsChanged(args?.workspaceId, name);
-          return result;
-        },
-  ]),
-);
+// Le contrôle d'abonnement, la notification temps réel et l'exclusion du
+// nettoyage corbeille sont désormais gérés par scopedMutation /
+// scopedMutationNoSub, APRÈS l'enrichissement RBAC (workspace validé).
 
 export default sharedDocumentResolvers;

@@ -250,7 +250,9 @@ async function sendPaymentReceivedNotification({
     }
 
     // Préparer les données pour le template
-    const invoiceNumber = `${invoice.prefix || ""}${invoice.number || ""}`;
+    const invoiceNumber = [invoice.prefix, invoice.number]
+      .filter(Boolean)
+      .join("-");
     const clientName =
       invoice.client?.name || invoice.client?.company || "Client";
     const totalAmount = formatAmount(
@@ -275,7 +277,7 @@ async function sendPaymentReceivedNotification({
     await transporter.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: user.email,
-      subject: `💰 Paiement reçu - Facture ${invoiceNumber}`,
+      subject: `Paiement reçu - Facture ${invoiceNumber}`,
       html: emailHtml,
     });
 

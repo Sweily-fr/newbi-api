@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import Client from "../models/Client.js";
 import ClientCustomField from "../models/ClientCustomField.js";
 import Invoice from "../models/Invoice.js";
@@ -123,12 +124,9 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // International si le flag est coché OU si le pays renseigné n'est pas la France
           const isIntl = isInternationalEntity(input);
-          if (isIntl) {
-            // Entreprise hors France : SIREN/TVA sont des notions franco-françaises
-            // → champs non requis et non stockés en base
-            clientData.siret = undefined;
-            clientData.vatNumber = undefined;
-          } else {
+          // Entreprise hors France : numéro fiscal local et n° TVA optionnels,
+          // format libre → stockés tels quels, aucune validation FR
+          if (!isIntl) {
             // Entreprise française : le SIREN/SIRET est obligatoire
             if (!input.siret || input.siret.trim() === "") {
               throw new Error(
@@ -136,10 +134,7 @@ const clientResolvers = {
               );
             }
             // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
-            if (
-              !/^\d{9}$/.test(input.siret) &&
-              !/^\d{14}$/.test(input.siret)
-            ) {
+            if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
               throw new Error(
                 "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
               );
@@ -250,12 +245,9 @@ const clientResolvers = {
         if (input.type === "COMPANY") {
           // International si le flag est coché OU si le pays renseigné n'est pas la France
           const isIntl = isInternationalEntity(input);
-          if (isIntl) {
-            // Entreprise hors France : SIREN/TVA sont des notions franco-françaises
-            // → champs non requis et vidés en base (le client était peut-être FR avant)
-            updateData.siret = "";
-            updateData.vatNumber = "";
-          } else {
+          // Entreprise hors France : numéro fiscal local et n° TVA optionnels,
+          // format libre → stockés tels quels, aucune validation FR
+          if (!isIntl) {
             // Entreprise française : le SIREN/SIRET est obligatoire
             if (!input.siret || input.siret.trim() === "") {
               throw new Error(
@@ -263,10 +255,7 @@ const clientResolvers = {
               );
             }
             // Valider le format du SIREN (9 chiffres) ou SIRET (14 chiffres)
-            if (
-              !/^\d{9}$/.test(input.siret) &&
-              !/^\d{14}$/.test(input.siret)
-            ) {
+            if (!/^\d{9}$/.test(input.siret) && !/^\d{14}$/.test(input.siret)) {
               throw new Error(
                 "Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres",
               );
@@ -457,7 +446,7 @@ const clientResolvers = {
             Invoice.countDocuments(clientFilter),
             PurchaseOrder.countDocuments(clientFilter),
           ]);
-          console.log(
+          logger.debug(
             `[updateClient] Sync documents pour client ${clientId}: ${quotesCount} devis, ${invoicesCount} factures, ${poCount} BC`,
           );
 
@@ -484,7 +473,7 @@ const clientResolvers = {
               { $set: { client: clientSnapshot } },
             ),
           ]);
-          console.log(
+          logger.debug(
             `[updateClient] Résultat sync: devis=${results[0].modifiedCount}, factures=${results[1].modifiedCount}, BC=${results[2].modifiedCount}`,
           );
         }

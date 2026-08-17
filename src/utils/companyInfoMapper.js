@@ -21,8 +21,16 @@ const VALID_COMPANY_STATUSES = [
   "EI",
   "EIRL",
   "SA",
+  "SCA",
   "SNC",
+  "SCS",
+  "SELARL",
+  "SELAS",
+  "SELAFA",
+  "SELCA",
   "SCI",
+  "SCM",
+  "SCP",
   "SCOP",
   "ASSOCIATION",
   "AUTO_ENTREPRENEUR",
@@ -72,6 +80,7 @@ function mapActivityToTransactionCategory(activityCategory) {
     liberale: "SERVICES",
     agricole: "GOODS",
     industrielle: "GOODS",
+    mixte: "MIXED",
   };
 
   return mapping[activityCategory.toLowerCase().trim()] || "SERVICES";
@@ -99,6 +108,21 @@ function mapFiscalRegimeToVatCondition(fiscalRegime) {
 }
 
 /**
+ * Détermine si l'organisation est en franchise en base de TVA (art. 293 B).
+ * La case dédiée fait foi ; à défaut (organisations créées avant son
+ * introduction), un régime fiscal micro vaut franchise en base.
+ * @param {Object} organization
+ * @returns {boolean}
+ */
+function isVatFranchise(organization) {
+  if (typeof organization.vatFranchise === "boolean") {
+    return organization.vatFranchise;
+  }
+  const regime = (organization.fiscalRegime || "").toLowerCase();
+  return regime.includes("micro") || regime.includes("franchise");
+}
+
+/**
  * Convertit un document organization (Better Auth) en objet companyInfo
  * compatible avec le schéma companyInfoSchema (utilisé dans Quote, Invoice, PurchaseOrder, CreditNote).
  * @param {Object} organization - Document de la collection 'organization' (Better Auth)
@@ -113,6 +137,26 @@ export function mapOrganizationToCompanyInfo(organization) {
 
   const companyInfo = {
     name: organization.companyName || "",
+    // Nom commercial : inclus uniquement si l'affichage est activé dans les paramètres
+    commercialName: organization.showCommercialName
+      ? organization.commercialName || ""
+      : "",
+    // Activité réglementée : titre professionnel, organisme de rattachement, numéro professionnel
+    professionalTitle: organization.isRegulatedActivity
+      ? organization.professionalTitle || ""
+      : "",
+    regulatoryBody: organization.isRegulatedActivity
+      ? organization.regulatoryBody || ""
+      : "",
+    professionalNumber: organization.isRegulatedActivity
+      ? organization.professionalNumber || ""
+      : "",
+    decennialInsurance: organization.isRegulatedActivity
+      ? organization.decennialInsurance || ""
+      : "",
+    professionalLiabilityInsurance: organization.isRegulatedActivity
+      ? organization.professionalLiabilityInsurance || ""
+      : "",
     email: organization.companyEmail || "",
     phone: organization.companyPhone || "",
     website:
@@ -133,19 +177,27 @@ export function mapOrganizationToCompanyInfo(organization) {
     transactionCategory: mapActivityToTransactionCategory(
       organization.activityCategory,
     ),
-    vatPaymentCondition: mapFiscalRegimeToVatCondition(
-      organization.fiscalRegime,
-    ),
+    // Régime de TVA explicitement choisi (vatMode: debits/encaissements).
+    // Aucun repli sur le régime fiscal : il ressuscitait la mention « Paiement
+    // de la TVA » alors que l'utilisateur avait décoché l'assujettissement ou
+    // choisi « Aucun » (reel-normal/reel-simplifie donnaient DEBITS).
+    // vatMode suffit : les deux écrans de réglages le vident déjà quand
+    // l'organisation n'est pas assujettie. Ne pas conditionner à isVatSubject,
+    // qui est undefined pour toute organisation ne l'ayant jamais enregistré.
+    vatPaymentCondition: mapFiscalRegimeToVatCondition(organization.vatMode),
+    // Franchise en base de TVA : repli sur le régime fiscal micro pour les
+    // organisations antérieures à l'introduction de la case dédiée.
+    vatFranchise: isVatFranchise(organization),
     capitalSocial: organization.capitalSocial || "",
     rcs: organization.rcs || "",
   };
 
-  // Inclure bankDetails seulement si les 3 champs sont présents
-  if (organization.bankIban && organization.bankBic && organization.bankName) {
+  // Inclure bankDetails dès qu'au moins un champ est renseigné
+  if (organization.bankIban || organization.bankBic || organization.bankName) {
     companyInfo.bankDetails = {
-      iban: organization.bankIban,
-      bic: organization.bankBic,
-      bankName: organization.bankName,
+      iban: organization.bankIban || "",
+      bic: organization.bankBic || "",
+      bankName: organization.bankName || "",
     };
   }
 

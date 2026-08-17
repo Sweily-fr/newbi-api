@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour l'upload de documents vers Cloudflare
  */
@@ -6,6 +7,8 @@ import cloudflareService from "../services/cloudflareService.js";
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import heicConvert from "heic-convert";
+import sharp from "sharp";
 
 const documentUploadResolvers = {
   Upload: GraphQLUpload,
@@ -16,7 +19,7 @@ const documentUploadResolvers = {
      */
     uploadDocument: async (_, { file, folderType }, { user }) => {
       try {
-        console.log(
+        logger.debug(
           "🚀 DocumentUpload - Début upload avec folderType:",
           folderType,
         );
@@ -37,12 +40,13 @@ const documentUploadResolvers = {
           chunks.push(chunk);
         }
 
-        const fileBuffer = Buffer.concat(chunks);
-        const fileSize = fileBuffer.length;
+        let fileBuffer = Buffer.concat(chunks);
+        let finalFilename = filename;
+        let finalMimetype = mimetype;
 
         // Valider la taille du fichier (10MB max)
         const maxSize = 10 * 1024 * 1024; // 10MB
-        if (fileSize > maxSize) {
+        if (fileBuffer.length > maxSize) {
           throw new Error(
             `Fichier trop volumineux. Taille maximum: ${
               maxSize / 1024 / 1024
@@ -50,19 +54,52 @@ const documentUploadResolvers = {
           );
         }
 
+        // Convertir les photos HEIC/HEIF (iPhone) en PNG : les navigateurs
+        // hors Safari ne savent pas afficher ce format
+        const isHeic =
+          ["image/heic", "image/heif"].includes(mimetype) ||
+          /\.hei[cf]$/i.test(filename);
+
+        if (isHeic) {
+          try {
+            const rawPng = await heicConvert({
+              buffer: fileBuffer,
+              format: "PNG",
+            });
+            fileBuffer = await sharp(rawPng)
+              .resize(2000, 2000, { fit: "inside", withoutEnlargement: true })
+              .png()
+              .toBuffer();
+            finalFilename = filename.replace(/\.[^.]+$/, "") + ".png";
+            finalMimetype = "image/png";
+            logger.debug(
+              "🖼️ DocumentUpload - HEIC converti en PNG:",
+              finalFilename,
+            );
+          } catch (conversionError) {
+            console.error("❌ Erreur conversion HEIC:", conversionError);
+            throw new Error(
+              "Impossible de convertir l'image HEIC. Réessayez avec un fichier PNG ou JPEG.",
+            );
+          }
+        }
+
+        const fileSize = fileBuffer.length;
+
         // Valider le type de fichier
         const allowedTypes = [
           "image/jpeg",
           "image/jpg",
           "image/png",
           "image/webp",
+          "image/svg+xml",
           "application/pdf",
           "application/octet-stream", // Support pour les fichiers dont le MIME type n'est pas détecté correctement
         ];
 
-        if (!allowedTypes.includes(mimetype)) {
+        if (!allowedTypes.includes(finalMimetype)) {
           throw new Error(
-            "Type de fichier non supporté. Types acceptés: JPEG, PNG, WebP, PDF",
+            "Type de fichier non supporté. Types acceptés: JPEG, PNG, WebP, SVG, PDF",
           );
         }
 
@@ -73,9 +110,9 @@ const documentUploadResolvers = {
         if (!folderType) {
           // Détecter les logos d'entreprise par le nom du fichier
           const isCompanyLogo =
-            filename.toLowerCase().includes("logo") ||
-            filename.toLowerCase().includes("company") ||
-            filename.toLowerCase().includes("entreprise");
+            finalFilename.toLowerCase().includes("logo") ||
+            finalFilename.toLowerCase().includes("company") ||
+            finalFilename.toLowerCase().includes("entreprise");
 
           // Si c'est une image ET que le nom contient des mots-clés de logo
           const isImage = [
@@ -83,7 +120,8 @@ const documentUploadResolvers = {
             "image/jpg",
             "image/png",
             "image/webp",
-          ].includes(mimetype);
+            "image/svg+xml",
+          ].includes(finalMimetype);
 
           if (isImage && isCompanyLogo) {
             finalFolderType = "imgCompany";
@@ -131,12 +169,12 @@ const documentUploadResolvers = {
 
               if (memberRecord && memberRecord.organizationId) {
                 organizationId = memberRecord.organizationId.toString();
-                console.log(
+                logger.debug(
                   "🔍 DocumentUpload - Organization trouvée via collection member:",
                   organizationId,
                 );
               } else {
-                console.log(
+                logger.debug(
                   "🔍 DocumentUpload - Aucun member trouvé pour userId:",
                   user.id,
                 );
@@ -159,7 +197,7 @@ const documentUploadResolvers = {
             organizationId = user.id;
           }
 
-          console.log(
+          logger.debug(
             "🏢 DocumentUpload - Organization ID récupéré:",
             organizationId,
             "pour type:",
@@ -168,13 +206,13 @@ const documentUploadResolvers = {
         }
 
         // Upload vers Cloudflare R2
-        console.log(
+        logger.debug(
           "📤 DocumentUpload - Appel cloudflareService avec finalFolderType:",
           finalFolderType,
         );
         const uploadResult = await cloudflareService.uploadImage(
           fileBuffer,
-          filename,
+          finalFilename,
           user.id,
           finalFolderType,
           organizationId,
@@ -185,7 +223,7 @@ const documentUploadResolvers = {
           key: uploadResult.key,
           url: uploadResult.url,
           contentType: uploadResult.contentType,
-          fileName: filename,
+          fileName: finalFilename,
           fileSize: fileSize,
           message: "Document uploadé avec succès",
         };
@@ -209,10 +247,22 @@ const documentUploadResolvers = {
      */
     promoteTemporaryFile: isAuthenticated(async (_, { tempKey }, { user }) => {
       try {
-        console.log(
+        logger.debug(
           "🚀 DocumentUpload - Promotion du fichier temporaire:",
           tempKey,
         );
+
+        // 🔐 La clé temporaire est fournie par le client. N'autoriser que les
+        // fichiers du propre préfixe de l'utilisateur (`temp/${user.id}/…`) pour
+        // empêcher la lecture/déplacement + suppression du fichier d'un tiers.
+        const uid = String(user.id || user._id);
+        if (
+          !tempKey ||
+          String(tempKey).includes("..") ||
+          !String(tempKey).startsWith(`temp/${uid}/`)
+        ) {
+          throw new Error("Clé temporaire invalide");
+        }
 
         // Récupérer l'ID de l'organisation de l'utilisateur
         let organizationId = null;
@@ -278,6 +328,24 @@ const documentUploadResolvers = {
      */
     deleteDocument: isAuthenticated(async (_, { key }, { user }) => {
       try {
+        // 🔐 La clé est fournie par le client : n'autoriser que les documents du
+        // propre préfixe de l'utilisateur, pour ne pas supprimer un objet R2 d'un
+        // tiers. Bloquer aussi le path traversal.
+        const uid = String(user.id || user._id);
+        if (
+          !key ||
+          String(key).includes("..") ||
+          !(
+            String(key).startsWith(`documents/${uid}/`) ||
+            String(key).startsWith(`temp/${uid}/`)
+          )
+        ) {
+          return {
+            success: false,
+            message: "Clé de document invalide",
+          };
+        }
+
         // Supprimer de Cloudflare R2
         await cloudflareService.deleteImage(key);
 

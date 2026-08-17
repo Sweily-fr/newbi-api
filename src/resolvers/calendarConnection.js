@@ -1,6 +1,5 @@
 import CalendarConnection from "../models/CalendarConnection.js";
 import Event from "../models/Event.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { getCalendarProvider } from "../services/calendar/CalendarProviderFactory.js";
 import {
   syncConnection,

@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import EmailSettings from "../models/EmailSettings.js";
 import { AuthenticationError, UserInputError } from "apollo-server-express";
 import { requireRead, requireWrite } from "../middlewares/rbac.js";
@@ -10,7 +11,7 @@ const emailSettingsResolvers = {
     getEmailSettings: requireRead("invoices")(async (_, __, context) => {
       const { user, workspaceId, organization } = context;
 
-      console.log("📧 [EmailSettings] Context:", {
+      logger.debug("📧 [EmailSettings] Context:", {
         hasUser: !!user,
         workspaceId,
         organizationId: organization?.id,
@@ -99,11 +100,11 @@ const emailSettingsResolvers = {
             verified: false,
             verifiedAt: null,
           },
-          { new: true, upsert: true, runValidators: true }
+          { new: true, upsert: true, runValidators: true },
         );
 
         return settings;
-      }
+      },
     ),
   },
 };

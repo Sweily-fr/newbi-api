@@ -1,3 +1,6 @@
+import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
+import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
 import {
@@ -7,11 +10,8 @@ import {
 import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
-import SignatureRequest from "../models/SignatureRequest.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
-  withRBAC,
   requireWrite,
   requireRead,
   requireDelete,
@@ -35,8 +35,10 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
+import { cancelActiveQuoteSignatures } from "../services/quoteSignatureSync.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 export const calculateQuoteTotals = (
@@ -163,11 +165,15 @@ const quoteResolvers = {
         };
       }
     },
-    client: async (quote) => {
+    client: async (quote, _args, context) => {
       // Pour les brouillons, résoudre depuis la collection Client (données à jour)
       if ((!quote.status || quote.status === "DRAFT") && quote.client?.id) {
         try {
-          const freshClient = await Client.findById(quote.client.id);
+          const freshClient = await loadWorkspaceClient(
+            context,
+            quote.client.id,
+            quote.workspaceId,
+          );
           if (freshClient) {
             return {
               id: freshClient._id.toString(),
@@ -204,18 +210,33 @@ const quoteResolvers = {
     },
     convertedToInvoice: async (quote) => {
       if (!quote.convertedToInvoice) return null;
-      return await Invoice.findById(quote.convertedToInvoice);
+      return await Invoice.findOne({
+        _id: quote.convertedToInvoice,
+        workspaceId: quote.workspaceId,
+      });
     },
     linkedInvoices: async (quote) => {
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
         return await Invoice.find({
           _id: { $in: quote.linkedInvoices },
+          workspaceId: quote.workspaceId,
         });
       } else if (quote.convertedToInvoice) {
-        const invoice = await Invoice.findById(quote.convertedToInvoice);
+        const invoice = await Invoice.findOne({
+          _id: quote.convertedToInvoice,
+          workspaceId: quote.workspaceId,
+        });
         return invoice ? [invoice] : [];
       }
       return [];
+    },
+    // Bons de commande créés depuis ce devis — résolus à l'inverse via
+    // PurchaseOrder.sourceQuoteId (le devis ne stocke pas de référence vers les BC)
+    linkedPurchaseOrders: async (quote) => {
+      return await PurchaseOrder.find({
+        sourceQuoteId: quote._id,
+        workspaceId: quote.workspaceId,
+      }).sort({ createdAt: -1 });
     },
     // true si une facture existe déjà via un bon de commande issu de ce devis.
     // Sert au front à masquer/désactiver les boutons de conversion pour éviter
@@ -223,6 +244,7 @@ const quoteResolvers = {
     hasPurchaseOrderInvoices: async (quote) => {
       const count = await PurchaseOrder.countDocuments({
         sourceQuoteId: quote._id,
+        workspaceId: quote.workspaceId,
         linkedInvoices: { $exists: true, $not: { $size: 0 } },
       });
       return count > 0;
@@ -325,7 +347,7 @@ const quoteResolvers = {
         if (status) query.status = status;
 
         if (search) {
-          const searchRegex = new RegExp(search, "i");
+          const searchRegex = new RegExp(escapeRegex(search), "i");
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },
@@ -343,7 +365,7 @@ const quoteResolvers = {
           .skip(skip)
           .limit(limit);
 
-        console.log(
+        logger.debug(
           "📋 [QUOTES RESOLVER] Devis récupérés:",
           quotes.map((q) => ({
             id: q.id,
@@ -562,7 +584,7 @@ const quoteResolvers = {
           inputWorkspaceId,
           context.workspaceId,
         );
-        console.log("📋 [quoteByNumber] Recherche devis:", {
+        logger.debug("📋 [quoteByNumber] Recherche devis:", {
           workspaceId,
           number,
         });
@@ -588,7 +610,7 @@ const quoteResolvers = {
           ],
         }).populate("createdBy");
 
-        console.log(
+        logger.debug(
           "📋 [quoteByNumber] Première recherche:",
           quote
             ? {
@@ -606,7 +628,7 @@ const quoteResolvers = {
           const possiblePrefix = trimmedNumber.substring(0, lastDashIndex);
           const possibleNumber = trimmedNumber.substring(lastDashIndex + 1);
 
-          console.log("📋 [quoteByNumber] Parsing:", {
+          logger.debug("📋 [quoteByNumber] Parsing:", {
             possiblePrefix,
             possibleNumber,
           });
@@ -617,7 +639,7 @@ const quoteResolvers = {
             number: possibleNumber,
           }).populate("createdBy");
 
-          console.log(
+          logger.debug(
             "📋 [quoteByNumber] Deuxième recherche:",
             quote
               ? {
@@ -688,7 +710,7 @@ const quoteResolvers = {
             );
           }
 
-          console.log("🔍 [createQuote] Input received:", {
+          logger.debug("🔍 [createQuote] Input received:", {
             prefix: input.prefix,
             number: input.number,
             status: input.status,
@@ -956,25 +978,28 @@ const quoteResolvers = {
           // Enregistrer l'activité dans le client si c'est un client existant
           if (clientData.id) {
             try {
-              await Client.findByIdAndUpdate(clientData.id, {
-                $push: {
-                  activity: {
-                    id: new mongoose.Types.ObjectId().toString(),
-                    type: "quote_created",
-                    description: `a créé le devis ${prefix}${number}`,
-                    userId: user._id,
-                    userName: user.name || user.email,
-                    userImage: user.image || null,
-                    metadata: {
-                      documentType: "quote",
-                      documentId: quote._id.toString(),
-                      documentNumber: `${prefix}-${number}`,
-                      status: quote.status,
+              await Client.findOneAndUpdate(
+                { _id: clientData.id, workspaceId },
+                {
+                  $push: {
+                    activity: {
+                      id: new mongoose.Types.ObjectId().toString(),
+                      type: "quote_created",
+                      description: `a créé le devis ${prefix}${number}`,
+                      userId: user._id,
+                      userName: user.name || user.email,
+                      userImage: user.image || null,
+                      metadata: {
+                        documentType: "quote",
+                        documentId: quote._id.toString(),
+                        documentNumber: `${prefix}-${number}`,
+                        status: quote.status,
+                      },
+                      createdAt: new Date(),
                     },
-                    createdAt: new Date(),
                   },
                 },
-              });
+              );
             } catch (activityError) {
               console.error(
                 "Erreur lors de l'enregistrement de l'activité:",
@@ -1088,7 +1113,7 @@ const quoteResolvers = {
         // les renuméroter casserait la continuité de la séquence. La transition
         // DRAFT → PENDING est gérée plus bas (le numéro y est généré/validé).
         if (quote.status !== "DRAFT") {
-          if (input.number && input.number !== quote.number) {
+          if (input.number !== undefined && input.number !== quote.number) {
             throw createValidationError(
               "Le numéro d'un devis finalisé est verrouillé",
               {
@@ -1096,7 +1121,7 @@ const quoteResolvers = {
               },
             );
           }
-          if (input.prefix && input.prefix !== quote.prefix) {
+          if (input.prefix !== undefined && input.prefix !== quote.prefix) {
             throw createValidationError(
               "Le préfixe d'un devis finalisé est verrouillé",
               {
@@ -1155,7 +1180,10 @@ const quoteResolvers = {
         ) {
           const clientId = updateData.client?.id || quote.client?.id;
           try {
-            const freshClient = await Client.findById(clientId);
+            const freshClient = await Client.findOne({
+              _id: clientId,
+              workspaceId: quote.workspaceId,
+            });
             if (freshClient) {
               updateData.client = {
                 id: freshClient._id.toString(),
@@ -1193,7 +1221,10 @@ const quoteResolvers = {
           const clientId = updateData.client?.id || quote.client?.id;
           if (clientId && !updateData.client) {
             try {
-              const freshClient = await Client.findById(clientId);
+              const freshClient = await Client.findOne({
+                _id: clientId,
+                workspaceId: quote.workspaceId,
+              });
               if (freshClient) {
                 updateData.client = {
                   id: freshClient._id.toString(),
@@ -1218,10 +1249,10 @@ const quoteResolvers = {
               );
             }
           }
-          console.log("🔍 [updateQuote] DRAFT → PENDING transition detected");
-          console.log("🔍 [updateQuote] Current number:", quote.number);
-          console.log("🔍 [updateQuote] Input number:", input.number);
-          console.log("🔍 [updateQuote] Input prefix:", input.prefix);
+          logger.debug("🔍 [updateQuote] DRAFT → PENDING transition detected");
+          logger.debug("🔍 [updateQuote] Current number:", quote.number);
+          logger.debug("🔍 [updateQuote] Input number:", input.number);
+          logger.debug("🔍 [updateQuote] Input prefix:", input.prefix);
 
           try {
             // Si le numéro ou le prefix ne sont pas fournis dans l'input, générer automatiquement
@@ -1240,16 +1271,16 @@ const quoteResolvers = {
               const year = now.getFullYear();
               const month = String(now.getMonth() + 1).padStart(2, "0");
 
-              let prefix;
-              if (lastQuote && lastQuote.prefix) {
-                // Utiliser le préfixe du dernier devis
-                prefix = lastQuote.prefix;
-              } else {
-                // Aucun devis existant, utiliser le préfixe par défaut
-                prefix = `D-${month}${year}`;
-              }
+              // Priorité au préfixe fourni puis à celui du devis : le déduire
+              // du dernier devis finalisé faisait perdre le préfixe du
+              // brouillon en cours de finalisation (cf. changeQuoteStatus).
+              const prefix =
+                input.prefix ||
+                quote.prefix ||
+                lastQuote?.prefix ||
+                `D-${month}${year}`;
 
-              console.log("🔍 [updateQuote] Using prefix:", prefix);
+              logger.debug("🔍 [updateQuote] Using prefix:", prefix);
 
               // Générer le prochain numéro séquentiel
               const finalizeOrg = await getOrganizationInfo(quote.workspaceId);
@@ -1262,7 +1293,7 @@ const quoteResolvers = {
                 autoNumbering: finalizeOrg?.quoteAutoNumbering === true,
               });
 
-              console.log("✅ [updateQuote] Generated new number:", newNumber);
+              logger.debug("✅ [updateQuote] Generated new number:", newNumber);
 
               // Mettre à jour le numéro et le préfixe
               updateData.number = newNumber;
@@ -1406,29 +1437,24 @@ const quoteResolvers = {
           throw createStatusTransitionError("Devis", quote.status, status);
         }
 
-        // Un devis natif (PENDING) ne peut être accepté que si le CLIENT l'a signé
-        // (SES ou QES_otp = « bon pour accord »). Le QES automatique est un cachet de
-        // la société et ne vaut pas acceptation. Les devis importés (IMPORTED) restent
-        // acceptables manuellement sans signature.
-        if (status === "COMPLETED" && quote.status === "PENDING") {
-          const clientSignature = await SignatureRequest.findOne({
-            documentType: "quote",
-            documentId: quote._id,
-            signatureType: { $ne: "QES_automatic" },
-            status: "DONE",
-          });
-
-          if (!clientSignature) {
-            throw createValidationError(
-              "Ce devis doit être signé par le client avant de pouvoir être accepté. Envoyez-le pour signature : il sera accepté automatiquement une fois signé.",
-            );
-          }
-        }
-
         const oldStatus = quote.status;
 
         // Si le devis passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
         if (quote.status === "DRAFT" && status === "PENDING") {
+          // Recaler les dates d'un brouillon repris plus tard : l'émission est
+          // ramenée à aujourd'hui et la validité décalée d'autant (délai
+          // d'origine conservé). Les vues affichent déjà ces dates recalées
+          // (getDraftEffectiveDates côté front) : sans ce recalage, la
+          // finalisation en un clic persisterait les dates d'origine.
+          const refreshedDates = refreshDraftDates(
+            quote.issueDate,
+            quote.validUntil,
+          );
+          if (refreshedDates.changed) {
+            quote.issueDate = refreshedDates.issueDate;
+            quote.validUntil = refreshedDates.secondDate;
+          }
+
           // Snapshot companyInfo à la finalisation
           if (!quote.companyInfo || !quote.companyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);
@@ -1438,7 +1464,10 @@ const quoteResolvers = {
           // Snapshot client à la finalisation (données à jour depuis la collection Client)
           if (quote.client?.id) {
             try {
-              const freshClient = await Client.findById(quote.client.id);
+              const freshClient = await Client.findOne({
+                _id: quote.client.id,
+                workspaceId: quote.workspaceId,
+              });
               if (freshClient) {
                 quote.client = {
                   id: freshClient._id.toString(),
@@ -1493,14 +1522,15 @@ const quoteResolvers = {
                   (quote.issueDate || new Date()).getMonth() + 1,
                 ).padStart(2, "0");
 
-                let prefix;
-                if (lastQuote && lastQuote.prefix) {
-                  prefix = lastQuote.prefix;
-                } else {
-                  prefix = `D-${month}${year}`;
-                }
+                // Le préfixe du devis prime : le reconstruire à partir du
+                // dernier devis finalisé faisait perdre le préfixe personnalisé
+                // du brouillon (et retombait sur D-<mois><année> quand aucun
+                // devis n'était encore finalisé). Même règle que les bons de
+                // commande, qui partent de `po.prefix`.
+                const prefix =
+                  quote.prefix || lastQuote?.prefix || `D-${month}${year}`;
 
-                console.log(
+                logger.debug(
                   "🔍 [changeQuoteStatus] DRAFT → PENDING, prefix:",
                   prefix,
                 );
@@ -1585,7 +1615,7 @@ const quoteResolvers = {
             } catch (err) {
               session.endSession();
               if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
-                console.log(
+                logger.debug(
                   `⚠️ [changeQuoteStatus] E11000 retry attempt ${attempt + 1}`,
                 );
                 continue;
@@ -1598,6 +1628,20 @@ const quoteResolvers = {
           await quote.save();
         }
 
+        // Décision manuelle (accepté/refusé) : annuler toute demande de
+        // signature encore active, le client ne doit plus pouvoir signer.
+        if (status === "COMPLETED" || status === "CANCELED") {
+          try {
+            await cancelActiveQuoteSignatures(quote._id);
+          } catch (err) {
+            console.error(
+              "Erreur annulation des signatures actives (devis):",
+              err,
+            );
+            // Ne pas faire échouer le changement de statut
+          }
+        }
+
         // Enregistrer l'activité dans le client si c'est un client existant
         if (quote.client && quote.client.id) {
           try {
@@ -1608,25 +1652,28 @@ const quoteResolvers = {
               CANCELED: "Refusé",
             };
 
-            await Client.findByIdAndUpdate(quote.client.id, {
-              $push: {
-                activity: {
-                  id: new mongoose.Types.ObjectId().toString(),
-                  type: "quote_status_changed",
-                  description: `a changé le statut du devis ${quote.prefix}-${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
-                  userId: user._id,
-                  userName: user.name || user.email,
-                  userImage: user.image || null,
-                  metadata: {
-                    documentType: "quote",
-                    documentId: quote._id.toString(),
-                    documentNumber: `${quote.prefix}-${quote.number}`,
-                    status: status,
+            await Client.findOneAndUpdate(
+              { _id: quote.client.id, workspaceId: quote.workspaceId },
+              {
+                $push: {
+                  activity: {
+                    id: new mongoose.Types.ObjectId().toString(),
+                    type: "quote_status_changed",
+                    description: `a changé le statut du devis ${quote.prefix}-${quote.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                    userId: user._id,
+                    userName: user.name || user.email,
+                    userImage: user.image || null,
+                    metadata: {
+                      documentType: "quote",
+                      documentId: quote._id.toString(),
+                      documentNumber: `${quote.prefix}-${quote.number}`,
+                      status: status,
+                    },
+                    createdAt: new Date(),
                   },
-                  createdAt: new Date(),
                 },
               },
-            });
+            );
           } catch (activityError) {
             console.error(
               "Erreur lors de l'enregistrement de l'activité:",
@@ -1711,6 +1758,7 @@ const quoteResolvers = {
           // Récupérer toutes les factures déjà liées au devis qui existent encore
           const existingInvoices = await Invoice.find({
             _id: { $in: quote.linkedInvoices },
+            workspaceId: quote.workspaceId,
           });
 
           // Mettre à jour la liste des factures liées valides
@@ -1944,6 +1992,7 @@ const quoteResolvers = {
             sourceQuote: quote._id, // Référence vers le devis source
             isDeposit: isInvoiceDeposit, // Marquer comme facture d'acompte si spécifié
             isReverseCharge: quote.isReverseCharge || false, // Copier l'auto-liquidation depuis le devis
+            isVatExempt: quote.isVatExempt || false, // Copier l'exonération de TVA globale depuis le devis
             shipping: quoteObj.shipping, // Copier les informations de livraison depuis le devis
             appearance: quoteObj.appearance, // Copier l'apparence du document
             clientPositionRight: quote.clientPositionRight || false,

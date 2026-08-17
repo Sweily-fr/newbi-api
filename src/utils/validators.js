@@ -303,10 +303,20 @@ const REQUIRED_FIELDS_BY_COMPANY_STATUS = {
   EURL: ["siret", "vatNumber", "capitalSocial", "rcs"],
   SASU: ["siret", "vatNumber", "capitalSocial", "rcs"],
   SA: ["siret", "vatNumber", "capitalSocial", "rcs"],
+  SCA: ["siret", "vatNumber", "capitalSocial", "rcs"],
   SNC: ["siret", "vatNumber", "capitalSocial", "rcs"],
+  SCS: ["siret", "vatNumber", "capitalSocial", "rcs"],
+
+  // Sociétés d'exercice libéral
+  SELARL: ["siret", "vatNumber", "capitalSocial", "rcs"],
+  SELAS: ["siret", "vatNumber", "capitalSocial", "rcs"],
+  SELAFA: ["siret", "vatNumber", "capitalSocial", "rcs"],
+  SELCA: ["siret", "vatNumber", "capitalSocial", "rcs"],
 
   // Sociétés civiles
   SCI: ["siret", "rcs"],
+  SCM: ["siret", "rcs"],
+  SCP: ["siret", "rcs"],
 
   // Sociétés coopératives
   SCOP: ["siret", "vatNumber", "capitalSocial", "rcs"],

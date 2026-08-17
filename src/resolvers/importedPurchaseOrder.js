@@ -1,3 +1,5 @@
+import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 /**
  * Resolvers GraphQL pour les bons de commande importés
  */
@@ -131,6 +133,10 @@ async function recordOcrUsage(userId, workspaceId, plan, documentInfo) {
 }
 
 async function checkPurchaseOrderAccess(poId, workspaceId) {
+  // Garde : sans workspaceId le filtre deviendrait findOne({ _id }) → IDOR.
+  if (!workspaceId) {
+    throw createValidationError("Contexte d'organisation requis");
+  }
   const po = await ImportedPurchaseOrder.findOne({ _id: poId, workspaceId });
   if (!po) {
     throw createNotFoundError("Bon de commande importé non trouvé");
@@ -408,7 +414,7 @@ const importedPurchaseOrderResolvers = {
         if (filters.category) query.category = filters.category;
         if (filters.vendorName) {
           query["vendor.name"] = {
-            $regex: new RegExp(filters.vendorName, "i"),
+            $regex: new RegExp(escapeRegex(filters.vendorName), "i"),
           };
         }
         if (filters.dateFrom || filters.dateTo) {
@@ -539,7 +545,7 @@ const importedPurchaseOrderResolvers = {
 
           // Upload Cloudflare en premier (indispensable, on a toujours besoin
           // de stocker le PDF même si l'OCR n'aboutit pas).
-          console.log(
+          logger.debug(
             `☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`,
           );
           const uploadResult = await cloudflareService.uploadImage(
@@ -571,7 +577,7 @@ const importedPurchaseOrderResolvers = {
               .update(fileBuffer)
               .digest("hex");
 
-            console.log(
+            logger.debug(
               `🔍 importPurchaseOrderDirect: Claude Vision pour ${filename}`,
             );
             const rawResult = await claudeVisionOcrService.processFromBase64(
@@ -756,7 +762,7 @@ const importedPurchaseOrderResolvers = {
     validateImportedPurchaseOrder: requireWrite("importedPurchaseOrders")(
       async (_, { id }, { workspaceId }) => {
         const po = await checkPurchaseOrderAccess(id, workspaceId);
-        return po.validate();
+        return po.markValidated();
       },
     ),
 

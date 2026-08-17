@@ -18,22 +18,47 @@ const DOCUMENT_MODELS = [
 ];
 
 /**
- * Vérifie la signature du webhook Resend (optionnel mais recommandé)
+ * Vérifie la signature Svix du webhook Resend sur le CORPS BRUT.
  * https://resend.com/docs/dashboard/webhooks/verify-webhooks
+ *
+ * Le header `svix-signature` contient une ou plusieurs signatures
+ * `v1,<base64>` séparées par des espaces, calculées en HMAC-SHA256 sur
+ * `${id}.${timestamp}.${rawBody}` avec le secret décodé de base64.
  */
-function verifyResendSignature(payload, signature, secret) {
-  if (!secret || !signature) return true; // Skip si pas configuré
-
+function verifySvixSignature({
+  id,
+  timestamp,
+  rawBody,
+  signatureHeader,
+  secret,
+}) {
+  if (!secret || !id || !timestamp || !signatureHeader) return false;
   try {
-    const expectedSignature = crypto
-      .createHmac("sha256", secret)
-      .update(payload)
-      .digest("hex");
-
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expectedSignature),
+    const secretBytes = Buffer.from(
+      String(secret).replace(/^whsec_/, ""),
+      "base64",
     );
+    const signedContent = `${id}.${timestamp}.${rawBody}`;
+    const expected = crypto
+      .createHmac("sha256", secretBytes)
+      .update(signedContent)
+      .digest("base64");
+    const expectedBuf = Buffer.from(expected);
+
+    return String(signatureHeader)
+      .split(" ")
+      .map((part) => (part.includes(",") ? part.split(",")[1] : part))
+      .some((sig) => {
+        try {
+          const sigBuf = Buffer.from(sig);
+          return (
+            sigBuf.length === expectedBuf.length &&
+            crypto.timingSafeEqual(sigBuf, expectedBuf)
+          );
+        } catch {
+          return false;
+        }
+      });
   } catch {
     return false;
   }
@@ -59,27 +84,52 @@ async function findDocumentByResendId(resendMessageId) {
  * POST /webhook/resend
  * Reçoit les événements Resend (email.opened, email.delivered, email.bounced, etc.)
  */
-router.post("/", express.json(), async (req, res) => {
+router.post("/", express.raw({ type: "*/*" }), async (req, res) => {
   try {
-    const signature =
-      req.headers["resend-signature"] || req.headers["svix-signature"];
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body.toString("utf8")
+      : typeof req.body === "string"
+        ? req.body
+        : JSON.stringify(req.body || {});
+
     const webhookSecret = process.env.RESEND_WEBHOOK_SECRET;
+    const svixId = req.headers["svix-id"] || req.headers["webhook-id"];
+    const svixTimestamp =
+      req.headers["svix-timestamp"] || req.headers["webhook-timestamp"];
+    const svixSignature =
+      req.headers["svix-signature"] ||
+      req.headers["webhook-signature"] ||
+      req.headers["resend-signature"];
 
-    // Vérifier la signature si configurée
-    if (webhookSecret && signature) {
-      const isValid = verifyResendSignature(
-        JSON.stringify(req.body),
-        signature,
-        webhookSecret,
-      );
-
+    // 🔐 Fail-closed : si un secret est configuré, la signature est OBLIGATOIRE
+    // et vérifiée sur le corps brut. Sans secret, on ne peut pas authentifier
+    // (on log un avertissement) — mais on ne renvoie plus `true` par défaut.
+    if (webhookSecret) {
+      const isValid = verifySvixSignature({
+        id: svixId,
+        timestamp: svixTimestamp,
+        rawBody,
+        signatureHeader: svixSignature,
+        secret: webhookSecret,
+      });
       if (!isValid) {
-        logger.warn("[ResendWebhook] Signature invalide");
+        logger.warn("[ResendWebhook] Signature invalide ou absente");
         return res.status(401).json({ error: "Invalid signature" });
       }
+    } else {
+      logger.warn(
+        "[ResendWebhook] RESEND_WEBHOOK_SECRET non configuré — événement non authentifié",
+      );
     }
 
-    const { type, data } = req.body;
+    let parsedBody;
+    try {
+      parsedBody = JSON.parse(rawBody);
+    } catch {
+      return res.status(400).json({ error: "Invalid JSON" });
+    }
+
+    const { type, data } = parsedBody;
 
     if (!type || !data) {
       return res.status(400).json({ error: "Invalid payload" });

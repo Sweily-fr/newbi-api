@@ -1,8 +1,10 @@
+import logger from "../utils/logger.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { createOwnerDownloadToken } from "../utils/ownerDownloadToken.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import {
   saveUploadedFile,
@@ -268,6 +270,22 @@ const fileTransferResolvers = {
           "FILE_TRANSFER_FETCH_ERROR",
         );
       }
+    },
+  },
+
+  FileTransfer: {
+    // Jeton remis au seul propriétaire authentifié : il permet à son tableau
+    // de bord de télécharger sans déclencher la notification ni le compteur
+    // destinés aux destinataires. Le type public FileTransferInfo ne l'expose
+    // pas, un destinataire ne peut donc pas l'obtenir.
+    ownerDownloadToken: (fileTransfer, _args, { user }) => {
+      if (!user?.id || String(fileTransfer.userId) !== String(user.id)) {
+        return null;
+      }
+      return createOwnerDownloadToken(
+        fileTransfer._id || fileTransfer.id,
+        user.id,
+      );
     },
   },
 
@@ -886,7 +904,7 @@ const fileTransferResolvers = {
               };
 
               await sendFileTransferEmail(recipientEmail, transferData);
-              console.log(
+              logger.debug(
                 "📧 Email de transfert (shared docs ZIP) envoyé à:",
                 recipientEmail,
               );

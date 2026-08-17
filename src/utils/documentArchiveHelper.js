@@ -100,6 +100,12 @@ export async function documentUrl({
   workspaceId,
   docId,
 }) {
+  // Aperçu iframe des PDF archivés désactivé par défaut : le cookie de session
+  // est host-only (www.newbi.fr) et n'est jamais envoyé à api.newbi.fr par
+  // l'iframe en prod → 401 → ERR_BLOCKED_BY_RESPONSE. null = le front
+  // rebascule sur le rendu live. À réactiver quand l'aperçu passera par un
+  // proxy same-origin côté front (même flag que invoiceDocumentUrl).
+  if (process.env.ENABLE_ARCHIVED_PDF_IFRAME_PREVIEW !== "true") return null;
   const doc = await Model.findOne({ _id: docId, workspaceId }).select(
     "status archivedPdfKey",
   );

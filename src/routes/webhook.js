@@ -62,19 +62,23 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
       return res.status(500).json({ error: "Webhook secret not configured" });
     }
 
-    // Vérifier la signature si elle est présente
-    if (signature && webhookSecret) {
-      const isValidSignature = verifyBridgeSignature(
-        req.body,
-        signature,
-        webhookSecret,
-      );
-      if (!isValidSignature) {
-        console.error("❌ Signature webhook invalide");
-        return res.status(401).json({ error: "Invalid webhook signature" });
-      }
-      console.log("✅ Signature webhook valide");
+    // 🔐 Fail-closed : la signature est OBLIGATOIRE. Auparavant, un attaquant
+    // pouvait omettre le header pour sauter la vérification et forger des
+    // événements (déconnexion de comptes, synchros coûteuses).
+    if (!signature) {
+      console.error("❌ Signature webhook Bridge manquante");
+      return res.status(401).json({ error: "Missing webhook signature" });
     }
+    const isValidSignature = verifyBridgeSignature(
+      req.body,
+      signature,
+      webhookSecret,
+    );
+    if (!isValidSignature) {
+      console.error("❌ Signature webhook invalide");
+      return res.status(401).json({ error: "Invalid webhook signature" });
+    }
+    logger.debug("✅ Signature webhook valide");
 
     // Parser le JSON selon le type de body
     let payload;
@@ -89,19 +93,19 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
 
     // Log des informations importantes
     // if (payload.type) {
-    //   console.log(`🎯 Type d'événement: ${payload.type}`);
+    //   logger.debug(`🎯 Type d'événement: ${payload.type}`);
     // }
 
     // if (payload.data) {
-    //   console.log("📊 Données:", JSON.stringify(payload.data, null, 2));
+    //   logger.debug("📊 Données:", JSON.stringify(payload.data, null, 2));
     // }
 
     // if (payload.account) {
-    //   console.log(`🏦 Compte: ${payload.account.name} (${payload.account.id})`);
+    //   logger.debug(`🏦 Compte: ${payload.account.name} (${payload.account.id})`);
     // }
 
     // if (payload.item) {
-    //   console.log(`💳 Item: ${payload.item.id} - ${payload.item.status}`);
+    //   logger.debug(`💳 Item: ${payload.item.id} - ${payload.item.status}`);
     // }
 
     // Traitement selon le type d'événement

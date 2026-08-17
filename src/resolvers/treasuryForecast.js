@@ -120,12 +120,15 @@ export const expandManualEntry = (entry, rangeStart, rangeEnd) => {
 // category and loses that identity, hence this dedicated projection — it mirrors
 // the same future-gating (month >= currentMonth) and real-invoice dedup as
 // sections 6b2/6c. Auto-forecast (historical average) is intentionally excluded:
-// it has no entity to delete. Returns [{ id, kind, name, category, type, amount,
-// date: Date }] sorted chronologically.
+// it has no entity to delete. `includePast` lifts the future-gating so a past
+// month can still show what had been forecast (read-only consultation); the
+// aggregate chart/table keeps ignoring past forecasts. Returns [{ id, kind,
+// name, category, type, amount, date: Date }] sorted chronologically.
 export const projectForecastOccurrences = async (
   workspaceId,
   rangeStart,
   rangeEnd,
+  { includePast = false } = {},
 ) => {
   const wId = new mongoose.Types.ObjectId(workspaceId);
   const now = new Date();
@@ -142,7 +145,7 @@ export const projectForecastOccurrences = async (
   for (const entry of manualEntries) {
     for (const occ of expandManualEntry(entry, rangeStart, rangeEnd)) {
       const month = mk(occ.date);
-      if (month < currentMonth) continue;
+      if (!includePast && month < currentMonth) continue;
       if (entry.excludedMonths?.includes(month)) continue;
       occurrences.push({
         id: entry._id.toString(),
@@ -165,10 +168,18 @@ export const projectForecastOccurrences = async (
     isMuted: false,
   }).lean();
   if (activeRecurrences.length > 0) {
+    // Dedup window: aligned on the projection window. When past months are
+    // included, real invoices of those months must also be considered so a
+    // detected recurrence doesn't duplicate an invoice already shown in Réel.
+    const currentMonthStart = new Date(currentMonth + "-01");
+    const dedupStart =
+      includePast && rangeStart < currentMonthStart
+        ? rangeStart
+        : currentMonthStart;
     const PurchaseInvoice = mongoose.model("PurchaseInvoice");
     const futurePurchaseInvoices = await PurchaseInvoice.find({
       workspaceId: wId,
-      issueDate: { $gte: new Date(currentMonth + "-01") },
+      issueDate: { $gte: dedupStart },
     })
       .select("supplierName category issueDate")
       .lean();
@@ -182,7 +193,7 @@ export const projectForecastOccurrences = async (
     const InvoiceModel = mongoose.model("Invoice");
     const futureInvoices = await InvoiceModel.find({
       workspaceId: wId,
-      issueDate: { $gte: new Date(currentMonth + "-01") },
+      issueDate: { $gte: dedupStart },
     })
       .select("client issueDate")
       .lean();
@@ -234,7 +245,7 @@ export const projectForecastOccurrences = async (
         const month = mk(occDate);
         occ = advance(occ, freq);
         if (occDate < rangeStart) continue;
-        if (month < currentMonth) continue;
+        if (!includePast && month < currentMonth) continue;
         if (rec.excludedMonths?.includes(month)) continue;
         let category;
         let type = rec.type;
@@ -1109,10 +1120,13 @@ const treasuryForecastResolvers = {
           "Client inconnu";
 
         // Prévisions (saisies manuelles + récurrences détectées) projetées sur
-        // ce mois — vide pour un mois passé (month < currentMonth), cohérent
-        // avec le tableau agrégé.
+        // ce mois — includePast: un mois passé reste consultable (onglet
+        // Prévision du drawer, en lecture seule côté front), même si le
+        // tableau agrégé, lui, ignore les prévisions passées.
         const forecastEntries = (
-          await projectForecastOccurrences(workspaceId, start, end)
+          await projectForecastOccurrences(workspaceId, start, end, {
+            includePast: true,
+          })
         ).map((o) => ({
           id: o.id,
           kind: o.kind,

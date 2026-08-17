@@ -16,6 +16,7 @@ import documentAutomationService from "../services/documentAutomationService.js"
 import { syncPurchaseInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionService.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
+import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -38,6 +39,32 @@ const checkAccess = async (id, workspaceId) => {
     throw new AppError("Facture d'achat non trouvée", ERROR_CODES.NOT_FOUND);
   }
   return doc;
+};
+
+// Supprime de R2 les fichiers d'une facture d'achat (résolution automatique
+// du bucket depuis l'URL, y compris domaines custom), SAUF ceux partagés avec
+// un justificatif de transaction : une facture créée par OCR depuis un reçu
+// référence le même objet R2 que transaction.receiptFiles — le supprimer
+// casserait le justificatif côté transaction.
+const deletePurchaseInvoiceFilesFromR2 = async (files, workspaceId) => {
+  const { default: Transaction } = await import("../models/Transaction.js");
+  for (const file of files || []) {
+    try {
+      if (!file.url) continue;
+      const resolved = cloudflareService.resolveBucketAndKeyFromUrl(file.url);
+      if (!resolved) continue;
+
+      const sharedWithReceipt = await Transaction.exists({
+        workspaceId: String(workspaceId),
+        "receiptFiles.key": resolved.key,
+      });
+      if (sharedWithReceipt) continue;
+
+      await cloudflareService.deleteImage(resolved.key, resolved.bucket);
+    } catch (err) {
+      console.warn("⚠️ Impossible de supprimer le fichier:", err.message);
+    }
+  }
 };
 
 const purchaseInvoiceResolvers = {
@@ -262,7 +289,7 @@ const purchaseInvoiceResolvers = {
             $gte: -(invoice.amountTTC * (1 + amountRange)),
             $lte: -(invoice.amountTTC * (1 - amountRange)),
           },
-          reconciliationStatus: { $ne: "matched" },
+          reconciliationStatus: { $nin: ["matched", "ignored"] },
           deletedAt: null,
         };
 
@@ -301,6 +328,121 @@ const purchaseInvoiceResolvers = {
             confidence: Math.min(confidence, 1),
           };
         });
+      },
+    ),
+
+    // Suggestions globales pour le toast de rapprochement (miroir de
+    // reconciliationSuggestions côté factures client) : on scanne les
+    // transactions débit non rapprochées et on cherche une facture d'achat
+    // correspondante (montant ±1 %, nom fournisseur dans le libellé, n° de
+    // facture dans le libellé).
+    purchaseInvoiceReconciliationSuggestions: requireRead("expenses")(
+      async (_, { workspaceId: argWorkspaceId }, context) => {
+        // resolveWorkspaceId privilégie le workspace validé par le RBAC :
+        // un argument workspaceId arbitraire ne peut pas cibler une autre org
+        const workspaceId = resolveWorkspaceId(
+          argWorkspaceId,
+          context.workspaceId || context.organizationId,
+        );
+        const wsId = new mongoose.Types.ObjectId(workspaceId);
+        const Transaction = mongoose.model("Transaction");
+
+        // Débits non rapprochés, sans justificatif déjà attaché.
+        const reconcileQuery = {
+          workspaceId: wsId,
+          deletedAt: null,
+          reconciliationStatus: { $nin: ["matched", "ignored"] },
+          amount: { $lt: 0 },
+          "receiptFiles.0": { $exists: false },
+        };
+
+        const unmatchedCount = await Transaction.countDocuments(reconcileQuery);
+        const unmatchedTransactions = await Transaction.find(reconcileQuery)
+          .sort({ date: -1 })
+          .limit(50)
+          .lean();
+
+        // Factures d'achat non payées / non rapprochées.
+        const pendingInvoices = await PurchaseInvoice.find({
+          workspaceId: wsId,
+          deletedAt: null,
+          isReconciled: { $ne: true },
+          status: { $nin: ["PAID", "ARCHIVED"] },
+          $or: [
+            { linkedTransactionIds: { $exists: false } },
+            { linkedTransactionIds: { $size: 0 } },
+          ],
+        })
+          .sort({ issueDate: -1 })
+          .limit(500)
+          .lean();
+
+        const normalizeRef = (s) =>
+          (s || "")
+            .toString()
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "");
+
+        const evaluate = (transaction, invoice) => {
+          const txAbs = Math.abs(transaction.amount);
+          const invoiceAmount = invoice.amountTTC || 0;
+          const amountMatch =
+            invoiceAmount > 0 &&
+            Math.abs(txAbs - invoiceAmount) <= invoiceAmount * 0.01;
+
+          const supplier = (invoice.supplierName || "").toLowerCase();
+          const descriptionMatch =
+            !!supplier &&
+            !!transaction.description &&
+            transaction.description.toLowerCase().includes(supplier);
+
+          const invRef = normalizeRef(invoice.invoiceNumber);
+          const txRef = normalizeRef(transaction.description);
+          const referenceMatch = invRef.length >= 6 && txRef.includes(invRef);
+
+          return { amountMatch, descriptionMatch, referenceMatch };
+        };
+
+        const suggestions = [];
+        for (const transaction of unmatchedTransactions) {
+          const matching = pendingInvoices
+            .map((invoice) => ({ invoice, m: evaluate(transaction, invoice) }))
+            .filter(
+              ({ m }) =>
+                m.amountMatch || m.descriptionMatch || m.referenceMatch,
+            );
+
+          if (matching.length > 0) {
+            const high = matching.some(
+              ({ m }) => m.amountMatch || m.referenceMatch,
+            );
+            suggestions.push({
+              transaction: {
+                id: transaction._id.toString(),
+                amount: transaction.amount,
+                description: transaction.description,
+                date: transaction.date,
+                reconciliationStatus: transaction.reconciliationStatus,
+              },
+              matchingPurchaseInvoices: matching.map(({ invoice }) => ({
+                id: invoice._id.toString(),
+                invoiceNumber: invoice.invoiceNumber,
+                supplierName: invoice.supplierName,
+                amountTTC: invoice.amountTTC,
+                issueDate: invoice.issueDate,
+                status: invoice.status,
+              })),
+              confidence: high ? "high" : "medium",
+            });
+          }
+        }
+
+        return {
+          success: true,
+          suggestions,
+          unmatchedCount,
+          pendingInvoicesCount: pendingInvoices.length,
+        };
       },
     ),
 
@@ -433,6 +575,20 @@ const purchaseInvoiceResolvers = {
 
         const oldStatus = invoice.status;
 
+        // Garde-fou d'intégrité : le montant d'une facture rapprochée ne peut
+        // pas changer (la transaction bancaire liée ne correspondrait plus).
+        // Délier d'abord (unreconcilePurchaseInvoice), modifier ensuite.
+        if (
+          invoice.isReconciled &&
+          input.amountTTC !== undefined &&
+          input.amountTTC !== invoice.amountTTC
+        ) {
+          throw new AppError(
+            "Impossible de modifier le montant d'une facture rapprochée. Déliez d'abord la transaction.",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
         Object.keys(input).forEach((key) => {
           if (input[key] !== undefined) {
             invoice[key] = input[key];
@@ -524,18 +680,14 @@ const purchaseInvoiceResolvers = {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
 
-        // Delete files from Cloudflare
-        for (const file of invoice.files || []) {
-          try {
-            if (file.url && file.url.includes("r2.dev")) {
-              const urlParts = file.url.split("/");
-              const key = urlParts.slice(3).join("/");
-              await cloudflareService.deleteImage(key);
-            }
-          } catch (err) {
-            console.warn("⚠️ Impossible de supprimer le fichier:", err.message);
-          }
-        }
+        await deletePurchaseInvoiceFilesFromR2(invoice.files, workspaceId);
+
+        // Détacher les transactions rapprochées (sinon elles restent
+        // "matched" avec un id orphelin pour toujours)
+        await detachPurchaseInvoicesFromTransactions(
+          [invoice._id],
+          workspaceId,
+        );
 
         await PurchaseInvoice.deleteOne({ _id: id });
         return { success: true, message: "Facture d'achat supprimée" };
@@ -571,18 +723,22 @@ const purchaseInvoiceResolvers = {
           }
           const buffer = Buffer.concat(chunks);
 
-          const uniqueFilename = `purchase-invoices/${workspaceId}/${Date.now()}-${filename.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+          // Bucket OCR : même destination que les fichiers issus du flux
+          // processDocumentOcr (cohérence des justificatifs de factures
+          // d'achat)
           const uploadResult = await cloudflareService.uploadImage(
             buffer,
-            uniqueFilename,
-            mimetype,
+            filename,
+            context.user.id,
+            "ocr",
+            workspaceId,
           );
 
           fileData = {
-            filename: uniqueFilename,
+            filename: uploadResult.key || filename,
             originalFilename: filename,
             mimetype,
-            path: uploadResult.key || uniqueFilename,
+            path: uploadResult.key,
             size: buffer.length,
             url: uploadResult.url,
             ocrProcessed: false,
@@ -634,16 +790,9 @@ const purchaseInvoiceResolvers = {
         if (!file)
           throw new AppError("Fichier non trouvé", ERROR_CODES.NOT_FOUND);
 
-        // Delete from Cloudflare
-        try {
-          if (file.url && file.url.includes("r2.dev")) {
-            const urlParts = file.url.split("/");
-            const key = urlParts.slice(3).join("/");
-            await cloudflareService.deleteImage(key);
-          }
-        } catch (err) {
-          console.warn("⚠️ Impossible de supprimer le fichier:", err.message);
-        }
+        // Delete from Cloudflare (bucket résolu depuis l'URL, fichiers
+        // partagés avec un justificatif de transaction préservés)
+        await deletePurchaseInvoiceFilesFromR2([file], workspaceId);
 
         invoice.files.pull(fileId);
         await invoice.save();
@@ -754,18 +903,14 @@ const purchaseInvoiceResolvers = {
 
         // Delete files
         for (const inv of invoices) {
-          for (const file of inv.files || []) {
-            try {
-              if (file.url && file.url.includes("r2.dev")) {
-                const urlParts = file.url.split("/");
-                const key = urlParts.slice(3).join("/");
-                await cloudflareService.deleteImage(key);
-              }
-            } catch (err) {
-              console.warn("⚠️ Erreur suppression fichier:", err.message);
-            }
-          }
+          await deletePurchaseInvoiceFilesFromR2(inv.files, workspaceId);
         }
+
+        // Détacher les transactions rapprochées des factures supprimées
+        await detachPurchaseInvoicesFromTransactions(
+          invoices.map((inv) => inv._id),
+          workspaceId,
+        );
 
         const result = await PurchaseInvoice.deleteMany({
           _id: { $in: ids },
@@ -804,18 +949,65 @@ const purchaseInvoiceResolvers = {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
+        if (!transactionIds || transactionIds.length === 0) {
+          throw new AppError(
+            "Au moins une transaction est requise pour le rapprochement",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
         const Transaction = mongoose.model("Transaction");
 
-        // Verify transactions belong to workspace
+        // Verify transactions belong to workspace (et ne sont pas masquées)
         const txCount = await Transaction.countDocuments({
           _id: { $in: transactionIds },
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          deletedAt: null,
         });
 
         if (txCount !== transactionIds.length) {
           throw new AppError(
             "Certaines transactions sont introuvables",
             ERROR_CODES.NOT_FOUND,
+          );
+        }
+
+        // Délier les transactions précédemment rapprochées qui ne sont plus
+        // dans la nouvelle liste (sinon elles gardent linkedPurchaseInvoiceIds
+        // et un statut "matched" vers une facture qui ne les référence plus)
+        const newIdSet = new Set(transactionIds.map(String));
+        const removedIds = (invoice.linkedTransactionIds || []).filter(
+          (prevId) => !newIdSet.has(String(prevId)),
+        );
+        if (removedIds.length > 0) {
+          await Transaction.updateMany(
+            { _id: { $in: removedIds } },
+            { $pull: { linkedPurchaseInvoiceIds: invoice._id } },
+          );
+          await Transaction.updateMany(
+            {
+              _id: { $in: removedIds },
+              $and: [
+                {
+                  $or: [
+                    { linkedInvoiceIds: { $exists: false } },
+                    { linkedInvoiceIds: { $size: 0 } },
+                  ],
+                },
+                {
+                  $or: [
+                    { linkedPurchaseInvoiceIds: { $exists: false } },
+                    { linkedPurchaseInvoiceIds: { $size: 0 } },
+                  ],
+                },
+              ],
+            },
+            {
+              $set: {
+                reconciliationStatus: "unmatched",
+                reconciliationDate: null,
+              },
+            },
           );
         }
 
@@ -826,10 +1018,22 @@ const purchaseInvoiceResolvers = {
         invoice.status = "PAID";
         invoice.paymentDate = invoice.paymentDate || new Date();
 
-        // Mark transactions as matched
+        // Lien N↔N par référence : la transaction "porte" la facture d'achat
+        // (linkedPurchaseInvoiceIds). Le justificatif reste sur la facture et
+        // est accessible via le lien — pas de copie de fichier. Le lien
+        // fonctionne donc même si la facture n'a pas de justificatif.
         await Transaction.updateMany(
-          { _id: { $in: transactionIds } },
-          { $set: { reconciliationStatus: "matched" } },
+          {
+            _id: { $in: transactionIds },
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          },
+          {
+            $set: {
+              reconciliationStatus: "matched",
+              reconciliationDate: new Date(),
+            },
+            $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
+          },
         );
 
         // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
@@ -872,16 +1076,23 @@ const purchaseInvoiceResolvers = {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
-        if (invoice.linkedTransactionIds?.length) {
-          const Transaction = mongoose.model("Transaction");
-          await Transaction.updateMany(
-            { _id: { $in: invoice.linkedTransactionIds } },
-            { $set: { reconciliationStatus: "unmatched" } },
-          );
-        }
+        // Retire le lien côté transactions ($pull + receiptFiles nettoyés) et
+        // repasse "unmatched" celles qui n'ont plus aucun lien. Updates ciblés
+        // (pas de save() par document : pas de revalidation de données legacy).
+        await detachPurchaseInvoicesFromTransactions(
+          [invoice._id],
+          workspaceId,
+        );
 
         invoice.linkedTransactionIds = [];
         invoice.isReconciled = false;
+        // Symétrique du flux factures client (unlink → PENDING) : le lien de
+        // paiement vient d'être retiré, la facture n'est plus "payée par la
+        // banque". On ne touche pas aux autres statuts (ARCHIVED...).
+        if (invoice.status === "PAID") {
+          invoice.status = "TO_PAY";
+          invoice.paymentDate = null;
+        }
 
         await invoice.save();
         return invoice;
@@ -894,18 +1105,30 @@ const purchaseInvoiceResolvers = {
         context.workspaceId,
       );
 
+      // L'adresse est facultative pour un fournisseur. On ne crée le
+      // sous-document `address` QUE si au moins un champ est renseigné : sinon
+      // Mongoose stocke un objet avec des champs null, et le type GraphQL
+      // Address (street/city/postalCode/country non-nullables) plante au retour
+      // (« Cannot return null for non-nullable field Address.street »).
+      const hasAddress =
+        input.street || input.city || input.postalCode || input.country;
+
       const supplier = new Supplier({
         name: input.name,
         email: input.email,
         phone: input.phone,
         siret: input.siret,
         vatNumber: input.vatNumber,
-        address: {
-          street: input.street,
-          city: input.city,
-          postalCode: input.postalCode,
-          country: input.country,
-        },
+        ...(hasAddress
+          ? {
+              address: {
+                street: input.street,
+                city: input.city,
+                postalCode: input.postalCode,
+                country: input.country,
+              },
+            }
+          : {}),
         iban: input.iban,
         bic: input.bic,
         defaultCategory: input.defaultCategory,
@@ -1190,6 +1413,16 @@ const purchaseInvoiceResolvers = {
 
   Supplier: {
     id: (parent) => parent._id?.toString() || parent.id,
+    // Le type GraphQL Address a des champs non-nullables (street/city/…). Les
+    // fournisseurs créés avant le correctif (ou par un autre client) peuvent
+    // avoir un sous-document address vide ou partiel (street: null) → GraphQL
+    // plantait à la lecture de la liste. On ne renvoie l'adresse QUE si elle est
+    // complète ; sinon null (Supplier.address est nullable).
+    address: (parent) => {
+      const a = parent.address;
+      if (a && a.street && a.city && a.postalCode && a.country) return a;
+      return null;
+    },
     createdAt: (parent) =>
       parent.createdAt instanceof Date
         ? parent.createdAt.toISOString()

@@ -17,8 +17,8 @@ const envFile =
 const envPath = path.resolve(process.cwd(), envFile);
 dotenv.config({ path: envPath });
 
-console.log(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
-console.log(`📄 Fichier .env chargé: ${envFile}`);
+logger.debug(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
+logger.debug(`📄 Fichier .env chargé: ${envFile}`);
 
 // Handlers globaux pour éviter les crashes silencieux
 process.on("unhandledRejection", (reason, promise) => {
@@ -91,6 +91,7 @@ import gmailConnectRoutes from "./routes/gmail-connect.js";
 import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
 import invoiceDocumentPdfRoutes from "./routes/invoiceDocumentPdf.js";
 import documentPdfRoutes from "./routes/documentPdf.js";
+import importedDocumentFileRoutes from "./routes/importedDocumentFile.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import emailTrackingRoutes from "./routes/emailTracking.js";
@@ -129,6 +130,21 @@ mongoose
     const legacyIndexes = [
       { collection: "quotes", index: "workspaceId_1_number_1" },
       { collection: "quotes", index: "number_1_createdBy_1" },
+      // Anciens index uniques sans le préfixe : ils bloquaient la réutilisation
+      // d'un même numéro avec un préfixe différent (E11000 à la création)
+      { collection: "quotes", index: "number_createdBy_year_unique" },
+      { collection: "quotes", index: "number_workspaceId_year_unique" },
+      { collection: "invoices", index: "number_createdBy_year_unique" },
+      { collection: "invoices", index: "number_workspaceId_year_unique" },
+      {
+        collection: "creditnotes",
+        index: "creditnote_number_createdBy_year_unique",
+      },
+      {
+        collection: "creditnotes",
+        index: "creditnote_number_workspaceId_year_unique",
+      },
+      { collection: "purchaseorders", index: "number_createdBy_year_unique" },
     ];
 
     for (const { collection, index } of legacyIndexes) {
@@ -257,7 +273,9 @@ async function startServer() {
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
-          callback(new Error(`Origine non autorisée: ${origin}`));
+          // Pas d'Error ici : elle deviendrait un 500 renvoyé au client.
+          // `false` = réponse sans headers CORS, le navigateur bloque quand même.
+          callback(null, false);
         }
       },
       credentials: true,
@@ -326,6 +344,10 @@ async function startServer() {
   // Route de streaming du PDF des devis / avoirs / bons de commande (R2, auth session)
   app.use("/documents", documentPdfRoutes);
 
+  // Route de streaming des fichiers originaux importés (factures/devis/BC
+  // importés, justificatifs de factures d'achat) depuis R2 (auth session)
+  app.use("/documents", importedDocumentFileRoutes);
+
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
 
@@ -363,21 +385,15 @@ async function startServer() {
 
   app.use(graphqlUploadExpress({ maxFileSize: 104857600, maxFiles: 20 }));
 
-  // DEBUG: Log les requêtes GraphQL qui retournent 400
+  // Trace les requêtes GraphQL qui retournent 400 (requêtes malformées,
+  // scanners, introspection refusée...) : faute du client, pas du serveur,
+  // donc en debug — visible en staging, silencieux en prod.
   app.use("/graphql", (req, res, next) => {
     const originalSend = res.send;
     res.send = function (body) {
       if (res.statusCode === 400) {
-        console.error("⚠️ [DEBUG 400] Requête GraphQL retournant 400:");
-        console.error(
-          "  Body reçu:",
-          JSON.stringify(req.body)?.substring(0, 500),
-        );
-        console.error(
-          "  Réponse:",
-          typeof body === "string"
-            ? body.substring(0, 500)
-            : JSON.stringify(body)?.substring(0, 500),
+        logger.debug(
+          `[GraphQL 400] body=${JSON.stringify(req.body)?.substring(0, 500)} réponse=${(typeof body === "string" ? body : JSON.stringify(body))?.substring(0, 500)}`,
         );
       }
       return originalSend.call(this, body);
@@ -397,6 +413,13 @@ async function startServer() {
   // Configuration Apollo Server
   const server = new ApolloServer({
     schema,
+    // Introspection désactivée partout sauf dev local, pour ne pas exposer
+    // publiquement le schéma complet (surface d'attaque). Le staging étant
+    // accessible sur Internet, on n'autorise que NODE_ENV=development, avec
+    // une porte de sortie explicite via ENABLE_GRAPHQL_INTROSPECTION=true.
+    introspection:
+      process.env.NODE_ENV === "development" ||
+      process.env.ENABLE_GRAPHQL_INTROSPECTION === "true",
     // Limiter la profondeur des queries à 10 niveaux pour protéger le backend
     validationRules: [depthLimit(10)],
     context: async ({ req }) => {
@@ -705,10 +728,43 @@ function setupRoutes(app) {
 
 // Gestion des erreurs
 function formatError(error) {
-  console.error("❌ [GraphQL Error]:", error.message);
-  console.error("Path:", error.path);
-  console.error("Extensions:", error.extensions);
   const originalError = error.originalError;
+
+  // Erreur d'auth attendue (JWT expiré entre deux refreshs, session révoquée) :
+  // le front la gère par un retry silencieux avec un nouveau JWT — log discret,
+  // pas d'❌ [GraphQL Error] qui pollue les logs pour un cas nominal.
+  const appErrorCode =
+    originalError?.name === "AppError"
+      ? originalError.code
+      : error.extensions?.exception?.name === "AppError"
+        ? error.extensions.exception.code
+        : null;
+  // Erreurs 100% côté client (requête malformée, champ inexistant,
+  // introspection refusée) : le serveur les rejette proprement, inutile de
+  // les logger en erreur — debug suffit pour diagnostiquer au besoin.
+  const clientErrorCodes = [
+    "GRAPHQL_PARSE_FAILED",
+    "GRAPHQL_VALIDATION_FAILED",
+  ];
+  // Erreurs "métier" attendues (AppError levée volontairement : abonnement
+  // inactif, permission refusée, ressource introuvable, validation...) : ce ne
+  // sont PAS des bugs mais des refus normaux — log discret. Seuls
+  // INTERNAL_ERROR / DATABASE_ERROR (et les exceptions non-AppError) sont de
+  // vrais incidents à remonter.
+  const systemErrorCodes = ["INTERNAL_ERROR", "DATABASE_ERROR"];
+  const isExpectedBusinessError =
+    appErrorCode && !systemErrorCodes.includes(appErrorCode);
+  if (isExpectedBusinessError) {
+    logger.debug(
+      `[GraphQL] ${appErrorCode} sur ${Array.isArray(error.path) ? error.path.join(".") : error.path} — refus métier attendu: ${error.message}`,
+    );
+  } else if (clientErrorCodes.includes(error.extensions?.code)) {
+    logger.debug(`[GraphQL] ${error.extensions.code}: ${error.message}`);
+  } else {
+    console.error("❌ [GraphQL Error]:", error.message);
+    console.error("Path:", error.path);
+    console.error("Extensions:", error.extensions);
+  }
 
   // Cas 1: originalError est une AppError directe
   if (originalError?.name === "AppError") {

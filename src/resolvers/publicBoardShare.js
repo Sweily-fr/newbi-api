@@ -8,13 +8,19 @@ import { Board, Column, Task } from "../models/kanban.js";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
-import { getPubSub } from "../config/redis.js";
+import { getPubSub, cacheDel } from "../config/redis.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
   sendShareAccessApprovedEmail,
   sendShareAccessRejectedEmail,
 } from "../utils/mailer.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  maybeTriggerClaudeDev,
+  claudeDevApplies,
+  hasClaudeMention,
+  isClaudeCodingStartComment,
+} from "../services/claudeDevTriggerService.js";
 
 // Événements de subscription (même que kanban.js)
 const TASK_UPDATED = "TASK_UPDATED";
@@ -323,6 +329,8 @@ const resolvers = {
           dueDate: task.dueDate,
           columnId: task.columnId,
           position: task.position,
+          claudeWorkingSince: task.claudeWorkingSince,
+          claudeCodingSince: task.claudeCodingSince,
           checklist: task.checklist,
           images: (task.images || []).map((img) => ({
             id: img._id?.toString() || img.id,
@@ -1108,7 +1116,33 @@ const resolvers = {
           createdAt: new Date(),
         });
 
+        // Loader « Claude est en train de répondre » : la réponse 🤖 du bot
+        // (postée via ce lien public) efface le marqueur ; un commentaire
+        // humain externe mentionnant @claude le pose et déclenche l'agent.
+        const isBotComment = trimmedContent.startsWith("🤖");
+        const mentionsClaude =
+          !isBotComment &&
+          claudeDevApplies(task) &&
+          hasClaudeMention(trimmedContent);
+        if (isBotComment) {
+          task.claudeWorkingSince = null;
+        } else if (mentionsClaude) {
+          task.claudeWorkingSince = new Date();
+        }
+
+        // Badge « Claude est en train de coder » : posé par l'accusé de
+        // développement, effacé par le prochain commentaire 🤖.
+        if (isBotComment) {
+          task.claudeCodingSince = isClaudeCodingStartComment(trimmedContent)
+            ? new Date()
+            : null;
+        }
+
         await task.save();
+
+        if (mentionsClaude) {
+          maybeTriggerClaudeDev(task, "addExternalComment");
+        }
 
         // Incrémenter le compteur de commentaires
         await share.incrementCommentCount();
@@ -1136,6 +1170,8 @@ const resolvers = {
           boardId: enrichedTask.boardId,
           columnId: enrichedTask.columnId,
           position: enrichedTask.position,
+          claudeWorkingSince: enrichedTask.claudeWorkingSince,
+          claudeCodingSince: enrichedTask.claudeCodingSince,
           checklist: enrichedTask.checklist || [],
           assignedMembers: enrichedTask.assignedMembers || [],
           images: (enrichedTask.images || []).map((img) => ({
@@ -1209,6 +1245,15 @@ const resolvers = {
           },
           "Commentaire externe ajouté",
         );
+
+        // Invalider le cache Redis des tâches du board (le safePublish de
+        // kanban.js le fait pour les mutations internes, pas celui-ci) :
+        // sans ça, les refetch/polls du front peuvent recevoir jusqu'à 30s
+        // de données périmées après un commentaire externe (réponse du bot
+        // Claude incluse).
+        cacheDel(
+          `kanban:tasks:${share.workspaceId}:${share.boardId}`,
+        ).catch(() => {});
 
         logger.info(
           `✅ [PublicShare] Événement UPDATED publié pour tâche ${task._id}`,
@@ -1289,6 +1334,8 @@ const resolvers = {
             dueDate: task.dueDate,
             columnId: task.columnId,
             position: task.position,
+            claudeWorkingSince: task.claudeWorkingSince,
+            claudeCodingSince: task.claudeCodingSince,
             checklist: task.checklist,
             images: (task.images || []).map((img) => ({
               id: img._id?.toString() || img.id,
@@ -2098,6 +2145,8 @@ const resolvers = {
           dueDate: task.dueDate,
           columnId: task.columnId?.toString() || task.columnId,
           position: task.position,
+          claudeWorkingSince: task.claudeWorkingSince,
+          claudeCodingSince: task.claudeCodingSince,
           checklist: task.checklist || [],
           images: (task.images || []).map((img) => ({
             id: img._id?.toString() || img.id,

@@ -1,4 +1,3 @@
-import jwt from "jsonwebtoken";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
@@ -6,35 +5,15 @@ import { getJWKSValidator } from "../services/jwks-validator.js";
 import { betterAuthMiddleware } from "./better-auth.js";
 import { getActiveOrganization } from "./org-resolver.js";
 
-// Cache LRU en mémoire pour User.findById — évite une query DB par requête authentifiée
-const USER_CACHE_TTL = 30_000; // 30 secondes
-const USER_CACHE_MAX = 500;
-const _userCache = new Map();
+// Cache LRU user partagé avec le chemin cookie (voir user-cache.js) :
+// une invalidation couvre les deux chemins d'authentification.
+import {
+  getCachedUser,
+  setCachedUser,
+  invalidateUserCache,
+} from "./user-cache.js";
 
-function getCachedUser(userId) {
-  const entry = _userCache.get(userId);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > USER_CACHE_TTL) {
-    _userCache.delete(userId);
-    return null;
-  }
-  return entry.user;
-}
-
-function setCachedUser(userId, user) {
-  // Eviction LRU simple : supprimer la plus ancienne entrée si la taille max est atteinte
-  if (_userCache.size >= USER_CACHE_MAX) {
-    const oldestKey = _userCache.keys().next().value;
-    _userCache.delete(oldestKey);
-  }
-  _userCache.set(userId, { user, ts: Date.now() });
-}
-
-// Permet d'invalider le cache depuis l'extérieur (ex: après updateUser)
-export function invalidateUserCache(userId) {
-  if (userId) _userCache.delete(userId);
-  else _userCache.clear();
-}
+export { invalidateUserCache };
 
 /**
  * Middleware d'authentification unifié
@@ -71,13 +50,17 @@ const betterAuthJWTMiddleware = async (req) => {
       decoded = await jwksValidator.validateJWT(token, clientIP);
 
       if (!decoded) {
-        logger.warn("JWT validation failed - decoded is null");
-        return null;
+        // JWT expiré ou invalide : tenter le fallback cookie avant d'abandonner
+        // (cas attendu — le front rafraîchira son JWT et retentera).
+        logger.debug("JWT non valide — tentative fallback cookie session");
+        return await betterAuthMiddleware(req);
       }
       logger.debug(`JWT validé avec succès pour utilisateur: ${decoded.sub}`);
     } catch (jwtError) {
-      logger.warn("JWT invalide ou malformé:", jwtError.message);
-      return null;
+      logger.debug(
+        `JWT invalide ou malformé (${jwtError.message}) — tentative fallback cookie session`,
+      );
+      return await betterAuthMiddleware(req);
     }
 
     if (!decoded || !decoded.sub) {

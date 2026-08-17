@@ -40,6 +40,7 @@ type PurchaseOrder {
   appearance: Appearance
   shipping: Shipping
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   sourceQuote: Quote
@@ -96,6 +97,7 @@ input CreatePurchaseOrderInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   sourceQuoteId: ID
@@ -126,6 +128,7 @@ input UpdatePurchaseOrderInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
 }

@@ -40,12 +40,14 @@ class BankingCacheService {
       this.client = createClient({
         url: redisUrl,
         socket: {
+          // Ne JAMAIS abandonner : un restart Redis (ex: auto-refresh snap)
+          // peut durer plus longtemps que quelques tentatives, et un cache
+          // mort jusqu'au prochain reload PM2 coûte plus cher qu'un retry.
           reconnectStrategy: (retries) => {
-            if (retries > 5) {
+            if (retries % 10 === 0) {
               logger.warn(
-                "⚠️ [BankingCache] Redis non disponible, cache désactivé"
+                `⚠️ [BankingCache] Redis injoignable, nouvelle tentative (essai ${retries})`,
               );
-              return false; // Stop reconnecting
             }
             return Math.min(retries * 100, 3000);
           },
@@ -69,7 +71,7 @@ class BankingCacheService {
       logger.info("✅ [BankingCache] Redis initialisé pour le cache banking");
     } catch (error) {
       logger.warn(
-        `⚠️ [BankingCache] Redis non disponible: ${error.message} - Cache désactivé`
+        `⚠️ [BankingCache] Redis non disponible: ${error.message} - Cache désactivé`,
       );
       this.isConnected = false;
     }
@@ -175,7 +177,7 @@ class BankingCacheService {
       const key = this._generateKey("accounts", workspaceId);
       await this._set(key, accounts, this.TTL.accounts);
       logger.debug(
-        `💾 Cache SET: ${accounts.length} comptes pour workspace ${workspaceId}`
+        `💾 Cache SET: ${accounts.length} comptes pour workspace ${workspaceId}`,
       );
       return true;
     } catch (error) {
@@ -198,7 +200,7 @@ class BankingCacheService {
 
       if (cached) {
         logger.debug(
-          `🎯 Cache HIT: transactions pour workspace ${workspaceId}`
+          `🎯 Cache HIT: transactions pour workspace ${workspaceId}`,
         );
         return { data: cached, fromCache: true };
       }
@@ -220,7 +222,7 @@ class BankingCacheService {
       const key = this._generateKey("transactions", workspaceId, suffix);
       await this._set(key, transactions, this.TTL.transactions);
       logger.debug(
-        `💾 Cache SET: ${transactions.length} transactions pour workspace ${workspaceId}`
+        `💾 Cache SET: ${transactions.length} transactions pour workspace ${workspaceId}`,
       );
       return true;
     } catch (error) {
@@ -348,7 +350,7 @@ class BankingCacheService {
       }
 
       logger.info(
-        `🗑️ Cache invalidé: transactions pour workspace ${workspaceId}`
+        `🗑️ Cache invalidé: transactions pour workspace ${workspaceId}`,
       );
       return true;
     } catch (error) {

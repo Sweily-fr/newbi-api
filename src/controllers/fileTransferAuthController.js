@@ -1,11 +1,40 @@
+import crypto from "crypto";
 import FileTransfer from "../models/FileTransfer.js";
-import AccessGrant from "../models/AccessGrant.js";
 import DownloadEvent from "../models/DownloadEvent.js";
-import User from "../models/User.js";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import logger from "../utils/logger.js";
-import { sendDownloadNotificationEmail } from "../utils/mailer.js";
+import { registerTransferDownload } from "../services/transferDownloadService.js";
+
+// 🔐 Comparaison à temps constant du secret de partage (shareLink / accessKey).
+function timingSafeEq(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+/**
+ * Vérifie que la requête porte le vrai secret de partage du transfert et que
+ * celui-ci est encore accessible. Renvoie null si OK, sinon { status, error }.
+ */
+function checkTransferShareSecret(fileTransfer, req) {
+  const link = req.body?.link || req.query?.link;
+  const key = req.body?.key || req.query?.key;
+  if (
+    !timingSafeEq(String(link || ""), fileTransfer.shareLink || "") ||
+    !timingSafeEq(String(key || ""), fileTransfer.accessKey || "")
+  ) {
+    return { status: 403, error: "Lien ou clé d'accès invalide" };
+  }
+  if (
+    typeof fileTransfer.isAccessible === "function" &&
+    !fileTransfer.isAccessible()
+  ) {
+    return { status: 410, error: "Transfert expiré ou indisponible" };
+  }
+  return null;
+}
 
 // Configuration R2
 const s3Client = new S3Client({
@@ -20,15 +49,15 @@ const s3Client = new S3Client({
 // Autoriser le téléchargement après vérification du paiement
 export const authorizeDownload = async (req, res) => {
   try {
-    console.log("🔐 Route authorize appelée avec params:", req.params);
-    console.log("🔐 Route authorize appelée avec body:", req.body);
+    logger.debug("🔐 Route authorize appelée avec params:", req.params);
+    logger.debug("🔐 Route authorize appelée avec body:", req.body);
 
     const { transferId } = req.params;
     const { fileId, email } = req.body;
 
     // Vérifier que transferId est valide
     if (!transferId) {
-      console.log("❌ transferId manquant");
+      logger.debug("❌ transferId manquant");
       return res.status(400).json({
         success: false,
         error: "ID de transfert manquant",
@@ -47,17 +76,26 @@ export const authorizeDownload = async (req, res) => {
       buyerIp,
     });
 
-    console.log("🔍 Recherche du transfert avec ID:", transferId);
+    logger.debug("🔍 Recherche du transfert avec ID:", transferId);
 
     // Vérifier que le transfert existe
     const fileTransfer =
       await FileTransfer.findById(transferId).populate("files");
-    console.log("🔍 Transfert trouvé:", fileTransfer ? "OUI" : "NON");
+    logger.debug("🔍 Transfert trouvé:", fileTransfer ? "OUI" : "NON");
     if (!fileTransfer) {
       return res.status(404).json({
         success: false,
         error: "Transfert non trouvé",
       });
+    }
+
+    // 🔐 Exiger le secret de partage (shareLink + accessKey) + expiration :
+    // le seul transferId (ObjectId devinable) ne suffit plus.
+    const secretErr = checkTransferShareSecret(fileTransfer, req);
+    if (secretErr) {
+      return res
+        .status(secretErr.status)
+        .json({ success: false, error: secretErr.error });
     }
 
     // Si pas de paiement requis, autoriser directement
@@ -68,7 +106,7 @@ export const authorizeDownload = async (req, res) => {
         fileId,
         email,
         buyerIp,
-        buyerUserAgent
+        buyerUserAgent,
       );
     }
 
@@ -94,7 +132,7 @@ export const authorizeDownload = async (req, res) => {
     //   });
     // }
 
-    console.log("🔍 Statut du transfert:", {
+    logger.debug("🔍 Statut du transfert:", {
       isPaymentRequired: fileTransfer.isPaymentRequired,
       isPaid: fileTransfer.isPaid,
       paymentAmount: fileTransfer.paymentAmount,
@@ -102,7 +140,7 @@ export const authorizeDownload = async (req, res) => {
 
     // Vérifier seulement si le transfert est payé globalement
     if (fileTransfer.isPaymentRequired && !fileTransfer.isPaid) {
-      console.log("❌ Paiement requis mais non effectué");
+      logger.debug("❌ Paiement requis mais non effectué");
       return res.status(402).json({
         success: false,
         error: "Paiement requis",
@@ -112,11 +150,11 @@ export const authorizeDownload = async (req, res) => {
       });
     }
 
-    console.log("✅ Vérification paiement OK, détection activité suspecte...");
+    logger.debug("✅ Vérification paiement OK, détection activité suspecte...");
 
     // Détecter une activité suspecte
     const isSuspicious = await DownloadEvent.detectSuspiciousActivity(buyerIp);
-    console.log("🔍 Activité suspecte détectée:", isSuspicious);
+    logger.debug("🔍 Activité suspecte détectée:", isSuspicious);
 
     if (isSuspicious) {
       logger.warn("🚨 Activité suspecte détectée", { buyerIp, email });
@@ -126,7 +164,7 @@ export const authorizeDownload = async (req, res) => {
       });
     }
 
-    console.log("✅ Génération des URLs de téléchargement...");
+    logger.debug("✅ Génération des URLs de téléchargement...");
 
     // Générer les URLs de téléchargement (sans AccessGrant)
     return await generateDownloadUrls(
@@ -136,7 +174,7 @@ export const authorizeDownload = async (req, res) => {
       email,
       buyerIp,
       buyerUserAgent,
-      null
+      null,
     );
   } catch (error) {
     console.error("❌ ERREUR DÉTAILLÉE dans authorizeDownload:", error);
@@ -156,7 +194,7 @@ async function generateDownloadUrls(
   email,
   buyerIp,
   buyerUserAgent,
-  accessGrant = null
+  accessGrant = null,
 ) {
   try {
     // Vérifier la configuration R2/S3
@@ -169,7 +207,9 @@ async function generateDownloadUrls(
     }
     const downloadUrls = [];
     const filesToProcess = fileId
-      ? fileTransfer.files.filter((f) => f._id.toString() === fileId || f.fileId === fileId)
+      ? fileTransfer.files.filter(
+          (f) => f._id.toString() === fileId || f.fileId === fileId,
+        )
       : fileTransfer.files;
 
     if (filesToProcess.length === 0) {
@@ -187,12 +227,10 @@ async function generateDownloadUrls(
     for (const file of filesToProcess) {
       let downloadUrl;
 
-      // Générer l'URL selon le type de stockage
-      if (file.downloadUrl && !file.downloadUrl.includes("undefined")) {
-        // URL publique directe (temporaire)
-        downloadUrl = file.downloadUrl;
-      } else if (file.storageType === "r2" && file.r2Key) {
-        // URL signée R2 courte
+      // Générer l'URL selon le type de stockage. Toujours signer une URL
+      // fraîche pour R2 : l'URL stockée sur le fichier (file.downloadUrl)
+      // est signée 24 h à l'upload et expire donc avant le transfert.
+      if (file.storageType === "r2" && file.r2Key) {
         const command = new GetObjectCommand({
           Bucket: process.env.TRANSFER_BUCKET,
           Key: file.r2Key,
@@ -201,6 +239,9 @@ async function generateDownloadUrls(
         downloadUrl = await getSignedUrl(s3Client, command, {
           expiresIn: urlExpirationMinutes * 60, // en secondes
         });
+      } else if (file.downloadUrl && !file.downloadUrl.includes("undefined")) {
+        // URL publique directe (temporaire)
+        downloadUrl = file.downloadUrl;
       } else {
         logger.error("❌ Impossible de générer URL pour fichier", {
           fileId: file._id,
@@ -272,6 +313,20 @@ export const markDownloadCompleted = async (req, res) => {
       });
     }
 
+    // 🔐 Exiger le secret de partage du transfert lié (anti-spam de notifications
+    // et de faux compteurs à partir d'un downloadEventId deviné).
+    const relatedTransfer = await FileTransfer.findById(
+      downloadEvent.transferId,
+    );
+    if (relatedTransfer) {
+      const secretErr = checkTransferShareSecret(relatedTransfer, req);
+      if (secretErr) {
+        return res
+          .status(secretErr.status)
+          .json({ success: false, error: secretErr.error });
+      }
+    }
+
     await downloadEvent.markCompleted(duration);
 
     logger.info("✅ Téléchargement marqué comme terminé", {
@@ -281,48 +336,18 @@ export const markDownloadCompleted = async (req, res) => {
       isLastFile,
     });
 
-    // Incrémenter le compteur + notification SEULEMENT pour le dernier fichier
+    // Comptage + notification une seule fois par téléchargement : au dernier
+    // fichier, et dédoublonnés avec la route proxy déjà traversée pour chaque
+    // fichier de la même session.
     if (isLastFile) {
-      try {
-        const fileTransfer = await FileTransfer.findById(downloadEvent.transferId);
-        if (fileTransfer) {
-          // Incrémenter le compteur de téléchargements
-          await fileTransfer.incrementDownloadCount();
-          logger.info("📊 Compteur de téléchargements incrémenté (via lien public)", {
-            transferId: downloadEvent.transferId,
-            newCount: fileTransfer.downloadCount,
-          });
-
-          // Envoyer notification si activée
-          if (fileTransfer.notifyOnDownload) {
-            try {
-              const owner = await User.findById(fileTransfer.userId);
-              if (owner && owner.email) {
-                const transferUrl = `${process.env.FRONTEND_URL}/dashboard/outils/transferts-fichiers`;
-                const displayName =
-                  fileTransfer.files.length > 1
-                    ? `${fileTransfer.files.length} fichiers`
-                    : fileTransfer.files[0]?.originalName || downloadEvent.fileName;
-
-                await sendDownloadNotificationEmail(owner.email, {
-                  fileName: displayName,
-                  downloadDate: new Date(),
-                  filesCount: fileTransfer.files.length,
-                  shareLink: fileTransfer.shareLink,
-                  transferUrl,
-                });
-                logger.info("📧 Notification de téléchargement envoyée", {
-                  ownerEmail: owner.email,
-                  filesCount: fileTransfer.files.length,
-                });
-              }
-            } catch (emailError) {
-              logger.error("❌ Erreur envoi notification téléchargement:", emailError);
-            }
-          }
-        }
-      } catch (countError) {
-        logger.error("❌ Erreur incrémentation compteur:", countError);
+      const fileTransfer = await FileTransfer.findById(
+        downloadEvent.transferId,
+      );
+      if (fileTransfer) {
+        await registerTransferDownload(fileTransfer, {
+          req,
+          fileName: downloadEvent.fileName,
+        });
       }
     }
 
@@ -341,10 +366,25 @@ export const getDownloadStats = async (req, res) => {
   try {
     const { transferId } = req.params;
 
+    // 🔐 Ces stats contiennent des PII de destinataires (emails, IP) : exiger le
+    // secret de partage du transfert (pas seulement un transferId devinable).
+    const fileTransfer = await FileTransfer.findById(transferId);
+    if (!fileTransfer) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Transfert non trouvé" });
+    }
+    const secretErr = checkTransferShareSecret(fileTransfer, req);
+    if (secretErr) {
+      return res
+        .status(secretErr.status)
+        .json({ success: false, error: secretErr.error });
+    }
+
     const stats = await DownloadEvent.getDownloadStats(transferId);
     const recentDownloads = await DownloadEvent.getRecentDownloads(
       transferId,
-      20
+      20,
     );
 
     res.json({

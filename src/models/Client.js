@@ -1,13 +1,9 @@
 import mongoose from "mongoose";
 import addressSchema from "./schemas/address.js";
 import {
-  EMAIL_REGEX,
   PHONE_REGEX,
-  SIRET_REGEX,
-  VAT_EU_REGEX,
   NAME_REGEX,
   isValidEmail,
-  isValidName,
   isValidSIRET,
   isValidVATNumberEU,
   isInternationalEntity,

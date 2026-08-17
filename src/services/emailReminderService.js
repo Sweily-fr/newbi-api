@@ -55,7 +55,7 @@ class EmailReminderService {
         },
       };
 
-      logger.info("🔧 Configuration SMTP:", {
+      logger.debug("🔧 Configuration SMTP:", {
         host: config.host,
         port: config.port,
         secure: config.secure,

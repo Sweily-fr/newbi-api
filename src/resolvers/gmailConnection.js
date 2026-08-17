@@ -3,7 +3,27 @@ import ImportedInvoice from "../models/ImportedInvoice.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { scanGmailConnection } from "../services/gmail/GmailScannerService.js";
 import logger from "../utils/logger.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  withOrganization,
+  resolveWorkspaceId,
+} from "../middlewares/rbac.js";
+
+// 🔐 Les queries lisent un workspaceId client (utilisé notamment pour un
+// countDocuments sur ImportedInvoice non filtré par user). On valide
+// l'appartenance à l'org et on impose le workspace validé par RBAC.
+const scopedQuery = (fn) =>
+  withOrganization(async (parent, args, context, info) =>
+    fn(
+      parent,
+      {
+        ...args,
+        workspaceId: resolveWorkspaceId(args.workspaceId, context.workspaceId),
+      },
+      context,
+      info,
+    ),
+  );
 
 function formatConnection(c) {
   return {
@@ -23,7 +43,7 @@ function formatConnection(c) {
 
 const gmailConnectionResolvers = {
   Query: {
-    gmailConnection: isAuthenticated(async (_, { workspaceId }, { user }) => {
+    gmailConnection: scopedQuery(async (_, { workspaceId }, { user }) => {
       try {
         const connection = await GmailConnection.findOne({
           userId: user.id || user._id,
@@ -39,7 +59,7 @@ const gmailConnectionResolvers = {
       }
     }),
 
-    gmailSyncStats: isAuthenticated(async (_, { workspaceId }, { user }) => {
+    gmailSyncStats: scopedQuery(async (_, { workspaceId }, { user }) => {
       try {
         const connection = await GmailConnection.findOne({
           userId: user.id || user._id,

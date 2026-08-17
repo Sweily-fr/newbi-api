@@ -9,6 +9,9 @@ type Transaction {
   amount: Float!
   currency: String!
   description: String!
+  # Libellé brut de la banque (Bridge provider_description) : conserve les
+  # références de virement que description (clean_description) tronque.
+  reference: String
   category: String
   expenseCategory: ExpenseCategory
   pcgAccount: PCGAccount
@@ -23,9 +26,14 @@ type Transaction {
   metadata: JSON
   receiptRequired: Boolean
   receiptFiles: [ReceiptFile!]!
-  # Champs de rapprochement bancaire
-  linkedInvoiceId: ID
-  linkedInvoice: LinkedInvoiceSummary
+  # Champs de rapprochement bancaire (N↔N : une transaction peut couvrir
+  # plusieurs factures dans le cas d'un paiement groupé).
+  linkedInvoiceIds: [ID!]!
+  linkedInvoices: [LinkedInvoiceSummary!]!
+  # Factures d'achat liées (débits). Le justificatif est accessible via la
+  # facture liée (files), sans copie sur la transaction.
+  linkedPurchaseInvoiceIds: [ID!]!
+  linkedPurchaseInvoices: [LinkedPurchaseInvoiceSummary!]!
   linkedExpenseId: ID
   reconciliationStatus: ReconciliationStatusEnum
   reconciliationDate: DateTime
@@ -44,6 +52,26 @@ type LinkedInvoiceSummary {
   totalTTC: Float
   issueDate: DateTime
   dueDate: DateTime
+}
+
+"""
+Résumé d'une facture d'achat liée à une transaction. Inclut les fichiers pour
+accéder au justificatif via le lien (sans copie sur la transaction).
+"""
+type LinkedPurchaseInvoiceSummary {
+  id: ID!
+  invoiceNumber: String
+  supplierName: String
+  status: String
+  amountTTC: Float
+  issueDate: DateTime
+  files: [LinkedPurchaseInvoiceFile!]!
+}
+
+type LinkedPurchaseInvoiceFile {
+  url: String
+  filename: String
+  mimetype: String
 }
 
 enum ReconciliationStatusEnum {
@@ -87,6 +115,8 @@ enum ExpenseCategory {
   MAINTENANCE
   TRAINING
   SUBSCRIPTIONS
+  SALES
+  GRANTS
   OTHER
 }
 
@@ -136,19 +166,33 @@ type AccountBanking {
 Statut de synchronisation des transactions d'un compte
 """
 type TransactionSyncStatus {
-  """Date de la dernière synchronisation réussie"""
+  """
+  Date de la dernière synchronisation réussie
+  """
   lastSyncAt: DateTime
-  """Statut de la synchronisation: pending, in_progress, complete, partial, failed"""
+  """
+  Statut de la synchronisation: pending, in_progress, complete, partial, failed
+  """
   status: TransactionSyncStatusEnum!
-  """Nombre total de transactions synchronisées pour ce compte"""
+  """
+  Nombre total de transactions synchronisées pour ce compte
+  """
   totalTransactions: Int!
-  """Date de la transaction la plus ancienne récupérée"""
+  """
+  Date de la transaction la plus ancienne récupérée
+  """
   oldestTransactionDate: DateTime
-  """Date de la transaction la plus récente récupérée"""
+  """
+  Date de la transaction la plus récente récupérée
+  """
   newestTransactionDate: DateTime
-  """Message d'erreur si la dernière sync a échoué"""
+  """
+  Message d'erreur si la dernière sync a échoué
+  """
   lastError: String
-  """Historique des 10 dernières synchronisations"""
+  """
+  Historique des 10 dernières synchronisations
+  """
   history: [SyncHistoryEntry!]!
 }
 
@@ -371,6 +415,47 @@ input TransactionFiltersInput {
   sync: Boolean
 }
 
+# Onglets de la page Transactions (prédicats calculés côté serveur pour que
+# les compteurs restent exacts avec la pagination)
+enum TransactionListTab {
+  ALL
+  LAST_MONTH
+  TO_RECONCILE
+  MISSING_RECEIPT
+}
+
+# Source d'une transaction pour le filtre : saisie manuelle ou flux bancaire
+enum TransactionSourceFilter {
+  MANUAL
+  BANK
+}
+
+input TransactionPageFiltersInput {
+  search: String
+  accountId: String
+  source: TransactionSourceFilter
+  category: String
+  paymentMethod: String
+  minAmount: Float
+  maxAmount: Float
+  startDate: DateTime
+  endDate: DateTime
+}
+
+type TransactionTabCounts {
+  all: Int!
+  lastMonth: Int!
+  toReconcile: Int!
+  missingReceipt: Int!
+}
+
+type TransactionPage {
+  items: [Transaction!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+  tabCounts: TransactionTabCounts!
+}
+
 input MetricsFiltersInput {
   provider: BankingProvider
   startDate: DateTime!
@@ -382,13 +467,21 @@ Input pour la synchronisation complète des transactions
 Permet de spécifier une période et des options avancées
 """
 input SyncAllTransactionsInput {
-  """ID du compte spécifique à synchroniser (optionnel, tous les comptes si non spécifié)"""
+  """
+  ID du compte spécifique à synchroniser (optionnel, tous les comptes si non spécifié)
+  """
   accountId: String
-  """Date de début au format YYYY-MM-DD (défaut: 90 jours en arrière)"""
+  """
+  Date de début au format YYYY-MM-DD (défaut: 90 jours en arrière)
+  """
   since: String
-  """Date de fin au format YYYY-MM-DD (défaut: aujourd'hui)"""
+  """
+  Date de fin au format YYYY-MM-DD (défaut: aujourd'hui)
+  """
   until: String
-  """Force une synchronisation complète sans limite de pages"""
+  """
+  Force une synchronisation complète sans limite de pages
+  """
   fullSync: Boolean
 }
 
@@ -397,21 +490,37 @@ Résultat détaillé d'une synchronisation de transactions
 """
 type SyncAllTransactionsResult {
   success: Boolean!
-  """Nombre total de comptes traités"""
+  """
+  Nombre total de comptes traités
+  """
   accounts: Int!
-  """Nombre total de transactions synchronisées"""
+  """
+  Nombre total de transactions synchronisées
+  """
   transactions: Int!
-  """Nombre de comptes synchronisés avec succès"""
+  """
+  Nombre de comptes synchronisés avec succès
+  """
   successfulAccounts: Int!
-  """Nombre de comptes en échec"""
+  """
+  Nombre de comptes en échec
+  """
   failedAccounts: Int!
-  """Noms des comptes en échec"""
+  """
+  Noms des comptes en échec
+  """
   failedAccountNames: [String!]!
-  """Durée totale de la synchronisation en ms"""
+  """
+  Durée totale de la synchronisation en ms
+  """
   duration: Int
-  """Période de synchronisation utilisée"""
+  """
+  Période de synchronisation utilisée
+  """
   period: SyncPeriod
-  """Détails par compte"""
+  """
+  Détails par compte
+  """
   details: [AccountSyncDetail!]
 }
 
@@ -439,6 +548,15 @@ extend type Query {
     limit: Int
     offset: Int
   ): [Transaction!]!
+  # Liste paginée côté serveur pour la page Transactions : items de la page
+  # demandée + total + compteurs d'onglets calculés sur toute la base
+  transactionsPage(
+    workspaceId: ID!
+    filters: TransactionPageFiltersInput
+    tab: TransactionListTab = ALL
+    page: Int = 1
+    limit: Int = 20
+  ): TransactionPage!
   transaction(id: ID!): Transaction
   transactionByExternalId(
     provider: BankingProvider!
@@ -468,21 +586,6 @@ extend type Query {
     accountId: String!
     filters: TransactionFiltersInput
   ): [Transaction!]!
-}
-
-# Input pour créer une transaction manuelle
-input CreateTransactionInput {
-  workspaceId: ID!
-  amount: Float!
-  currency: String
-  description: String!
-  type: TransactionType!
-  date: DateTime
-  category: String
-  vendor: String
-  paymentMethod: String
-  notes: String
-  tags: [String!]
 }
 
 input UpdateTransactionInput {
@@ -534,19 +637,23 @@ type UploadTransactionReceiptResult {
 }
 
 extend type Mutation {
-  # Transactions manuelles
-  createTransaction(input: CreateTransactionInput!): Transaction!
+  # Les transactions proviennent du flux bancaire Bridge : seule la mise à jour
+  # (catégorie / description) est permise, pas de création ni de suppression.
   updateTransaction(id: ID!, input: UpdateTransactionInput!): Transaction!
-  deleteTransaction(id: ID!): Boolean!
-
-  # Mettre à jour le compte PCG d'une transaction
-  updateTransactionPCG(transactionId: ID!, pcgNumero: String!, workspaceId: ID!): Transaction!
 
   # Upload de justificatifs (multi-fichiers)
-  uploadTransactionReceipt(transactionId: ID!, workspaceId: ID!, files: [Upload!]!): UploadTransactionReceiptResult!
+  uploadTransactionReceipt(
+    transactionId: ID!
+    workspaceId: ID!
+    files: [Upload!]!
+  ): UploadTransactionReceiptResult!
 
   # Suppression d'un justificatif spécifique
-  removeTransactionReceiptFile(transactionId: ID!, workspaceId: ID!, fileId: ID!): UploadTransactionReceiptResult!
+  removeTransactionReceiptFile(
+    transactionId: ID!
+    workspaceId: ID!
+    fileId: ID!
+  ): UploadTransactionReceiptResult!
 
   # Paiements
   processPayment(input: ProcessPaymentInput!): PaymentResult!
@@ -566,7 +673,9 @@ extend type Mutation {
   Synchronisation complète des transactions avec pagination et période configurable.
   Récupère TOUTES les transactions disponibles pour la période spécifiée.
   """
-  syncAllTransactions(input: SyncAllTransactionsInput): SyncAllTransactionsResult!
+  syncAllTransactions(
+    input: SyncAllTransactionsInput
+  ): SyncAllTransactionsResult!
 }
 
 # Subscriptions

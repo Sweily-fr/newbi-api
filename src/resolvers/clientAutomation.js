@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import ClientAutomation from "../models/ClientAutomation.js";
 import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
@@ -432,7 +433,7 @@ const clientAutomationResolvers = {
             workspaceId,
           );
           if (result.applied > 0) {
-            console.log(
+            logger.debug(
               `Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`,
             );
           }

@@ -39,13 +39,33 @@ const SUPERPDP_OAUTH_CONFIG = {
   // car ils sont fournis par SuperPDP lors de la création de l'application
 };
 
+// Deep link de retour vers l'app mobile (scheme Expo newbi://). Quand
+// l'activation est initiée depuis le mobile (source=mobile stocké dans le state
+// OAuth), le callback y redirige au lieu de l'URL desktop, pour que
+// WebBrowser.openAuthSessionAsync() se referme et rende la main à l'app.
+const MOBILE_CALLBACK = "newbi://einvoicing-callback";
+
+/**
+ * Construit l'URL de redirection finale du callback OAuth selon l'origine.
+ * - mobile → deep link newbi://einvoicing-callback?<params>
+ * - web    → {FRONTEND_URL}/dashboard?openSettings=true&settingsTab=…&<params>
+ */
+function buildRedirectUrl(source, params) {
+  const qs = new URLSearchParams(params).toString();
+  if (source === "mobile") {
+    return `${MOBILE_CALLBACK}?${qs}`;
+  }
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  return `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&${qs}`;
+}
+
 /**
  * GET /api/superpdp/authorize
  * Génère l'URL d'autorisation OAuth2 pour rediriger l'utilisateur vers SuperPDP
  */
 router.get("/authorize", requireInternalSecret, async (req, res) => {
   try {
-    const { organizationId, login_hint: loginHint } = req.query;
+    const { organizationId, login_hint: loginHint, source } = req.query;
 
     if (!organizationId) {
       return res.status(400).json({
@@ -63,11 +83,13 @@ router.get("/authorize", requireInternalSecret, async (req, res) => {
       });
     }
 
-    // Générer un state unique (CSRF) et le stocker dans Redis (multi-instance safe)
+    // Générer un state unique (CSRF) et le stocker dans Redis (multi-instance safe).
+    // On mémorise l'origine (mobile/web) pour que le callback redirige vers le
+    // bon endroit (deep link app vs dashboard desktop).
     const state = crypto.randomBytes(32).toString("hex");
     await cacheSet(
       `${OAUTH_STATE_PREFIX}${state}`,
-      { organizationId },
+      { organizationId, source: source === "mobile" ? "mobile" : "web" },
       OAUTH_STATE_TTL,
     );
 
@@ -134,16 +156,25 @@ router.get("/authorize", requireInternalSecret, async (req, res) => {
  * Callback OAuth2 - reçoit le code d'autorisation et l'échange contre des tokens
  */
 router.get("/callback", async (req, res) => {
+  // Origine par défaut : web. Résolue depuis le state dès qu'on peut, pour que
+  // TOUTES les branches de redirection (erreur, succès, exception) pointent vers
+  // le bon endroit (deep link mobile vs dashboard desktop).
+  let source = "web";
   try {
     const { code, state, error, error_description } = req.query;
+
+    // Lire le state tôt (si présent) pour connaître l'origine mobile/web.
+    let stateData = null;
+    if (state) {
+      stateData = await cacheGet(`${OAUTH_STATE_PREFIX}${state}`);
+      if (stateData?.source) source = stateData.source;
+    }
 
     // Gérer les erreurs OAuth2
     if (error) {
       logger.error(`Erreur OAuth2 SuperPDP: ${error} - ${error_description}`);
-      // Rediriger vers le frontend avec l'erreur
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&error=${encodeURIComponent(error_description || error)}`,
+        buildRedirectUrl(source, { error: error_description || error }),
       );
     }
 
@@ -154,14 +185,12 @@ router.get("/callback", async (req, res) => {
       });
     }
 
-    // Vérifier le state (protection CSRF) depuis Redis
-    const stateData = await cacheGet(`${OAUTH_STATE_PREFIX}${state}`);
-
     if (!stateData) {
       logger.error("State OAuth2 invalide ou expiré");
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&error=${encodeURIComponent("Session expirée, veuillez réessayer")}`,
+        buildRedirectUrl(source, {
+          error: "Session expirée, veuillez réessayer",
+        }),
       );
     }
 
@@ -228,17 +257,16 @@ router.get("/callback", async (req, res) => {
       `✅ Facturation électronique activée pour l'organisation ${organizationId}`,
     );
 
-    // Rediriger vers le frontend avec succès
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    // Rediriger avec succès (deep link mobile ou dashboard desktop)
     res.redirect(
-      `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&success=true&message=${encodeURIComponent("Connexion à SuperPDP réussie !")}`,
+      buildRedirectUrl(source, {
+        success: "true",
+        message: "Connexion à SuperPDP réussie !",
+      }),
     );
   } catch (error) {
     logger.error("Erreur lors du callback OAuth2:", error);
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    res.redirect(
-      `${frontendUrl}/dashboard?openSettings=true&settingsTab=facturation-electronique&error=${encodeURIComponent(error.message)}`,
-    );
+    res.redirect(buildRedirectUrl(source, { error: error.message }));
   }
 });
 

@@ -289,6 +289,11 @@ const purchaseOrderSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Exonération de TVA globale (TVA à 0% par défaut sur tous les articles)
+    isVatExempt: {
+      type: Boolean,
+      default: false,
+    },
     clientPositionRight: {
       type: Boolean,
       default: false,

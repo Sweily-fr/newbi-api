@@ -8,10 +8,13 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
+import { buildPageQuery } from "../utils/transaction-page-query.js";
 import {
   getMappingTable,
   getAllPCGAccounts,
-  suggestPCGAccount,
   PCG,
 } from "../utils/pcg-mapping.js";
 
@@ -55,6 +58,47 @@ const bankingResolvers = {
           .limit(limit)
           .skip(offset)
           .lean();
+      },
+    ),
+
+    // Liste paginée serveur pour la page Transactions : la page demandée +
+    // totalCount + compteurs d'onglets calculés sur toute la base (les
+    // prédicats d'onglets sont dans utils/transaction-page-query.js)
+    transactionsPage: withWorkspace(
+      async (
+        parent,
+        { workspaceId, filters = {}, tab = "ALL", page = 1, limit = 20 },
+      ) => {
+        const now = new Date();
+        const safeLimit = Math.min(Math.max(limit, 1), 100);
+        const safePage = Math.max(page, 1);
+
+        const pageQuery = buildPageQuery(workspaceId, filters, tab, now);
+        const countFor = (tabName) =>
+          Transaction.countDocuments(
+            buildPageQuery(workspaceId, filters, tabName, now),
+          );
+
+        const [items, totalCount, all, lastMonth, toReconcile, missingReceipt] =
+          await Promise.all([
+            Transaction.find(pageQuery)
+              .sort({ date: -1, createdAt: -1 })
+              .skip((safePage - 1) * safeLimit)
+              .limit(safeLimit)
+              .lean(),
+            Transaction.countDocuments(pageQuery),
+            countFor("ALL"),
+            countFor("LAST_MONTH"),
+            countFor("TO_RECONCILE"),
+            countFor("MISSING_RECEIPT"),
+          ]);
+
+        return {
+          items,
+          totalCount,
+          hasNextPage: safePage * safeLimit < totalCount,
+          tabCounts: { all, lastMonth, toReconcile, missingReceipt },
+        };
       },
     ),
 
@@ -216,162 +260,65 @@ const bankingResolvers = {
   },
 
   Mutation: {
-    // Créer une transaction manuelle
-    createTransaction: withWorkspace(async (parent, { input }, { user }) => {
-      const { v4: uuidv4 } = await import("uuid");
-
-      // Normaliser la catégorie (fallback "OTHER" si non spécifiée)
-      const category = input.category || "OTHER";
-
-      // Mapper vers la catégorie large pour expenseCategory (enum validé)
-      const VALID_EXPENSE_CATEGORIES = [
-        "OFFICE_SUPPLIES",
-        "TRAVEL",
-        "MEALS",
-        "ACCOMMODATION",
-        "SOFTWARE",
-        "HARDWARE",
-        "SERVICES",
-        "MARKETING",
-        "TAXES",
-        "RENT",
-        "UTILITIES",
-        "SALARIES",
-        "INSURANCE",
-        "MAINTENANCE",
-        "TRAINING",
-        "SUBSCRIPTIONS",
-        "OTHER",
-      ];
-
-      let expenseCategory = category;
-      if (!VALID_EXPENSE_CATEGORIES.includes(category)) {
-        const subcategoryToExpenseCategory = {
-          bureau: "OFFICE_SUPPLIES",
-          materiel: "HARDWARE",
-          mobilier: "OFFICE_SUPPLIES",
-          equipement: "HARDWARE",
-          transport: "TRAVEL",
-          carburant: "TRAVEL",
-          parking: "TRAVEL",
-          peage: "TRAVEL",
-          taxi: "TRAVEL",
-          train: "TRAVEL",
-          avion: "TRAVEL",
-          location_vehicule: "TRAVEL",
-          repas: "MEALS",
-          restaurant: "MEALS",
-          hotel: "ACCOMMODATION",
-          marketing: "MARKETING",
-          publicite: "MARKETING",
-          communication: "MARKETING",
-          telephone: "UTILITIES",
-          internet: "UTILITIES",
-          site_web: "SOFTWARE",
-          reseaux_sociaux: "MARKETING",
-          formation: "TRAINING",
-          conference: "TRAINING",
-          livres: "TRAINING",
-          abonnement: "SUBSCRIPTIONS",
-          comptabilite: "SERVICES",
-          juridique: "SERVICES",
-          assurance: "INSURANCE",
-          banque: "SERVICES",
-          conseil: "SERVICES",
-          sous_traitance: "SERVICES",
-          loyer: "RENT",
-          electricite: "UTILITIES",
-          eau: "UTILITIES",
-          chauffage: "UTILITIES",
-          entretien: "MAINTENANCE",
-          logiciel: "SOFTWARE",
-          saas: "SOFTWARE",
-          licence: "SOFTWARE",
-          salaire: "SALARIES",
-          charges_sociales: "SALARIES",
-          recrutement: "SERVICES",
-          impots_taxes: "TAXES",
-          tva: "TAXES",
-          avoirs_remboursement: "OTHER",
-          cadeaux: "OTHER",
-          representation: "OTHER",
-          poste: "OFFICE_SUPPLIES",
-          impression: "OFFICE_SUPPLIES",
-          autre: "OTHER",
-          ventes: "SERVICES",
-          services: "SERVICES",
-          honoraires: "SERVICES",
-          commissions: "SERVICES",
-          consulting: "SERVICES",
-          abonnements_revenus: "SUBSCRIPTIONS",
-          licences_revenus: "SOFTWARE",
-          royalties: "OTHER",
-          loyers_revenus: "RENT",
-          interets: "OTHER",
-          dividendes: "OTHER",
-          plus_values: "OTHER",
-          subventions: "OTHER",
-          remboursements_revenus: "OTHER",
-          indemnites: "OTHER",
-          cadeaux_recus: "OTHER",
-          autre_revenu: "OTHER",
-        };
-        expenseCategory = subcategoryToExpenseCategory[category] || "OTHER";
-      }
-
-      // Pré-remplir le compte PCG via suggestion automatique
-      const pcgSuggestion = suggestPCGAccount({
-        amount: input.amount,
-        metadata: { bridgeCategoryId: input.bridgeCategoryId || null },
-        category_id: null,
-      });
-
-      const transaction = new Transaction({
-        externalId: `manual-${uuidv4()}`,
-        provider: "manual",
-        type: input.type?.toLowerCase() || "debit",
-        status: "completed",
-        amount: input.amount,
-        currency: input.currency || "EUR",
-        description: input.description,
-        workspaceId: input.workspaceId,
-        userId: user._id,
-        date: input.date || new Date(),
-        category: category, // Catégorie fine (ex: "parking")
-        expenseCategory: expenseCategory, // Catégorie large pour le reporting (ex: "TRAVEL")
-        pcgAccount: {
-          numero: pcgSuggestion.numero,
-          intitule: pcgSuggestion.intitule,
-          confidence: pcgSuggestion.confidence,
-          isManual: false,
-        },
-        metadata: {
-          vendor: input.vendor,
-          paymentMethod: input.paymentMethod || "BANK_TRANSFER",
-          notes: input.notes,
-          tags: input.tags,
-          source: "MANUAL",
-        },
-      });
-
-      await transaction.save();
-      return transaction;
-    }),
-
     // Mettre à jour une transaction
     updateTransaction: withWorkspace(
       async (parent, { id, input }, { user, workspaceId }) => {
         const updateData = {};
 
+        const existing = await Transaction.findOne({
+          _id: id,
+          workspaceId,
+        }).select("amount reconciliationStatus provider description");
+
+        if (!existing) {
+          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+
+        // Les transactions synchronisées (Bridge, etc.) reflètent le compte
+        // bancaire : montant, devise, date, type et statut ne sont pas
+        // modifiables. Seuls description, catégorie, PCG et metadata restent
+        // éditables. Les transactions manuelles gardent l'édition complète.
+        if (existing.provider !== "manual") {
+          delete input.amount;
+          delete input.currency;
+          delete input.date;
+          delete input.type;
+          delete input.status;
+        }
+
+        // Garde-fou d'intégrité : le montant d'une transaction rapprochée ne
+        // peut pas changer (la facture liée ne correspondrait plus). Délier
+        // d'abord, modifier ensuite.
+        if (
+          input.amount !== undefined &&
+          existing.reconciliationStatus === "matched" &&
+          existing.amount !== input.amount
+        ) {
+          throw new AppError(
+            "Impossible de modifier le montant d'une transaction rapprochée. Déliez d'abord la facture.",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
         if (input.amount !== undefined) updateData.amount = input.amount;
         if (input.currency) updateData.currency = input.currency;
-        if (input.description) updateData.description = input.description;
+        if (input.description) {
+          updateData.description = input.description;
+          // Marquer la description comme éditée manuellement pour que les
+          // syncs bancaires ne l'écrasent plus (même logique que categoryIsManual)
+          if (input.description !== existing.description) {
+            updateData.descriptionIsManual = true;
+          }
+        }
         if (input.type) updateData.type = input.type.toLowerCase();
         // Statut stocké en minuscules (cohérent avec createTransaction et l'enum du modèle)
         if (input.status) updateData.status = input.status.toLowerCase();
         if (input.date) updateData.date = input.date;
         if (input.category) {
           updateData.category = input.category; // Catégorie fine (ex: "parking", "carburant") ou large (ex: "TRAVEL")
+          // Marquer la catégorie comme choisie manuellement pour que les
+          // syncs bancaires ne l'écrasent plus (même logique que pcgAccount.isManual)
+          updateData.categoryIsManual = true;
 
           // Mapper vers la catégorie large pour expenseCategory (enum validé)
           const VALID_EXPENSE_CATEGORIES = [
@@ -500,62 +447,30 @@ const bankingResolvers = {
           throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
         }
 
-        return transaction;
-      },
-    ),
-
-    // Mettre à jour le compte PCG d'une transaction
-    updateTransactionPCG: withWorkspace(
-      async (parent, { transactionId, pcgNumero }, { user, workspaceId }) => {
-        const intitule = PCG[pcgNumero] || pcgNumero;
-        const transaction = await Transaction.findOneAndUpdate(
-          { _id: transactionId, workspaceId },
-          {
-            $set: {
-              "pcgAccount.numero": pcgNumero,
-              "pcgAccount.intitule": intitule,
-              "pcgAccount.confidence": "high",
-              "pcgAccount.isManual": true,
-              "pcgAccount.manuallySetAt": new Date(),
-              "pcgAccount.manuallySetBy": user._id,
-            },
-          },
-          { new: true },
-        );
-
-        if (!transaction) {
-          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
+        // Si la transaction est (devenue) une dépense et porte des
+        // justificatifs pas encore traités, créer les factures d'achat par
+        // OCR (fire-and-forget, non bloquant)
+        if (
+          transactionReceiptOcrService.isExpenseTransaction(transaction) &&
+          (transaction.receiptFiles || []).some(
+            (f) => f.url && !f.ocrProcessed && !f.purchaseInvoiceId,
+          )
+        ) {
+          transactionReceiptOcrService
+            .processReceiptsForTransaction({
+              transactionId: id,
+              workspaceId,
+              userId: user._id || user.id,
+            })
+            .catch((err) => {
+              console.error(
+                "⚠️ [UPDATE TRANSACTION] Erreur OCR facture d'achat (non bloquante):",
+                err.message,
+              );
+            });
         }
 
         return transaction;
-      },
-    ),
-
-    // Supprimer une transaction
-    // - Manuelle: suppression définitive (rien ne la recréera).
-    // - Bancaire: soft delete (deletedAt) pour éviter qu'elle réapparaisse
-    //   à la prochaine synchro Bridge/GoCardless.
-    deleteTransaction: withWorkspace(
-      async (parent, { id }, { user, workspaceId }) => {
-        const transaction = await Transaction.findOne({
-          _id: id,
-          workspaceId,
-          deletedAt: null,
-        });
-
-        if (!transaction) {
-          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
-        }
-
-        if (transaction.provider === "manual") {
-          await Transaction.deleteOne({ _id: transaction._id });
-        } else {
-          await Transaction.updateOne(
-            { _id: transaction._id },
-            { $set: { deletedAt: new Date() } },
-          );
-        }
-        return true;
       },
     ),
 
@@ -596,6 +511,8 @@ const bankingResolvers = {
           ];
 
           const uploadedReceiptFiles = [];
+          // Buffers conservés pour l'OCR (création auto de facture d'achat)
+          const receiptBuffersByKey = {};
 
           for (const fileInput of filesArray) {
             const { createReadStream, filename, mimetype } = await fileInput;
@@ -643,6 +560,7 @@ const bankingResolvers = {
               uploadedAt: new Date(),
               uploadedBy: String(user._id || user.id),
             });
+            receiptBuffersByKey[uploadResult.key] = fileBuffer;
           }
 
           const updatedTransaction = await Transaction.findOneAndUpdate(
@@ -673,6 +591,22 @@ const bankingResolvers = {
             .catch((err) => {
               console.error(
                 "⚠️ [UPLOAD RECEIPT] Erreur automation (non bloquante):",
+                err.message,
+              );
+            });
+
+          // Création automatique de factures d'achat par OCR pour les
+          // transactions de type dépense (fire-and-forget, non bloquant)
+          transactionReceiptOcrService
+            .processReceiptsForTransaction({
+              transactionId,
+              workspaceId,
+              userId: user._id || user.id,
+              buffersByKey: receiptBuffersByKey,
+            })
+            .catch((err) => {
+              console.error(
+                "⚠️ [UPLOAD RECEIPT] Erreur OCR facture d'achat (non bloquante):",
                 err.message,
               );
             });
@@ -729,10 +663,58 @@ const bankingResolvers = {
             };
           }
 
-          // Best-effort suppression R2
-          if (fileToRemove.key) {
+          // Si ce justificatif a généré une facture d'achat par OCR, annuler
+          // proprement : si la facture est restée telle quelle (source OCR,
+          // uniquement ce fichier, uniquement cette transaction), on la
+          // supprime avec son lien de rapprochement. Sinon (facture enrichie
+          // ou liée ailleurs), on la conserve et on garde l'objet R2 qu'elle
+          // référence encore.
+          let deleteR2Object = true;
+          if (fileToRemove.purchaseInvoiceId) {
+            const linkedInvoice = await PurchaseInvoice.findOne({
+              _id: fileToRemove.purchaseInvoiceId,
+              workspaceId,
+            });
+            if (linkedInvoice) {
+              const onlyThisTransaction =
+                (linkedInvoice.linkedTransactionIds || []).length <= 1 &&
+                (linkedInvoice.linkedTransactionIds || []).every(
+                  (txId) => String(txId) === String(transactionId),
+                );
+              const onlyThisFile =
+                (linkedInvoice.files || []).length <= 1 &&
+                (linkedInvoice.files || []).every(
+                  (f) => f.path === fileToRemove.key,
+                );
+              if (
+                linkedInvoice.source === "OCR" &&
+                onlyThisTransaction &&
+                onlyThisFile
+              ) {
+                await detachPurchaseInvoicesFromTransactions(
+                  [linkedInvoice._id],
+                  workspaceId,
+                );
+                await PurchaseInvoice.deleteOne({ _id: linkedInvoice._id });
+              } else {
+                deleteR2Object = false;
+              }
+            }
+          }
+
+          // Best-effort suppression R2 (bucket résolu depuis l'URL : les
+          // justificatifs vivent dans le bucket receipts, pas le bucket par
+          // défaut)
+          if (deleteR2Object && (fileToRemove.url || fileToRemove.key)) {
             try {
-              await cloudflareService.deleteImage(fileToRemove.key);
+              if (fileToRemove.url) {
+                await cloudflareService.deleteImageByUrl(fileToRemove.url);
+              } else {
+                await cloudflareService.deleteImage(
+                  fileToRemove.key,
+                  cloudflareService.receiptsBucketName,
+                );
+              }
             } catch (err) {
               console.warn(
                 "⚠️ [REMOVE RECEIPT] Suppression R2 échouée:",
@@ -1087,6 +1069,10 @@ const bankingResolvers = {
     amount: (parent) => parent.amount ?? 0,
     currency: (parent) => parent.currency || "EUR",
     description: (parent) => parent.description || "",
+    // Libellé brut : fallback sur metadata pour les transactions synchronisées
+    // avant l'ajout du champ reference (26/06/2026) et non encore backfillées.
+    reference: (parent) =>
+      parent.reference || parent.metadata?.bridgeProviderDescription || null,
     // receiptFiles : fallback sur le legacy receiptFile (objet) si pas encore migré
     // Génère un id synthétique stable si _id manque (subdocs migrés via raw driver)
     receiptFiles: (parent) => {
@@ -1130,22 +1116,23 @@ const bankingResolvers = {
         provider: parent.fees.provider || null,
       };
     },
-    // Champs de rapprochement
-    linkedInvoiceId: (parent) => parent.linkedInvoiceId?.toString() || null,
+    // Champs de rapprochement (N↔N)
+    linkedInvoiceIds: (parent) =>
+      (parent.linkedInvoiceIds || []).map((id) => id.toString()),
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
     reconciliationStatus: (parent) => {
       const status = parent.reconciliationStatus || "unmatched";
       return status.toUpperCase();
     },
     reconciliationDate: (parent) => parent.reconciliationDate || null,
-    // Resolver pour la facture liée (charge les détails de la facture)
-    linkedInvoice: async (parent) => {
-      if (!parent.linkedInvoiceId) return null;
+    // Resolver pour les factures liées (charge les détails).
+    linkedInvoices: async (parent) => {
+      const ids = parent.linkedInvoiceIds || [];
+      if (ids.length === 0) return [];
       try {
         const Invoice = (await import("../models/Invoice.js")).default;
-        const invoice = await Invoice.findById(parent.linkedInvoiceId).lean();
-        if (!invoice) return null;
-        return {
+        const invoices = await Invoice.find({ _id: { $in: ids } }).lean();
+        return invoices.map((invoice) => ({
           id: invoice._id.toString(),
           number: invoice.number,
           status: invoice.status,
@@ -1156,10 +1143,43 @@ const bankingResolvers = {
           totalTTC: invoice.finalTotalTTC || invoice.totalTTC || 0,
           issueDate: invoice.issueDate,
           dueDate: invoice.dueDate,
-        };
+        }));
       } catch (error) {
-        console.error("[BANKING] Erreur chargement facture liée:", error);
-        return null;
+        console.error("[BANKING] Erreur chargement factures liées:", error);
+        return [];
+      }
+    },
+    // Factures d'achat liées (lien par référence, justificatif inclus).
+    linkedPurchaseInvoiceIds: (parent) =>
+      (parent.linkedPurchaseInvoiceIds || []).map((id) => id.toString()),
+    linkedPurchaseInvoices: async (parent) => {
+      const ids = parent.linkedPurchaseInvoiceIds || [];
+      if (ids.length === 0) return [];
+      try {
+        const PurchaseInvoice = (await import("../models/PurchaseInvoice.js"))
+          .default;
+        const invoices = await PurchaseInvoice.find({
+          _id: { $in: ids },
+        }).lean();
+        return invoices.map((inv) => ({
+          id: inv._id.toString(),
+          invoiceNumber: inv.invoiceNumber,
+          supplierName: inv.supplierName,
+          status: inv.status,
+          amountTTC: inv.amountTTC,
+          issueDate: inv.issueDate,
+          files: (inv.files || []).map((f) => ({
+            url: f.url,
+            filename: f.originalFilename || f.filename,
+            mimetype: f.mimetype,
+          })),
+        }));
+      } catch (error) {
+        console.error(
+          "[BANKING] Erreur chargement factures d'achat liées:",
+          error,
+        );
+        return [];
       }
     },
     userId: async (transaction) => {
@@ -1281,7 +1301,7 @@ const bankingResolvers = {
   },
 };
 
-// ✅ Phase A.1 — Subscription check sur toutes les mutations banking (fail-closed: coûts Bridge/GoCardless)
+// ✅ Phase A.1 — Subscription check sur toutes les mutations banking (fail-closed: coûts Bridge)
 const originalBankingMutations = bankingResolvers.Mutation;
 bankingResolvers.Mutation = Object.fromEntries(
   Object.entries(originalBankingMutations).map(([name, fn]) => [

@@ -1,0 +1,4 @@
+# Configuration gitleaks (scan de secrets du hook pre-commit)
+# Règles par défaut de gitleaks.
+[extend]
+useDefault = true

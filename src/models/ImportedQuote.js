@@ -191,7 +191,8 @@ importedQuoteSchema.index({ workspaceId: 1, "vendor.name": 1 });
 importedQuoteSchema.index({ workspaceId: 1, quoteDate: -1 });
 importedQuoteSchema.index({ workspaceId: 1, originalQuoteNumber: 1 });
 
-importedQuoteSchema.methods.validate = function () {
+// Méthode métier — ne pas écraser le validate() natif de Mongoose
+importedQuoteSchema.methods.markValidated = function () {
   this.status = "VALIDATED";
   return this.save();
 };

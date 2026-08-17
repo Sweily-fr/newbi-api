@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour l'OCR (Hybrid: Claude Vision + fallbacks)
  */
@@ -6,7 +7,6 @@ import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import mongoose from "mongoose";
-import mistralOcrService from "../services/mistralOcrService.js";
 import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -87,7 +87,7 @@ const ocrResolvers = {
           // Vérifier le cache Redis
           const cached = await ocrCacheService.get(contentHash);
           if (cached) {
-            console.log(`💾 OCR Cache HIT pour ${filename} — retour immédiat`);
+            logger.debug(`💾 OCR Cache HIT pour ${filename} — retour immédiat`);
             return cached;
           }
 
@@ -101,7 +101,7 @@ const ocrResolvers = {
 
           // Tentative 1: OCR direct via Claude Vision
           try {
-            console.log(`🔍 OCR direct (processFromBase64) pour ${filename}`);
+            logger.debug(`🔍 OCR direct (processFromBase64) pour ${filename}`);
             rawResult = await claudeVisionOcrService.processFromBase64(
               base64Data,
               mimetype,
@@ -127,7 +127,7 @@ const ocrResolvers = {
           } catch (claudeError) {
             // Tentative 2: Fallback — upload Cloudflare + OCR hybride (Mistral, etc.)
             console.warn(`⚠️ Claude Vision échoué: ${claudeError.message}`);
-            console.log(
+            logger.debug(
               `🔄 Fallback: upload Cloudflare + OCR hybride pour ${filename}`,
             );
 
@@ -148,7 +148,7 @@ const ocrResolvers = {
                 throw new Error("Échec upload Cloudflare");
               }
 
-              console.log(`☁️ Upload Cloudflare OK: ${uploadResult.url}`);
+              logger.debug(`☁️ Upload Cloudflare OK: ${uploadResult.url}`);
 
               // OCR via service hybride (Mistral, Google, etc.)
               const hybridResult =
@@ -171,7 +171,7 @@ const ocrResolvers = {
                   document_analysis: hybridResult.document_analysis,
                 };
               } else {
-                console.log("🤖 Analyse intelligente Mistral (fallback)...");
+                logger.debug("🤖 Analyse intelligente Mistral (fallback)...");
                 financialAnalysis =
                   await mistralIntelligentAnalysisService.analyzeDocument(
                     hybridResult,
@@ -193,7 +193,7 @@ const ocrResolvers = {
               };
               usedFallback = true;
 
-              console.log(`✅ Fallback OCR réussi via ${rawResult.provider}`);
+              logger.debug(`✅ Fallback OCR réussi via ${rawResult.provider}`);
             } catch (fallbackError) {
               console.error(`❌ Fallback OCR échoué: ${fallbackError.message}`);
               throw createInternalServerError(
@@ -205,7 +205,36 @@ const ocrResolvers = {
           // Générer un ID de document
           const documentId = new mongoose.Types.ObjectId();
 
-          // Construire la réponse
+          // Upload Cloudflare AWAITÉ (plus fire & forget) — le client mobile
+          // a besoin du documentUrl dans la réponse pour attacher le fichier
+          // en tant que justificatif de la facture d'achat créée juste après.
+          // Avant : documentUrl:null → le mobile ne pouvait pas appeler
+          // addFileToPurchaseInvoice → aucun justificatif visible sur la
+          // facture d'achat créée via OCR.
+          let documentUrl = null;
+          let cloudflareKey = null;
+          if (!usedFallback) {
+            try {
+              const uploadResult = await cloudflareService.uploadImage(
+                fileBuffer,
+                filename,
+                user.id,
+                "ocr",
+                contextOrgId,
+              );
+              documentUrl = uploadResult.url;
+              cloudflareKey = uploadResult.key;
+            } catch (uploadErr) {
+              console.error(
+                "❌ Erreur upload Cloudflare (OCR) :",
+                uploadErr.message,
+              );
+              // On continue quand même — l'OCR a réussi, on renvoie les data
+              // extraites. Le justificatif ne sera juste pas attaché.
+            }
+          }
+
+          // Construire la réponse avec la vraie URL Cloudflare.
           const response = {
             success: true,
             extractedText: rawResult.extractedText,
@@ -220,33 +249,17 @@ const ocrResolvers = {
               mimeType: mimetype,
               fileSize: fileBuffer.length,
               processedAt: new Date().toISOString(),
-              documentUrl: null,
-              cloudflareKey: null,
+              documentUrl,
+              cloudflareKey,
               documentId: documentId.toString(),
             },
             message: `Document traité avec succès via ${rawResult.provider || "claude-vision"}`,
           };
 
-          // Fire & forget: upload Cloudflare (si pas déjà fait) + save MongoDB + cache Redis
+          // Sauvegarde MongoDB + cache Redis en fire & forget — pas critique
+          // pour le client (les data OCR sont déjà dans la réponse).
           (async () => {
             try {
-              let documentUrl = null;
-              let cloudflareKey = null;
-
-              if (!usedFallback) {
-                // Upload vers Cloudflare uniquement si pas déjà fait par le fallback
-                const uploadResult = await cloudflareService.uploadImage(
-                  fileBuffer,
-                  filename,
-                  user.id,
-                  "ocr",
-                  contextOrgId,
-                );
-                documentUrl = uploadResult.url;
-                cloudflareKey = uploadResult.key;
-              }
-
-              // Sauvegarder en MongoDB
               const ocrDocument = new OcrDocument({
                 _id: documentId,
                 userId: user.id,
@@ -271,17 +284,14 @@ const ocrResolvers = {
               });
 
               await ocrDocument.save();
-              console.log(
+              logger.debug(
                 `✅ OCR document sauvegardé (background): ${documentId}`,
               );
 
               // Cache Redis
               await ocrCacheService.set(contentHash, response);
             } catch (err) {
-              console.error(
-                "❌ Erreur background (upload/save/cache):",
-                err.message,
-              );
+              console.error("❌ Erreur background (save/cache):", err.message);
             }
           })();
 
@@ -360,7 +370,7 @@ const ocrResolvers = {
           const cached = await ocrCacheService.get(urlHash);
 
           if (cached) {
-            console.log(`💾 OCR Cache HIT pour ${fileName} — retour immédiat`);
+            logger.debug(`💾 OCR Cache HIT pour ${fileName} — retour immédiat`);
             return cached;
           }
 
@@ -385,7 +395,7 @@ const ocrResolvers = {
 
           if (ocrResult.provider === "claude-vision") {
             // Claude Vision fournit déjà transaction_data, extracted_fields, document_analysis
-            console.log(
+            logger.debug(
               "⚡ Claude Vision: données structurées disponibles, skip analyse Mistral",
             );
             financialAnalysis = {
@@ -395,14 +405,14 @@ const ocrResolvers = {
             };
           } else {
             // Fallback: analyse avec Mistral AI
-            console.log(
+            logger.debug(
               "🤖 Démarrage de l'analyse intelligente avec Mistral AI...",
             );
             financialAnalysis =
               await mistralIntelligentAnalysisService.analyzeDocument(
                 ocrResult,
               );
-            console.log(
+            logger.debug(
               "✅ Analyse intelligente terminée:",
               financialAnalysis.transaction_data?.vendor_name,
             );

@@ -1,7 +1,55 @@
 import Quote from "../models/Quote.js";
+import SignatureRequest from "../models/SignatureRequest.js";
 import logger from "../utils/logger.js";
 import documentAutomationService from "./documentAutomationService.js";
 import { syncQuoteIfNeeded } from "./pennylaneSyncHelper.js";
+import esignatureService from "./esignatureService.js";
+import { publishSignatureStatus } from "./esignaturePubsub.js";
+
+const ACTIVE_SIGNATURE_STATUSES = [
+  "PENDING",
+  "WAIT_VALIDATION",
+  "WAIT_SIGN",
+  "WAIT_SIGNER",
+];
+
+/**
+ * Annule les demandes de signature encore actives d'un devis.
+ *
+ * Appelé quand le devis est accepté ou refusé manuellement : la décision est
+ * prise, le client ne doit plus pouvoir signer. La demande est supprimée côté
+ * provider (best effort) puis marquée CANCELLED en base.
+ *
+ * @param {string|object} quoteId - Identifiant du devis
+ * @returns {Promise<number>} nombre de demandes annulées
+ */
+export async function cancelActiveQuoteSignatures(quoteId) {
+  const activeRequests = await SignatureRequest.find({
+    documentType: "quote",
+    documentId: quoteId,
+    status: { $in: ACTIVE_SIGNATURE_STATUSES },
+  });
+
+  for (const request of activeRequests) {
+    if (request.externalSignatureId) {
+      try {
+        await esignatureService.deleteSignature(request.externalSignatureId);
+      } catch (err) {
+        logger.warn(
+          `Annulation signature ${request._id}: suppression externe impossible: ${err.message}`,
+        );
+      }
+    }
+    request.status = "CANCELLED";
+    await request.save();
+    publishSignatureStatus(request);
+    logger.info(
+      `Signature ${request._id} annulée automatiquement (décision manuelle sur le devis ${quoteId})`,
+    );
+  }
+
+  return activeRequests.length;
+}
 
 /**
  * Accepte automatiquement un devis lorsque sa demande de signature passe à DONE.
@@ -79,4 +127,4 @@ export async function acceptQuoteOnSignature(signatureRequest) {
   return true;
 }
 
-export default { acceptQuoteOnSignature };
+export default { acceptQuoteOnSignature, cancelActiveQuoteSignatures };

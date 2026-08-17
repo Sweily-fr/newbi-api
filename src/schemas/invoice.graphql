@@ -10,6 +10,8 @@ type Invoice {
   isDeposit: Boolean!
   invoiceType: String
   situationNumber: Int
+  progressMode: String
+  globalProgressPercentage: Float
   situationReference: String
   client: EmbeddedClient!
   companyInfo: Company!
@@ -39,13 +41,19 @@ type Invoice {
   appearance: Appearance
   shipping: Shipping
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   createdBy: User!
   stripeInvoiceId: String
   # Lien de paiement en ligne Stripe Connect (null si Stripe non connecté ou facture non payable)
   paymentLink: String
-  linkedTransactionId: ID
+  # Transactions bancaires liées (rapprochement N↔N). Une facture peut être
+  # soldée par plusieurs paiements (échelonnement, acompte + solde).
+  linkedTransactionIds: [ID!]!
+  # Résolues à la volée depuis linkedTransactionIds — évite un round-trip
+  # côté client pour afficher nom / montant / date sur la vue détail facture.
+  linkedTransactions: [Transaction!]!
   # E-Invoicing SuperPDP
   superPdpInvoiceId: String
   eInvoiceStatus: String
@@ -67,6 +75,12 @@ type Invoice {
   eReportingError: String
   # Email tracking
   emailTracking: EmailTracking
+  # Devis source — lien direct (sourceQuote) avec fallback inverse via
+  # Quote.linkedInvoices pour les factures liées avant l'ajout du champ
+  sourceQuote: Quote
+  # Bon de commande source — résolu à l'inverse via PurchaseOrder.linkedInvoices
+  # (le modèle Invoice ne stocke pas de référence vers le BC)
+  sourcePurchaseOrder: PurchaseOrder
   createdAt: String!
   updatedAt: String!
 }
@@ -137,6 +151,8 @@ input CreateInvoiceInput {
   isDeposit: Boolean
   invoiceType: String
   situationNumber: Int
+  progressMode: String
+  globalProgressPercentage: Float
   client: ClientInput!
   companyInfo: CompanyInput
   items: [ItemInput!]!
@@ -163,6 +179,7 @@ input CreateInvoiceInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
   sourcePurchaseOrderId: ID
@@ -173,6 +190,8 @@ input UpdateInvoiceInput {
   isDeposit: Boolean
   invoiceType: String
   situationNumber: Int
+  progressMode: String
+  globalProgressPercentage: Float
   client: ClientInput
   companyInfo: CompanyInput
   items: [ItemInput!]
@@ -199,6 +218,7 @@ input UpdateInvoiceInput {
   appearance: AppearanceInput
   shipping: ShippingInput
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   clientPositionRight: Boolean
   operationType: String
 }

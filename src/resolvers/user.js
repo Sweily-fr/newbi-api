@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import mongoose from "mongoose";
@@ -14,7 +15,6 @@ import {
 } from "../utils/mailer.js";
 import { saveBase64Image, deleteFile } from "../utils/fileUpload.js";
 import cloudflareService from "../services/cloudflareService.js";
-import path from "path";
 import CryptoJS from "crypto-js";
 import {
   AppError,
@@ -667,7 +667,7 @@ const userResolvers = {
             // Continuer même si la suppression échoue
           }
         } else {
-          console.log("Aucun logo à supprimer pour l'utilisateur:", user.id);
+          logger.debug("Aucun logo à supprimer pour l'utilisateur:", user.id);
         }
 
         // Mettre à jour l'utilisateur
@@ -706,7 +706,7 @@ const userResolvers = {
             // Continuer même si la suppression échoue
           }
         } else {
-          console.log(
+          logger.debug(
             "Aucune photo de profil à supprimer pour l'utilisateur:",
             user.id,
           );
@@ -969,7 +969,7 @@ const userResolvers = {
 
         await user.save();
 
-        console.log(
+        logger.debug(
           `✅ Utilisateur ${email} mis à jour : isPartner=${isPartner}`,
         );
 
@@ -1028,7 +1028,7 @@ const userResolvers = {
 
               if (fileKey) {
                 await cloudflareService.deleteImage(fileKey, bucketName);
-                console.log("✅ Logo supprimé de Cloudflare R2:", fileKey);
+                logger.debug("✅ Logo supprimé de Cloudflare R2:", fileKey);
               }
             } catch (err) {
               console.error(

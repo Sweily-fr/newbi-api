@@ -1,3 +1,6 @@
+import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
+import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import mongoose from "mongoose";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import {
@@ -32,7 +35,50 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+
+/**
+ * Libère un numéro définitif occupé par un brouillon (même mécanique que
+ * createInvoice / createQuote).
+ *
+ * L'index unique du modèle (prefix + number + workspaceId + issueYear) couvre
+ * TOUS les statuts, alors que la numérotation (nextPurchaseOrderNumber,
+ * validateNumberSequence) ignore les brouillons. Un brouillon peut donc occuper
+ * le numéro visé sans être visible : cas typique, un BC finalisé repassé en
+ * brouillon conserve son numéro. Sans ce renommage préalable, le save part en
+ * E11000 et l'utilisateur reste bloqué, puisque le seul numéro accepté par la
+ * séquence est justement celui du brouillon.
+ *
+ * Suffixe court (stamp 6 chiffres + index) : le numéro doit rester ≤ 20
+ * caractères (validateur du modèle), sinon le brouillon renommé devient
+ * inéditable au prochain save.
+ */
+const renameConflictingDrafts = async (
+  { prefix, number, workspaceId, excludeId = null },
+  options = {},
+) => {
+  const query = { prefix, number, status: "DRAFT", workspaceId };
+  if (excludeId) query._id = { $ne: excludeId };
+
+  const conflictingDrafts = await PurchaseOrder.find(
+    query,
+    { _id: 1 },
+    options,
+  ).lean();
+  if (conflictingDrafts.length === 0) return;
+
+  const renameStamp = Date.now().toString().slice(-6);
+  await PurchaseOrder.bulkWrite(
+    conflictingDrafts.map((draft, i) => ({
+      updateOne: {
+        filter: { _id: draft._id },
+        update: { $set: { number: `${number}-${renameStamp}${i}` } },
+      },
+    })),
+    options,
+  );
+};
 
 // Fonction utilitaire pour calculer les totaux
 const calculatePurchaseOrderTotals = (
@@ -150,11 +196,15 @@ const purchaseOrderResolvers = {
         };
       }
     },
-    client: async (po) => {
+    client: async (po, _args, context) => {
       // Pour les brouillons, résoudre depuis la collection Client (données à jour)
       if ((!po.status || po.status === "DRAFT") && po.client?.id) {
         try {
-          const freshClient = await Client.findById(po.client.id);
+          const freshClient = await loadWorkspaceClient(
+            context,
+            po.client.id,
+            po.workspaceId,
+          );
           if (freshClient) {
             return {
               id: freshClient._id.toString(),
@@ -188,11 +238,17 @@ const purchaseOrderResolvers = {
     },
     sourceQuote: async (po) => {
       if (!po.sourceQuoteId) return null;
-      return await Quote.findById(po.sourceQuoteId);
+      return await Quote.findOne({
+        _id: po.sourceQuoteId,
+        workspaceId: po.workspaceId,
+      });
     },
     linkedInvoices: async (po) => {
       if (po.linkedInvoices && po.linkedInvoices.length > 0) {
-        return await Invoice.find({ _id: { $in: po.linkedInvoices } });
+        return await Invoice.find({
+          _id: { $in: po.linkedInvoices },
+          workspaceId: po.workspaceId,
+        });
       }
       return [];
     },
@@ -264,7 +320,7 @@ const purchaseOrderResolvers = {
         if (status) query.status = status;
 
         if (search) {
-          const searchRegex = new RegExp(search, "i");
+          const searchRegex = new RegExp(escapeRegex(search), "i");
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },
@@ -483,7 +539,8 @@ const purchaseOrderResolvers = {
           // Récupérer les informations de l'organisation (avant la numérotation :
           // le flag "séquence continue" en dépend)
           const organization = await getOrganizationInfo(workspaceId);
-          const autoNumbering = organization?.purchaseOrderAutoNumbering === true;
+          const autoNumbering =
+            organization?.purchaseOrderAutoNumbering === true;
 
           // === Génération du numéro (style Pennylane) ===
           // - Aucun BC finalisé → numéro manuel libre accepté
@@ -585,6 +642,13 @@ const purchaseOrderResolvers = {
           const PO_MAX_SAVE_RETRIES = 5;
           let purchaseOrder;
           for (let attempt = 1; attempt <= PO_MAX_SAVE_RETRIES; attempt++) {
+            // Les brouillons portent un numéro DRAFT-<timestamp> qui n'entre
+            // en conflit avec rien : seuls les numéros définitifs sont à
+            // libérer.
+            if (!isDraft) {
+              await renameConflictingDrafts({ prefix, number, workspaceId });
+            }
+
             purchaseOrder = new PurchaseOrder({
               ...input,
               number,
@@ -741,7 +805,7 @@ const purchaseOrderResolvers = {
           // continuité de la séquence. La transition DRAFT → finalisé est
           // gérée plus bas (le numéro y est généré/validé).
           if (po.status !== "DRAFT") {
-            if (input.number && input.number !== po.number) {
+            if (input.number !== undefined && input.number !== po.number) {
               throw createValidationError(
                 "Le numéro d'un bon de commande finalisé est verrouillé",
                 {
@@ -749,7 +813,7 @@ const purchaseOrderResolvers = {
                 },
               );
             }
-            if (input.prefix && input.prefix !== po.prefix) {
+            if (input.prefix !== undefined && input.prefix !== po.prefix) {
               throw createValidationError(
                 "Le préfixe d'un bon de commande finalisé est verrouillé",
                 {
@@ -826,6 +890,16 @@ const purchaseOrderResolvers = {
                 autoNumbering,
               });
               updateData.prefix = prefix;
+
+              // Le numéro séquentiel généré peut être occupé par un autre
+              // brouillon (invisible pour la numérotation) : le libérer avant
+              // le save, comme dans la branche « numéro fourni » ci-dessous.
+              await renameConflictingDrafts({
+                prefix,
+                number: updateData.number,
+                workspaceId: po.workspaceId,
+                excludeId: po._id,
+              });
             } else {
               // Numéro fourni explicitement : verrou de séquence (max+1
               // strict, pas de doublon parmi les finalisés) + renommage des
@@ -853,22 +927,12 @@ const purchaseOrderResolvers = {
                 );
               }
 
-              const conflictingDrafts = await PurchaseOrder.find({
+              await renameConflictingDrafts({
                 prefix: input.prefix,
                 number: normalizedNumber,
-                status: "DRAFT",
                 workspaceId: po.workspaceId,
-                _id: { $ne: po._id },
+                excludeId: po._id,
               });
-              // Suffixe court (≤ 20 caractères, cf. validateur du modèle) :
-              // Date.now() complet faisait dépasser la limite → brouillon
-              // renommé devenait inéditable.
-              const renameStamp = Date.now().toString().slice(-6);
-              for (let i = 0; i < conflictingDrafts.length; i++) {
-                await PurchaseOrder.findByIdAndUpdate(conflictingDrafts[i]._id, {
-                  number: `${normalizedNumber}-${renameStamp}${i}`,
-                });
-              }
 
               updateData.number = normalizedNumber;
             }
@@ -887,7 +951,10 @@ const purchaseOrderResolvers = {
             po.client?.id
           ) {
             try {
-              const freshClient = await Client.findById(po.client.id);
+              const freshClient = await Client.findOne({
+                _id: po.client.id,
+                workspaceId: po.workspaceId,
+              });
               if (freshClient) {
                 updateData.client = {
                   id: freshClient._id.toString(),
@@ -992,6 +1059,20 @@ const purchaseOrderResolvers = {
 
           // Si transition DRAFT → CONFIRMED, snapshot companyInfo + client et générer un numéro séquentiel
           if (po.status === "DRAFT" && status === "CONFIRMED") {
+            // Recaler les dates d'un brouillon repris plus tard : l'émission
+            // est ramenée à aujourd'hui et la validité décalée d'autant (délai
+            // d'origine conservé). Les vues affichent déjà ces dates recalées
+            // (getDraftEffectiveDates côté front) : sans ce recalage, la
+            // finalisation en un clic persisterait les dates d'origine.
+            const refreshedDates = refreshDraftDates(
+              po.issueDate,
+              po.validUntil,
+            );
+            if (refreshedDates.changed) {
+              po.issueDate = refreshedDates.issueDate;
+              po.validUntil = refreshedDates.secondDate;
+            }
+
             // Snapshot companyInfo à la finalisation
             if (!po.companyInfo || !po.companyInfo.name) {
               const org = await getOrganizationInfo(workspaceId);
@@ -1007,7 +1088,10 @@ const purchaseOrderResolvers = {
               const clientId = po.client?.id || po.clientId;
               if (clientId) {
                 try {
-                  const freshClient = await Client.findById(clientId);
+                  const freshClient = await Client.findOne({
+                    _id: clientId,
+                    workspaceId: po.workspaceId,
+                  });
                   if (freshClient) {
                     po.client = {
                       id: freshClient._id.toString(),
@@ -1060,6 +1144,19 @@ const purchaseOrderResolvers = {
                     autoNumbering,
                   });
 
+                  // Libérer le numéro s'il est occupé par un brouillon : sans
+                  // ça, le retry E11000 consommait un numéro suivant et laissait
+                  // un trou dans la séquence.
+                  await renameConflictingDrafts(
+                    {
+                      prefix,
+                      number: newNumber,
+                      workspaceId: po.workspaceId,
+                      excludeId: po._id,
+                    },
+                    { session },
+                  );
+
                   // Utiliser un numéro temporaire pour éviter les conflits d'unicité
                   po.number = `TEMP-${Date.now()}`;
                   await po.save({ session });
@@ -1074,7 +1171,7 @@ const purchaseOrderResolvers = {
               } catch (err) {
                 session.endSession();
                 if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
-                  console.log(
+                  logger.debug(
                     `⚠️ [changePurchaseOrderStatus] E11000 retry attempt ${attempt + 1}`,
                   );
                   continue;
@@ -1160,6 +1257,9 @@ const purchaseOrderResolvers = {
         const purchaseOrder = new PurchaseOrder({
           number,
           prefix,
+          purchaseOrderNumber: quote.prefix
+            ? `${quote.prefix.replace(/-$/, "")}-${quote.number}`
+            : quote.number,
           client: quoteObj.client,
           companyInfo: mapOrganizationToCompanyInfo(organization),
           items: quoteObj.items,
@@ -1212,12 +1312,17 @@ const purchaseOrderResolvers = {
           },
           shipping: quoteObj.shipping,
           isReverseCharge: quote.isReverseCharge || false,
+          isVatExempt: quote.isVatExempt || false,
           clientPositionRight:
             organization.purchaseOrderClientPositionRight || false,
           showBankDetails: organization.showBankDetails || false,
           retenueGarantie: quote.retenueGarantie || 0,
           escompte: quote.escompte || 0,
         });
+
+        // Le BC issu du devis est créé finalisé (CONFIRMED) : libérer le numéro
+        // s'il est occupé par un brouillon.
+        await renameConflictingDrafts({ prefix, number, workspaceId });
 
         await purchaseOrder.save();
         return await purchaseOrder.populate("createdBy");
@@ -1259,6 +1364,7 @@ const purchaseOrderResolvers = {
             if (sourceQuote.linkedInvoices?.length > 0) {
               const existingInvoices = await Invoice.find({
                 _id: { $in: sourceQuote.linkedInvoices },
+                workspaceId: sourceQuote.workspaceId,
               });
               const validIds = existingInvoices.map((inv) => inv._id);
               if (validIds.length !== sourceQuote.linkedInvoices.length) {
@@ -1346,6 +1452,7 @@ const purchaseOrderResolvers = {
           workspaceId,
           createdBy: user.id,
           isReverseCharge: po.isReverseCharge || false,
+          isVatExempt: po.isVatExempt || false,
           shipping: poObj.shipping,
           appearance: {
             textColor:

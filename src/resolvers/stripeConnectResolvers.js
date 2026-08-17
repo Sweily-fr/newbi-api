@@ -3,7 +3,11 @@ import stripeConnectService from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  withOrganization,
+} from "../middlewares/rbac.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 // In-memory rate limit for payment session creation
 const RATE_LIMIT_IP_WINDOW = 60 * 1000; // 1 minute
@@ -58,17 +62,16 @@ const stripeConnectResolvers = {
      */
     myStripeConnectAccount: async (_, args, { user, organizationId }) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour accéder à cette ressource",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
       try {
-        console.log(
-          "🔍 Recherche compte Stripe Connect pour organizationId:",
-          organizationId,
+        logger.debug(
+          `🔍 Recherche compte Stripe Connect pour organizationId: ${organizationId}`,
         );
-        console.log("👤 User email:", user.email);
 
         // Essayer d'abord avec organizationId (nouveau système)
         let account = null;
@@ -78,13 +81,13 @@ const stripeConnectResolvers = {
 
         // Fallback: Si pas de compte trouvé avec organizationId, essayer avec userId (ancien système)
         if (!account) {
-          console.log("⚠️ Fallback: Recherche par userId pour compatibilité");
+          logger.debug("⚠️ Fallback: Recherche par userId pour compatibilité");
           account = await StripeConnectAccount.findOne({ userId: user._id });
         }
 
-        console.log("📊 Compte trouvé:", account ? "OUI" : "NON");
+        logger.debug(`📊 Compte trouvé: ${account ? "OUI" : "NON"}`);
         if (account) {
-          console.log("✅ Détails (avant mise à jour):", {
+          logger.debug("✅ Détails (avant mise à jour):", {
             accountId: account.accountId,
             isOnboarded: account.isOnboarded,
             chargesEnabled: account.chargesEnabled,
@@ -93,13 +96,13 @@ const stripeConnectResolvers = {
           });
 
           // Mettre à jour le statut depuis Stripe pour avoir les dernières informations
-          console.log("🔄 Mise à jour du statut depuis Stripe...");
+          logger.debug("🔄 Mise à jour du statut depuis Stripe...");
           const statusUpdate = await stripeConnectService.checkAccountStatus(
             account.accountId,
           );
 
           if (statusUpdate.success) {
-            console.log("✅ Statut mis à jour:", {
+            logger.debug("✅ Statut mis à jour:", {
               isOnboarded: statusUpdate.isOnboarded,
               chargesEnabled: statusUpdate.chargesEnabled,
             });
@@ -135,8 +138,9 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour créer un compte Stripe Connect",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -185,8 +189,9 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour générer un lien d'onboarding",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -255,8 +260,9 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error(
+        throw new AppError(
           "Vous devez être connecté pour vérifier le statut d'un compte",
+          ERROR_CODES.UNAUTHENTICATED,
         );
       }
 
@@ -329,7 +335,10 @@ const stripeConnectResolvers = {
       { user, organizationId, userRole },
     ) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -389,7 +398,10 @@ const stripeConnectResolvers = {
      */
     disconnectStripe: async (_, args, { user, organizationId, userRole }) => {
       if (!user) {
-        throw new Error("Vous devez être connecté");
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
       }
 
       if (!organizationId) {
@@ -658,6 +670,32 @@ STRIPE_CONNECT_BLOCK.forEach((name) => {
       return original(parent, args, context, info);
     };
   }
+});
+
+// 🔐 Sécurité : envelopper les resolvers Stripe Connect org-scopés dans
+// withOrganization (position externe, après le check d'abonnement) pour valider
+// l'appartenance à l'organisation en base et remplacer le rôle/l'org lus depuis
+// les headers client (x-user-role / x-organization-id) par les valeurs vérifiées
+// par RBAC (context.organizationId et context.userRole). Empêche l'escalade de
+// rôle et la suppression du Stripe Connect d'une autre organisation.
+// createPaymentSessionForFileTransfer / consumePaymentReturnToken restent publics
+// (paiement par un client externe), donc volontairement non enveloppés.
+const STRIPE_CONNECT_ORG_SCOPED_QUERIES = ["myStripeConnectAccount"];
+const STRIPE_CONNECT_ORG_SCOPED_MUTATIONS = [
+  "createStripeConnectAccount",
+  "generateStripeOnboardingLink",
+  "checkStripeConnectAccountStatus",
+  "generateStripeDashboardLink",
+  "disconnectStripe",
+];
+STRIPE_CONNECT_ORG_SCOPED_QUERIES.forEach((name) => {
+  const original = stripeConnectResolvers.Query[name];
+  if (original) stripeConnectResolvers.Query[name] = withOrganization(original);
+});
+STRIPE_CONNECT_ORG_SCOPED_MUTATIONS.forEach((name) => {
+  const original = stripeConnectResolvers.Mutation[name];
+  if (original)
+    stripeConnectResolvers.Mutation[name] = withOrganization(original);
 });
 
 export default stripeConnectResolvers;

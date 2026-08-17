@@ -3,157 +3,13 @@ import { bankingService } from "../services/banking/index.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
-import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
 
 // Provider par défaut (peut être changé via variable d'environnement)
-const DEFAULT_PROVIDER = process.env.BANKING_PROVIDER || "gocardless";
-
-// ============================================
-// ROUTES GOCARDLESS
-// ============================================
-
-/**
- * Liste les institutions bancaires disponibles
- * GET /banking-connect/gocardless/institutions
- */
-router.get("/gocardless/institutions", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
-
-    const country = req.query.country || "FR";
-
-    await bankingService.initialize("gocardless");
-    const provider = bankingService.currentProvider;
-
-    const institutions = await provider.listInstitutions(country);
-
-    res.json({
-      institutions,
-      country,
-      count: institutions.length,
-    });
-  } catch (error) {
-    logger.error("Erreur liste institutions:", error);
-    res.status(500).json({
-      error: "Erreur lors de la récupération des institutions",
-      details: error.message,
-    });
-  }
-});
-
-/**
- * Génère l'URL de connexion bancaire pour GoCardless
- * GET /banking-connect/gocardless/connect
- */
-router.get(
-  "/gocardless/connect",
-  requireActiveSubscriptionREST({ failClosed: true }),
-  async (req, res) => {
-    try {
-      const user = await betterAuthJWTMiddleware(req);
-      if (!user) {
-        return res.status(401).json({ error: "Non authentifié" });
-      }
-
-      // Vérifier que l'email est vérifié
-      if (!user.isEmailVerified && !user.emailVerified) {
-        return res.status(403).json({
-          error:
-            "Veuillez vérifier votre adresse email avant de connecter un compte bancaire",
-          code: "EMAIL_NOT_VERIFIED",
-        });
-      }
-
-      const workspaceId =
-        req.headers["x-workspace-id"] || req.query.workspaceId;
-      const institutionId = req.query.institutionId;
-
-      if (!workspaceId) {
-        return res.status(400).json({ error: "WorkspaceId requis" });
-      }
-
-      if (!institutionId) {
-        return res
-          .status(400)
-          .json({ error: "InstitutionId requis (banque à connecter)" });
-      }
-
-      console.log(
-        "🔍 Route /gocardless/connect - workspaceId:",
-        workspaceId,
-        "institutionId:",
-        institutionId,
-      );
-
-      await bankingService.initialize("gocardless");
-      const provider = bankingService.currentProvider;
-
-      // Générer l'URL de connexion
-      const connectUrl = await provider.generateConnectUrl(
-        user._id.toString(),
-        workspaceId,
-        institutionId,
-      );
-
-      logger.info(`URL de connexion GoCardless générée pour user ${user._id}`);
-
-      res.json({
-        connectUrl,
-        provider: "gocardless",
-        institutionId,
-      });
-    } catch (error) {
-      logger.error("Erreur génération URL GoCardless:", error);
-      res.status(500).json({
-        error: "Erreur lors de la génération de l'URL de connexion",
-        details: error.message,
-      });
-    }
-  },
-);
-
-/**
- * Callback GoCardless (redirection après connexion)
- * GET /banking-connect/gocardless/callback
- */
-router.get("/gocardless/callback", async (req, res) => {
-  try {
-    const { ref, error } = req.query;
-
-    if (error) {
-      logger.error("Erreur GoCardless callback:", error);
-      return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error)}`,
-      );
-    }
-
-    if (!ref) {
-      return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?banking_error=missing_reference`,
-      );
-    }
-
-    // Le ref correspond au workspaceId (reference de la requisition)
-    logger.info(`Callback GoCardless reçu pour workspace: ${ref}`);
-
-    // Rediriger vers le dashboard avec succès
-    // La synchronisation sera déclenchée côté frontend
-    res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&provider=gocardless&ref=${ref}`,
-    );
-  } catch (error) {
-    logger.error("Erreur callback GoCardless:", error);
-    res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_error=${encodeURIComponent(error.message)}`,
-    );
-  }
-});
+const DEFAULT_PROVIDER = process.env.BANKING_PROVIDER || "bridge";
 
 // ============================================
 // ROUTES BRIDGE
@@ -198,6 +54,7 @@ router.get("/bridge/institutions", async (req, res) => {
  */
 router.get(
   "/bridge/connect",
+  requireWorkspaceMembership,
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
@@ -220,7 +77,7 @@ router.get(
       const providerId = req.query.providerId || req.query.bankId; // Provider pré-sélectionné (optionnel)
       const source = req.query.source || "web"; // "web" (default) or "mobile"
 
-      console.log(
+      logger.debug(
         "🔍 Route /bridge/connect - workspaceId:",
         workspaceId,
         "providerId:",
@@ -243,7 +100,7 @@ router.get(
         existingBridgeUser =
           await provider.getBridgeUserByExternalId(workspaceId);
         if (existingBridgeUser) {
-          console.log(
+          logger.debug(
             "ℹ️ Utilisateur Bridge existant trouvé:",
             existingBridgeUser.uuid,
           );
@@ -337,7 +194,7 @@ router.get("/bridge/callback", async (req, res) => {
  * Statut de la connexion bancaire (multi-provider)
  * GET /banking-connect/status
  */
-router.get("/status", async (req, res) => {
+router.get("/status", requireWorkspaceMembership, async (req, res) => {
   try {
     const user = await betterAuthJWTMiddleware(req);
     if (!user) {
@@ -372,10 +229,6 @@ router.get("/status", async (req, res) => {
     // Récupérer les infos utilisateur pour lastSync
     const userData = await User.findById(user._id);
 
-    // Vérifier les requisitions GoCardless
-    const gocardlessRequisition =
-      userData?.gocardlessRequisitions?.[workspaceId];
-
     // Vérifier les tokens Bridge (legacy)
     const bridgeTokens = userData?.bridgeTokens?.[workspaceId];
 
@@ -384,15 +237,8 @@ router.get("/status", async (req, res) => {
       provider: activeProvider,
       accountsCount,
       hasAccounts: accountsCount > 0,
-      lastSync:
-        gocardlessRequisition?.createdAt || bridgeTokens?.lastSync || null,
+      lastSync: bridgeTokens?.lastSync || null,
       // Infos spécifiques par provider
-      gocardless: gocardlessRequisition
-        ? {
-            requisitionId: gocardlessRequisition.requisitionId,
-            institutionId: gocardlessRequisition.institutionId,
-          }
-        : null,
       bridge: bridgeTokens
         ? {
             hasTokens: true,
@@ -419,7 +265,7 @@ router.get("/status", async (req, res) => {
  *
  * Priorité: accountId > itemId > provider > tous
  */
-router.post("/disconnect", async (req, res) => {
+router.post("/disconnect", requireWorkspaceMembership, async (req, res) => {
   try {
     const user = await betterAuthJWTMiddleware(req);
     if (!user) {
@@ -491,35 +337,13 @@ router.post("/disconnect", async (req, res) => {
         );
 
         // 2) Détacher les liens de réconciliation (best-effort, on conserve
-        //    les factures/dépenses, on retire juste le lien orphelin).
+        //    les factures/dépenses, on retire juste le lien orphelin ;
+        //    isReconciled n'est remis à false que si plus AUCUNE transaction
+        //    liée ne subsiste).
         try {
-          const [
-            { default: Invoice },
-            { default: Expense },
-            { default: PurchaseInvoice },
-          ] = await Promise.all([
-            import("../models/Invoice.js"),
-            import("../models/Expense.js"),
-            import("../models/PurchaseInvoice.js"),
-          ]);
-
-          await Promise.all([
-            Invoice.updateMany(
-              { linkedTransactionId: { $in: txIds } },
-              { $set: { linkedTransactionId: null } },
-            ),
-            Expense.updateMany(
-              { linkedTransactionId: { $in: txIds } },
-              { $set: { linkedTransactionId: null, isReconciled: false } },
-            ),
-            PurchaseInvoice.updateMany(
-              { linkedTransactionIds: { $in: txIds } },
-              {
-                $pull: { linkedTransactionIds: { $in: txIds } },
-                $set: { isReconciled: false },
-              },
-            ),
-          ]);
+          const { detachTransactionsFromDocuments } =
+            await import("../utils/reconciliation-cleanup.js");
+          await detachTransactionsFromDocuments(txIds, workspaceId);
         } catch (unlinkErr) {
           logger.warn(
             `Cascade: liens de réconciliation non nettoyés: ${unlinkErr.message}`,
@@ -639,17 +463,10 @@ router.post("/disconnect", async (req, res) => {
     }
 
     // Cas 3: Déconnexion par provider ou tous les providers
-    const providersToDisconnect = provider
-      ? [provider]
-      : ["gocardless", "bridge"];
+    const providersToDisconnect = provider ? [provider] : ["bridge"];
 
     for (const p of providersToDisconnect) {
-      if (p === "gocardless") {
-        // Supprimer les requisitions GoCardless
-        await User.findByIdAndUpdate(user._id, {
-          $unset: { [`gocardlessRequisitions.${workspaceId}`]: 1 },
-        });
-      } else if (p === "bridge") {
+      if (p === "bridge") {
         // Supprimer les tokens Bridge
         await User.findByIdAndUpdate(user._id, {
           $unset: { [`bridgeTokens.${workspaceId}`]: 1 },

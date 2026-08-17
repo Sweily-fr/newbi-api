@@ -1,5 +1,10 @@
+import logger from "../../../utils/logger.js";
 import { BankingProvider } from "../interfaces/BankingProvider.js";
 import axios from "axios";
+import {
+  repointTransactionReferences,
+  detachTransactionsFromDocuments,
+} from "../../../utils/reconciliation-cleanup.js";
 
 /**
  * Provider Bridge API pour les services bancaires
@@ -169,14 +174,14 @@ export class BridgeProvider extends BankingProvider {
       // En mode sandbox, pas besoin d'authentification immédiate
       // L'authentification se fera lors de la connexion utilisateur
       if (this.config.environment === "sandbox") {
-        console.log("✅ Bridge provider initialisé en mode sandbox");
+        logger.debug("✅ Bridge provider initialisé en mode sandbox");
         this.isInitialized = true;
         return;
       }
 
       await this._authenticate();
       this.isInitialized = true;
-      console.log("✅ Bridge provider initialisé");
+      logger.debug("✅ Bridge provider initialisé");
     } catch (error) {
       console.error("❌ Erreur initialisation Bridge:", error);
       throw error;
@@ -189,7 +194,7 @@ export class BridgeProvider extends BankingProvider {
    */
   async listInstitutions(country = "FR") {
     try {
-      console.log("🔍 Appel /v3/providers avec:", {
+      logger.debug("🔍 Appel /v3/providers avec:", {
         clientId: this.clientId
           ? this.clientId.substring(0, 20) + "..."
           : "non défini",
@@ -227,7 +232,7 @@ export class BridgeProvider extends BankingProvider {
         }
       }
 
-      console.log(
+      logger.debug(
         `✅ ${allProviders.length} banques récupérées pour ${country}`,
       );
 
@@ -236,7 +241,7 @@ export class BridgeProvider extends BankingProvider {
         p.capabilities?.includes("aggregation"),
       );
 
-      console.log(`✅ ${aggregationProviders.length} banques avec agrégation`);
+      logger.debug(`✅ ${aggregationProviders.length} banques avec agrégation`);
 
       return aggregationProviders.map((provider) => ({
         id: provider.id.toString(),
@@ -264,7 +269,7 @@ export class BridgeProvider extends BankingProvider {
     providerId = null,
     { callbackUrl: overrideCallbackUrl } = {},
   ) {
-    console.log(
+    logger.debug(
       "🔍 generateConnectUrl appelé avec userId:",
       userId,
       "workspaceId:",
@@ -287,12 +292,12 @@ export class BridgeProvider extends BankingProvider {
         callback_url: callbackUrl,
       };
 
-      console.log(`🔗 Callback URL configuré: ${callbackUrl}`);
+      logger.debug(`🔗 Callback URL configuré: ${callbackUrl}`);
 
       // Si un provider est pré-sélectionné, l'ajouter à la session
       if (providerId) {
         sessionData.provider_id = parseInt(providerId, 10);
-        console.log(`🏦 Provider pré-sélectionné: ${providerId}`);
+        logger.debug(`🏦 Provider pré-sélectionné: ${providerId}`);
       }
 
       // Créer une session de connexion
@@ -313,7 +318,7 @@ export class BridgeProvider extends BankingProvider {
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
       });
 
-      console.log(
+      logger.debug(
         "✅ Réponse session Bridge:",
         JSON.stringify(response.data, null, 2),
       );
@@ -388,14 +393,14 @@ export class BridgeProvider extends BankingProvider {
         },
       });
 
-      console.log(
+      logger.debug(
         "🔍 Réponse complète API Bridge:",
         JSON.stringify(response.data, null, 2),
       );
-      console.log(
+      logger.debug(
         `📊 API Bridge: ${response.data.resources?.length || 0} comptes reçus`,
       );
-      console.log(
+      logger.debug(
         `🔍 Comptes avec data_access enabled: ${
           response.data.resources?.filter(
             (acc) => acc.data_access === "enabled",
@@ -408,10 +413,10 @@ export class BridgeProvider extends BankingProvider {
         response.data.resources?.filter(
           (account) => account.data_access === "enabled",
         ) || [];
-      console.log(`🔍 Analyse des ${enabledAccounts.length} comptes enabled:`);
+      logger.debug(`🔍 Analyse des ${enabledAccounts.length} comptes enabled:`);
 
       enabledAccounts.slice(0, 5).forEach((account, index) => {
-        console.log(
+        logger.debug(
           `  ${index + 1}. ID: ${account.id}, Name: ${account.name}, Type: ${
             account.type
           }, Item_ID: ${account.item_id}`,
@@ -433,7 +438,7 @@ export class BridgeProvider extends BankingProvider {
         }
       });
 
-      console.log(
+      logger.debug(
         `🔧 Après déduplication par provider+id: ${uniqueAccounts.size} comptes uniques`,
       );
 
@@ -455,7 +460,7 @@ export class BridgeProvider extends BankingProvider {
             name: provider.name,
             logo: provider.images?.logo || provider.logo_url || null,
           };
-          console.log(`✅ Provider ${providerId}: ${provider.name}`);
+          logger.debug(`✅ Provider ${providerId}: ${provider.name}`);
         } catch (err) {
           console.warn(
             `⚠️ Impossible de récupérer le provider ${providerId}:`,
@@ -508,7 +513,7 @@ export class BridgeProvider extends BankingProvider {
         status: "active",
       });
 
-      console.log(
+      logger.debug(
         `✅ ${activeAccounts.length} comptes actifs synchronisés pour workspace ${workspaceId}`,
       );
       return activeAccounts;
@@ -531,7 +536,7 @@ export class BridgeProvider extends BankingProvider {
       // Pas besoin de conversion en ObjectId
       const workspaceStringId = workspaceId.toString();
 
-      console.log(
+      logger.debug(
         `💾 Tentative sauvegarde de ${accounts.length} comptes pour workspace ${workspaceId} (String: ${workspaceStringId})`,
       );
 
@@ -547,7 +552,7 @@ export class BridgeProvider extends BankingProvider {
       );
 
       if (disconnectedExternalIds.size > 0) {
-        console.log(
+        logger.debug(
           `⏭️ ${disconnectedExternalIds.size} compte(s) déconnecté(s) seront ignorés lors de la sync`,
         );
       }
@@ -555,13 +560,13 @@ export class BridgeProvider extends BankingProvider {
       for (const accountData of accounts) {
         // Ne pas réactiver les comptes que l'utilisateur a déconnectés
         if (disconnectedExternalIds.has(accountData.externalId)) {
-          console.log(
+          logger.debug(
             `⏭️ Compte ignoré (déconnecté par l'utilisateur): ${accountData.name} (${accountData.externalId})`,
           );
           continue;
         }
 
-        console.log(
+        logger.debug(
           `🔍 Sauvegarde compte: ${accountData.name} (${accountData.externalId})`,
         );
 
@@ -585,7 +590,7 @@ export class BridgeProvider extends BankingProvider {
           },
         );
 
-        console.log(
+        logger.debug(
           `✅ Compte ${result.isNew ? "créé" : "mis à jour"}: ${result.name}`,
         );
       }
@@ -595,7 +600,7 @@ export class BridgeProvider extends BankingProvider {
         workspaceId: workspaceStringId,
         provider: this.name,
       });
-      console.log(`📊 Total comptes en base pour ce workspace: ${totalCount}`);
+      logger.debug(`📊 Total comptes en base pour ce workspace: ${totalCount}`);
     } catch (error) {
       console.error("❌ Erreur sauvegarde comptes:", error.message);
       throw error;
@@ -676,7 +681,7 @@ export class BridgeProvider extends BankingProvider {
       const since = options.since || defaultRange.since;
       const until = options.until || defaultRange.until;
 
-      console.log(
+      logger.debug(
         `📅 Récupération transactions compte ${accountId}: ${since} → ${until}`,
       );
 
@@ -690,12 +695,20 @@ export class BridgeProvider extends BankingProvider {
 
       do {
         // Construire les paramètres de requête
+        // Bridge v3: min_date/max_date filtrent sur la date de la transaction.
+        // Ne PAS utiliser "since" (filtre sur updated_at) ni "until" (inexistant en v3),
+        // sinon l'API renvoie tout l'historique à chaque sync.
         const params = {
           account_id: accountId,
           limit: this.config.sync.transactionsPerPage,
-          since,
-          until,
+          min_date: since,
         };
+
+        // Ne borner la fin que si demandé explicitement (max_date exclut
+        // potentiellement le jour même, on laisse ouvert par défaut)
+        if (options.until) {
+          params.max_date = until;
+        }
 
         // Ajouter le curseur pour la pagination
         if (cursor) {
@@ -713,7 +726,7 @@ export class BridgeProvider extends BankingProvider {
         const resources = response.data.resources || [];
         pageCount++;
 
-        console.log(
+        logger.debug(
           `📄 Page ${pageCount}: ${resources.length} transactions récupérées`,
         );
 
@@ -728,15 +741,17 @@ export class BridgeProvider extends BankingProvider {
         }
 
         // Vérifier s'il y a une page suivante
-        // Bridge utilise le champ "pagination.next_uri" ou le dernier ID
-        const pagination = response.data.pagination;
-        if (
-          pagination?.next_uri ||
-          (resources.length === this.config.sync.transactionsPerPage &&
-            resources.length > 0)
-        ) {
-          // Utiliser l'ID de la dernière transaction comme curseur
-          cursor = resources[resources.length - 1]?.id?.toString();
+        // Bridge v3: le curseur "after" est opaque et fourni dans
+        // pagination.next_uri (la doc interdit de forger ses propres curseurs)
+        const nextUri = response.data.pagination?.next_uri;
+        if (nextUri) {
+          try {
+            cursor = new URL(nextUri, this.config.baseUrl).searchParams.get(
+              "after",
+            );
+          } catch {
+            cursor = null;
+          }
         } else {
           cursor = null;
         }
@@ -783,7 +798,7 @@ export class BridgeProvider extends BankingProvider {
         error: null,
       });
 
-      console.log(
+      logger.debug(
         `✅ ${allTransactions.length} transactions synchronisées pour compte ${accountId} (${pageCount} pages, ${Date.now() - startTime}ms)`,
       );
 
@@ -929,6 +944,29 @@ export class BridgeProvider extends BankingProvider {
           workspaceId: workspaceStringId,
         };
 
+        // Préserver une catégorie choisie manuellement : ne pas l'écraser avec
+        // la catégorie Bridge. Le flag categoryIsManual est posé par le resolveur
+        // updateTransaction ; l'heuristique sur bridgeCategoryMapped couvre les
+        // transactions modifiées avant l'introduction du flag.
+        const hasManualCategory =
+          existing &&
+          (existing.categoryIsManual ||
+            (existing.category &&
+              existing.metadata?.bridgeCategoryMapped &&
+              existing.category !== existing.metadata.bridgeCategoryMapped));
+        if (hasManualCategory) {
+          delete updatedTransactionData.category;
+          delete updatedTransactionData.expenseCategory;
+        }
+
+        // Préserver une description modifiée manuellement : ne pas l'écraser
+        // avec clean_description de Bridge à chaque re-sync. Le flag
+        // descriptionIsManual est posé par le resolveur updateTransaction.
+        // `reference` (libellé brut) reste synchronisé normalement.
+        if (existing?.descriptionIsManual) {
+          delete updatedTransactionData.description;
+        }
+
         // Pré-remplir le PCG seulement si pas de correction manuelle existante
         if (!existing?.pcgAccount?.isManual) {
           const pcgSuggestion = suggestPCGAccount(transactionData);
@@ -940,11 +978,29 @@ export class BridgeProvider extends BankingProvider {
           };
         }
 
+        // Préserver les champs metadata saisis par l'utilisateur
+        // (updateTransaction) : le $set du metadata complet du provider les
+        // écraserait à chaque re-sync.
+        if (existing?.metadata) {
+          const userMetadataKeys = ["notes", "vendor", "paymentMethod", "tags"];
+          const preserved = {};
+          for (const key of userMetadataKeys) {
+            if (existing.metadata[key] !== undefined) {
+              preserved[key] = existing.metadata[key];
+            }
+          }
+          updatedTransactionData.metadata = {
+            ...updatedTransactionData.metadata,
+            ...preserved,
+          };
+        }
+
         // Déduplication: lors du premier import d'une transaction bancaire,
         // chercher une transaction manuelle équivalente saisie par l'utilisateur
         // (avant que le rapprochement bancaire ne la rapatrie). Si trouvée, on
         // récupère les enrichissements manuels (PCG, justificatif, rapprochement)
         // puis on supprime la transaction manuelle pour éviter le doublon.
+        let mergedManualTxId = null;
         if (!existing) {
           const txDate = new Date(transactionData.date);
           if (!isNaN(txDate.getTime())) {
@@ -972,9 +1028,17 @@ export class BridgeProvider extends BankingProvider {
                 updatedTransactionData.receiptFiles = manualMatch.receiptFiles;
                 updatedTransactionData.receiptRequired = false;
               }
-              if (manualMatch.linkedInvoiceId) {
-                updatedTransactionData.linkedInvoiceId =
-                  manualMatch.linkedInvoiceId;
+              if ((manualMatch.linkedInvoiceIds || []).length > 0) {
+                updatedTransactionData.linkedInvoiceIds =
+                  manualMatch.linkedInvoiceIds;
+                updatedTransactionData.reconciliationStatus =
+                  manualMatch.reconciliationStatus;
+                updatedTransactionData.reconciliationDate =
+                  manualMatch.reconciliationDate;
+              }
+              if ((manualMatch.linkedPurchaseInvoiceIds || []).length > 0) {
+                updatedTransactionData.linkedPurchaseInvoiceIds =
+                  manualMatch.linkedPurchaseInvoiceIds;
                 updatedTransactionData.reconciliationStatus =
                   manualMatch.reconciliationStatus;
                 updatedTransactionData.reconciliationDate =
@@ -984,12 +1048,15 @@ export class BridgeProvider extends BankingProvider {
                 updatedTransactionData.linkedExpenseId =
                   manualMatch.linkedExpenseId;
               }
-              if (
-                manualMatch.expenseCategory &&
-                !updatedTransactionData.expenseCategory
-              ) {
-                updatedTransactionData.expenseCategory =
-                  manualMatch.expenseCategory;
+              // La catégorie d'une transaction manuelle est une saisie
+              // utilisateur : la reporter sur la transaction bancaire fusionnée
+              if (manualMatch.category) {
+                updatedTransactionData.category = manualMatch.category;
+                if (manualMatch.expenseCategory) {
+                  updatedTransactionData.expenseCategory =
+                    manualMatch.expenseCategory;
+                }
+                updatedTransactionData.categoryIsManual = true;
               }
               const carriedNotes = manualMatch.metadata?.notes;
               const carriedVendor = manualMatch.metadata?.vendor;
@@ -1004,14 +1071,15 @@ export class BridgeProvider extends BankingProvider {
               }
 
               await Transaction.deleteOne({ _id: manualMatch._id });
-              console.log(
+              mergedManualTxId = manualMatch._id;
+              logger.debug(
                 `🔄 Doublon manuel fusionné dans transaction bancaire ${transactionData.externalId} (manualId=${manualMatch._id})`,
               );
             }
           }
         }
 
-        await Transaction.findOneAndUpdate(
+        const savedTransaction = await Transaction.findOneAndUpdate(
           {
             externalId: transactionData.externalId,
             workspaceId: workspaceStringId,
@@ -1024,6 +1092,16 @@ export class BridgeProvider extends BankingProvider {
             setDefaultsOnInsert: true,
           },
         );
+
+        // Fusion manuelle → bancaire : repointer les références des
+        // factures/dépenses vers la transaction bancaire (sinon elles
+        // pointent vers la transaction manuelle supprimée)
+        if (mergedManualTxId && savedTransaction) {
+          await repointTransactionReferences(
+            mergedManualTxId,
+            savedTransaction._id,
+          );
+        }
       }
     } catch (error) {
       console.error("❌ Erreur sauvegarde transactions:", error.message);
@@ -1054,7 +1132,7 @@ export class BridgeProvider extends BankingProvider {
       const accountsReport = [];
       const failedAccounts = [];
 
-      console.log(
+      logger.debug(
         `🔄 Démarrage sync de ${accounts.length} comptes pour workspace ${workspaceId}`,
       );
 
@@ -1084,7 +1162,7 @@ export class BridgeProvider extends BankingProvider {
           accountsReport.push(accountReport);
           totalTransactions += transactions.length;
 
-          console.log(
+          logger.debug(
             `  ✓ ${account.name}: ${transactions.length} transactions (${accountReport.duration}ms)`,
           );
         } catch (error) {
@@ -1122,7 +1200,7 @@ export class BridgeProvider extends BankingProvider {
         details: accountsReport,
       };
 
-      console.log(
+      logger.debug(
         `✅ Synchronisation terminée: ${totalTransactions} transactions pour ${accounts.length} comptes (${failedAccounts.length} échecs) en ${totalDuration}ms`,
       );
 
@@ -1172,18 +1250,18 @@ export class BridgeProvider extends BankingProvider {
    * Crée un utilisateur Bridge
    */
   async createBridgeUser(workspaceId) {
-    console.log("workspaceId", workspaceId);
+    logger.debug("workspaceId", workspaceId);
     try {
       const response = await this.client.post("/v3/aggregation/users", {
         external_user_id: workspaceId,
       });
 
-      console.log("✅ Utilisateur Bridge créé:", response.data);
+      logger.debug("✅ Utilisateur Bridge créé:", response.data);
       return response.data;
     } catch (error) {
       // Si l'utilisateur existe déjà, récupérer ses informations
       if (error.response?.status === 409) {
-        console.log("✅ Utilisateur Bridge existe déjà, récupération...");
+        logger.debug("✅ Utilisateur Bridge existe déjà, récupération...");
         try {
           // Récupérer l'utilisateur existant
           const existingUser =
@@ -1209,13 +1287,13 @@ export class BridgeProvider extends BankingProvider {
    * Récupère un utilisateur Bridge par external_user_id
    */
   async getBridgeUserByExternalId(workspaceId) {
-    console.log(
+    logger.debug(
       "🔍 getBridgeUserByExternalId appelé avec workspaceId:",
       workspaceId,
     );
     try {
       // D'abord essayer de récupérer tous les utilisateurs et filtrer (méthode actuelle qui fonctionne)
-      console.log("🔍 Requête API Bridge avec params:", {
+      logger.debug("🔍 Requête API Bridge avec params:", {
         external_user_id: workspaceId,
       });
       const response = await this.client.get("/v3/aggregation/users", {
@@ -1230,10 +1308,10 @@ export class BridgeProvider extends BankingProvider {
           (u) => u.external_user_id === workspaceId,
         );
         if (user) {
-          console.log("✅ Utilisateur Bridge trouvé:", user);
+          logger.debug("✅ Utilisateur Bridge trouvé:", user);
           return user;
         } else {
-          console.log(
+          logger.debug(
             `❌ Aucun utilisateur trouvé avec external_user_id: ${workspaceId}`,
           );
           throw new Error("Utilisateur Bridge non trouvé");
@@ -1256,10 +1334,10 @@ export class BridgeProvider extends BankingProvider {
    * Récupère un utilisateur Bridge par UUID (méthode directe)
    */
   async getBridgeUserByUuid(uuid) {
-    console.log("🔍 getBridgeUserByUuid appelé avec UUID:", uuid);
+    logger.debug("🔍 getBridgeUserByUuid appelé avec UUID:", uuid);
     try {
       const response = await this.client.get(`/v3/aggregation/users/${uuid}`);
-      console.log("✅ Utilisateur Bridge trouvé par UUID:", response.data);
+      logger.debug("✅ Utilisateur Bridge trouvé par UUID:", response.data);
       return response.data;
     } catch (error) {
       console.error(
@@ -1276,14 +1354,17 @@ export class BridgeProvider extends BankingProvider {
    * Crée un token d'autorisation utilisateur pour Bridge v3
    */
   async createUserAuthToken(workspaceId) {
-    console.log("🔍 createUserAuthToken appelé avec workspaceId:", workspaceId);
+    logger.debug(
+      "🔍 createUserAuthToken appelé avec workspaceId:",
+      workspaceId,
+    );
     try {
       // D'abord créer l'utilisateur Bridge si nécessaire
       const bridgeUser = await this.createBridgeUser(workspaceId);
 
       // Utiliser l'UUID retourné par Bridge
       const userUuid = bridgeUser.uuid || bridgeUser.id || workspaceId;
-      console.log("🔑 Création token pour UUID:", userUuid);
+      logger.debug("🔑 Création token pour UUID:", userUuid);
 
       const response = await this.client.post(
         "/v3/aggregation/authorization/token",
@@ -1360,11 +1441,11 @@ export class BridgeProvider extends BankingProvider {
       await this.client.delete(`/v3/aggregation/items/${itemId}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      console.log(`Item Bridge ${itemId} supprime avec succes`);
+      logger.debug(`Item Bridge ${itemId} supprime avec succes`);
       return true;
     } catch (error) {
       if (error.response?.status === 404) {
-        console.log(`Item Bridge ${itemId} deja supprime ou inexistant`);
+        logger.debug(`Item Bridge ${itemId} deja supprime ou inexistant`);
         return true;
       }
       console.error(
@@ -1388,7 +1469,7 @@ export class BridgeProvider extends BankingProvider {
 
       // 2. Supprimer l'utilisateur Bridge via l'API
       await this.client.delete(`/v3/aggregation/users/${bridgeUser.uuid}`);
-      console.log(`✅ Utilisateur Bridge supprimé: ${bridgeUser.uuid}`);
+      logger.debug(`✅ Utilisateur Bridge supprimé: ${bridgeUser.uuid}`);
 
       // 3. Supprimer les comptes bancaires de la base de données
       const { default: AccountBanking } =
@@ -1397,18 +1478,26 @@ export class BridgeProvider extends BankingProvider {
         workspaceId: workspaceId.toString(),
         provider: this.name,
       });
-      console.log(
+      logger.debug(
         `✅ ${deletedAccounts.deletedCount} comptes supprimés de la base`,
       );
 
-      // 4. Supprimer les transactions de la base de données
+      // 4. Supprimer les transactions de la base de données (avec
+      // détachement préalable des factures/dépenses rapprochées pour ne pas
+      // laisser de liens orphelins)
       const { default: Transaction } =
         await import("../../../models/Transaction.js");
-      const deletedTransactions = await Transaction.deleteMany({
+      const txFilter = {
         workspaceId: workspaceId.toString(),
         provider: this.name,
-      });
-      console.log(
+      };
+      const txToDelete = await Transaction.find(txFilter).select("_id");
+      await detachTransactionsFromDocuments(
+        txToDelete.map((t) => t._id),
+        workspaceId,
+      );
+      const deletedTransactions = await Transaction.deleteMany(txFilter);
+      logger.debug(
         `✅ ${deletedTransactions.deletedCount} transactions supprimées de la base`,
       );
 
@@ -1453,7 +1542,7 @@ export class BridgeProvider extends BankingProvider {
     try {
       // En v3, l'authentification se fait via les headers Client-Id et Client-Secret
       // Pas besoin d'endpoint d'authentification séparé
-      console.log("✅ Authentification Bridge v3 configurée via headers");
+      logger.debug("✅ Authentification Bridge v3 configurée via headers");
     } catch (error) {
       console.error(
         "❌ Erreur authentification Bridge:",

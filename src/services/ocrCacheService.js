@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 /**
  * Service de cache Redis pour l'OCR
  * Évite de retraiter les factures déjà extraites
@@ -39,7 +40,7 @@ class OcrCacheService {
     const redisHost = process.env.REDIS_HOST;
 
     if (!redisUrl && !redisHost) {
-      console.log("ℹ️ OCR Cache: Redis non configuré, cache désactivé");
+      logger.debug("ℹ️ OCR Cache: Redis non configuré, cache désactivé");
       return;
     }
 
@@ -51,10 +52,9 @@ class OcrCacheService {
         redisOptions = {
           url: redisUrl,
           socket: {
-            reconnectStrategy: (retries) => {
-              if (retries > 5) return false; // Stop après 5 tentatives
-              return Math.min(retries * 100, 500);
-            },
+            // Retry sans limite (backoff plafonné) : ne pas mourir sur un
+            // restart Redis plus long que quelques tentatives
+            reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
           },
         };
       } else {
@@ -63,10 +63,8 @@ class OcrCacheService {
           socket: {
             host: redisHost || "localhost",
             port: parseInt(process.env.REDIS_PORT || "6379"),
-            reconnectStrategy: (retries) => {
-              if (retries > 5) return false;
-              return Math.min(retries * 100, 500);
-            },
+            // Retry sans limite (backoff plafonné), même raison que ci-dessus
+            reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
           },
           database: parseInt(process.env.REDIS_DB || "0"),
         };
@@ -87,7 +85,7 @@ class OcrCacheService {
       });
 
       this.client.on("connect", () => {
-        console.log("✅ OCR Cache: Connecté à Redis");
+        logger.debug("✅ OCR Cache: Connecté à Redis");
         this.isConnected = true;
         this._errorLogged = false;
       });
@@ -98,7 +96,10 @@ class OcrCacheService {
 
       await this.client.connect();
     } catch (error) {
-      console.warn("⚠️ OCR Cache: Impossible de se connecter à Redis:", error.message);
+      console.warn(
+        "⚠️ OCR Cache: Impossible de se connecter à Redis:",
+        error.message,
+      );
       this.client = null;
     }
   }
@@ -208,7 +209,8 @@ class OcrCacheService {
    */
   getStats() {
     const total = this.stats.hits + this.stats.misses;
-    const hitRate = total > 0 ? ((this.stats.hits / total) * 100).toFixed(1) : 0;
+    const hitRate =
+      total > 0 ? ((this.stats.hits / total) * 100).toFixed(1) : 0;
 
     return {
       ...this.stats,
@@ -239,7 +241,7 @@ class OcrCacheService {
       const keys = await this.client.keys(`${this.prefix}*`);
       if (keys.length > 0) {
         await this.client.del(keys);
-        console.log(`🗑️ OCR Cache: ${keys.length} entrées supprimées`);
+        logger.debug(`🗑️ OCR Cache: ${keys.length} entrées supprimées`);
       }
       return true;
     } catch (error) {

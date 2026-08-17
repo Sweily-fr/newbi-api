@@ -1,11 +1,17 @@
 import {
   withOrganization,
   checkSubscriptionActive,
+  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
 import logger from "../utils/logger.js";
-import { invoiceReferenceMatches } from "../utils/invoiceReferenceMatch.js";
+import {
+  findReconciliationSuggestions,
+  findTransactionsForInvoice,
+  findInvoicesForTransaction,
+  setReconciliationIgnored,
+} from "../utils/reconciliationMatching.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const reconciliationResolvers = {
@@ -17,75 +23,22 @@ const reconciliationResolvers = {
         { user, workspaceId: ctxWorkspaceId },
       ) => {
         try {
-          // Utiliser le workspaceId passé en argument ou celui du contexte
-          const workspaceId = argWorkspaceId || ctxWorkspaceId;
+          // resolveWorkspaceId privilégie le workspace validé par le RBAC :
+          // un argument workspaceId arbitraire ne peut pas cibler une autre org
+          const workspaceId = resolveWorkspaceId(
+            argWorkspaceId,
+            ctxWorkspaceId,
+          );
 
-          // Critères "à rapprocher" : une entrée d'argent (amount > 0) pas encore
-          // liée à une facture (linkedInvoiceId null), sans justificatif attaché
-          // (receiptFiles vide → un justificatif/ticket vaut justification, donc
-          // plus rien à rapprocher) et dont le statut n'est ni "matched" ni
-          // "ignored" (donc unmatched/suggested, ou vide pour données legacy).
-          // Doit rester identique au filtre "toReconcile" de la page Transactions
-          // (TransactionTable.jsx) et à la route REST /reconciliation/suggestions.
-          const reconcileQuery = {
-            workspaceId,
-            deletedAt: null,
-            reconciliationStatus: { $nin: ["matched", "ignored"] },
-            amount: { $gt: 0 },
-            linkedInvoiceId: null,
-            "receiptFiles.0": { $exists: false },
-          };
+          // Logique partagée avec la route REST /reconciliation/suggestions
+          // (utils/reconciliationMatching.js) : mêmes candidats, mêmes règles.
+          const { suggestions, unmatchedCount, pendingInvoicesCount } =
+            await findReconciliationSuggestions(workspaceId);
 
-          // Comptage complet, sans plafond (countDocuments) → le badge reflète le
-          // vrai total. La génération de suggestions ci-dessous reste plafonnée
-          // (perf), mais ne sert plus à calculer unmatchedCount.
-          const unmatchedCount =
-            await Transaction.countDocuments(reconcileQuery);
-
-          const unmatchedTransactions = await Transaction.find(reconcileQuery)
-            .sort({ date: -1 })
-            .limit(50);
-
-          // Récupérer les factures en attente de paiement (cap à 500 pour éviter surcharge mémoire)
-          const pendingInvoices = await Invoice.find({
-            workspaceId,
-            status: "PENDING",
-            linkedTransactionId: null,
-          })
-            .sort({ dueDate: 1 })
-            .limit(500);
-
-          // Générer des suggestions de correspondance
-          const suggestions = [];
-
-          for (const transaction of unmatchedTransactions) {
-            const matchingInvoices = pendingInvoices.filter((invoice) => {
-              const invoiceAmount =
-                invoice.finalTotalTTC || invoice.totalTTC || 0;
-              const tolerance = invoiceAmount * 0.01;
-              const amountMatch =
-                Math.abs(transaction.amount - invoiceAmount) <= tolerance;
-
-              const clientName =
-                invoice.client?.name || invoice.client?.firstName || "";
-              const descriptionMatch =
-                clientName &&
-                transaction.description
-                  ?.toLowerCase()
-                  .includes(clientName.toLowerCase());
-
-              // Correspondance par numéro de facture présent dans le libellé brut
-              // de la transaction (référence Bridge non tronquée).
-              const referenceMatch = invoiceReferenceMatches(
-                transaction,
-                invoice,
-              );
-
-              return amountMatch || descriptionMatch || referenceMatch;
-            });
-
-            if (matchingInvoices.length > 0) {
-              suggestions.push({
+          return {
+            success: true,
+            suggestions: suggestions.map(
+              ({ transaction, matchingInvoices, confidence }) => ({
                 transaction: {
                   id: transaction._id.toString(),
                   amount: transaction.amount,
@@ -103,24 +56,11 @@ const reconciliationResolvers = {
                   dueDate: inv.dueDate,
                   status: inv.status,
                 })),
-                confidence: matchingInvoices.some((inv) => {
-                  const invoiceAmount = inv.finalTotalTTC || inv.totalTTC || 0;
-                  const amtMatch =
-                    Math.abs(transaction.amount - invoiceAmount) <=
-                    invoiceAmount * 0.01;
-                  return amtMatch || invoiceReferenceMatches(transaction, inv);
-                })
-                  ? "high"
-                  : "medium",
-              });
-            }
-          }
-
-          return {
-            success: true,
-            suggestions,
+                confidence,
+              }),
+            ),
             unmatchedCount,
-            pendingInvoicesCount: pendingInvoices.length,
+            pendingInvoicesCount,
           };
         } catch (error) {
           logger.error("[RECONCILIATION-GQL] Erreur suggestions:", error);
@@ -130,7 +70,7 @@ const reconciliationResolvers = {
     ),
 
     transactionsForInvoice: withOrganization(
-      async (parent, { invoiceId }, { user, workspaceId }) => {
+      async (parent, { invoiceId, search }, { user, workspaceId }) => {
         try {
           // IDOR fix: filtre par workspaceId pour empêcher l'accès cross-tenant
           const invoice = await Invoice.findOne({
@@ -141,64 +81,74 @@ const reconciliationResolvers = {
             throw new Error("Facture non trouvée");
           }
 
-          const invoiceAmount = invoice.finalTotalTTC || invoice.totalTTC || 0;
-
-          // Récupérer les transactions non rapprochées (crédits uniquement)
-          const transactions = await Transaction.find({
+          // Logique partagée avec la route REST (fenêtre de dates contournée
+          // par une recherche explicite, scoring montant/nom/référence).
+          const { scored, invoiceAmount } = await findTransactionsForInvoice(
+            invoice,
             workspaceId,
-            deletedAt: null,
-            reconciliationStatus: { $in: ["unmatched", "suggested"] },
-            amount: { $gt: 0 },
-          })
-            .sort({ date: -1 })
-            .limit(100);
+            search,
+          );
 
-          // Trier par pertinence
-          const scoredTransactions = transactions.map((tx) => {
-            let score = 0;
-
-            // Score par montant
-            const tolerance = invoiceAmount * 0.01;
-            if (Math.abs(tx.amount - invoiceAmount) <= tolerance) {
-              score += 100;
-            } else if (
-              Math.abs(tx.amount - invoiceAmount) <=
-              invoiceAmount * 0.1
-            ) {
-              score += 50;
-            }
-
-            // Score par nom du client
-            const clientName =
-              invoice.client?.name || invoice.client?.firstName || "";
-            if (
-              clientName &&
-              tx.description?.toLowerCase().includes(clientName.toLowerCase())
-            ) {
-              score += 50;
-            }
-
-            return {
+          return {
+            success: true,
+            transactions: scored.map(({ transaction: tx, score }) => ({
               id: tx._id.toString(),
               amount: tx.amount,
               description: tx.description,
               date: tx.date,
               reconciliationStatus: tx.reconciliationStatus,
               score,
-            };
-          });
-
-          // Trier par score décroissant
-          scoredTransactions.sort((a, b) => b.score - a.score);
-
-          return {
-            success: true,
-            transactions: scoredTransactions.slice(0, 20),
+            })),
             invoiceAmount,
           };
         } catch (error) {
           logger.error(
             "[RECONCILIATION-GQL] Erreur transactions pour facture:",
+            error,
+          );
+          throw error;
+        }
+      },
+    ),
+
+    invoicesForTransaction: withOrganization(
+      async (parent, { transactionId, search }, { user, workspaceId }) => {
+        try {
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+            deletedAt: null,
+          });
+          if (!transaction) {
+            throw new Error("Transaction non trouvée");
+          }
+
+          // Logique partagée avec la route REST : PENDING + COMPLETED non
+          // liées (plafonds séparés), fenêtre de dates contournée par une
+          // recherche explicite, scoring montant/nom/référence.
+          const { scored, transactionAmount } =
+            await findInvoicesForTransaction(transaction, workspaceId, search);
+
+          const scoredInvoices = scored.map(({ invoice: inv, score }) => ({
+            id: inv._id.toString(),
+            number: inv.number,
+            clientName:
+              inv.client?.name ||
+              `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
+            totalTTC: inv.finalTotalTTC || inv.totalTTC || 0,
+            dueDate: inv.dueDate,
+            status: inv.status,
+            score,
+          }));
+
+          return {
+            success: true,
+            invoices: scoredInvoices,
+            transactionAmount,
+          };
+        } catch (error) {
+          logger.error(
+            "[RECONCILIATION-GQL] Erreur factures pour transaction:",
             error,
           );
           throw error;
@@ -213,57 +163,63 @@ const reconciliationResolvers = {
         try {
           const { transactionId, invoiceId } = input;
 
-          // Revendication ATOMIQUE de la transaction : la condition
-          // linkedInvoiceId:null dans le filtre garantit qu'on ne lie pas une
-          // transaction déjà liée, même si une autre requête arrive en parallèle
-          // (élimine la race TOCTOU entre la vérification et l'écriture).
+          // Garde-fou : on ne rapproche que des factures émises. Une DRAFT
+          // contournerait la numérotation DRAFT→PENDING, une CANCELED ne doit
+          // pas redevenir COMPLETED.
+          const targetInvoice = await Invoice.findOne({
+            _id: invoiceId,
+            workspaceId,
+          });
+          if (!targetInvoice) {
+            return { success: false, message: "Facture non trouvée" };
+          }
+          if (["DRAFT", "CANCELED"].includes(targetInvoice.status)) {
+            return {
+              success: false,
+              message: `Impossible de rapprocher une facture au statut ${targetInvoice.status}`,
+            };
+          }
+
+          // Relation N↔N : on utilise $addToSet des deux côtés pour être
+          // idempotent (rejoue la même liaison = no-op) et supporter les
+          // paiements groupés (1 transaction → N factures) et échelonnements
+          // (1 facture ← N transactions).
           const transaction = await Transaction.findOneAndUpdate(
-            { _id: transactionId, workspaceId, linkedInvoiceId: null },
+            { _id: transactionId, workspaceId, deletedAt: null },
             {
-              linkedInvoiceId: invoiceId,
-              reconciliationStatus: "matched",
-              reconciliationDate: new Date(),
+              $addToSet: { linkedInvoiceIds: invoiceId },
+              $set: {
+                reconciliationStatus: "matched",
+                reconciliationDate: new Date(),
+              },
             },
             { new: true },
           );
           if (!transaction) {
-            const exists = await Transaction.exists({
-              _id: transactionId,
-              workspaceId,
-            });
-            return {
-              success: false,
-              message: exists
-                ? "Cette transaction est déjà liée à une facture"
-                : "Transaction non trouvée",
-            };
+            return { success: false, message: "Transaction non trouvée" };
           }
 
-          // Revendication ATOMIQUE de la facture. Si elle échoue (facture
-          // introuvable ou déjà liée), on annule la liaison de la transaction
-          // pour éviter un état incohérent (pas de transaction Mongo requise,
-          // compatible avec un MongoDB standalone).
           const invoice = await Invoice.findOneAndUpdate(
-            { _id: invoiceId, workspaceId, linkedTransactionId: null },
+            { _id: invoiceId, workspaceId },
             {
-              linkedTransactionId: transactionId,
-              status: "COMPLETED",
-              paymentDate: transaction.date,
+              $addToSet: { linkedTransactionIds: transactionId },
+              // Passe la facture en COMPLETED dès qu'une transaction est liée.
+              // La 1re paymentDate est préservée si des transactions
+              // ultérieures sont ajoutées (paiements échelonnés).
+              $set: {
+                status: "COMPLETED",
+                paymentDate: targetInvoice.paymentDate || transaction.date,
+              },
             },
             { new: true },
           );
           if (!invoice) {
-            transaction.linkedInvoiceId = null;
-            transaction.reconciliationStatus = "unmatched";
-            transaction.reconciliationDate = null;
-            await transaction.save();
-            const exists = await Invoice.exists({ _id: invoiceId, workspaceId });
-            return {
-              success: false,
-              message: exists
-                ? "Cette facture est déjà liée à une transaction"
-                : "Facture non trouvée",
-            };
+            // Compensation : retirer la ref qu'on vient d'ajouter côté transaction.
+            await Transaction.updateOne(
+              { _id: transactionId, workspaceId },
+              { $pull: { linkedInvoiceIds: invoiceId } },
+            );
+            return { success: false, message: "Facture non trouvée" };
           }
 
           // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible
@@ -308,36 +264,55 @@ const reconciliationResolvers = {
         try {
           const { transactionId, invoiceId } = input;
 
-          let transaction, invoice;
-
-          if (transactionId) {
-            transaction = await Transaction.findOne({
-              _id: transactionId,
-              workspaceId,
-            });
-            if (transaction?.linkedInvoiceId) {
-              invoice = await Invoice.findById(transaction.linkedInvoiceId);
-            }
-          } else if (invoiceId) {
-            invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
-            if (invoice?.linkedTransactionId) {
-              transaction = await Transaction.findById(
-                invoice.linkedTransactionId,
-              );
-            }
+          // Impossible de délier sans les DEUX ids en N↔N : on ne peut plus
+          // se contenter d'un seul champ singular comme avant.
+          if (!transactionId || !invoiceId) {
+            return {
+              success: false,
+              message:
+                "transactionId et invoiceId sont requis pour délier une liaison N↔N",
+            };
           }
 
-          // Délier la transaction
-          if (transaction) {
-            transaction.linkedInvoiceId = null;
+          // Délier côté transaction ($pull idempotent).
+          const transaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            { $pull: { linkedInvoiceIds: invoiceId } },
+            { new: true },
+          );
+
+          // Si plus aucun lien (ni facture de vente, ni facture d'achat) →
+          // status unmatched. updateOne ciblé plutôt que save() : ne revalide
+          // pas tout le document (données legacy hors enum).
+          if (
+            transaction &&
+            (transaction.linkedInvoiceIds || []).length === 0 &&
+            (transaction.linkedPurchaseInvoiceIds || []).length === 0
+          ) {
+            await Transaction.updateOne(
+              { _id: transactionId, workspaceId },
+              {
+                $set: {
+                  reconciliationStatus: "unmatched",
+                  reconciliationDate: null,
+                },
+              },
+            );
             transaction.reconciliationStatus = "unmatched";
             transaction.reconciliationDate = null;
-            await transaction.save();
           }
 
-          // Délier la facture (repasser en PENDING)
-          if (invoice) {
-            invoice.linkedTransactionId = null;
+          // Délier côté facture.
+          const invoice = await Invoice.findOneAndUpdate(
+            { _id: invoiceId, workspaceId },
+            { $pull: { linkedTransactionIds: transactionId } },
+            { new: true },
+          );
+
+          // Si plus aucune transaction liée → facture repasse PENDING sans
+          // date de paiement. Sinon on garde COMPLETED (les autres transactions
+          // liées la maintiennent payée).
+          if (invoice && (invoice.linkedTransactionIds || []).length === 0) {
             invoice.status = "PENDING";
             invoice.paymentDate = null;
             await invoice.save();
@@ -350,8 +325,6 @@ const reconciliationResolvers = {
           return {
             success: true,
             message: "Déliaison effectuée avec succès",
-            // Transaction mise à jour (linkedInvoiceId null, statut unmatched) :
-            // Apollo efface linkedInvoice de l'entité en cache sans refetch.
             transaction: transaction || null,
           };
         } catch (error) {
@@ -366,10 +339,10 @@ const reconciliationResolvers = {
         try {
           const { transactionId } = input;
 
-          const transaction = await Transaction.findOneAndUpdate(
-            { _id: transactionId, workspaceId },
-            { reconciliationStatus: "ignored" },
-            { new: true },
+          const transaction = await setReconciliationIgnored(
+            transactionId,
+            workspaceId,
+            true,
           );
 
           if (!transaction) {
@@ -386,6 +359,39 @@ const reconciliationResolvers = {
           };
         } catch (error) {
           logger.error("[RECONCILIATION-GQL] Erreur ignorer:", error);
+          return { success: false, message: error.message };
+        }
+      },
+    ),
+
+    unignoreTransaction: withOrganization(
+      async (parent, { input }, { user, workspaceId }) => {
+        try {
+          const { transactionId } = input;
+
+          const transaction = await setReconciliationIgnored(
+            transactionId,
+            workspaceId,
+            false,
+          );
+
+          if (!transaction) {
+            return {
+              success: false,
+              message: "Transaction non trouvée ou non ignorée",
+            };
+          }
+
+          logger.info(
+            `[RECONCILIATION-GQL] Transaction réactivée pour le rapprochement: ${transactionId}`,
+          );
+
+          return {
+            success: true,
+            message: "Transaction réintégrée au rapprochement",
+          };
+        } catch (error) {
+          logger.error("[RECONCILIATION-GQL] Erreur dé-ignorer:", error);
           return { success: false, message: error.message };
         }
       },

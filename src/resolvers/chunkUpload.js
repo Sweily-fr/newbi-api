@@ -1,5 +1,6 @@
 import { ApolloError, UserInputError } from "apollo-server-express";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 import {
   saveChunk,
   areAllChunksReceived,
@@ -82,6 +83,23 @@ const chunkUploadResolvers = {
             throw new UserInputError(
               "Identifiant de fichier ou nom de fichier manquant",
             );
+          }
+
+          // 🔐 fileId sert de nom de dossier (path.join) et de motif regex :
+          // n'autoriser qu'un identifiant sûr (bloque le path traversal `../`
+          // et l'injection de métacaractères regex).
+          if (!/^[a-zA-Z0-9_-]{1,128}$/.test(fileId)) {
+            throw new UserInputError("Identifiant de fichier invalide");
+          }
+
+          // 🔐 Borner totalChunks (évite un remplissage disque via un nombre
+          // de chunks déclaré arbitrairement grand).
+          if (
+            !Number.isInteger(totalChunks) ||
+            totalChunks < 1 ||
+            totalChunks > 100000
+          ) {
+            throw new UserInputError("Nombre de chunks invalide");
           }
 
           if (chunkIndex < 0 || chunkIndex >= totalChunks) {
@@ -225,6 +243,19 @@ const chunkUploadResolvers = {
           // Définir les options du transfert de fichier
           const expiryDays = input?.expiryDays || 7; // 7 jours par défaut
           const workspaceId = input?.workspaceId || null;
+          // 🔐 Ne pas taguer un transfert avec le workspace d'une org dont
+          // l'utilisateur n'est pas membre.
+          if (
+            workspaceId &&
+            !(await userBelongsToWorkspace(
+              String(user.id || user._id),
+              String(workspaceId),
+            ))
+          ) {
+            throw new UserInputError(
+              "Accès non autorisé à cet espace de travail",
+            );
+          }
 
           // Gérer les champs avec alias pour compatibilité avec le frontend
           const isPaymentRequired =

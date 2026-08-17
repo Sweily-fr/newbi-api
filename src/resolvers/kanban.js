@@ -3,21 +3,36 @@ import { Board, Column, Task } from "../models/kanban.js";
 import { AuthenticationError } from "apollo-server-express";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getPubSub, cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
-import User from "../models/User.js";
 import { ObjectId } from "mongodb";
 import { sendTaskAssignmentEmail, sendMentionEmail } from "../utils/mailer.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "./notification.js";
 import { sendPushToUser } from "../services/pushNotificationService.js";
 import Client from "../models/Client.js";
+import {
+  maybeTriggerClaudeDev,
+  hasClaudeMention,
+  claudeDevApplies,
+  isClaudeCodingStartComment,
+} from "../services/claudeDevTriggerService.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
 const TASK_UPDATED = "TASK_UPDATED";
 const COLUMN_UPDATED = "COLUMN_UPDATED";
+
+// Board introuvable = refus métier attendu (board supprimé par un collègue,
+// changement d'organisation en cours, accès retiré au tableau), pas un
+// incident. Une AppError NOT_FOUND est loggée en debug par formatError, là où
+// une Error nue sortait un "❌ [GraphQL Error]" ramassé par l'alerting.
+// Le message reste en anglais : le front le filtre tel quel pour ne pas
+// afficher de toast (NewbiV2/src/lib/apolloClient.js).
+const boardNotFoundError = () =>
+  new AppError("Board not found", ERROR_CODES.NOT_FOUND, { resource: "Board" });
 
 // Clé de cache Redis pour les tâches d'un board
 const boardTasksCacheKey = (boardId, workspaceId) =>
@@ -109,7 +124,7 @@ const enrichTaskWithUserInfo = async (task) => {
         .collection("user")
         .find({ _id: { $in: [...userStringIds, ...userObjectIds] } })
         .toArray();
-      logger.info(
+      logger.debug(
         `🔍 [enrichTask] ${users.length} utilisateurs trouvés pour ${userStringIds.length} IDs demandés`,
       );
       users.forEach((u) => {
@@ -126,7 +141,7 @@ const enrichTaskWithUserInfo = async (task) => {
         }
         // Prioriser u.image (Better Auth) avant u.avatar (ancien système)
         const userImage = u.image || u.avatar || null;
-        logger.info(
+        logger.debug(
           `📋 [enrichTask] User ${u._id.toString()}: name=${displayName}, image=${userImage ? "oui" : "non"}, u.image=${u.image ? "oui" : "non"}, u.avatar=${u.avatar ? "oui" : "non"}`,
         );
         usersMap[u._id.toString()] = { name: displayName, image: userImage };
@@ -149,7 +164,7 @@ const enrichTaskWithUserInfo = async (task) => {
 
   // Récupérer les infos des visiteurs externes depuis PublicBoardShare et UserInvited
   let visitorsMap = {};
-  logger.info(
+  logger.debug(
     `🔍 [enrichTask] externalEmails: ${externalEmails.size}, visitorIds: ${visitorIds.size}, boardId: ${taskObj.boardId}`,
   );
   if ((externalEmails.size > 0 || visitorIds.size > 0) && taskObj.boardId) {
@@ -160,7 +175,7 @@ const enrichTaskWithUserInfo = async (task) => {
         boardId: taskObj.boardId,
         isActive: true,
       });
-      logger.info(
+      logger.debug(
         `🔍 [enrichTask] Share trouvé: ${!!share}, visiteurs: ${share?.visitors?.length || 0}`,
       );
       if (share?.visitors) {
@@ -193,7 +208,7 @@ const enrichTaskWithUserInfo = async (task) => {
             email: { $in: Array.from(externalEmails) },
           }).lean();
 
-          logger.info(
+          logger.debug(
             `🔍 [enrichTask] ${invitedUsers.length} utilisateurs invités trouvés pour ${externalEmails.size} emails`,
           );
 
@@ -219,7 +234,7 @@ const enrichTaskWithUserInfo = async (task) => {
 
             // Indexer par email (clé primaire dans UserInvited)
             visitorsMap[u.email.toLowerCase()] = visitorData;
-            logger.info(
+            logger.debug(
               `📋 [enrichTask] UserInvited indexé: ${u.email} -> ${displayName}, image: ${u.image ? "oui" : "non"}`,
             );
           });
@@ -507,6 +522,81 @@ const enrichTasksWithUserInfo = async (tasks) => {
   });
 };
 
+// Infos d'affichage d'un utilisateur pour l'enrichissement des
+// commentaires et de l'activité des tâches
+const buildUserDisplayInfo = (u) => {
+  let displayName = "";
+  if (u.name && u.lastName) {
+    displayName = `${u.name} ${u.lastName}`;
+  } else if (u.name) {
+    displayName = u.name;
+  } else if (u.lastName) {
+    displayName = u.lastName;
+  } else {
+    displayName = u.email?.split("@")[0] || "Utilisateur";
+  }
+  return {
+    name: displayName,
+    image: u.avatar || u.image || null,
+    email: u.email || null,
+  };
+};
+
+// Loader par requête des infos utilisateur : les resolvers Task.comments
+// et Task.activity tournent en parallèle sur des dizaines de tâches, on
+// déduplique donc les lookups Mongo via un cache de promesses porté par
+// le contexte GraphQL.
+const loadTaskUsersInfo = async (context, userIds) => {
+  const ids = Array.from(userIds);
+  if (ids.length === 0) return {};
+
+  const cache =
+    context && typeof context === "object"
+      ? (context._taskUserInfoCache ??= new Map())
+      : new Map();
+
+  // Pas d'await entre la détection des ids manquants et le remplissage du
+  // cache : les resolvers concurrents du même tick partagent le batch.
+  const missing = ids.filter((id) => !cache.has(id));
+  if (missing.length > 0) {
+    const batch = mongoose.connection.db
+      .collection("user")
+      .find({
+        _id: {
+          $in: missing.map((id) => {
+            try {
+              return new mongoose.Types.ObjectId(id);
+            } catch {
+              return id;
+            }
+          }),
+        },
+      })
+      .toArray()
+      .then(
+        (users) =>
+          new Map(
+            users.map((u) => [u._id.toString(), buildUserDisplayInfo(u)]),
+          ),
+      );
+    for (const id of missing) {
+      cache.set(
+        id,
+        batch.then((m) => m.get(id) || null),
+      );
+    }
+  }
+
+  const usersMap = {};
+  await Promise.all(
+    ids.map(async (id) => {
+      const info = await cache.get(id);
+      if (info) usersMap[id] = info;
+    }),
+  );
+  return usersMap;
+};
+
 const resolvers = {
   Query: {
     boards: withWorkspace(
@@ -572,11 +662,11 @@ const resolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         try {
-          logger.info("🔍 [Kanban] organizationMembers appelé");
-          logger.info(`🔍 [Kanban] workspaceId (args): ${workspaceId}`);
-          logger.info(`🔍 [Kanban] contextWorkspaceId: ${contextWorkspaceId}`);
-          logger.info(`🔍 [Kanban] finalWorkspaceId: ${finalWorkspaceId}`);
-          logger.info(`🔍 [Kanban] db disponible: ${!!db}`);
+          logger.debug("🔍 [Kanban] organizationMembers appelé");
+          logger.debug(`🔍 [Kanban] workspaceId (args): ${workspaceId}`);
+          logger.debug(`🔍 [Kanban] contextWorkspaceId: ${contextWorkspaceId}`);
+          logger.debug(`🔍 [Kanban] finalWorkspaceId: ${finalWorkspaceId}`);
+          logger.debug(`🔍 [Kanban] db disponible: ${!!db}`);
 
           // Convertir le workspaceId en ObjectId pour la recherche
           let orgId;
@@ -585,7 +675,7 @@ const resolvers = {
               typeof finalWorkspaceId === "string"
                 ? new ObjectId(finalWorkspaceId)
                 : finalWorkspaceId;
-            logger.info(`✅ [Kanban] orgId converti: ${orgId}`);
+            logger.debug(`✅ [Kanban] orgId converti: ${orgId}`);
           } catch (conversionError) {
             logger.error(
               `❌ [Kanban] Erreur conversion ObjectId: ${conversionError.message}`,
@@ -593,7 +683,7 @@ const resolvers = {
             return [];
           }
 
-          logger.info(
+          logger.debug(
             `🔍 [Kanban] Recherche membres pour organisation: ${orgId}`,
           );
 
@@ -602,7 +692,7 @@ const resolvers = {
             .collection("organization")
             .findOne({ _id: orgId });
 
-          logger.info(
+          logger.debug(
             `🔍 [Kanban] Résultat findOne organisation: ${
               organization ? "trouvée" : "non trouvée"
             }`,
@@ -616,7 +706,7 @@ const resolvers = {
               .find({})
               .limit(5)
               .toArray();
-            logger.info(
+            logger.debug(
               `📋 [Kanban] Organisations en base (premiers 5): ${allOrgs
                 .map((o) => o._id)
                 .join(", ")}`,
@@ -624,7 +714,9 @@ const resolvers = {
             return [];
           }
 
-          logger.info(`🏢 [Kanban] Organisation trouvée: ${organization.name}`);
+          logger.debug(
+            `🏢 [Kanban] Organisation trouvée: ${organization.name}`,
+          );
 
           // 2. Récupérer TOUS les membres (y compris owner) via la collection member
           // Better Auth stocke TOUS les membres dans la collection member, même l'owner
@@ -635,7 +727,7 @@ const resolvers = {
             })
             .toArray();
 
-          logger.info(
+          logger.debug(
             `📋 [Kanban] ${members.length} membres trouvés (incluant owner)`,
           );
 
@@ -652,7 +744,7 @@ const resolvers = {
             return typeof userId === "string" ? new ObjectId(userId) : userId;
           });
 
-          logger.info(
+          logger.debug(
             `👥 [Kanban] Recherche de ${userIds.length} utilisateurs`,
           );
 
@@ -664,7 +756,7 @@ const resolvers = {
             })
             .toArray();
 
-          logger.info(`✅ [Kanban] ${users.length} utilisateurs trouvés`);
+          logger.debug(`✅ [Kanban] ${users.length} utilisateurs trouvés`);
 
           // 5. Créer le résultat en combinant membres et users
           const result = members
@@ -709,8 +801,8 @@ const resolvers = {
             })
             .filter(Boolean); // Retirer les null
 
-          logger.info(`✅ [Kanban] Retour de ${result.length} membres`);
-          logger.info(
+          logger.debug(`✅ [Kanban] Retour de ${result.length} membres`);
+          logger.debug(
             "📋 [Kanban] Détails:",
             result.map((r) => ({
               email: r.email,
@@ -759,7 +851,7 @@ const resolvers = {
           })
           .toArray();
 
-        logger.info(
+        logger.debug(
           `✅ [Kanban] Récupéré ${users.length} utilisateurs sur ${userIds.length} demandés`,
         );
 
@@ -812,7 +904,7 @@ const resolvers = {
           _id: id,
           workspaceId: finalWorkspaceId,
         });
-        if (!board) throw new Error("Board not found");
+        if (!board) throw boardNotFoundError();
 
         // Vérifier l'accès : si aucune restriction de membres → tout le monde
         // peut voir. Sinon, l'utilisateur doit être propriétaire, listé dans
@@ -851,7 +943,7 @@ const resolvers = {
               );
             }
             if (!isWorkspaceAdmin) {
-              throw new Error("Board not found");
+              throw boardNotFoundError();
             }
           }
         }
@@ -1101,7 +1193,7 @@ const resolvers = {
             _id: input.id,
             workspaceId: finalWorkspaceId,
           }).select("userId");
-          if (!existing) throw new Error("Board not found");
+          if (!existing) throw boardNotFoundError();
           if (!user?.id || existing.userId?.toString() !== user.id.toString()) {
             throw new Error(
               "Seul le créateur du tableau peut modifier la liste des membres autorisés",
@@ -1116,7 +1208,7 @@ const resolvers = {
           updateData,
           { new: true },
         );
-        if (!board) throw new Error("Board not found");
+        if (!board) throw boardNotFoundError();
 
         // Publier l'événement de mise à jour de board
         safePublish(
@@ -1185,7 +1277,7 @@ const resolvers = {
           _id: boardId,
           workspaceId: finalWorkspaceId,
         });
-        if (!board) throw new Error("Board not found");
+        if (!board) throw boardNotFoundError();
 
         const favs = board.favoritedBy || [];
         const isFav = favs.includes(user.id);
@@ -1639,8 +1731,8 @@ const resolvers = {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { id, ...updates } = input;
 
-        logger.info("📝 [UpdateTask] dueDate reçue:", input.dueDate);
-        logger.info("📝 [UpdateTask] dueDate type:", typeof input.dueDate);
+        logger.debug("📝 [UpdateTask] dueDate reçue:", input.dueDate);
+        logger.debug("📝 [UpdateTask] dueDate type:", typeof input.dueDate);
 
         // Récupérer la tâche avant modification pour comparer
         const oldTask = await Task.findOne({
@@ -1865,7 +1957,7 @@ const resolvers = {
         // mutations concurrentes (ou arrivées dans le désordre) s'écrasent en
         // "last-write-wins" et un membre retiré peut réapparaître.
         let memberAtomicOps = null; // { add: [], remove: [], all: [] } | null
-        logger.info(
+        logger.debug(
           `📧 [UpdateTask] updates.assignedMembers reçu: ${JSON.stringify(updates.assignedMembers)}`,
         );
         if (updates.assignedMembers !== undefined) {
@@ -1890,7 +1982,7 @@ const resolvers = {
           const oldMembers = normalizeMembers(oldTask.assignedMembers);
           const newMembers = normalizeMembers(updates.assignedMembers);
 
-          logger.info(
+          logger.debug(
             `📧 [UpdateTask] oldMembers: ${JSON.stringify(oldMembers)}, newMembers: ${JSON.stringify(newMembers)}`,
           );
 
@@ -1899,13 +1991,13 @@ const resolvers = {
             oldMembers.length !== newMembers.length ||
             oldMembers.some((m, i) => m !== newMembers[i]);
 
-          logger.info(`📧 [UpdateTask] hasChanged: ${hasChanged}`);
+          logger.debug(`📧 [UpdateTask] hasChanged: ${hasChanged}`);
 
           if (hasChanged) {
             const addedMembers = newMembers.filter(
               (m) => !oldMembers.includes(m),
             );
-            logger.info(
+            logger.debug(
               `📧 [UpdateTask] addedMembers: ${JSON.stringify(addedMembers)}`,
             );
             const removedMembers = oldMembers.filter(
@@ -1939,21 +2031,21 @@ const resolvers = {
               ];
 
               // Envoyer des emails de notification aux membres assignés
-              logger.info(
+              logger.debug(
                 `📧 [UpdateTask] Début envoi emails pour ${addedMembers.length} membres assignés: ${addedMembers.join(", ")}`,
               );
               (async () => {
                 try {
                   // Récupérer les infos du board et de la colonne
                   const board = await Board.findById(oldTask.boardId);
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? "OUI" : "NON"}, Board name: ${board?.title}`,
                   );
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`,
                   );
                   const column = await Column.findById(oldTask.columnId);
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] Column trouvée: ${column ? "OUI" : "NON"}, Column title: ${column?.title}`,
                   );
                   const assignerName =
@@ -1963,7 +2055,7 @@ const resolvers = {
                     "Un membre de l'équipe";
                   const boardName = board?.title || "Tableau sans nom";
                   const columnName = column?.title || "Colonne";
-                  logger.info(
+                  logger.debug(
                     `📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`,
                   );
 
@@ -2015,11 +2107,11 @@ const resolvers = {
                                 : oldTask.priority || "",
                             taskUrl: taskUrl,
                           });
-                          logger.info(
+                          logger.debug(
                             `📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`,
                           );
                         } else {
-                          logger.info(
+                          logger.debug(
                             `📧 [UpdateTask] Email désactivé par préférences pour ${memberData.email}`,
                           );
                         }
@@ -2047,7 +2139,7 @@ const resolvers = {
 
                             // Publier la notification en temps réel
                             await publishNotification(notification);
-                            logger.info(
+                            logger.debug(
                               `🔔 [UpdateTask] Notification créée pour ${memberData.email}`,
                             );
 
@@ -2073,7 +2165,7 @@ const resolvers = {
                             );
                           }
                         } else {
-                          logger.info(
+                          logger.debug(
                             `🔔 [UpdateTask] Notification push désactivée par préférences pour ${memberData.email}`,
                           );
                         }
@@ -2309,7 +2401,7 @@ const resolvers = {
         );
         if (!task) throw new Error("Task not found");
 
-        logger.info("📝 [UpdateTask] Task après sauvegarde:", {
+        logger.debug("📝 [UpdateTask] Task après sauvegarde:", {
           dueDate: task.dueDate,
           dueDateType: typeof task.dueDate,
           dueDateISO: task.dueDate ? task.dueDate.toISOString() : null,
@@ -2415,7 +2507,7 @@ const resolvers = {
             _id: { $ne: id }, // Exclure la tâche qu'on déplace
           }).sort("position");
 
-          console.log(
+          logger.debug(
             "📊 [moveTask] Tâches de la colonne cible AVANT update (sans la tâche déplacée):",
             {
               columnId: columnId,
@@ -2524,7 +2616,7 @@ const resolvers = {
           // Publier UN SEUL événement pour la tâche principale déplacée
           // Les autres tâches réorganisées ne nécessitent pas de publication
           const updatedTask = await Task.findOne({ _id: id });
-          console.log(
+          logger.debug(
             "📢 [moveTask] Publication événement pour la tâche principale:",
             {
               taskId: updatedTask._id.toString(),
@@ -2612,6 +2704,31 @@ const resolvers = {
             createdAt: new Date(),
           });
 
+          // Loader « Claude est en train de répondre » : un commentaire humain
+          // mentionnant @claude pose le marqueur (l'agent va être déclenché),
+          // un commentaire 🤖 du bot (repli authentifié) l'efface.
+          const isBotComment = String(input.content || "")
+            .trimStart()
+            .startsWith("🤖");
+          const mentionsClaude =
+            !isBotComment &&
+            claudeDevApplies(task) &&
+            hasClaudeMention(input.content);
+          if (isBotComment) {
+            task.claudeWorkingSince = null;
+          } else if (mentionsClaude) {
+            task.claudeWorkingSince = new Date();
+          }
+
+          // Badge « Claude est en train de coder » : posé par l'accusé de
+          // développement, effacé par le prochain commentaire 🤖 (synthèse,
+          // demande de précisions...).
+          if (isBotComment) {
+            task.claudeCodingSince = isClaudeCodingStartComment(input.content)
+              ? new Date()
+              : null;
+          }
+
           await task.save();
 
           // Enrichir la tâche avec les infos utilisateur
@@ -2629,6 +2746,12 @@ const resolvers = {
             },
             "Commentaire ajouté",
           );
+
+          // Mention @claude dans un commentaire humain → déclencher l'agent dev
+          // (les commentaires du bot commencent par 🤖 et ne comptent jamais)
+          if (mentionsClaude) {
+            maybeTriggerClaudeDev(task, "addComment");
+          }
 
           // Envoyer les notifications de mention (en arrière-plan)
           if (mentionedUserIds.length > 0) {
@@ -3748,7 +3871,7 @@ const resolvers = {
     boardMembers: (board) => {
       return board.members || [];
     },
-    members: async (board) => {
+    members: async (board, _args, context) => {
       try {
         const db = mongoose.connection.db;
 
@@ -3758,25 +3881,69 @@ const resolvers = {
             ? new mongoose.Types.ObjectId(board.workspaceId)
             : board.workspaceId;
 
-        logger.info(
-          `🔍 [Kanban Board.members] Recherche membres pour organisation: ${orgId}`,
-        );
+        // Données organisation/membres/users partagées entre tous les boards
+        // d'une même requête : les resolvers tournent en parallèle, on met donc
+        // en cache la promesse (pas le résultat) pour dédupliquer les queries.
+        const loadOrgData = async () => {
+          const [organization, workspaceMembers] = await Promise.all([
+            db.collection("organization").findOne({ _id: orgId }),
+            db.collection("member").find({ organizationId: orgId }).toArray(),
+          ]);
 
-        // 1. Récupérer l'organisation
-        const organization = await db
-          .collection("organization")
-          .findOne({ _id: orgId });
+          if (!organization) {
+            logger.warn(
+              `⚠️ [Kanban Board.members] Organisation non trouvée: ${orgId}`,
+            );
+            return {
+              organization: null,
+              workspaceMembers: [],
+              usersById: new Map(),
+            };
+          }
 
-        if (!organization) {
-          logger.warn(
-            `⚠️ [Kanban Board.members] Organisation non trouvée: ${orgId}`,
-          );
-          return [];
+          const userIds = workspaceMembers
+            .map((m) =>
+              typeof m.userId === "string"
+                ? new mongoose.Types.ObjectId(m.userId)
+                : m.userId,
+            )
+            .filter(Boolean);
+
+          const users = userIds.length
+            ? await db
+                .collection("user")
+                .find({ _id: { $in: userIds } })
+                .toArray()
+            : [];
+
+          return {
+            organization,
+            workspaceMembers,
+            usersById: new Map(users.map((u) => [u._id.toString(), u])),
+          };
+        };
+
+        let orgDataPromise;
+        if (context && typeof context === "object") {
+          if (!(context._kanbanOrgMembersCache instanceof Map)) {
+            context._kanbanOrgMembersCache = new Map();
+          }
+          const cacheKey = orgId.toString();
+          orgDataPromise = context._kanbanOrgMembersCache.get(cacheKey);
+          if (!orgDataPromise) {
+            orgDataPromise = loadOrgData();
+            context._kanbanOrgMembersCache.set(cacheKey, orgDataPromise);
+          }
+        } else {
+          orgDataPromise = loadOrgData();
         }
 
-        logger.info(
-          `🏢 [Kanban Board.members] Organisation trouvée: ${organization.name}`,
-        );
+        const { organization, workspaceMembers, usersById } =
+          await orgDataPromise;
+
+        if (!organization) {
+          return [];
+        }
 
         // Liste des userIds autorisés sur ce board.
         // - Si board.members est vide : aucune restriction → tous les membres
@@ -3791,57 +3958,21 @@ const resolvers = {
           ? new Set([ownerId, ...assignedIds].filter(Boolean))
           : null;
 
-        // 2. Récupérer les membres workspace
-        const allWorkspaceMembers = await db
-          .collection("member")
-          .find({
-            organizationId: orgId,
-          })
-          .toArray();
         const members = hasRestriction
-          ? allWorkspaceMembers.filter((m) =>
+          ? workspaceMembers.filter((m) =>
               allowedUserIds.has(m.userId?.toString()),
             )
-          : allWorkspaceMembers;
-
-        logger.info(
-          `📋 [Kanban Board.members] ${members.length} membres trouvés`,
-        );
+          : workspaceMembers;
 
         if (members.length === 0) {
-          logger.warn("⚠️ [Kanban Board.members] Aucun membre trouvé");
           return [];
         }
 
-        // 3. Récupérer les IDs utilisateurs
-        const userIds = members.map((m) => {
-          const userId = m.userId;
-          return typeof userId === "string"
-            ? new mongoose.Types.ObjectId(userId)
-            : userId;
-        });
-
-        logger.info(
-          `👥 [Kanban Board.members] Recherche de ${userIds.length} utilisateurs`,
-        );
-
-        // 4. Récupérer les informations des utilisateurs avec leurs photos
-        const users = await db
-          .collection("user")
-          .find({
-            _id: { $in: userIds },
-          })
-          .toArray();
-
-        logger.info(
-          `✅ [Kanban Board.members] ${users.length} utilisateurs trouvés`,
-        );
-
-        // 5. Créer le résultat en combinant membres et users
-        const result = members
+        // Combiner membres et users
+        return members
           .map((member) => {
             const memberUserId = member.userId?.toString();
-            const user = users.find((u) => u._id.toString() === memberUserId);
+            const user = usersById.get(memberUserId);
 
             if (!user) {
               logger.warn(
@@ -3857,17 +3988,6 @@ const resolvers = {
               user.profile?.profilePicture ||
               user.profile?.profilePictureUrl ||
               null;
-
-            logger.info(
-              `📸 [Kanban Board.members] Utilisateur: ${user.email}`,
-              {
-                image: user.image || "null",
-                avatar: user.avatar || "null",
-                profilePicture: user.profile?.profilePicture || "null",
-                profilePictureUrl: user.profile?.profilePictureUrl || "null",
-                finalImage: userImage || "null",
-              },
-            );
 
             // Construire le nom complet
             let displayName = "";
@@ -3891,12 +4011,6 @@ const resolvers = {
             };
           })
           .filter(Boolean); // Retirer les null
-
-        logger.info(
-          `✅ [Kanban Board.members] Retour de ${result.length} membres avec photos`,
-        );
-
-        return result;
       } catch (error) {
         logger.error("❌ [Kanban Board.members] Erreur:", error);
         logger.error("Stack:", error.stack);
@@ -3945,13 +4059,8 @@ const resolvers = {
     },
 
     // Enrichir les commentaires avec les infos utilisateur dynamiquement
-    comments: async (task) => {
-      logger.info(
-        `🔄 [Task.comments] Enrichissement des commentaires pour la tâche ${task._id || task.id}`,
-      );
+    comments: async (task, _args, context) => {
       if (!task.comments || task.comments.length === 0) return [];
-
-      const db = mongoose.connection.db;
 
       // Collecter tous les userIds des commentaires (sauf externes)
       const userIds = new Set();
@@ -3961,48 +4070,15 @@ const resolvers = {
         }
       });
 
-      // Récupérer les infos des utilisateurs
+      // Récupérer les infos des utilisateurs (loader partagé par requête)
       let usersMap = {};
-      if (userIds.size > 0) {
-        try {
-          const userObjectIds = Array.from(userIds).map((id) => {
-            try {
-              return new mongoose.Types.ObjectId(id);
-            } catch {
-              return id;
-            }
-          });
-
-          const users = await db
-            .collection("user")
-            .find({
-              _id: { $in: userObjectIds },
-            })
-            .toArray();
-
-          users.forEach((u) => {
-            // Construire le nom complet
-            let displayName = "";
-            if (u.name && u.lastName) {
-              displayName = `${u.name} ${u.lastName}`;
-            } else if (u.name) {
-              displayName = u.name;
-            } else if (u.lastName) {
-              displayName = u.lastName;
-            } else {
-              displayName = u.email?.split("@")[0] || "Utilisateur";
-            }
-            usersMap[u._id.toString()] = {
-              name: displayName,
-              image: u.avatar || u.image || null,
-            };
-          });
-        } catch (error) {
-          logger.error(
-            "❌ [Task.comments] Erreur récupération utilisateurs:",
-            error,
-          );
-        }
+      try {
+        usersMap = await loadTaskUsersInfo(context, userIds);
+      } catch (error) {
+        logger.error(
+          "❌ [Task.comments] Erreur récupération utilisateurs:",
+          error,
+        );
       }
 
       // Enrichir les commentaires
@@ -4039,6 +4115,7 @@ const resolvers = {
           id: comment._id?.toString() || comment.id,
           // IMPORTANT: Toujours utiliser userInfo en priorité, ignorer comment.userName stocké
           userName: userInfo?.name || "Utilisateur",
+          userEmail: comment.userEmail || userInfo?.email || null,
           userImage: userInfo?.image || null,
           // Préserver les images du commentaire
           images: (comment.images || []).map((img) => {
@@ -4053,10 +4130,8 @@ const resolvers = {
     },
 
     // Enrichir l'activité avec les infos utilisateur dynamiquement
-    activity: async (task) => {
+    activity: async (task, _args, context) => {
       if (!task.activity || task.activity.length === 0) return [];
-
-      const db = mongoose.connection.db;
 
       // Collecter tous les userIds de l'activité
       const userIds = new Set();
@@ -4064,48 +4139,15 @@ const resolvers = {
         if (a.userId) userIds.add(a.userId);
       });
 
-      // Récupérer les infos des utilisateurs
+      // Récupérer les infos des utilisateurs (loader partagé par requête)
       let usersMap = {};
-      if (userIds.size > 0) {
-        try {
-          const userObjectIds = Array.from(userIds).map((id) => {
-            try {
-              return new mongoose.Types.ObjectId(id);
-            } catch {
-              return id;
-            }
-          });
-
-          const users = await db
-            .collection("user")
-            .find({
-              _id: { $in: userObjectIds },
-            })
-            .toArray();
-
-          users.forEach((u) => {
-            // Construire le nom complet
-            let displayName = "";
-            if (u.name && u.lastName) {
-              displayName = `${u.name} ${u.lastName}`;
-            } else if (u.name) {
-              displayName = u.name;
-            } else if (u.lastName) {
-              displayName = u.lastName;
-            } else {
-              displayName = u.email?.split("@")[0] || "Utilisateur";
-            }
-            usersMap[u._id.toString()] = {
-              name: displayName,
-              image: u.avatar || u.image || null,
-            };
-          });
-        } catch (error) {
-          logger.error(
-            "❌ [Task.activity] Erreur récupération utilisateurs:",
-            error,
-          );
-        }
+      try {
+        usersMap = await loadTaskUsersInfo(context, userIds);
+      } catch (error) {
+        logger.error(
+          "❌ [Task.activity] Erreur récupération utilisateurs:",
+          error,
+        );
       }
 
       // Enrichir l'activité

@@ -8,6 +8,7 @@ import logger from "../utils/logger.js";
 import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
 import { sendSignatureInvitations } from "../services/esignatureEmail.js";
+import { mapExternalStatus } from "../services/esignatureStatus.js";
 import {
   publishSignatureStatus,
   signatureChannel,
@@ -29,31 +30,6 @@ function getDocumentModel(documentType) {
         ERROR_CODES.VALIDATION_ERROR,
       );
   }
-}
-
-/**
- * Mapper le statut de l'API eSignature vers notre statut interne
- */
-function mapExternalStatus(externalState) {
-  const statusMap = {
-    WAIT_VALIDATION: "WAIT_VALIDATION",
-    WAIT_SIGN: "WAIT_SIGN",
-    WAIT_SIGNER: "WAIT_SIGNER",
-    DONE: "DONE",
-    ERROR: "ERROR",
-  };
-  // Normaliser la casse : l'API peut renvoyer l'état en minuscules/casse mixte
-  const key = String(externalState || "")
-    .trim()
-    .toUpperCase();
-  const mapped = statusMap[key];
-  if (!mapped) {
-    logger.warn(
-      `mapExternalStatus: état eSignature inconnu "${externalState}", repli sur PENDING`,
-    );
-    return "PENDING";
-  }
-  return mapped;
 }
 
 // Helper pour récupérer la dernière SignatureRequest d'un document (filtre optionnel)
@@ -197,8 +173,9 @@ const esignatureResolvers = {
                 // L'API OpenAPI encapsule les données dans .data
                 const detail = externalStatus?.data || externalStatus || {};
 
+                // null = état inexploitable : on conserve le statut courant
                 const newStatus = mapExternalStatus(detail.state);
-                if (newStatus !== signatureRequest.status) {
+                if (newStatus && newStatus !== signatureRequest.status) {
                   signatureRequest.status = newStatus;
                   if (detail.errorMessage) {
                     signatureRequest.errorMessage = detail.errorMessage;
@@ -295,6 +272,14 @@ const esignatureResolvers = {
           if (document.status === "DRAFT") {
             throw new AppError(
               "Les brouillons ne peuvent pas être signés. Veuillez d'abord valider le document.",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+
+          // Un devis déjà accepté ou refusé ne peut plus être envoyé en signature
+          if (document.status !== "PENDING") {
+            throw new AppError(
+              "Seul un devis en attente peut être envoyé en signature.",
               ERROR_CODES.VALIDATION_ERROR,
             );
           }
@@ -453,9 +438,10 @@ const esignatureResolvers = {
           const resultData = apiResult.data || apiResult;
           signatureRequest.externalSignatureId =
             resultData.id || resultData._id;
-          signatureRequest.status = mapExternalStatus(
-            resultData.state || "WAIT_VALIDATION",
-          );
+          // La demande vient d'être acceptée par le fournisseur : à défaut
+          // d'état exploitable, elle est vivante, jamais PENDING.
+          signatureRequest.status =
+            mapExternalStatus(resultData.state) || "WAIT_VALIDATION";
           // L'URL de signature est dans le premier signataire
           const firstSignerUrl = resultData.signers?.[0]?.url || null;
           signatureRequest.signingUrl = resultData.signingUrl || firstSignerUrl;
@@ -651,9 +637,8 @@ const esignatureResolvers = {
 
           const resultData = apiResult.data || apiResult;
           sealRequest.externalSignatureId = resultData.id || resultData._id;
-          sealRequest.status = mapExternalStatus(
-            resultData.state || "WAIT_VALIDATION",
-          );
+          sealRequest.status =
+            mapExternalStatus(resultData.state) || "WAIT_VALIDATION";
           await sealRequest.save();
           publishSignatureStatus(sealRequest);
 
@@ -764,6 +749,19 @@ const esignatureResolvers = {
             );
           }
 
+          // Un devis déjà accepté ou refusé ne peut plus être signé
+          if (signatureRequest.documentType === "quote") {
+            const quoteDoc = await Quote.findById(
+              signatureRequest.documentId,
+            ).select("status");
+            if (quoteDoc && quoteDoc.status !== "PENDING") {
+              throw new AppError(
+                "Ce devis n'est plus en attente : la signature ne peut plus être relancée.",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+          }
+
           // Supprimer l'ancienne signature côté API
           if (signatureRequest.externalSignatureId) {
             try {
@@ -811,8 +809,33 @@ const esignatureResolvers = {
   Subscription: {
     // Mises à jour temps réel du statut de signature d'un document.
     signatureStatusUpdated: {
-      subscribe: (_, { documentId }) =>
-        getPubSub().asyncIterableIterator([signatureChannel(documentId)]),
+      // 🔐 Authentification + appartenance : sans ce contrôle, un client WebSocket
+      // anonyme pouvait suivre la signature du devis de n'importe quelle organisation.
+      subscribe: async (_, { documentId }, context) => {
+        if (!context?.user) {
+          throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
+        }
+        const request = await SignatureRequest.findOne({ documentId })
+          .select("organizationId")
+          .lean();
+        if (request) {
+          const { getActiveOrganization } =
+            await import("../middlewares/org-resolver.js");
+          const org = await getActiveOrganization(
+            context.user._id.toString(),
+            String(request.organizationId),
+          );
+          if (!org) {
+            throw new AppError(
+              "Vous n'êtes pas membre de cette organisation.",
+              ERROR_CODES.FORBIDDEN,
+            );
+          }
+        }
+        return getPubSub().asyncIterableIterator([
+          signatureChannel(documentId),
+        ]);
+      },
     },
   },
 };

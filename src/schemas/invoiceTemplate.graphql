@@ -15,6 +15,7 @@ type InvoiceTemplate {
   appearance: Appearance
   clientPositionRight: Boolean
   isReverseCharge: Boolean
+  isVatExempt: Boolean
   showBankDetails: Boolean
   bankDetails: BankDetails
   shipping: Shipping

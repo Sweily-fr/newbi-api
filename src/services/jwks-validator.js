@@ -74,19 +74,27 @@ class JWKSValidator {
         logger.debug("🔑 Utilisation du bypass token Vercel");
       }
 
+      // redirect: "follow" — une redirection (apex↔www, migration de domaine)
+      // ne doit pas faire tomber la validation des JWT de toute la prod.
       const response = await fetch(this.jwksUrl, {
         method: "GET",
         headers: headers,
         signal: controller.signal,
-        redirect: "error",
+        redirect: "follow",
         referrerPolicy: "no-referrer",
       });
 
       clearTimeout(timeoutId);
 
+      if (response.url && response.url !== this.jwksUrl) {
+        logger.warn(
+          `JWKS récupéré via redirection: ${this.jwksUrl} → ${response.url}. Mettre à jour FRONTEND_URL pour éviter ce détour.`,
+        );
+      }
+
       if (!response.ok) {
         throw new Error(
-          `Erreur HTTP ${response.status} lors de la récupération JWKS`,
+          `Erreur HTTP ${response.status} lors de la récupération JWKS (${this.jwksUrl})`,
         );
       }
 
@@ -96,10 +104,12 @@ class JWKSValidator {
         throw new Error("Format JWKS invalide ou vide");
       }
 
-      logger.info(` JWKS récupéré avec succès: ${jwks.keys.length} clé(s)`);
+      logger.debug(`JWKS récupéré avec succès: ${jwks.keys.length} clé(s)`);
       return jwks;
     } catch (error) {
-      logger.error("Erreur récupération JWKS :", error.message);
+      logger.error(
+        `Erreur récupération JWKS (${this.jwksUrl}) : ${error.message} — si cette erreur persiste, les utilisateurs paraîtront déconnectés (validation JWT impossible).`,
+      );
       throw error;
     }
   }
@@ -114,7 +124,7 @@ class JWKSValidator {
       const cached = this.keyCache.get(cacheKey);
 
       if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
-        logger.info(`Clé récupérée depuis le cache pour kid: ${kid}`);
+        logger.debug(`Clé récupérée depuis le cache pour kid: ${kid}`);
         this.cacheHits++;
         return cached.key;
       }
@@ -165,7 +175,7 @@ class JWKSValidator {
         algorithm: jwk.alg || "EdDSA",
       });
 
-      logger.info(`Clé JWKS mise en cache pour kid: ${kid}`);
+      logger.debug(`Clé JWKS mise en cache pour kid: ${kid}`);
       return keyLike;
     } catch (error) {
       // Laisser remonter l'indispo JWKS (gérée sans blocage dans validateJWT)
@@ -338,15 +348,30 @@ class JWKSValidator {
           clockTolerance: "60s", // Augmenté pour s'adapter à l'expiration de session d'1 heure
         });
 
-        logger.info(
+        logger.debug(
           `✓ JWT validé avec succès (crypto complète) pour l'utilisateur ${verifiedPayload.sub}`,
         );
         // Reset les tentatives échouées après une validation réussie
         this.failedAttempts.delete(clientIP);
         return verifiedPayload;
       } catch (verifyError) {
-        logger.warn("JWT crypto verification failed:", verifyError.message);
-        logger.debug(`Détails erreur: ${verifyError.code || "unknown"}`);
+        // JWT expiré = cycle de vie normal (tokens de 5 min) : le front va
+        // en redemander un et retenter. Ni erreur loguée, ni tentative
+        // suspecte comptée (sinon 10 requêtes d'un onglet inactif suffisent
+        // à bloquer l'IP 15 min).
+        const isExpired =
+          verifyError?.code === "ERR_JWT_EXPIRED" ||
+          verifyError?.name === "JWTExpired";
+        if (isExpired) {
+          logger.debug(
+            `JWT expiré pour ${payload?.sub || "?"} — refresh attendu côté client`,
+          );
+          return null;
+        }
+
+        logger.warn(
+          `JWT crypto verification failed: ${verifyError?.name || "?"} — ${verifyError?.message || "?"} (code: ${verifyError?.code || "unknown"})`,
+        );
 
         // Strict mode: no issuer-based bypass. If crypto fails, reject.
         // The JWKS key cache (5 min hot + 24h extended) ensures availability

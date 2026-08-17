@@ -87,6 +87,19 @@ const invoiceSchema = new mongoose.Schema(
       min: 1,
       default: 1,
     },
+    // Mode d'avancement pour les factures de situation
+    progressMode: {
+      type: String,
+      enum: ["uniform", "individual"],
+      default: "uniform",
+    },
+    // Pourcentage d'avancement global (mode uniforme)
+    globalProgressPercentage: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 100,
+    },
     depositAmount: {
       type: Number,
       min: 0,
@@ -364,6 +377,11 @@ const invoiceSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Exonération de TVA globale (TVA à 0% par défaut sur tous les articles)
+    isVatExempt: {
+      type: Boolean,
+      default: false,
+    },
     // Position du client dans le PDF (false = centre, true = droite)
     clientPositionRight: {
       type: Boolean,
@@ -390,11 +408,13 @@ const invoiceSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Rapprochement avec transaction bancaire
-    linkedTransactionId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      default: null,
+    // Rapprochement avec transactions bancaires (relation N↔N).
+    // Une facture peut être soldée par plusieurs paiements (échelonnement,
+    // acompte + solde) et une transaction peut couvrir plusieurs factures
+    // (paiement groupé côté Transaction.linkedInvoiceIds).
+    linkedTransactionIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Transaction" }],
+      default: [],
       index: true,
     },
 

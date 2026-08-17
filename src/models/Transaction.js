@@ -71,6 +71,14 @@ const transactionSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Vrai si la description a été modifiée manuellement par l'utilisateur.
+    // Les syncs bancaires (Bridge) ne doivent alors plus l'écraser avec
+    // clean_description (même logique que categoryIsManual).
+    descriptionIsManual: {
+      type: Boolean,
+      default: false,
+    },
+
     // Comptes impliqués
     fromAccount: {
       type: String,
@@ -133,11 +141,22 @@ const transactionSchema = new mongoose.Schema(
       default: {},
     },
 
-    // Rapprochement avec facture (pour les entrées d'argent)
-    linkedInvoiceId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Invoice",
-      default: null,
+    // Rapprochement avec factures (pour les entrées d'argent).
+    // Relation N↔N : une transaction peut solder plusieurs factures
+    // (paiement groupé). Utiliser $addToSet / $pull pour éviter les doublons
+    // et supporter les liaisons multiples atomiques.
+    linkedInvoiceIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Invoice" }],
+      default: [],
+      index: true,
+    },
+
+    // Rapprochement avec des factures d'achat (sorties d'argent / débits).
+    // Lien N↔N par référence : la transaction "porte" ses factures d'achat
+    // (le justificatif est accessible via la facture liée, sans copie).
+    linkedPurchaseInvoiceIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "PurchaseInvoice" }],
+      default: [],
       index: true,
     },
 
@@ -154,6 +173,14 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       default: null,
       index: true,
+    },
+
+    // Vrai si la catégorie a été choisie manuellement par l'utilisateur.
+    // Les syncs bancaires (Bridge) ne doivent alors plus écraser
+    // category/expenseCategory avec la catégorie du provider.
+    categoryIsManual: {
+      type: Boolean,
+      default: false,
     },
 
     // Catégorie de dépense (pour les sorties d'argent) - enum interne
@@ -176,6 +203,8 @@ const transactionSchema = new mongoose.Schema(
         "MAINTENANCE",
         "TRAINING",
         "SUBSCRIPTIONS",
+        "SALES",
+        "GRANTS",
         "OTHER",
       ],
       default: null,
@@ -235,6 +264,18 @@ const transactionSchema = new mongoose.Schema(
         size: { type: Number },
         uploadedAt: { type: Date, default: Date.now },
         uploadedBy: { type: String },
+        // Suivi de la création automatique de facture d'achat par OCR
+        // (transactionReceiptOcrService) — évite les doubles traitements.
+        // ocrClaimedAt : horodatage du claim, permet de retraiter un fichier
+        // dont le traitement a été interrompu (crash/restart PM2) sans jamais
+        // avoir produit de facture.
+        ocrProcessed: { type: Boolean, default: false },
+        ocrClaimedAt: { type: Date, default: null },
+        purchaseInvoiceId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "PurchaseInvoice",
+          default: null,
+        },
       },
     ],
 
@@ -251,7 +292,7 @@ const transactionSchema = new mongoose.Schema(
     },
 
     // Soft delete: si défini, la transaction est masquée et ne sera pas
-    // recréée par les synchros bancaires suivantes (Bridge/GoCardless).
+    // recréée par les synchros bancaires suivantes (Bridge).
     deletedAt: {
       type: Date,
       default: null,
@@ -271,6 +312,8 @@ transactionSchema.index({ provider: 1, externalId: 1 }, { unique: true });
 transactionSchema.index({ fromAccount: 1, createdAt: -1 });
 transactionSchema.index({ toAccount: 1, createdAt: -1 });
 transactionSchema.index({ workspaceId: 1, date: -1, amount: 1 });
+// Filtre par compte + tri par date de la liste paginée (transactionsPage)
+transactionSchema.index({ workspaceId: 1, fromAccount: 1, date: -1 });
 
 // Méthodes d'instance
 transactionSchema.methods.isCompleted = function () {

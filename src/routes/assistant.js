@@ -9,10 +9,7 @@ import { createPseudoMap } from "../services/assistant/PseudonymMap.js";
 import { createStreamHydrator } from "../services/assistant/streamHydrator.js";
 import { preparePayloadForLLM } from "../services/assistant/toolResultPipeline.js";
 import { buildResolverContext } from "../services/assistant/buildResolverContext.js";
-import {
-  checkAndConsume,
-  RATE_LIMITS,
-} from "../services/assistant/rateLimit.js";
+import { checkAndConsume } from "../services/assistant/rateLimit.js";
 import {
   SYSTEM_BLOCKS,
   TOOL_SCHEMAS_CACHED,
@@ -26,6 +23,7 @@ import {
 } from "../services/assistant/conversationHelpers.js";
 import ClientModel from "../models/Client.js";
 import { generateConversationTitle } from "../services/assistant/titleSummary.js";
+import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
@@ -47,15 +45,13 @@ const ASSISTANT_MODEL =
 const ASSISTANT_MAX_TOKENS = 500;
 
 // Log de démarrage : confirme que la clé est lue dans CE process + valide le
-// slug attendu. On masque la clé : préfixe (7 char) + longueur — assez pour
-// diagnostiquer "vide / mal collée / format inconnu" sans la fuiter.
+// slug attendu. Longueur + préfixe attendu (booléen) suffisent pour
+// diagnostiquer "vide / mal collée / format inconnu" sans logger la clé.
 if (anthropic) {
   const k = process.env.ANTHROPIC_API_KEY || "";
-  const masked =
-    k.length >= 11 ? `${k.slice(0, 7)}…${k.slice(-4)}` : "(trop courte)";
   const prefixOk = k.startsWith("sk-ant-");
   logger.info(
-    `[assistant] LLM client ready — model=${ASSISTANT_MODEL} key_prefix=${masked} key_len=${k.length} prefix_ok=${prefixOk}`,
+    `[assistant] LLM client ready — model=${ASSISTANT_MODEL} key_len=${k.length} prefix_ok=${prefixOk}`,
   );
 } else {
   logger.warn(
@@ -63,32 +59,8 @@ if (anthropic) {
   );
 }
 
-/**
- * Vérifie que l'utilisateur fait partie du workspace cible. Pattern aligné
- * sur rbac.getMemberRole : query collection `member` (Better Auth orga plugin)
- * sur (organizationId, userId).
- *
- * Retourne `true` si membre, `false` sinon (et logge un warn en cas de tentative
- * cross-tenant — utile pour détecter un client mal configuré ou un abus).
- */
-async function userBelongsToWorkspace(userId, workspaceId) {
-  try {
-    const { ObjectId } = mongoose.Types;
-    const orgObjectId =
-      typeof workspaceId === "string" ? new ObjectId(workspaceId) : workspaceId;
-    const userObjectId =
-      typeof userId === "string" ? new ObjectId(userId) : userId;
-    const member = await mongoose.connection.db.collection("member").findOne({
-      organizationId: orgObjectId,
-      userId: userObjectId,
-    });
-    return !!member;
-  } catch (err) {
-    // workspaceId/userId non-ObjectId valide → on traite comme non membre
-    logger.warn(`userBelongsToWorkspace: validation failed (${err.message})`);
-    return false;
-  }
-}
+// Vérification d'appartenance au workspace factorisée dans
+// utils/workspace-membership.js (partagée avec les routes reconciliation).
 
 /**
  * POST /assistant/log
@@ -198,11 +170,9 @@ router.post("/log", async (req, res) => {
 router.post("/chat", async (req, res) => {
   try {
     if (!anthropic) {
-      return res
-        .status(503)
-        .json({
-          error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
-        });
+      return res.status(503).json({
+        error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
+      });
     }
 
     const user = await betterAuthJWTMiddleware(req);
@@ -374,11 +344,9 @@ const ASSISTANT_TOOL_LOOP_MAX_ITERS = 4; // garde-fou anti-boucle infinie
 router.post("/chat/stream", async (req, res) => {
   // ─── 1. Vérifs préalables ────────────────────────────────────────
   if (!anthropic) {
-    return res
-      .status(503)
-      .json({
-        error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
-      });
+    return res.status(503).json({
+      error: "Assistant LLM non configuré (ANTHROPIC_API_KEY manquante)",
+    });
   }
   const user = await betterAuthJWTMiddleware(req);
   if (!user) return res.status(401).json({ error: "Non authentifié" });

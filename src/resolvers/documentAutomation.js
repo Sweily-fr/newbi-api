@@ -1,16 +1,44 @@
 import DocumentAutomation from "../models/DocumentAutomation.js";
 import DocumentAutomationLog from "../models/DocumentAutomationLog.js";
 import SharedFolder from "../models/SharedFolder.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  withOrganization,
+  resolveWorkspaceId,
+  checkSubscriptionActive,
+} from "../middlewares/rbac.js";
 import { createNotFoundError, createValidationError } from "../utils/errors.js";
 import documentAutomationService, {
   getAutomationProgress,
 } from "../services/documentAutomationService.js";
 
+// Wrapper lecture : valide l'appartenance à l'organisation (withOrganization)
+// et impose le workspace validé par RBAC (jamais l'ID brut des args). Ferme
+// l'IDOR cross-org : un membre de l'org A ne peut plus cibler l'org B via
+// args.workspaceId — resolveWorkspaceId renvoie le workspace du contexte validé.
+const scopedQuery = (fn) =>
+  withOrganization(async (parent, args, context, info) => {
+    const workspaceId = resolveWorkspaceId(
+      args.workspaceId,
+      context.workspaceId,
+    );
+    return fn(parent, { ...args, workspaceId }, context, info);
+  });
+
+// Wrapper écriture : idem + contrôle d'abonnement APRÈS enrichissement RBAC
+// (context.workspaceId est alors défini, ne dépend plus d'un header client).
+const scopedMutation = (fn) =>
+  withOrganization(async (parent, args, context, info) => {
+    const workspaceId = resolveWorkspaceId(
+      args.workspaceId,
+      context.workspaceId,
+    );
+    await checkSubscriptionActive(context);
+    return fn(parent, { ...args, workspaceId }, context, info);
+  });
+
 const documentAutomationResolvers = {
   Query: {
-    documentAutomations: isAuthenticated(async (_, { workspaceId }) => {
+    documentAutomations: scopedQuery(async (_, { workspaceId }) => {
       const automations = await DocumentAutomation.find({ workspaceId })
         .populate("createdBy")
         .sort({ createdAt: -1 });
@@ -18,7 +46,7 @@ const documentAutomationResolvers = {
       return automations;
     }),
 
-    documentAutomation: isAuthenticated(async (_, { workspaceId, id }) => {
+    documentAutomation: scopedQuery(async (_, { workspaceId, id }) => {
       const automation = await DocumentAutomation.findOne({
         _id: id,
         workspaceId,
@@ -31,7 +59,7 @@ const documentAutomationResolvers = {
       return automation;
     }),
 
-    documentAutomationLogs: isAuthenticated(
+    documentAutomationLogs: scopedQuery(
       async (_, { workspaceId, automationId, limit }) => {
         const filter = { workspaceId };
         if (automationId) {
@@ -46,7 +74,7 @@ const documentAutomationResolvers = {
       },
     ),
 
-    documentsForAutomation: isAuthenticated(
+    documentsForAutomation: scopedQuery(
       async (_, { workspaceId, automationId }) => {
         const automation = await DocumentAutomation.findOne({
           _id: automationId,
@@ -64,13 +92,26 @@ const documentAutomationResolvers = {
       },
     ),
 
-    documentAutomationProgress: isAuthenticated(async (_, { automationId }) => {
-      return getAutomationProgress(automationId) || null;
-    }),
+    documentAutomationProgress: scopedQuery(
+      async (_, { workspaceId, automationId }) => {
+        // Vérifier que l'automatisation appartient bien au workspace validé
+        // avant de renvoyer une progression stockée dans une Map globale.
+        const automation = await DocumentAutomation.findOne({
+          _id: automationId,
+          workspaceId,
+        }).lean();
+
+        if (!automation) {
+          throw createNotFoundError("Automatisation");
+        }
+
+        return getAutomationProgress(automationId) || null;
+      },
+    ),
   },
 
   Mutation: {
-    createDocumentAutomation: isAuthenticated(
+    createDocumentAutomation: scopedMutation(
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
 
@@ -120,7 +161,7 @@ const documentAutomationResolvers = {
       },
     ),
 
-    updateDocumentAutomation: isAuthenticated(
+    updateDocumentAutomation: scopedMutation(
       async (_, { workspaceId, id, input }) => {
         const automation = await DocumentAutomation.findOne({
           _id: id,
@@ -195,8 +236,9 @@ const documentAutomationResolvers = {
             "classified";
         }
 
-        await DocumentAutomation.findByIdAndUpdate(
-          id,
+        // Scoper la mise à jour au workspace (défense en profondeur)
+        await DocumentAutomation.findOneAndUpdate(
+          { _id: id, workspaceId },
           { $set },
           { runValidators: true },
         );
@@ -205,48 +247,43 @@ const documentAutomationResolvers = {
       },
     ),
 
-    deleteDocumentAutomation: isAuthenticated(
-      async (_, { workspaceId, id }) => {
-        const automation = await DocumentAutomation.findOne({
-          _id: id,
-          workspaceId,
-        });
+    deleteDocumentAutomation: scopedMutation(async (_, { workspaceId, id }) => {
+      const automation = await DocumentAutomation.findOne({
+        _id: id,
+        workspaceId,
+      });
 
-        if (!automation) {
-          throw createNotFoundError("Automatisation");
-        }
+      if (!automation) {
+        throw createNotFoundError("Automatisation");
+      }
 
-        await DocumentAutomation.deleteOne({ _id: id });
+      await DocumentAutomation.deleteOne({ _id: id, workspaceId });
 
-        // Nettoyer les logs associés
-        await DocumentAutomationLog.deleteMany({ automationId: id });
+      // Nettoyer les logs associés
+      await DocumentAutomationLog.deleteMany({ automationId: id, workspaceId });
 
-        return true;
-      },
-    ),
+      return true;
+    }),
 
-    toggleDocumentAutomation: isAuthenticated(
-      async (_, { workspaceId, id }, context) => {
-        const { user } = context;
-        const automation = await DocumentAutomation.findOne({
-          _id: id,
-          workspaceId,
-        });
+    toggleDocumentAutomation: scopedMutation(async (_, { workspaceId, id }) => {
+      const automation = await DocumentAutomation.findOne({
+        _id: id,
+        workspaceId,
+      });
 
-        if (!automation) {
-          throw createNotFoundError("Automatisation");
-        }
+      if (!automation) {
+        throw createNotFoundError("Automatisation");
+      }
 
-        automation.isActive = !automation.isActive;
-        await automation.save();
+      automation.isActive = !automation.isActive;
+      await automation.save();
 
-        return await DocumentAutomation.findById(automation._id).populate(
-          "createdBy",
-        );
-      },
-    ),
+      return await DocumentAutomation.findById(automation._id).populate(
+        "createdBy",
+      );
+    }),
 
-    testDocumentAutomation: isAuthenticated(async (_, { workspaceId, id }) => {
+    testDocumentAutomation: scopedMutation(async (_, { workspaceId, id }) => {
       const automation = await DocumentAutomation.findOne({
         _id: id,
         workspaceId,
@@ -270,13 +307,24 @@ const documentAutomationResolvers = {
       return true;
     }),
 
-    processAutomationDocument: isAuthenticated(
+    processAutomationDocument: scopedMutation(
       async (
         _,
         { workspaceId, automationId, documentId, documentType, pdfBase64 },
         context,
       ) => {
         const { user } = context;
+
+        // Vérifier que l'automatisation appartient bien au workspace validé
+        // avant d'injecter un PDF dans l'arborescence de documents partagés.
+        const automation = await DocumentAutomation.findOne({
+          _id: automationId,
+          workspaceId,
+        }).lean();
+
+        if (!automation) {
+          throw createNotFoundError("Automatisation");
+        }
 
         try {
           const result =
@@ -316,9 +364,12 @@ const documentAutomationResolvers = {
           }
 
           // Incrémenter les stats d'échec
-          await DocumentAutomation.findByIdAndUpdate(automationId, {
-            $inc: { "stats.failedExecutions": 1 },
-          }).catch(() => {});
+          await DocumentAutomation.findOneAndUpdate(
+            { _id: automationId, workspaceId },
+            {
+              $inc: { "stats.failedExecutions": 1 },
+            },
+          ).catch(() => {});
 
           return {
             success: false,
@@ -328,7 +379,7 @@ const documentAutomationResolvers = {
       },
     ),
 
-    runDocumentAutomation: isAuthenticated(
+    runDocumentAutomation: scopedMutation(
       async (_, { workspaceId, id }, context) => {
         const { user } = context;
 
@@ -441,7 +492,11 @@ const documentAutomationResolvers = {
   DocumentAutomationActionConfig: {
     targetFolder: async (parent) => {
       if (!parent.targetFolderId) return null;
-      return await SharedFolder.findById(parent.targetFolderId);
+      // Scoper au workspace de l'automatisation parente (défense en profondeur)
+      return await SharedFolder.findOne({
+        _id: parent.targetFolderId,
+        ...(parent.workspaceId ? { workspaceId: parent.workspaceId } : {}),
+      });
     },
   },
 
@@ -460,17 +515,5 @@ const documentAutomationResolvers = {
       parent.createdAt ? new Date(parent.createdAt).toISOString() : null,
   },
 };
-
-// ✅ Phase A.3 — Subscription check sur toutes les mutations documentAutomation
-const originalDocAutoMutations = documentAutomationResolvers.Mutation;
-documentAutomationResolvers.Mutation = Object.fromEntries(
-  Object.entries(originalDocAutoMutations).map(([name, fn]) => [
-    name,
-    async (parent, args, context, info) => {
-      await checkSubscriptionActive(context);
-      return fn(parent, args, context, info);
-    },
-  ]),
-);
 
 export default documentAutomationResolvers;

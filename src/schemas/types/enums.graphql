@@ -60,8 +60,16 @@ enum CompanyStatus {
   EI
   EIRL
   SA
+  SCA
   SNC
+  SCS
+  SELARL
+  SELAS
+  SELAFA
+  SELCA
   SCI
+  SCM
+  SCP
   SCOP
   ASSOCIATION
   AUTO_ENTREPRENEUR

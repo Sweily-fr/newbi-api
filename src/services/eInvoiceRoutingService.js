@@ -1,5 +1,3 @@
-import logger from "../utils/logger.js";
-
 /**
  * Service de routage e-invoicing / e-reporting
  *
@@ -19,8 +17,16 @@ const COMPANY_STATUS_TO_SIZE = {
   SASU: "TPE_MICRO",
   SARL: "PME",
   SAS: "PME",
+  SCA: "PME",
   SNC: "PME",
+  SCS: "PME",
+  SELARL: "PME",
+  SELAS: "PME",
+  SELAFA: "PME",
+  SELCA: "PME",
   SCI: "PME",
+  SCM: "PME",
+  SCP: "PME",
   SCOP: "PME",
   ASSOCIATION: "PME",
   AUTRE: "PME",

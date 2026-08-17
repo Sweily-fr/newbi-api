@@ -133,19 +133,26 @@ function getCurrentFiscalYearRange(org, now = new Date()) {
  * espèces / hors compte bancaire connecté, qui ne sont reflétés par aucun
  * solde de compte. Pour un compte bancaire précis, on ne renvoie que son solde.
  */
-async function getAccountsBalance(workspaceId, accountId) {
+async function getAccountsBalance(
+  workspaceId,
+  accountId,
+  { excludeManual = false } = {},
+) {
   const filter = { workspaceId };
   if (accountId) {
     filter.$or = [{ _id: accountId }, { externalId: accountId }];
   }
 
   const accountsPromise = AccountBanking.find(filter).lean();
-  const cashPromise = accountId
-    ? Promise.resolve(0)
-    : Transaction.aggregate([
-        { $match: { workspaceId, deletedAt: null, provider: "manual" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-      ]).then((res) => res[0]?.total ?? 0);
+  // excludeManual : solde strictement Bridge (on n'ajoute pas la somme des
+  // transactions manuelles / espèces). Idem quand un compte précis est ciblé.
+  const cashPromise =
+    accountId || excludeManual
+      ? Promise.resolve(0)
+      : Transaction.aggregate([
+          { $match: { workspaceId, deletedAt: null, provider: "manual" } },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]).then((res) => res[0]?.total ?? 0);
 
   const [accounts, cashBalance] = await Promise.all([
     accountsPromise,
@@ -169,9 +176,12 @@ const dashboardAggregationResolvers = {
      * Stats résumées pour les cartes du dashboard
      */
     dashboardSummary: withWorkspace(
-      async (parent, { workspaceId, accountId }) => {
+      async (parent, { workspaceId, accountId, excludeManual }) => {
         const matchFilter = { workspaceId, deletedAt: null };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Bridge-only : exclut les transactions manuelles (provider "manual")
+        // des revenus/dépenses. Le solde suit le même filtre (getAccountsBalance).
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         // Encaissements / décaissements bornés à l'exercice comptable en cours
         // (défaut : année civile). Le solde et le nombre de transactions restent
@@ -221,7 +231,7 @@ const dashboardAggregationResolvers = {
               },
             },
           ]),
-          getAccountsBalance(workspaceId, accountId),
+          getAccountsBalance(workspaceId, accountId, { excludeManual }),
         ]);
 
         const stats = transactionStats[0] || {
@@ -243,7 +253,7 @@ const dashboardAggregationResolvers = {
      * Données pour le graphique de trésorerie (un point par jour)
      */
     dashboardTreasuryChart: withWorkspace(
-      async (parent, { workspaceId, period, accountId }) => {
+      async (parent, { workspaceId, period, accountId, excludeManual }) => {
         const { startDate, endDate } = resolvePeriodDates(period);
 
         const matchFilter = {
@@ -252,6 +262,9 @@ const dashboardAggregationResolvers = {
           date: { $gte: startDate, $lte: endDate },
         };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Courbe Bridge-only : on écarte les transactions ajoutées manuellement
+        // pour que le graph suive uniquement le solde des comptes connectés.
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         const [dailyData, { balance: currentBalance }] = await Promise.all([
           Transaction.aggregate([
@@ -271,7 +284,7 @@ const dashboardAggregationResolvers = {
             },
             { $sort: { _id: 1 } },
           ]),
-          getAccountsBalance(workspaceId, accountId),
+          getAccountsBalance(workspaceId, accountId, { excludeManual }),
         ]);
 
         // Map des données par jour
@@ -330,7 +343,10 @@ const dashboardAggregationResolvers = {
      * Agrégation par catégorie pour les pie charts (income ou expense)
      */
     dashboardCategoryAggregation: withWorkspace(
-      async (parent, { workspaceId, type, period, accountId }) => {
+      async (
+        parent,
+        { workspaceId, type, period, accountId, excludeManual },
+      ) => {
         const { startDate, endDate } = resolvePeriodDates(period);
         const isIncome = type === "income";
 
@@ -341,19 +357,28 @@ const dashboardAggregationResolvers = {
           amount: isIncome ? { $gt: 0 } : { $lt: 0 },
         };
         if (accountId) matchFilter.fromAccount = accountId;
+        // Bridge-only : exclut les transactions manuelles (provider "manual").
+        // Le CA injecté depuis les factures émises (plus bas) n'est pas concerné.
+        if (excludeManual) matchFilter.provider = { $ne: "manual" };
 
         // Entrées : la tranche "Chiffre d'affaires" est dérivée des factures
         // émises (cf. plus bas), pas des transactions bancaires. On exclut donc
         // les transactions déjà rattachées à une facture pour éviter de
         // compter deux fois les factures payées et rapprochées.
-        if (isIncome) matchFilter.linkedInvoiceId = null;
+        if (isIncome) {
+          // N↔N : "non rattachée" = array vide.
+          matchFilter.$or = [
+            { linkedInvoiceIds: { $exists: false } },
+            { linkedInvoiceIds: { $size: 0 } },
+          ];
+        }
 
-        // T4/T5 : on a besoin de linkedInvoiceId, category, expenseCategory
+        // T4/T5 : on a besoin de linkedInvoiceIds, category, expenseCategory
         // pour respecter les catégorisations manuelles + reclasser les
         // paiements de factures clients en "Chiffre d'affaires".
         const transactions = await Transaction.find(matchFilter)
           .select(
-            "amount description metadata linkedInvoiceId category expenseCategory",
+            "amount description metadata linkedInvoiceIds category expenseCategory",
           )
           .lean();
 

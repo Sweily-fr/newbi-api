@@ -70,12 +70,17 @@ documentCounterSchema.statics.getNextNumber = async function (
     findOpts,
   );
 
-  // Si le compteur est désynchronisé (en avance OU en retard par rapport aux documents réels),
-  // le réinitialiser au max existant avant d'incrémenter
-  if (currentCounter && currentCounter.lastNumber !== existingMax) {
+  // 🔐 Numérotation légale : ne JAMAIS rabaisser le compteur.
+  // Un numéro est alloué AVANT la persistance du document (hors transaction),
+  // donc le compteur est normalement "en avance" sur les documents déjà en base.
+  // L'ancien code rabaissait alors le compteur au max persisté, ce qui réémettait
+  // le même numéro (doublon) en cas de création concurrente, et réutilisait un
+  // numéro après suppression du dernier document. On ne rattrape que VERS LE HAUT
+  // (ex : après un import de documents existants), jamais vers le bas.
+  if (currentCounter && currentCounter.lastNumber < existingMax) {
     await this.findOneAndUpdate(
       { documentType, prefix: counterPrefix, workspaceId },
-      { $set: { lastNumber: existingMax } },
+      { $max: { lastNumber: existingMax } },
       findOpts,
     );
   }

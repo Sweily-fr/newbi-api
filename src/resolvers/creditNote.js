@@ -1,3 +1,5 @@
+import logger from "../utils/logger.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import CreditNote from "../models/CreditNote.js";
 import {
   archiveDocumentPdf,
@@ -7,10 +9,7 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import Event from "../models/Event.js";
-import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
+import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireCompanyInfo,
   getOrganizationInfo,
@@ -19,9 +18,9 @@ import {
   requireWrite,
   requireDelete,
   checkSubscriptionActive,
-  resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
+import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXArchiveService.js";
 import {
   generateCreditNoteNumber,
   validateNumberSequence,
@@ -159,10 +158,11 @@ const creditNoteResolvers = {
 
       // Recherche textuelle
       if (search) {
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { number: { $regex: search, $options: "i" } },
-          { "client.name": { $regex: search, $options: "i" } },
-          { reason: { $regex: search, $options: "i" } },
+          { number: { $regex: safeSearch, $options: "i" } },
+          { "client.name": { $regex: safeSearch, $options: "i" } },
+          { reason: { $regex: safeSearch, $options: "i" } },
         ];
       }
 
@@ -302,10 +302,12 @@ const creditNoteResolvers = {
           // Montant total de la facture originale
           const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
-          // Vérifier que la somme totale ne dépasse pas le montant de la facture
+          // Vérifier que la somme totale ne dépasse pas le montant de la facture.
+          // Comparaison en centimes arrondis : un avoir dont le montant ÉGALE la
+          // facture doit passer (l'écart d'arrondi flottant ne doit pas bloquer).
           if (
-            existingCreditNotesTotal + newCreditNoteAmount >
-            invoiceTotalAmount
+            Math.round((existingCreditNotesTotal + newCreditNoteAmount) * 100) >
+            Math.round(invoiceTotalAmount * 100)
           ) {
             const remainingAmount =
               invoiceTotalAmount - existingCreditNotesTotal;
@@ -414,6 +416,11 @@ const creditNoteResolvers = {
 
           await creditNote.save();
 
+          // Archivage R2 du PDF de l'avoir — non bloquant, serveur-à-serveur.
+          // Parité avec l'archivage auto des factures : fonctionne pour TOUS les
+          // clients (mobile inclus), qui n'archivent pas le PDF côté client.
+          triggerCreditNoteFacturXArchive(creditNote, workspaceId);
+
           // Créer un événement
           await Event.create({
             title: `Avoir créé: ${creditNote.prefix}${creditNote.number}`,
@@ -453,11 +460,11 @@ const creditNoteResolvers = {
               });
 
               await client.save();
-              console.log(
+              logger.debug(
                 `✅ Activité ajoutée au client ${client.name} pour l'avoir ${creditNote.prefix}${creditNote.number}`,
               );
             } else {
-              console.log(
+              logger.debug(
                 `⚠️ Client non trouvé avec l'email ${creditNote.client.email} dans le workspace ${workspaceId}`,
               );
             }
@@ -519,12 +526,9 @@ const creditNoteResolvers = {
           // son préfixe sont VERROUILLÉS — les renuméroter casserait la
           // continuité de la séquence.
           if (input.number && input.number !== creditNote.number) {
-            throw createValidationError(
-              "Le numéro d'un avoir est verrouillé",
-              {
-                number: `Impossible de remplacer le numéro "${creditNote.number}" par "${input.number}" sur un avoir émis.`,
-              },
-            );
+            throw createValidationError("Le numéro d'un avoir est verrouillé", {
+              number: `Impossible de remplacer le numéro "${creditNote.number}" par "${input.number}" sur un avoir émis.`,
+            });
           }
           if (input.prefix && input.prefix !== creditNote.prefix) {
             throw createValidationError(
@@ -555,9 +559,10 @@ const creditNoteResolvers = {
           let totals = {};
           if (input.items) {
             // Récupérer la facture originale pour obtenir isReverseCharge
-            const originalInvoice = await Invoice.findById(
-              creditNote.originalInvoice,
-            );
+            const originalInvoice = await Invoice.findOne({
+              _id: creditNote.originalInvoice,
+              workspaceId: creditNote.workspaceId,
+            });
             if (!originalInvoice) {
               throw createNotFoundError("Facture originale non trouvée");
             }
@@ -588,10 +593,12 @@ const creditNoteResolvers = {
             // Montant total de la facture originale
             const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
-            // Vérifier que la somme totale ne dépasse pas le montant de la facture
+            // Vérifier que la somme totale ne dépasse pas le montant de la facture.
+            // Comparaison en centimes arrondis (cf. création) : l'égalité passe.
             if (
-              otherCreditNotesTotal + updatedCreditNoteAmount >
-              invoiceTotalAmount
+              Math.round(
+                (otherCreditNotesTotal + updatedCreditNoteAmount) * 100,
+              ) > Math.round(invoiceTotalAmount * 100)
             ) {
               const remainingAmount =
                 invoiceTotalAmount - otherCreditNotesTotal;

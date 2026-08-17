@@ -1,3 +1,4 @@
+import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import Invoice from "../models/Invoice.js";
 import Client from "../models/Client.js";
@@ -11,7 +12,7 @@ import axios from "axios";
  * Vérifie et envoie les relances automatiques pour toutes les factures impayées
  */
 async function processAutomaticReminders() {
-  console.log(
+  logger.debug(
     "🔔 [InvoiceReminder] Démarrage du processus de relance automatique...",
   );
 
@@ -21,7 +22,7 @@ async function processAutomaticReminders() {
       enabled: true,
     });
 
-    console.log(
+    logger.debug(
       `📊 [InvoiceReminder] ${activeSettings.length} workspace(s) avec relances activées`,
     );
 
@@ -29,7 +30,7 @@ async function processAutomaticReminders() {
       await processWorkspaceReminders(settings);
     }
 
-    console.log("✅ [InvoiceReminder] Processus de relance terminé");
+    logger.debug("✅ [InvoiceReminder] Processus de relance terminé");
   } catch (error) {
     console.error(
       "❌ [InvoiceReminder] Erreur lors du processus de relance:",
@@ -50,7 +51,7 @@ async function processWorkspaceReminders(settings) {
     excludedClientIds = [],
   } = settings;
 
-  console.log(`🏢 [InvoiceReminder] Traitement du workspace: ${workspaceId}`);
+  logger.debug(`🏢 [InvoiceReminder] Traitement du workspace: ${workspaceId}`);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -81,7 +82,7 @@ async function processWorkspaceReminders(settings) {
   // des ObjectIds → comparer sur client.id après conversion en String.
   if (excludedClientIds && excludedClientIds.length > 0) {
     query["client.id"] = { $nin: excludedClientIds.map(String) };
-    console.log(
+    logger.debug(
       `🚫 [InvoiceReminder] ${excludedClientIds.length} client(s) exclu(s) des relances`,
     );
   }
@@ -89,7 +90,7 @@ async function processWorkspaceReminders(settings) {
   // Trouver les factures impayées avec date d'échéance dépassée
   const overdueInvoices = await Invoice.find(query).populate("client");
 
-  console.log(
+  logger.debug(
     `📄 [InvoiceReminder] ${overdueInvoices.length} facture(s) en retard trouvée(s)`,
   );
 
@@ -175,7 +176,7 @@ async function sendReminder(
   preloadedEmailSettings,
 ) {
   try {
-    console.log(
+    logger.debug(
       `📧 [InvoiceReminder] Envoi ${reminderType} relance pour facture ${invoice.number}`,
     );
 
@@ -219,7 +220,7 @@ async function sendReminder(
     // Générer le PDF de la facture via l'API Next.js
     let pdfBuffer = null;
     try {
-      console.log(
+      logger.debug(
         `📄 [InvoiceReminder] Génération du PDF pour facture ${invoice.number}`,
       );
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -243,7 +244,7 @@ async function sendReminder(
         { responseType: "arraybuffer", timeout: pdfTimeout, headers },
       );
       pdfBuffer = Buffer.from(response.data);
-      console.log(
+      logger.debug(
         `✅ [InvoiceReminder] PDF généré (${pdfBuffer.length} bytes)`,
       );
     } catch (pdfError) {
@@ -282,14 +283,14 @@ async function sendReminder(
       fromEmail = emailSettings.fromEmail;
       fromName = emailSettings.fromName || invoice.companyInfo?.name || "";
       replyTo = emailSettings.replyTo || emailSettings.fromEmail;
-      console.log(
+      logger.debug(
         `📧 [InvoiceReminder] Utilisation de l'email personnalisé: ${fromEmail}`,
       );
     } else {
       // Fallback sur les informations de la facture
       fromEmail = invoice.companyInfo?.email || "noreply@newbi.fr";
       fromName = invoice.companyInfo?.name || "";
-      console.log(
+      logger.debug(
         `⚠️ [InvoiceReminder] Aucun email configuré, utilisation de l'email de la facture: ${fromEmail}`,
       );
     }
@@ -300,10 +301,10 @@ async function sendReminder(
       : fromEmail;
 
     // Envoyer l'email avec le SMTP centralisé
-    console.log(
+    logger.debug(
       `📤 [InvoiceReminder] Envoi email de ${actualSenderEmail} vers ${clientEmail}`,
     );
-    console.log(`📋 [InvoiceReminder] Sujet: ${emailSubject}`);
+    logger.debug(`📋 [InvoiceReminder] Sujet: ${emailSubject}`);
 
     const mailOptions = {
       from: actualSenderEmail,
@@ -328,7 +329,7 @@ async function sendReminder(
     const mailResult =
       await emailReminderService.transporter.sendMail(mailOptions);
 
-    console.log(
+    logger.debug(
       `✅ [InvoiceReminder] Email envoyé, messageId: ${mailResult.messageId}`,
     );
 
@@ -379,7 +380,7 @@ async function sendReminder(
       );
     }
 
-    console.log(
+    logger.debug(
       `✅ [InvoiceReminder] Relance ${reminderType} envoyée pour ${invoice.number}`,
     );
   } catch (error) {
