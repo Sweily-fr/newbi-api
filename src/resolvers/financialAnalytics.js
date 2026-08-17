@@ -103,7 +103,7 @@ function normalizeProductDescription(desc) {
   let normalized = desc
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .trim();
   // Supprimer suffixes de période courants
   const patterns = [
@@ -134,7 +134,7 @@ function isQuoteLinkedLineItem(desc) {
   const normalized = desc
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .trim();
   return /^(acompte|facture)\b.*\bdevis\b/i.test(normalized);
 }
@@ -2554,14 +2554,23 @@ const financialAnalyticsResolvers = {
         // ImportedInvoice (agrégation 11 bis, factures client importées). Les
         // importées n'ont pas de client.id : elles sont rapprochées des clients
         // Newbi par nom, sinon elles forment leur propre entrée (type inconnu).
+        // Les noms importés viennent de l'OCR : la clé de rapprochement ignore
+        // casse, accents et espaces multiples ("L'héritage" = "L'HERITAGE"),
+        // sans quoi un même client apparaît en double dans les graphiques.
         const normName = (s) => (s || "Client inconnu").trim();
+        const nameMergeKey = (s) =>
+          normName(s)
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/\s+/g, " ")
+            .toLowerCase();
 
         // 1) Agrégat par client (somme des mois).
         const clientAgg = new Map(); // clé : clientId, sinon `name:<nom>`
         for (const row of paidInvoiceByClientMonthly || []) {
           const cId = row._id.clientId || null;
           const name = normName(row._id.clientName);
-          const key = cId || `name:${name.toLowerCase()}`;
+          const key = cId || `name:${nameMergeKey(name)}`;
           let entry = clientAgg.get(key);
           if (!entry) {
             entry = {
@@ -2584,11 +2593,11 @@ const financialAnalyticsResolvers = {
         // 1 bis) Fusionner les factures importées, rapprochées par nom.
         const entryByName = new Map();
         for (const entry of clientAgg.values()) {
-          entryByName.set(entry.clientName.toLowerCase(), entry);
+          entryByName.set(nameMergeKey(entry.clientName), entry);
         }
         for (const row of paidImportedByClientMonthly || []) {
           const name = normName(row._id.clientName);
-          const nameKey = name.toLowerCase();
+          const nameKey = nameMergeKey(name);
           let entry = entryByName.get(nameKey);
           if (!entry) {
             entry = {
@@ -2686,7 +2695,7 @@ const financialAnalyticsResolvers = {
         const fmtMonth = (year, month) =>
           `${year}-${month < 10 ? "0" + month : month}`;
         const addMonthly = (name, month, r) => {
-          const key = `${name.toLowerCase()}::${month}`;
+          const key = `${nameMergeKey(name)}::${month}`;
           let m = monthlyByClientMonth.get(key);
           if (!m) {
             m = {
