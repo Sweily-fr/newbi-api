@@ -53,6 +53,8 @@ type ImportedInvoiceVendor {
 
 # Informations du client (destinataire)
 type ImportedInvoiceClient {
+  # ID du client Newbi rapproché (null si aucun client existant ne correspond)
+  id: ID
   name: String
   address: String
   city: String
@@ -215,6 +217,8 @@ input UpdateImportedInvoiceInput {
   vendorCountry: String
   vendorSiret: String
   vendorVatNumber: String
+  # Associer un client Newbi existant (null explicite pour dissocier)
+  clientId: ID
   clientName: String
   clientSiret: String
   clientAddress: String

@@ -1332,23 +1332,29 @@ const financialAnalyticsResolvers = {
           // remontait rien, aucun flux ne posant ce statut sur une importée, et
           // la somme des CA clients ne collait donc pas au CA total. Même règle
           // de rattachement que l'agrégation 8 : paymentDate, repli invoiceDate.
-          // Les importées n'ont ni client.id ni type : le rapprochement avec
-          // les clients Newbi se fait par nom en JS, et un filtre par client
-          // (clientId/clientIds) les exclut faute d'identifiant.
+          // Les importées rapprochées d'un client Newbi portent client.id
+          // (auto-match à l'import ou association manuelle en sidebar) : la
+          // fusion se fait alors par identifiant, et un filtre par client
+          // (clientId/clientIds) les inclut. Les non rapprochées restent
+          // fusionnées par nom en JS et sortent des vues filtrées par client.
           (() => {
-            if (clientId || (clientIds && clientIds.length > 0)) {
-              return Promise.resolve([]);
-            }
             const range = {};
             if (startDate) range.$gte = new Date(startDate);
             if (endDate) range.$lte = new Date(endDate);
             const hasRange = Boolean(startDate || endDate);
+            const clientFilter =
+              clientIds && clientIds.length > 0
+                ? { "client.id": { $in: clientIds } }
+                : clientId
+                  ? { "client.id": clientId }
+                  : {};
             return ImportedInvoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
                   status: { $in: IMPORTED_REVENUE_STATUSES },
                   ...notConvertedImportedMatch,
+                  ...clientFilter,
                 },
               },
               {
@@ -1364,6 +1370,7 @@ const financialAnalyticsResolvers = {
               {
                 $group: {
                   _id: {
+                    clientId: "$client.id",
                     clientName: { $ifNull: ["$client.name", ""] },
                     year: { $year: "$_effectiveDate" },
                     month: { $month: "$_effectiveDate" },
@@ -2552,8 +2559,9 @@ const financialAnalyticsResolvers = {
         // "Répartition par type") et le "Tableau croisé Client x Mois".
         // Deux sources : Invoice (agrégation #11, factures Newbi) et
         // ImportedInvoice (agrégation 11 bis, factures client importées). Les
-        // importées n'ont pas de client.id : elles sont rapprochées des clients
-        // Newbi par nom, sinon elles forment leur propre entrée (type inconnu).
+        // importées rapprochées d'un client Newbi (client.id) fusionnent par
+        // identifiant ; les autres sont rapprochées par nom, sinon elles
+        // forment leur propre entrée (type inconnu).
         // Les noms importés viennent de l'OCR : la clé de rapprochement ignore
         // casse, accents et espaces multiples ("L'héritage" = "L'HERITAGE"),
         // sans quoi un même client apparaît en double dans les graphiques.
@@ -2590,32 +2598,78 @@ const financialAnalyticsResolvers = {
           entry.invoiceCount += row.invoiceCount || 0;
         }
 
-        // 1 bis) Fusionner les factures importées, rapprochées par nom.
+        // 1 bis) Fusionner les factures importées : par client.id quand la
+        // facture est rapprochée d'un client Newbi, sinon par nom.
         const entryByName = new Map();
         for (const entry of clientAgg.values()) {
           entryByName.set(nameMergeKey(entry.clientName), entry);
         }
+        // Entrées créées depuis des importées liées sans facture Newbi sur la
+        // période : enrichies ensuite (nom canonique + type) via la collection
+        // Client.
+        const linkedOnlyIds = new Set();
         for (const row of paidImportedByClientMonthly || []) {
+          const linkedId = row._id.clientId ? String(row._id.clientId) : null;
           const name = normName(row._id.clientName);
-          const nameKey = nameMergeKey(name);
-          let entry = entryByName.get(nameKey);
-          if (!entry) {
-            entry = {
-              clientId: null,
-              clientName: name,
-              clientType: null,
-              totalHT: 0,
-              totalTTC: 0,
-              totalVAT: 0,
-              invoiceCount: 0,
-            };
-            clientAgg.set(`name:${nameKey}`, entry);
-            entryByName.set(nameKey, entry);
+          let entry = null;
+          if (linkedId) {
+            entry = clientAgg.get(linkedId);
+            if (!entry) {
+              entry = {
+                clientId: linkedId,
+                clientName: name,
+                clientType: null,
+                totalHT: 0,
+                totalTTC: 0,
+                totalVAT: 0,
+                invoiceCount: 0,
+              };
+              clientAgg.set(linkedId, entry);
+              entryByName.set(nameMergeKey(name), entry);
+              linkedOnlyIds.add(linkedId);
+            }
+          } else {
+            const nameKey = nameMergeKey(name);
+            entry = entryByName.get(nameKey);
+            if (!entry) {
+              entry = {
+                clientId: null,
+                clientName: name,
+                clientType: null,
+                totalHT: 0,
+                totalTTC: 0,
+                totalVAT: 0,
+                invoiceCount: 0,
+              };
+              clientAgg.set(`name:${nameKey}`, entry);
+              entryByName.set(nameKey, entry);
+            }
           }
           entry.totalHT += row.totalHT || 0;
           entry.totalTTC += row.totalTTC || 0;
           entry.totalVAT += row.totalVAT || 0;
           entry.invoiceCount += row.invoiceCount || 0;
+        }
+
+        // Enrichir les entrées issues d'importées liées seules : nom canonique
+        // et type du client Newbi (sinon nom OCR et type inconnu).
+        if (linkedOnlyIds.size > 0) {
+          const ClientModel = mongoose.model("Client");
+          const linkedClients = await ClientModel.find({
+            _id: { $in: [...linkedOnlyIds] },
+          })
+            .select("name firstName lastName type")
+            .lean();
+          for (const c of linkedClients) {
+            const entry = clientAgg.get(String(c._id));
+            if (!entry) continue;
+            const displayName =
+              c.type === "INDIVIDUAL"
+                ? `${c.firstName || ""} ${c.lastName || ""}`.trim()
+                : c.name;
+            entry.clientName = displayName || entry.clientName;
+            entry.clientType = c.type || null;
+          }
         }
 
         // 2) Construire revenueByClient (+ temps passé via clientTimeMap).
@@ -2721,8 +2775,14 @@ const financialAnalyticsResolvers = {
           );
         }
         for (const row of paidImportedByClientMonthly || []) {
+          // Importée liée à un client Newbi : ligne au nom canonique du
+          // client (fusion avec ses factures Newbi même si l'OCR orthographie
+          // le nom différemment).
+          const linkedEntry = row._id.clientId
+            ? clientAgg.get(String(row._id.clientId))
+            : null;
           addMonthly(
-            normName(row._id.clientName),
+            normName(linkedEntry?.clientName || row._id.clientName),
             fmtMonth(row._id.year, row._id.month),
             row,
           );

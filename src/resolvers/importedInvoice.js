@@ -29,6 +29,7 @@ import {
 import documentAutomationService from "../services/documentAutomationService.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
+import Client from "../models/Client.js";
 import stripe from "../utils/stripe.js";
 
 // Limite maximale d'import en lot
@@ -569,6 +570,67 @@ async function fillClientFromVendor(invoiceData, workspaceId) {
   };
 }
 
+// Clé de comparaison de noms de clients : casse, accents, espaces et
+// ponctuation ignorés ("A way out" = "Awayout", "L'héritage" = "L'HERITAGE").
+const clientMatchKey = (s) =>
+  (s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase();
+
+const siretDigits = (s) => ((s || "").match(/\d/g) || []).join("");
+
+const clientDisplayName = (c) =>
+  c.type === "INDIVIDUAL"
+    ? `${c.firstName || ""} ${c.lastName || ""}`.trim()
+    : c.name || "";
+
+// Rapproche la contrepartie d'un client Newbi existant. Le nom normalisé
+// prime : l'OCR attrape parfois un mauvais SIRET sur le document (autre
+// numéro présent sur la page), alors que le nom extrait est fiable. Le SIRET
+// (ou son SIREN, 9 premiers chiffres) sert de second essai. Dans les deux cas
+// le lien n'est posé que si UN SEUL client correspond.
+async function matchExistingClient(workspaceId, clientInfo) {
+  if (!clientInfo?.name && !clientInfo?.siret) return null;
+  const clients = await Client.find({ workspaceId })
+    .select("name firstName lastName type siret")
+    .lean();
+  const nameKey = clientMatchKey(clientInfo.name);
+  if (nameKey) {
+    const byName = clients.filter(
+      (c) => clientMatchKey(clientDisplayName(c)) === nameKey,
+    );
+    if (byName.length === 1) return byName[0];
+  }
+  const digits = siretDigits(clientInfo.siret);
+  if (digits.length >= 9) {
+    const siren = digits.slice(0, 9);
+    const bySiret = clients.filter((c) => {
+      const cd = siretDigits(c.siret);
+      return cd.length >= 9 && (cd === digits || cd.slice(0, 9) === siren);
+    });
+    if (bySiret.length === 1) return bySiret[0];
+  }
+  return null;
+}
+
+// Résolution complète du client d'une facture importée à la création :
+// bascule vendor -> client si besoin, puis rapprochement automatique avec un
+// client Newbi existant (client.id, corrigeable ensuite dans la sidebar).
+async function resolveImportedClient(invoiceData, workspaceId) {
+  await fillClientFromVendor(invoiceData, workspaceId);
+  if (!invoiceData?.client?.name) return;
+  try {
+    const matched = await matchExistingClient(workspaceId, invoiceData.client);
+    if (matched) invoiceData.client.id = String(matched._id);
+  } catch (e) {
+    logger.warn(
+      `resolveImportedClient : rapprochement client impossible (${e.message})`,
+    );
+  }
+}
+
 async function convertSingleImportedInvoice(importedInvoice, userId) {
   const supplier = await findOrCreateSupplier(
     importedInvoice.vendor,
@@ -868,7 +930,7 @@ const importedInvoiceResolvers = {
             mimeType,
             workspaceId,
           );
-          await fillClientFromVendor(invoiceData, workspaceId);
+          await resolveImportedClient(invoiceData, workspaceId);
 
           // OPTIMISATION: Enregistrer usage OCR + détecter doublons en parallèle
           const [duplicates] = await Promise.all([
@@ -1114,7 +1176,7 @@ const importedInvoiceResolvers = {
             }
           }
 
-          await fillClientFromVendor(invoiceData, workspaceId);
+          await resolveImportedClient(invoiceData, workspaceId);
 
           if (consumedQuota && plan) {
             await recordOcrUsage(user.id, workspaceId, plan, {
@@ -1300,7 +1362,7 @@ const importedInvoiceResolvers = {
                     extractionResult,
                   );
                 }
-                await fillClientFromVendor(invoiceData, workspaceId);
+                await resolveImportedClient(invoiceData, workspaceId);
 
                 // Doublons + enregistrement OCR en parallèle
                 const [duplicates] = await Promise.all([
@@ -1460,6 +1522,31 @@ const importedInvoiceResolvers = {
             invoice.client.city = input.clientCity;
           if (input.clientPostalCode !== undefined)
             invoice.client.postalCode = input.clientPostalCode;
+        }
+
+        // Associer / dissocier un client Newbi existant (null = dissocier).
+        if (input.clientId !== undefined) {
+          if (!invoice.client) invoice.client = {};
+          if (!input.clientId) {
+            invoice.client.id = null;
+          } else {
+            const linked = await Client.findOne({
+              _id: input.clientId,
+              workspaceId,
+            }).lean();
+            if (!linked) {
+              throw createNotFoundError(
+                "Client non trouvé dans cet espace de travail",
+              );
+            }
+            invoice.client.id = String(linked._id);
+            // Aligner le nom affiché sur le client choisi, sauf si un nom
+            // explicite est fourni dans la même mutation.
+            if (input.clientName === undefined) {
+              invoice.client.name =
+                clientDisplayName(linked) || invoice.client.name;
+            }
+          }
         }
 
         // Mettre à jour les autres champs
@@ -1775,3 +1862,5 @@ importedInvoiceResolvers.Mutation = Object.fromEntries(
 );
 
 export default importedInvoiceResolvers;
+// Exposés pour les tests unitaires (rapprochement client des importées)
+export { matchExistingClient, resolveImportedClient, fillClientFromVendor };
