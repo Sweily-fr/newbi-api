@@ -524,6 +524,51 @@ async function findOrCreateSupplier(vendor, workspaceId, userId) {
   });
 }
 
+// Une facture importée est une facture de VENTE : la contrepartie doit vivre
+// dans client.*. En pratique l'OCR range la société détectée sur le document
+// dans vendor.* et laisse client vide — les graphiques analytics (qui lisent
+// client.name) perdaient alors le client. On bascule vendor vers client à la
+// création, sauf si vendor est l'organisation elle-même (émetteur correctement
+// lu par l'OCR, le nom du client est alors ailleurs sur le document).
+const normalizeCompanyName = (s) =>
+  (s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+async function fillClientFromVendor(invoiceData, workspaceId) {
+  const vendorName = invoiceData?.vendor?.name?.trim();
+  if (invoiceData?.client?.name || !vendorName) return;
+  try {
+    // Pas de modèle mongoose "Organization" enregistré : collection brute.
+    const org = await mongoose.connection.db
+      .collection("organization")
+      .findOne(
+        { _id: new mongoose.Types.ObjectId(String(workspaceId)) },
+        { projection: { name: 1, companyName: 1 } },
+      );
+    const ownNames = [org?.name, org?.companyName]
+      .filter(Boolean)
+      .map(normalizeCompanyName);
+    if (ownNames.includes(normalizeCompanyName(vendorName))) return;
+  } catch (e) {
+    logger.warn(
+      `fillClientFromVendor : organisation ${workspaceId} illisible (${e.message}), bascule appliquée par défaut`,
+    );
+  }
+  invoiceData.client = {
+    ...invoiceData.client,
+    name: vendorName,
+    address: invoiceData.client?.address || invoiceData.vendor.address || null,
+    city: invoiceData.client?.city || invoiceData.vendor.city || null,
+    postalCode:
+      invoiceData.client?.postalCode || invoiceData.vendor.postalCode || null,
+    siret: invoiceData.client?.siret || invoiceData.vendor.siret || null,
+  };
+}
+
 async function convertSingleImportedInvoice(importedInvoice, userId) {
   const supplier = await findOrCreateSupplier(
     importedInvoice.vendor,
@@ -823,6 +868,7 @@ const importedInvoiceResolvers = {
             mimeType,
             workspaceId,
           );
+          await fillClientFromVendor(invoiceData, workspaceId);
 
           // OPTIMISATION: Enregistrer usage OCR + détecter doublons en parallèle
           const [duplicates] = await Promise.all([
@@ -1068,6 +1114,8 @@ const importedInvoiceResolvers = {
             }
           }
 
+          await fillClientFromVendor(invoiceData, workspaceId);
+
           if (consumedQuota && plan) {
             await recordOcrUsage(user.id, workspaceId, plan, {
               fileName: filename,
@@ -1252,6 +1300,7 @@ const importedInvoiceResolvers = {
                     extractionResult,
                   );
                 }
+                await fillClientFromVendor(invoiceData, workspaceId);
 
                 // Doublons + enregistrement OCR en parallèle
                 const [duplicates] = await Promise.all([
