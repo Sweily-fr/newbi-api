@@ -38,6 +38,10 @@ const vendorInfoSchema = new mongoose.Schema(
 // Schéma pour les informations du client (destinataire de la facture)
 const clientInfoSchema = new mongoose.Schema(
   {
+    // ID du client Newbi rapproché (collection Client, stocké en String comme
+    // sur Invoice.client.id) : posé par le rapprochement automatique à
+    // l'import, ou choisi/corrigé manuellement dans la sidebar.
+    id: { type: String, default: null },
     name: { type: String, default: "" },
     address: { type: String, default: "" },
     city: { type: String, default: "" },
