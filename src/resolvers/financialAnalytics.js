@@ -2,6 +2,18 @@ import mongoose from "mongoose";
 import { requireRead, resolveWorkspaceId } from "../middlewares/rbac.js";
 import { Board, Task } from "../models/kanban.js";
 
+// Statuts des factures de VENTE importées comptées dans le CA (encaissé) et
+// dans les factures émises. PENDING_REVIEW est inclus : une facture importée
+// naît dans ce statut (importedInvoice.js) et n'en sort que si l'utilisateur
+// la valide une par une dans la sidebar. Sans lui, tout l'historique importé
+// et non revu disparaissait du CA mensuel — le CA ne remontait alors que les
+// factures Newbi rapprochées, alors que le CA doit compter TOUTES les
+// factures payées du mois, avec ou sans justificatif/rapprochement.
+// UPLOADED (PDF sans OCR, donc sans montant), REJECTED et ARCHIVED restent
+// exclus. Les importées converties en factures d'ACHAT sont retirées à part
+// via notConvertedImportedMatch.
+const IMPORTED_REVENUE_STATUSES = ["PENDING_REVIEW", "VALIDATED", "COMPLETED"];
+
 /**
  * Aggregate time tracked in Kanban tasks by client.
  * Returns a Map<clientIdString, { totalTimeSeconds, totalBillableAmount }>
@@ -290,22 +302,22 @@ const financialAnalyticsResolvers = {
         }
         if (status && status.length > 0) invoiceMatch.status = { $in: status };
 
-        // --- Paid invoice match (revenu reconnu à la DATE DE PAIEMENT) ---
+        // --- Paid invoice match (revenu reconnu à l'ENCAISSEMENT) ---
         // Les graphiques "Détail par client" et "Tableau croisé Client x Mois"
         // — ainsi que "Top 10 clients" et "Répartition par type" qui partagent
         // la même source — se basent uniquement sur les factures CLIENT PAYÉES
-        // (status COMPLETED), filtrées et regroupées par paymentDate.
+        // (status COMPLETED). Le rattachement au mois se fait sur la date
+        // effective (paymentDate, repli issueDate), comme le CA mensuel de
+        // l'agrégation 5 : une facture marquée payée sans rapprochement
+        // bancaire n'a pas de paymentDate, et l'exiger sortait ces factures des
+        // graphiques clients alors qu'elles comptent dans le CA total.
         // Deux collections alimentent ces graphiques : Invoice (factures créées
         // sur Newbi) via cette agrégation, et ImportedInvoice (factures client
         // importées) via l'agrégation 11 bis. Les factures d'ACHAT vivent dans
         // PurchaseInvoice et restent hors du CA client.
-        const paymentDateRange = { $ne: null };
-        if (startDate) paymentDateRange.$gte = new Date(startDate);
-        if (endDate) paymentDateRange.$lte = new Date(endDate);
         const paidInvoiceMatch = {
           workspaceId: wId,
           status: "COMPLETED",
-          paymentDate: paymentDateRange,
         };
         if (clientIds && clientIds.length > 0) {
           paidInvoiceMatch["client.id"] = { $in: clientIds };
@@ -967,7 +979,7 @@ const financialAnalyticsResolvers = {
           (() => {
             const importedMatch = {
               workspaceId: wId,
-              status: { $in: ["VALIDATED", "COMPLETED"] },
+              status: { $in: IMPORTED_REVENUE_STATUSES },
               ...notConvertedImportedMatch,
             };
             const pipeline = [
@@ -1041,7 +1053,7 @@ const financialAnalyticsResolvers = {
               {
                 $match: {
                   workspaceId: wId,
-                  status: { $in: ["VALIDATED", "COMPLETED"] },
+                  status: { $in: IMPORTED_REVENUE_STATUSES },
                   ...notConvertedImportedMatch,
                 },
               },
@@ -1259,47 +1271,67 @@ const financialAnalyticsResolvers = {
             ]);
           })(),
 
-          // 11. Invoice — CA client payé par client x mois (paymentDate)
+          // 11. Invoice — CA client payé par client x mois (date effective)
           // Alimente "Détail par client", "Top 10 clients", "Répartition par
           // type" et "Tableau croisé Client x Mois" pour les factures client
           // créées sur Newbi. Les factures client importées sont couvertes par
           // l'agrégation 11 bis (collection ImportedInvoice).
           // Granularité mensuelle : les totaux par client sont sommés en JS.
-          Invoice.aggregate([
-            { $match: paidInvoiceMatch },
-            {
-              $group: {
-                _id: {
-                  clientId: "$client.id",
-                  clientName: {
-                    $cond: {
-                      if: { $eq: ["$client.type", "INDIVIDUAL"] },
-                      then: {
-                        $concat: [
-                          { $ifNull: ["$client.firstName", ""] },
-                          " ",
-                          { $ifNull: ["$client.lastName", ""] },
-                        ],
-                      },
-                      else: { $ifNull: ["$client.name", "Client inconnu"] },
-                    },
-                  },
-                  clientType: "$client.type",
-                  year: { $year: "$paymentDate" },
-                  month: { $month: "$paymentDate" },
+          (() => {
+            const paidEffectiveRange = {};
+            if (startDate) paidEffectiveRange.$gte = new Date(startDate);
+            if (endDate) paidEffectiveRange.$lte = new Date(endDate);
+            const hasPaidRange = Boolean(startDate || endDate);
+            return Invoice.aggregate([
+              { $match: paidInvoiceMatch },
+              {
+                $addFields: {
+                  // Même rattachement que le CA mensuel (agrégation 5)
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
                 },
-                totalHT: { $sum: "$finalTotalHT" },
-                totalTTC: { $sum: "$finalTotalTTC" },
-                totalVAT: { $sum: "$finalTotalVAT" },
-                invoiceCount: { $sum: 1 },
               },
-            },
-          ]),
+              {
+                $match: hasPaidRange
+                  ? { _effectiveDate: paidEffectiveRange }
+                  : { _effectiveDate: { $ne: null } },
+              },
+              {
+                $group: {
+                  _id: {
+                    clientId: "$client.id",
+                    clientName: {
+                      $cond: {
+                        if: { $eq: ["$client.type", "INDIVIDUAL"] },
+                        then: {
+                          $concat: [
+                            { $ifNull: ["$client.firstName", ""] },
+                            " ",
+                            { $ifNull: ["$client.lastName", ""] },
+                          ],
+                        },
+                        else: { $ifNull: ["$client.name", "Client inconnu"] },
+                      },
+                    },
+                    clientType: "$client.type",
+                    year: { $year: "$_effectiveDate" },
+                    month: { $month: "$_effectiveDate" },
+                  },
+                  totalHT: { $sum: "$finalTotalHT" },
+                  totalTTC: { $sum: "$finalTotalTTC" },
+                  totalVAT: { $sum: "$finalTotalVAT" },
+                  invoiceCount: { $sum: 1 },
+                },
+              },
+            ]);
+          })(),
 
           // 11 bis. ImportedInvoice — CA client payé par client x mois.
-          // Les factures client importées encaissées (COMPLETED) complètent les
-          // factures Newbi dans les graphiques clients. Même règle de
-          // rattachement que l'agrégation 8 : paymentDate, repli invoiceDate.
+          // Les factures client importées encaissées complètent les factures
+          // Newbi dans les graphiques clients. Mêmes statuts que l'agrégation 8
+          // (IMPORTED_REVENUE_STATUSES) : filtrer sur le seul COMPLETED ne
+          // remontait rien, aucun flux ne posant ce statut sur une importée, et
+          // la somme des CA clients ne collait donc pas au CA total. Même règle
+          // de rattachement que l'agrégation 8 : paymentDate, repli invoiceDate.
           // Les importées n'ont ni client.id ni type : le rapprochement avec
           // les clients Newbi se fait par nom en JS, et un filtre par client
           // (clientId/clientIds) les exclut faute d'identifiant.
@@ -1312,7 +1344,13 @@ const financialAnalyticsResolvers = {
             if (endDate) range.$lte = new Date(endDate);
             const hasRange = Boolean(startDate || endDate);
             return ImportedInvoice.aggregate([
-              { $match: { workspaceId: wId, status: "COMPLETED" } },
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: IMPORTED_REVENUE_STATUSES },
+                  ...notConvertedImportedMatch,
+                },
+              },
               {
                 $addFields: {
                   _effectiveDate: { $ifNull: ["$paymentDate", "$invoiceDate"] },
@@ -2164,14 +2202,15 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
-            // Encaissé N-1 (importées) — VALIDATED = payée + repli
-            // paymentDate→invoiceDate (cohérent avec la période courante) ;
-            // DSO strict (paymentDate réelle).
+            // Encaissé N-1 (importées) — mêmes statuts que la période courante
+            // (IMPORTED_REVENUE_STATUSES) + repli paymentDate→invoiceDate,
+            // sinon la comparaison N-1 serait faussée ; DSO strict
+            // (paymentDate réelle).
             ImportedInvoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
-                  status: { $in: ["VALIDATED", "COMPLETED"] },
+                  status: { $in: IMPORTED_REVENUE_STATUSES },
                   ...notConvertedImportedMatch,
                 },
               },
@@ -2290,13 +2329,13 @@ const financialAnalyticsResolvers = {
                 },
               },
             ]),
-            // Factures importées émises N-1 (VALIDATED/COMPLETED, par
+            // Factures importées émises N-1 (IMPORTED_REVENUE_STATUSES, par
             // invoiceDate) — pour « Factures émises » et « Panier moyen » N-1.
             ImportedInvoice.aggregate([
               {
                 $match: {
                   workspaceId: wId,
-                  status: { $in: ["VALIDATED", "COMPLETED"] },
+                  status: { $in: IMPORTED_REVENUE_STATUSES },
                 },
               },
               {
