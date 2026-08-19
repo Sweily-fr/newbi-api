@@ -78,6 +78,7 @@ import webhookRoutes from "./routes/webhook.js";
 import fileTransferAuthRoutes from "./routes/fileTransferAuth.js";
 import fileDownloadRoutes from "./routes/fileDownload.js";
 import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
+import backofficeAdminRoutes from "./routes/backofficeAdmin.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
@@ -350,6 +351,10 @@ async function startServer() {
 
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);
+
+  // Mini back-office interne : gestion/purge totale des utilisateurs de test
+  // (allowlist BACKOFFICE_ADMIN_USER_IDS, voir routes/backofficeAdmin.js)
+  app.use("/api/backoffice", validateJWT, backofficeAdminRoutes);
 
   // Routes assistant (télémétrie Phase 0 + chat LLM V1)
   // Auth via betterAuthJWTMiddleware dans chaque route (pattern banking).
