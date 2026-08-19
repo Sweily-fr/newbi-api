@@ -169,24 +169,30 @@ class SuperPdpService {
       const credentials =
         await EInvoicingSettingsService.getSuperPdpCredentials(organizationId);
 
-      if (!credentials?.clientId || !credentials?.clientSecret) {
+      // client_secret optionnel : absent pour les applications SuperPDP de
+      // type « Publique » (RFC 6749).
+      if (!credentials?.clientId) {
         logger.error("Credentials manquants pour rafraîchir le token");
         return null;
       }
 
       const tokenUrl = `${this.oauthUrl}/token`;
 
+      const refreshParams = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: credentials.clientId,
+      });
+      if (credentials.clientSecret) {
+        refreshParams.set("client_secret", credentials.clientSecret);
+      }
+
       const response = await fetch(tokenUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-          client_id: credentials.clientId,
-          client_secret: credentials.clientSecret,
-        }),
+        body: refreshParams,
       });
 
       if (!response.ok) {

@@ -87,9 +87,28 @@ router.get("/authorize", requireInternalSecret, async (req, res) => {
     // On mémorise l'origine (mobile/web) pour que le callback redirige vers le
     // bon endroit (deep link app vs dashboard desktop).
     const state = crypto.randomBytes(32).toString("hex");
+
+    // PKCE (RFC 7636) : exigé par SuperPDP pour les applications « Publiques »
+    // (sans client_secret). Le code_verifier est stocké avec le state et renvoyé
+    // au callback lors de l'échange du code. Les applications confidentielles
+    // (avec secret) gardent le flow historique sans PKCE.
+    let codeVerifier = null;
+    let codeChallenge = null;
+    if (!process.env.SUPERPDP_CLIENT_SECRET) {
+      codeVerifier = crypto.randomBytes(32).toString("base64url");
+      codeChallenge = crypto
+        .createHash("sha256")
+        .update(codeVerifier)
+        .digest("base64url");
+    }
+
     await cacheSet(
       `${OAUTH_STATE_PREFIX}${state}`,
-      { organizationId, source: source === "mobile" ? "mobile" : "web" },
+      {
+        organizationId,
+        source: source === "mobile" ? "mobile" : "web",
+        codeVerifier,
+      },
       OAUTH_STATE_TTL,
     );
 
@@ -102,11 +121,17 @@ router.get("/authorize", requireInternalSecret, async (req, res) => {
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("state", state);
+    if (codeChallenge) {
+      authUrl.searchParams.set("code_challenge", codeChallenge);
+      authUrl.searchParams.set("code_challenge_method", "S256");
+    }
     // Scopes: laisser vide selon la documentation SuperPDP
 
     // Pré-remplissage (best-effort) du formulaire SuperPDP : email + SIREN réel.
-    // Le scheme "fr_siren" indique à SuperPDP d'onboarder une société RÉELLE
-    // (production) ; sans numéro, SuperPDP retombe sur l'onboarding "sandbox".
+    // Sans numéro, le formulaire SuperPDP demande simplement le SIREN à la main
+    // (vérifié au registre des entreprises : une société fictive est refusée).
+    // Les sociétés de test (Tricatel 000000001, Burger Queen 000000002) ne sont
+    // acceptées qu'avec une application SuperPDP créée en mode « Bac à sable ».
     // On n'envoie le numéro que s'il s'agit d'un SIREN valide (9 chiffres).
     if (loginHint) {
       authUrl.searchParams.set("login_hint", loginHint);
@@ -197,12 +222,14 @@ router.get("/callback", async (req, res) => {
     const { organizationId } = stateData;
     await cacheDel(`${OAUTH_STATE_PREFIX}${state}`); // Supprimer le state utilisé
 
-    // Récupérer les credentials
+    // Récupérer les credentials. Le client_secret est optionnel : les
+    // applications SuperPDP de type « Publique » (RFC 6749) n'en ont pas,
+    // l'échange de code se fait alors avec le seul client_id.
     const clientId = process.env.SUPERPDP_CLIENT_ID;
     const clientSecret = process.env.SUPERPDP_CLIENT_SECRET;
 
-    if (!clientId || !clientSecret) {
-      throw new Error("Credentials SuperPDP non configurés");
+    if (!clientId) {
+      throw new Error("SUPERPDP_CLIENT_ID non configuré");
     }
 
     // Construire l'URL de redirection (doit être identique à celle utilisée pour l'autorisation)
@@ -213,18 +240,26 @@ router.get("/callback", async (req, res) => {
       `🔄 Échange du code OAuth2 pour l'organisation ${organizationId}`,
     );
 
+    const tokenParams = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: clientId,
+    });
+    if (clientSecret) {
+      tokenParams.set("client_secret", clientSecret);
+    }
+    // PKCE : renvoyer le code_verifier généré à l'authorize (client public)
+    if (stateData.codeVerifier) {
+      tokenParams.set("code_verifier", stateData.codeVerifier);
+    }
+
     const tokenResponse = await fetch(SUPERPDP_OAUTH_CONFIG.tokenEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri,
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
+      body: tokenParams,
     });
 
     if (!tokenResponse.ok) {
