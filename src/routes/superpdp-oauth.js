@@ -320,6 +320,27 @@ router.post("/disconnect", requireInternalSecret, async (req, res) => {
       });
     }
 
+    // Engagement légal : l'activation vaut mandat de facturation d'une durée
+    // minimale d'un an auprès de la plateforme agréée. La déconnexion est
+    // refusée avant l'échéance. SUPERPDP_ALLOW_EARLY_DISCONNECT=true permet de
+    // lever la contrainte pour les tests sandbox (local/staging uniquement).
+    if (process.env.SUPERPDP_ALLOW_EARLY_DISCONNECT !== "true") {
+      const settings =
+        await EInvoicingSettingsService.getEInvoicingSettings(organizationId);
+      if (settings?.eInvoicingActivatedAt) {
+        const engagementEndsAt = new Date(settings.eInvoicingActivatedAt);
+        engagementEndsAt.setFullYear(engagementEndsAt.getFullYear() + 1);
+        if (Date.now() < engagementEndsAt.getTime()) {
+          return res.status(403).json({
+            success: false,
+            error:
+              "La déconnexion n'est possible qu'à l'issue de l'engagement d'un an du mandat de facturation électronique.",
+            engagementEndsAt: engagementEndsAt.toISOString(),
+          });
+        }
+      }
+    }
+
     // Supprimer les tokens et désactiver la facturation électronique
     await EInvoicingSettingsService.removeSuperPdpTokens(organizationId);
     await EInvoicingSettingsService.disableEInvoicing(organizationId);
