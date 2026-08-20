@@ -31,6 +31,11 @@ import axios from "axios";
  *   --delay <ms>    pause entre deux documents (défaut 2000 ms : chaque
  *                   génération lance un Puppeteer côté NewbiV2)
  *   --env <fichier> fichier d'env à charger (défaut .env.production)
+ *   --situation-only  ne traite que les factures de situation (implique le
+ *                   type invoice). Ajouté le 20/08/2026 : les PDF archivés
+ *                   de situation perdaient le récapitulatif de facturation
+ *                   et l'avancement cumulé (fix NewbiV2 PR #1056) — passer
+ *                   un --before postérieur au déploiement du fix.
  */
 
 const args = process.argv.slice(2);
@@ -39,7 +44,8 @@ const getOpt = (name) => {
   return i !== -1 ? args[i + 1] : null;
 };
 const DRY_RUN = args.includes("--dry-run");
-const ONLY_TYPE = getOpt("type");
+const SITUATION_ONLY = args.includes("--situation-only");
+const ONLY_TYPE = SITUATION_ONLY ? "invoice" : getOpt("type");
 const LIMIT = Number(getOpt("limit")) || 0;
 const DELAY_MS = Number(getOpt("delay")) || 2000;
 const ENV_FILE = getOpt("env") || ".env.production";
@@ -159,7 +165,10 @@ async function main() {
     {
       type: "invoice",
       collection: "invoices",
-      filter: { status: { $ne: "DRAFT" } },
+      filter: {
+        status: { $ne: "DRAFT" },
+        ...(SITUATION_ONLY ? { invoiceType: "situation" } : {}),
+      },
       regenerate: (doc) => archiveInvoiceFacturX(doc, String(doc.workspaceId)),
     },
     {
