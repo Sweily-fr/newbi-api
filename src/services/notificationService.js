@@ -178,7 +178,7 @@ function generatePaymentReceivedHtml({
           </tr>
           <tr style="border-top: 1px solid #e5e7eb;">
             <td style="padding: 12px 0 6px 0; font-size: 14px; color: #6b7280; font-weight: 500;">Montant payé</td>
-            <td style="padding: 12px 0 6px 0; font-size: 16px; color: #10b981; font-weight: 600; text-align: right;">${totalAmount}</td>
+            <td style="padding: 12px 0 6px 0; font-size: 16px; color: #1a1a1a; font-weight: 600; text-align: right;">${totalAmount}</td>
           </tr>
         </table>
       </div>
