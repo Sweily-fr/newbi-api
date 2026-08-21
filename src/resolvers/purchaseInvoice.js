@@ -17,6 +17,7 @@ import { syncPurchaseInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js"
 import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionService.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
+import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -574,6 +575,7 @@ const purchaseInvoiceResolvers = {
         const invoice = await checkAccess(id, workspaceId);
 
         const oldStatus = invoice.status;
+        const oldCategory = invoice.category;
 
         // Garde-fou d'intégrité : le montant d'une facture rapprochée ne peut
         // pas changer (la transaction bancaire liée ne correspondrait plus).
@@ -621,6 +623,16 @@ const purchaseInvoiceResolvers = {
         }
 
         await invoice.save();
+
+        // La facture fait foi : un changement de catégorie se propage aux
+        // transactions déjà rapprochées
+        if (invoice.category !== oldCategory) {
+          await syncLinkedTransactionCategories({
+            category: invoice.category,
+            workspaceId,
+            transactionIds: invoice.linkedTransactionIds || [],
+          });
+        }
 
         // Sync Pennylane si le statut a changé (fire-and-forget)
         if (invoice.status !== oldStatus) {
@@ -936,6 +948,19 @@ const purchaseInvoiceResolvers = {
           { $set: { category } },
         );
 
+        // La facture fait foi : propager la nouvelle catégorie aux
+        // transactions rapprochées des factures concernées
+        const reconciled = await PurchaseInvoice.find({
+          _id: { $in: ids },
+          workspaceId,
+          "linkedTransactionIds.0": { $exists: true },
+        }).select("linkedTransactionIds");
+        await syncLinkedTransactionCategories({
+          category,
+          workspaceId,
+          transactionIds: reconciled.flatMap((inv) => inv.linkedTransactionIds),
+        });
+
         return {
           success: true,
           updatedCount: result.modifiedCount,
@@ -1035,6 +1060,14 @@ const purchaseInvoiceResolvers = {
             $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
           },
         );
+
+        // La facture fait foi : les transactions rapprochées prennent sa
+        // catégorie (les deux pages affichent alors le même libellé)
+        await syncLinkedTransactionCategories({
+          category: invoice.category,
+          workspaceId,
+          transactionIds,
+        });
 
         // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
         await reportPurchaseInvoicePaymentIfNeeded(invoice, workspaceId);
