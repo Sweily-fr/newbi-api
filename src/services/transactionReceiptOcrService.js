@@ -6,6 +6,7 @@ import mistralIntelligentAnalysisService from "./mistralIntelligentAnalysisServi
 import Transaction from "../models/Transaction.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
+import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import crypto from "crypto";
 
 /**
@@ -535,6 +536,14 @@ async function processReceiptsForTransaction({
         },
         { arrayFilters: [{ "elem._id": receiptFile._id }] },
       );
+
+      // La facture fait foi : la transaction rapprochée prend la catégorie de
+      // la facture créée, pour un affichage identique sur les deux pages
+      await syncLinkedTransactionCategories({
+        category: invoice.category,
+        workspaceId,
+        transactionIds: [transaction._id],
+      });
 
       createdInvoices.push(invoice);
       logger.info(
