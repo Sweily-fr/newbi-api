@@ -416,6 +416,13 @@ const bankingResolvers = {
               indemnites: "OTHER",
               cadeaux_recus: "OTHER",
               autre_revenu: "OTHER",
+              // Catégories propres à l'enum facture d'achat, propagées sur la
+              // transaction au rapprochement (purchaseInvoiceCategorySync) —
+              // sans ce mapping, ré-enregistrer la transaction dégraderait
+              // expenseCategory en OTHER
+              TRANSPORT: "TRAVEL",
+              TELECOMMUNICATIONS: "UTILITIES",
+              ENERGY: "UTILITIES",
             };
             updateData.expenseCategory =
               subcategoryToExpenseCategory[input.category] || "OTHER";
