@@ -146,6 +146,10 @@ mongoose
         index: "creditnote_number_workspaceId_year_unique",
       },
       { collection: "purchaseorders", index: "number_createdBy_year_unique" },
+      // Ancien index unique d'avant la migration userID → workspaceID :
+      // bloquait la création d'un client avec le même email par le même
+      // utilisateur dans un autre workspace (E11000 cross-workspace)
+      { collection: "clients", index: "email_1_createdBy_1" },
     ];
 
     for (const { collection, index } of legacyIndexes) {
