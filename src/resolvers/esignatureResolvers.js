@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { requireRead, requireWrite } from "../middlewares/rbac.js";
 import esignatureService from "../services/esignatureService.js";
 import SignatureRequest from "../models/SignatureRequest.js";
@@ -9,6 +10,7 @@ import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
 import { sendSignatureInvitations } from "../services/esignatureEmail.js";
 import { mapExternalStatus } from "../services/esignatureStatus.js";
+import { publishEmailTrackingUpdate } from "./documentEmail.js";
 import {
   publishSignatureStatus,
   signatureChannel,
@@ -480,6 +482,15 @@ const esignatureResolvers = {
               };
             });
 
+            // Conserver l'URL individuelle de chaque signataire : cible de la
+            // redirection du lien tracké /tracking/sign/:token/:index
+            signerUrls.forEach((s, i) => {
+              if (signatureRequest.signers[i]) {
+                signatureRequest.signers[i].signingUrl = s.url || null;
+              }
+            });
+            await signatureRequest.save();
+
             const documentNumber =
               `${document.prefix || ""}-${document.number || ""}`.replace(
                 /^-/,
@@ -490,8 +501,51 @@ const esignatureResolvers = {
             const totalAmount =
               document.finalTotalTTC ?? document.totalTTC ?? null;
 
+            // Suivi email : même mécanique que l'envoi classique par email.
+            // L'envoi en signature marque le devis « Envoyé » dans la colonne
+            // Suivi ; le pixel et le lien tracké marqueront « Ouvert »/« Consulté ».
+            const trackingToken = crypto.randomBytes(32).toString("hex");
+            const apiBaseUrl =
+              process.env.API_URL ||
+              process.env.NEXT_PUBLIC_API_URL ||
+              process.env.BACKEND_URL ||
+              "http://localhost:4000";
+            const emailSentAt = new Date();
+            // $set de l'objet entier (pas de chemins pointés) : un document dont
+            // emailTracking vaut null ferait échouer la création de sous-champs.
+            await Quote.updateOne(
+              { _id: documentId },
+              {
+                $set: {
+                  emailTracking: {
+                    trackingToken,
+                    emailSentAt,
+                    emailOpenedAt: null,
+                    emailOpenCount: 0,
+                    emailClickedAt: null,
+                    emailClickCount: 0,
+                  },
+                },
+              },
+            );
+            publishEmailTrackingUpdate({
+              documentId: documentId.toString(),
+              documentType: "quote",
+              workspaceId: context.workspaceId.toString(),
+              emailTracking: {
+                emailSentAt: emailSentAt.toISOString(),
+                emailOpenedAt: null,
+                emailOpenCount: 0,
+                emailClickedAt: null,
+                emailClickCount: 0,
+              },
+            });
+
             sendSignatureInvitations({
-              signerUrls,
+              signerUrls: signerUrls.map((s, i) => ({
+                ...s,
+                trackedUrl: `${apiBaseUrl}/tracking/sign/${trackingToken}/${i}`,
+              })),
               companyName,
               documentNumber: documentNumber || document.number || "",
               totalAmount:
@@ -502,11 +556,27 @@ const esignatureResolvers = {
                     }).format(totalAmount)
                   : null,
               qualified: signatureType === "QES_otp",
-            }).catch((err) =>
-              logger.error(
-                `Envoi invitations signature (devis ${documentNumber}): ${err.message}`,
-              ),
-            );
+              trackingPixelUrl: `${apiBaseUrl}/tracking/open/${trackingToken}`,
+            })
+              .then(({ resendMessageId }) => {
+                // Second signal d'ouverture via le webhook Resend email.opened,
+                // utile quand le pixel est bloqué par le client mail.
+                if (resendMessageId) {
+                  return Quote.updateOne(
+                    { _id: documentId },
+                    {
+                      $set: {
+                        "emailTracking.resendMessageId": resendMessageId,
+                      },
+                    },
+                  );
+                }
+              })
+              .catch((err) =>
+                logger.error(
+                  `Envoi invitations signature (devis ${documentNumber}): ${err.message}`,
+                ),
+              );
           }
 
           return {

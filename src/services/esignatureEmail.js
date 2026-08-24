@@ -25,8 +25,14 @@ function buildSigningEmailHtml({
   documentNumber,
   totalAmount,
   signingUrl,
+  trackedSigningUrl,
+  trackingPixelUrl,
   qualified,
 }) {
+  // Le bouton passe par le lien tracké (enregistre l'ouverture même quand le
+  // client mail bloque les images) ; le lien de secours en clair reste l'URL
+  // directe du prestataire pour ne dépendre de l'API sur aucun chemin.
+  const buttonUrl = trackedSigningUrl || signingUrl;
   const todayFormatted = new Date().toLocaleDateString("fr-FR", {
     day: "numeric",
     month: "long",
@@ -107,7 +113,7 @@ function buildSigningEmailHtml({
       </div>
 
       <!-- Bouton CTA -->
-      <a href="${signingUrl}" style="display:block;background-color:#1a1a1a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:500;font-size:15px;text-align:center;">Signer le devis</a>
+      <a href="${buttonUrl}" style="display:block;background-color:#1a1a1a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:500;font-size:15px;text-align:center;">Signer le devis</a>
       <p style="font-size:12px;color:#9ca3af;margin:16px 0 0 0;text-align:center;line-height:1.6;">Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br><span style="color:#5a50ff;word-break:break-all;">${signingUrl}</span></p>
     </div>
 
@@ -125,6 +131,7 @@ function buildSigningEmailHtml({
     </div>
 
   </div>
+  ${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" border="0" alt="" style="display:block;width:1px;height:1px;border:0;outline:none;text-decoration:none;">` : ""}
 </body>
 </html>`;
 }
@@ -133,13 +140,16 @@ function buildSigningEmailHtml({
  * Envoie l'invitation à signer à chaque signataire disposant d'une URL de signature.
  *
  * @param {object} params
- * @param {Array<{email:string,name?:string,surname?:string,url:string}>} params.signerUrls
- *   Signataires avec leur URL individuelle (issue de la réponse de l'API).
+ * @param {Array<{email:string,name?:string,surname?:string,url:string,trackedUrl?:string}>} params.signerUrls
+ *   Signataires avec leur URL individuelle (issue de la réponse de l'API) et
+ *   l'éventuel lien tracké /tracking/sign servi au bouton de l'email.
  * @param {string} params.companyName - Nom de l'entreprise émettrice
  * @param {string} params.documentNumber - Numéro du devis (préfixe inclus si dispo)
  * @param {string|null} params.totalAmount - Montant total formaté (optionnel)
  * @param {boolean} params.qualified - true pour une signature qualifiée (QES_otp)
- * @returns {Promise<number>} Nombre d'emails envoyés
+ * @param {string|null} params.trackingPixelUrl - URL du pixel de tracking d'ouverture
+ * @returns {Promise<{sent:number,resendMessageId:string|null}>} Nombre d'emails
+ *   envoyés et identifiant Resend du premier email (pour le webhook email.opened)
  */
 export async function sendSignatureInvitations({
   signerUrls,
@@ -147,17 +157,19 @@ export async function sendSignatureInvitations({
   documentNumber,
   totalAmount = null,
   qualified = false,
+  trackingPixelUrl = null,
 }) {
   const recipients = (signerUrls || []).filter((s) => s && s.email && s.url);
   if (recipients.length === 0) {
     logger.warn(
       "sendSignatureInvitations: aucune URL de signature exploitable, aucun email envoyé",
     );
-    return 0;
+    return { sent: 0, resendMessageId: null };
   }
 
   const subject = `${companyName} vous invite à signer le devis ${documentNumber}`;
   let sent = 0;
+  let resendMessageId = null;
 
   for (const signer of recipients) {
     const signerName = [signer.name, signer.surname]
@@ -171,13 +183,20 @@ export async function sendSignatureInvitations({
         documentNumber,
         totalAmount,
         signingUrl: signer.url,
+        trackedSigningUrl: signer.trackedUrl || null,
+        trackingPixelUrl,
         qualified,
       });
-      await emailReminderService.sendEmail({
+      const result = await emailReminderService.sendEmail({
         to: signer.email,
         subject,
         html,
       });
+      // Un seul resendMessageId par document : celui du premier email suffit
+      // au webhook Resend pour retrouver le devis.
+      if (!resendMessageId && result?.id) {
+        resendMessageId = result.id;
+      }
       sent += 1;
     } catch (err) {
       logger.error(
@@ -189,7 +208,7 @@ export async function sendSignatureInvitations({
   logger.info(
     `Invitations de signature envoyées: ${sent}/${recipients.length} pour le devis ${documentNumber}`,
   );
-  return sent;
+  return { sent, resendMessageId };
 }
 
 export default { sendSignatureInvitations };
