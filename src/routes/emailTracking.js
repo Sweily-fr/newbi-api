@@ -3,6 +3,7 @@ import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import CreditNote from "../models/CreditNote.js";
+import SignatureRequest from "../models/SignatureRequest.js";
 import logger from "../utils/logger.js";
 import { publishEmailTrackingUpdate } from "../resolvers/documentEmail.js";
 import {
@@ -94,6 +95,53 @@ router.get("/open/:token", async (req, res) => {
 });
 
 /**
+ * Enregistre un clic sur le document (un clic implique une ouverture),
+ * puis publie la mise à jour en temps réel via GraphQL subscription.
+ */
+async function recordEmailClick(Model, documentType, doc) {
+  const newClickCount = (doc.emailTracking?.emailClickCount || 0) + 1;
+  const now = new Date();
+
+  const updateData = {
+    "emailTracking.emailClickCount": newClickCount,
+  };
+
+  const emailClickedAt = doc.emailTracking?.emailClickedAt || now;
+  if (!doc.emailTracking?.emailClickedAt) {
+    updateData["emailTracking.emailClickedAt"] = now;
+  }
+
+  // Enregistrer aussi comme "ouvert" (un clic implique une ouverture)
+  if (!doc.emailTracking?.emailOpenedAt) {
+    updateData["emailTracking.emailOpenedAt"] = now;
+    updateData["emailTracking.emailOpenCount"] =
+      (doc.emailTracking?.emailOpenCount || 0) + 1;
+  }
+
+  await Model.updateOne({ _id: doc._id }, { $set: updateData });
+
+  logger.info(
+    `[EmailTracking] Lien cliqué pour ${Model.modelName} ${doc._id} (${newClickCount}x)`,
+  );
+
+  // Publier la mise à jour en temps réel
+  publishEmailTrackingUpdate({
+    documentId: doc._id.toString(),
+    documentType,
+    workspaceId: doc.workspaceId.toString(),
+    emailTracking: {
+      emailSentAt: doc.emailTracking?.emailSentAt?.toISOString() || null,
+      emailOpenedAt: (doc.emailTracking?.emailOpenedAt || now).toISOString(),
+      emailOpenCount: doc.emailTracking?.emailOpenedAt
+        ? doc.emailTracking.emailOpenCount
+        : (doc.emailTracking?.emailOpenCount || 0) + 1,
+      emailClickedAt: emailClickedAt.toISOString(),
+      emailClickCount: newClickCount,
+    },
+  });
+}
+
+/**
  * GET /tracking/click/:token
  * Endpoint de tracking de clic dans un email.
  * Enregistre le clic, puis redirige vers le PDF du document.
@@ -109,48 +157,7 @@ router.get("/click/:token", async (req, res) => {
       const doc = await Model.findOne({ "emailTracking.trackingToken": token });
 
       if (doc) {
-        const newClickCount = (doc.emailTracking?.emailClickCount || 0) + 1;
-        const now = new Date();
-
-        const updateData = {
-          "emailTracking.emailClickCount": newClickCount,
-        };
-
-        const emailClickedAt = doc.emailTracking?.emailClickedAt || now;
-        if (!doc.emailTracking?.emailClickedAt) {
-          updateData["emailTracking.emailClickedAt"] = now;
-        }
-
-        // Enregistrer aussi comme "ouvert" (un clic implique une ouverture)
-        if (!doc.emailTracking?.emailOpenedAt) {
-          updateData["emailTracking.emailOpenedAt"] = now;
-          updateData["emailTracking.emailOpenCount"] =
-            (doc.emailTracking?.emailOpenCount || 0) + 1;
-        }
-
-        await Model.updateOne({ _id: doc._id }, { $set: updateData });
-
-        logger.info(
-          `[EmailTracking] Lien cliqué pour ${Model.modelName} ${doc._id} (${newClickCount}x)`,
-        );
-
-        // Publier la mise à jour en temps réel
-        publishEmailTrackingUpdate({
-          documentId: doc._id.toString(),
-          documentType,
-          workspaceId: doc.workspaceId.toString(),
-          emailTracking: {
-            emailSentAt: doc.emailTracking?.emailSentAt?.toISOString() || null,
-            emailOpenedAt: (
-              doc.emailTracking?.emailOpenedAt || now
-            ).toISOString(),
-            emailOpenCount: doc.emailTracking?.emailOpenedAt
-              ? doc.emailTracking.emailOpenCount
-              : (doc.emailTracking?.emailOpenCount || 0) + 1,
-            emailClickedAt: emailClickedAt.toISOString(),
-            emailClickCount: newClickCount,
-          },
-        });
+        await recordEmailClick(Model, documentType, doc);
 
         // URL du PDF partagé
         if (doc.cachedPdf?.url) {
@@ -211,6 +218,51 @@ router.get("/click/:token", async (req, res) => {
   // Fallback : page Newbi
   const frontendUrl = process.env.FRONTEND_URL || "https://www.newbi.fr";
   res.redirect(302, frontendUrl);
+});
+
+/**
+ * GET /tracking/sign/:token/:signerIndex?
+ * Lien tracké du bouton « Signer le devis » des invitations de signature.
+ * Enregistre le clic (donc l'ouverture, même si le pixel a été bloqué par
+ * le client mail), puis redirige vers l'URL de signature du signataire.
+ */
+router.get("/sign/:token/:signerIndex?", async (req, res) => {
+  const { token, signerIndex } = req.params;
+  const idx = Math.max(0, Number.parseInt(signerIndex, 10) || 0);
+  let redirectUrl = null;
+
+  try {
+    const quote = await Quote.findOne({
+      "emailTracking.trackingToken": token,
+    });
+
+    if (quote) {
+      await recordEmailClick(Quote, "quote", quote);
+
+      // URL de signature du signataire (signature client, hors cachet entreprise)
+      const signatureRequest = await SignatureRequest.findOne({
+        documentType: "quote",
+        documentId: quote._id,
+        signatureType: { $ne: "QES_automatic" },
+        status: { $nin: ["CANCELLED", "ERROR"] },
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      redirectUrl =
+        signatureRequest?.signers?.[idx]?.signingUrl ||
+        signatureRequest?.signingUrl ||
+        null;
+    }
+  } catch (error) {
+    logger.warn(
+      `[EmailTracking] Erreur tracking lien signature: ${error.message}`,
+    );
+  }
+
+  // Fallback : page Newbi
+  const frontendUrl = process.env.FRONTEND_URL || "https://www.newbi.fr";
+  res.redirect(302, redirectUrl || frontendUrl);
 });
 
 export default router;
