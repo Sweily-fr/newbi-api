@@ -30,8 +30,13 @@ const signerSchema = new mongoose.Schema(
     signedAt: {
       type: Date,
     },
+    // URL de signature individuelle, cible de la redirection du lien
+    // tracké /tracking/sign/:token/:index des emails d'invitation
+    signingUrl: {
+      type: String,
+    },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const signatureRequestSchema = new mongoose.Schema(
@@ -111,7 +116,7 @@ const signatureRequestSchema = new mongoose.Schema(
       ref: "User",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Index pour retrouver rapidement les signatures d'un document
@@ -125,7 +130,7 @@ signatureRequestSchema.index({ externalSignatureId: 1 }, { sparse: true });
 
 const SignatureRequest = mongoose.model(
   "SignatureRequest",
-  signatureRequestSchema
+  signatureRequestSchema,
 );
 
 export default SignatureRequest;
