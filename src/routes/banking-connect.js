@@ -11,6 +11,52 @@ const router = express.Router();
 // Provider par défaut (peut être changé via variable d'environnement)
 const DEFAULT_PROVIDER = process.env.BANKING_PROVIDER || "bridge";
 
+// Cache mémoire (par instance PM2) du statut des items Bridge, pour ne pas
+// appeler Bridge à chaque affichage du statut. TTL court : un statut d'item
+// change après une reconnexion utilisateur.
+const ITEMS_STATUS_TTL_MS = 5 * 60 * 1000;
+const itemsStatusCache = new Map();
+
+// Statuts Bridge nécessitant une action de l'utilisateur :
+// 402 = identifiants invalides, 429 = action requise dans l'espace client,
+// 1010 = ré-authentification forte (SCA) requise.
+// Tant que l'item est dans un de ces états, la synchronisation est bloquée.
+const ACTION_REQUIRED_STATUSES = new Set([402, 429, 1010]);
+
+async function getItemsNeedingAction(
+  workspaceId,
+  accounts,
+  { force = false } = {},
+) {
+  const key = workspaceId.toString();
+  const cached = itemsStatusCache.get(key);
+  if (!force && cached && Date.now() - cached.at < ITEMS_STATUS_TTL_MS) {
+    return cached.items;
+  }
+
+  await bankingService.initialize("bridge");
+  const provider = bankingService.currentProvider;
+  const items = await provider.listItems(workspaceId);
+
+  const needingAction = items
+    .filter((item) => ACTION_REQUIRED_STATUSES.has(item.status))
+    .map((item) => {
+      const account = accounts.find(
+        (a) => a.raw?.item_id?.toString() === item.itemId,
+      );
+      return {
+        itemId: item.itemId,
+        status: item.status,
+        statusCodeInfo: item.statusCodeInfo,
+        authenticationExpiresAt: item.authenticationExpiresAt,
+        bankName: account?.institutionName || null,
+      };
+    });
+
+  itemsStatusCache.set(key, { at: Date.now(), items: needingAction });
+  return needingAction;
+}
+
 // ============================================
 // ROUTES BRIDGE
 // ============================================
@@ -150,6 +196,69 @@ router.get(
 );
 
 /**
+ * Génère l'URL de ré-authentification Bridge pour un item existant
+ * (SCA expirée, identifiants à revalider, etc.)
+ * GET /banking-connect/bridge/reconnect?itemId=xxx
+ */
+router.get(
+  "/bridge/reconnect",
+  requireWorkspaceMembership,
+  requireActiveSubscriptionREST({ failClosed: true }),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
+
+      const workspaceId =
+        req.headers["x-workspace-id"] || req.query.workspaceId;
+      const itemId = req.query.itemId;
+
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+      if (!itemId || !/^\d+$/.test(itemId)) {
+        return res.status(400).json({ error: "itemId requis" });
+      }
+
+      await bankingService.initialize("bridge");
+      const provider = bankingService.currentProvider;
+
+      // Vérifier que l'item appartient bien à ce workspace
+      const items = await provider.listItems(workspaceId);
+      const item = items.find((i) => i.itemId === itemId);
+      if (!item) {
+        return res
+          .status(404)
+          .json({ error: "Connexion bancaire introuvable pour ce workspace" });
+      }
+
+      const connectUrl = await provider.generateReconnectUrl(
+        workspaceId,
+        itemId,
+      );
+
+      // Invalider le cache de statut : au retour de l'utilisateur, le
+      // statut de l'item doit être relu depuis Bridge
+      itemsStatusCache.delete(workspaceId.toString());
+
+      logger.info(
+        `URL de reconnexion Bridge générée pour item ${itemId} (workspace ${workspaceId})`,
+      );
+
+      res.json({ connectUrl, provider: "bridge" });
+    } catch (error) {
+      logger.error("Erreur génération URL de reconnexion Bridge:", error);
+      res.status(500).json({
+        error: "Erreur lors de la génération de l'URL de reconnexion",
+        details: error.message,
+      });
+    }
+  },
+);
+
+/**
  * Callback Bridge v3 (redirection après connexion)
  * GET /banking-connect/bridge/callback
  */
@@ -232,11 +341,30 @@ router.get("/status", requireWorkspaceMembership, async (req, res) => {
     // Vérifier les tokens Bridge (legacy)
     const bridgeTokens = userData?.bridgeTokens?.[workspaceId];
 
+    // Connexions Bridge nécessitant une action utilisateur (SCA expirée,
+    // identifiants invalides...) : sans ça la sync s'arrête silencieusement.
+    // ?refresh=true force la relecture depuis Bridge (retour de reconnexion).
+    let itemsNeedingAction = [];
+    if (isConnected && activeProvider === "bridge") {
+      try {
+        itemsNeedingAction = await getItemsNeedingAction(
+          workspaceId,
+          accounts,
+          {
+            force: req.query.refresh === "true",
+          },
+        );
+      } catch (err) {
+        logger.warn(`Statut items Bridge indisponible: ${err.message}`);
+      }
+    }
+
     res.json({
       isConnected,
       provider: activeProvider,
       accountsCount,
       hasAccounts: accountsCount > 0,
+      itemsNeedingAction,
       lastSync: bridgeTokens?.lastSync || null,
       // Infos spécifiques par provider
       bridge: bridgeTokens

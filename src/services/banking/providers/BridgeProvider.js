@@ -347,6 +347,73 @@ export class BridgeProvider extends BankingProvider {
   }
 
   /**
+   * Liste les items Bridge du workspace avec leur statut
+   * (statut != 0 = sync bloquée, ex: 1010 = ré-authentification SCA requise)
+   */
+  async listItems(workspaceId) {
+    const userToken = await this.createUserAuthToken(workspaceId);
+    const items = [];
+    let url = "/v3/aggregation/items?limit=100";
+    while (url) {
+      const response = await this.client.get(url, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      items.push(...(response.data.resources || []));
+      url = response.data.pagination?.next_uri || null;
+    }
+    return items.map((item) => ({
+      itemId: item.id?.toString(),
+      providerId: item.provider_id,
+      status: item.status,
+      statusCodeInfo: item.status_code_info || null,
+      authenticationExpiresAt: item.authentication_expires_at || null,
+      lastSuccessfulRefresh: item.last_successful_refresh || null,
+    }));
+  }
+
+  /**
+   * Génère l'URL de ré-authentification (SCA) pour un item existant.
+   * L'utilisateur revalide l'authentification forte sans re-choisir sa banque,
+   * les comptes et l'historique sont conservés.
+   */
+  async generateReconnectUrl(workspaceId, itemId) {
+    try {
+      const userToken = await this.createUserAuthToken(workspaceId);
+      const callbackUrl =
+        this.config.redirectUri || "http://localhost:3000/dashboard";
+
+      const response = await this.client.post(
+        "/v3/aggregation/connect-sessions",
+        {
+          item_id: parseInt(itemId, 10),
+          user_email: `workspace-${workspaceId}@example.com`,
+          callback_url: callbackUrl,
+        },
+        {
+          headers: { Authorization: `Bearer ${userToken}` },
+        },
+      );
+
+      const redirectUrl =
+        response.data.url ||
+        response.data.redirect_url ||
+        response.data.connect_url;
+      if (!redirectUrl) {
+        throw new Error("Aucune URL de reconnexion retournée par Bridge");
+      }
+      return redirectUrl;
+    } catch (error) {
+      console.error(
+        "❌ Erreur génération URL de reconnexion Bridge:",
+        error.response?.data || error.message,
+      );
+      throw new Error(
+        `Génération URL de reconnexion échouée: ${error.message}`,
+      );
+    }
+  }
+
+  /**
    * Traite le callback de Bridge v3 (webhook)
    */
   async handleCallback(webhookData, userId, workspaceId) {
