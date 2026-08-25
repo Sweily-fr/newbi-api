@@ -17,6 +17,9 @@ const PDF_TIMEOUT = Number(process.env.PDF_GENERATION_TIMEOUT_MS) || 120000;
  * Réécrit l'archive si rappelée. NON BLOQUANT via triggerInvoiceFacturXArchive.
  */
 export async function archiveInvoiceFacturX(invoice, workspaceId) {
+  // Sous Vitest, les factures vivent dans un MongoMemoryServer : le front ne
+  // les connaît pas, l'appel lancerait un vrai Puppeteer pour finir en 404.
+  if (process.env.NODE_ENV === "test") return;
   if (!invoice?._id || invoice.status === "DRAFT" || !workspaceId) return;
   if (!process.env.INTERNAL_API_SECRET) {
     logger.warn(

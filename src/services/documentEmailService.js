@@ -67,6 +67,13 @@ async function getDocument(documentId, documentType, workspaceId) {
  * Génère le PDF d'un document via l'API Next.js
  */
 async function generateDocumentPdf(documentId, documentType) {
+  // Sous Vitest, les documents vivent dans un MongoMemoryServer : le front ne
+  // les connaît pas, l'appel lancerait un vrai Puppeteer pour finir en 404.
+  if (process.env.NODE_ENV === "test") {
+    throw new Error(
+      "generateDocumentPdf désactivé en environnement de test (mocker le service si nécessaire)",
+    );
+  }
   const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
 
   let endpoint;

@@ -1406,6 +1406,10 @@ const purchaseInvoiceResolvers = {
 
   PurchaseInvoice: {
     id: (parent) => parent._id?.toString() || parent.id,
+    // source est non-nullable dans le schéma mais les queries de liste lisent
+    // en .lean() (défauts Mongoose non appliqués) : un doc écrit en brut sans
+    // ce champ ferait tomber la liste entière du workspace (incident 24/08/2026).
+    source: (parent) => parent.source || "MANUAL",
     issueDate: (parent) =>
       parent.issueDate instanceof Date
         ? parent.issueDate.toISOString()

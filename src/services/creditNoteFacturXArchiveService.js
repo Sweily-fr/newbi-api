@@ -16,6 +16,9 @@ const PDF_TIMEOUT = Number(process.env.PDF_GENERATION_TIMEOUT_MS) || 120000;
  * uploader sur R2. NON BLOQUANT via triggerCreditNoteFacturXArchive.
  */
 export async function archiveCreditNoteFacturX(creditNote, workspaceId) {
+  // Sous Vitest, les avoirs vivent dans un MongoMemoryServer : le front ne
+  // les connaît pas, l'appel lancerait un vrai Puppeteer pour finir en 404.
+  if (process.env.NODE_ENV === "test") return;
   if (!creditNote?._id || !workspaceId) return;
   if (!process.env.INTERNAL_API_SECRET) {
     logger.warn(
