@@ -336,8 +336,14 @@ class JWKSValidator {
       try {
         const { jwtVerify } = await import("jose");
 
+        // AUTH_EXPECTED_ISSUER permet de découpler l'issuer des JWT (baseURL
+        // Better Auth) de FRONTEND_URL (URL des liens dans les emails) — utile
+        // en dev quand FRONTEND_URL pointe sur l'IP LAN pour le mobile alors
+        // que Better Auth émet avec localhost.
         const expectedIssuer =
-          process.env.FRONTEND_URL || "http://localhost:3000";
+          process.env.AUTH_EXPECTED_ISSUER ||
+          process.env.FRONTEND_URL ||
+          "http://localhost:3000";
         logger.debug(
           `Expected issuer: ${expectedIssuer}, Token issuer: ${payload.iss}`,
         );
