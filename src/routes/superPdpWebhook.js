@@ -6,6 +6,7 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import superPdpService from "../services/superPdpService.js";
+import { fetchSuperPdpPdfFile } from "../services/purchaseInvoiceReceptionService.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -173,8 +174,11 @@ router.post(
             });
           }
 
-          // Récupérer le détail complet de la facture
-          let invoiceDetail = payload;
+          // Récupérer le détail complet de la facture (EN16931).
+          // Pas de fallback sur le payload webhook : il ne contient ni
+          // fournisseur ni montants, on créerait une facture vide. Le cron de
+          // réception réimportera la facture au prochain tick.
+          let invoiceDetail;
           try {
             invoiceDetail = await superPdpService.getReceivedInvoiceDetail(
               workspaceId,
@@ -182,8 +186,22 @@ router.post(
             );
           } catch (detailError) {
             logger.warn(
-              `Impossible de récupérer le détail EN16931, utilisation du payload webhook: ${detailError.message}`
+              `Impossible de récupérer le détail EN16931 pour ${invoiceId}, import différé au cron de réception: ${detailError.message}`
             );
+            return res.status(200).json({
+              received: true,
+              warning: "EN16931 detail unavailable, deferred to reception cron",
+            });
+          }
+
+          if (!superPdpService.hasReceivedInvoiceData(invoiceDetail)) {
+            logger.warn(
+              `Détail EN16931 vide pour ${invoiceId}, import différé au cron de réception`
+            );
+            return res.status(200).json({
+              received: true,
+              warning: "EN16931 detail empty, deferred to reception cron",
+            });
           }
 
           // Trouver un utilisateur admin pour le createdBy
@@ -206,6 +224,20 @@ router.post(
             workspaceId,
             adminUser._id
           );
+          // Le détail peut être un EN16931 nu sans champ id : forcer l'ID du
+          // webhook pour préserver l'idempotence par superPdpInvoiceId.
+          purchaseInvoiceData.superPdpInvoiceId = String(invoiceId);
+
+          // Rattacher le PDF de la facture (best-effort)
+          const pdfFile = await fetchSuperPdpPdfFile(
+            workspaceId,
+            String(adminUser._id),
+            invoiceId,
+            purchaseInvoiceData.invoiceNumber
+          );
+          if (pdfFile) {
+            purchaseInvoiceData.files = [pdfFile];
+          }
 
           // Auto-créer ou trouver le fournisseur
           let supplier = await Supplier.findOne({

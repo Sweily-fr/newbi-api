@@ -3,8 +3,73 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import Notification from "../models/Notification.js";
 import superPdpService from "./superPdpService.js";
+import cloudflareService from "./cloudflareService.js";
 import { publishNotification } from "../resolvers/notification.js";
 import logger from "../utils/logger.js";
+
+/**
+ * Récupérer le PDF d'une facture reçue chez SuperPDP et l'uploader sur R2
+ * (bucket OCR, même destination que les justificatifs uploadés à la main).
+ *
+ * Best-effort : retourne null en cas d'échec, l'import de la facture ne doit
+ * pas être bloqué par l'indisponibilité du rendu PDF.
+ *
+ * @param {string} workspaceId - ID de l'organisation
+ * @param {string} userId - Utilisateur attribué (métadonnées d'upload)
+ * @param {string|number} superPdpId - ID SuperPDP de la facture
+ * @param {string} [invoiceNumber] - Numéro de facture (nom de fichier)
+ * @returns {Promise<Object|null>} - Entrée pour PurchaseInvoice.files, ou null
+ */
+export async function fetchSuperPdpPdfFile(
+  workspaceId,
+  userId,
+  superPdpId,
+  invoiceNumber,
+) {
+  try {
+    const pdfBuffer = await superPdpService.getArchivedPdf(
+      workspaceId,
+      superPdpId,
+    );
+    if (!pdfBuffer || pdfBuffer.length === 0) {
+      throw new Error("PDF vide");
+    }
+    // Le fallback /download peut renvoyer le fichier brut d'origine (XML UBL) :
+    // ne rattacher que si c'est réellement un PDF.
+    if (!pdfBuffer.subarray(0, 5).toString("latin1").startsWith("%PDF")) {
+      throw new Error("le fichier renvoyé n'est pas un PDF");
+    }
+
+    const safeNumber = String(invoiceNumber || superPdpId).replace(
+      /[^a-zA-Z0-9._-]/g,
+      "-",
+    );
+    const fileName = `facture-${safeNumber}.pdf`;
+    const uploadResult = await cloudflareService.uploadImage(
+      pdfBuffer,
+      fileName,
+      userId,
+      "ocr",
+      workspaceId,
+    );
+
+    return {
+      filename: uploadResult.key || fileName,
+      originalFilename: fileName,
+      mimetype: "application/pdf",
+      path: uploadResult.key,
+      size: pdfBuffer.length,
+      url: uploadResult.url,
+      ocrProcessed: false,
+      ocrData: null,
+    };
+  } catch (err) {
+    logger.warn(
+      `[reception] PDF non rattaché pour la facture SuperPDP ${superPdpId}: ${err.message}`,
+    );
+    return null;
+  }
+}
 
 /**
  * Importe les factures fournisseurs reçues depuis SuperPDP dans Newbi.
@@ -45,12 +110,42 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
           continue;
         }
 
+        // La liste GET /invoices ne renvoie que des résumés sans en_invoice :
+        // récupérer le détail EN16931 avant transformation, sinon la facture
+        // serait créée vide ("Fournisseur inconnu", 0 €).
+        let sourceInvoice = superPdpInvoice;
+        if (!superPdpService.hasReceivedInvoiceData(sourceInvoice)) {
+          sourceInvoice = await superPdpService.getReceivedInvoiceDetail(
+            workspaceId,
+            superPdpId,
+          );
+        }
+        if (!superPdpService.hasReceivedInvoiceData(sourceInvoice)) {
+          throw new Error(
+            `détail EN16931 vide pour la facture SuperPDP ${superPdpId}`,
+          );
+        }
+
         const purchaseInvoiceData =
           superPdpService.transformReceivedInvoiceToPurchaseInvoice(
-            superPdpInvoice,
+            sourceInvoice,
             workspaceId,
             userId,
           );
+        // Le détail peut être un EN16931 nu sans champ id : forcer l'ID de la
+        // liste pour préserver l'idempotence par superPdpInvoiceId.
+        purchaseInvoiceData.superPdpInvoiceId = String(superPdpId);
+
+        // Rattacher le PDF de la facture (best-effort)
+        const pdfFile = await fetchSuperPdpPdfFile(
+          workspaceId,
+          userId,
+          superPdpId,
+          purchaseInvoiceData.invoiceNumber,
+        );
+        if (pdfFile) {
+          purchaseInvoiceData.files = [pdfFile];
+        }
 
         // Auto-créer ou trouver le fournisseur
         let supplier = await Supplier.findOne({
