@@ -165,6 +165,8 @@ describe("qonto.Mutation.testQontoConnection", () => {
   });
 
   it("transmet l'environnement sandbox", async () => {
+    process.env.BACKOFFICE_ADMIN_USER_IDS = String(userId);
+    process.env.QONTO_STAGING_TOKEN = "tok";
     testConnectionMock.mockResolvedValue(okConnection());
     await resolvers.Mutation.testQontoConnection(
       null,
@@ -174,6 +176,8 @@ describe("qonto.Mutation.testQontoConnection", () => {
     expect(testConnectionMock).toHaveBeenCalledWith(
       expect.objectContaining({ environment: "sandbox" }),
     );
+    delete process.env.BACKOFFICE_ADMIN_USER_IDS;
+    delete process.env.QONTO_STAGING_TOKEN;
   });
 
   it("rejette un utilisateur non membre (RBAC)", async () => {
@@ -185,6 +189,91 @@ describe("qonto.Mutation.testQontoConnection", () => {
       ),
     ).rejects.toThrow();
   });
+});
+
+describe("qonto — sandbox réservé aux admins back-office", () => {
+  const withEnv = (vars, fn) => async () => {
+    const saved = {};
+    for (const [k, v] of Object.entries(vars)) {
+      saved[k] = process.env[k];
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    try {
+      await fn();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  };
+
+  it(
+    "qontoSandboxAvailable=false sans allowlist ni token",
+    withEnv(
+      { BACKOFFICE_ADMIN_USER_IDS: undefined, QONTO_STAGING_TOKEN: undefined },
+      async () => {
+        expect(
+          await resolvers.Query.qontoSandboxAvailable(null, {}, baseCtx()),
+        ).toBe(false);
+      },
+    ),
+  );
+
+  it(
+    "qontoSandboxAvailable=true pour un admin avec token",
+    withEnv(
+      { BACKOFFICE_ADMIN_USER_IDS: String(userId), QONTO_STAGING_TOKEN: "tok" },
+      async () => {
+        expect(
+          await resolvers.Query.qontoSandboxAvailable(null, {}, baseCtx()),
+        ).toBe(true);
+      },
+    ),
+  );
+
+  it(
+    "refuse environment=sandbox à un owner non admin (test et connect)",
+    withEnv(
+      { BACKOFFICE_ADMIN_USER_IDS: undefined, QONTO_STAGING_TOKEN: "tok" },
+      async () => {
+        const test = await resolvers.Mutation.testQontoConnection(
+          null,
+          { login: "l", secretKey: "s", environment: "sandbox" },
+          baseCtx(),
+        );
+        expect(test.success).toBe(false);
+        expect(test.message).toMatch(/administrateurs Newbi/);
+        expect(testConnectionMock).not.toHaveBeenCalled();
+
+        const connect = await resolvers.Mutation.connectQonto(
+          null,
+          { login: "l", secretKey: "s", environment: "sandbox" },
+          baseCtx(),
+        );
+        expect(connect.success).toBe(false);
+        expect(await QontoAccount.countDocuments({ organizationId })).toBe(0);
+      },
+    ),
+  );
+
+  it(
+    "accepte environment=sandbox pour un admin",
+    withEnv(
+      { BACKOFFICE_ADMIN_USER_IDS: String(userId), QONTO_STAGING_TOKEN: "tok" },
+      async () => {
+        testConnectionMock.mockResolvedValue(okConnection());
+        const out = await resolvers.Mutation.connectQonto(
+          null,
+          { login: "0001-7324", secretKey: "s", environment: "sandbox" },
+          baseCtx(),
+        );
+        expect(out.success).toBe(true);
+        expect(out.account.environment).toBe("sandbox");
+      },
+    ),
+  );
 });
 
 describe("qonto.Mutation.connectQonto", () => {

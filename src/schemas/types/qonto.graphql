@@ -111,6 +111,12 @@ extend type Query {
   Récupérer le compte Qonto de l'organisation active
   """
   myQontoAccount: QontoAccount
+
+  """
+  Indique si l'utilisateur peut connecter le sandbox Qonto (admins back-office
+  uniquement, et token staging configuré côté serveur)
+  """
+  qontoSandboxAvailable: Boolean!
 }
 
 # === MUTATIONS ===
