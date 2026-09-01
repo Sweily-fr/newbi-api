@@ -6,7 +6,10 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import superPdpService from "../services/superPdpService.js";
-import { fetchSuperPdpPdfFile } from "../services/purchaseInvoiceReceptionService.js";
+import {
+  fetchSuperPdpPdfFile,
+  invoiceIsAddressedToOrganization,
+} from "../services/purchaseInvoiceReceptionService.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -201,6 +204,20 @@ router.post(
             return res.status(200).json({
               received: true,
               warning: "EN16931 detail empty, deferred to reception cron",
+            });
+          }
+
+          // Ne pas importer les factures adressées à un autre destinataire
+          // (compte SuperPDP partagé entre plusieurs workspaces)
+          const organization =
+            await EInvoicingSettingsService.getOrganizationById(workspaceId);
+          if (!invoiceIsAddressedToOrganization(invoiceDetail, organization)) {
+            logger.info(
+              `Facture SuperPDP ${invoiceId} ignorée : destinataire différent de l'organisation ${workspaceId}`
+            );
+            return res.status(200).json({
+              received: true,
+              warning: "Invoice not addressed to this workspace",
             });
           }
 

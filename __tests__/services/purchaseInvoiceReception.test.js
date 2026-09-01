@@ -48,7 +48,11 @@ import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import Notification from "../../src/models/Notification.js";
-import { importReceivedInvoices } from "../../src/services/purchaseInvoiceReceptionService.js";
+import {
+  importReceivedInvoices,
+  invoiceIsAddressedToOrganization,
+} from "../../src/services/purchaseInvoiceReceptionService.js";
+import mongoose from "mongoose";
 
 const workspaceId = buildOrganizationId();
 const userId = buildUserId();
@@ -78,6 +82,73 @@ const detailFor = (id) => ({
     seller: { name: "Acme Telecom" },
     totals: { total_with_vat: "1200" },
   },
+});
+
+describe("invoiceIsAddressedToOrganization", () => {
+  const org = (siret) => ({ companyInfo: { siret } });
+  const withBuyer = (buyer) => ({
+    en_invoice: { number: "F1", seller: {}, totals: {}, buyer },
+  });
+
+  it("accepte quand le SIREN du buyer correspond au SIRET de l'org", () => {
+    expect(
+      invoiceIsAddressedToOrganization(
+        withBuyer({
+          legal_registration_identifier: { value: "123456789", scheme: "0002" },
+        }),
+        org("12345678900019"),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuse quand le SIREN du buyer ne correspond pas", () => {
+    expect(
+      invoiceIsAddressedToOrganization(
+        withBuyer({
+          legal_registration_identifier: { value: "111111111", scheme: "0002" },
+        }),
+        org("12345678900019"),
+      ),
+    ).toBe(false);
+  });
+
+  it("matche via le numéro de TVA intracom du buyer", () => {
+    expect(
+      invoiceIsAddressedToOrganization(
+        withBuyer({ vat_identifier: "FR32123456789" }),
+        org("12345678900019"),
+      ),
+    ).toBe(true);
+  });
+
+  it("matche via l'adresse électronique (SIRET, scheme 0009)", () => {
+    expect(
+      invoiceIsAddressedToOrganization(
+        withBuyer({ electronic_address: { value: "12345678900019" } }),
+        org("123456789"),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepte si l'org n'a pas de SIRET (comparaison impossible)", () => {
+    expect(
+      invoiceIsAddressedToOrganization(
+        withBuyer({
+          legal_registration_identifier: { value: "111111111" },
+        }),
+        { companyInfo: {} },
+      ),
+    ).toBe(true);
+  });
+
+  it("accepte si le buyer n'a aucun identifiant exploitable", () => {
+    expect(
+      invoiceIsAddressedToOrganization(
+        withBuyer({ name: "Client sans SIREN" }),
+        org("12345678900019"),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("importReceivedInvoices — notification d'arrivée", () => {
@@ -315,6 +386,43 @@ describe("importReceivedInvoices — récupération du détail EN16931", () => {
     expect(res.errors).toBe(0);
     const pi = await PurchaseInvoice.findOne({ superPdpInvoiceId: "sp-1" });
     expect(pi.files).toHaveLength(0);
+  });
+
+  it("ignore une facture adressée à un autre destinataire (compte SuperPDP partagé)", async () => {
+    // Organisation avec un SIRET différent du buyer de la facture
+    await mongoose.connection.db.collection("organization").insertOne({
+      _id: workspaceId,
+      name: "Autre Société",
+      companyInfo: { siret: "98765432100019" },
+    });
+
+    getReceivedInvoices.mockResolvedValue({
+      invoices: [{ id: "sp-1", direction: "in" }],
+      hasAfter: false,
+    });
+    getReceivedInvoiceDetail.mockResolvedValue({
+      id: "sp-1",
+      en_invoice: {
+        number: "FA-2026-001",
+        seller: { name: "Acme Telecom" },
+        totals: { total_with_vat: "1200" },
+        buyer: {
+          name: "Sweily",
+          legal_registration_identifier: { value: "123456789", scheme: "0002" },
+        },
+      },
+    });
+
+    const res = await importReceivedInvoices(
+      workspaceId.toString(),
+      userId.toString(),
+    );
+
+    expect(res.imported).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(res.errors).toBe(0);
+    expect(transformReceivedInvoiceToPurchaseInvoice).not.toHaveBeenCalled();
+    expect(await PurchaseInvoice.countDocuments()).toBe(0);
   });
 
   it("ne crée pas de facture vide si le détail renvoyé est vide lui aussi", async () => {

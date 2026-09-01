@@ -4,8 +4,51 @@ import Supplier from "../models/Supplier.js";
 import Notification from "../models/Notification.js";
 import superPdpService from "./superPdpService.js";
 import cloudflareService from "./cloudflareService.js";
+import EInvoicingSettingsService from "./eInvoicingSettingsService.js";
 import { publishNotification } from "../resolvers/notification.js";
 import logger from "../utils/logger.js";
+
+/**
+ * Vérifier que la facture reçue est bien adressée à l'organisation (SIREN de
+ * l'acheteur). Plusieurs workspaces peuvent être connectés au même compte
+ * SuperPDP : sans ce filtre, chacun importerait toutes les factures entrantes
+ * du compte, y compris celles destinées aux autres.
+ *
+ * Retourne true si le buyer correspond, ou si la comparaison est impossible
+ * (SIREN de l'org ou identifiants buyer absents) afin de ne pas perdre de
+ * factures légitimes.
+ *
+ * @param {Object} sourceInvoice - Enveloppe { en_invoice } ou EN16931 nu
+ * @param {Object|null} organization - Document organization (Better Auth)
+ * @returns {boolean}
+ */
+export function invoiceIsAddressedToOrganization(sourceInvoice, organization) {
+  const invoice = sourceInvoice?.en_invoice || sourceInvoice || {};
+  const buyer = invoice.buyer || {};
+  const digits = (v) => String(v || "").replace(/\D/g, "");
+
+  const buyerSirens = [
+    buyer.legal_registration_identifier?.value,
+    ...(Array.isArray(buyer.identifiers)
+      ? buyer.identifiers.map((i) => i?.value)
+      : []),
+    buyer.electronic_address?.value,
+    // TVA intracom FR : les 9 derniers chiffres sont le SIREN
+    buyer.vat_identifier ? digits(buyer.vat_identifier).slice(-9) : null,
+  ]
+    .map(digits)
+    .filter((v) => v.length >= 9)
+    .map((v) => v.substring(0, 9));
+
+  const orgSiren = digits(
+    organization?.siret ||
+      organization?.siren ||
+      organization?.companyInfo?.siret,
+  ).substring(0, 9);
+
+  if (orgSiren.length < 9 || buyerSirens.length === 0) return true;
+  return buyerSirens.includes(orgSiren);
+}
 
 /**
  * Récupérer le PDF d'une facture reçue chez SuperPDP et l'uploader sur R2
@@ -90,6 +133,9 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
   let startingAfterId = undefined;
   let hasMore = true;
 
+  const organization =
+    await EInvoicingSettingsService.getOrganizationById(workspaceId);
+
   while (hasMore) {
     const result = await superPdpService.getReceivedInvoices(workspaceId, {
       startingAfterId,
@@ -124,6 +170,16 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
           throw new Error(
             `détail EN16931 vide pour la facture SuperPDP ${superPdpId}`,
           );
+        }
+
+        // Ne pas importer les factures adressées à un autre destinataire
+        // (compte SuperPDP partagé entre plusieurs workspaces)
+        if (!invoiceIsAddressedToOrganization(sourceInvoice, organization)) {
+          skipped++;
+          logger.info(
+            `[reception] facture SuperPDP ${superPdpId} ignorée : destinataire différent de l'organisation ${workspaceId}`,
+          );
+          continue;
         }
 
         const purchaseInvoiceData =
