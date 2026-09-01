@@ -1,0 +1,177 @@
+# === QONTO INTEGRATION TYPES ===
+
+"""
+Compte bancaire Qonto (snapshot récupéré via l'API)
+"""
+type QontoBankAccount {
+  qontoId: String!
+  slug: String
+  name: String
+  iban: String
+  bic: String
+  currency: String
+  main: Boolean
+  status: String
+}
+
+"""
+Compte Qonto connecté à une organisation
+"""
+type QontoAccount {
+  id: ID!
+  organizationId: String!
+  login: String!
+  isConnected: Boolean!
+  organizationName: String
+  qontoOrganizationId: String
+  slug: String
+  environment: String!
+  bankAccounts: [QontoBankAccount!]!
+  selectedBankAccountId: String
+  lastSyncAt: String
+  syncStatus: String!
+  syncError: String
+  stats: QontoStats
+  autoSync: QontoAutoSync
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+Statistiques de synchronisation Qonto
+"""
+type QontoStats {
+  invoicesSynced: Int!
+  expensesSynced: Int!
+  clientsSynced: Int!
+}
+
+"""
+Préférences de synchronisation automatique Qonto
+"""
+type QontoAutoSync {
+  invoices: Boolean!
+  supplierInvoices: Boolean!
+}
+
+"""
+Résultat d'une opération Qonto
+"""
+type QontoResult {
+  success: Boolean!
+  message: String
+  account: QontoAccount
+}
+
+"""
+Résultat du test de connexion Qonto
+"""
+type QontoConnectionResult {
+  success: Boolean!
+  message: String
+  organizationName: String
+  organizationId: String
+  slug: String
+  bankAccounts: [QontoBankAccount!]
+}
+
+"""
+Résultat de synchronisation d'une entité vers Qonto
+"""
+type QontoSyncResult {
+  success: Boolean!
+  message: String
+  qontoId: String
+}
+
+"""
+Résultat détaillé d'une synchronisation complète vers Qonto
+"""
+type QontoSyncAllResult {
+  success: Boolean!
+  message: String
+  invoicesSynced: Int
+  invoicesErrors: Int
+  expensesSynced: Int
+  expensesErrors: Int
+}
+
+"""
+Input pour les préférences de sync automatique Qonto
+"""
+input QontoAutoSyncInput {
+  invoices: Boolean
+  supplierInvoices: Boolean
+}
+
+# === QUERIES ===
+
+extend type Query {
+  """
+  Récupérer le compte Qonto de l'organisation active
+  """
+  myQontoAccount: QontoAccount
+}
+
+# === MUTATIONS ===
+
+extend type Mutation {
+  """
+  Tester les identifiants Qonto (identifiant + clé secrète) sans sauvegarder
+  """
+  testQontoConnection(
+    login: String!
+    secretKey: String!
+    environment: String
+  ): QontoConnectionResult!
+
+  """
+  Connecter Qonto à l'organisation (sauvegarde les identifiants après test)
+  """
+  connectQonto(
+    login: String!
+    secretKey: String!
+    environment: String
+    bankAccountId: String
+  ): QontoResult!
+
+  """
+  Déconnecter Qonto de l'organisation
+  """
+  disconnectQonto: QontoResult!
+
+  """
+  Mettre à jour les préférences de synchronisation automatique
+  """
+  updateQontoAutoSync(autoSync: QontoAutoSyncInput!): QontoResult!
+
+  """
+  Choisir le compte bancaire Qonto dont l'IBAN figure sur les factures
+  """
+  updateQontoBankAccount(bankAccountId: String!): QontoResult!
+
+  """
+  Rafraîchir la liste des comptes bancaires Qonto
+  """
+  refreshQontoBankAccounts: QontoResult!
+
+  """
+  Synchroniser une facture spécifique vers Qonto
+  """
+  syncInvoiceToQonto(invoiceId: ID!): QontoSyncResult!
+
+  """
+  Synchroniser une facture d'achat spécifique vers Qonto
+  """
+  syncPurchaseInvoiceToQonto(purchaseInvoiceId: ID!): QontoSyncResult!
+
+  """
+  Synchroniser une dépense spécifique vers Qonto
+  """
+  syncExpenseToQonto(expenseId: ID!): QontoSyncResult!
+
+  """
+  Lancer une synchronisation complète vers Qonto
+  """
+  syncAllToQonto: QontoSyncAllResult!
+}

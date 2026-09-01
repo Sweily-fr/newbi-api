@@ -44,6 +44,7 @@ import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
+import { syncInvoiceIfNeeded as syncInvoiceToQontoIfNeeded } from "../services/qontoSyncHelper.js";
 import { triggerInvoiceFacturXArchive } from "../services/invoiceFacturXArchiveService.js";
 import {
   autoPushEventToConnections,
@@ -188,6 +189,11 @@ export async function applyInvoicePaid(
   // Sync Pennylane (fire-and-forget)
   syncInvoiceIfNeeded(invoice, organizationId || workspaceId).catch((err) =>
     console.error("Erreur sync Pennylane (paid):", err),
+  );
+
+  // Sync Qonto (fire-and-forget)
+  syncInvoiceToQontoIfNeeded(invoice, organizationId || workspaceId).catch(
+    (err) => console.error("Erreur sync Qonto (paid):", err),
   );
 
   return invoice;
@@ -3075,6 +3081,12 @@ const invoiceResolvers = {
           invoice,
           context.organizationId || workspaceId,
         ).catch((err) => console.error("Erreur sync Pennylane:", err));
+
+        // Sync Qonto (fire-and-forget)
+        syncInvoiceToQontoIfNeeded(
+          invoice,
+          context.organizationId || workspaceId,
+        ).catch((err) => console.error("Erreur sync Qonto:", err));
 
         // Archivage Factur-X sur R2 à la finalisation (DRAFT → PENDING).
         // Fire-and-forget, ne bloque pas la réponse.
