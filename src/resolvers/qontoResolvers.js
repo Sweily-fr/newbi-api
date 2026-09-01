@@ -21,6 +21,28 @@ function isOwnerOrAdmin(userRole) {
   return normalized === "owner" || normalized === "admin";
 }
 
+/**
+ * Le sandbox Qonto (Developer Portal) n'a de sens que pour tester la prod
+ * avec des données fictives : réservé à l'allowlist du back-office
+ * (BACKOFFICE_ADMIN_USER_IDS, comme /admin) et au token staging serveur.
+ */
+function isBackofficeAdmin(userId) {
+  const allowlist = (process.env.BACKOFFICE_ADMIN_USER_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return allowlist.length > 0 && allowlist.includes(String(userId));
+}
+
+function sandboxAvailableFor(user) {
+  return !!process.env.QONTO_STAGING_TOKEN && isBackofficeAdmin(user?._id);
+}
+
+const SANDBOX_DENIED = {
+  success: false,
+  message: "Le sandbox Qonto est réservé aux administrateurs Newbi",
+};
+
 const ROLE_DENIED = (action) => ({
   success: false,
   message: `Seuls les propriétaires et administrateurs peuvent ${action}`,
@@ -56,6 +78,11 @@ const qontoResolvers = {
   },
 
   Query: {
+    qontoSandboxAvailable: async (_, args, { user }) => {
+      requireUser(user);
+      return sandboxAvailableFor(user);
+    },
+
     myQontoAccount: async (_, args, { user, organizationId }) => {
       requireUser(user);
       try {
@@ -84,6 +111,9 @@ const qontoResolvers = {
       if (!isOwnerOrAdmin(userRole)) {
         return ROLE_DENIED("tester la connexion Qonto");
       }
+      if (environment === "sandbox" && !sandboxAvailableFor(user)) {
+        return SANDBOX_DENIED;
+      }
 
       return qontoService.testConnection({
         login: login?.trim(),
@@ -106,6 +136,9 @@ const qontoResolvers = {
       }
       if (!isOwnerOrAdmin(userRole)) {
         return ROLE_DENIED("connecter Qonto");
+      }
+      if (environment === "sandbox" && !sandboxAvailableFor(user)) {
+        return SANDBOX_DENIED;
       }
 
       try {
