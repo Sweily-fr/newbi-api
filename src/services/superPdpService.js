@@ -1311,6 +1311,21 @@ class SuperPdpService {
   }
 
   /**
+   * Vérifier qu'un objet facture SuperPDP contient des données exploitables
+   * (fournisseur, montants ou numéro). Les éléments de la liste GET /invoices
+   * sont des résumés ({ id, direction, ... }) sans bloc en_invoice : les
+   * transformer directement produirait une facture vide ("Fournisseur inconnu",
+   * 0 €).
+   * @param {Object} superPdpInvoice - Enveloppe { en_invoice } ou EN16931 nu
+   * @returns {boolean}
+   */
+  hasReceivedInvoiceData(superPdpInvoice) {
+    if (!superPdpInvoice) return false;
+    const invoice = superPdpInvoice.en_invoice || superPdpInvoice;
+    return Boolean(invoice.seller || invoice.totals || invoice.number);
+  }
+
+  /**
    * Transformer une facture SuperPDP reçue en format PurchaseInvoice Newbi
    * @param {Object} superPdpInvoice - Facture reçue au format SuperPDP/EN16931
    * @param {string} workspaceId - ID du workspace
