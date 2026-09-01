@@ -44,6 +44,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./types/documentAutomation.graphql"), // Chargement explicite du schéma Document Automation
   path.join(__dirname, "./purchaseInvoice.graphql"),
   path.join(__dirname, "./types/pennylane.graphql"),
+  path.join(__dirname, "./types/qonto.graphql"),
   path.join(__dirname, "./types/installedApp.graphql"),
   path.join(__dirname, "./types/esignature.graphql"),
   path.join(__dirname, "./types/rgpd.graphql"),

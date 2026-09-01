@@ -61,6 +61,7 @@ import purchaseOrderResolvers from "./purchaseOrder.js";
 import importedPurchaseOrderResolvers from "./importedPurchaseOrder.js";
 import financialAnalyticsResolvers from "./financialAnalytics.js";
 import pennylaneResolvers from "./pennylaneResolvers.js";
+import qontoResolvers from "./qontoResolvers.js";
 import installedAppResolvers from "./installedApp.js";
 import esignatureResolvers from "./esignatureResolvers.js";
 import rgpdResolvers from "./rgpd.js";
@@ -130,6 +131,7 @@ const resolvers = mergeResolvers([
   importedPurchaseOrderResolvers,
   financialAnalyticsResolvers,
   pennylaneResolvers,
+  qontoResolvers,
   installedAppResolvers,
   esignatureResolvers,
   rgpdResolvers,

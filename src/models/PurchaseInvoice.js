@@ -246,6 +246,18 @@ const purchaseInvoiceSchema = new mongoose.Schema(
       default: "NOT_SYNCED",
     },
 
+    // === QONTO SYNC ===
+    qontoId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    qontoSyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
+
     workspaceId: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
