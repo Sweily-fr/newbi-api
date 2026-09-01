@@ -430,6 +430,18 @@ const invoiceSchema = new mongoose.Schema(
       default: "NOT_SYNCED",
     },
 
+    // === QONTO SYNC ===
+    qontoId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    qontoSyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
+
     // === E-INVOICING SUPERPDP ===
 
     // ID de la facture chez SuperPDP

@@ -51,7 +51,7 @@ const fileSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { _id: true, timestamps: true }
+  { _id: true, timestamps: true },
 );
 
 // Schéma pour les métadonnées extraites par OCR
@@ -95,7 +95,7 @@ const ocrMetadataSchema = new mongoose.Schema(
       type: String,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // Énumération pour les catégories de dépenses
@@ -378,6 +378,18 @@ const expenseSchema = new mongoose.Schema(
       default: "NOT_SYNCED",
     },
 
+    // === QONTO SYNC ===
+    qontoId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    qontoSyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
+
     // Indique si la dépense est rapprochée avec une transaction bancaire
     isReconciled: {
       type: Boolean,
@@ -386,7 +398,7 @@ const expenseSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index pour améliorer les performances des recherches

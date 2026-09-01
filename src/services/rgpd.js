@@ -376,6 +376,11 @@ export async function deleteUserAccount(userId, organizationId) {
       { name: "importedquotes", filter: { workspaceId: orgObjectId } },
       { name: "importedpurchaseorders", filter: { workspaceId: orgObjectId } },
       { name: "pennylaneaccounts", filter: { workspaceId: orgObjectId } },
+      // QontoAccount est indexé par organizationId (string)
+      {
+        name: "qontoaccounts",
+        filter: { organizationId: String(orgObjectId) },
+      },
       { name: "installedapps", filter: { workspaceId: orgObjectId } },
     ];
 

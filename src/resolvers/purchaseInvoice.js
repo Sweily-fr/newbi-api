@@ -14,6 +14,7 @@ import {
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncPurchaseInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
+import { syncPurchaseInvoiceIfNeeded as syncPurchaseInvoiceToQontoIfNeeded } from "../services/qontoSyncHelper.js";
 import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionService.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
@@ -642,6 +643,12 @@ const purchaseInvoiceResolvers = {
           ).catch((err) =>
             console.error("Erreur sync Pennylane facture d'achat:", err),
           );
+          syncPurchaseInvoiceToQontoIfNeeded(
+            invoice,
+            context.organizationId || workspaceId,
+          ).catch((err) =>
+            console.error("Erreur sync Qonto facture d'achat:", err),
+          );
         }
 
         // Automatisations documents partagés si le statut a changé (fire-and-forget)
@@ -832,6 +839,12 @@ const purchaseInvoiceResolvers = {
           context.organizationId || workspaceId,
         ).catch((err) =>
           console.error("Erreur sync Pennylane facture d'achat (paid):", err),
+        );
+        syncPurchaseInvoiceToQontoIfNeeded(
+          invoice,
+          context.organizationId || workspaceId,
+        ).catch((err) =>
+          console.error("Erreur sync Qonto facture d'achat (paid):", err),
         );
 
         // Automatisations documents partagés (fire-and-forget)
