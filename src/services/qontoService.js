@@ -781,6 +781,127 @@ const qontoService = {
   },
 
   /**
+   * Sync un devis Newbi → Qonto quote
+   * Endpoint: POST /quotes (+ /client_invoices/uploads pour le PDF Newbi)
+   * Qonto exige terms_and_conditions et expiry_date.
+   */
+  async syncQuote(credentials, quote) {
+    try {
+      const items = this._buildItems(quote).map((item) => ({
+        ...item,
+        currency: quote.currency || "EUR",
+      }));
+      if (items.length === 0) {
+        return {
+          success: false,
+          message: "Le devis n'a aucun article à synchroniser",
+        };
+      }
+
+      let clientId = null;
+      if (quote.client) {
+        clientId = await this._findOrCreateClient(credentials, quote.client);
+      }
+      if (!clientId) {
+        return {
+          success: false,
+          message: "Impossible de trouver ou créer le client dans Qonto",
+        };
+      }
+
+      const ref = truncate(
+        `${quote.prefix || ""}${quote.number || ""}`.trim(),
+        MAX_NUMBER_LENGTH,
+      );
+      const issueDate = formatDate(quote.issueDate);
+      let expiryDate = quote.validUntil
+        ? formatDate(quote.validUntil)
+        : formatDate(
+            new Date(new Date(issueDate).getTime() + 30 * 24 * 3600 * 1000),
+          );
+      if (expiryDate < issueDate) expiryDate = issueDate;
+
+      let uploadId = null;
+      const pdfUrl = quote.cachedPdf?.url || quote.archivedPdfUrl;
+      if (pdfUrl) {
+        uploadId = await this.uploadClientInvoiceFile(
+          credentials,
+          pdfUrl,
+          `devis-${ref || quote._id}.pdf`,
+        );
+      }
+
+      const terms =
+        (quote.termsAndConditions || "").trim() ||
+        `Devis valable jusqu'au ${expiryDate.split("-").reverse().join("/")}.`;
+
+      const payload = {
+        client_id: clientId,
+        issue_date: issueDate,
+        expiry_date: expiryDate,
+        currency: quote.currency || "EUR",
+        terms_and_conditions: truncate(terms, 3000),
+        items,
+        ...(ref && { number: ref }),
+        ...(uploadId && { upload_id: uploadId }),
+      };
+
+      if (quote.discount > 0) {
+        payload.discount =
+          quote.discountType === "PERCENTAGE"
+            ? {
+                type: "percentage",
+                value: String(Math.min(quote.discount, 100) / 100),
+              }
+            : { type: "absolute", value: money(quote.discount) };
+      }
+
+      let data;
+      try {
+        data = await qontoRequest(credentials, "POST", "/quotes", payload);
+      } catch (error) {
+        if (
+          error instanceof QontoApiError &&
+          error.status === 422 &&
+          payload.number &&
+          error.hasPointer("/number")
+        ) {
+          const withoutNumber = { ...payload };
+          delete withoutNumber.number;
+          data = await qontoRequest(
+            credentials,
+            "POST",
+            "/quotes",
+            withoutNumber,
+          );
+        } else {
+          throw error;
+        }
+      }
+
+      const qontoId = data?.quote?.id || data?.id || "";
+      logger.info(
+        `[QONTO] Devis ${ref || quote._id} créé sur Qonto (${qontoId})`,
+      );
+      return {
+        success: true,
+        qontoId: String(qontoId),
+        message: "Devis synchronisé avec Qonto",
+      };
+    } catch (error) {
+      if (error instanceof QontoApiError && error.status === 409) {
+        return {
+          success: true,
+          qontoId: "existing",
+          message: "Devis déjà existant sur Qonto",
+        };
+      }
+      logger.error("[QONTO] syncQuote failed:", error.message);
+      return { success: false, message: error.message };
+    }
+  },
+
+  /**
    * Envoie un PDF comme facture fournisseur Qonto
    * Endpoint: POST /supplier_invoices/bulk (multipart)
    * La clé d'idempotence = id Newbi → un renvoi ne crée pas de doublon.
@@ -931,6 +1052,39 @@ const qontoService = {
   },
 
   /**
+   * Liste paginée des devis Qonto créés depuis un instant.
+   * L'endpoint n'a pas de filtre updated_at : les changements de statut des
+   * devis déjà importés sont relus via getQuote.
+   */
+  async listQuotes(credentials, { createdAtFrom, page = 1 } = {}) {
+    const params = new URLSearchParams({
+      per_page: "100",
+      page: String(page),
+      sort_by: "created_at:asc",
+    });
+    if (createdAtFrom) {
+      params.set(
+        "filter[created_at_from]",
+        new Date(createdAtFrom).toISOString(),
+      );
+    }
+    const data = await qontoRequest(
+      credentials,
+      "GET",
+      `/quotes?${params.toString()}`,
+    );
+    return {
+      items: data?.quotes || [],
+      nextPage: data?.meta?.next_page || null,
+    };
+  },
+
+  async getQuote(credentials, quoteId) {
+    const data = await qontoRequest(credentials, "GET", `/quotes/${quoteId}`);
+    return data?.quote || data || null;
+  },
+
+  /**
    * Télécharge une pièce jointe Qonto (URL signée valable 30 min)
    * @returns {Promise<{buffer: Buffer, fileName: string, contentType: string}|null>}
    */
@@ -973,7 +1127,7 @@ const qontoService = {
   /**
    * Sync complète : factures clients + factures d'achat + dépenses
    */
-  async syncAll(organizationId, { Invoice, Expense, PurchaseInvoice }) {
+  async syncAll(organizationId, { Invoice, Expense, PurchaseInvoice, Quote }) {
     const account = await QontoAccount.findOne({ organizationId });
     if (!account || !account.isConnected) {
       return { success: false, message: "Compte Qonto non connecté" };
@@ -984,6 +1138,7 @@ const qontoService = {
     const results = {
       invoices: { synced: 0, errors: 0 },
       expenses: { synced: 0, errors: 0 },
+      quotes: { synced: 0, errors: 0 },
     };
 
     account.syncStatus = "IN_PROGRESS";
@@ -1082,15 +1237,50 @@ const qontoService = {
         }
       }
 
+      // 4. Devis envoyés ou acceptés
+      if (account.autoSync.quotes && Quote) {
+        const quotes = await Quote.find({
+          workspaceId: organizationId,
+          status: { $in: ["PENDING", "COMPLETED"] },
+          qontoSyncStatus: { $ne: "SYNCED" },
+        }).limit(50);
+
+        logger.info(`[QONTO] syncAll: ${quotes.length} devis à synchroniser`);
+
+        for (const quote of quotes) {
+          const result = await this.syncQuote(credentials, quote);
+          if (result.success) {
+            quote.qontoSyncStatus = "SYNCED";
+            quote.qontoId = result.qontoId;
+            await quote.save();
+            results.quotes.synced++;
+          } else {
+            quote.qontoSyncStatus = "ERROR";
+            await quote.save();
+            results.quotes.errors++;
+            logger.warn(
+              `[QONTO] syncAll devis ${quote.prefix || ""}${quote.number || quote._id}: ${result.message}`,
+            );
+          }
+        }
+      }
+
       account.syncStatus = "SUCCESS";
       account.lastSyncAt = new Date();
       account.syncError = null;
       account.stats.invoicesSynced += results.invoices.synced;
       account.stats.expensesSynced += results.expenses.synced;
+      account.stats.quotesSynced += results.quotes.synced;
       await account.save();
 
-      const total = results.invoices.synced + results.expenses.synced;
-      const totalErrors = results.invoices.errors + results.expenses.errors;
+      const total =
+        results.invoices.synced +
+        results.expenses.synced +
+        results.quotes.synced;
+      const totalErrors =
+        results.invoices.errors +
+        results.expenses.errors +
+        results.quotes.errors;
 
       return {
         success: true,

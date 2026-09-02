@@ -16,11 +16,15 @@ import { buildOrganizationId, buildUserId } from "../factories/index.js";
 const {
   listClientInvoicesMock,
   listSupplierInvoicesMock,
+  listQuotesMock,
+  getQuoteMock,
   downloadAttachmentMock,
   uploadImageMock,
 } = vi.hoisted(() => ({
   listClientInvoicesMock: vi.fn(),
   listSupplierInvoicesMock: vi.fn(),
+  listQuotesMock: vi.fn(),
+  getQuoteMock: vi.fn(),
   downloadAttachmentMock: vi.fn(),
   uploadImageMock: vi.fn(),
 }));
@@ -29,6 +33,8 @@ vi.mock("../../src/services/qontoService.js", () => ({
   default: {
     listClientInvoices: listClientInvoicesMock,
     listSupplierInvoices: listSupplierInvoicesMock,
+    listQuotes: listQuotesMock,
+    getQuote: getQuoteMock,
     downloadAttachment: downloadAttachmentMock,
   },
 }));
@@ -47,10 +53,13 @@ import ImportedInvoice from "../../src/models/ImportedInvoice.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import Expense from "../../src/models/Expense.js";
 import Supplier from "../../src/models/Supplier.js";
+import Quote from "../../src/models/Quote.js";
+import ImportedQuote from "../../src/models/ImportedQuote.js";
 import {
   importFromQonto,
   importClientInvoices,
   importSupplierInvoices,
+  importQuotes,
 } from "../../src/services/qontoImportService.js";
 
 const organizationId = buildOrganizationId();
@@ -133,6 +142,8 @@ beforeEach(async () => {
   await clearMongo();
   listClientInvoicesMock.mockReset().mockResolvedValue(pages([]));
   listSupplierInvoicesMock.mockReset().mockResolvedValue(pages([]));
+  listQuotesMock.mockReset().mockResolvedValue(pages([]));
+  getQuoteMock.mockReset();
   downloadAttachmentMock.mockReset().mockResolvedValue({
     buffer: pdf,
     fileName: "doc.pdf",
@@ -408,6 +419,117 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
     );
     const out = await importSupplierInvoices(account, String(userId));
     expect(out).toMatchObject({ imported: 0, skipped: 2 });
+  });
+});
+
+const qontoQuote = (overrides = {}) => ({
+  id: "qq-1",
+  number: "Q-2026-001",
+  status: "pending_approval",
+  issue_date: "2026-09-01",
+  expiry_date: "2026-09-30",
+  currency: "EUR",
+  total_amount: { value: "360.00", currency: "EUR" },
+  vat_amount: { value: "60.00", currency: "EUR" },
+  attachment_id: "att-q",
+  created_at: "2026-09-01T10:00:00Z",
+  client: {
+    id: "c-1",
+    name: "Client Qonto SA",
+    tax_identification_number: "732829320",
+  },
+  organization: { legal_name: "Ma Société" },
+  items: [
+    {
+      title: "Prestation",
+      quantity: "3",
+      unit_price: { value: "100.00" },
+      vat_rate: "0.2",
+      subtotal: { value: "300.00" },
+    },
+  ],
+  ...overrides,
+});
+
+const quoteDoc = (overrides = {}) => ({
+  workspaceId: organizationId,
+  createdBy: userId,
+  prefix: "D-",
+  number: "000001",
+  status: "PENDING",
+  issueDate: new Date("2026-09-01"),
+  validUntil: new Date("2026-09-30"),
+  client: {
+    type: "COMPANY",
+    name: "Client SA",
+    email: "c@test.fr",
+    address: {
+      street: "1 rue",
+      city: "Paris",
+      postalCode: "75001",
+      country: "France",
+    },
+  },
+  companyInfo: {
+    name: "Acme",
+    email: "a@test.fr",
+    address: {
+      street: "2 rue",
+      city: "Paris",
+      postalCode: "75002",
+      country: "France",
+    },
+  },
+  items: [{ description: "P", quantity: 1, unitPrice: 1, vatRate: 20 }],
+  ...overrides,
+});
+
+describe("importQuotes (Qonto → devis importés)", () => {
+  it("crée un ImportedQuote avec le PDF et avance le curseur (created_at)", async () => {
+    const account = await createAccount();
+    listQuotesMock.mockResolvedValue(pages([qontoQuote()]));
+    const out = await importQuotes(account, String(userId));
+    expect(out).toMatchObject({ imported: 1, errors: 0 });
+    const doc = await ImportedQuote.findOne({ qontoId: "qq-1" });
+    expect(doc.source).toBe("QONTO");
+    expect(doc.status).toBe("PENDING_REVIEW");
+    expect(doc.originalQuoteNumber).toBe("Q-2026-001");
+    expect(doc.totalTTC).toBe(360);
+    expect(doc.totalHT).toBe(300);
+    expect(doc.validUntil.toISOString()).toMatch(/^2026-09-30/);
+    expect(doc.items[0]).toMatchObject({
+      quantity: 3,
+      unitPrice: 100,
+      vatRate: 20,
+    });
+    expect(account.importCursors.quotes.toISOString()).toBe(
+      "2026-09-01T10:00:00.000Z",
+    );
+    expect(listQuotesMock.mock.calls[0][1].createdAtFrom).toBeNull();
+  });
+
+  it("ignore les devis poussés par Newbi et les annulés, et suit le statut des devis en attente", async () => {
+    const account = await createAccount();
+    await Quote.create(quoteDoc({ qontoId: "qq-pushed" }));
+    listQuotesMock.mockResolvedValue(
+      pages([
+        qontoQuote({ id: "qq-pushed" }),
+        qontoQuote({ id: "qq-cancel", status: "canceled" }),
+        qontoQuote(),
+      ]),
+    );
+    let out = await importQuotes(account, String(userId));
+    expect(out).toMatchObject({ imported: 1, skipped: 2 });
+
+    // Le devis importé passe accepté côté Qonto → relu via getQuote
+    listQuotesMock.mockResolvedValue(pages([]));
+    getQuoteMock.mockResolvedValue({ id: "qq-1", status: "approved" });
+    out = await importQuotes(account, String(userId));
+    expect(out).toMatchObject({ imported: 0, updated: 1 });
+    expect(getQuoteMock).toHaveBeenCalledWith(expect.anything(), "qq-1");
+    const doc = await ImportedQuote.findOne({ qontoId: "qq-1" });
+    expect(doc.status).toBe("VALIDATED");
+    expect(await ImportedQuote.countDocuments()).toBe(1);
   });
 });
 

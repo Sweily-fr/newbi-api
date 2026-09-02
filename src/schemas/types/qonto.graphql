@@ -46,8 +46,10 @@ type QontoStats {
   invoicesSynced: Int!
   expensesSynced: Int!
   clientsSynced: Int!
+  quotesSynced: Int!
   clientInvoicesImported: Int!
   supplierInvoicesImported: Int!
+  quotesImported: Int!
 }
 
 """
@@ -58,10 +60,14 @@ type QontoAutoSync {
   invoices: Boolean!
   "Newbi → Qonto : factures fournisseurs et dépenses"
   supplierInvoices: Boolean!
+  "Newbi → Qonto : devis envoyés ou acceptés"
+  quotes: Boolean!
   "Qonto → Newbi : factures clients créées dans Qonto"
   importClientInvoices: Boolean!
   "Qonto → Newbi : factures fournisseurs déposées dans Qonto"
   importSupplierInvoices: Boolean!
+  "Qonto → Newbi : devis créés dans Qonto"
+  importQuotes: Boolean!
 }
 
 """
@@ -104,6 +110,8 @@ type QontoSyncAllResult {
   invoicesErrors: Int
   expensesSynced: Int
   expensesErrors: Int
+  quotesSynced: Int
+  quotesErrors: Int
 }
 
 """
@@ -112,8 +120,10 @@ Input pour les préférences de sync automatique Qonto
 input QontoAutoSyncInput {
   invoices: Boolean
   supplierInvoices: Boolean
+  quotes: Boolean
   importClientInvoices: Boolean
   importSupplierInvoices: Boolean
+  importQuotes: Boolean
 }
 
 """
@@ -128,6 +138,9 @@ type QontoImportResult {
   supplierInvoicesImported: Int
   supplierInvoicesUpdated: Int
   supplierInvoicesErrors: Int
+  quotesImported: Int
+  quotesUpdated: Int
+  quotesErrors: Int
 }
 
 # === QUERIES ===
@@ -201,6 +214,11 @@ extend type Mutation {
   Synchroniser une dépense spécifique vers Qonto
   """
   syncExpenseToQonto(expenseId: ID!): QontoSyncResult!
+
+  """
+  Synchroniser un devis spécifique vers Qonto
+  """
+  syncQuoteToQonto(quoteId: ID!): QontoSyncResult!
 
   """
   Lancer une synchronisation complète vers Qonto

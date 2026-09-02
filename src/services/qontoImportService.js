@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import QontoAccount from "../models/QontoAccount.js";
 import Invoice from "../models/Invoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
+import Quote from "../models/Quote.js";
+import ImportedQuote from "../models/ImportedQuote.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Expense from "../models/Expense.js";
 import Supplier from "../models/Supplier.js";
@@ -32,6 +34,15 @@ const CLIENT_STATUS_MAP = {
   paid: "COMPLETED",
   canceled: "REJECTED",
 };
+
+const QUOTE_STATUS_MAP = {
+  pending_approval: "PENDING_REVIEW",
+  approved: "VALIDATED",
+  canceled: "REJECTED",
+};
+
+// Nombre max de devis Qonto relus par passage pour suivre leur statut
+const QUOTE_STATUS_REFRESH_LIMIT = 50;
 
 const SUPPLIER_STATUS_MAP = {
   to_review: "TO_PROCESS",
@@ -483,6 +494,169 @@ export async function importSupplierInvoices(account, userId) {
   return result;
 }
 
+function mapQuoteItems(items = []) {
+  return items.map((it) => ({
+    description: [it.title, it.description].filter(Boolean).join(" - "),
+    quantity: num(it.quantity) || 1,
+    unitPrice: num(it.unit_price),
+    totalPrice: num(it.subtotal) || num(it.total_amount),
+    vatRate: Math.round(num(it.vat_rate) * 10000) / 100,
+  }));
+}
+
+/**
+ * Importe les devis créés dans Qonto (→ devis importés) et suit le statut
+ * des devis déjà importés (accepté / refusé).
+ * L'endpoint /quotes n'a qu'un filtre created_at : curseur sur la création.
+ */
+export async function importQuotes(account, userId) {
+  const credentials = account.getCredentials();
+  const workspaceId = String(account.organizationId);
+  const result = { imported: 0, updated: 0, skipped: 0, errors: 0 };
+
+  const since = account.importCursors?.quotes
+    ? new Date(account.importCursors.quotes.getTime() - CURSOR_OVERLAP_MS)
+    : null;
+
+  let page = 1;
+  let maxCreatedAt = account.importCursors?.quotes || null;
+  let deferredMin = null;
+
+  do {
+    const { items, nextPage } = await qontoService.listQuotes(credentials, {
+      createdAtFrom: since,
+      page,
+    });
+
+    for (const q of items) {
+      const createdAt = toDate(q.created_at);
+      try {
+        const qontoId = String(q.id);
+
+        // Devis poussé par Newbi : ne jamais le réimporter
+        const pushed = await Quote.exists({ workspaceId, qontoId });
+        if (pushed) {
+          result.skipped++;
+          continue;
+        }
+        if (await ImportedQuote.exists({ workspaceId, qontoId })) {
+          result.skipped++;
+          continue;
+        }
+
+        const mappedStatus = QUOTE_STATUS_MAP[q.status];
+        if (!mappedStatus || q.status === "canceled") {
+          result.skipped++;
+          continue;
+        }
+
+        if (!q.attachment_id) {
+          if (!deferredMin || (createdAt && createdAt < deferredMin)) {
+            deferredMin = createdAt || new Date();
+          }
+          result.skipped++;
+          continue;
+        }
+
+        const file = await fetchAttachmentToR2(credentials, q.attachment_id, {
+          workspaceId,
+          userId,
+          fallbackName: `devis-${q.number || q.id}`,
+        });
+        if (!file) {
+          result.errors++;
+          continue;
+        }
+
+        const totalTTC = num(q.total_amount);
+        const totalVAT = num(q.vat_amount);
+        const client = q.client || {};
+        const billing = client.billing_address || {};
+
+        await ImportedQuote.create({
+          workspaceId,
+          importedBy: userId,
+          qontoId,
+          source: "QONTO",
+          status: mappedStatus,
+          originalQuoteNumber: q.number || null,
+          vendor: { name: q.organization?.legal_name || "" },
+          client: {
+            name: clientDisplayName(client),
+            address: billing.street_address || client.address || "",
+            city: billing.city || client.city || "",
+            postalCode: billing.zip_code || client.zip_code || "",
+            siret: client.tax_identification_number || null,
+          },
+          quoteDate: toDate(q.issue_date) || createdAt,
+          validUntil: toDate(q.expiry_date),
+          totalHT: Math.round((totalTTC - totalVAT) * 100) / 100,
+          totalVAT,
+          totalTTC,
+          currency: q.currency || "EUR",
+          items: mapQuoteItems(q.items),
+          file: {
+            url: file.upload.url,
+            cloudflareKey: file.upload.key,
+            originalFileName: file.fileName,
+            mimeType: file.mimeType,
+            fileSize: file.buffer.length,
+          },
+        });
+
+        result.imported++;
+        logger.info(
+          `[QONTO-IMPORT] Devis ${q.number || q.id} importé depuis Qonto (org=${workspaceId})`,
+        );
+      } catch (error) {
+        result.errors++;
+        logger.error(`[QONTO-IMPORT] Devis Qonto ${q.id}: ${error.message}`);
+      } finally {
+        if (createdAt && (!maxCreatedAt || createdAt > maxCreatedAt)) {
+          maxCreatedAt = createdAt;
+        }
+      }
+    }
+
+    page = nextPage;
+  } while (page);
+
+  const cursor =
+    deferredMin && (!maxCreatedAt || deferredMin < maxCreatedAt)
+      ? deferredMin
+      : maxCreatedAt;
+  if (cursor) account.importCursors.quotes = cursor;
+
+  // Suivi de statut des devis importés encore en attente (accepté / refusé)
+  const pending = await ImportedQuote.find({
+    workspaceId,
+    source: "QONTO",
+    status: "PENDING_REVIEW",
+    qontoId: { $ne: null },
+  })
+    .sort({ createdAt: 1 })
+    .limit(QUOTE_STATUS_REFRESH_LIMIT);
+
+  for (const doc of pending) {
+    try {
+      const fresh = await qontoService.getQuote(credentials, doc.qontoId);
+      const mapped = QUOTE_STATUS_MAP[fresh?.status];
+      if (mapped && mapped !== doc.status) {
+        doc.status = mapped;
+        await doc.save();
+        result.updated++;
+      }
+    } catch (error) {
+      result.errors++;
+      logger.warn(
+        `[QONTO-IMPORT] Statut devis Qonto ${doc.qontoId}: ${error.message}`,
+      );
+    }
+  }
+
+  return result;
+}
+
 /**
  * Lance l'import Qonto → Newbi pour un compte (factures clients + fournisseurs
  * selon les préférences), met à jour curseurs et stats.
@@ -497,6 +671,7 @@ export async function importFromQonto(account, userId, { force = false } = {}) {
   const results = {
     clientInvoices: { ...empty },
     supplierInvoices: { ...empty },
+    quotes: { ...empty },
   };
 
   if (!account?.isConnected) {
@@ -510,19 +685,29 @@ export async function importFromQonto(account, userId, { force = false } = {}) {
     if (force || account.autoSync?.importSupplierInvoices) {
       results.supplierInvoices = await importSupplierInvoices(account, userId);
     }
+    if (force || account.autoSync?.importQuotes) {
+      results.quotes = await importQuotes(account, userId);
+    }
 
     account.stats.clientInvoicesImported += results.clientInvoices.imported;
     account.stats.supplierInvoicesImported += results.supplierInvoices.imported;
+    account.stats.quotesImported += results.quotes.imported;
     account.lastImportAt = new Date();
     account.importError = null;
     await account.save();
 
     const total =
-      results.clientInvoices.imported + results.supplierInvoices.imported;
+      results.clientInvoices.imported +
+      results.supplierInvoices.imported +
+      results.quotes.imported;
     const updated =
-      results.clientInvoices.updated + results.supplierInvoices.updated;
+      results.clientInvoices.updated +
+      results.supplierInvoices.updated +
+      results.quotes.updated;
     const errors =
-      results.clientInvoices.errors + results.supplierInvoices.errors;
+      results.clientInvoices.errors +
+      results.supplierInvoices.errors +
+      results.quotes.errors;
 
     return {
       success: true,
@@ -549,6 +734,7 @@ export async function importAllFromQonto(resolveUserId) {
     $or: [
       { "autoSync.importClientInvoices": true },
       { "autoSync.importSupplierInvoices": true },
+      { "autoSync.importQuotes": true },
     ],
   });
 
@@ -565,7 +751,8 @@ export async function importAllFromQonto(resolveUserId) {
       const out = await importFromQonto(account, userId);
       const n =
         (out.results?.clientInvoices?.imported || 0) +
-        (out.results?.supplierInvoices?.imported || 0);
+        (out.results?.supplierInvoices?.imported || 0) +
+        (out.results?.quotes?.imported || 0);
       totalImported += n;
       if (n > 0 || !out.success) {
         logger.info(
