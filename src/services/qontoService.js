@@ -1107,6 +1107,31 @@ const qontoService = {
   },
 
   /**
+   * Marque une facture fournisseur Qonto comme payée (paiement saisi dans Newbi)
+   * Endpoint: POST /supplier_invoices/{id}/mark_as_paid
+   * Qonto refuse tant que la facture a des données manquantes (analyse en cours).
+   */
+  async markSupplierInvoicePaid(credentials, qontoId, paymentDate) {
+    try {
+      await qontoRequest(
+        credentials,
+        "POST",
+        `/supplier_invoices/${qontoId}/mark_as_paid`,
+        { supplier_invoice: { payment_date: formatDate(paymentDate) } },
+      );
+      return {
+        success: true,
+        message: "Facture fournisseur marquée payée dans Qonto",
+      };
+    } catch (error) {
+      logger.warn(
+        `[QONTO] markSupplierInvoicePaid ${qontoId}: ${error.message}`,
+      );
+      return { success: false, message: error.message };
+    }
+  },
+
+  /**
    * Rafraîchit la liste des comptes bancaires Qonto stockée sur le compte
    */
   async refreshBankAccounts(account) {

@@ -11,6 +11,12 @@ import cloudflareService from "./cloudflareService.js";
 import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "../resolvers/notification.js";
+import { applyInvoicePaid } from "../resolvers/invoice.js";
+import { cancelActiveQuoteSignatures } from "./quoteSignatureSync.js";
+import { syncQuoteIfNeeded as syncQuoteToPennylane } from "./pennylaneSyncHelper.js";
+import { syncPurchaseInvoiceIfNeeded as syncPurchaseInvoiceToPennylane } from "./pennylaneSyncHelper.js";
+import documentAutomationService from "./documentAutomationService.js";
+import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -151,13 +157,40 @@ export async function importClientInvoices(account, userId) {
           continue;
         }
 
-        // Facture poussée par Newbi lui-même : ne jamais la réimporter
-        const pushed = await Invoice.exists({
+        // Facture poussée par Newbi lui-même : jamais réimportée, mais son
+        // paiement constaté dans Qonto est répercuté (même effets qu'un
+        // paiement manuel : notifications, automatisations, sync Pennylane).
+        const pushedInvoice = await Invoice.findOne({
           workspaceId,
           qontoId: String(ci.id),
         });
-        if (pushed) {
-          result.skipped++;
+        if (pushedInvoice) {
+          if (ci.status === "paid" && pushedInvoice.status !== "COMPLETED") {
+            await applyInvoicePaid(pushedInvoice, {
+              paymentDate: toDate(ci.paid_at) || new Date(),
+              userId,
+              workspaceId,
+              organizationId: workspaceId,
+              paymentMethod: "BANK_TRANSFER",
+            });
+            result.updated++;
+            logger.info(
+              `[QONTO-IMPORT] Facture ${pushedInvoice.prefix || ""}${pushedInvoice.number} payée dans Qonto → COMPLETED (org=${workspaceId})`,
+            );
+            await notifyImported({
+              userId,
+              workspaceId,
+              documentType: "INVOICE",
+              documentId: pushedInvoice._id,
+              documentNumber: `${pushedInvoice.prefix || ""}${pushedInvoice.number || ""}`,
+              counterpartName: pushedInvoice.client?.name,
+              amountTTC: pushedInvoice.finalTotalTTC,
+              url: "/dashboard/outils/factures",
+              event: "PAID",
+            });
+          } else {
+            result.skipped++;
+          }
           continue;
         }
 
@@ -186,6 +219,19 @@ export async function importClientInvoices(account, userId) {
           if (changed) {
             await existing.save();
             result.updated++;
+            if (mappedStatus === "COMPLETED") {
+              await notifyImported({
+                userId,
+                workspaceId,
+                documentType: "INVOICE",
+                documentId: existing._id,
+                documentNumber: existing.originalInvoiceNumber,
+                counterpartName: existing.client?.name,
+                amountTTC: existing.totalTTC,
+                url: "/dashboard/outils/factures",
+                event: "PAID",
+              });
+            }
           } else {
             result.skipped++;
           }
@@ -328,14 +374,35 @@ export async function importSupplierInvoices(account, userId) {
       try {
         const qontoId = String(si.id);
 
-        // Déposée par Newbi (facture d'achat) : ne pas réimporter
-        const pushed = await PurchaseInvoice.exists({
+        // Déposée par Newbi (facture d'achat) : jamais réimportée, mais un
+        // paiement constaté dans Qonto est répercuté.
+        const pushedPurchase = await PurchaseInvoice.findOne({
           workspaceId: workspaceObjectId,
           qontoId,
           source: { $ne: "QONTO" },
         });
-        if (pushed) {
-          result.skipped++;
+        if (pushedPurchase) {
+          if (si.status === "paid" && pushedPurchase.status !== "PAID") {
+            await applyPurchaseInvoicePaid(pushedPurchase, {
+              paymentDate: toDate(si.payment_date) || new Date(),
+              workspaceId,
+              userId,
+            });
+            result.updated++;
+            await notifyImported({
+              userId,
+              workspaceId,
+              documentType: "PURCHASE_INVOICE",
+              documentId: pushedPurchase._id,
+              documentNumber: pushedPurchase.invoiceNumber,
+              counterpartName: pushedPurchase.supplierName,
+              amountTTC: pushedPurchase.amountTTC,
+              url: `/dashboard/outils/factures-achat?invoice=${pushedPurchase._id}`,
+              event: "PAID",
+            });
+          } else {
+            result.skipped++;
+          }
           continue;
         }
 
@@ -383,6 +450,7 @@ export async function importSupplierInvoices(account, userId) {
             existing.supplierName = si.supplier_name;
             changed = true;
           }
+          let paidNow = false;
           if (
             si.status === "paid" &&
             existing.status !== "PAID" &&
@@ -391,10 +459,24 @@ export async function importSupplierInvoices(account, userId) {
             existing.status = "PAID";
             existing.paymentDate = toDate(si.payment_date) || new Date();
             changed = true;
+            paidNow = true;
           }
           if (changed) {
             await existing.save();
             result.updated++;
+            if (paidNow) {
+              await notifyImported({
+                userId,
+                workspaceId,
+                documentType: "PURCHASE_INVOICE",
+                documentId: existing._id,
+                documentNumber: existing.invoiceNumber,
+                counterpartName: existing.supplierName,
+                amountTTC: existing.amountTTC,
+                url: `/dashboard/outils/factures-achat?invoice=${existing._id}`,
+                event: "PAID",
+              });
+            }
           } else {
             result.skipped++;
           }
@@ -563,6 +645,7 @@ async function notifyImported({
   counterpartName,
   amountTTC,
   url,
+  event = "IMPORTED",
 }) {
   try {
     const notification = await Notification.createDocumentImportedNotification({
@@ -575,6 +658,7 @@ async function notifyImported({
       counterpartName,
       amountTTC,
       url,
+      event,
     });
     await publishNotification(notification);
   } catch (error) {
@@ -582,6 +666,99 @@ async function notifyImported({
       `[QONTO-IMPORT] notification non envoyée (${documentType} ${documentNumber || documentId}): ${error.message}`,
     );
   }
+}
+
+/**
+ * Paiement constaté dans Qonto sur une facture d'achat Newbi : mêmes effets
+ * que markPurchaseInvoiceAsPaid (SuperPDP, Pennylane, automatisations).
+ */
+async function applyPurchaseInvoicePaid(
+  purchaseInvoice,
+  { paymentDate, workspaceId, userId },
+) {
+  purchaseInvoice.status = "PAID";
+  purchaseInvoice.paymentDate = paymentDate || new Date();
+  purchaseInvoice.paymentMethod =
+    purchaseInvoice.paymentMethod || "BANK_TRANSFER";
+  try {
+    await reportPurchaseInvoicePaymentIfNeeded(purchaseInvoice, workspaceId);
+  } catch (error) {
+    logger.warn(`[QONTO-IMPORT] signalement paiement PDP: ${error.message}`);
+  }
+  await purchaseInvoice.save();
+  logger.info(
+    `[QONTO-IMPORT] Facture d'achat ${purchaseInvoice.invoiceNumber || purchaseInvoice._id} payée dans Qonto → PAID (org=${workspaceId})`,
+  );
+  syncPurchaseInvoiceToPennylane(purchaseInvoice, workspaceId).catch((err) =>
+    logger.error(`[QONTO-IMPORT] sync Pennylane paiement: ${err.message}`),
+  );
+  documentAutomationService
+    .executeAutomationsForExpense(
+      "PURCHASE_INVOICE_PAID",
+      workspaceId,
+      {
+        documentId: purchaseInvoice._id.toString(),
+        documentType: "purchaseInvoice",
+        documentNumber: purchaseInvoice.invoiceNumber || "",
+        clientName: purchaseInvoice.supplierName || "",
+        issueDate: purchaseInvoice.issueDate || purchaseInvoice.createdAt,
+      },
+      userId,
+    )
+    .catch((err) =>
+      logger.error(`[QONTO-IMPORT] automatisations paiement: ${err.message}`),
+    );
+}
+
+/**
+ * Décision du client constatée dans Qonto sur un devis envoyé depuis Newbi :
+ * mêmes effets qu'une acceptation / un refus manuel (signatures actives
+ * annulées, automatisations, sync Pennylane à l'acceptation).
+ * @returns {Promise<boolean>} true si le devis a changé
+ */
+async function applyQuoteDecision(quote, qontoStatus, { workspaceId, userId }) {
+  if (quote.status !== "PENDING") return false;
+  const decision =
+    qontoStatus === "approved"
+      ? "COMPLETED"
+      : qontoStatus === "canceled"
+        ? "CANCELED"
+        : null;
+  if (!decision) return false;
+
+  quote.status = decision;
+  await quote.save();
+  logger.info(
+    `[QONTO-IMPORT] Devis ${quote.prefix || ""}${quote.number} ${decision === "COMPLETED" ? "accepté" : "refusé"} dans Qonto (org=${workspaceId})`,
+  );
+
+  cancelActiveQuoteSignatures(quote._id).catch((err) =>
+    logger.warn(`[QONTO-IMPORT] annulation signatures devis: ${err.message}`),
+  );
+  documentAutomationService
+    .executeAutomations(
+      decision === "COMPLETED" ? "QUOTE_ACCEPTED" : "QUOTE_CANCELED",
+      workspaceId,
+      {
+        documentId: quote._id.toString(),
+        documentType: "quote",
+        documentNumber: quote.number,
+        prefix: quote.prefix || "",
+        clientName: quote.client?.name || "",
+        issueDate: quote.issueDate || quote.createdAt,
+        clientId: quote.client?._id || quote.clientId || null,
+      },
+      userId,
+    )
+    .catch((err) =>
+      logger.error(`[QONTO-IMPORT] automatisations devis: ${err.message}`),
+    );
+  if (decision === "COMPLETED") {
+    syncQuoteToPennylane(quote, workspaceId).catch((err) =>
+      logger.error(`[QONTO-IMPORT] sync Pennylane devis: ${err.message}`),
+    );
+  }
+  return true;
 }
 
 function mapQuoteItems(items = []) {
@@ -765,12 +942,49 @@ export async function importQuotes(account, userId) {
           counterpartName: doc.client?.name,
           amountTTC: doc.totalTTC,
           url: "/dashboard/outils/devis",
+          event: fresh.status === "approved" ? "ACCEPTED" : "REFUSED",
         });
       }
     } catch (error) {
       result.errors++;
       logger.warn(
         `[QONTO-IMPORT] Statut devis Qonto ${doc.qontoId}: ${error.message}`,
+      );
+    }
+  }
+
+  // Devis envoyés depuis Newbi, en attente de décision du client dans Qonto
+  const pendingPushed = await Quote.find({
+    workspaceId,
+    status: "PENDING",
+    qontoId: { $nin: [null, "existing"] },
+  })
+    .sort({ updatedAt: 1 })
+    .limit(QUOTE_STATUS_REFRESH_LIMIT);
+
+  for (const quote of pendingPushed) {
+    try {
+      const fresh = await qontoService.getQuote(credentials, quote.qontoId);
+      if (
+        await applyQuoteDecision(quote, fresh?.status, { workspaceId, userId })
+      ) {
+        result.updated++;
+        await notifyImported({
+          userId,
+          workspaceId,
+          documentType: "QUOTE",
+          documentId: quote._id,
+          documentNumber: `${quote.prefix || ""}${quote.number || ""}`,
+          counterpartName: quote.client?.name,
+          amountTTC: quote.finalTotalTTC,
+          url: "/dashboard/outils/devis",
+          event: quote.status === "COMPLETED" ? "ACCEPTED" : "REFUSED",
+        });
+      }
+    } catch (error) {
+      result.errors++;
+      logger.warn(
+        `[QONTO-IMPORT] Décision devis Qonto ${quote.qontoId}: ${error.message}`,
       );
     }
   }
