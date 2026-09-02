@@ -13,6 +13,8 @@ type Quote {
   companyInfo: Company!
   items: [Item!]!
   status: QuoteStatus!
+  "Identifiant Qonto si le devis vient de Qonto ou y a été envoyé"
+  qontoId: String
   headerNotes: String
   footerNotes: String
   termsAndConditions: String
