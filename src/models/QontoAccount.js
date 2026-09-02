@@ -38,6 +38,8 @@ const qontoBankAccountSchema = new mongoose.Schema(
     currency: { type: String, default: "EUR" },
     main: { type: Boolean, default: false },
     status: { type: String },
+    // Compte externe agrégé (sandbox uniquement, jamais listé en production)
+    external: { type: Boolean, default: false },
   },
   { _id: false },
 );
