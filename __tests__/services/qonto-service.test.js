@@ -816,13 +816,3 @@ describe("qontoService.syncPurchaseInvoice", () => {
     expect(out.message).toMatch(/too large/);
   });
 });
-
-describe("qontoService.syncSupplierInvoice (dépenses)", () => {
-  it("refuse sans justificatif", async () => {
-    const out = await qontoService.syncSupplierInvoice(credentials, {
-      _id: "e-1",
-      files: [],
-    });
-    expect(out.success).toBe(false);
-  });
-});

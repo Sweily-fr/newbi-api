@@ -85,48 +85,6 @@ export async function syncInvoiceIfNeeded(invoice, workspaceId) {
 }
 
 /**
- * Sync automatique d'une dépense (statut APPROVED ou PAID)
- */
-export async function syncExpenseIfNeeded(expense, workspaceId) {
-  try {
-    if (!expense || !workspaceId) return;
-
-    const syncableStatuses = ["APPROVED", "PAID"];
-    if (!syncableStatuses.includes(expense.status)) return;
-    if (expense.qontoSyncStatus === "SYNCED") return;
-
-    const account = await findConnectedAccount(workspaceId, "supplierInvoices");
-    if (!account) return;
-
-    const label = expense.title || expense._id;
-    logger.info(
-      `[QONTO] Auto-sync dépense ${label} (status=${expense.status})...`,
-    );
-
-    const result = await qontoService.syncSupplierInvoice(
-      account.getCredentials(),
-      expense,
-    );
-
-    const Expense = (await import("../models/Expense.js")).default;
-    await markSynced(Expense, expense._id, result);
-
-    if (result.success) {
-      account.stats.expensesSynced += 1;
-      account.lastSyncAt = new Date();
-      await account.save();
-      logger.info(`[QONTO] Auto-sync dépense ${label} → OK`);
-    } else {
-      logger.warn(
-        `[QONTO] Auto-sync dépense ${label} → ERREUR: ${result.message}`,
-      );
-    }
-  } catch (error) {
-    logger.error("[QONTO] Erreur auto-sync dépense:", error.message);
-  }
-}
-
-/**
  * Sync automatique d'une facture d'achat (statut TO_PAY, PENDING, PAID ou OVERDUE)
  */
 export async function syncPurchaseInvoiceIfNeeded(
