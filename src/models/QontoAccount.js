@@ -101,22 +101,27 @@ const qontoAccountSchema = new mongoose.Schema(
       invoicesSynced: { type: Number, default: 0 },
       expensesSynced: { type: Number, default: 0 },
       clientsSynced: { type: Number, default: 0 },
+      quotesSynced: { type: Number, default: 0 },
       clientInvoicesImported: { type: Number, default: 0 },
       supplierInvoicesImported: { type: Number, default: 0 },
+      quotesImported: { type: Number, default: 0 },
       lastErrors: [qontoSyncLogSchema],
     },
     autoSync: {
       // Newbi → Qonto
       invoices: { type: Boolean, default: true },
       supplierInvoices: { type: Boolean, default: true },
+      quotes: { type: Boolean, default: true },
       // Qonto → Newbi (cron de polling, cf. qontoImportCron)
       importClientInvoices: { type: Boolean, default: true },
       importSupplierInvoices: { type: Boolean, default: true },
+      importQuotes: { type: Boolean, default: true },
     },
     // Curseurs updated_at_from du polling Qonto → Newbi
     importCursors: {
       clientInvoices: { type: Date },
       supplierInvoices: { type: Date },
+      quotes: { type: Date },
     },
     lastImportAt: {
       type: Date,

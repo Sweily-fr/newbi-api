@@ -38,6 +38,7 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
+import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "../services/qontoSyncHelper.js";
 import { cancelActiveQuoteSignatures } from "../services/quoteSignatureSync.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
@@ -1717,6 +1718,12 @@ const quoteResolvers = {
             (err) => console.error("Erreur sync Pennylane devis:", err),
           );
         }
+
+        // Sync Qonto (fire-and-forget) — devis envoyé ou accepté → Qonto quotes
+        syncQuoteToQontoIfNeeded(
+          quote,
+          context.organizationId || workspaceId,
+        ).catch((err) => console.error("Erreur sync Qonto devis:", err));
 
         return await quote.populate("createdBy");
       }),

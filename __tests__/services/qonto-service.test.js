@@ -581,6 +581,113 @@ describe("qontoService.syncCustomerInvoice", () => {
   });
 });
 
+describe("qontoService.syncQuote", () => {
+  const quote = {
+    _id: "q-1",
+    prefix: "D-",
+    number: "2026-007",
+    status: "PENDING",
+    issueDate: "2026-09-01",
+    validUntil: "2026-09-30",
+    currency: "EUR",
+    client: { type: "COMPANY", name: "Client SA", siret: "732829320" },
+    items: [
+      {
+        description: "Prestation",
+        quantity: 3,
+        unitPrice: 100,
+        vatRate: 20,
+        unit: "jour",
+      },
+    ],
+  };
+
+  it("crée le devis avec expiry_date, terms_and_conditions et currency sur les lignes", async () => {
+    const calls = stubRouter({
+      "GET /v2/clients": jsonResponse({
+        clients: [
+          {
+            id: "c-1",
+            kind: "company",
+            name: "Client SA",
+            tax_identification_number: "732829320",
+          },
+        ],
+      }),
+      "POST /v2/quotes": jsonResponse({ quote: { id: "qq-1" } }, 201),
+    });
+    const out = await qontoService.syncQuote(credentials, quote);
+    expect(out.success).toBe(true);
+    expect(out.qontoId).toBe("qq-1");
+    const body = JSON.parse(
+      calls.find((c) => c.url.pathname === "/v2/quotes").options.body,
+    );
+    expect(body).toMatchObject({
+      client_id: "c-1",
+      issue_date: "2026-09-01",
+      expiry_date: "2026-09-30",
+      number: "D-2026-007",
+      currency: "EUR",
+    });
+    expect(body.terms_and_conditions).toMatch(/30\/09\/2026/);
+    expect(body.items[0]).toMatchObject({
+      title: "Prestation",
+      quantity: "3",
+      unit: "day",
+      currency: "EUR",
+      vat_rate: "0.2",
+      unit_price: { value: "100.00", currency: "EUR" },
+    });
+    expect(body.payment_methods).toBeUndefined();
+  });
+
+  it("calcule expiry_date à +30 jours sans validUntil et reprend les CGV du devis", async () => {
+    const calls = stubRouter({
+      "GET /v2/clients": jsonResponse({
+        clients: [
+          {
+            id: "c-1",
+            kind: "company",
+            name: "Client SA",
+            tax_identification_number: "1",
+          },
+        ],
+      }),
+      "POST /v2/quotes": jsonResponse({ quote: { id: "qq-2" } }, 201),
+    });
+    await qontoService.syncQuote(credentials, {
+      ...quote,
+      validUntil: null,
+      termsAndConditions: "Acompte de 30 % à la commande.",
+    });
+    const body = JSON.parse(calls.at(-1).options.body);
+    expect(body.expiry_date).toBe("2026-10-01");
+    expect(body.terms_and_conditions).toBe("Acompte de 30 % à la commande.");
+  });
+
+  it("409 → succès 'existing'", async () => {
+    stubRouter({
+      "GET /v2/clients": jsonResponse({
+        clients: [
+          {
+            id: "c-1",
+            kind: "company",
+            name: "Client SA",
+            tax_identification_number: "1",
+          },
+        ],
+      }),
+      "POST /v2/quotes": jsonResponse(
+        { errors: [{ code: "quote_number_already_exists" }] },
+        409,
+      ),
+    });
+    const out = await qontoService.syncQuote(credentials, quote);
+    expect(out.success).toBe(true);
+    expect(out.qontoId).toBe("existing");
+  });
+});
+
 describe("qontoService.syncPurchaseInvoice", () => {
   const withPdfDownload = (handlers) => {
     const calls = stubRouter(handlers);

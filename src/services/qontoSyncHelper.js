@@ -169,3 +169,43 @@ export async function syncPurchaseInvoiceIfNeeded(
     logger.error("[QONTO] Erreur auto-sync facture d'achat:", error.message);
   }
 }
+
+/**
+ * Sync automatique d'un devis vers Qonto (statut PENDING = envoyé, COMPLETED = accepté)
+ */
+export async function syncQuoteIfNeeded(quote, workspaceId) {
+  try {
+    if (!quote || !workspaceId) return;
+
+    const syncableStatuses = ["PENDING", "COMPLETED"];
+    if (!syncableStatuses.includes(quote.status)) return;
+    if (quote.qontoSyncStatus === "SYNCED") return;
+
+    const account = await findConnectedAccount(workspaceId, "quotes");
+    if (!account) return;
+
+    const label = `${quote.prefix || ""}${quote.number || quote._id}`;
+    logger.info(`[QONTO] Auto-sync devis ${label} (status=${quote.status})...`);
+
+    const result = await qontoService.syncQuote(
+      account.getCredentials(),
+      quote,
+    );
+
+    const Quote = (await import("../models/Quote.js")).default;
+    await markSynced(Quote, quote._id, result);
+
+    if (result.success) {
+      account.stats.quotesSynced += 1;
+      account.lastSyncAt = new Date();
+      await account.save();
+      logger.info(`[QONTO] Auto-sync devis ${label} → OK`);
+    } else {
+      logger.warn(
+        `[QONTO] Auto-sync devis ${label} → ERREUR: ${result.message}`,
+      );
+    }
+  } catch (error) {
+    logger.error("[QONTO] Erreur auto-sync devis:", error.message);
+  }
+}

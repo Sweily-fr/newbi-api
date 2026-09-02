@@ -19,12 +19,14 @@ const {
   syncCustomerInvoiceMock,
   syncPurchaseInvoiceMock,
   syncSupplierInvoiceMock,
+  syncQuoteMock,
   syncAllMock,
 } = vi.hoisted(() => ({
   testConnectionMock: vi.fn(),
   syncCustomerInvoiceMock: vi.fn(),
   syncPurchaseInvoiceMock: vi.fn(),
   syncSupplierInvoiceMock: vi.fn(),
+  syncQuoteMock: vi.fn(),
   syncAllMock: vi.fn(),
 }));
 
@@ -35,6 +37,7 @@ vi.mock("../../src/services/qontoService.js", () => ({
     syncCustomerInvoice: syncCustomerInvoiceMock,
     syncPurchaseInvoice: syncPurchaseInvoiceMock,
     syncSupplierInvoice: syncSupplierInvoiceMock,
+    syncQuote: syncQuoteMock,
     refreshBankAccounts: vi.fn(),
     syncAll: syncAllMock,
   },
@@ -53,6 +56,7 @@ vi.mock("../../src/utils/logger.js", () => ({
 
 import QontoAccount from "../../src/models/QontoAccount.js";
 import Invoice from "../../src/models/Invoice.js";
+import Quote from "../../src/models/Quote.js";
 import resolvers from "../../src/resolvers/qontoResolvers.js";
 
 const userId = buildUserId();
@@ -114,6 +118,7 @@ beforeEach(async () => {
   syncCustomerInvoiceMock.mockReset();
   syncPurchaseInvoiceMock.mockReset();
   syncSupplierInvoiceMock.mockReset();
+  syncQuoteMock.mockReset();
   syncAllMock.mockReset();
   importFromQontoMock.mockReset();
   await seedOrgMembership({ userId, organizationId, role: "owner" });
@@ -507,6 +512,61 @@ describe("qonto.Mutation.syncInvoiceToQonto", () => {
     expect(out.success).toBe(false);
     expect(out.message).toMatch(/non trouvée/);
     expect(syncCustomerInvoiceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("qonto.Mutation.syncQuoteToQonto", () => {
+  it("synchronise un devis et le marque SYNCED", async () => {
+    await createAccount();
+    const quote = await Quote.create({
+      workspaceId: organizationId,
+      createdBy: userId,
+      prefix: "D-",
+      number: "000001",
+      status: "PENDING",
+      issueDate: new Date("2026-09-01"),
+      validUntil: new Date("2026-09-30"),
+      client: {
+        type: "COMPANY",
+        name: "Client SA",
+        email: "client@test.fr",
+        address: {
+          street: "1 rue",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+      },
+      companyInfo: {
+        name: "Acme",
+        email: "acme@test.fr",
+        address: {
+          street: "2 rue",
+          city: "Paris",
+          postalCode: "75002",
+          country: "France",
+        },
+      },
+      items: [
+        { description: "Presta", quantity: 1, unitPrice: 100, vatRate: 20 },
+      ],
+    });
+    syncQuoteMock.mockResolvedValue({
+      success: true,
+      qontoId: "qq-1",
+      message: "ok",
+    });
+    const out = await resolvers.Mutation.syncQuoteToQonto(
+      null,
+      { quoteId: quote._id.toString() },
+      baseCtx(),
+    );
+    expect(out.success).toBe(true);
+    const fresh = await Quote.findById(quote._id);
+    expect(fresh.qontoSyncStatus).toBe("SYNCED");
+    expect(fresh.qontoId).toBe("qq-1");
+    const account = await QontoAccount.findOne({ organizationId });
+    expect(account.stats.quotesSynced).toBe(1);
   });
 });
 
