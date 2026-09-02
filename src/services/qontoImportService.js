@@ -679,6 +679,21 @@ export async function importFromQonto(account, userId, { force = false } = {}) {
   }
 
   try {
+    // Compte connecté avant l'introduction des curseurs : on démarre à
+    // maintenant plutôt que d'importer tout l'historique Qonto.
+    let initialized = false;
+    for (const key of ["clientInvoices", "supplierInvoices", "quotes"]) {
+      if (!account.importCursors?.[key]) {
+        account.importCursors[key] = new Date();
+        initialized = true;
+      }
+    }
+    if (initialized) {
+      logger.info(
+        `[QONTO-IMPORT] Curseurs initialisés à maintenant pour org=${account.organizationId} (historique Qonto non importé)`,
+      );
+    }
+
     if (force || account.autoSync?.importClientInvoices) {
       results.clientInvoices = await importClientInvoices(account, userId);
     }
