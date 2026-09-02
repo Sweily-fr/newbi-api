@@ -9,6 +9,7 @@ import Expense from "../models/Expense.js";
 import Supplier from "../models/Supplier.js";
 import qontoService from "./qontoService.js";
 import cloudflareService from "./cloudflareService.js";
+import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -35,9 +36,13 @@ const CLIENT_STATUS_MAP = {
   canceled: "REJECTED",
 };
 
+// Statut ImportedQuote à la création. Un devis accepté côté Qonto est ensuite
+// converti en vrai Quote (statut IMPORTED) via convertSingleImportedQuote,
+// comme le bouton « Valider » de Newbi : c'est cette conversion qui passe
+// l'ImportedQuote en VALIDATED (masqué du tableau au profit du vrai devis).
 const QUOTE_STATUS_MAP = {
   pending_approval: "PENDING_REVIEW",
-  approved: "VALIDATED",
+  approved: "PENDING_REVIEW",
   canceled: "REJECTED",
 };
 
@@ -494,6 +499,29 @@ export async function importSupplierInvoices(account, userId) {
   return result;
 }
 
+/**
+ * Applique le statut Qonto d'un devis à son ImportedQuote :
+ *  - approved  → conversion en vrai Quote (statut IMPORTED, qontoId conservé)
+ *  - canceled  → REJECTED
+ * @returns {Promise<boolean>} true si le document a changé
+ */
+async function applyQontoQuoteStatus(doc, qontoStatus, userId) {
+  if (qontoStatus === "approved" && doc.status === "PENDING_REVIEW") {
+    const quote = await convertSingleImportedQuote(doc, userId);
+    await Quote.updateOne(
+      { _id: quote._id },
+      { $set: { qontoId: doc.qontoId, qontoSyncStatus: "SYNCED" } },
+    );
+    return true;
+  }
+  if (qontoStatus === "canceled" && doc.status !== "REJECTED") {
+    doc.status = "REJECTED";
+    await doc.save();
+    return true;
+  }
+  return false;
+}
+
 function mapQuoteItems(items = []) {
   return items.map((it) => ({
     description: [it.title, it.description].filter(Boolean).join(" - "),
@@ -573,7 +601,7 @@ export async function importQuotes(account, userId) {
         const client = q.client || {};
         const billing = client.billing_address || {};
 
-        await ImportedQuote.create({
+        const created = await ImportedQuote.create({
           workspaceId,
           importedBy: userId,
           qontoId,
@@ -608,6 +636,17 @@ export async function importQuotes(account, userId) {
         logger.info(
           `[QONTO-IMPORT] Devis ${q.number || q.id} importé depuis Qonto (org=${workspaceId})`,
         );
+
+        // Déjà accepté côté Qonto : devient tout de suite un vrai devis
+        if (q.status === "approved") {
+          try {
+            await applyQontoQuoteStatus(created, "approved", userId);
+          } catch (error) {
+            logger.warn(
+              `[QONTO-IMPORT] Conversion du devis accepté ${q.number || q.id} impossible: ${error.message}`,
+            );
+          }
+        }
       } catch (error) {
         result.errors++;
         logger.error(`[QONTO-IMPORT] Devis Qonto ${q.id}: ${error.message}`);
@@ -640,11 +679,11 @@ export async function importQuotes(account, userId) {
   for (const doc of pending) {
     try {
       const fresh = await qontoService.getQuote(credentials, doc.qontoId);
-      const mapped = QUOTE_STATUS_MAP[fresh?.status];
-      if (mapped && mapped !== doc.status) {
-        doc.status = mapped;
-        await doc.save();
+      if (await applyQontoQuoteStatus(doc, fresh?.status, userId)) {
         result.updated++;
+        logger.info(
+          `[QONTO-IMPORT] Devis ${doc.originalQuoteNumber || doc.qontoId} → ${fresh.status} (org=${workspaceId})`,
+        );
       }
     } catch (error) {
       result.errors++;
