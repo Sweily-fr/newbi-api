@@ -1035,6 +1035,14 @@ const quoteResolvers = {
               );
           }
 
+          // Sync Qonto (fire-and-forget) — devis créé directement envoyé
+          if (quote.status === "PENDING") {
+            syncQuoteToQontoIfNeeded(
+              quote,
+              context.organizationId || workspaceId,
+            ).catch((err) => console.error("Erreur sync Qonto devis:", err));
+          }
+
           return await quote.populate("createdBy");
         },
       ),
@@ -1364,8 +1372,18 @@ const quoteResolvers = {
           }
         }
 
+        const statusBeforeUpdate = quote.status;
         Object.assign(quote, updateData);
         await quote.save();
+
+        // Sync Qonto (fire-and-forget) — envoi (DRAFT → PENDING) via updateQuote
+        if (quote.status !== statusBeforeUpdate) {
+          syncQuoteToQontoIfNeeded(
+            quote,
+            context.organizationId || workspaceId,
+          ).catch((err) => console.error("Erreur sync Qonto devis:", err));
+        }
+
         return await quote.populate("createdBy");
       }),
     ),
