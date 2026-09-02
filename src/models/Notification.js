@@ -29,6 +29,7 @@ const notificationSchema = new mongoose.Schema(
         "MEMBER_JOINED", // Nouveau membre
         "MENTION", // Mention dans un commentaire
         "PURCHASE_INVOICE_RECEIVED", // Facture d'achat reçue via e-invoicing (SuperPDP)
+        "DOCUMENT_IMPORTED", // Document arrivé d'une plateforme externe (Qonto…)
       ],
       index: true,
     },
@@ -60,6 +61,11 @@ const notificationSchema = new mongoose.Schema(
       purchaseInvoiceId: { type: String },
       supplierName: { type: String },
       amountTTC: { type: Number },
+      // Pour DOCUMENT_IMPORTED (document importé depuis une plateforme)
+      documentType: { type: String }, // INVOICE | QUOTE | PURCHASE_INVOICE
+      documentId: { type: String },
+      documentNumber: { type: String },
+      source: { type: String }, // QONTO…
     },
     // Statut de lecture
     read: {
@@ -181,6 +187,57 @@ notificationSchema.statics.createPurchaseInvoiceReceivedNotification =
         supplierName,
         amountTTC,
         url: url || "/dashboard/outils/factures-achat",
+      },
+    });
+  };
+
+const DOCUMENT_LABELS = {
+  INVOICE: { title: "Nouvelle facture reçue", noun: "La facture" },
+  QUOTE: { title: "Nouveau devis reçu", noun: "Le devis" },
+  PURCHASE_INVOICE: {
+    title: "Nouvelle facture d'achat reçue",
+    noun: "La facture d'achat",
+  },
+};
+
+const SOURCE_LABELS = { QONTO: "Qonto", GMAIL: "Gmail", SUPERPDP: "la PDP" };
+
+/**
+ * Notification « document importé depuis une plateforme externe » (Qonto…).
+ * Sert aussi au front pour rafraîchir la liste concernée en temps réel.
+ */
+notificationSchema.statics.createDocumentImportedNotification =
+  async function ({
+    userId,
+    workspaceId,
+    documentType,
+    documentId,
+    documentNumber,
+    source,
+    counterpartName,
+    amountTTC,
+    url,
+  }) {
+    const labels = DOCUMENT_LABELS[documentType] || DOCUMENT_LABELS.INVOICE;
+    const sourceLabel = SOURCE_LABELS[source] || source || "une plateforme";
+    return this.create({
+      userId,
+      workspaceId,
+      type: "DOCUMENT_IMPORTED",
+      title: labels.title,
+      message:
+        `${labels.noun} ${documentNumber || ""}${counterpartName ? ` (${counterpartName})` : ""} est arrivé${documentType === "QUOTE" ? "" : "e"} depuis ${sourceLabel}`.replace(
+          /\s+/g,
+          " ",
+        ),
+      data: {
+        documentType,
+        documentId: documentId ? String(documentId) : undefined,
+        documentNumber,
+        source,
+        supplierName: counterpartName,
+        amountTTC,
+        url,
       },
     });
   };
