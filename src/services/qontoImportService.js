@@ -501,16 +501,24 @@ export async function importSupplierInvoices(account, userId) {
 
 /**
  * Applique le statut Qonto d'un devis à son ImportedQuote :
- *  - approved  → conversion en vrai Quote (statut IMPORTED, qontoId conservé)
+ *  - approved  → conversion en vrai Quote accepté (COMPLETED, qontoId conservé)
  *  - canceled  → REJECTED
  * @returns {Promise<boolean>} true si le document a changé
  */
 async function applyQontoQuoteStatus(doc, qontoStatus, userId) {
   if (qontoStatus === "approved" && doc.status === "PENDING_REVIEW") {
     const quote = await convertSingleImportedQuote(doc, userId);
+    // Accepté côté Qonto → accepté côté Newbi (transition IMPORTED → COMPLETED,
+    // la seule autorisée avec CANCELED pour un devis importé)
     await Quote.updateOne(
       { _id: quote._id },
-      { $set: { qontoId: doc.qontoId, qontoSyncStatus: "SYNCED" } },
+      {
+        $set: {
+          status: "COMPLETED",
+          qontoId: doc.qontoId,
+          qontoSyncStatus: "SYNCED",
+        },
+      },
     );
     return true;
   }
