@@ -67,6 +67,8 @@ type ImportedQuote {
   importedBy: ID!
   status: ImportedQuoteStatus!
   originalQuoteNumber: String
+  "Origine de l'import : OCR_UPLOAD, MANUAL, QONTO"
+  source: String
   vendor: ImportedQuoteVendor
   client: ImportedQuoteClient
   quoteDate: String
