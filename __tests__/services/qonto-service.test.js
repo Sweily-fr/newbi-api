@@ -117,6 +117,7 @@ describe("qontoService.testConnection", () => {
     expect(out.slug).toBe("acme-1234");
     expect(out.bankAccounts).toEqual([
       {
+        external: false,
         qontoId: "b1",
         slug: "acme-bank-1",
         name: "Principal",
@@ -133,6 +134,52 @@ describe("qontoService.testConnection", () => {
     expect(calls[0].url.href).toBe(
       "https://thirdparty.qonto.com/v2/organization",
     );
+  });
+
+  it("en sandbox, complète avec les comptes externes de /bank_accounts", async () => {
+    stubRouter({
+      "GET /v2/organization": jsonResponse({
+        organization: {
+          id: "org-1",
+          name: "0001",
+          bank_accounts: [
+            {
+              id: "b1",
+              iban: "FRXXXXXXXXXXXXXXXXXXXXXXXXX",
+              main: true,
+              status: "active",
+              name: "Compte principal",
+            },
+          ],
+        },
+      }),
+      "GET /v2/bank_accounts": jsonResponse({
+        bank_accounts: [
+          {
+            id: "b1",
+            iban: "FRXXXXXXXXXXXXXXXXXXXXXXXXX",
+            main: true,
+            status: "active",
+            name: "Compte principal",
+          },
+          {
+            id: "ext-1",
+            iban: "DE77533700080111111100",
+            main: false,
+            status: "active",
+            name: "Main-TestAccount",
+            is_external_account: true,
+          },
+        ],
+      }),
+    });
+    const out = await qontoService.testConnection({
+      ...credentials,
+      environment: "sandbox",
+    });
+    expect(out.success).toBe(true);
+    expect(out.bankAccounts.map((a) => a.qontoId)).toEqual(["b1", "ext-1"]);
+    expect(out.bankAccounts[1].external).toBe(true);
   });
 
   it("message dédié sur 401", async () => {
