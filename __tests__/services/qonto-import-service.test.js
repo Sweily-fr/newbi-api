@@ -45,6 +45,13 @@ vi.mock("../../src/services/cloudflareService.js", () => ({
   default: { uploadImage: uploadImageMock },
 }));
 
+const { publishNotificationMock } = vi.hoisted(() => ({
+  publishNotificationMock: vi.fn(),
+}));
+vi.mock("../../src/resolvers/notification.js", () => ({
+  publishNotification: publishNotificationMock,
+}));
+
 vi.mock("../../src/utils/logger.js", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -56,6 +63,7 @@ import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import Supplier from "../../src/models/Supplier.js";
 import Quote from "../../src/models/Quote.js";
 import ImportedQuote from "../../src/models/ImportedQuote.js";
+import Notification from "../../src/models/Notification.js";
 import {
   importFromQonto,
   importClientInvoices,
@@ -154,6 +162,7 @@ beforeEach(async () => {
   listSupplierInvoicesMock.mockReset().mockResolvedValue(pages([]));
   listQuotesMock.mockReset().mockResolvedValue(pages([]));
   getQuoteMock.mockReset();
+  publishNotificationMock.mockReset();
   downloadAttachmentMock.mockReset().mockResolvedValue({
     buffer: pdf,
     fileName: "doc.pdf",
@@ -196,6 +205,14 @@ describe("importClientInvoices (Qonto → factures importées)", () => {
     expect(account.importCursors.clientInvoices.toISOString()).toBe(
       "2026-09-01T10:05:00.000Z",
     );
+
+    // Notification « document importé » publiée (rafraîchissement temps réel)
+    const notif = await Notification.findOne({ type: "DOCUMENT_IMPORTED" });
+    expect(notif).toBeTruthy();
+    expect(notif.data.documentType).toBe("INVOICE");
+    expect(notif.data.source).toBe("QONTO");
+    expect(notif.data.documentNumber).toBe("Q-2026-001");
+    expect(publishNotificationMock).toHaveBeenCalledTimes(1);
   });
 
   it("est idempotent et met à jour le statut payé", async () => {
