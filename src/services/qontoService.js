@@ -877,6 +877,87 @@ const qontoService = {
   },
 
   /**
+   * Liste paginée des factures clients Qonto modifiées depuis un instant
+   * (sens Qonto → Newbi). `exclude_imported=true` (défaut Qonto) écarte les
+   * factures importées avec PDF, donc celles poussées par Newbi.
+   */
+  async listClientInvoices(credentials, { updatedAtFrom, page = 1 } = {}) {
+    const params = new URLSearchParams({
+      per_page: "100",
+      page: String(page),
+      sort_by: "created_at:asc",
+    });
+    if (updatedAtFrom) {
+      params.set(
+        "filter[updated_at_from]",
+        new Date(updatedAtFrom).toISOString(),
+      );
+    }
+    const data = await qontoRequest(
+      credentials,
+      "GET",
+      `/client_invoices?${params.toString()}`,
+    );
+    return {
+      items: data?.client_invoices || [],
+      nextPage: data?.meta?.next_page || null,
+    };
+  },
+
+  /**
+   * Liste paginée des factures fournisseurs Qonto modifiées depuis un instant
+   */
+  async listSupplierInvoices(credentials, { updatedAtFrom, page = 1 } = {}) {
+    const params = new URLSearchParams({
+      per_page: "100",
+      page: String(page),
+      sort_by: "created_at:asc",
+    });
+    if (updatedAtFrom) {
+      params.set(
+        "filter[updated_at_from]",
+        new Date(updatedAtFrom).toISOString(),
+      );
+    }
+    const data = await qontoRequest(
+      credentials,
+      "GET",
+      `/supplier_invoices?${params.toString()}`,
+    );
+    return {
+      items: data?.supplier_invoices || [],
+      nextPage: data?.meta?.next_page || null,
+    };
+  },
+
+  /**
+   * Télécharge une pièce jointe Qonto (URL signée valable 30 min)
+   * @returns {Promise<{buffer: Buffer, fileName: string, contentType: string}|null>}
+   */
+  async downloadAttachment(credentials, attachmentId) {
+    if (!attachmentId) return null;
+    const data = await qontoRequest(
+      credentials,
+      "GET",
+      `/attachments/${attachmentId}`,
+    );
+    const att = data?.attachment;
+    if (!att?.url) return null;
+    const response = await fetch(att.url);
+    if (!response.ok) {
+      throw new Error(
+        `Téléchargement pièce jointe Qonto: HTTP ${response.status}`,
+      );
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return {
+      buffer,
+      fileName: att.file_name || `${attachmentId}.pdf`,
+      contentType: att.file_content_type || "application/pdf",
+    };
+  },
+
+  /**
    * Rafraîchit la liste des comptes bancaires Qonto stockée sur le compte
    */
   async refreshBankAccounts(account) {
@@ -1027,5 +1108,12 @@ const qontoService = {
   },
 };
 
-export { QontoApiError, mapVatRate, mapUnit, normalizeName, isUsableIban };
+export {
+  QontoApiError,
+  qontoRequest,
+  mapVatRate,
+  mapUnit,
+  normalizeName,
+  isUsableIban,
+};
 export default qontoService;

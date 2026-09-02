@@ -92,6 +92,13 @@ const importedInvoiceSchema = new mongoose.Schema(
       index: true,
     },
 
+    // === QONTO (facture client créée dans Qonto, importée par le cron) ===
+    qontoId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+
     // Informations du fournisseur (émetteur)
     vendor: vendorInfoSchema,
 
@@ -215,7 +222,7 @@ const importedInvoiceSchema = new mongoose.Schema(
     // Source de l'import
     source: {
       type: String,
-      enum: ["OCR_UPLOAD", "GMAIL", "MANUAL"],
+      enum: ["QONTO", "OCR_UPLOAD", "GMAIL", "MANUAL"],
       default: "OCR_UPLOAD",
     },
     gmailMessageId: {
