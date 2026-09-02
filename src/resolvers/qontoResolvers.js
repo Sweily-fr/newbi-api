@@ -4,6 +4,7 @@ import QontoAccount from "../models/QontoAccount.js";
 import Invoice from "../models/Invoice.js";
 import Expense from "../models/Expense.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import Quote from "../models/Quote.js";
 import logger from "../utils/logger.js";
 import {
   checkSubscriptionActive,
@@ -268,8 +269,10 @@ const qontoResolvers = {
         for (const field of [
           "invoices",
           "supplierInvoices",
+          "quotes",
           "importClientInvoices",
           "importSupplierInvoices",
+          "importQuotes",
         ]) {
           if (autoSync[field] !== undefined) {
             account.autoSync[field] = autoSync[field];
@@ -485,6 +488,40 @@ const qontoResolvers = {
     },
 
     /**
+     * Synchronise un devis spécifique vers Qonto
+     */
+    syncQuoteToQonto: async (_, { quoteId }, { user, organizationId }) => {
+      requireUser(user);
+      if (!organizationId) {
+        return { success: false, message: "Aucune organisation active" };
+      }
+
+      try {
+        const account = await QontoAccount.findOne({ organizationId });
+        if (!account || !account.isConnected) {
+          return { success: false, message: "Qonto n'est pas connecté" };
+        }
+
+        const quote = await Quote.findOne({
+          _id: quoteId,
+          workspaceId: organizationId,
+        });
+        if (!quote) {
+          return { success: false, message: "Devis non trouvé" };
+        }
+
+        const result = await qontoService.syncQuote(
+          account.getCredentials(),
+          quote,
+        );
+        return applySyncResult(quote, account, result, "quotesSynced");
+      } catch (error) {
+        logger.error("Erreur sync devis Qonto:", error);
+        return { success: false, message: error.message };
+      }
+    },
+
+    /**
      * Importe maintenant les documents créés dans Qonto vers Newbi
      */
     importFromQonto: async (_, args, { user, organizationId, userRole }) => {
@@ -515,6 +552,9 @@ const qontoResolvers = {
           supplierInvoicesImported: r.supplierInvoices?.imported || 0,
           supplierInvoicesUpdated: r.supplierInvoices?.updated || 0,
           supplierInvoicesErrors: r.supplierInvoices?.errors || 0,
+          quotesImported: r.quotes?.imported || 0,
+          quotesUpdated: r.quotes?.updated || 0,
+          quotesErrors: r.quotes?.errors || 0,
         };
       } catch (error) {
         logger.error("Erreur import Qonto:", error);
@@ -539,6 +579,7 @@ const qontoResolvers = {
           Invoice,
           Expense,
           PurchaseInvoice,
+          Quote,
         });
 
         return {
@@ -548,6 +589,8 @@ const qontoResolvers = {
           invoicesErrors: result.results?.invoices?.errors || 0,
           expensesSynced: result.results?.expenses?.synced || 0,
           expensesErrors: result.results?.expenses?.errors || 0,
+          quotesSynced: result.results?.quotes?.synced || 0,
+          quotesErrors: result.results?.quotes?.errors || 0,
         };
       } catch (error) {
         logger.error("Erreur syncAll Qonto:", error);
@@ -567,6 +610,7 @@ const QONTO_BLOCK = [
   "syncInvoiceToQonto",
   "syncPurchaseInvoiceToQonto",
   "syncExpenseToQonto",
+  "syncQuoteToQonto",
   "syncAllToQonto",
   "importFromQonto",
 ];
