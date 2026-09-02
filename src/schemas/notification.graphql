@@ -10,6 +10,12 @@ type NotificationData {
   url: String
   purchaseInvoiceId: ID
   supplierName: String
+  "Pour DOCUMENT_IMPORTED : INVOICE | QUOTE | PURCHASE_INVOICE"
+  documentType: String
+  documentId: ID
+  documentNumber: String
+  "Plateforme d'origine (QONTO…)"
+  source: String
   amountTTC: Float
 }
 

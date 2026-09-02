@@ -9,6 +9,8 @@ import Supplier from "../models/Supplier.js";
 import qontoService from "./qontoService.js";
 import cloudflareService from "./cloudflareService.js";
 import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
+import Notification from "../models/Notification.js";
+import { publishNotification } from "../resolvers/notification.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -219,7 +221,7 @@ export async function importClientInvoices(account, userId) {
         const client = ci.client || {};
         const billing = client.billing_address || {};
 
-        await ImportedInvoice.create({
+        const createdInvoice = await ImportedInvoice.create({
           workspaceId,
           importedBy: userId,
           qontoId: String(ci.id),
@@ -262,6 +264,16 @@ export async function importClientInvoices(account, userId) {
         logger.info(
           `[QONTO-IMPORT] Facture client ${ci.number || ci.id} importée depuis Qonto (org=${workspaceId})`,
         );
+        await notifyImported({
+          userId,
+          workspaceId,
+          documentType: "INVOICE",
+          documentId: createdInvoice._id,
+          documentNumber: ci.number,
+          counterpartName: clientDisplayName(client),
+          amountTTC: totalTTC,
+          url: "/dashboard/outils/factures",
+        });
       } catch (error) {
         result.errors++;
         logger.error(
@@ -431,7 +443,7 @@ export async function importSupplierInvoices(account, userId) {
           });
         }
 
-        await PurchaseInvoice.create({
+        const createdPurchase = await PurchaseInvoice.create({
           workspaceId: workspaceObjectId,
           createdBy: new mongoose.Types.ObjectId(userId),
           qontoId,
@@ -477,6 +489,16 @@ export async function importSupplierInvoices(account, userId) {
         logger.info(
           `[QONTO-IMPORT] Facture fournisseur ${invoiceNumber} (${supplierName}) importée depuis Qonto (org=${workspaceId})`,
         );
+        await notifyImported({
+          userId,
+          workspaceId,
+          documentType: "PURCHASE_INVOICE",
+          documentId: createdPurchase._id,
+          documentNumber: invoiceNumber,
+          counterpartName: supplierName,
+          amountTTC,
+          url: `/dashboard/outils/factures-achat?invoice=${createdPurchase._id}`,
+        });
       } catch (error) {
         result.errors++;
         logger.error(
@@ -526,6 +548,40 @@ async function applyQontoQuoteStatus(doc, qontoStatus, userId) {
     return true;
   }
   return false;
+}
+
+/**
+ * Notification « document importé » (best-effort) : alimente la cloche et
+ * permet au front de rafraîchir la liste sans recharger la page.
+ */
+async function notifyImported({
+  userId,
+  workspaceId,
+  documentType,
+  documentId,
+  documentNumber,
+  counterpartName,
+  amountTTC,
+  url,
+}) {
+  try {
+    const notification = await Notification.createDocumentImportedNotification({
+      userId,
+      workspaceId,
+      documentType,
+      documentId,
+      documentNumber,
+      source: "QONTO",
+      counterpartName,
+      amountTTC,
+      url,
+    });
+    await publishNotification(notification);
+  } catch (error) {
+    logger.warn(
+      `[QONTO-IMPORT] notification non envoyée (${documentType} ${documentNumber || documentId}): ${error.message}`,
+    );
+  }
 }
 
 function mapQuoteItems(items = []) {
@@ -642,6 +698,16 @@ export async function importQuotes(account, userId) {
         logger.info(
           `[QONTO-IMPORT] Devis ${q.number || q.id} importé depuis Qonto (org=${workspaceId})`,
         );
+        await notifyImported({
+          userId,
+          workspaceId,
+          documentType: "QUOTE",
+          documentId: created._id,
+          documentNumber: q.number,
+          counterpartName: clientDisplayName(client),
+          amountTTC: totalTTC,
+          url: "/dashboard/outils/devis",
+        });
 
         // Déjà accepté côté Qonto : devient tout de suite un vrai devis
         if (q.status === "approved") {
@@ -690,6 +756,16 @@ export async function importQuotes(account, userId) {
         logger.info(
           `[QONTO-IMPORT] Devis ${doc.originalQuoteNumber || doc.qontoId} → ${fresh.status} (org=${workspaceId})`,
         );
+        await notifyImported({
+          userId,
+          workspaceId,
+          documentType: "QUOTE",
+          documentId: doc._id,
+          documentNumber: doc.originalQuoteNumber,
+          counterpartName: doc.client?.name,
+          amountTTC: doc.totalTTC,
+          url: "/dashboard/outils/devis",
+        });
       }
     } catch (error) {
       result.errors++;
