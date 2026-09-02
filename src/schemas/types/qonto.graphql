@@ -31,6 +31,8 @@ type QontoAccount {
   lastSyncAt: String
   syncStatus: String!
   syncError: String
+  lastImportAt: String
+  importError: String
   stats: QontoStats
   autoSync: QontoAutoSync
   createdAt: String!
@@ -44,14 +46,22 @@ type QontoStats {
   invoicesSynced: Int!
   expensesSynced: Int!
   clientsSynced: Int!
+  clientInvoicesImported: Int!
+  supplierInvoicesImported: Int!
 }
 
 """
 Préférences de synchronisation automatique Qonto
 """
 type QontoAutoSync {
+  "Newbi → Qonto : factures clients"
   invoices: Boolean!
+  "Newbi → Qonto : factures fournisseurs et dépenses"
   supplierInvoices: Boolean!
+  "Qonto → Newbi : factures clients créées dans Qonto"
+  importClientInvoices: Boolean!
+  "Qonto → Newbi : factures fournisseurs déposées dans Qonto"
+  importSupplierInvoices: Boolean!
 }
 
 """
@@ -102,6 +112,22 @@ Input pour les préférences de sync automatique Qonto
 input QontoAutoSyncInput {
   invoices: Boolean
   supplierInvoices: Boolean
+  importClientInvoices: Boolean
+  importSupplierInvoices: Boolean
+}
+
+"""
+Résultat d'un import Qonto → Newbi
+"""
+type QontoImportResult {
+  success: Boolean!
+  message: String
+  clientInvoicesImported: Int
+  clientInvoicesUpdated: Int
+  clientInvoicesErrors: Int
+  supplierInvoicesImported: Int
+  supplierInvoicesUpdated: Int
+  supplierInvoicesErrors: Int
 }
 
 # === QUERIES ===
@@ -180,4 +206,10 @@ extend type Mutation {
   Lancer une synchronisation complète vers Qonto
   """
   syncAllToQonto: QontoSyncAllResult!
+
+  """
+  Importer maintenant les documents créés dans Qonto (factures clients et
+  fournisseurs) vers Newbi
+  """
+  importFromQonto: QontoImportResult!
 }

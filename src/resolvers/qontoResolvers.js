@@ -1,4 +1,5 @@
 import qontoService from "../services/qontoService.js";
+import { importFromQonto } from "../services/qontoImportService.js";
 import QontoAccount from "../models/QontoAccount.js";
 import Invoice from "../models/Invoice.js";
 import Expense from "../models/Expense.js";
@@ -72,6 +73,7 @@ const qontoResolvers = {
     // Dates stockées en Date, déclarées String dans le schéma → ISO explicite
     // (sinon la String scalar sérialise Date.valueOf() → "Invalid Date" côté client)
     lastSyncAt: (account) => account.lastSyncAt?.toISOString() || null,
+    lastImportAt: (account) => account.lastImportAt?.toISOString() || null,
     createdAt: (account) => account.createdAt?.toISOString() || null,
     updatedAt: (account) => account.updatedAt?.toISOString() || null,
     bankAccounts: (account) => account.bankAccounts || [],
@@ -263,7 +265,12 @@ const qontoResolvers = {
           return { success: false, message: "Aucun compte Qonto connecté" };
         }
 
-        for (const field of ["invoices", "supplierInvoices"]) {
+        for (const field of [
+          "invoices",
+          "supplierInvoices",
+          "importClientInvoices",
+          "importSupplierInvoices",
+        ]) {
           if (autoSync[field] !== undefined) {
             account.autoSync[field] = autoSync[field];
           }
@@ -478,6 +485,44 @@ const qontoResolvers = {
     },
 
     /**
+     * Importe maintenant les documents créés dans Qonto vers Newbi
+     */
+    importFromQonto: async (_, args, { user, organizationId, userRole }) => {
+      requireUser(user);
+      if (!organizationId) {
+        return { success: false, message: "Aucune organisation active" };
+      }
+      if (!isOwnerOrAdmin(userRole)) {
+        return ROLE_DENIED("lancer un import depuis Qonto");
+      }
+
+      try {
+        const account = await QontoAccount.findOne({ organizationId });
+        if (!account || !account.isConnected) {
+          return { success: false, message: "Qonto n'est pas connecté" };
+        }
+
+        const result = await importFromQonto(account, String(user._id), {
+          force: true,
+        });
+        const r = result.results || {};
+        return {
+          success: result.success,
+          message: result.message,
+          clientInvoicesImported: r.clientInvoices?.imported || 0,
+          clientInvoicesUpdated: r.clientInvoices?.updated || 0,
+          clientInvoicesErrors: r.clientInvoices?.errors || 0,
+          supplierInvoicesImported: r.supplierInvoices?.imported || 0,
+          supplierInvoicesUpdated: r.supplierInvoices?.updated || 0,
+          supplierInvoicesErrors: r.supplierInvoices?.errors || 0,
+        };
+      } catch (error) {
+        logger.error("Erreur import Qonto:", error);
+        return { success: false, message: error.message };
+      }
+    },
+
+    /**
      * Lance une synchronisation complète vers Qonto
      */
     syncAllToQonto: async (_, args, { user, organizationId, userRole }) => {
@@ -523,6 +568,7 @@ const QONTO_BLOCK = [
   "syncPurchaseInvoiceToQonto",
   "syncExpenseToQonto",
   "syncAllToQonto",
+  "importFromQonto",
 ];
 QONTO_BLOCK.forEach((name) => {
   const original = qontoResolvers.Mutation[name];

@@ -192,7 +192,7 @@ const purchaseInvoiceSchema = new mongoose.Schema(
     },
     source: {
       type: String,
-      enum: ["MANUAL", "OCR", "SUPERPDP"],
+      enum: ["MANUAL", "OCR", "SUPERPDP", "QONTO"],
       default: "MANUAL",
     },
     // Champs e-invoicing (SuperPDP)
