@@ -18,14 +18,12 @@ const {
   testConnectionMock,
   syncCustomerInvoiceMock,
   syncPurchaseInvoiceMock,
-  syncSupplierInvoiceMock,
   syncQuoteMock,
   syncAllMock,
 } = vi.hoisted(() => ({
   testConnectionMock: vi.fn(),
   syncCustomerInvoiceMock: vi.fn(),
   syncPurchaseInvoiceMock: vi.fn(),
-  syncSupplierInvoiceMock: vi.fn(),
   syncQuoteMock: vi.fn(),
   syncAllMock: vi.fn(),
 }));
@@ -36,7 +34,6 @@ vi.mock("../../src/services/qontoService.js", () => ({
     syncClient: vi.fn(),
     syncCustomerInvoice: syncCustomerInvoiceMock,
     syncPurchaseInvoice: syncPurchaseInvoiceMock,
-    syncSupplierInvoice: syncSupplierInvoiceMock,
     syncQuote: syncQuoteMock,
     refreshBankAccounts: vi.fn(),
     syncAll: syncAllMock,
@@ -117,7 +114,6 @@ beforeEach(async () => {
   testConnectionMock.mockReset();
   syncCustomerInvoiceMock.mockReset();
   syncPurchaseInvoiceMock.mockReset();
-  syncSupplierInvoiceMock.mockReset();
   syncQuoteMock.mockReset();
   syncAllMock.mockReset();
   importFromQontoMock.mockReset();

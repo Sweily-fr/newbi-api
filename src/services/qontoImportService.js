@@ -5,7 +5,6 @@ import ImportedInvoice from "../models/ImportedInvoice.js";
 import Quote from "../models/Quote.js";
 import ImportedQuote from "../models/ImportedQuote.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
-import Expense from "../models/Expense.js";
 import Supplier from "../models/Supplier.js";
 import qontoService from "./qontoService.js";
 import cloudflareService from "./cloudflareService.js";
@@ -23,7 +22,7 @@ import logger from "../utils/logger.js";
  *  - Factures fournisseurs déposées dans Qonto → PurchaseInvoice (achats)
  *
  * Idempotent : chaque document Newbi porte le `qontoId` d'origine. Les documents
- * que Newbi a lui-même poussés vers Qonto (Invoice/PurchaseInvoice/Expense
+ * que Newbi a lui-même poussés vers Qonto (Invoice/PurchaseInvoice
  * .qontoId) ne sont jamais réimportés.
  */
 
@@ -317,13 +316,12 @@ export async function importSupplierInvoices(account, userId) {
       try {
         const qontoId = String(si.id);
 
-        // Déposée par Newbi (facture d'achat ou dépense) : ne pas réimporter
-        const pushed =
-          (await PurchaseInvoice.exists({
-            workspaceId: workspaceObjectId,
-            qontoId,
-            source: { $ne: "QONTO" },
-          })) || (await Expense.exists({ workspaceId, qontoId }));
+        // Déposée par Newbi (facture d'achat) : ne pas réimporter
+        const pushed = await PurchaseInvoice.exists({
+          workspaceId: workspaceObjectId,
+          qontoId,
+          source: { $ne: "QONTO" },
+        });
         if (pushed) {
           result.skipped++;
           continue;

@@ -2,7 +2,6 @@ import qontoService from "../services/qontoService.js";
 import { importFromQonto } from "../services/qontoImportService.js";
 import QontoAccount from "../models/QontoAccount.js";
 import Invoice from "../models/Invoice.js";
-import Expense from "../models/Expense.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Quote from "../models/Quote.js";
 import logger from "../utils/logger.js";
@@ -466,40 +465,6 @@ const qontoResolvers = {
     },
 
     /**
-     * Synchronise une dépense spécifique vers Qonto
-     */
-    syncExpenseToQonto: async (_, { expenseId }, { user, organizationId }) => {
-      requireUser(user);
-      if (!organizationId) {
-        return { success: false, message: "Aucune organisation active" };
-      }
-
-      try {
-        const account = await QontoAccount.findOne({ organizationId });
-        if (!account || !account.isConnected) {
-          return { success: false, message: "Qonto n'est pas connecté" };
-        }
-
-        const expense = await Expense.findOne({
-          _id: expenseId,
-          workspaceId: organizationId,
-        });
-        if (!expense) {
-          return { success: false, message: "Dépense non trouvée" };
-        }
-
-        const result = await qontoService.syncSupplierInvoice(
-          account.getCredentials(),
-          expense,
-        );
-        return applySyncResult(expense, account, result, "expensesSynced");
-      } catch (error) {
-        logger.error("Erreur sync dépense Qonto:", error);
-        return { success: false, message: error.message };
-      }
-    },
-
-    /**
      * Synchronise un devis spécifique vers Qonto
      */
     syncQuoteToQonto: async (_, { quoteId }, { user, organizationId }) => {
@@ -589,7 +554,6 @@ const qontoResolvers = {
       try {
         const result = await qontoService.syncAll(organizationId, {
           Invoice,
-          Expense,
           PurchaseInvoice,
           Quote,
         });
@@ -621,7 +585,6 @@ const QONTO_BLOCK = [
   "refreshQontoBankAccounts",
   "syncInvoiceToQonto",
   "syncPurchaseInvoiceToQonto",
-  "syncExpenseToQonto",
   "syncQuoteToQonto",
   "syncAllToQonto",
   "importFromQonto",
