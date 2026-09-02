@@ -53,7 +53,6 @@ import QontoAccount from "../../src/models/QontoAccount.js";
 import Invoice from "../../src/models/Invoice.js";
 import ImportedInvoice from "../../src/models/ImportedInvoice.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
-import Expense from "../../src/models/Expense.js";
 import Supplier from "../../src/models/Supplier.js";
 import Quote from "../../src/models/Quote.js";
 import ImportedQuote from "../../src/models/ImportedQuote.js";
@@ -361,19 +360,10 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
       amountTTC: 12,
       currency: "EUR",
     });
-    await Expense.create({
-      workspaceId: organizationId,
-      createdBy: userId,
-      qontoId: "si-expense",
-      title: "Dépense",
-      amount: 10,
-      date: new Date(),
-    });
 
     listSupplierInvoicesMock.mockResolvedValue(
       pages([
         supplierInvoice({ id: "si-pushed" }),
-        supplierInvoice({ id: "si-expense" }),
         supplierInvoice({
           id: "si-new",
           status: "to_review",
@@ -386,7 +376,7 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
       ]),
     );
     let out = await importSupplierInvoices(account, String(userId));
-    expect(out).toMatchObject({ imported: 1, skipped: 2 });
+    expect(out).toMatchObject({ imported: 1, skipped: 1 });
 
     const created = await PurchaseInvoice.findOne({ qontoId: "si-new" });
     expect(created.status).toBe("TO_PROCESS");

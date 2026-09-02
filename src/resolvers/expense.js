@@ -19,7 +19,6 @@ import {
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { syncExpenseIfNeeded } from "../services/pennylaneSyncHelper.js";
-import { syncExpenseIfNeeded as syncExpenseToQontoIfNeeded } from "../services/qontoSyncHelper.js";
 
 const unlinkAsync = promisify(fs.unlink);
 const mkdirAsync = promisify(fs.mkdir);
@@ -480,10 +479,6 @@ const expenseResolvers = {
             ).catch((err) =>
               console.error("Erreur sync Pennylane dépense:", err),
             );
-            syncExpenseToQontoIfNeeded(
-              updatedExpense,
-              context.organizationId || workspaceId,
-            ).catch((err) => console.error("Erreur sync Qonto dépense:", err));
           }
 
           return updatedExpense;
@@ -613,10 +608,6 @@ const expenseResolvers = {
           ).catch((err) =>
             console.error("Erreur sync Pennylane dépense:", err),
           );
-          syncExpenseToQontoIfNeeded(
-            expense,
-            context.organizationId || workspaceId,
-          ).catch((err) => console.error("Erreur sync Qonto dépense:", err));
         }
 
         return expense;

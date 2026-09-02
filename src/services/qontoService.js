@@ -993,38 +993,6 @@ const qontoService = {
   },
 
   /**
-   * Sync une dépense (Expense) Newbi → Qonto supplier invoice
-   */
-  async syncSupplierInvoice(credentials, expense) {
-    try {
-      const file = pickPdfFile(expense.files);
-      if (!file?.url) {
-        return {
-          success: false,
-          message:
-            "Aucun justificatif attaché : Qonto exige le fichier de la dépense",
-        };
-      }
-
-      const ref = expense.invoiceNumber || expense.title || expense._id;
-      const qontoId = await this._uploadSupplierInvoice(credentials, {
-        fileUrl: file.url,
-        filename: file.filename || `depense-${ref}.pdf`,
-        idempotencyKey: String(expense._id),
-      });
-
-      return {
-        success: true,
-        qontoId: qontoId || "imported",
-        message: "Dépense synchronisée avec Qonto",
-      };
-    } catch (error) {
-      logger.error("[QONTO] syncSupplierInvoice failed:", error.message);
-      return { success: false, message: error.message };
-    }
-  },
-
-  /**
    * Liste paginée des factures clients Qonto modifiées depuis un instant
    * (sens Qonto → Newbi). `exclude_imported=true` (défaut Qonto) écarte les
    * factures importées avec PDF, donc celles poussées par Newbi.
@@ -1152,9 +1120,9 @@ const qontoService = {
   },
 
   /**
-   * Sync complète : factures clients + factures d'achat + dépenses
+   * Sync complète : factures clients + factures d'achat + devis
    */
-  async syncAll(organizationId, { Invoice, Expense, PurchaseInvoice, Quote }) {
+  async syncAll(organizationId, { Invoice, PurchaseInvoice, Quote }) {
     const account = await QontoAccount.findOne({ organizationId });
     if (!account || !account.isConnected) {
       return { success: false, message: "Compte Qonto non connecté" };
@@ -1229,36 +1197,6 @@ const qontoService = {
             results.expenses.errors++;
             logger.warn(
               `[QONTO] syncAll facture d'achat ${pi.invoiceNumber || pi._id}: ${result.message}`,
-            );
-          }
-        }
-      }
-
-      // 3. Dépenses
-      if (account.autoSync.supplierInvoices && Expense) {
-        const expenses = await Expense.find({
-          workspaceId: organizationId,
-          status: { $in: ["APPROVED", "PAID"] },
-          qontoSyncStatus: { $ne: "SYNCED" },
-        }).limit(50);
-
-        logger.info(
-          `[QONTO] syncAll: ${expenses.length} dépenses à synchroniser`,
-        );
-
-        for (const expense of expenses) {
-          const result = await this.syncSupplierInvoice(credentials, expense);
-          if (result.success) {
-            expense.qontoSyncStatus = "SYNCED";
-            expense.qontoId = result.qontoId;
-            await expense.save();
-            results.expenses.synced++;
-          } else {
-            expense.qontoSyncStatus = "ERROR";
-            await expense.save();
-            results.expenses.errors++;
-            logger.warn(
-              `[QONTO] syncAll dépense ${expense.title || expense._id}: ${result.message}`,
             );
           }
         }
