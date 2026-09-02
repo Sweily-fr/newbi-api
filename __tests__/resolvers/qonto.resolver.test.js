@@ -40,6 +40,13 @@ vi.mock("../../src/services/qontoService.js", () => ({
   },
 }));
 
+const { importFromQontoMock } = vi.hoisted(() => ({
+  importFromQontoMock: vi.fn(),
+}));
+vi.mock("../../src/services/qontoImportService.js", () => ({
+  importFromQonto: importFromQontoMock,
+}));
+
 vi.mock("../../src/utils/logger.js", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -108,6 +115,7 @@ beforeEach(async () => {
   syncPurchaseInvoiceMock.mockReset();
   syncSupplierInvoiceMock.mockReset();
   syncAllMock.mockReset();
+  importFromQontoMock.mockReset();
   await seedOrgMembership({ userId, organizationId, role: "owner" });
   await seedOrgMembership({
     userId: memberUserId,
@@ -499,6 +507,63 @@ describe("qonto.Mutation.syncInvoiceToQonto", () => {
     expect(out.success).toBe(false);
     expect(out.message).toMatch(/non trouvée/);
     expect(syncCustomerInvoiceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("qonto.Mutation.importFromQonto", () => {
+  it("refuse sans compte connecté", async () => {
+    const out = await resolvers.Mutation.importFromQonto(null, {}, baseCtx());
+    expect(out.success).toBe(false);
+    expect(importFromQontoMock).not.toHaveBeenCalled();
+  });
+
+  it("refuse un membre simple", async () => {
+    await createAccount();
+    const out = await resolvers.Mutation.importFromQonto(
+      null,
+      {},
+      buildContext({ userId: memberUserId, organizationId }),
+    );
+    expect(out.success).toBe(false);
+  });
+
+  it("lance l'import en mode forcé et mappe les compteurs", async () => {
+    await createAccount();
+    importFromQontoMock.mockResolvedValue({
+      success: true,
+      message: "ok",
+      results: {
+        clientInvoices: { imported: 2, updated: 1, errors: 0 },
+        supplierInvoices: { imported: 3, updated: 0, errors: 1 },
+      },
+    });
+    const out = await resolvers.Mutation.importFromQonto(null, {}, baseCtx());
+    expect(out).toMatchObject({
+      success: true,
+      clientInvoicesImported: 2,
+      clientInvoicesUpdated: 1,
+      supplierInvoicesImported: 3,
+      supplierInvoicesErrors: 1,
+    });
+    const [account, uid, opts] = importFromQontoMock.mock.calls[0];
+    expect(account.login).toBe("acme-1234");
+    expect(uid).toBe(String(userId));
+    expect(opts).toEqual({ force: true });
+  });
+});
+
+describe("qonto.Mutation.updateQontoAutoSync (import)", () => {
+  it("met à jour les flags d'import Qonto → Newbi", async () => {
+    await createAccount();
+    const out = await resolvers.Mutation.updateQontoAutoSync(
+      null,
+      { autoSync: { importClientInvoices: false } },
+      baseCtx(),
+    );
+    expect(out.success).toBe(true);
+    const fresh = await QontoAccount.findOne({ organizationId });
+    expect(fresh.autoSync.importClientInvoices).toBe(false);
+    expect(fresh.autoSync.importSupplierInvoices).toBe(true);
   });
 });
 
