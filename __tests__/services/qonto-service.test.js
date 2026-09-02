@@ -735,6 +735,45 @@ describe("qontoService.syncQuote", () => {
   });
 });
 
+describe("qontoService.markSupplierInvoicePaid", () => {
+  it("appelle POST /supplier_invoices/{id}/mark_as_paid avec la date", async () => {
+    const calls = stubRouter({
+      "POST /v2/supplier_invoices/si-1/mark_as_paid": jsonResponse({
+        supplier_invoice: { id: "si-1", status: "paid" },
+      }),
+    });
+    const out = await qontoService.markSupplierInvoicePaid(
+      credentials,
+      "si-1",
+      new Date("2026-09-02T10:00:00Z"),
+    );
+    expect(out.success).toBe(true);
+    expect(JSON.parse(calls[0].options.body)).toEqual({
+      supplier_invoice: { payment_date: "2026-09-02" },
+    });
+  });
+
+  it("renvoie success=false si Qonto refuse (données manquantes)", async () => {
+    stubRouter({
+      "POST /v2/supplier_invoices/si-1/mark_as_paid": jsonResponse(
+        {
+          errors: [
+            { code: "invalid_supplier_invoice", detail: "missing data" },
+          ],
+        },
+        400,
+      ),
+    });
+    const out = await qontoService.markSupplierInvoicePaid(
+      credentials,
+      "si-1",
+      new Date(),
+    );
+    expect(out.success).toBe(false);
+    expect(out.message).toMatch(/missing data/);
+  });
+});
+
 describe("qontoService.syncPurchaseInvoice", () => {
   const withPdfDownload = (handlers) => {
     const calls = stubRouter(handlers);

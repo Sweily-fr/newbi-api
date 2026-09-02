@@ -217,19 +217,40 @@ notificationSchema.statics.createDocumentImportedNotification =
     counterpartName,
     amountTTC,
     url,
+    event = "IMPORTED", // IMPORTED | PAID | ACCEPTED | REFUSED
   }) {
     const labels = DOCUMENT_LABELS[documentType] || DOCUMENT_LABELS.INVOICE;
     const sourceLabel = SOURCE_LABELS[source] || source || "une plateforme";
+    const fem = documentType !== "QUOTE";
+    const ref = `${labels.noun} ${documentNumber || ""}${counterpartName ? ` (${counterpartName})` : ""}`;
+    const EVENTS = {
+      IMPORTED: {
+        title: labels.title,
+        message: `${ref} est arrivé${fem ? "e" : ""} depuis ${sourceLabel}`,
+      },
+      PAID: {
+        title:
+          documentType === "PURCHASE_INVOICE"
+            ? "Facture d'achat payée"
+            : "Facture payée",
+        message: `${ref} a été marqué${fem ? "e" : ""} payé${fem ? "e" : ""} dans ${sourceLabel}`,
+      },
+      ACCEPTED: {
+        title: "Devis accepté",
+        message: `${ref} a été accepté dans ${sourceLabel}`,
+      },
+      REFUSED: {
+        title: "Devis refusé",
+        message: `${ref} a été refusé dans ${sourceLabel}`,
+      },
+    };
+    const ev = EVENTS[event] || EVENTS.IMPORTED;
     return this.create({
       userId,
       workspaceId,
       type: "DOCUMENT_IMPORTED",
-      title: labels.title,
-      message:
-        `${labels.noun} ${documentNumber || ""}${counterpartName ? ` (${counterpartName})` : ""} est arrivé${documentType === "QUOTE" ? "" : "e"} depuis ${sourceLabel}`.replace(
-          /\s+/g,
-          " ",
-        ),
+      title: ev.title,
+      message: ev.message.replace(/\s+/g, " "),
       data: {
         documentType,
         documentId: documentId ? String(documentId) : undefined,
