@@ -167,3 +167,40 @@ export async function syncQuoteIfNeeded(quote, workspaceId) {
     logger.error("[QONTO] Erreur auto-sync devis:", error.message);
   }
 }
+
+/**
+ * Paiement saisi dans Newbi sur une facture d'achat connue de Qonto
+ * (déposée par Newbi ou importée depuis Qonto) → marquée payée dans Qonto.
+ */
+export async function syncPurchaseInvoicePaidToQonto(
+  purchaseInvoice,
+  workspaceId,
+) {
+  try {
+    if (!purchaseInvoice || !workspaceId) return;
+    if (purchaseInvoice.status !== "PAID" || !purchaseInvoice.qontoId) return;
+    if (purchaseInvoice.qontoId === "imported") return; // dépôt sans id retourné
+
+    const account = await findConnectedAccount(workspaceId, "supplierInvoices");
+    if (!account) return;
+
+    const result = await qontoService.markSupplierInvoicePaid(
+      account.getCredentials(),
+      purchaseInvoice.qontoId,
+      purchaseInvoice.paymentDate || new Date(),
+    );
+    const label = purchaseInvoice.invoiceNumber || purchaseInvoice._id;
+    if (result.success) {
+      logger.info(`[QONTO] Paiement facture d'achat ${label} → Qonto OK`);
+    } else {
+      logger.warn(
+        `[QONTO] Paiement facture d'achat ${label} → Qonto refusé: ${result.message}`,
+      );
+    }
+  } catch (error) {
+    logger.error(
+      "[QONTO] Erreur sync paiement facture d'achat:",
+      error.message,
+    );
+  }
+}

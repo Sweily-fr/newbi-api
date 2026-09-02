@@ -45,11 +45,33 @@ vi.mock("../../src/services/cloudflareService.js", () => ({
   default: { uploadImage: uploadImageMock },
 }));
 
-const { publishNotificationMock } = vi.hoisted(() => ({
+const { publishNotificationMock, applyInvoicePaidMock } = vi.hoisted(() => ({
   publishNotificationMock: vi.fn(),
+  applyInvoicePaidMock: vi.fn(),
 }));
 vi.mock("../../src/resolvers/notification.js", () => ({
   publishNotification: publishNotificationMock,
+}));
+// Effets de bord lourds d'un paiement / d'une décision : mockés, on vérifie
+// seulement qu'ils sont déclenchés avec les bons documents.
+vi.mock("../../src/resolvers/invoice.js", () => ({
+  applyInvoicePaid: applyInvoicePaidMock,
+}));
+vi.mock("../../src/services/quoteSignatureSync.js", () => ({
+  cancelActiveQuoteSignatures: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../src/services/pennylaneSyncHelper.js", () => ({
+  syncQuoteIfNeeded: vi.fn().mockResolvedValue(undefined),
+  syncPurchaseInvoiceIfNeeded: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../src/services/documentAutomationService.js", () => ({
+  default: {
+    executeAutomations: vi.fn().mockResolvedValue(undefined),
+    executeAutomationsForExpense: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock("../../src/utils/purchaseInvoiceEInvoiceHelper.js", () => ({
+  reportPurchaseInvoicePaymentIfNeeded: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../src/utils/logger.js", () => ({
@@ -163,6 +185,12 @@ beforeEach(async () => {
   listQuotesMock.mockReset().mockResolvedValue(pages([]));
   getQuoteMock.mockReset();
   publishNotificationMock.mockReset();
+  applyInvoicePaidMock.mockReset().mockImplementation(async (invoice, opts) => {
+    invoice.status = "COMPLETED";
+    invoice.paymentDate = new Date(opts.paymentDate);
+    await invoice.save();
+    return invoice;
+  });
   downloadAttachmentMock.mockReset().mockResolvedValue({
     buffer: pdf,
     fileName: "doc.pdf",
@@ -281,6 +309,68 @@ describe("importClientInvoices (Qonto → factures importées)", () => {
     expect(out).toMatchObject({ imported: 0, skipped: 2 });
     expect(await ImportedInvoice.countDocuments()).toBe(0);
     expect(downloadAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  it("répercute le paiement Qonto d'une facture envoyée depuis Newbi", async () => {
+    const account = await createAccount();
+    const pushed = await Invoice.create({
+      workspaceId: organizationId,
+      createdBy: userId,
+      prefix: "F-",
+      number: "000042",
+      status: "PENDING",
+      issueDate: new Date(),
+      dueDate: new Date(),
+      qontoId: "ci-pushed",
+      finalTotalTTC: 120,
+      client: {
+        type: "COMPANY",
+        name: "Client SA",
+        email: "c@test.fr",
+        address: {
+          street: "1 rue",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+      },
+      companyInfo: {
+        name: "Acme",
+        email: "a@test.fr",
+        address: {
+          street: "2 rue",
+          city: "Paris",
+          postalCode: "75002",
+          country: "France",
+        },
+      },
+      items: [{ description: "P", quantity: 1, unitPrice: 100, vatRate: 20 }],
+    });
+    listClientInvoicesMock.mockResolvedValue(
+      pages([
+        clientInvoice({
+          id: "ci-pushed",
+          status: "paid",
+          paid_at: "2026-09-10T12:00:00Z",
+        }),
+      ]),
+    );
+    const out = await importClientInvoices(account, String(userId));
+    expect(out).toMatchObject({ imported: 0, updated: 1 });
+    expect(applyInvoicePaidMock).toHaveBeenCalledTimes(1);
+    const [invoiceArg, opts] = applyInvoicePaidMock.mock.calls[0];
+    expect(String(invoiceArg._id)).toBe(String(pushed._id));
+    expect(opts.paymentMethod).toBe("BANK_TRANSFER");
+    expect(opts.paymentDate.toISOString()).toBe("2026-09-10T12:00:00.000Z");
+    expect(await ImportedInvoice.countDocuments()).toBe(0);
+    const notif = await Notification.findOne({ type: "DOCUMENT_IMPORTED" });
+    expect(notif.title).toBe("Facture payée");
+
+    // Rejeu : déjà payée, rien ne bouge
+    applyInvoicePaidMock.mockClear();
+    const again = await importClientInvoices(account, String(userId));
+    expect(again).toMatchObject({ updated: 0, skipped: 1 });
+    expect(applyInvoicePaidMock).not.toHaveBeenCalled();
   });
 
   it("diffère une facture dont le PDF n'est pas encore généré sans avancer le curseur au-delà", async () => {
@@ -423,6 +513,42 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
     expect(await PurchaseInvoice.countDocuments({ qontoId: "si-new" })).toBe(1);
   });
 
+  it("répercute le paiement Qonto d'une facture d'achat déposée depuis Newbi", async () => {
+    const account = await createAccount();
+    const pushed = await PurchaseInvoice.create({
+      workspaceId: organizationId,
+      createdBy: userId,
+      qontoId: "si-pushed",
+      source: "OCR",
+      status: "TO_PAY",
+      supplierName: "X",
+      invoiceNumber: "P-1",
+      issueDate: new Date(),
+      amountHT: 10,
+      amountTVA: 2,
+      amountTTC: 12,
+      currency: "EUR",
+    });
+    listSupplierInvoicesMock.mockResolvedValue(
+      pages([
+        supplierInvoice({
+          id: "si-pushed",
+          status: "paid",
+          payment_date: "2026-09-05",
+        }),
+      ]),
+    );
+    const out = await importSupplierInvoices(account, String(userId));
+    expect(out).toMatchObject({ imported: 0, updated: 1 });
+    const fresh = await PurchaseInvoice.findById(pushed._id);
+    expect(fresh.status).toBe("PAID");
+    expect(fresh.paymentDate.toISOString()).toMatch(/^2026-09-05/);
+    expect(fresh.paymentMethod).toBe("BANK_TRANSFER");
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+    const notif = await Notification.findOne({ type: "DOCUMENT_IMPORTED" });
+    expect(notif.title).toBe("Facture d'achat payée");
+  });
+
   it("ignore les factures rejetées et sans pièce jointe", async () => {
     const account = await createAccount();
     listSupplierInvoicesMock.mockResolvedValue(
@@ -542,7 +668,11 @@ describe("importQuotes (Qonto → devis importés)", () => {
     // Le devis importé passe accepté côté Qonto → relu via getQuote, puis
     // converti en vrai devis (statut IMPORTED) comme le bouton « Valider »
     listQuotesMock.mockResolvedValue(pages([]));
-    getQuoteMock.mockResolvedValue({ id: "qq-1", status: "approved" });
+    // qq-1 accepté ; le devis poussé par Newbi (qq-pushed) reste en attente
+    getQuoteMock.mockImplementation(async (_c, id) => ({
+      id,
+      status: id === "qq-1" ? "approved" : "pending_approval",
+    }));
     out = await importQuotes(account, String(userId));
     expect(out).toMatchObject({ imported: 0, updated: 1 });
     expect(getQuoteMock).toHaveBeenCalledWith(expect.anything(), "qq-1");
@@ -576,6 +706,34 @@ describe("importQuotes (Qonto → devis importés)", () => {
     expect(
       await Quote.countDocuments({ qontoId: "qq-ok", status: "COMPLETED" }),
     ).toBe(1);
+  });
+
+  it("répercute la décision Qonto sur un devis envoyé depuis Newbi", async () => {
+    const account = await createAccount();
+    const accepted = await Quote.create(
+      quoteDoc({ number: "000010", qontoId: "qq-acc" }),
+    );
+    const refused = await Quote.create(
+      quoteDoc({ number: "000011", qontoId: "qq-ref" }),
+    );
+    getQuoteMock.mockImplementation(async (_c, id) => ({
+      id,
+      status: id === "qq-acc" ? "approved" : "canceled",
+    }));
+    const out = await importQuotes(account, String(userId));
+    expect(out).toMatchObject({ imported: 0, updated: 2 });
+    expect((await Quote.findById(accepted._id)).status).toBe("COMPLETED");
+    expect((await Quote.findById(refused._id)).status).toBe("CANCELED");
+    const titles = (await Notification.find({ type: "DOCUMENT_IMPORTED" }))
+      .map((n) => n.title)
+      .sort();
+    expect(titles).toEqual(["Devis accepté", "Devis refusé"]);
+
+    // Rejeu : plus en attente, Qonto n'est plus interrogé pour ces devis
+    getQuoteMock.mockClear();
+    const again = await importQuotes(account, String(userId));
+    expect(again.updated).toBe(0);
+    expect(getQuoteMock).not.toHaveBeenCalled();
   });
 
   it("un devis annulé côté Qonto passe en REJECTED", async () => {
