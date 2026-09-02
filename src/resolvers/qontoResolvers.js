@@ -189,6 +189,13 @@ const qontoResolvers = {
           bankAccounts,
           selectedBankAccountId: selected?.qontoId || null,
           syncStatus: "IDLE",
+          // L'import Qonto → Newbi ne remonte que les documents créés après la
+          // connexion : pas d'import de tout l'historique Qonto dans Newbi.
+          importCursors: {
+            clientInvoices: new Date(),
+            supplierInvoices: new Date(),
+            quotes: new Date(),
+          },
           connectedBy: user._id,
         });
 
