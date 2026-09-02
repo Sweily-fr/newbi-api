@@ -343,10 +343,11 @@ function pickPdfFile(files = []) {
 /**
  * Snapshot des comptes bancaires Qonto pour QontoAccount.bankAccounts
  */
-function mapBankAccounts(bankAccounts = []) {
+function mapBankAccounts(bankAccounts = [], { includeExternal = false } = {}) {
   return (bankAccounts || [])
-    .filter((a) => a && !a.is_external_account)
+    .filter((a) => a && (includeExternal || !a.is_external_account))
     .map((a) => ({
+      external: !!a.is_external_account,
       qontoId: String(a.id),
       slug: a.slug || null,
       name: a.name || null,
@@ -381,12 +382,38 @@ const qontoService = {
         };
       }
 
+      // GET /organization ne liste que les comptes Qonto natifs. En sandbox, le
+      // compte principal a un IBAN masqué : on complète avec GET /bank_accounts
+      // (comptes de test externes) pour avoir un IBAN utilisable sur les factures.
+      // En production, seuls les comptes Qonto sont éligibles (IBAN rattaché).
+      const includeExternal = credentials.environment === "sandbox";
+      let bankAccounts = mapBankAccounts(org.bank_accounts, {
+        includeExternal,
+      });
+      if (includeExternal) {
+        try {
+          const extra = await qontoRequest(
+            credentials,
+            "GET",
+            "/bank_accounts",
+          );
+          const known = new Set(bankAccounts.map((a) => a.qontoId));
+          for (const a of mapBankAccounts(extra?.bank_accounts, {
+            includeExternal,
+          })) {
+            if (!known.has(a.qontoId)) bankAccounts.push(a);
+          }
+        } catch (error) {
+          logger.warn(`[QONTO] GET /bank_accounts ignoré: ${error.message}`);
+        }
+      }
+
       return {
         success: true,
         organizationName: org.legal_name || org.name || null,
         organizationId: String(org.id),
         slug: org.slug || null,
-        bankAccounts: mapBankAccounts(org.bank_accounts),
+        bankAccounts,
         message: "Connexion à Qonto réussie",
       };
     } catch (error) {

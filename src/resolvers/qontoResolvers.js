@@ -167,8 +167,13 @@ const qontoResolvers = {
         }
 
         const bankAccounts = testResult.bankAccounts || [];
+        // Un IBAN masqué (FRXXXX…) ne peut pas figurer sur une facture
+        const usable = (a) =>
+          a.status !== "closed" && !/X{4,}/i.test(a.iban || "");
         const selected =
           bankAccounts.find((a) => a.qontoId === bankAccountId) ||
+          bankAccounts.find((a) => a.main && usable(a)) ||
+          bankAccounts.find(usable) ||
           bankAccounts.find((a) => a.main && a.status !== "closed") ||
           bankAccounts[0];
 

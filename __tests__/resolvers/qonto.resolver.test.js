@@ -306,6 +306,35 @@ describe("qonto.Mutation.connectQonto", () => {
     expect(persisted.getDecryptedSecretKey()).toBe("sk");
   });
 
+  it("évite par défaut un compte principal dont l'IBAN est masqué", async () => {
+    testConnectionMock.mockResolvedValue({
+      ...okConnection(),
+      bankAccounts: [
+        {
+          qontoId: "m",
+          name: "Principal",
+          iban: "FRXXXXXXXXXXXXXXXXXXXXXXXXX",
+          main: true,
+          status: "active",
+        },
+        {
+          qontoId: "ok",
+          name: "Test",
+          iban: "DE77533700080111111100",
+          main: false,
+          status: "active",
+        },
+      ],
+    });
+    const out = await resolvers.Mutation.connectQonto(
+      null,
+      { login: "acme-1234", secretKey: "sk" },
+      baseCtx(),
+    );
+    expect(out.success).toBe(true);
+    expect(out.account.selectedBankAccountId).toBe("ok");
+  });
+
   it("respecte le bankAccountId fourni", async () => {
     testConnectionMock.mockResolvedValue(okConnection());
     const out = await resolvers.Mutation.connectQonto(
