@@ -10,8 +10,10 @@ import {
 
 process.env.DATA_ENCRYPTION_KEY ||= "test-encryption-key-qonto";
 
+import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
+import { seedOrgMembership } from "../helpers/auth.js";
 
 const {
   listClientInvoicesMock,
@@ -140,6 +142,15 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await clearMongo();
+  // companyInfo de l'organisation : requis pour convertir un devis importé en Quote
+  // (capital social et RCS obligatoires pour une SASU)
+  await seedOrgMembership({ userId, organizationId, role: "owner" });
+  await mongoose.connection.db
+    .collection("organization")
+    .updateOne(
+      { _id: organizationId },
+      { $set: { capitalSocial: "10000", rcs: "Paris B 123 456 789" } },
+    );
   listClientInvoicesMock.mockReset().mockResolvedValue(pages([]));
   listSupplierInvoicesMock.mockReset().mockResolvedValue(pages([]));
   listQuotesMock.mockReset().mockResolvedValue(pages([]));
@@ -521,7 +532,8 @@ describe("importQuotes (Qonto → devis importés)", () => {
     let out = await importQuotes(account, String(userId));
     expect(out).toMatchObject({ imported: 1, skipped: 2 });
 
-    // Le devis importé passe accepté côté Qonto → relu via getQuote
+    // Le devis importé passe accepté côté Qonto → relu via getQuote, puis
+    // converti en vrai devis (statut IMPORTED) comme le bouton « Valider »
     listQuotesMock.mockResolvedValue(pages([]));
     getQuoteMock.mockResolvedValue({ id: "qq-1", status: "approved" });
     out = await importQuotes(account, String(userId));
@@ -530,6 +542,49 @@ describe("importQuotes (Qonto → devis importés)", () => {
     const doc = await ImportedQuote.findOne({ qontoId: "qq-1" });
     expect(doc.status).toBe("VALIDATED");
     expect(await ImportedQuote.countDocuments()).toBe(1);
+
+    const realQuote = await Quote.findOne({
+      qontoId: "qq-1",
+      status: "IMPORTED",
+    });
+    expect(realQuote).toBeTruthy();
+    expect(realQuote.number).toBe("Q-2026-001");
+    expect(realQuote.finalTotalTTC).toBe(360);
+    expect(realQuote.qontoSyncStatus).toBe("SYNCED");
+
+    // Rejeu : plus rien à faire, pas de second devis
+    out = await importQuotes(account, String(userId));
+    expect(out).toMatchObject({ imported: 0, updated: 0 });
+    expect(await Quote.countDocuments({ qontoId: "qq-1" })).toBe(1);
+  });
+
+  it("un devis déjà accepté côté Qonto devient directement un vrai devis", async () => {
+    const account = await createAccount();
+    listQuotesMock.mockResolvedValue(
+      pages([qontoQuote({ id: "qq-ok", number: "Q-OK", status: "approved" })]),
+    );
+    const out = await importQuotes(account, String(userId));
+    expect(out.imported).toBe(1);
+    expect((await ImportedQuote.findOne({ qontoId: "qq-ok" })).status).toBe(
+      "VALIDATED",
+    );
+    expect(
+      await Quote.countDocuments({ qontoId: "qq-ok", status: "IMPORTED" }),
+    ).toBe(1);
+  });
+
+  it("un devis annulé côté Qonto passe en REJECTED", async () => {
+    const account = await createAccount();
+    listQuotesMock.mockResolvedValue(pages([qontoQuote()]));
+    await importQuotes(account, String(userId));
+    listQuotesMock.mockResolvedValue(pages([]));
+    getQuoteMock.mockResolvedValue({ id: "qq-1", status: "canceled" });
+    const out = await importQuotes(account, String(userId));
+    expect(out.updated).toBe(1);
+    expect((await ImportedQuote.findOne({ qontoId: "qq-1" })).status).toBe(
+      "REJECTED",
+    );
+    expect(await Quote.countDocuments({ qontoId: "qq-1" })).toBe(0);
   });
 });
 
