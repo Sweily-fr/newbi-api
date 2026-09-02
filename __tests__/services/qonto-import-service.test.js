@@ -543,11 +543,9 @@ describe("importQuotes (Qonto → devis importés)", () => {
     expect(doc.status).toBe("VALIDATED");
     expect(await ImportedQuote.countDocuments()).toBe(1);
 
-    const realQuote = await Quote.findOne({
-      qontoId: "qq-1",
-      status: "IMPORTED",
-    });
+    const realQuote = await Quote.findOne({ qontoId: "qq-1" });
     expect(realQuote).toBeTruthy();
+    expect(realQuote.status).toBe("COMPLETED");
     expect(realQuote.number).toBe("Q-2026-001");
     expect(realQuote.finalTotalTTC).toBe(360);
     expect(realQuote.qontoSyncStatus).toBe("SYNCED");
@@ -569,7 +567,7 @@ describe("importQuotes (Qonto → devis importés)", () => {
       "VALIDATED",
     );
     expect(
-      await Quote.countDocuments({ qontoId: "qq-ok", status: "IMPORTED" }),
+      await Quote.countDocuments({ qontoId: "qq-ok", status: "COMPLETED" }),
     ).toBe(1);
   });
 
