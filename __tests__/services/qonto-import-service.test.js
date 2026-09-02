@@ -533,9 +533,32 @@ describe("importQuotes (Qonto → devis importés)", () => {
   });
 });
 
+const pastCursors = {
+  clientInvoices: new Date("2026-01-01T00:00:00Z"),
+  supplierInvoices: new Date("2026-01-01T00:00:00Z"),
+  quotes: new Date("2026-01-01T00:00:00Z"),
+};
+
 describe("importFromQonto", () => {
+  it("initialise les curseurs à maintenant sur un compte sans curseur (pas d'historique)", async () => {
+    const account = await createAccount();
+    listClientInvoicesMock.mockResolvedValue(pages([clientInvoice()]));
+    const before = Date.now();
+    const out = await importFromQonto(account, String(userId));
+    expect(out.success).toBe(true);
+    const [, opts] = listClientInvoicesMock.mock.calls[0];
+    // Curseur = maintenant (moins la marge de 5 min), et non null
+    expect(opts.updatedAtFrom.getTime()).toBeGreaterThanOrEqual(
+      before - 5 * 60 * 1000,
+    );
+    const fresh = await QontoAccount.findById(account._id);
+    expect(fresh.importCursors.quotes).toBeTruthy();
+    expect(fresh.importCursors.supplierInvoices).toBeTruthy();
+  });
+
   it("respecte les préférences et met à jour stats + lastImportAt", async () => {
     const account = await createAccount({
+      importCursors: pastCursors,
       autoSync: { importClientInvoices: false, importSupplierInvoices: true },
     });
     listClientInvoicesMock.mockResolvedValue(pages([clientInvoice()]));
@@ -554,6 +577,7 @@ describe("importFromQonto", () => {
 
   it("force=true ignore les préférences (import manuel)", async () => {
     const account = await createAccount({
+      importCursors: pastCursors,
       autoSync: { importClientInvoices: false, importSupplierInvoices: false },
     });
     listClientInvoicesMock.mockResolvedValue(pages([clientInvoice()]));
@@ -562,7 +586,7 @@ describe("importFromQonto", () => {
   });
 
   it("enregistre importError si Qonto est injoignable", async () => {
-    const account = await createAccount();
+    const account = await createAccount({ importCursors: pastCursors });
     listClientInvoicesMock.mockRejectedValue(new Error("Qonto API 503"));
     const out = await importFromQonto(account, String(userId));
     expect(out.success).toBe(false);

@@ -301,6 +301,10 @@ describe("qonto.Mutation.connectQonto", () => {
 
     const persisted = await QontoAccount.findOne({ organizationId });
     expect(persisted.organizationName).toBe("Acme SAS");
+    // Import Qonto → Newbi limité aux documents créés après la connexion
+    expect(persisted.importCursors.clientInvoices).toBeInstanceOf(Date);
+    expect(persisted.importCursors.supplierInvoices).toBeInstanceOf(Date);
+    expect(persisted.importCursors.quotes).toBeInstanceOf(Date);
     expect(persisted.bankAccounts).toHaveLength(2);
     expect(persisted.selectedBankAccountId).toBe("b1");
     expect(persisted.getDecryptedSecretKey()).toBe("sk");
