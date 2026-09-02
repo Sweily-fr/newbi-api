@@ -394,6 +394,9 @@ async function convertSingleImportedQuote(importedQuote, userId) {
   return quote;
 }
 
+// Réutilisé par l'import Qonto → Newbi (devis accepté côté Qonto)
+export { convertSingleImportedQuote };
+
 const importedQuoteResolvers = {
   Upload: GraphQLUpload,
 
