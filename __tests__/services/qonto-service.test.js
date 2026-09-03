@@ -292,6 +292,261 @@ describe("qontoService.syncClient", () => {
   });
 });
 
+describe("qontoService.syncClient — prénom/nom (bugs sandbox 03/09/2026)", () => {
+  it("société avec prénom de contact sans nom : n'envoie ni first_name ni last_name", async () => {
+    // Qonto : « last_name failed on the 'required_with' tag » si first_name seul
+    const calls = stubRouter({
+      "POST /v2/clients": jsonResponse({ client: { id: "c-3" } }),
+    });
+    const out = await qontoService.syncClient(credentials, {
+      type: "COMPANY",
+      name: "ASSOCIATION : UNE OASIS",
+      firstName: "Marie",
+      siret: "903887743",
+      email: "oasis@test.fr",
+    });
+    expect(out.success).toBe(true);
+    const body = JSON.parse(calls[0].options.body);
+    expect(body.kind).toBe("company");
+    expect(body.name).toBe("ASSOCIATION : UNE OASIS");
+    expect(body).not.toHaveProperty("first_name");
+    expect(body).not.toHaveProperty("last_name");
+    expect(body.tax_identification_number).toBe("903887743");
+  });
+
+  it("société avec prénom ET nom de contact : envoie les deux", async () => {
+    const calls = stubRouter({
+      "POST /v2/clients": jsonResponse({ client: { id: "c-4" } }),
+    });
+    await qontoService.syncClient(credentials, {
+      type: "COMPANY",
+      name: "Client SA",
+      firstName: "Marie",
+      lastName: "Durand",
+    });
+    const body = JSON.parse(calls[0].options.body);
+    expect(body).toMatchObject({ first_name: "Marie", last_name: "Durand" });
+  });
+
+  it("particulier avec nom complet seul : découpe prénom / nom", async () => {
+    const calls = stubRouter({
+      "POST /v2/clients": jsonResponse({ client: { id: "c-5" } }),
+    });
+    await qontoService.syncClient(credentials, {
+      type: "INDIVIDUAL",
+      name: "Jean Pierre Dupont",
+    });
+    const body = JSON.parse(calls[0].options.body);
+    expect(body).toMatchObject({
+      kind: "individual",
+      first_name: "Jean",
+      last_name: "Pierre Dupont",
+    });
+  });
+
+  it("particulier avec un seul mot : même valeur en prénom et nom", async () => {
+    const calls = stubRouter({
+      "POST /v2/clients": jsonResponse({ client: { id: "c-6" } }),
+    });
+    await qontoService.syncClient(credentials, {
+      type: "INDIVIDUAL",
+      name: "Madonna",
+    });
+    const body = JSON.parse(calls[0].options.body);
+    expect(body).toMatchObject({ first_name: "Madonna", last_name: "Madonna" });
+  });
+});
+
+describe("qontoService._findOrCreateClient — réutilisation des clients", () => {
+  const baseInvoice = {
+    _id: "inv-ind",
+    prefix: "F-",
+    number: "2026-010",
+    status: "PENDING",
+    issueDate: "2026-09-01",
+    dueDate: "2026-09-30",
+    currency: "EUR",
+    items: [
+      { description: "Prestation", quantity: 1, unitPrice: 100, vatRate: 20 },
+    ],
+  };
+  const iban = { iban: "FR7630006000011234567890189" };
+
+  it("retrouve un particulier par email (filter[name] ne couvre pas les particuliers) sans le recréer", async () => {
+    const calls = stubRouter({
+      "GET /v2/clients": ({ url }) => {
+        if (url.searchParams.get("filter[email]") === "lo@test.fr") {
+          return jsonResponse({
+            clients: [
+              // Autre personne avec le même email : ne doit pas être prise
+              {
+                id: "c-other",
+                kind: "individual",
+                first_name: "Paul",
+                last_name: "Martin",
+                email: "lo@test.fr",
+              },
+              // Client créé avant le découpage : nom complet en prénom ET nom
+              {
+                id: "c-old",
+                kind: "individual",
+                first_name: "Dydydfdf lo",
+                last_name: "Dydydfdf lo",
+                email: "lo@test.fr",
+              },
+            ],
+          });
+        }
+        return jsonResponse({ clients: [] });
+      },
+      "POST /v2/client_invoices": jsonResponse(
+        { client_invoice: { id: "ci-9" } },
+        201,
+      ),
+    });
+    const out = await qontoService.syncCustomerInvoice(
+      credentials,
+      {
+        ...baseInvoice,
+        client: {
+          type: "INDIVIDUAL",
+          name: "Dydydfdf lo",
+          email: "lo@test.fr",
+        },
+      },
+      iban,
+    );
+    expect(out.success).toBe(true);
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.url.pathname === "/v2/clients",
+      ),
+    ).toBe(false);
+    const create = calls.find((c) => c.url.pathname === "/v2/client_invoices");
+    expect(JSON.parse(create.options.body).client_id).toBe("c-old");
+  });
+
+  it("retrouve un particulier créé avec le découpage prénom / nom", async () => {
+    const calls = stubRouter({
+      "GET /v2/clients": ({ url }) =>
+        url.searchParams.get("filter[email]")
+          ? jsonResponse({
+              clients: [
+                {
+                  id: "c-split",
+                  kind: "individual",
+                  first_name: "Dydydfdf",
+                  last_name: "lo",
+                  email: "LO@test.fr",
+                },
+              ],
+            })
+          : jsonResponse({ clients: [] }),
+      "POST /v2/client_invoices": jsonResponse(
+        { client_invoice: { id: "ci-10" } },
+        201,
+      ),
+    });
+    const out = await qontoService.syncCustomerInvoice(
+      credentials,
+      {
+        ...baseInvoice,
+        client: {
+          type: "INDIVIDUAL",
+          name: "Dydydfdf lo",
+          email: "lo@test.fr",
+        },
+      },
+      iban,
+    );
+    expect(out.success).toBe(true);
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.url.pathname === "/v2/clients",
+      ),
+    ).toBe(false);
+  });
+
+  it("même email mais nom différent : crée un nouveau client", async () => {
+    const calls = stubRouter({
+      "GET /v2/clients": ({ url }) =>
+        url.searchParams.get("filter[email]")
+          ? jsonResponse({
+              clients: [
+                {
+                  id: "c-other",
+                  kind: "individual",
+                  first_name: "Paul",
+                  last_name: "Martin",
+                  email: "lo@test.fr",
+                },
+              ],
+            })
+          : jsonResponse({ clients: [] }),
+      "POST /v2/clients": jsonResponse({ client: { id: "c-new-ind" } }),
+      "POST /v2/client_invoices": jsonResponse(
+        { client_invoice: { id: "ci-11" } },
+        201,
+      ),
+    });
+    const out = await qontoService.syncCustomerInvoice(
+      credentials,
+      {
+        ...baseInvoice,
+        client: {
+          type: "INDIVIDUAL",
+          name: "Dydydfdf lo",
+          email: "lo@test.fr",
+        },
+      },
+      iban,
+    );
+    expect(out.success).toBe(true);
+    const create = calls.find((c) => c.url.pathname === "/v2/client_invoices");
+    expect(JSON.parse(create.options.body).client_id).toBe("c-new-ind");
+  });
+
+  it("la raison du refus Qonto remonte dans le message de sync", async () => {
+    stubRouter({
+      "GET /v2/clients": jsonResponse({ clients: [] }),
+      "POST /v2/clients": jsonResponse(
+        {
+          errors: [
+            {
+              code: "invalid",
+              detail:
+                "Key: 'Client.last_name' Error:Field validation for 'last_name' failed on the 'required_with' tag",
+            },
+          ],
+        },
+        422,
+      ),
+    });
+    const out = await qontoService.syncQuote(credentials, {
+      _id: "q-1",
+      prefix: "D-",
+      number: "0050",
+      status: "PENDING",
+      issueDate: "2026-09-01",
+      validUntil: "2026-09-30",
+      currency: "EUR",
+      client: {
+        type: "COMPANY",
+        name: "ASSOCIATION : UNE OASIS",
+        firstName: "Marie",
+        email: "oasis@test.fr",
+      },
+      items: [
+        { description: "Prestation", quantity: 1, unitPrice: 100, vatRate: 20 },
+      ],
+    });
+    expect(out.success).toBe(false);
+    expect(out.message).toMatch(
+      /Impossible de trouver ou créer le client dans Qonto : Qonto API 422: .*required_with/,
+    );
+  });
+});
+
 describe("qontoService — numéro fiscal client (tin_number) et IBAN masqué", () => {
   it("envoie le SIRET Newbi en tax_identification_number pour une société", async () => {
     const calls = stubRouter({
@@ -625,6 +880,8 @@ describe("qontoService.syncCustomerInvoice", () => {
     });
     expect(out.success).toBe(false);
     expect(out.message).toMatch(/client/);
+    // La raison Qonto est conservée (auparavant perdue : « Impossible … » seul)
+    expect(out.message).toMatch(/bad/);
   });
 });
 
