@@ -80,7 +80,7 @@ export async function syncInvoiceIfNeeded(invoice, workspaceId) {
       );
     }
   } catch (error) {
-    logger.error("[QONTO] Erreur auto-sync facture:", error.message);
+    logger.error(`[QONTO] Erreur auto-sync facture: ${error.message}`);
   }
 }
 
@@ -124,7 +124,7 @@ export async function syncPurchaseInvoiceIfNeeded(
       );
     }
   } catch (error) {
-    logger.error("[QONTO] Erreur auto-sync facture d'achat:", error.message);
+    logger.error(`[QONTO] Erreur auto-sync facture d'achat: ${error.message}`);
   }
 }
 
@@ -164,7 +164,7 @@ export async function syncQuoteIfNeeded(quote, workspaceId) {
       );
     }
   } catch (error) {
-    logger.error("[QONTO] Erreur auto-sync devis:", error.message);
+    logger.error(`[QONTO] Erreur auto-sync devis: ${error.message}`);
   }
 }
 
