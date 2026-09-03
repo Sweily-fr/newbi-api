@@ -335,6 +335,52 @@ function clientTaxId(client) {
   return raw || null;
 }
 
+/**
+ * Prénom / nom d'un particulier tels qu'envoyés à Qonto.
+ * Sans prénom/nom séparés, le nom complet est découpé (premier mot = prénom,
+ * reste = nom) : envoyer le nom complet dans les deux champs empêchait la
+ * recherche de retrouver le client, qui était recréé à chaque document.
+ */
+function clientNameParts(client) {
+  const first = String(client?.firstName || "").trim();
+  const last = String(client?.lastName || "").trim();
+  if (first && last) return { first, last };
+  const words = String(client?.name || `${first} ${last}`)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return { first: "Client", last: "Client" };
+  if (words.length === 1) return { first: words[0], last: words[0] };
+  return { first: words[0], last: words.slice(1).join(" ") };
+}
+
+function clientSearchName(client) {
+  return (
+    client?.name || `${client?.firstName || ""} ${client?.lastName || ""}`
+  ).trim();
+}
+
+/**
+ * Un client Qonto correspond-il au client Newbi ? Comparaison normalisée sur
+ * le nom (société), sur « prénom nom » (particulier), et sur le découpage
+ * envoyé par syncClient. Les particuliers créés avant le découpage portent
+ * le nom complet en prénom : accepté aussi, pour les réutiliser.
+ */
+function qontoClientMatches(qontoClient, client) {
+  const target = normalizeName(clientSearchName(client));
+  if (!target) return false;
+  const first = qontoClient.first_name || "";
+  const last = qontoClient.last_name || "";
+  const candidates = [qontoClient.name, `${first} ${last}`, first];
+  if (candidates.some((n) => n && normalizeName(n) === target)) return true;
+  const parts = clientNameParts(client);
+  return (
+    !!first &&
+    normalizeName(first) === normalizeName(parts.first) &&
+    normalizeName(last) === normalizeName(parts.last)
+  );
+}
+
 function pickPdfFile(files = []) {
   if (!Array.isArray(files) || files.length === 0) return null;
   return files.find((f) => f?.mimetype === "application/pdf") || files[0];
@@ -417,7 +463,7 @@ const qontoService = {
         message: "Connexion à Qonto réussie",
       };
     } catch (error) {
-      logger.error("[QONTO] testConnection failed:", error.message);
+      logger.error(`[QONTO] testConnection failed: ${error.message}`);
       const message =
         error.status === 401
           ? "Identifiants Qonto invalides (vérifiez l'identifiant et la clé secrète)"
@@ -439,17 +485,23 @@ const qontoService = {
 
       let payload;
       if (isIndividual) {
+        const parts = clientNameParts(client);
         payload = {
           kind: "individual",
-          first_name: client.firstName || fullName || "Client",
-          last_name: client.lastName || fullName || "Client",
+          first_name: parts.first,
+          last_name: parts.last,
         };
       } else {
+        // Contact d'une société : Qonto exige last_name dès que first_name est
+        // fourni (`required_with`) → envoyé seulement si les deux sont connus.
+        const hasContact = !!(client.firstName && client.lastName);
         payload = {
           kind: "company",
           name: fullName || "Client inconnu",
-          ...(client.firstName && { first_name: client.firstName }),
-          ...(client.lastName && { last_name: client.lastName }),
+          ...(hasContact && {
+            first_name: client.firstName,
+            last_name: client.lastName,
+          }),
           ...(client.vatNumber && { vat_number: client.vatNumber }),
           ...(clientTaxId(client) && {
             tax_identification_number: clientTaxId(client),
@@ -476,7 +528,7 @@ const qontoService = {
         message: "Client synchronisé avec Qonto",
       };
     } catch (error) {
-      logger.error("[QONTO] syncClient failed:", error.message);
+      logger.error(`[QONTO] syncClient failed: ${error.message}`);
       return { success: false, message: error.message };
     }
   },
@@ -485,12 +537,14 @@ const qontoService = {
    * Cherche un client Qonto (n° TVA puis nom exact), sinon le crée
    */
   async _findOrCreateClient(credentials, client) {
-    try {
-      const searchName =
-        client.name ||
-        `${client.firstName || ""} ${client.lastName || ""}`.trim();
-      if (!searchName) return null;
+    const searchName = clientSearchName(client);
+    if (!searchName) {
+      throw new Error(
+        "Impossible de trouver ou créer le client dans Qonto : nom du client manquant",
+      );
+    }
 
+    try {
       // 1. Par numéro de TVA (match exact côté Qonto)
       if (client.vatNumber) {
         const byVat = await qontoRequest(
@@ -503,31 +557,51 @@ const qontoService = {
         }
       }
 
-      // 2. Par nom (filtre partiel côté Qonto → on exige un match exact normalisé)
+      // 2. Par email : filter[name] ne couvre pas les particuliers (prénom/nom),
+      // seule la recherche par email les retrouve. Même email + même nom exigés
+      // (un email partagé entre plusieurs clients distincts reste distinct).
+      if (client.email) {
+        const byEmail = await qontoRequest(
+          credentials,
+          "GET",
+          `/clients?filter[email]=${encodeURIComponent(client.email)}&per_page=25`,
+        );
+        const wanted = String(client.email).trim().toLowerCase();
+        const match = (byEmail?.clients || []).find(
+          (c) =>
+            String(c.email || "")
+              .trim()
+              .toLowerCase() === wanted && qontoClientMatches(c, client),
+        );
+        if (match) return this._ensureClientTaxId(credentials, match, client);
+      }
+
+      // 3. Par nom (filtre partiel côté Qonto → on exige un match exact normalisé)
       if (searchName.length >= 2) {
         const byName = await qontoRequest(
           credentials,
           "GET",
           `/clients?filter[name]=${encodeURIComponent(searchName)}&per_page=25`,
         );
-        const target = normalizeName(searchName);
-        const match = (byName?.clients || []).find((c) => {
-          const candidates = [
-            c.name,
-            `${c.first_name || ""} ${c.last_name || ""}`,
-          ];
-          return candidates.some((n) => normalizeName(n) === target);
-        });
+        const match = (byName?.clients || []).find((c) =>
+          qontoClientMatches(c, client),
+        );
         if (match) return this._ensureClientTaxId(credentials, match, client);
       }
-
-      // 3. Créer
-      const created = await this.syncClient(credentials, client);
-      return created.success && created.qontoId ? created.qontoId : null;
     } catch (error) {
-      logger.warn("[QONTO] _findOrCreateClient failed:", error.message);
-      return null;
+      throw new Error(
+        `Impossible de trouver ou créer le client dans Qonto : ${error.message}`,
+      );
     }
+
+    // 4. Créer — la raison du refus Qonto remonte jusqu'au résultat de sync
+    const created = await this.syncClient(credentials, client);
+    if (!created.success || !created.qontoId) {
+      throw new Error(
+        `Impossible de trouver ou créer le client dans Qonto : ${created.message || "réponse Qonto sans identifiant"}`,
+      );
+    }
+    return created.qontoId;
   },
 
   /**
@@ -578,7 +652,7 @@ const qontoService = {
       );
       return data?.data?.id || data?.data?.attributes?.id || null;
     } catch (error) {
-      logger.warn("[QONTO] uploadClientInvoiceFile failed:", error.message);
+      logger.warn(`[QONTO] uploadClientInvoiceFile failed: ${error.message}`);
       return null;
     }
   },
@@ -802,7 +876,7 @@ const qontoService = {
           message: "Facture déjà existante sur Qonto",
         };
       }
-      logger.error("[QONTO] syncCustomerInvoice failed:", error.message);
+      logger.error(`[QONTO] syncCustomerInvoice failed: ${error.message}`);
       return { success: false, message: error.message };
     }
   },
@@ -923,7 +997,7 @@ const qontoService = {
           message: "Devis déjà existant sur Qonto",
         };
       }
-      logger.error("[QONTO] syncQuote failed:", error.message);
+      logger.error(`[QONTO] syncQuote failed: ${error.message}`);
       return { success: false, message: error.message };
     }
   },
@@ -987,7 +1061,7 @@ const qontoService = {
         message: "Facture d'achat synchronisée avec Qonto",
       };
     } catch (error) {
-      logger.error("[QONTO] syncPurchaseInvoice failed:", error.message);
+      logger.error(`[QONTO] syncPurchaseInvoice failed: ${error.message}`);
       return { success: false, message: error.message };
     }
   },
@@ -1282,7 +1356,7 @@ const qontoService = {
       account.syncError = error.message;
       await account.save();
 
-      logger.error("[QONTO] syncAll failed:", error.message);
+      logger.error(`[QONTO] syncAll failed: ${error.message}`);
       return { success: false, message: error.message, results };
     }
   },
