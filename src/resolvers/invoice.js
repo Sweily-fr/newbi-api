@@ -1856,6 +1856,24 @@ const invoiceResolvers = {
               triggerInvoiceFacturXArchive(invoice, workspaceId);
             }
 
+            // Sync Pennylane / Qonto (fire-and-forget) — facture créée
+            // directement envoyée depuis l'éditeur (status PENDING), sans
+            // passer par changeInvoiceStatus où ces hooks sont aussi posés.
+            if (invoice.status !== "DRAFT") {
+              syncInvoiceIfNeeded(
+                invoice,
+                context.organizationId || workspaceId,
+              ).catch((err) =>
+                console.error("Erreur sync Pennylane (création):", err),
+              );
+              syncInvoiceToQontoIfNeeded(
+                invoice,
+                context.organizationId || workspaceId,
+              ).catch((err) =>
+                console.error("Erreur sync Qonto (création):", err),
+              );
+            }
+
             return await invoice.populate("createdBy");
           } catch (error) {
             // Intercepter les erreurs de validation Mongoose
@@ -2603,6 +2621,21 @@ const invoiceResolvers = {
               updatedInvoice.status !== "DRAFT"
             ) {
               triggerInvoiceFacturXArchive(updatedInvoice, workspaceId);
+
+              // Sync Pennylane / Qonto (fire-and-forget) — envoi d'un brouillon
+              // depuis l'éditeur (DRAFT → PENDING) via updateInvoice.
+              syncInvoiceIfNeeded(
+                updatedInvoice,
+                context.organizationId || workspaceId,
+              ).catch((err) =>
+                console.error("Erreur sync Pennylane (finalisation):", err),
+              );
+              syncInvoiceToQontoIfNeeded(
+                updatedInvoice,
+                context.organizationId || workspaceId,
+              ).catch((err) =>
+                console.error("Erreur sync Qonto (finalisation):", err),
+              );
             }
 
             return updatedInvoice;
