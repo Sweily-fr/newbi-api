@@ -12,6 +12,7 @@
  */
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { invoiceReferenceMatches } from "./invoiceReferenceMatch.js";
 import {
   earliestTransactionDateForInvoice,
@@ -169,14 +170,21 @@ export async function findReconciliationSuggestions(workspaceId) {
  * explicite (search) la contourne (ex. acompte encaissé avant émission).
  */
 export async function findTransactionsForInvoice(invoice, workspaceId, search) {
+  const term = (search || "").trim();
+
   const txQuery = {
     workspaceId,
     deletedAt: null,
-    reconciliationStatus: { $in: ["unmatched", "suggested"] },
+    // Par défaut : transactions encore à rapprocher. En recherche explicite,
+    // on inclut aussi les transactions déjà rapprochées (paiement groupé :
+    // un virement qui solde plusieurs factures se rattache à la 2e facture
+    // depuis la page facture). Seules les ignorées restent exclues.
+    reconciliationStatus: term
+      ? { $nin: ["ignored"] }
+      : { $in: ["unmatched", "suggested"] },
     amount: { $gt: 0 },
+    _id: { $nin: invoice.linkedTransactionIds || [] },
   };
-
-  const term = (search || "").trim();
 
   const minTxDate = earliestTransactionDateForInvoice(invoice);
   if (!term && minTxDate) {
@@ -335,6 +343,185 @@ export async function findInvoicesForTransaction(
     (a, b) =>
       b.score - a.score ||
       new Date(a.invoice.dueDate) - new Date(b.invoice.dueDate),
+  );
+
+  return { scored: scored.slice(0, 50), transactionAmount: transaction.amount };
+}
+
+// ---------------------------------------------------------------------------
+// Factures d'achat ↔ transactions (débits)
+// ---------------------------------------------------------------------------
+
+const normalizeText = (s) =>
+  (s || "")
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+// Nom du fournisseur présent dans le libellé (ou l'inverse : libellé Bridge
+// nettoyé "QONTO" contenu dans "Qonto SAS").
+const supplierNameMatches = (transaction, purchaseInvoice) => {
+  const supplier = normalizeText(purchaseInvoice.supplierName);
+  const description = normalizeText(transaction.description);
+  if (supplier.length < 3 || description.length < 3) return false;
+  return description.includes(supplier) || supplier.includes(description);
+};
+
+// Numéro de facture d'achat dans le libellé brut ou nettoyé (≥ 6 caractères
+// normalisés, même garde-fou que côté factures de vente).
+const purchaseInvoiceReferenceMatches = (transaction, purchaseInvoice) => {
+  const ref = normalizeText(purchaseInvoice.invoiceNumber);
+  if (ref.length < 6) return false;
+  const haystack = normalizeText(
+    `${transaction.reference || ""} ${transaction.metadata?.bridgeProviderDescription || ""} ${transaction.description || ""}`,
+  );
+  return haystack.includes(ref);
+};
+
+const scorePurchaseInvoiceAgainstTransaction = (
+  transaction,
+  purchaseInvoice,
+) => {
+  const txAbs = Math.abs(transaction.amount || 0);
+  const amount = purchaseInvoice.amountTTC || 0;
+  let score = 0;
+  if (amount > 0) {
+    if (Math.abs(txAbs - amount) <= amount * 0.01) score += 100;
+    else if (Math.abs(txAbs - amount) <= amount * 0.1) score += 50;
+  }
+  if (supplierNameMatches(transaction, purchaseInvoice)) score += 50;
+  if (purchaseInvoiceReferenceMatches(transaction, purchaseInvoice))
+    score += 100;
+  return score;
+};
+
+/**
+ * Transactions (débits) candidates pour une facture d'achat : rattachement
+ * manuel côté facture d'achat. Par défaut, transactions encore à rapprocher
+ * datées après l'émission (marge de 3 jours). Une recherche explicite
+ * contourne la fenêtre de dates et inclut les transactions déjà rapprochées
+ * (une transaction Qonto peut porter plusieurs factures d'achat, et une
+ * facture créée après le paiement doit rester rattachable).
+ */
+export async function findTransactionsForPurchaseInvoice(
+  purchaseInvoice,
+  workspaceId,
+  search,
+) {
+  const term = (search || "").trim();
+
+  const txQuery = {
+    workspaceId,
+    deletedAt: null,
+    reconciliationStatus: term
+      ? { $nin: ["ignored"] }
+      : { $in: ["unmatched", "suggested"] },
+    amount: { $lt: 0 },
+    _id: { $nin: purchaseInvoice.linkedTransactionIds || [] },
+  };
+
+  const minTxDate = earliestTransactionDateForInvoice(purchaseInvoice);
+  if (!term && minTxDate) {
+    txQuery.date = { $gte: minTxDate };
+  }
+
+  if (term) {
+    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const or = [{ description: regex }, { reference: regex }];
+    const searchAmount = parseAmountSearch(term);
+    if (searchAmount !== null) {
+      const tolerance = Math.max(searchAmount * 0.01, 0.01);
+      or.push({
+        amount: {
+          $gte: -(searchAmount + tolerance),
+          $lte: -(searchAmount - tolerance),
+        },
+      });
+    }
+    txQuery.$or = or;
+  }
+
+  const transactions = await Transaction.find(txQuery)
+    .sort({ date: -1 })
+    .limit(200);
+
+  const scored = transactions.map((tx) => ({
+    transaction: tx,
+    score: scorePurchaseInvoiceAgainstTransaction(tx, purchaseInvoice),
+  }));
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      new Date(b.transaction.date) - new Date(a.transaction.date),
+  );
+
+  return {
+    scored: scored.slice(0, 50),
+    invoiceAmount: purchaseInvoice.amountTTC || 0,
+  };
+}
+
+/**
+ * Factures d'achat candidates pour une transaction (débit) : rattachement
+ * manuel côté transaction. Pas de fenêtre de dates : une facture d'achat
+ * est souvent émise après le prélèvement (abonnements, relevés mensuels).
+ * Les factures non rapprochées sont servies en premier (plafond propre),
+ * puis les factures déjà rapprochées à une autre transaction (cas d'une
+ * facture unique pour plusieurs prélèvements), signalées par isReconciled.
+ */
+export async function findPurchaseInvoicesForTransaction(
+  transaction,
+  workspaceId,
+  search,
+) {
+  const term = (search || "").trim();
+  const clauses = [];
+
+  if (term) {
+    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const or = [{ supplierName: regex }, { invoiceNumber: regex }];
+    const searchAmount = parseAmountSearch(term);
+    if (searchAmount !== null) {
+      const tolerance = Math.max(searchAmount * 0.01, 0.01);
+      or.push({
+        amountTTC: {
+          $gte: searchAmount - tolerance,
+          $lte: searchAmount + tolerance,
+        },
+      });
+    }
+    clauses.push({ $or: or });
+  }
+
+  const buildQuery = (linkClause) => ({
+    workspaceId,
+    status: { $ne: "ARCHIVED" },
+    _id: { $nin: transaction.linkedPurchaseInvoiceIds || [] },
+    $and: [linkClause, ...clauses],
+  });
+
+  const unlinked = await PurchaseInvoice.find(
+    buildQuery(UNLINKED_INVOICE_CLAUSE),
+  )
+    .sort({ issueDate: -1 })
+    .limit(200);
+
+  const linked = await PurchaseInvoice.find(
+    buildQuery({ "linkedTransactionIds.0": { $exists: true } }),
+  )
+    .sort({ issueDate: -1 })
+    .limit(100);
+
+  const scored = [...unlinked, ...linked].map((inv) => ({
+    invoice: inv,
+    score: scorePurchaseInvoiceAgainstTransaction(transaction, inv),
+  }));
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      new Date(b.invoice.issueDate || 0) - new Date(a.invoice.issueDate || 0),
   );
 
   return { scored: scored.slice(0, 50), transactionAmount: transaction.amount };

@@ -5,10 +5,13 @@ import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId } from "../factories/index.js";
 import Transaction from "../../src/models/Transaction.js";
 import Invoice from "../../src/models/Invoice.js";
+import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import {
   findReconciliationSuggestions,
   findTransactionsForInvoice,
   findInvoicesForTransaction,
+  findTransactionsForPurchaseInvoice,
+  findPurchaseInvoicesForTransaction,
   setReconciliationIgnored,
 } from "../../src/utils/reconciliationMatching.js";
 
@@ -226,6 +229,194 @@ describe("findInvoicesForTransaction", () => {
     const bySearch = await findInvoicesForTransaction(tx, workspaceId, "0042");
     expect(bySearch.scored.map((s) => s.invoice._id.toString())).toEqual([
       future._id.toString(),
+    ]);
+  });
+});
+
+describe("findTransactionsForInvoice — paiement groupé", () => {
+  it("n'inclut une transaction déjà rapprochée qu'en recherche explicite, jamais celles liées à la facture", async () => {
+    const invoice = await insertInvoice();
+    const matched = await createTransaction({
+      reconciliationStatus: "matched",
+      description: "Virement groupe Lab Developpements",
+    });
+    const linked = await createTransaction({
+      reconciliationStatus: "matched",
+      description: "Lab Developpements deja lie",
+    });
+    await Invoice.collection.updateOne(
+      { _id: invoice._id },
+      { $set: { linkedTransactionIds: [linked._id] } },
+    );
+    const freshInvoice = await Invoice.findById(invoice._id);
+
+    const byDefault = await findTransactionsForInvoice(
+      freshInvoice,
+      workspaceId,
+    );
+    expect(byDefault.scored.map((s) => s.transaction._id.toString())).toEqual(
+      [],
+    );
+
+    const withSearch = await findTransactionsForInvoice(
+      freshInvoice,
+      workspaceId,
+      "Lab",
+    );
+    expect(withSearch.scored.map((s) => s.transaction._id.toString())).toEqual([
+      matched._id.toString(),
+    ]);
+  });
+});
+
+async function insertPurchaseInvoice(overrides = {}) {
+  counter += 1;
+  const doc = {
+    _id: new mongoose.Types.ObjectId(),
+    workspaceId: orgId,
+    supplierName: "Qonto",
+    invoiceNumber: `QONTO-2026-${String(counter).padStart(4, "0")}`,
+    issueDate: new Date("2026-07-31T00:00:00.000Z"),
+    amountTTC: 29,
+    status: "TO_PAY",
+    isReconciled: false,
+    linkedTransactionIds: [],
+    ...overrides,
+  };
+  await PurchaseInvoice.collection.insertOne(doc);
+  return PurchaseInvoice.findById(doc._id);
+}
+
+const createDebit = (overrides = {}) =>
+  createTransaction({
+    type: "debit",
+    amount: -29,
+    description: "PRLV QONTO",
+    date: new Date("2026-08-02T00:00:00.000Z"),
+    ...overrides,
+  });
+
+describe("findTransactionsForPurchaseInvoice", () => {
+  it("propose les débits à rapprocher, score montant + fournisseur, exclut les crédits et les liés", async () => {
+    const pi = await insertPurchaseInvoice();
+    const good = await createDebit();
+    await createDebit({ amount: 29, type: "credit" });
+    const other = await createDebit({ amount: -500, description: "OVH" });
+    const linked = await createDebit({ description: "PRLV QONTO deja lie" });
+    await PurchaseInvoice.collection.updateOne(
+      { _id: pi._id },
+      { $set: { linkedTransactionIds: [linked._id] } },
+    );
+    const fresh = await PurchaseInvoice.findById(pi._id);
+
+    const { scored, invoiceAmount } = await findTransactionsForPurchaseInvoice(
+      fresh,
+      workspaceId,
+    );
+    expect(invoiceAmount).toBe(29);
+    expect(scored.map((s) => s.transaction._id.toString())).toEqual([
+      good._id.toString(),
+      other._id.toString(),
+    ]);
+    expect(scored[0].score).toBe(150);
+    expect(scored[1].score).toBe(0);
+  });
+
+  it("applique la fenêtre de dates par défaut, et l'ignore en recherche (facture créée après le paiement)", async () => {
+    const pi = await insertPurchaseInvoice({
+      issueDate: new Date("2026-08-15T00:00:00.000Z"),
+    });
+    const before = await createDebit({
+      date: new Date("2026-07-21T00:00:00.000Z"),
+      description: "CB HOSTINGER",
+    });
+
+    const byDefault = await findTransactionsForPurchaseInvoice(pi, workspaceId);
+    expect(byDefault.scored).toHaveLength(0);
+
+    const withSearch = await findTransactionsForPurchaseInvoice(
+      pi,
+      workspaceId,
+      "hostinger",
+    );
+    expect(withSearch.scored.map((s) => s.transaction._id.toString())).toEqual([
+      before._id.toString(),
+    ]);
+  });
+
+  it("en recherche, inclut une transaction déjà rapprochée (relevé multi-prélèvements) mais jamais une ignorée", async () => {
+    const pi = await insertPurchaseInvoice();
+    const matched = await createDebit({ reconciliationStatus: "matched" });
+    await createDebit({ reconciliationStatus: "ignored" });
+
+    const byDefault = await findTransactionsForPurchaseInvoice(pi, workspaceId);
+    expect(byDefault.scored).toHaveLength(0);
+
+    const withSearch = await findTransactionsForPurchaseInvoice(
+      pi,
+      workspaceId,
+      "29",
+    );
+    expect(withSearch.scored.map((s) => s.transaction._id.toString())).toEqual([
+      matched._id.toString(),
+    ]);
+  });
+});
+
+describe("findPurchaseInvoicesForTransaction", () => {
+  it("propose les factures non rapprochées d'abord, puis les rapprochées (signalées), sans celles déjà liées ni archivées", async () => {
+    const tx = await createDebit();
+    const unlinked = await insertPurchaseInvoice();
+    const reconciledElsewhere = await insertPurchaseInvoice({
+      isReconciled: true,
+      status: "PAID",
+      linkedTransactionIds: [new mongoose.Types.ObjectId()],
+    });
+    const linkedToTx = await insertPurchaseInvoice({
+      linkedTransactionIds: [tx._id],
+    });
+    await insertPurchaseInvoice({ status: "ARCHIVED" });
+    await Transaction.updateOne(
+      { _id: tx._id },
+      { $set: { linkedPurchaseInvoiceIds: [linkedToTx._id] } },
+    );
+    const freshTx = await Transaction.findById(tx._id);
+
+    const { scored, transactionAmount } =
+      await findPurchaseInvoicesForTransaction(freshTx, workspaceId);
+    expect(transactionAmount).toBe(-29);
+    const ids = scored.map((s) => s.invoice._id.toString());
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(unlinked._id.toString());
+    expect(ids).toContain(reconciledElsewhere._id.toString());
+    expect(scored.every((s) => s.score === 150)).toBe(true);
+  });
+
+  it("recherche par fournisseur, numéro ou montant", async () => {
+    const tx = await createDebit();
+    const qonto = await insertPurchaseInvoice();
+    const ovh = await insertPurchaseInvoice({
+      supplierName: "OVH",
+      invoiceNumber: "FR-OVH-123456",
+      amountTTC: 120,
+    });
+
+    const byName = await findPurchaseInvoicesForTransaction(
+      tx,
+      workspaceId,
+      "ovh",
+    );
+    expect(byName.scored.map((s) => s.invoice._id.toString())).toEqual([
+      ovh._id.toString(),
+    ]);
+
+    const byAmount = await findPurchaseInvoicesForTransaction(
+      tx,
+      workspaceId,
+      "29",
+    );
+    expect(byAmount.scored.map((s) => s.invoice._id.toString())).toEqual([
+      qonto._id.toString(),
     ]);
   });
 });
