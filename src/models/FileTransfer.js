@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { dedupeTransferFileNames } from "../utils/uniqueFileNames.js";
 
 const { Schema } = mongoose;
 
@@ -195,6 +196,13 @@ const FileTransferSchema = new Schema(
 
 // Middleware pre-save pour hasher le mot de passe
 FileTransferSchema.pre("save", async function (next) {
+  // Des fichiers distincts portant le même nom s'écrasent à l'extraction du
+  // ZIP côté destinataire (macOS ne garde que le dernier, sans prévenir).
+  // On suffixe les doublons dès l'enregistrement : la liste affichée, les
+  // téléchargements unitaires et les archives restent cohérents.
+  if (this.isModified("files")) {
+    dedupeTransferFileNames(this.files);
+  }
   // Ne hasher que si le mot de passe a été modifié et qu'il n'est pas déjà hashé
   if (this.isModified("password") && this.password) {
     // Vérifier si le mot de passe est déjà hashé (commence par $2a$ ou $2b$)
