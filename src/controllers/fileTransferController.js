@@ -5,6 +5,7 @@ import cloudflareTransferService from "../services/cloudflareTransferService.js"
 import { registerTransferDownload } from "../services/transferDownloadService.js";
 import Stripe from "stripe";
 import archiver from "archiver";
+import { makeUniqueFileNames } from "../utils/uniqueFileNames.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const logger = console; // Utilisation de console comme logger de base
@@ -364,11 +365,19 @@ const downloadAllFiles = async (req, res) => {
       return res.status(404).send("Aucun fichier disponible pour ce transfert");
     }
 
-    // Séparer les fichiers locaux et R2
-    const localFiles = fileTransfer.files.filter((f) => f.storageType !== "r2");
-    const r2Files = fileTransfer.files.filter(
-      (f) => f.storageType === "r2" && f.r2Key,
+    // Séparer les fichiers locaux et R2. Les noms d'entrées du ZIP sont
+    // dédoublonnés (fichiers homonymes = écrasement à l'extraction) ; le nom
+    // dédoublonné sert aussi à reconnaître l'entrée finalisée par archiver.
+    const entryNames = makeUniqueFileNames(
+      fileTransfer.files.map((f) => f.originalName),
     );
+    const withEntryName = (f, i) => ({ file: f, entryName: entryNames[i] });
+    const localFiles = fileTransfer.files
+      .map(withEntryName)
+      .filter(({ file }) => file.storageType !== "r2");
+    const r2Files = fileTransfer.files
+      .map(withEntryName)
+      .filter(({ file }) => file.storageType === "r2" && file.r2Key);
 
     logger.debug(
       `[DEBUG] Fichiers locaux: ${localFiles.length}, Fichiers R2: ${r2Files.length}`,
@@ -376,7 +385,7 @@ const downloadAllFiles = async (req, res) => {
 
     // Vérifier que tous les fichiers locaux existent physiquement
     const missingLocalFiles = [];
-    for (const file of localFiles) {
+    for (const { file } of localFiles) {
       const filePath = path.join(process.cwd(), "public", file.filePath);
       if (!fs.existsSync(filePath)) {
         missingLocalFiles.push(file.originalName);
@@ -418,10 +427,10 @@ const downloadAllFiles = async (req, res) => {
       // On ne l'annonce que dans le cas sûr : uniquement des fichiers R2,
       // noms ASCII, tailles connues, pas de zip64 (< 4 Go).
       const sizesKnown = r2Files.every(
-        (f) => Number.isFinite(f.size) && f.size >= 0,
+        ({ file }) => Number.isFinite(file.size) && file.size >= 0,
       );
-      const asciiNames = r2Files.every((f) =>
-        /^[\x20-\x7e]+$/.test(f.originalName || ""),
+      const asciiNames = r2Files.every(({ entryName }) =>
+        /^[\x20-\x7e]+$/.test(entryName || ""),
       );
       let expectedZipSize = null;
       if (
@@ -432,12 +441,13 @@ const downloadAllFiles = async (req, res) => {
       ) {
         expectedZipSize =
           r2Files.reduce(
-            (acc, f) => acc + f.size + 92 + 2 * f.originalName.length,
+            (acc, { file, entryName }) =>
+              acc + file.size + 92 + 2 * entryName.length,
             0,
           ) + 22;
         if (
           expectedZipSize < 0xfffffffe &&
-          r2Files.every((f) => f.size < 0xfffffffe)
+          r2Files.every(({ file }) => file.size < 0xfffffffe)
         ) {
           res.setHeader("Content-Length", expectedZipSize);
         } else {
@@ -479,10 +489,10 @@ const downloadAllFiles = async (req, res) => {
       archive.pipe(res);
 
       // Ajouter les fichiers locaux
-      for (const file of localFiles) {
+      for (const { file, entryName } of localFiles) {
         const filePath = path.join(process.cwd(), "public", file.filePath);
-        archive.file(filePath, { name: file.originalName });
-        logger.debug(`[ZIP] Ajout fichier local: ${file.originalName}`);
+        archive.file(filePath, { name: entryName });
+        logger.debug(`[ZIP] Ajout fichier local: ${entryName}`);
       }
 
       // Ajouter les fichiers R2 en les streamant SÉQUENTIELLEMENT :
@@ -504,10 +514,8 @@ const downloadAllFiles = async (req, res) => {
       });
 
       try {
-        for (const file of r2Files) {
-          logger.debug(
-            `[ZIP] Ajout fichier R2: ${file.originalName} (${file.r2Key})`,
-          );
+        for (const { file, entryName } of r2Files) {
+          logger.debug(`[ZIP] Ajout fichier R2: ${entryName} (${file.r2Key})`);
 
           const command = new GetObjectCommand({
             Bucket: process.env.TRANSFER_BUCKET || "app-transfers-prod",
@@ -518,7 +526,7 @@ const downloadAllFiles = async (req, res) => {
 
           const entryDone = new Promise((resolve, reject) => {
             const onEntry = (entry) => {
-              if (entry.name === file.originalName) {
+              if (entry.name === entryName) {
                 archive.off("entry", onEntry);
                 resolve();
               }
@@ -527,7 +535,7 @@ const downloadAllFiles = async (req, res) => {
             response.Body.once("error", reject);
           });
 
-          archive.append(response.Body, { name: file.originalName });
+          archive.append(response.Body, { name: entryName });
           await entryDone;
         }
       } catch (r2Error) {
