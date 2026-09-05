@@ -1,12 +1,11 @@
-import mongoose from 'mongoose';
-import { DISCOUNT_TYPE } from '../constants/enums.js';
-import { 
-  isValidItemDescription, 
-  isValidUnit, 
-  isValidCreditAmount, 
-  isValidCreditNonZeroAmount, 
-  isValidPercentage 
-} from '../../utils/validators.js';
+import mongoose from "mongoose";
+import { DISCOUNT_TYPE } from "../constants/enums.js";
+import {
+  isValidItemDescription,
+  isValidUnit,
+  isValidCreditAmount,
+  isValidPercentage,
+} from "../../utils/validators.js";
 
 /**
  * Schéma pour les éléments d'avoir (credit note items)
@@ -19,42 +18,46 @@ const creditNoteItemSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: isValidItemDescription,
-      message: 'La description de l\'article contient des caractères non autorisés'
-    }
+      message:
+        "La description de l'article contient des caractères non autorisés",
+    },
   },
   quantity: {
     type: Number,
     required: true,
     validate: {
       validator: isValidCreditAmount,
-      message: 'La quantité doit être un nombre valide'
-    }
+      message: "La quantité doit être un nombre valide",
+    },
   },
+  // Un prix unitaire à zéro est accepté : une facture peut contenir une
+  // ligne offerte (0 €) et l'avoir reprend ses lignes telles quelles.
   unitPrice: {
     type: Number,
     required: true,
     validate: {
-      validator: isValidCreditNonZeroAmount,
-      message: 'Le prix unitaire doit être un nombre valide différent de zéro'
-    }
+      validator: isValidCreditAmount,
+      message: "Le prix unitaire doit être un nombre valide",
+    },
   },
   vatRate: {
     type: Number,
     required: true,
     validate: {
       validator: isValidPercentage,
-      message: 'Le taux de TVA doit être un pourcentage valide (entre 0 et 100)'
-    }
+      message:
+        "Le taux de TVA doit être un pourcentage valide (entre 0 et 100)",
+    },
   },
   vatExemptionText: {
     type: String,
     trim: true,
-    required: function() {
+    required: function () {
       // Le champ est obligatoire uniquement lorsque vatRate est à 0
       return this.vatRate === 0;
     },
     validate: {
-      validator: function(value) {
+      validator: function (value) {
         // La mention d'exonération n'est utilisée que lorsque vatRate est à 0
         if (this.vatRate !== 0) {
           return !value; // Si vatRate n'est pas 0, vatExemptionText doit être vide
@@ -62,35 +65,37 @@ const creditNoteItemSchema = new mongoose.Schema({
         // Si vatRate est 0, vatExemptionText doit être présent et ne pas dépasser 500 caractères
         return value && value.length > 0 && value.length <= 500;
       },
-      message: 'La mention d\'exonération de TVA est obligatoire lorsque le taux de TVA est à 0, ne doit pas dépasser 500 caractères, et ne peut être utilisée que lorsque le taux de TVA est à 0'
-    }
+      message:
+        "La mention d'exonération de TVA est obligatoire lorsque le taux de TVA est à 0, ne doit pas dépasser 500 caractères, et ne peut être utilisée que lorsque le taux de TVA est à 0",
+    },
   },
   unit: {
     type: String,
     trim: true,
-    default: 'unité',
+    default: "unité",
     validate: {
       validator: isValidUnit,
-      message: 'L\'unité contient des caractères non autorisés ou dépasse 20 caractères'
-    }
+      message:
+        "L'unité contient des caractères non autorisés ou dépasse 20 caractères",
+    },
   },
   discount: {
     type: Number,
     default: 0,
     validate: {
       validator: isValidCreditAmount,
-      message: 'La remise doit être un nombre valide'
-    }
+      message: "La remise doit être un nombre valide",
+    },
   },
   discountType: {
     type: String,
     enum: Object.values(DISCOUNT_TYPE),
-    default: DISCOUNT_TYPE.PERCENTAGE
+    default: DISCOUNT_TYPE.PERCENTAGE,
   },
   details: {
     type: String,
     trim: true,
-  }
+  },
 });
 
 export default creditNoteItemSchema;

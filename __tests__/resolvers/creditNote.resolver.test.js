@@ -105,18 +105,16 @@ beforeEach(async () => {
   await seedOrgMembership({ userId, organizationId, role: "owner" });
   // requireCompanyInfo validates capitalSocial + rcs for SASU
   const db = mongoose.connection.db;
-  await db
-    .collection("organization")
-    .updateOne(
-      { _id: organizationId },
-      {
-        $set: {
-          capitalSocial: "10000",
-          rcs: "Paris B 123 456 789",
-          vatNumber: "FR12345678901",
-        },
+  await db.collection("organization").updateOne(
+    { _id: organizationId },
+    {
+      $set: {
+        capitalSocial: "10000",
+        rcs: "Paris B 123 456 789",
+        vatNumber: "FR12345678901",
       },
-    );
+    },
+  );
 });
 
 const ctx = () => buildContext({ userId, organizationId });
@@ -138,6 +136,28 @@ describe("CreditNote Resolver — createCreditNote", () => {
     expect(result.finalTotalVAT).toBeLessThan(0);
     expect(result.finalTotalTTC).toBeLessThan(0);
     // 500 HT * 20% = 100 VAT → TTC = 600 → stored as -600
+    expect(result.finalTotalTTC).toBeCloseTo(-600, 0);
+  });
+
+  it("accepte un article à prix unitaire 0 (ligne offerte reprise de la facture)", async () => {
+    const inv = await insertInvoice({
+      items: [
+        { description: "Service", quantity: 1, unitPrice: 1000, vatRate: 20 },
+        { description: "Offert", quantity: 1, unitPrice: 0, vatRate: 20 },
+      ],
+    });
+    const input = buildCreditNoteInput(inv._id, {
+      items: [
+        { description: "Retour", quantity: -1, unitPrice: -500, vatRate: 20 },
+        { description: "Offert", quantity: -1, unitPrice: 0, vatRate: 20 },
+      ],
+    });
+
+    const resolver = creditNoteResolvers.Mutation.createCreditNote;
+    const result = await resolver(null, { input }, ctx());
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items[1].unitPrice).toBe(0);
     expect(result.finalTotalTTC).toBeCloseTo(-600, 0);
   });
 
@@ -231,7 +251,9 @@ describe("CreditNote Resolver — numérotation", () => {
           prefix: "AV-202601",
           number: "0001",
           issueDate: new Date("2026-01-15"),
-          items: [{ description: "R1", quantity: 1, unitPrice: 10, vatRate: 20 }],
+          items: [
+            { description: "R1", quantity: 1, unitPrice: 10, vatRate: 20 },
+          ],
         }),
       },
       ctx(),
@@ -247,7 +269,9 @@ describe("CreditNote Resolver — numérotation", () => {
           prefix: "AV-202602",
           number: "0001",
           issueDate: new Date("2026-02-15"),
-          items: [{ description: "R2", quantity: 1, unitPrice: 10, vatRate: 20 }],
+          items: [
+            { description: "R2", quantity: 1, unitPrice: 10, vatRate: 20 },
+          ],
         }),
       },
       ctx(),
@@ -266,7 +290,9 @@ describe("CreditNote Resolver — numérotation", () => {
         input: buildCreditNoteInput(inv._id, {
           prefix: "AV",
           number: "0001",
-          items: [{ description: "R", quantity: 1, unitPrice: 10, vatRate: 20 }],
+          items: [
+            { description: "R", quantity: 1, unitPrice: 10, vatRate: 20 },
+          ],
         }),
       },
       ctx(),
