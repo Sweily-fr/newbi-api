@@ -51,6 +51,35 @@ const LEGAL_FORM_TOKENS = new Set([
   "group",
 ]);
 
+// Mots vides ignorés pour la comparaison par jetons ("Association : une
+// oasis" = "Association oasis").
+const STOP_WORDS = new Set([
+  "une",
+  "un",
+  "le",
+  "la",
+  "les",
+  "l",
+  "de",
+  "du",
+  "des",
+  "d",
+  "et",
+  "a",
+  "au",
+  "aux",
+  "en",
+  "the",
+  "of",
+  "and",
+]);
+
+const significantTokens = (s) =>
+  stripAccents(s)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t && !LEGAL_FORM_TOKENS.has(t) && !STOP_WORDS.has(t));
+
 const stripAccents = (s) =>
   (s || "")
     .toString()
@@ -138,6 +167,23 @@ export async function matchExistingClient(workspaceId, clientInfo, clients) {
     if (found) return found;
   }
 
+  // Jetons significatifs : tous les mots du nom lu sont dans le nom du
+  // client (ou l'inverse), mots vides et formes juridiques ignorés.
+  // "Association oasis" ↔ "ASSOCIATION : UNE OASIS".
+  const tokens = significantTokens(clientInfo.name);
+  if (tokens.length >= 1 && tokens.join("").length >= 5) {
+    const found = uniqueOrNull(
+      list.filter((c) => {
+        const ct = significantTokens(clientDisplayName(c));
+        if (ct.length === 0) return false;
+        const a = new Set(ct);
+        const b = new Set(tokens);
+        return tokens.every((t) => a.has(t)) || ct.every((t) => b.has(t));
+      }),
+    );
+    if (found) return found;
+  }
+
   // Inclusion : garde-fou de 5 caractères pour ne pas lier "Sud" à "Sud Ouest
   // Transports" et "Sud Est Logistique" (ambigu de toute façon → null).
   if (looseKey.length >= 5) {
@@ -153,6 +199,49 @@ export async function matchExistingClient(workspaceId, clientInfo, clients) {
   }
 
   return null;
+}
+
+/**
+ * Client existant cité dans le texte brut d'un document (repli quand
+ * l'extraction structurée n'a rien donné : l'OCR lit le texte, mais le
+ * modèle qui en tire les champs a échoué). Détection par email, par SIRET /
+ * SIREN, ou par nom (clé tolérante ≥ 5 caractères présente dans le texte
+ * normalisé). Un seul client au niveau de preuve le plus fort, sinon null.
+ */
+export async function matchClientInText(workspaceId, text, clients) {
+  const raw = (text || "").toString();
+  if (raw.length < 10) return null;
+  const list =
+    clients ||
+    (await Client.find({ workspaceId })
+      .select("name firstName lastName type siret email")
+      .lean());
+  if (list.length === 0) return null;
+
+  const lower = raw.toLowerCase();
+  const digits = raw.replace(/\D/g, "");
+  const normalized = clientLooseKey(raw);
+
+  const scored = [];
+  for (const c of list) {
+    let strength = 0;
+    const email = normalizeEmail(c.email);
+    if (email && lower.includes(email)) strength = Math.max(strength, 3);
+    const cd = siretDigits(c.siret);
+    if (cd.length >= 9 && digits.includes(cd.slice(0, 9))) {
+      strength = Math.max(strength, 3);
+    }
+    const key = clientLooseKey(clientDisplayName(c));
+    if (key.length >= 5 && normalized.includes(key)) {
+      strength = Math.max(strength, 1);
+    }
+    if (strength > 0) scored.push({ client: c, strength });
+  }
+  if (scored.length === 0) return null;
+  const best = Math.max(...scored.map((s) => s.strength));
+  return uniqueOrNull(
+    scored.filter((s) => s.strength === best).map((s) => s.client),
+  );
 }
 
 const normalizeCompanyName = (s) =>
@@ -204,15 +293,29 @@ export async function fillClientFromVendor(invoiceData, workspaceId) {
  */
 export async function resolveImportedClient(invoiceData, workspaceId, clients) {
   await fillClientFromVendor(invoiceData, workspaceId);
-  if (!invoiceData?.client?.name && !invoiceData?.client?.siret) return null;
   try {
-    const matched = await matchExistingClient(
-      workspaceId,
-      invoiceData.client,
-      clients,
-    );
+    let matched = null;
+    if (invoiceData?.client?.name || invoiceData?.client?.siret) {
+      matched = await matchExistingClient(
+        workspaceId,
+        invoiceData.client,
+        clients,
+      );
+    }
+    // Repli : le client cité dans le texte brut du document.
+    if (!matched) {
+      matched = await matchClientInText(
+        workspaceId,
+        invoiceData?.ocrData?.extractedText,
+        clients,
+      );
+    }
     if (matched) {
-      invoiceData.client.id = String(matched._id);
+      invoiceData.client = {
+        ...(invoiceData.client || {}),
+        id: String(matched._id),
+        name: invoiceData.client?.name || clientDisplayName(matched),
+      };
       return matched;
     }
   } catch (e) {
@@ -221,4 +324,33 @@ export async function resolveImportedClient(invoiceData, workspaceId, clients) {
     );
   }
   return null;
+}
+
+/**
+ * Client Newbi à proposer pour une facture importée déjà enregistrée :
+ * client.id s'il existe, sinon même rapprochement qu'à l'import (champs
+ * lus, puis texte brut).
+ */
+export async function suggestClientForImportedInvoice(workspaceId, invoice) {
+  if (invoice?.client?.id) {
+    return Client.findOne({ _id: invoice.client.id, workspaceId }).lean();
+  }
+  const clients = await Client.find({ workspaceId })
+    .select("name firstName lastName type siret email")
+    .lean();
+  const info = {
+    name: invoice?.client?.name || "",
+    siret: invoice?.client?.siret || null,
+    email: invoice?.client?.email || null,
+  };
+  const byFields =
+    info.name || info.siret || info.email
+      ? await matchExistingClient(workspaceId, info, clients)
+      : null;
+  if (byFields) return byFields;
+  return matchClientInText(
+    workspaceId,
+    invoice?.ocrData?.extractedText,
+    clients,
+  );
 }

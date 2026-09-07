@@ -36,6 +36,7 @@ import {
   resolveImportedClient,
   fillClientFromVendor,
   clientDisplayName,
+  suggestClientForImportedInvoice,
 } from "../utils/clientMatching.js";
 import stripe from "../utils/stripe.js";
 
@@ -626,14 +627,7 @@ const importedInvoiceResolvers = {
     importedInvoiceClientSuggestion: withWorkspace(
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
-        if (invoice.client?.id) {
-          return Client.findOne({ _id: invoice.client.id, workspaceId });
-        }
-        return matchExistingClient(workspaceId, {
-          name: invoice.client?.name || invoice.vendor?.name || "",
-          siret: invoice.client?.siret || null,
-          email: invoice.client?.email || null,
-        });
+        return suggestClientForImportedInvoice(workspaceId, invoice);
       },
     ),
 
