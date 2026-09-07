@@ -260,6 +260,14 @@ extend type Query {
   importedInvoice(id: ID!): ImportedInvoice
 
   """
+  Client Newbi existant correspondant au client lu sur la facture importée
+  (nom, SIRET, email), ou null. Sert de valeur par défaut dans la sidebar
+  quand l'import n'a pas posé client.id (factures importées avant la mise en
+  place de l'association automatique).
+  """
+  importedInvoiceClientSuggestion(id: ID!): Client
+
+  """
   Liste les factures importées avec pagination et filtres
   """
   importedInvoices(
