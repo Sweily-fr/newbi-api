@@ -53,6 +53,7 @@ type ImportedInvoiceVendor {
 
 # Informations du client (destinataire)
 type ImportedInvoiceClient {
+  email: String
   # ID du client Newbi rapproché (null si aucun client existant ne correspond)
   id: ID
   name: String
@@ -112,6 +113,9 @@ type ImportedInvoice {
   ocrData: ImportedInvoiceOcrData
   notes: String
   linkedExpenseId: ID
+  # Rapprochement bancaire (N↔N) : encaissements liés à cette facture.
+  linkedTransactionIds: [ID!]!
+  linkedTransactions: [Transaction!]!
   isDuplicate: Boolean
   duplicateOf: ID
   source: String
