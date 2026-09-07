@@ -44,6 +44,7 @@ vi.mock("../../src/services/pennylaneSyncHelper.js", () => ({
 
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
+import Transaction from "../../src/models/Transaction.js";
 import Supplier from "../../src/models/Supplier.js";
 import superPdpService from "../../src/services/superPdpService.js";
 import purchaseInvoiceResolvers from "../../src/resolvers/purchaseInvoice.js";
@@ -393,5 +394,216 @@ describe("PurchaseInvoice Resolver - markPurchaseInvoiceAsPaid (e-invoicing)", (
 
     expect(superPdpService.submitInvoiceEvent).not.toHaveBeenCalled();
     expect(result.status).toBe("PAID");
+  });
+});
+
+describe("PurchaseInvoice Resolver - rapprochement N↔N", () => {
+  const reconcile = purchaseInvoiceResolvers.Mutation.reconcilePurchaseInvoice;
+  const unlink =
+    purchaseInvoiceResolvers.Mutation.unlinkPurchaseInvoiceFromTransaction;
+  const unreconcile =
+    purchaseInvoiceResolvers.Mutation.unreconcilePurchaseInvoice;
+
+  let txCounter = 0;
+  const createDebit = (overrides = {}) => {
+    txCounter += 1;
+    return Transaction.create({
+      externalId: `tx-pi-${txCounter}`,
+      provider: "bridge",
+      type: "debit",
+      status: "completed",
+      amount: -1200,
+      currency: "EUR",
+      description: "PRLV ACME",
+      workspaceId: organizationId,
+      date: new Date("2026-08-02T00:00:00.000Z"),
+      ...overrides,
+    });
+  };
+
+  it("ajoute une transaction aux liens existants au lieu de les remplacer", async () => {
+    const { insertedId } = await insertPurchaseInvoice();
+    const tx1 = await createDebit();
+    const tx2 = await createDebit({ amount: -30 });
+
+    await reconcile(
+      null,
+      { purchaseInvoiceId: insertedId.toString(), transactionIds: [tx1._id] },
+      ctx(),
+    );
+    const result = await reconcile(
+      null,
+      { purchaseInvoiceId: insertedId.toString(), transactionIds: [tx2._id] },
+      ctx(),
+    );
+
+    expect(result.linkedTransactionIds.map(String).sort()).toEqual(
+      [tx1._id.toString(), tx2._id.toString()].sort(),
+    );
+    expect(result.status).toBe("PAID");
+    expect(result.isReconciled).toBe(true);
+
+    for (const tx of [tx1, tx2]) {
+      const fresh = await Transaction.findById(tx._id);
+      expect(fresh.reconciliationStatus).toBe("matched");
+      expect(fresh.linkedPurchaseInvoiceIds.map(String)).toEqual([
+        insertedId.toString(),
+      ]);
+    }
+  });
+
+  it("refuse une paire déjà liée (pas de doublon silencieux)", async () => {
+    const { insertedId } = await insertPurchaseInvoice();
+    const tx = await createDebit();
+    await reconcile(
+      null,
+      { purchaseInvoiceId: insertedId.toString(), transactionIds: [tx._id] },
+      ctx(),
+    );
+    await expect(
+      reconcile(
+        null,
+        { purchaseInvoiceId: insertedId.toString(), transactionIds: [tx._id] },
+        ctx(),
+      ),
+    ).rejects.toThrow(/déjà rapprochée/);
+  });
+
+  it("une transaction peut porter plusieurs factures d'achat", async () => {
+    const a = await insertPurchaseInvoice({ invoiceNumber: "A" });
+    const b = await insertPurchaseInvoice({ invoiceNumber: "B" });
+    const tx = await createDebit();
+
+    await reconcile(
+      null,
+      { purchaseInvoiceId: a.insertedId.toString(), transactionIds: [tx._id] },
+      ctx(),
+    );
+    await reconcile(
+      null,
+      { purchaseInvoiceId: b.insertedId.toString(), transactionIds: [tx._id] },
+      ctx(),
+    );
+
+    const fresh = await Transaction.findById(tx._id);
+    expect(fresh.linkedPurchaseInvoiceIds.map(String).sort()).toEqual(
+      [a.insertedId.toString(), b.insertedId.toString()].sort(),
+    );
+  });
+
+  it("délie une seule transaction : la facture reste payée tant qu'il en reste une", async () => {
+    const { insertedId } = await insertPurchaseInvoice();
+    const tx1 = await createDebit();
+    const tx2 = await createDebit({ amount: -30 });
+    await reconcile(
+      null,
+      {
+        purchaseInvoiceId: insertedId.toString(),
+        transactionIds: [tx1._id, tx2._id],
+      },
+      ctx(),
+    );
+
+    const afterFirst = await unlink(
+      null,
+      { purchaseInvoiceId: insertedId.toString(), transactionId: tx1._id },
+      ctx(),
+    );
+    expect(afterFirst.linkedTransactionIds.map(String)).toEqual([
+      tx2._id.toString(),
+    ]);
+    expect(afterFirst.status).toBe("PAID");
+    expect(afterFirst.isReconciled).toBe(true);
+
+    const freshTx1 = await Transaction.findById(tx1._id);
+    expect(freshTx1.reconciliationStatus).toBe("unmatched");
+    expect(freshTx1.linkedPurchaseInvoiceIds).toHaveLength(0);
+    const freshTx2 = await Transaction.findById(tx2._id);
+    expect(freshTx2.reconciliationStatus).toBe("matched");
+
+    const afterSecond = await unlink(
+      null,
+      { purchaseInvoiceId: insertedId.toString(), transactionId: tx2._id },
+      ctx(),
+    );
+    expect(afterSecond.linkedTransactionIds).toHaveLength(0);
+    expect(afterSecond.status).toBe("TO_PAY");
+    expect(afterSecond.isReconciled).toBe(false);
+    expect(afterSecond.paymentDate).toBeNull();
+  });
+
+  it("délier ne repasse pas 'unmatched' une transaction qui porte encore une autre facture d'achat", async () => {
+    const a = await insertPurchaseInvoice({ invoiceNumber: "A" });
+    const b = await insertPurchaseInvoice({ invoiceNumber: "B" });
+    const tx = await createDebit();
+    for (const id of [a.insertedId, b.insertedId]) {
+      await reconcile(
+        null,
+        { purchaseInvoiceId: id.toString(), transactionIds: [tx._id] },
+        ctx(),
+      );
+    }
+
+    await unlink(
+      null,
+      { purchaseInvoiceId: a.insertedId.toString(), transactionId: tx._id },
+      ctx(),
+    );
+
+    const fresh = await Transaction.findById(tx._id);
+    expect(fresh.reconciliationStatus).toBe("matched");
+    expect(fresh.linkedPurchaseInvoiceIds.map(String)).toEqual([
+      b.insertedId.toString(),
+    ]);
+  });
+
+  it("unreconcilePurchaseInvoice retire toujours tous les liens", async () => {
+    const { insertedId } = await insertPurchaseInvoice();
+    const tx1 = await createDebit();
+    const tx2 = await createDebit({ amount: -30 });
+    await reconcile(
+      null,
+      {
+        purchaseInvoiceId: insertedId.toString(),
+        transactionIds: [tx1._id, tx2._id],
+      },
+      ctx(),
+    );
+    const result = await unreconcile(
+      null,
+      { purchaseInvoiceId: insertedId.toString() },
+      ctx(),
+    );
+    expect(result.linkedTransactionIds).toHaveLength(0);
+    expect(result.status).toBe("TO_PAY");
+    for (const tx of [tx1, tx2]) {
+      const fresh = await Transaction.findById(tx._id);
+      expect(fresh.reconciliationStatus).toBe("unmatched");
+    }
+  });
+});
+
+describe("PurchaseInvoice Resolver - Query.purchaseInvoiceDuplicates", () => {
+  const query = purchaseInvoiceResolvers.Query.purchaseInvoiceDuplicates;
+
+  it("remonte une facture existante au même numéro", async () => {
+    const { insertedId } = await insertPurchaseInvoice({
+      invoiceNumber: "HOST-2026-0721",
+      supplierName: "Hostinger",
+      amountTTC: 30.98,
+    });
+    const result = await query(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        input: {
+          supplierName: "hostinger",
+          invoiceNumber: "HOST-2026-0721",
+          amountTTC: 30.98,
+        },
+      },
+      ctx(),
+    );
+    expect(result.map((r) => r.id)).toEqual([insertedId.toString()]);
   });
 });

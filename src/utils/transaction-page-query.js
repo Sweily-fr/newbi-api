@@ -1,3 +1,4 @@
+import { NO_LINKED_DOCUMENTS_CLAUSES } from "./transactionLinks.js";
 /**
  * Construction des requêtes Mongo de la liste paginée de transactions
  * (query GraphQL transactionsPage). Fonctions pures, testées unitairement.
@@ -22,20 +23,8 @@ const parseAmountSearch = (term) => {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 };
 
-const NO_LINKED_INVOICES = [
-  {
-    $or: [
-      { linkedInvoiceIds: { $exists: false } },
-      { linkedInvoiceIds: { $size: 0 } },
-    ],
-  },
-  {
-    $or: [
-      { linkedPurchaseInvoiceIds: { $exists: false } },
-      { linkedPurchaseInvoiceIds: { $size: 0 } },
-    ],
-  },
-];
+// Source unique des clauses "aucun document lié" : utils/transactionLinks.js
+const NO_LINKED_INVOICES = NO_LINKED_DOCUMENTS_CLAUSES;
 
 /**
  * Prédicat Mongo d'un onglet. `now` est injectable pour les tests.

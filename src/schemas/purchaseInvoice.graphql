@@ -218,6 +218,51 @@ type PurchaseInvoiceReconciliationSuggestionsResponse {
   pendingInvoicesCount: Int!
 }
 
+# Rattachement manuel côté facture d'achat (transactions candidates).
+type TransactionsForPurchaseInvoiceResponse {
+  success: Boolean!
+  transactions: [ReconciliationTransaction!]!
+  invoiceAmount: Float!
+}
+
+# Rattachement manuel côté transaction (factures d'achat candidates).
+# isReconciled : déjà liée à une autre transaction (relevé couvrant plusieurs
+# prélèvements) — rattachable quand même, signalé à l'utilisateur.
+type PurchaseInvoiceReconciliationCandidate {
+  id: ID!
+  invoiceNumber: String
+  supplierName: String
+  amountTTC: Float
+  issueDate: DateTime
+  status: String
+  isReconciled: Boolean!
+  score: Int
+}
+
+type PurchaseInvoicesForTransactionResponse {
+  success: Boolean!
+  purchaseInvoices: [PurchaseInvoiceReconciliationCandidate!]!
+  transactionAmount: Float!
+}
+
+# Doublon probable (même numéro, ou même fournisseur + montant + date proche)
+type PurchaseInvoiceDuplicate {
+  id: ID!
+  invoiceNumber: String
+  supplierName: String
+  amountTTC: Float
+  issueDate: DateTime
+  status: String
+}
+
+input PurchaseInvoiceDuplicateCheckInput {
+  supplierName: String
+  invoiceNumber: String
+  amountTTC: Float
+  issueDate: String
+  excludeId: ID
+}
+
 # --- SUPPLIER ---
 
 type Supplier {
@@ -363,13 +408,37 @@ extend type Query {
 
   purchaseInvoiceStats(workspaceId: ID!): PurchaseInvoiceStats!
 
-  purchaseInvoiceReconciliationMatches(purchaseInvoiceId: ID!): [PurchaseInvoiceReconciliationMatch!]!
+  purchaseInvoiceReconciliationMatches(
+    purchaseInvoiceId: ID!
+  ): [PurchaseInvoiceReconciliationMatch!]!
 
   # Suggestions globales (toast de rapprochement) : débits non rapprochés
   # rapprochés à des factures d'achat non payées.
   purchaseInvoiceReconciliationSuggestions(
     workspaceId: ID!
   ): PurchaseInvoiceReconciliationSuggestionsResponse!
+
+  # Transactions (débits) rattachables à une facture d'achat. search : libellé,
+  # référence brute, ou montant ; contourne la fenêtre de dates et inclut les
+  # transactions déjà rapprochées.
+  transactionsForPurchaseInvoice(
+    purchaseInvoiceId: ID!
+    search: String
+  ): TransactionsForPurchaseInvoiceResponse!
+
+  # Factures d'achat rattachables à une transaction. search : fournisseur,
+  # numéro, ou montant.
+  purchaseInvoicesForTransaction(
+    transactionId: ID!
+    search: String
+  ): PurchaseInvoicesForTransactionResponse!
+
+  # Factures d'achat existantes ressemblant à celle décrite (avertissement
+  # avant création manuelle).
+  purchaseInvoiceDuplicates(
+    workspaceId: ID!
+    input: PurchaseInvoiceDuplicateCheckInput!
+  ): [PurchaseInvoiceDuplicate!]!
 
   supplier(id: ID!): Supplier!
 
@@ -385,23 +454,56 @@ extend type Query {
 
 extend type Mutation {
   createPurchaseInvoice(input: CreatePurchaseInvoiceInput!): PurchaseInvoice!
-  updatePurchaseInvoice(id: ID!, input: UpdatePurchaseInvoiceInput!): PurchaseInvoice!
+  updatePurchaseInvoice(
+    id: ID!
+    input: UpdatePurchaseInvoiceInput!
+  ): PurchaseInvoice!
   deletePurchaseInvoice(id: ID!): DeletePurchaseInvoiceResult!
 
-  addPurchaseInvoiceFile(purchaseInvoiceId: ID!, input: PurchaseInvoiceFileInput!): PurchaseInvoice!
-  removePurchaseInvoiceFile(purchaseInvoiceId: ID!, fileId: ID!): PurchaseInvoice!
+  addPurchaseInvoiceFile(
+    purchaseInvoiceId: ID!
+    input: PurchaseInvoiceFileInput!
+  ): PurchaseInvoice!
+  removePurchaseInvoiceFile(
+    purchaseInvoiceId: ID!
+    fileId: ID!
+  ): PurchaseInvoice!
 
-  markPurchaseInvoiceAsPaid(id: ID!, paymentDate: String, paymentMethod: PurchaseInvoicePaymentMethod): PurchaseInvoice!
+  markPurchaseInvoiceAsPaid(
+    id: ID!
+    paymentDate: String
+    paymentMethod: PurchaseInvoicePaymentMethod
+  ): PurchaseInvoice!
 
-  bulkUpdatePurchaseInvoiceStatus(ids: [ID!]!, status: PurchaseInvoiceStatus!): BulkActionResult!
+  bulkUpdatePurchaseInvoiceStatus(
+    ids: [ID!]!
+    status: PurchaseInvoiceStatus!
+  ): BulkActionResult!
   bulkDeletePurchaseInvoices(ids: [ID!]!): BulkActionResult!
-  bulkCategorizePurchaseInvoices(ids: [ID!]!, category: PurchaseInvoiceCategory!): BulkActionResult!
+  bulkCategorizePurchaseInvoices(
+    ids: [ID!]!
+    category: PurchaseInvoiceCategory!
+  ): BulkActionResult!
 
-  reconcilePurchaseInvoice(purchaseInvoiceId: ID!, transactionIds: [ID!]!): PurchaseInvoice!
+  # Ajoute des transactions aux liens existants (N↔N, additif). Erreur si la
+  # paire est déjà liée.
+  reconcilePurchaseInvoice(
+    purchaseInvoiceId: ID!
+    transactionIds: [ID!]!
+  ): PurchaseInvoice!
+  # Retire UN lien (facture d'achat, transaction).
+  unlinkPurchaseInvoiceFromTransaction(
+    purchaseInvoiceId: ID!
+    transactionId: ID!
+  ): PurchaseInvoice!
+  # Retire TOUS les liens de la facture d'achat.
   unreconcilePurchaseInvoice(purchaseInvoiceId: ID!): PurchaseInvoice!
 
   # Synchronisation e-invoicing (SuperPDP)
-  syncPurchaseInvoicesFromSuperPdp(workspaceId: ID!, since: String): SyncPurchaseInvoicesResult!
+  syncPurchaseInvoicesFromSuperPdp(
+    workspaceId: ID!
+    since: String
+  ): SyncPurchaseInvoicesResult!
   # Cycle de vie destinataire : approuver (fr:205) / refuser (fr:210)
   acknowledgePurchaseInvoiceEInvoice(id: ID!): PurchaseInvoice!
   refusePurchaseInvoiceEInvoice(id: ID!, reason: String): PurchaseInvoice!

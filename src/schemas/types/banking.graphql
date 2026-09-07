@@ -34,6 +34,9 @@ type Transaction {
   # facture liée (files), sans copie sur la transaction.
   linkedPurchaseInvoiceIds: [ID!]!
   linkedPurchaseInvoices: [LinkedPurchaseInvoiceSummary!]!
+  # Factures clients importées (Qonto, OCR, Gmail) soldées par cette transaction.
+  linkedImportedInvoiceIds: [ID!]!
+  linkedImportedInvoices: [LinkedImportedInvoiceSummary!]!
   linkedExpenseId: ID
   reconciliationStatus: ReconciliationStatusEnum
   reconciliationDate: DateTime
@@ -52,6 +55,21 @@ type LinkedInvoiceSummary {
   totalTTC: Float
   issueDate: DateTime
   dueDate: DateTime
+}
+
+"""
+Résumé d'une facture client importée liée à une transaction.
+number = numéro d'origine lu sur le document, source = QONTO | OCR_UPLOAD | GMAIL | MANUAL.
+"""
+type LinkedImportedInvoiceSummary {
+  id: ID!
+  number: String
+  status: String
+  clientName: String
+  totalTTC: Float
+  issueDate: DateTime
+  dueDate: DateTime
+  source: String
 }
 
 """

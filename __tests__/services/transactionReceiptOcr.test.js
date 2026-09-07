@@ -208,21 +208,204 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     expect(unchanged.reconciliationStatus).toBe("ignored");
   });
 
-  it("ne crée pas de doublon si la transaction est déjà rapprochée à une facture d'achat", async () => {
-    const existingInvoiceId = buildOrganizationId();
-    const tx = await createExpenseTransaction({
-      linkedPurchaseInvoiceIds: [existingInvoiceId],
+  it("rattache le justificatif à une facture d'achat existante (même numéro) au lieu de créer un doublon", async () => {
+    mockClaudeSuccess();
+    // Facture saisie à la main avant le dépôt du justificatif sur la transaction
+    const existing = await PurchaseInvoice.create({
+      workspaceId,
+      createdBy: userId,
+      supplierName: "Amazon EU SARL",
+      invoiceNumber: "INV-2026-042",
+      issueDate: new Date("2026-07-18T00:00:00.000Z"),
+      amountHT: 100.42,
+      amountTVA: 20.08,
+      vatRate: 20,
+      amountTTC: 120.5,
+      status: "TO_PAY",
     });
+    const tx = await createExpenseTransaction();
 
     const invoices =
       await transactionReceiptOcrService.processReceiptsForTransaction({
         transactionId: tx._id.toString(),
         workspaceId,
         userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
       });
 
-    expect(invoices).toHaveLength(0);
-    expect(await PurchaseInvoice.countDocuments()).toBe(0);
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0]._id.toString()).toBe(existing._id.toString());
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+
+    const updated = await PurchaseInvoice.findById(existing._id);
+    expect(updated.status).toBe("PAID");
+    expect(updated.isReconciled).toBe(true);
+    expect(updated.linkedTransactionIds.map(String)).toContain(
+      tx._id.toString(),
+    );
+    expect(updated.files).toHaveLength(1);
+    expect(updated.files[0].path).toBe("receipts/receipt-1.pdf");
+
+    const updatedTx = await Transaction.findById(tx._id);
+    expect(updatedTx.reconciliationStatus).toBe("matched");
+    expect(updatedTx.linkedPurchaseInvoiceIds.map(String)).toEqual([
+      existing._id.toString(),
+    ]);
+    expect(updatedTx.receiptFiles[0].purchaseInvoiceId.toString()).toBe(
+      existing._id.toString(),
+    );
+  });
+
+  it("une même facture déposée sur deux transactions ne donne qu'une facture d'achat (relevé mensuel)", async () => {
+    mockClaudeSuccess();
+    const tx1 = await createExpenseTransaction({ amount: -120.5 });
+    const tx2 = await createExpenseTransaction({
+      amount: -30,
+      receiptFiles: [
+        {
+          url: "https://receipts.newbi.fr/receipt-2.pdf",
+          key: "receipts/receipt-2.pdf",
+          filename: "receipt-2.pdf",
+          mimetype: "application/pdf",
+          size: 1234,
+          uploadedBy: userId,
+        },
+      ],
+    });
+
+    const first =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx1._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+    const second =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx2._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-2.pdf": Buffer.from("fake-pdf") },
+      });
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(second[0]._id.toString()).toBe(first[0]._id.toString());
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+
+    const invoice = await PurchaseInvoice.findById(first[0]._id);
+    expect(invoice.linkedTransactionIds.map(String).sort()).toEqual(
+      [tx1._id.toString(), tx2._id.toString()].sort(),
+    );
+    const updatedTx2 = await Transaction.findById(tx2._id);
+    expect(updatedTx2.reconciliationStatus).toBe("matched");
+    expect(updatedTx2.linkedPurchaseInvoiceIds.map(String)).toEqual([
+      invoice._id.toString(),
+    ]);
+  });
+
+  it("crée une seconde facture d'achat si le justificatif est différent (plusieurs justificatifs par transaction)", async () => {
+    mockClaudeSuccess();
+    const tx = await createExpenseTransaction({ amount: -180 });
+
+    const first =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+    expect(first).toHaveLength(1);
+
+    // Second justificatif : autre fournisseur, autre numéro
+    toInvoiceFormat.mockReturnValue({
+      transaction_data: {
+        document_number: "SFR-2026-0099",
+        transaction_date: "18/07/2026",
+        vendor_name: "SFR Business",
+        amount: 59.5,
+        currency: "EUR",
+        category: "TELECOMMUNICATIONS",
+      },
+      extracted_fields: { totals: { total_ttc: 59.5 } },
+      document_analysis: { confidence: 0.9 },
+    });
+    await Transaction.updateOne(
+      { _id: tx._id },
+      {
+        $push: {
+          receiptFiles: {
+            url: "https://receipts.newbi.fr/receipt-2.pdf",
+            key: "receipts/receipt-2.pdf",
+            filename: "receipt-2.pdf",
+            mimetype: "application/pdf",
+            size: 999,
+            uploadedBy: userId,
+          },
+        },
+      },
+    );
+
+    const second =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-2.pdf": Buffer.from("fake-pdf") },
+      });
+
+    expect(second).toHaveLength(1);
+    expect(second[0]._id.toString()).not.toBe(first[0]._id.toString());
+    expect(await PurchaseInvoice.countDocuments()).toBe(2);
+
+    const updatedTx = await Transaction.findById(tx._id);
+    expect(updatedTx.linkedPurchaseInvoiceIds.map(String).sort()).toEqual(
+      [first[0]._id.toString(), second[0]._id.toString()].sort(),
+    );
+    expect(updatedTx.receiptFiles[1].purchaseInvoiceId.toString()).toBe(
+      second[0]._id.toString(),
+    );
+  });
+
+  it("OCR en échec sur une transaction déjà rapprochée : rattache le fichier à la facture liée, sans facture fallback", async () => {
+    processFromBase64.mockRejectedValue(new Error("Claude indisponible"));
+    processDocumentFromUrl.mockResolvedValue({ success: false });
+    const existing = await PurchaseInvoice.create({
+      workspaceId,
+      createdBy: userId,
+      supplierName: "Qonto",
+      invoiceNumber: "QONTO-2026-07",
+      issueDate: new Date("2026-07-31T00:00:00.000Z"),
+      amountHT: 100,
+      amountTVA: 20,
+      vatRate: 20,
+      amountTTC: 120,
+      status: "PAID",
+      isReconciled: true,
+    });
+    const tx = await createExpenseTransaction({
+      linkedPurchaseInvoiceIds: [existing._id],
+      reconciliationStatus: "matched",
+    });
+    await PurchaseInvoice.updateOne(
+      { _id: existing._id },
+      { $addToSet: { linkedTransactionIds: tx._id } },
+    );
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0]._id.toString()).toBe(existing._id.toString());
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+    const updated = await PurchaseInvoice.findById(existing._id);
+    expect(updated.files).toHaveLength(1);
+    expect(updated.files[0].ocrProcessed).toBe(false);
   });
 
   it("ne retraite pas un justificatif déjà traité (idempotence)", async () => {
