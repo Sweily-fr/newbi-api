@@ -222,25 +222,25 @@ export async function matchClientInText(workspaceId, text, clients) {
   const digits = raw.replace(/\D/g, "");
   const normalized = clientLooseKey(raw);
 
+  // Score cumulé : chaque preuve compte (email 3, SIRET 3, nom 2). Le
+  // document cite aussi l'émetteur (SIREN dans le n° de TVA, email de
+  // contact...) : un client qui porte les identifiants de l'émetteur ne
+  // totalise qu'une preuve, le vrai destinataire en cumule plusieurs.
   const scored = [];
   for (const c of list) {
-    let strength = 0;
+    let score = 0;
     const email = normalizeEmail(c.email);
-    if (email && lower.includes(email)) strength = Math.max(strength, 3);
+    if (email && lower.includes(email)) score += 3;
     const cd = siretDigits(c.siret);
-    if (cd.length >= 9 && digits.includes(cd.slice(0, 9))) {
-      strength = Math.max(strength, 3);
-    }
+    if (cd.length >= 9 && digits.includes(cd.slice(0, 9))) score += 3;
     const key = clientLooseKey(clientDisplayName(c));
-    if (key.length >= 5 && normalized.includes(key)) {
-      strength = Math.max(strength, 1);
-    }
-    if (strength > 0) scored.push({ client: c, strength });
+    if (key.length >= 5 && normalized.includes(key)) score += 2;
+    if (score > 0) scored.push({ client: c, score });
   }
   if (scored.length === 0) return null;
-  const best = Math.max(...scored.map((s) => s.strength));
+  const best = Math.max(...scored.map((s) => s.score));
   return uniqueOrNull(
-    scored.filter((s) => s.strength === best).map((s) => s.client),
+    scored.filter((s) => s.score === best).map((s) => s.client),
   );
 }
 
