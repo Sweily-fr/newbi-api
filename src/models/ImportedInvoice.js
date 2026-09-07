@@ -43,6 +43,7 @@ const clientInfoSchema = new mongoose.Schema(
     // l'import, ou choisi/corrigé manuellement dans la sidebar.
     id: { type: String, default: null },
     name: { type: String, default: "" },
+    email: { type: String, default: null },
     address: { type: String, default: "" },
     city: { type: String, default: "" },
     postalCode: { type: String, default: "" },
@@ -117,6 +118,15 @@ const importedInvoiceSchema = new mongoose.Schema(
     paymentDate: {
       type: Date,
       default: null,
+    },
+
+    // Rapprochement bancaire (N↔N, miroir de Transaction.linkedImportedInvoiceIds) :
+    // une facture importée peut être soldée par plusieurs encaissements, un
+    // encaissement peut couvrir plusieurs factures. $addToSet / $pull uniquement.
+    linkedTransactionIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Transaction" }],
+      default: [],
+      index: true,
     },
 
     // Montants

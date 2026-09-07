@@ -159,6 +159,13 @@ const transactionSchema = new mongoose.Schema(
       default: [],
       index: true,
     },
+    // Factures clients importées (Qonto, OCR, Gmail) soldées par cette
+    // transaction. Même règles N↔N que linkedInvoiceIds.
+    linkedImportedInvoiceIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "ImportedInvoice" }],
+      default: [],
+      index: true,
+    },
 
     // Rapprochement avec justificatif/dépense (pour les sorties d'argent)
     linkedExpenseId: {

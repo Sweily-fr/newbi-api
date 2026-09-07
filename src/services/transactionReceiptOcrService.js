@@ -7,6 +7,7 @@ import Transaction from "../models/Transaction.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
+import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
 import crypto from "crypto";
 
 /**
@@ -371,6 +372,101 @@ async function createPurchaseInvoiceFromReceipt({
 }
 
 /**
+ * Facture d'achat existante à laquelle rattacher le justificatif plutôt que
+ * d'en créer une nouvelle (une facture Qonto mensuelle couvre plusieurs
+ * prélèvements ; une facture saisie à la main puis son justificatif déposé
+ * sur la transaction ne doit pas donner deux factures).
+ *
+ * - OCR réussi : recherche par numéro / fournisseur / montant / date, en
+ *   privilégiant les factures déjà liées à la transaction.
+ * - OCR échoué : aucune donnée fiable ; si la transaction porte déjà une
+ *   facture d'achat, le justificatif lui est rattaché (créer une facture
+ *   "fallback" au montant de la transaction doublerait la dépense).
+ */
+async function findExistingPurchaseInvoiceForReceipt({
+  transaction,
+  financial,
+  ocrSucceeded,
+  workspaceId,
+}) {
+  const linkedIds = transaction.linkedPurchaseInvoiceIds || [];
+
+  if (!ocrSucceeded) {
+    if (linkedIds.length === 0) return null;
+    return PurchaseInvoice.findOne({
+      _id: { $in: linkedIds },
+      workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    }).sort({ createdAt: -1 });
+  }
+
+  const td = financial?.transaction_data || {};
+  const totals = financial?.extracted_fields?.totals || {};
+  const candidates = await findPurchaseInvoiceDuplicates({
+    workspaceId,
+    supplierName: td.vendor_name || td.supplier_name || null,
+    invoiceNumber: td.document_number || td.invoice_number || null,
+    amountTTC:
+      toPositiveNumber(td.amount) || toPositiveNumber(totals.total_ttc) || null,
+    issueDate: parseOcrDate(td.transaction_date || td.invoice_date) || null,
+    preferIds: linkedIds,
+    limit: 1,
+  });
+  return candidates[0] || null;
+}
+
+/**
+ * Rattache un justificatif à une facture d'achat existante : fichier ajouté
+ * à la facture (sans doublon de clé R2), facture marquée payée/rapprochée,
+ * lien N↔N avec la transaction.
+ */
+async function attachReceiptToExistingPurchaseInvoice({
+  invoice,
+  transaction,
+  receiptFile,
+  financial,
+  ocrSucceeded,
+  workspaceId,
+}) {
+  const alreadyHasFile = (invoice.files || []).some(
+    (f) => f.path === receiptFile.key || f.url === receiptFile.url,
+  );
+
+  const nextStatus = ["TO_PROCESS", "TO_PAY", "PENDING", "OVERDUE"].includes(
+    invoice.status,
+  )
+    ? "PAID"
+    : invoice.status;
+  const paymentDate = invoice.paymentDate || transaction.date || new Date();
+
+  const update = {
+    $set: { isReconciled: true, status: nextStatus, paymentDate },
+    $addToSet: { linkedTransactionIds: transaction._id },
+  };
+  if (!alreadyHasFile) {
+    update.$push = {
+      files: {
+        filename: receiptFile.filename,
+        originalFilename: receiptFile.filename,
+        mimetype: receiptFile.mimetype,
+        path: receiptFile.key,
+        size: receiptFile.size,
+        url: receiptFile.url,
+        ocrProcessed: ocrSucceeded,
+        ocrData: financial || null,
+      },
+    };
+  }
+
+  // Update ciblé (pas de save()) : ne revalide pas tout le document, des
+  // factures legacy peuvent avoir des champs hors enum.
+  return PurchaseInvoice.findOneAndUpdate(
+    { _id: invoice._id, workspaceId: new mongoose.Types.ObjectId(workspaceId) },
+    update,
+    { new: true },
+  );
+}
+
+/**
  * Point d'entrée : traite les justificatifs non encore traités d'une
  * transaction dépense et crée les factures d'achat correspondantes.
  *
@@ -380,7 +476,7 @@ async function createPurchaseInvoiceFromReceipt({
  * @param {string} params.userId
  * @param {Object<string, Buffer>} [params.buffersByKey] buffers des fichiers
  *   fraîchement uploadés, indexés par clé R2 (évite un re-téléchargement)
- * @returns {Promise<Array>} factures créées
+ * @returns {Promise<Array>} factures créées ou rattachées (une par justificatif)
  */
 async function processReceiptsForTransaction({
   transactionId,
@@ -403,12 +499,9 @@ async function processReceiptsForTransaction({
     return [];
   }
 
-  // Transaction déjà rapprochée à une facture d'achat : le justificatif
-  // correspond très probablement à cette facture existante — ne pas créer
-  // de doublon
-  if ((transaction.linkedPurchaseInvoiceIds || []).length > 0) {
-    return [];
-  }
+  // Transaction déjà rapprochée à une facture d'achat : on traite quand même
+  // les nouveaux justificatifs (plusieurs factures par transaction), la
+  // déduplication ci-dessous évite de recréer une facture existante.
 
   // Un claim est périmé s'il a été posé il y a longtemps sans jamais aboutir
   // à une facture (crash/restart PM2 pendant l'OCR) : on le retraite.
@@ -428,33 +521,21 @@ async function processReceiptsForTransaction({
 
   for (const receiptFile of pendingFiles) {
     // Claim atomique du fichier pour éviter un double traitement en cas
-    // d'appels concurrents (upload + update simultanés). La condition sur
-    // linkedPurchaseInvoiceIds re-vérifie au dernier moment qu'un
-    // rapprochement manuel n'a pas eu lieu entre le chargement et le claim.
+    // d'appels concurrents (upload + update simultanés).
     const claimed = await Transaction.findOneAndUpdate(
       {
         _id: transaction._id,
         workspaceId,
-        $and: [
-          {
+        receiptFiles: {
+          $elemMatch: {
+            _id: receiptFile._id,
+            purchaseInvoiceId: null,
             $or: [
-              { linkedPurchaseInvoiceIds: { $exists: false } },
-              { linkedPurchaseInvoiceIds: { $size: 0 } },
+              { ocrProcessed: { $ne: true } },
+              { ocrClaimedAt: { $lt: staleClaimBefore } },
             ],
           },
-          {
-            receiptFiles: {
-              $elemMatch: {
-                _id: receiptFile._id,
-                purchaseInvoiceId: null,
-                $or: [
-                  { ocrProcessed: { $ne: true } },
-                  { ocrClaimedAt: { $lt: staleClaimBefore } },
-                ],
-              },
-            },
-          },
-        ],
+        },
       },
       {
         $set: {
@@ -486,18 +567,14 @@ async function processReceiptsForTransaction({
         );
       }
 
-      // Re-vérification finale : l'OCR peut durer plusieurs secondes, un
-      // rapprochement manuel a pu avoir lieu entre-temps — ne pas créer de
-      // facture en double
+      // Re-vérification finale : l'OCR peut durer plusieurs secondes, la
+      // transaction a pu être ignorée ou rapprochée à la main entre-temps.
+      // On relit ses liens pour que la déduplication les prenne en compte.
       const fresh = await Transaction.findOne({
         _id: transaction._id,
         workspaceId,
       }).select("linkedPurchaseInvoiceIds reconciliationStatus");
-      if (
-        !fresh ||
-        (fresh.linkedPurchaseInvoiceIds || []).length > 0 ||
-        fresh.reconciliationStatus === "ignored"
-      ) {
+      if (!fresh || fresh.reconciliationStatus === "ignored") {
         await Transaction.updateOne(
           { _id: transaction._id, workspaceId },
           {
@@ -509,20 +586,46 @@ async function processReceiptsForTransaction({
           { arrayFilters: [{ "elem._id": receiptFile._id }] },
         ).catch(() => {});
         logger.info(
-          `ℹ️ [RECEIPT OCR] Rapprochement manuel détecté pendant l'OCR, création annulée (transaction ${transaction._id})`,
+          `ℹ️ [RECEIPT OCR] Transaction ignorée pendant l'OCR, création annulée (transaction ${transaction._id})`,
         );
         continue;
       }
+      transaction.linkedPurchaseInvoiceIds = fresh.linkedPurchaseInvoiceIds;
 
-      const invoice = await createPurchaseInvoiceFromReceipt({
+      // Déduplication : facture existante (même numéro / fournisseur +
+      // montant, ou facture déjà liée si l'OCR a échoué) → on y rattache le
+      // justificatif et la transaction au lieu de créer un doublon.
+      const existing = await findExistingPurchaseInvoiceForReceipt({
         transaction,
-        receiptFile,
         financial,
-        extractedText,
         ocrSucceeded,
         workspaceId,
-        userId,
       });
+
+      let invoice;
+      if (existing) {
+        invoice = await attachReceiptToExistingPurchaseInvoice({
+          invoice: existing,
+          transaction,
+          receiptFile,
+          financial,
+          ocrSucceeded,
+          workspaceId,
+        });
+        logger.info(
+          `ℹ️ [RECEIPT OCR] Justificatif ${receiptFile.filename} rattaché à la facture d'achat existante ${existing._id} (transaction ${transaction._id})`,
+        );
+      } else {
+        invoice = await createPurchaseInvoiceFromReceipt({
+          transaction,
+          receiptFile,
+          financial,
+          extractedText,
+          ocrSucceeded,
+          workspaceId,
+          userId,
+        });
+      }
 
       await Transaction.updateOne(
         { _id: transaction._id, workspaceId },
@@ -546,9 +649,11 @@ async function processReceiptsForTransaction({
       });
 
       createdInvoices.push(invoice);
-      logger.info(
-        `✅ [RECEIPT OCR] Facture d'achat ${invoice._id} créée depuis le justificatif ${receiptFile.filename} (transaction ${transaction._id})`,
-      );
+      if (!existing) {
+        logger.info(
+          `✅ [RECEIPT OCR] Facture d'achat ${invoice._id} créée depuis le justificatif ${receiptFile.filename} (transaction ${transaction._id})`,
+        );
+      }
     } catch (error) {
       // Libérer le claim pour permettre un retraitement ultérieur
       console.error(

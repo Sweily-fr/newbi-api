@@ -30,6 +30,14 @@ import documentAutomationService from "../services/documentAutomationService.js"
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import Client from "../models/Client.js";
+import { detachImportedInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
+import {
+  matchExistingClient,
+  resolveImportedClient,
+  fillClientFromVendor,
+  clientDisplayName,
+  suggestClientForImportedInvoice,
+} from "../utils/clientMatching.js";
 import stripe from "../utils/stripe.js";
 
 // Limite maximale d'import en lot
@@ -531,105 +539,8 @@ async function findOrCreateSupplier(vendor, workspaceId, userId) {
 // client.name) perdaient alors le client. On bascule vendor vers client à la
 // création, sauf si vendor est l'organisation elle-même (émetteur correctement
 // lu par l'OCR, le nom du client est alors ailleurs sur le document).
-const normalizeCompanyName = (s) =>
-  (s || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-
-async function fillClientFromVendor(invoiceData, workspaceId) {
-  const vendorName = invoiceData?.vendor?.name?.trim();
-  if (invoiceData?.client?.name || !vendorName) return;
-  try {
-    // Pas de modèle mongoose "Organization" enregistré : collection brute.
-    const org = await mongoose.connection.db
-      .collection("organization")
-      .findOne(
-        { _id: new mongoose.Types.ObjectId(String(workspaceId)) },
-        { projection: { name: 1, companyName: 1 } },
-      );
-    const ownNames = [org?.name, org?.companyName]
-      .filter(Boolean)
-      .map(normalizeCompanyName);
-    if (ownNames.includes(normalizeCompanyName(vendorName))) return;
-  } catch (e) {
-    logger.warn(
-      `fillClientFromVendor : organisation ${workspaceId} illisible (${e.message}), bascule appliquée par défaut`,
-    );
-  }
-  invoiceData.client = {
-    ...invoiceData.client,
-    name: vendorName,
-    address: invoiceData.client?.address || invoiceData.vendor.address || null,
-    city: invoiceData.client?.city || invoiceData.vendor.city || null,
-    postalCode:
-      invoiceData.client?.postalCode || invoiceData.vendor.postalCode || null,
-    siret: invoiceData.client?.siret || invoiceData.vendor.siret || null,
-  };
-}
-
-// Clé de comparaison de noms de clients : casse, accents, espaces et
-// ponctuation ignorés ("A way out" = "Awayout", "L'héritage" = "L'HERITAGE").
-const clientMatchKey = (s) =>
-  (s || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .toLowerCase();
-
-const siretDigits = (s) => ((s || "").match(/\d/g) || []).join("");
-
-const clientDisplayName = (c) =>
-  c.type === "INDIVIDUAL"
-    ? `${c.firstName || ""} ${c.lastName || ""}`.trim()
-    : c.name || "";
-
-// Rapproche la contrepartie d'un client Newbi existant. Le nom normalisé
-// prime : l'OCR attrape parfois un mauvais SIRET sur le document (autre
-// numéro présent sur la page), alors que le nom extrait est fiable. Le SIRET
-// (ou son SIREN, 9 premiers chiffres) sert de second essai. Dans les deux cas
-// le lien n'est posé que si UN SEUL client correspond.
-async function matchExistingClient(workspaceId, clientInfo) {
-  if (!clientInfo?.name && !clientInfo?.siret) return null;
-  const clients = await Client.find({ workspaceId })
-    .select("name firstName lastName type siret")
-    .lean();
-  const nameKey = clientMatchKey(clientInfo.name);
-  if (nameKey) {
-    const byName = clients.filter(
-      (c) => clientMatchKey(clientDisplayName(c)) === nameKey,
-    );
-    if (byName.length === 1) return byName[0];
-  }
-  const digits = siretDigits(clientInfo.siret);
-  if (digits.length >= 9) {
-    const siren = digits.slice(0, 9);
-    const bySiret = clients.filter((c) => {
-      const cd = siretDigits(c.siret);
-      return cd.length >= 9 && (cd === digits || cd.slice(0, 9) === siren);
-    });
-    if (bySiret.length === 1) return bySiret[0];
-  }
-  return null;
-}
-
-// Résolution complète du client d'une facture importée à la création :
-// bascule vendor -> client si besoin, puis rapprochement automatique avec un
-// client Newbi existant (client.id, corrigeable ensuite dans la sidebar).
-async function resolveImportedClient(invoiceData, workspaceId) {
-  await fillClientFromVendor(invoiceData, workspaceId);
-  if (!invoiceData?.client?.name) return;
-  try {
-    const matched = await matchExistingClient(workspaceId, invoiceData.client);
-    if (matched) invoiceData.client.id = String(matched._id);
-  } catch (e) {
-    logger.warn(
-      `resolveImportedClient : rapprochement client impossible (${e.message})`,
-    );
-  }
-}
+// Rapprochement client partagé par tous les flux d'import (OCR, Qonto,
+// Gmail) : voir utils/clientMatching.js. Ré-exporté ci-dessous pour les tests.
 
 async function convertSingleImportedInvoice(importedInvoice, userId) {
   const supplier = await findOrCreateSupplier(
@@ -713,6 +624,13 @@ const importedInvoiceResolvers = {
     /**
      * Liste les factures importées avec pagination et filtres
      */
+    importedInvoiceClientSuggestion: withWorkspace(
+      async (_, { id }, { workspaceId }) => {
+        const invoice = await checkInvoiceAccess(id, workspaceId);
+        return suggestClientForImportedInvoice(workspaceId, invoice);
+      },
+    ),
+
     importedInvoices: requireRead("importedInvoices")(
       async (
         _,
@@ -1634,6 +1552,12 @@ const importedInvoiceResolvers = {
           }
         }
 
+        // Liens bancaires : retirer la référence côté transactions avant la
+        // suppression (sinon statut "matched" fantôme).
+        await detachImportedInvoicesFromTransactions(
+          [invoice._id],
+          workspaceId,
+        );
         await ImportedInvoice.findOneAndDelete({ _id: id, workspaceId });
         return true;
       },
@@ -1672,6 +1596,12 @@ const importedInvoiceResolvers = {
             }
           }
         }
+
+        await detachImportedInvoicesFromTransactions(
+          invoices.map((inv) => inv._id),
+
+          workspaceId,
+        );
 
         const result = await ImportedInvoice.deleteMany({
           _id: { $in: ids },
@@ -1834,6 +1764,22 @@ const importedInvoiceResolvers = {
     workspaceId: (parent) => parent.workspaceId?.toString(),
     importedBy: (parent) => parent.importedBy?.toString(),
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
+    linkedTransactionIds: (parent) =>
+      (parent.linkedTransactionIds || []).map((id) => id.toString()),
+    linkedTransactions: async (parent) => {
+      const ids = parent.linkedTransactionIds || [];
+      if (ids.length === 0) return [];
+      try {
+        const Transaction = mongoose.model("Transaction");
+        return await Transaction.find({
+          _id: { $in: ids },
+          workspaceId: String(parent.workspaceId),
+        }).sort({ date: -1 });
+      } catch (error) {
+        logger.error("[ImportedInvoice.linkedTransactions] Erreur:", error);
+        return [];
+      }
+    },
     duplicateOf: (parent) => parent.duplicateOf?.toString() || null,
     invoiceDate: (parent) => parent.invoiceDate?.toISOString() || null,
     dueDate: (parent) => parent.dueDate?.toISOString() || null,

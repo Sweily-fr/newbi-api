@@ -65,6 +65,19 @@ type ReconciliationIgnoreResponse {
   message: String
 }
 
+# Factures clients importées (Qonto, OCR, Gmail) rattachables à une
+# transaction. Même forme que ReconciliationInvoice (number = numéro d'origine).
+type ImportedInvoicesForTransactionResponse {
+  success: Boolean!
+  invoices: [ReconciliationInvoice!]!
+  transactionAmount: Float!
+}
+
+input ReconciliationImportedLinkInput {
+  transactionId: ID!
+  importedInvoiceId: ID!
+}
+
 # Enums
 enum ReconciliationConfidence {
   high
@@ -108,6 +121,21 @@ extend type Query {
     transactionId: ID!
     search: String
   ): InvoicesForTransactionResponse!
+
+  # Factures clients importées rattachables à une transaction (non rapprochées
+  # d'abord, puis déjà rapprochées à une autre transaction). search : numéro
+  # d'origine, client, ou montant.
+  importedInvoicesForTransaction(
+    transactionId: ID!
+    search: String
+  ): ImportedInvoicesForTransactionResponse!
+
+  # Transactions rattachables à une facture importée (mêmes règles que
+  # transactionsForInvoice).
+  transactionsForImportedInvoice(
+    importedInvoiceId: ID!
+    search: String
+  ): TransactionsForInvoiceResponse!
 }
 
 # Mutations
@@ -120,6 +148,18 @@ extend type Mutation {
   # Délier une transaction d'une facture
   unlinkTransactionFromInvoice(
     input: ReconciliationUnlinkInput!
+  ): ReconciliationUnlinkResponse!
+
+  # Lier une transaction à une facture client importée (N↔N, additif).
+  # La facture passe en COMPLETED avec la date de la transaction.
+  linkTransactionToImportedInvoice(
+    input: ReconciliationImportedLinkInput!
+  ): ReconciliationLinkResponse!
+
+  # Délier une transaction d'une facture importée. Plus aucune transaction
+  # liée → la facture repasse VALIDATED sans date de paiement.
+  unlinkTransactionFromImportedInvoice(
+    input: ReconciliationImportedLinkInput!
   ): ReconciliationUnlinkResponse!
 
   # Ignorer une transaction (ne plus la suggérer)

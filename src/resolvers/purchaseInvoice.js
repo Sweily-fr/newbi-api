@@ -22,6 +22,12 @@ import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionServ
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
+import {
+  findTransactionsForPurchaseInvoice,
+  findPurchaseInvoicesForTransaction,
+} from "../utils/reconciliationMatching.js";
+import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -448,6 +454,99 @@ const purchaseInvoiceResolvers = {
           unmatchedCount,
           pendingInvoicesCount: pendingInvoices.length,
         };
+      },
+    ),
+
+    // Rattachement manuel côté facture d'achat : transactions (débits)
+    // candidates, avec recherche serveur. Logique dans reconciliationMatching.
+    transactionsForPurchaseInvoice: requireRead("expenses")(
+      async (_, { purchaseInvoiceId, search }, context) => {
+        const workspaceId = context.workspaceId || context.organizationId;
+        const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
+        const { scored, invoiceAmount } =
+          await findTransactionsForPurchaseInvoice(
+            invoice,
+            workspaceId,
+            search,
+          );
+        return {
+          success: true,
+          transactions: scored.map(({ transaction: tx, score }) => ({
+            id: tx._id.toString(),
+            amount: tx.amount,
+            description: tx.description,
+            date: tx.date,
+            reconciliationStatus: tx.reconciliationStatus,
+            score,
+          })),
+          invoiceAmount,
+        };
+      },
+    ),
+
+    // Rattachement manuel côté transaction : factures d'achat candidates
+    // (non rapprochées d'abord, puis déjà rapprochées à une autre transaction).
+    purchaseInvoicesForTransaction: requireRead("expenses")(
+      async (_, { transactionId, search }, context) => {
+        const workspaceId = context.workspaceId || context.organizationId;
+        const Transaction = mongoose.model("Transaction");
+        const transaction = await Transaction.findOne({
+          _id: transactionId,
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          deletedAt: null,
+        });
+        if (!transaction) {
+          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+        const { scored, transactionAmount } =
+          await findPurchaseInvoicesForTransaction(
+            transaction,
+            workspaceId,
+            search,
+          );
+        return {
+          success: true,
+          purchaseInvoices: scored.map(({ invoice: inv, score }) => ({
+            id: inv._id.toString(),
+            invoiceNumber: inv.invoiceNumber,
+            supplierName: inv.supplierName,
+            amountTTC: inv.amountTTC,
+            issueDate: inv.issueDate,
+            status: inv.status,
+            isReconciled: Boolean(
+              inv.isReconciled || (inv.linkedTransactionIds || []).length > 0,
+            ),
+            score,
+          })),
+          transactionAmount,
+        };
+      },
+    ),
+
+    // Doublons probables avant création/édition manuelle (avertissement non
+    // bloquant côté front). Mêmes règles que la déduplication OCR.
+    purchaseInvoiceDuplicates: requireRead("expenses")(
+      async (_, { workspaceId: argWorkspaceId, input }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          argWorkspaceId,
+          context.workspaceId || context.organizationId,
+        );
+        const duplicates = await findPurchaseInvoiceDuplicates({
+          workspaceId,
+          supplierName: input?.supplierName,
+          invoiceNumber: input?.invoiceNumber,
+          amountTTC: input?.amountTTC,
+          issueDate: input?.issueDate ? new Date(input.issueDate) : null,
+          excludeId: input?.excludeId || null,
+        });
+        return duplicates.map((inv) => ({
+          id: inv._id.toString(),
+          invoiceNumber: inv.invoiceNumber,
+          supplierName: inv.supplierName,
+          amountTTC: inv.amountTTC,
+          issueDate: inv.issueDate,
+          status: inv.status,
+        }));
       },
     ),
 
@@ -1028,48 +1127,28 @@ const purchaseInvoiceResolvers = {
           );
         }
 
-        // Délier les transactions précédemment rapprochées qui ne sont plus
-        // dans la nouvelle liste (sinon elles gardent linkedPurchaseInvoiceIds
-        // et un statut "matched" vers une facture qui ne les référence plus)
-        const newIdSet = new Set(transactionIds.map(String));
-        const removedIds = (invoice.linkedTransactionIds || []).filter(
-          (prevId) => !newIdSet.has(String(prevId)),
+        // Sémantique additive (N↔N) : les transactions passées s'ajoutent aux
+        // liens existants, elles ne les remplacent pas. Une facture d'achat
+        // peut couvrir plusieurs prélèvements (relevé mensuel Qonto : abonnement
+        // + frais), une transaction peut porter plusieurs factures d'achat.
+        // Pour retirer un lien : unlinkPurchaseInvoiceFromTransaction.
+        const alreadyLinked = new Set(
+          (invoice.linkedTransactionIds || []).map(String),
         );
-        if (removedIds.length > 0) {
-          await Transaction.updateMany(
-            { _id: { $in: removedIds } },
-            { $pull: { linkedPurchaseInvoiceIds: invoice._id } },
-          );
-          await Transaction.updateMany(
-            {
-              _id: { $in: removedIds },
-              $and: [
-                {
-                  $or: [
-                    { linkedInvoiceIds: { $exists: false } },
-                    { linkedInvoiceIds: { $size: 0 } },
-                  ],
-                },
-                {
-                  $or: [
-                    { linkedPurchaseInvoiceIds: { $exists: false } },
-                    { linkedPurchaseInvoiceIds: { $size: 0 } },
-                  ],
-                },
-              ],
-            },
-            {
-              $set: {
-                reconciliationStatus: "unmatched",
-                reconciliationDate: null,
-              },
-            },
+        const newTransactionIds = [
+          ...new Set(transactionIds.map(String)),
+        ].filter((id) => !alreadyLinked.has(id));
+        if (newTransactionIds.length === 0) {
+          throw new AppError(
+            "Cette transaction est déjà rapprochée à cette facture",
+            ERROR_CODES.VALIDATION_ERROR,
           );
         }
 
-        invoice.linkedTransactionIds = transactionIds.map(
-          (id) => new mongoose.Types.ObjectId(id),
-        );
+        invoice.linkedTransactionIds = [
+          ...(invoice.linkedTransactionIds || []),
+          ...newTransactionIds.map((id) => new mongoose.Types.ObjectId(id)),
+        ];
         invoice.isReconciled = true;
         invoice.status = "PAID";
         invoice.paymentDate = invoice.paymentDate || new Date();
@@ -1080,7 +1159,7 @@ const purchaseInvoiceResolvers = {
         // fonctionne donc même si la facture n'a pas de justificatif.
         await Transaction.updateMany(
           {
-            _id: { $in: transactionIds },
+            _id: { $in: newTransactionIds },
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
           },
           {
@@ -1097,7 +1176,7 @@ const purchaseInvoiceResolvers = {
         await syncLinkedTransactionCategories({
           category: invoice.category,
           workspaceId,
-          transactionIds,
+          transactionIds: newTransactionIds,
         });
 
         // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
@@ -1131,6 +1210,64 @@ const purchaseInvoiceResolvers = {
             ),
           );
 
+        return invoice;
+      },
+    ),
+
+    // Déliaison unitaire (facture d'achat, transaction) : contrepartie de la
+    // sémantique additive de reconcilePurchaseInvoice. unreconcilePurchaseInvoice
+    // reste la déliaison globale (toutes les transactions).
+    unlinkPurchaseInvoiceFromTransaction: requireWrite("expenses")(
+      async (_, { purchaseInvoiceId, transactionId }, context) => {
+        const workspaceId = context.workspaceId || context.organizationId;
+        const wsId = new mongoose.Types.ObjectId(workspaceId);
+        const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
+        const Transaction = mongoose.model("Transaction");
+
+        const txObjectId = new mongoose.Types.ObjectId(transactionId);
+
+        // Côté transaction : $pull + pointeur du justificatif OCR nettoyé.
+        await Transaction.updateOne(
+          { _id: txObjectId, workspaceId: wsId },
+          { $pull: { linkedPurchaseInvoiceIds: invoice._id } },
+        );
+        await Transaction.updateOne(
+          {
+            _id: txObjectId,
+            workspaceId: wsId,
+            "receiptFiles.purchaseInvoiceId": invoice._id,
+          },
+          { $set: { "receiptFiles.$[elem].purchaseInvoiceId": null } },
+          { arrayFilters: [{ "elem.purchaseInvoiceId": invoice._id }] },
+        );
+        // Plus aucun lien (ni vente ni achat) → la transaction redevient à
+        // rapprocher.
+        await Transaction.updateOne(
+          {
+            _id: txObjectId,
+            workspaceId: wsId,
+            $and: NO_LINKED_DOCUMENTS_CLAUSES,
+          },
+          {
+            $set: {
+              reconciliationStatus: "unmatched",
+              reconciliationDate: null,
+            },
+          },
+        );
+
+        // Côté facture.
+        invoice.linkedTransactionIds = (
+          invoice.linkedTransactionIds || []
+        ).filter((id) => String(id) !== String(transactionId));
+        if (invoice.linkedTransactionIds.length === 0) {
+          invoice.isReconciled = false;
+          if (invoice.status === "PAID") {
+            invoice.status = "TO_PAY";
+            invoice.paymentDate = null;
+          }
+        }
+        await invoice.save();
         return invoice;
       },
     ),

@@ -53,6 +53,7 @@ type ImportedInvoiceVendor {
 
 # Informations du client (destinataire)
 type ImportedInvoiceClient {
+  email: String
   # ID du client Newbi rapproché (null si aucun client existant ne correspond)
   id: ID
   name: String
@@ -112,6 +113,9 @@ type ImportedInvoice {
   ocrData: ImportedInvoiceOcrData
   notes: String
   linkedExpenseId: ID
+  # Rapprochement bancaire (N↔N) : encaissements liés à cette facture.
+  linkedTransactionIds: [ID!]!
+  linkedTransactions: [Transaction!]!
   isDuplicate: Boolean
   duplicateOf: ID
   source: String
@@ -256,6 +260,14 @@ extend type Query {
   importedInvoice(id: ID!): ImportedInvoice
 
   """
+  Client Newbi existant correspondant au client lu sur la facture importée
+  (nom, SIRET, email), ou null. Sert de valeur par défaut dans la sidebar
+  quand l'import n'a pas posé client.id (factures importées avant la mise en
+  place de l'association automatique).
+  """
+  importedInvoiceClientSuggestion(id: ID!): Client
+
+  """
   Liste les factures importées avec pagination et filtres
   """
   importedInvoices(
@@ -286,10 +298,7 @@ extend type Mutation {
   """
   Importe une facture PDF avec OCR — upload direct (pas de pré-upload Cloudflare)
   """
-  importInvoiceDirect(
-    file: Upload!
-    workspaceId: ID!
-  ): ImportedInvoiceResult!
+  importInvoiceDirect(file: Upload!, workspaceId: ID!): ImportedInvoiceResult!
 
   """
   Importe une facture PDF avec OCR

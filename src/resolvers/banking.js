@@ -1189,6 +1189,35 @@ const bankingResolvers = {
         return [];
       }
     },
+    linkedImportedInvoiceIds: (parent) =>
+      (parent.linkedImportedInvoiceIds || []).map((id) => id.toString()),
+    linkedImportedInvoices: async (parent) => {
+      const ids = parent.linkedImportedInvoiceIds || [];
+      if (ids.length === 0) return [];
+      try {
+        const ImportedInvoice = (await import("../models/ImportedInvoice.js"))
+          .default;
+        const invoices = await ImportedInvoice.find({
+          _id: { $in: ids },
+        }).lean();
+        return invoices.map((inv) => ({
+          id: inv._id.toString(),
+          number: inv.originalInvoiceNumber || null,
+          status: inv.status,
+          clientName: inv.client?.name || inv.vendor?.name || "Client inconnu",
+          totalTTC: inv.totalTTC || 0,
+          issueDate: inv.invoiceDate,
+          dueDate: inv.dueDate,
+          source: inv.source,
+        }));
+      } catch (error) {
+        console.error(
+          "[BANKING] Erreur chargement factures importées liées:",
+          error,
+        );
+        return [];
+      }
+    },
     userId: async (transaction) => {
       if (transaction.userId && typeof transaction.userId === "object") {
         return transaction.userId; // Déjà populé
