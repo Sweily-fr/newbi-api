@@ -5,6 +5,7 @@ import GmailOAuthProvider, { translateGmailError } from './GmailOAuthProvider.js
 import hybridOcrService from '../hybridOcrService.js';
 import cloudflareService from '../cloudflareService.js';
 import logger from '../../utils/logger.js';
+import { resolveImportedClient } from '../../utils/clientMatching.js';
 
 // Mots-clés pour détecter les emails contenant des factures
 const INVOICE_KEYWORDS = [
@@ -450,6 +451,8 @@ async function processGmailMessage(gmail, messageId, connection) {
 
       // Transform OCR data
       const invoiceData = transformOcrDataToInvoice(ocrResult);
+      // Même association client que les autres flux d'import (OCR, Qonto)
+      await resolveImportedClient(invoiceData, connection.workspaceId);
 
       // Check for duplicates
       const duplicates = await ImportedInvoice.findPotentialDuplicates(

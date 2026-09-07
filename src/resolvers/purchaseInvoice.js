@@ -27,6 +27,7 @@ import {
   findPurchaseInvoicesForTransaction,
 } from "../utils/reconciliationMatching.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -1245,20 +1246,7 @@ const purchaseInvoiceResolvers = {
           {
             _id: txObjectId,
             workspaceId: wsId,
-            $and: [
-              {
-                $or: [
-                  { linkedInvoiceIds: { $exists: false } },
-                  { linkedInvoiceIds: { $size: 0 } },
-                ],
-              },
-              {
-                $or: [
-                  { linkedPurchaseInvoiceIds: { $exists: false } },
-                  { linkedPurchaseInvoiceIds: { $size: 0 } },
-                ],
-              },
-            ],
+            $and: NO_LINKED_DOCUMENTS_CLAUSES,
           },
           {
             $set: {

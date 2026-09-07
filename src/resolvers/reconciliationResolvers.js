@@ -5,14 +5,30 @@ import {
 } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
+import ImportedInvoice from "../models/ImportedInvoice.js";
 import logger from "../utils/logger.js";
 import {
   findReconciliationSuggestions,
   findTransactionsForInvoice,
   findInvoicesForTransaction,
+  findImportedInvoicesForTransaction,
+  findTransactionsForImportedInvoice,
   setReconciliationIgnored,
 } from "../utils/reconciliationMatching.js";
+import { transactionHasNoLinks } from "../utils/transactionLinks.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
+
+// Résumé d'une facture importée au format ReconciliationInvoice (number =
+// numéro d'origine, client = nom lu sur le document ou vendor à défaut).
+const importedInvoiceSummary = (inv, score) => ({
+  id: inv._id.toString(),
+  number: inv.originalInvoiceNumber || null,
+  clientName: inv.client?.name || inv.vendor?.name || "",
+  totalTTC: inv.totalTTC || 0,
+  dueDate: inv.dueDate,
+  status: inv.status,
+  ...(score !== undefined ? { score } : {}),
+});
 
 const reconciliationResolvers = {
   Query: {
@@ -155,6 +171,78 @@ const reconciliationResolvers = {
         }
       },
     ),
+
+    importedInvoicesForTransaction: withOrganization(
+      async (parent, { transactionId, search }, { workspaceId }) => {
+        try {
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+            deletedAt: null,
+          });
+          if (!transaction) {
+            throw new Error("Transaction non trouvée");
+          }
+          const { scored, transactionAmount } =
+            await findImportedInvoicesForTransaction(
+              transaction,
+              workspaceId,
+              search,
+            );
+          return {
+            success: true,
+            invoices: scored.map(({ invoice: inv, score }) =>
+              importedInvoiceSummary(inv, score),
+            ),
+            transactionAmount,
+          };
+        } catch (error) {
+          logger.error(
+            "[RECONCILIATION-GQL] Erreur factures importées pour transaction:",
+            error,
+          );
+          throw error;
+        }
+      },
+    ),
+
+    transactionsForImportedInvoice: withOrganization(
+      async (parent, { importedInvoiceId, search }, { workspaceId }) => {
+        try {
+          const invoice = await ImportedInvoice.findOne({
+            _id: importedInvoiceId,
+            workspaceId,
+          });
+          if (!invoice) {
+            throw new Error("Facture importée non trouvée");
+          }
+          const { scored, invoiceAmount } =
+            await findTransactionsForImportedInvoice(
+              invoice,
+              workspaceId,
+              search,
+            );
+          return {
+            success: true,
+            transactions: scored.map(({ transaction: tx, score }) => ({
+              id: tx._id.toString(),
+              amount: tx.amount,
+              description: tx.description,
+              date: tx.date,
+              reconciliationStatus: tx.reconciliationStatus,
+              score,
+            })),
+            invoiceAmount,
+          };
+        } catch (error) {
+          logger.error(
+            "[RECONCILIATION-GQL] Erreur transactions pour facture importée:",
+            error,
+          );
+          throw error;
+        }
+      },
+    ),
   },
 
   Mutation: {
@@ -284,11 +372,7 @@ const reconciliationResolvers = {
           // Si plus aucun lien (ni facture de vente, ni facture d'achat) →
           // status unmatched. updateOne ciblé plutôt que save() : ne revalide
           // pas tout le document (données legacy hors enum).
-          if (
-            transaction &&
-            (transaction.linkedInvoiceIds || []).length === 0 &&
-            (transaction.linkedPurchaseInvoiceIds || []).length === 0
-          ) {
+          if (transaction && transactionHasNoLinks(transaction)) {
             await Transaction.updateOne(
               { _id: transactionId, workspaceId },
               {
@@ -329,6 +413,144 @@ const reconciliationResolvers = {
           };
         } catch (error) {
           logger.error("[RECONCILIATION-GQL] Erreur déliaison:", error);
+          return { success: false, message: error.message };
+        }
+      },
+    ),
+
+    // Facture client importée (Qonto, OCR, Gmail) ↔ transaction. Même
+    // sémantique que linkTransactionToInvoice : $addToSet des deux côtés,
+    // la facture est considérée encaissée (COMPLETED) à la date du virement.
+    linkTransactionToImportedInvoice: withOrganization(
+      async (parent, { input }, { workspaceId }) => {
+        try {
+          const { transactionId, importedInvoiceId } = input;
+
+          const target = await ImportedInvoice.findOne({
+            _id: importedInvoiceId,
+            workspaceId,
+          });
+          if (!target) {
+            return { success: false, message: "Facture importée non trouvée" };
+          }
+          if (["REJECTED", "ARCHIVED"].includes(target.status)) {
+            return {
+              success: false,
+              message: `Impossible de rapprocher une facture importée au statut ${target.status}`,
+            };
+          }
+
+          const transaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId, deletedAt: null },
+            {
+              $addToSet: { linkedImportedInvoiceIds: target._id },
+              $set: {
+                reconciliationStatus: "matched",
+                reconciliationDate: new Date(),
+              },
+            },
+            { new: true },
+          );
+          if (!transaction) {
+            return { success: false, message: "Transaction non trouvée" };
+          }
+
+          const invoice = await ImportedInvoice.findOneAndUpdate(
+            { _id: importedInvoiceId, workspaceId },
+            {
+              $addToSet: { linkedTransactionIds: transaction._id },
+              $set: {
+                status: "COMPLETED",
+                paymentDate: target.paymentDate || transaction.date,
+              },
+            },
+            { new: true },
+          );
+          if (!invoice) {
+            await Transaction.updateOne(
+              { _id: transactionId, workspaceId },
+              { $pull: { linkedImportedInvoiceIds: target._id } },
+            );
+            return { success: false, message: "Facture importée non trouvée" };
+          }
+
+          logger.info(
+            `[RECONCILIATION-GQL] Rapprochement: Transaction ${transactionId} <-> Facture importée ${importedInvoiceId}`,
+          );
+
+          return {
+            success: true,
+            message: "Rapprochement effectué avec succès",
+            transaction,
+            invoice: importedInvoiceSummary(invoice),
+          };
+        } catch (error) {
+          logger.error(
+            "[RECONCILIATION-GQL] Erreur rapprochement facture importée:",
+            error,
+          );
+          return { success: false, message: error.message };
+        }
+      },
+    ),
+
+    unlinkTransactionFromImportedInvoice: withOrganization(
+      async (parent, { input }, { workspaceId }) => {
+        try {
+          const { transactionId, importedInvoiceId } = input;
+
+          const transaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            { $pull: { linkedImportedInvoiceIds: importedInvoiceId } },
+            { new: true },
+          );
+          if (transaction && transactionHasNoLinks(transaction)) {
+            await Transaction.updateOne(
+              { _id: transactionId, workspaceId },
+              {
+                $set: {
+                  reconciliationStatus: "unmatched",
+                  reconciliationDate: null,
+                },
+              },
+            );
+            transaction.reconciliationStatus = "unmatched";
+            transaction.reconciliationDate = null;
+          }
+
+          const invoice = await ImportedInvoice.findOneAndUpdate(
+            { _id: importedInvoiceId, workspaceId },
+            { $pull: { linkedTransactionIds: transactionId } },
+            { new: true },
+          );
+          // Plus aucun encaissement lié → la facture n'est plus "encaissée"
+          // par la banque. Update ciblé (pas de save() : pas de revalidation
+          // de données OCR legacy).
+          if (
+            invoice &&
+            (invoice.linkedTransactionIds || []).length === 0 &&
+            invoice.status === "COMPLETED"
+          ) {
+            await ImportedInvoice.updateOne(
+              { _id: importedInvoiceId, workspaceId },
+              { $set: { status: "VALIDATED", paymentDate: null } },
+            );
+          }
+
+          logger.info(
+            `[RECONCILIATION-GQL] Déliaison: Transaction ${transactionId} <-> Facture importée ${importedInvoiceId}`,
+          );
+
+          return {
+            success: true,
+            message: "Déliaison effectuée avec succès",
+            transaction: transaction || null,
+          };
+        } catch (error) {
+          logger.error(
+            "[RECONCILIATION-GQL] Erreur déliaison facture importée:",
+            error,
+          );
           return { success: false, message: error.message };
         }
       },

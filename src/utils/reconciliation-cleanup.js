@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import logger from "./logger.js";
+import { NO_LINKED_DOCUMENTS_CLAUSES } from "./transactionLinks.js";
 
 /**
  * Nettoyage des liens de rapprochement bancaire (N↔N) lors des suppressions.
@@ -62,20 +63,7 @@ export async function detachPurchaseInvoicesFromTransactions(
       await Transaction.updateMany(
         {
           _id: { $in: affectedIds },
-          $and: [
-            {
-              $or: [
-                { linkedInvoiceIds: { $exists: false } },
-                { linkedInvoiceIds: { $size: 0 } },
-              ],
-            },
-            {
-              $or: [
-                { linkedPurchaseInvoiceIds: { $exists: false } },
-                { linkedPurchaseInvoiceIds: { $size: 0 } },
-              ],
-            },
-          ],
+          $and: NO_LINKED_DOCUMENTS_CLAUSES,
         },
         {
           $set: { reconciliationStatus: "unmatched", reconciliationDate: null },
@@ -85,6 +73,46 @@ export async function detachPurchaseInvoicesFromTransactions(
   } catch (err) {
     logger.error(
       `detachPurchaseInvoicesFromTransactions: échec nettoyage (${err.message})`,
+    );
+  }
+}
+
+/**
+ * Détache des factures clients importées (sur le point d'être supprimées) des
+ * transactions qui les référencent, puis repasse "unmatched" celles qui n'ont
+ * plus aucun lien. Symétrique de detachPurchaseInvoicesFromTransactions.
+ */
+export async function detachImportedInvoicesFromTransactions(
+  invoiceIds,
+  workspaceId,
+) {
+  if (!invoiceIds || invoiceIds.length === 0) return;
+
+  const { default: Transaction } = await import("../models/Transaction.js");
+  const ids = invoiceIds.map((id) =>
+    typeof id === "string" ? new mongoose.Types.ObjectId(id) : id,
+  );
+  const wsId = String(workspaceId);
+
+  try {
+    const affected = await Transaction.find({
+      workspaceId: wsId,
+      linkedImportedInvoiceIds: { $in: ids },
+    }).select("_id");
+    const affectedIds = affected.map((t) => t._id);
+    if (affectedIds.length === 0) return;
+
+    await Transaction.updateMany(
+      { _id: { $in: affectedIds } },
+      { $pull: { linkedImportedInvoiceIds: { $in: ids } } },
+    );
+    await Transaction.updateMany(
+      { _id: { $in: affectedIds }, $and: NO_LINKED_DOCUMENTS_CLAUSES },
+      { $set: { reconciliationStatus: "unmatched", reconciliationDate: null } },
+    );
+  } catch (err) {
+    logger.error(
+      `detachImportedInvoicesFromTransactions: échec nettoyage (${err.message})`,
     );
   }
 }
@@ -101,10 +129,12 @@ export async function repointTransactionReferences(oldTxId, newTxId) {
       { default: Invoice },
       { default: PurchaseInvoice },
       { default: Expense },
+      { default: ImportedInvoice },
     ] = await Promise.all([
       import("../models/Invoice.js"),
       import("../models/PurchaseInvoice.js"),
       import("../models/Expense.js"),
+      import("../models/ImportedInvoice.js"),
     ]);
 
     // $addToSet du nouvel id puis $pull de l'ancien (deux passes : Mongo
@@ -122,6 +152,14 @@ export async function repointTransactionReferences(oldTxId, newTxId) {
       { $addToSet: { linkedTransactionIds: newTxId } },
     );
     await PurchaseInvoice.updateMany(
+      { linkedTransactionIds: oldTxId },
+      { $pull: { linkedTransactionIds: oldTxId } },
+    );
+    await ImportedInvoice.updateMany(
+      { linkedTransactionIds: oldTxId },
+      { $addToSet: { linkedTransactionIds: newTxId } },
+    );
+    await ImportedInvoice.updateMany(
       { linkedTransactionIds: oldTxId },
       { $pull: { linkedTransactionIds: oldTxId } },
     );
@@ -161,10 +199,12 @@ export async function detachTransactionsFromDocuments(
       { default: Invoice },
       { default: Expense },
       { default: PurchaseInvoice },
+      { default: ImportedInvoice },
     ] = await Promise.all([
       import("../models/Invoice.js"),
       import("../models/Expense.js"),
       import("../models/PurchaseInvoice.js"),
+      import("../models/ImportedInvoice.js"),
     ]);
 
     const docFilter = { linkedTransactionIds: { $in: txIds } };
@@ -186,6 +226,9 @@ export async function detachTransactionsFromDocuments(
         { $set: { linkedTransactionId: null, isReconciled: false } },
       ),
       PurchaseInvoice.updateMany(docFilter, {
+        $pull: { linkedTransactionIds: { $in: txIds } },
+      }),
+      ImportedInvoice.updateMany(docFilter, {
         $pull: { linkedTransactionIds: { $in: txIds } },
       }),
     ]);

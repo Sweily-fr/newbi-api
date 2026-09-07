@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import QontoAccount from "../models/QontoAccount.js";
 import Invoice from "../models/Invoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
+import { matchExistingClient } from "../utils/clientMatching.js";
 import Quote from "../models/Quote.js";
 import ImportedQuote from "../models/ImportedQuote.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
@@ -266,6 +267,14 @@ export async function importClientInvoices(account, userId) {
         const totalVAT = num(ci.vat_amount);
         const client = ci.client || {};
         const billing = client.billing_address || {};
+        const clientName = clientDisplayName(client);
+        // client.id = _id d'un client Newbi (contrat du modèle), jamais l'id
+        // Qonto : association automatique par nom / email / SIRET.
+        const matchedClient = await matchExistingClient(workspaceId, {
+          name: clientName,
+          email: client.email || null,
+          siret: client.tax_identification_number || null,
+        }).catch(() => null);
 
         const createdInvoice = await ImportedInvoice.create({
           workspaceId,
@@ -276,8 +285,9 @@ export async function importClientInvoices(account, userId) {
           originalInvoiceNumber: ci.number || null,
           vendor: { name: ci.organization?.legal_name || "" },
           client: {
-            id: client.id || null,
-            name: clientDisplayName(client),
+            id: matchedClient ? String(matchedClient._id) : null,
+            name: clientName,
+            email: client.email || null,
             address: billing.street_address || client.address || "",
             city: billing.city || client.city || "",
             postalCode: billing.zip_code || client.zip_code || "",

@@ -13,6 +13,8 @@
 import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import ImportedInvoice from "../models/ImportedInvoice.js";
+import { NO_LINKED_DOCUMENTS_CLAUSES } from "./transactionLinks.js";
 import { invoiceReferenceMatches } from "./invoiceReferenceMatch.js";
 import {
   earliestTransactionDateForInvoice,
@@ -50,10 +52,7 @@ export const buildReconcileTransactionQuery = (workspaceId) => ({
   deletedAt: null,
   reconciliationStatus: { $nin: ["matched", "ignored"] },
   amount: { $gt: 0 },
-  $or: [
-    { linkedInvoiceIds: { $exists: false } },
-    { linkedInvoiceIds: { $size: 0 } },
-  ],
+  $and: NO_LINKED_DOCUMENTS_CLAUSES,
   "receiptFiles.0": { $exists: false },
 });
 
@@ -522,6 +521,133 @@ export async function findPurchaseInvoicesForTransaction(
     (a, b) =>
       b.score - a.score ||
       new Date(b.invoice.issueDate || 0) - new Date(a.invoice.issueDate || 0),
+  );
+
+  return { scored: scored.slice(0, 50), transactionAmount: transaction.amount };
+}
+
+// ---------------------------------------------------------------------------
+// Factures clients importées (Qonto, OCR, Gmail) ↔ transactions (crédits)
+// ---------------------------------------------------------------------------
+
+// Vue "facture de vente" d'une facture importée : permet de réutiliser tel
+// quel le scoring et la fenêtre de dates des factures Newbi (montant TTC,
+// nom du client, numéro d'origine dans le libellé brut).
+export const importedInvoiceAsInvoiceLike = (doc) => ({
+  _id: doc._id,
+  workspaceId: doc.workspaceId,
+  prefix: "",
+  number: doc.originalInvoiceNumber || "",
+  issueDate: doc.invoiceDate,
+  dueDate: doc.dueDate,
+  totalTTC: doc.totalTTC,
+  finalTotalTTC: doc.totalTTC,
+  client: { name: doc.client?.name || doc.vendor?.name || "" },
+  linkedTransactionIds: doc.linkedTransactionIds || [],
+});
+
+const IMPORTED_RECONCILABLE_STATUSES = [
+  "UPLOADED",
+  "PENDING_REVIEW",
+  "VALIDATED",
+  "COMPLETED",
+];
+
+/**
+ * Transactions (crédits) candidates pour une facture importée : mêmes règles
+ * que pour une facture Newbi (fenêtre de dates par défaut, recherche explicite
+ * hors fenêtre et transactions déjà rapprochées incluses).
+ */
+export async function findTransactionsForImportedInvoice(
+  importedInvoice,
+  workspaceId,
+  search,
+) {
+  return findTransactionsForInvoice(
+    importedInvoiceAsInvoiceLike(importedInvoice),
+    workspaceId,
+    search,
+  );
+}
+
+/**
+ * Factures importées candidates pour une transaction (rattachement manuel
+ * côté transaction). Les factures encore non rapprochées d'abord (plafond
+ * propre), puis celles déjà rapprochées à une autre transaction (paiement
+ * échelonné), hors rejetées/archivées et hors déjà liées à cette transaction.
+ */
+export async function findImportedInvoicesForTransaction(
+  transaction,
+  workspaceId,
+  search,
+) {
+  const term = (search || "").trim();
+  const clauses = [];
+
+  const maxIssueDate = latestInvoiceIssueDateForTransaction(transaction);
+  if (!term && maxIssueDate) {
+    clauses.push({
+      $or: [{ invoiceDate: null }, { invoiceDate: { $lte: maxIssueDate } }],
+    });
+  }
+
+  if (term) {
+    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const or = [
+      { originalInvoiceNumber: regex },
+      { "client.name": regex },
+      { "vendor.name": regex },
+    ];
+    const searchAmount = parseAmountSearch(term);
+    if (searchAmount !== null) {
+      const tolerance = Math.max(searchAmount * 0.01, 0.01);
+      or.push({
+        totalTTC: {
+          $gte: searchAmount - tolerance,
+          $lte: searchAmount + tolerance,
+        },
+      });
+    }
+    clauses.push({ $or: or });
+  }
+
+  const buildQuery = (linkClause) => ({
+    workspaceId,
+    status: { $in: IMPORTED_RECONCILABLE_STATUSES },
+    _id: { $nin: transaction.linkedImportedInvoiceIds || [] },
+    $and: [linkClause, ...clauses],
+  });
+
+  const unlinked = await ImportedInvoice.find(
+    buildQuery(UNLINKED_INVOICE_CLAUSE),
+  )
+    .sort({ invoiceDate: -1 })
+    .limit(200);
+  const linked = await ImportedInvoice.find(
+    buildQuery({ "linkedTransactionIds.0": { $exists: true } }),
+  )
+    .sort({ invoiceDate: -1 })
+    .limit(100);
+
+  const scored = [...unlinked, ...linked].map((doc) => {
+    const inv = importedInvoiceAsInvoiceLike(doc);
+    const amount = invoiceAmountOf(inv);
+    let score = 0;
+    if (amount > 0) {
+      if (Math.abs(transaction.amount - amount) <= amount * 0.01) score += 100;
+      else if (Math.abs(transaction.amount - amount) <= amount * 0.1)
+        score += 50;
+    }
+    if (clientNameMatches(transaction, inv)) score += 50;
+    if (invoiceReferenceMatches(transaction, inv)) score += 100;
+    return { invoice: doc, score };
+  });
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      new Date(b.invoice.invoiceDate || 0) -
+        new Date(a.invoice.invoiceDate || 0),
   );
 
   return { scored: scored.slice(0, 50), transactionAmount: transaction.amount };
