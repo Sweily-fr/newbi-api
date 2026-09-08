@@ -980,7 +980,21 @@ const purchaseOrderResolvers = {
             }
           }
 
+          const statusBeforeUpdate = po.status;
           Object.assign(po, updateData);
+
+          // Bon de commande déjà finalisé dont le contenu change : l'archive
+          // PDF R2 (aperçu sidebar, bouton PDF) date de la finalisation et ne
+          // reflète plus le document. On l'oublie ici : le client web la
+          // réécrit juste après (archivePurchaseOrderPdf) ; en cas d'échec,
+          // l'aperçu retombe sur le rendu HTML à jour au lieu de servir
+          // l'ancien PDF. Même logique que updateQuote.
+          if (statusBeforeUpdate !== "DRAFT" && po.archivedPdfKey) {
+            po.archivedPdfKey = undefined;
+            po.archivedPdfStoredAt = undefined;
+            po.archivedPdfSource = undefined;
+          }
+
           await po.save();
           return await po.populate("createdBy");
         },

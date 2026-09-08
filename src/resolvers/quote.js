@@ -1374,6 +1374,20 @@ const quoteResolvers = {
 
         const statusBeforeUpdate = quote.status;
         Object.assign(quote, updateData);
+
+        // Devis déjà finalisé (PENDING) dont le contenu change : l'archive
+        // PDF R2 (aperçu sidebar, bouton PDF, email) date de la finalisation
+        // et ne reflète plus le devis. On l'oublie ici : le client web la
+        // réécrit juste après (archiveQuotePdf) ; si ça échoue ou si la
+        // modification vient du mobile, l'aperçu retombe sur le rendu HTML à
+        // jour au lieu de servir l'ancien PDF. L'objet R2 est simplement
+        // écrasé au ré-archivage (clé stable par document et par mois).
+        if (statusBeforeUpdate !== "DRAFT" && quote.archivedPdfKey) {
+          quote.archivedPdfKey = undefined;
+          quote.archivedPdfStoredAt = undefined;
+          quote.archivedPdfSource = undefined;
+        }
+
         await quote.save();
 
         // Sync Qonto (fire-and-forget) — envoi (DRAFT → PENDING) via updateQuote

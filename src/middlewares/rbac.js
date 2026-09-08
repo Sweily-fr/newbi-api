@@ -530,9 +530,10 @@ export const withRBAC = (resolver, options = {}) => {
       // Gérer les erreurs de validation Mongoose avec un message user-friendly
       if (error instanceof mongoose.Error.ValidationError) {
         const messages = Object.values(error.errors).map((e) => e.message);
+        // Message interpolé : winston n'écrit pas les arguments supplémentaires
+        // dans les fichiers, le détail (« Le prénom est requis… ») était perdu.
         logger.warn(
-          `Erreur de validation dans ${resolver.name || "resolver"}:`,
-          messages.join(", "),
+          `Erreur de validation dans ${resolver.name || "resolver"} (${info?.fieldName || "?"}): ${messages.join(", ")}`,
         );
         throw new AppError(
           messages.length === 1
