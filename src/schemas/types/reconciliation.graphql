@@ -18,6 +18,7 @@ type ReconciliationTransaction {
 type ReconciliationInvoice {
   id: ID!
   number: String
+  prefix: String
   clientName: String
   totalTTC: Float
   dueDate: DateTime

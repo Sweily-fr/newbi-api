@@ -50,6 +50,7 @@ Résumé d'une facture liée à une transaction (évite les dépendances circula
 type LinkedInvoiceSummary {
   id: ID!
   number: String
+  prefix: String
   status: String
   clientName: String
   totalTTC: Float

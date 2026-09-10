@@ -1142,6 +1142,7 @@ const bankingResolvers = {
         return invoices.map((invoice) => ({
           id: invoice._id.toString(),
           number: invoice.number,
+          prefix: invoice.prefix || null,
           status: invoice.status,
           clientName:
             invoice.client?.name ||
