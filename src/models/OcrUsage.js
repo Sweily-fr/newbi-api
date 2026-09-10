@@ -18,7 +18,13 @@ const ocrUsageSchema = new mongoose.Schema(
     // Provider OCR (claude-vision, mindee, google-document-ai, mistral)
     provider: {
       type: String,
-      enum: ["claude-vision", "mindee", "google-document-ai", "mistral"],
+      enum: [
+        "claude-vision",
+        "mindee",
+        "google-document-ai",
+        "mistral",
+        "tesseract",
+      ],
       required: true,
     },
 
@@ -58,13 +64,13 @@ const ocrUsageSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index composé pour requêtes rapides
 ocrUsageSchema.index(
   { workspaceId: 1, provider: 1, month: 1 },
-  { unique: true }
+  { unique: true },
 );
 
 /**
@@ -76,7 +82,7 @@ ocrUsageSchema.index(
  */
 ocrUsageSchema.statics.getCurrentUsage = async function (
   workspaceId,
-  provider
+  provider,
 ) {
   const currentMonth = new Date().toISOString().slice(0, 7); // "2025-01"
 
@@ -95,7 +101,7 @@ ocrUsageSchema.statics.getCurrentUsage = async function (
 ocrUsageSchema.statics.hasQuotaAvailable = async function (
   workspaceId,
   provider,
-  limit = 250
+  limit = 250,
 ) {
   const currentUsage = await this.getCurrentUsage(workspaceId, provider);
   return currentUsage < limit;
@@ -107,7 +113,7 @@ ocrUsageSchema.statics.hasQuotaAvailable = async function (
 ocrUsageSchema.statics.incrementUsage = async function (
   workspaceId,
   provider,
-  documentInfo = {}
+  documentInfo = {},
 ) {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -153,7 +159,7 @@ ocrUsageSchema.statics.incrementUsage = async function (
   const result = await this.findOneAndUpdate(
     { workspaceId, provider, month: currentMonth },
     updateData,
-    { upsert: true, new: true }
+    { upsert: true, new: true },
   );
 
   return result;

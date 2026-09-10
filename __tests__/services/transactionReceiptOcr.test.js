@@ -174,6 +174,224 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     );
   });
 
+  it("justificatif en devise étrangère : la facture prend le débit bancaire converti (EUR) et garde le montant d'origine", async () => {
+    mockClaudeSuccess();
+    toInvoiceFormat.mockReturnValue({
+      transaction_data: {
+        document_number: "MDB-2026-08",
+        transaction_date: "02/08/2026",
+        vendor_name: "MongoDB Inc",
+        amount: 10.59,
+        amount_ht: 10.59,
+        tax_amount: 0,
+        tax_rate: 0,
+        currency: "USD",
+        category: "SOFTWARE",
+        payment_method: "card",
+      },
+      extracted_fields: {
+        totals: { total_ht: 10.59, total_tax: 0, total_ttc: 10.59 },
+      },
+      document_analysis: { confidence: 0.9 },
+    });
+    const tx = await createExpenseTransaction({
+      amount: -9.25,
+      currency: "EUR",
+      description: "CB MONGODB",
+      date: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+
+    expect(invoices).toHaveLength(1);
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.currency).toBe("EUR");
+    expect(invoice.amountTTC).toBe(9.25);
+    expect(invoice.amountHT).toBe(9.25);
+    expect(invoice.amountTVA).toBe(0);
+    expect(invoice.vatRate).toBe(0);
+    // Montant lu sur le justificatif conservé pour information
+    expect(invoice.ocrMetadata.amountTTC).toBe(10.59);
+    expect(invoice.ocrMetadata.currency).toBe("USD");
+    expect(invoice.notes).toContain("10.59 USD");
+    expect(invoice.notes).toContain("9.25 EUR");
+  });
+
+  it("justificatif en devise étrangère déposé sur une seconde transaction : rattaché à la facture existante (montant converti)", async () => {
+    const ocrUsd = () =>
+      toInvoiceFormat.mockReturnValue({
+        transaction_data: {
+          document_number: "MDB-2026-08",
+          transaction_date: "02/08/2026",
+          vendor_name: "MongoDB Inc",
+          amount: 10.59,
+          amount_ht: 10.59,
+          tax_amount: 0,
+          tax_rate: 0,
+          currency: "USD",
+          category: "SOFTWARE",
+          payment_method: "card",
+        },
+        extracted_fields: {
+          totals: { total_ht: 10.59, total_tax: 0, total_ttc: 10.59 },
+        },
+        document_analysis: { confidence: 0.9 },
+      });
+    mockClaudeSuccess();
+    ocrUsd();
+    const tx1 = await createExpenseTransaction({
+      amount: -9.25,
+      description: "CB MONGODB",
+    });
+    await transactionReceiptOcrService.processReceiptsForTransaction({
+      transactionId: tx1._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
+
+    mockClaudeSuccess();
+    ocrUsd();
+    const tx2 = await createExpenseTransaction({
+      amount: -9.25,
+      description: "CB MONGODB",
+      receiptFiles: [
+        {
+          url: "https://receipts.newbi.fr/receipt-2.pdf",
+          key: "receipts/receipt-2.pdf",
+          filename: "receipt-2.pdf",
+          mimetype: "application/pdf",
+          size: 1234,
+          uploadedBy: userId,
+        },
+      ],
+    });
+    await transactionReceiptOcrService.processReceiptsForTransaction({
+      transactionId: tx2._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-2.pdf": Buffer.from("fake-pdf") },
+    });
+
+    const all = await PurchaseInvoice.find({ workspaceId });
+    expect(all).toHaveLength(1);
+    expect(all[0].amountTTC).toBe(9.25);
+    expect(all[0].linkedTransactionIds.map(String)).toEqual(
+      expect.arrayContaining([tx1._id.toString(), tx2._id.toString()]),
+    );
+  });
+
+  it("moteurs IA indisponibles : Tesseract + regex pré-remplissent la facture, marquée « partial »", async () => {
+    processFromBase64.mockRejectedValue(
+      new Error("ANTHROPIC_API_KEY manquante"),
+    );
+    processDocumentFromUrl.mockResolvedValue({
+      success: true,
+      provider: "tesseract",
+      extractionQuality: "partial",
+      extractedText:
+        "Northwind Digital LLC INVOICE ... Balance due (USD) $3,577.78",
+      transaction_data: {
+        vendor_name: "Northwind Digital LLC",
+        amount: 3577.78,
+        amount_ht: 3847,
+        tax_amount: 310.78,
+        tax_rate: 8.25,
+        transaction_date: "2026-03-04",
+        due_date: "2026-04-03",
+        document_number: "INV-2026-0042",
+        currency: "USD",
+        category: "OTHER",
+        payment_method: "",
+      },
+      extracted_fields: {
+        totals: { total_ht: 3847, total_tax: 310.78, total_ttc: 3577.78 },
+      },
+    });
+    // Analyse Mistral en quota : analyse de secours (success false)
+    analyzeDocument.mockResolvedValue({
+      success: false,
+      degraded: true,
+      extractionQuality: "partial",
+      transaction_data: { vendor_name: "Fournisseur inconnu", amount: 0 },
+      extracted_fields: {},
+    });
+    const tx = await createExpenseTransaction({
+      amount: -3470.12,
+      description: "CB NORTHWIND DIGITAL",
+    });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
+      });
+
+    expect(invoices).toHaveLength(1);
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.supplierName).toBe("Northwind Digital LLC");
+    expect(invoice.invoiceNumber).toBe("INV-2026-0042");
+    // Combiné au correctif devise : justificatif en USD sur un compte EUR,
+    // la facture porte le débit bancaire converti et garde le montant lu
+    expect(invoice.amountTTC).toBe(3470.12);
+    expect(invoice.currency).toBe("EUR");
+    expect(invoice.ocrMetadata.amountTTC).toBe(3577.78);
+    expect(invoice.ocrMetadata.currency).toBe("USD");
+    expect(invoice.vatRate).toBe(8.25);
+    expect(invoice.ocrMetadata.provider).toBe("tesseract");
+    expect(invoice.ocrMetadata.extractionQuality).toBe("partial");
+    expect(invoice.files[0].ocrProcessed).toBe(true);
+  });
+
+  it("OCR totalement impossible : facture depuis la transaction, marquée « none »", async () => {
+    processFromBase64.mockRejectedValue(
+      new Error("ANTHROPIC_API_KEY manquante"),
+    );
+    processDocumentFromUrl.mockResolvedValue({
+      success: false,
+      error: "Tous les OCR ont échoué",
+      provider: "none",
+    });
+    const tx = await createExpenseTransaction({ amount: -42 });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
+      });
+
+    expect(invoices).toHaveLength(1);
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.amountTTC).toBe(42);
+    expect(invoice.ocrMetadata.extractionQuality).toBe("none");
+    expect(invoice.files[0].ocrProcessed).toBe(false);
+  });
+
+  it("OCR Claude réussi : facture marquée « full » avec le moteur", async () => {
+    mockClaudeSuccess();
+    const tx = await createExpenseTransaction();
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.ocrMetadata.provider).toBe("claude-vision");
+    expect(invoice.ocrMetadata.extractionQuality).toBe("full");
+  });
+
   it("ignore les transactions qui ne sont pas des dépenses", async () => {
     const tx = await createExpenseTransaction({ type: "credit", amount: 250 });
 
@@ -511,5 +729,85 @@ describe("transactionReceiptOcrService.isExpenseTransaction", () => {
         type: "credit",
       }),
     ).toBe(false);
+  });
+});
+
+describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
+  const { resolveReceiptAmounts } = transactionReceiptOcrService;
+  const tx = { amount: -9.25, currency: "EUR" };
+
+  it("garde les montants OCR quand la devise est celle du compte", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: {
+          amount: 120.5,
+          amount_ht: 100.42,
+          tax_amount: 20.08,
+          tax_rate: 20,
+          currency: "eur",
+        },
+      },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 120.5,
+      amountHT: 100.42,
+      amountTVA: 20.08,
+      vatRate: 20,
+      currency: "EUR",
+      conversion: null,
+    });
+  });
+
+  it("garde les montants OCR quand l'OCR ne donne pas de devise", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: { amount: 10.59, amount_ht: 8.83, tax_amount: 1.76 },
+      },
+    });
+    expect(r.amountTTC).toBe(10.59);
+    expect(r.currency).toBe("EUR");
+    expect(r.conversion).toBeNull();
+  });
+
+  it("devise étrangère (symbole $) : débit bancaire retenu, HT et TVA au prorata", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -100, currency: "EUR" },
+      financial: {
+        transaction_data: {
+          amount: 120,
+          amount_ht: 100,
+          tax_amount: 20,
+          tax_rate: 20,
+          currency: "$",
+        },
+      },
+    });
+    expect(r).toEqual({
+      amountTTC: 100,
+      amountHT: 83.33,
+      amountTVA: 16.67,
+      vatRate: 20,
+      currency: "EUR",
+      conversion: { originalAmountTTC: 120, originalCurrency: "USD" },
+    });
+  });
+
+  it("devise étrangère sans montant bancaire exploitable : montants OCR conservés dans leur devise", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: 0, currency: "EUR" },
+      financial: { transaction_data: { amount: 10.59, currency: "USD" } },
+    });
+    expect(r.amountTTC).toBe(10.59);
+    expect(r.currency).toBe("USD");
+    expect(r.conversion).toBeNull();
+  });
+
+  it("OCR en échec : montant de la transaction dans sa devise", () => {
+    const r = resolveReceiptAmounts({ transaction: tx, financial: null });
+    expect(r.amountTTC).toBe(9.25);
+    expect(r.currency).toBe("EUR");
+    expect(r.vatRate).toBe(20);
   });
 });

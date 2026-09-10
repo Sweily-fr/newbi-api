@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { extractInvoiceFieldsFromText } from "../utils/ocrTextFallback.js";
 /**
  * Service d'analyse intelligente avec l'API Chat de Mistral
  * Utilise l'IA pour extraire les données structurées des documents OCR
@@ -118,6 +119,7 @@ INSTRUCTIONS CRITIQUES:
 7. Extrait l'adresse COMPLÈTE du client si présente
 8. Pour le moyen de paiement, cherche: Carte Bancaire, CB, Espèces, Chèque, Virement, etc.
 9. Extrait les informations légales: SIRET, TVA intracommunautaire, RCS, APE
+10. Pour "currency", indique la devise RÉELLEMENT utilisée sur le document (code ISO 4217 : EUR, USD, GBP, CHF...) ; "$" ou "US$" = USD, jamais EUR par défaut
 10. Extrait les totaux: HT, TVA, TTC, montant payé, rendu monnaie
 11. Pour la catégorie, choisis parmi: RENT, SUBSCRIPTIONS, OFFICE_SUPPLIES, SERVICES, TRANSPORT, MEALS, TELECOMMUNICATIONS, INSURANCE, ENERGY, SOFTWARE, HARDWARE, MARKETING, TRAINING, MAINTENANCE, TAXES, UTILITIES, OTHER
 
@@ -426,8 +428,44 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
   getFallbackAnalysis(ocrData) {
     logger.debug("📋 Utilisation de l'analyse de secours");
 
+    // Secours gratuit : champs extraits par regex du texte OCR (montants
+    // FR/EN, devise, dates, numéro, fournisseur). Qualité "partial".
+    const text = ocrData?.extractedText || ocrData?.text || "";
+    try {
+      const fallback = extractInvoiceFieldsFromText(text);
+      if (fallback.found) {
+        logger.debug(
+          `📝 Analyse de secours par regex (TTC: ${fallback.transaction_data.amount} ${fallback.transaction_data.currency}, fournisseur: ${fallback.transaction_data.vendor_name || "?"})`,
+        );
+        return {
+          success: false,
+          degraded: true,
+          extractionQuality: "partial",
+          document_analysis: {
+            document_type: "invoice",
+            confidence: 0.4,
+            language: "fr",
+            provider: "regex-fallback",
+          },
+          transaction_data: {
+            ...fallback.transaction_data,
+            vendor_name:
+              fallback.transaction_data.vendor_name || "Fournisseur inconnu",
+            status: "pending",
+            subcategory: "non_classifie",
+          },
+          extracted_fields: fallback.extracted_fields,
+          raw_content: text,
+        };
+      }
+    } catch (error) {
+      console.warn("⚠️ Analyse de secours regex échouée:", error.message);
+    }
+
     return {
       success: false,
+      degraded: true,
+      extractionQuality: "none",
       document_analysis: {
         document_type: "unknown",
         confidence: 0.3,

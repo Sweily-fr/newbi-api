@@ -8,20 +8,55 @@ import logger from "../utils/logger.js";
  * 1. Mindee OCR (si configuré et quota disponible) - Gratuit 250/mois, très précis
  * 2. Google Document AI (si configuré) - Gratuit 1000/mois, précis pour les factures
  * 3. Mistral OCR (fallback) - Bon pour le texte général
+ * 4. Tesseract (dernier recours) - Gratuit et local, sans quota : images via
+ *    OCR, PDF via leur couche texte. Champs extraits par regex (qualité
+ *    "partial", à vérifier par l'utilisateur).
  *
  * Variables d'environnement:
  * - OCR_PROVIDER: Provider par défaut ("claude-vision", "mindee", "google-document-ai", "mistral-ocr")
  * - OCR_DISABLE_CLAUDE: "true" pour désactiver Claude Vision
+ * - OCR_DISABLE_TESSERACT: "true" pour désactiver le dernier recours gratuit
  */
 
 import claudeVisionOcrService from "./claudeVisionOcrService.js";
 import mindeeOcrService from "./mindeeOcrService.js";
 import googleDocumentAI from "./googleDocumentAIService.js";
 import mistralOcrService from "./mistralOcrService.js";
+import tesseractOcrService from "./tesseractOcrService.js";
 import ocrCacheService from "./ocrCacheService.js";
 import OcrUsage from "../models/OcrUsage.js";
-import invoiceExtractionService from "./invoiceExtractionService.js";
+import { extractInvoiceFieldsFromText } from "../utils/ocrTextFallback.js";
 import { assertSafeDownloadUrl } from "../utils/ssrfGuard.js";
+
+/**
+ * Complète un résultat OCR "texte seul" (Google OCR basique, Tesseract) avec
+ * des champs extraits par regex : montants FR/EN, devise, dates, numéro,
+ * fournisseur. Marque le résultat "partial" pour que l'appelant sache que ces
+ * champs n'ont pas été validés par une IA.
+ */
+function applyTextFallback(result, providerName) {
+  const text = result.extractedText || result.text || "";
+  if (!text) return result;
+  try {
+    const fallback = extractInvoiceFieldsFromText(text);
+    if (!fallback.found) return result;
+    result.transaction_data = fallback.transaction_data;
+    result.extracted_fields = {
+      ...(result.extracted_fields || {}),
+      ...fallback.extracted_fields,
+    };
+    result.extractionQuality = "partial";
+    logger.debug(
+      `📝 ${providerName}: champs extraits par regex (TTC: ${fallback.transaction_data.amount} ${fallback.transaction_data.currency}, N°: ${fallback.transaction_data.document_number || "?"}, fournisseur: ${fallback.transaction_data.vendor_name || "?"})`,
+    );
+  } catch (extractionError) {
+    console.warn(
+      `⚠️ Extraction regex de secours échouée (${providerName}):`,
+      extractionError.message,
+    );
+  }
+  return result;
+}
 
 class HybridOcrService {
   constructor() {
@@ -53,6 +88,7 @@ class HybridOcrService {
         mindee: 2,
         "google-document-ai": 3,
         "mistral-ocr": 4,
+        tesseract: 9,
       };
       return basePriorities[providerName] || 5;
     };
@@ -126,6 +162,20 @@ class HybridOcrService {
       logger.debug(
         `✅ Mistral OCR disponible (priorité ${getPriority("mistral-ocr")})`,
       );
+    }
+
+    // Tesseract - Dernier recours gratuit et local (toujours disponible)
+    if (tesseractOcrService.isAvailable()) {
+      this.providers.push({
+        name: "tesseract",
+        service: tesseractOcrService,
+        priority: getPriority("tesseract"),
+      });
+      logger.debug(
+        `✅ Tesseract OCR disponible (priorité ${getPriority("tesseract")}) - gratuit, dernier recours`,
+      );
+    } else {
+      logger.debug("ℹ️ Tesseract OCR désactivé via OCR_DISABLE_TESSERACT");
     }
 
     // Trier par priorité
@@ -235,53 +285,8 @@ class HybridOcrService {
             result.transaction_data?.vendor_name ||
             result.transaction_data?.amount ||
             result.transaction_data?.document_number;
-          if (!hasEntities && result.extractedText) {
-            try {
-              const regex = invoiceExtractionService.extractWithPatterns(
-                result.extractedText,
-              );
-              if (regex) {
-                const totalTTC =
-                  parseFloat(regex.netToPay || regex.totalTTC) || 0;
-                const totalHT =
-                  parseFloat(regex.totalHT || regex.totalHtMois) || 0;
-                const totalTVA = parseFloat(regex.tvaAmount) || 0;
-                result.transaction_data = {
-                  vendor_name: "",
-                  amount: totalTTC,
-                  amount_ht: totalHT,
-                  tax_amount: totalTVA,
-                  transaction_date: regex.invoiceDate || null,
-                  due_date: regex.dueDate || null,
-                  document_number: regex.invoiceNumber || null,
-                  currency: "EUR",
-                  category: "OTHER",
-                  payment_method: regex.paymentMethod || "",
-                };
-                result.extracted_fields = {
-                  ...result.extracted_fields,
-                  vendor_siret: regex.siret || null,
-                  vendor_vat_number: regex.vatNumber || null,
-                  vendor_email: regex.email || null,
-                  vendor_phone: regex.phone || null,
-                  vendor_city: regex.city || "",
-                  vendor_postal_code: regex.postalCode || "",
-                  totals: {
-                    total_ht: totalHT,
-                    total_tax: totalTVA,
-                    total_ttc: totalTTC,
-                  },
-                };
-                logger.debug(
-                  `📝 Google Document AI: données extraites via regex fallback (TTC: ${totalTTC}, N°: ${regex.invoiceNumber})`,
-                );
-              }
-            } catch (extractionError) {
-              console.warn(
-                `⚠️ Regex extraction fallback échoué:`,
-                extractionError.message,
-              );
-            }
+          if (!hasEntities) {
+            applyTextFallback(result, "Google Document AI");
           }
 
           // Incrémenter le compteur d'usage Google
@@ -317,6 +322,28 @@ class HybridOcrService {
             } catch (usageError) {
               console.warn(
                 "⚠️ Erreur incrémentation usage Mistral:",
+                usageError.message,
+              );
+            }
+          }
+        } else if (provider.name === "tesseract") {
+          // Tesseract - Dernier recours gratuit : texte + champs par regex
+          result = await provider.service.processDocumentFromUrl(
+            documentUrl,
+            fileName,
+            mimeType,
+          );
+          applyTextFallback(result, "Tesseract");
+
+          if (workspaceId) {
+            try {
+              await OcrUsage.incrementUsage(workspaceId, "tesseract", {
+                fileName,
+                success: true,
+              });
+            } catch (usageError) {
+              console.warn(
+                "⚠️ Erreur incrémentation usage Tesseract:",
                 usageError.message,
               );
             }
