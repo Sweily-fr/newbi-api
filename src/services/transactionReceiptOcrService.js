@@ -171,6 +171,8 @@ async function runOcr(receiptFile, fileBuffer, workspaceId) {
           document_analysis: structured.document_analysis,
         },
         extractedText: rawResult.extractedText || null,
+        provider: "claude-vision",
+        extractionQuality: "full",
       };
     } catch (error) {
       logger.warn(
@@ -191,6 +193,7 @@ async function runOcr(receiptFile, fileBuffer, workspaceId) {
   }
 
   let financial;
+  let extractionQuality = "full";
   if (hybridResult.provider === "claude-vision") {
     financial = {
       transaction_data: hybridResult.transaction_data,
@@ -200,11 +203,34 @@ async function runOcr(receiptFile, fileBuffer, workspaceId) {
   } else {
     financial =
       await mistralIntelligentAnalysisService.analyzeDocument(hybridResult);
+    if (financial?.success === false) {
+      // Analyse IA indisponible (quota, clé, panne). Secours gratuit : les
+      // champs extraits par regex, soit par le provider (Tesseract, Google
+      // OCR basique), soit par l'analyse de secours Mistral.
+      if (
+        hybridResult.extractionQuality === "partial" &&
+        hybridResult.transaction_data
+      ) {
+        financial = {
+          transaction_data: hybridResult.transaction_data,
+          extracted_fields: hybridResult.extracted_fields || {},
+          document_analysis: { confidence: 0.4, provider: "regex-fallback" },
+        };
+        extractionQuality = "partial";
+      } else {
+        extractionQuality = financial.extractionQuality || "none";
+      }
+      logger.warn(
+        `⚠️ [RECEIPT OCR] Analyse IA indisponible pour ${receiptFile.filename}, champs de secours (${extractionQuality}) via ${hybridResult.provider}`,
+      );
+    }
   }
 
   return {
     financial,
     extractedText: hybridResult.extractedText || hybridResult.text || null,
+    provider: hybridResult.provider || "hybrid",
+    extractionQuality,
   };
 }
 
@@ -242,6 +268,8 @@ async function createPurchaseInvoiceFromReceipt({
   financial,
   extractedText,
   ocrSucceeded,
+  ocrProvider = null,
+  extractionQuality = null,
   workspaceId,
   userId,
 }) {
@@ -347,8 +375,15 @@ async function createPurchaseInvoiceFromReceipt({
           rawExtractedText: extractedText
             ? String(extractedText).slice(0, 50000)
             : undefined,
+          provider: ocrProvider || undefined,
+          extractionQuality: extractionQuality || "full",
         }
-      : {},
+      : {
+          // Aucune donnée extraite : facture construite depuis la transaction,
+          // à compléter par l'utilisateur
+          provider: ocrProvider || undefined,
+          extractionQuality: "none",
+        },
   });
 
   try {
@@ -551,6 +586,8 @@ async function processReceiptsForTransaction({
       let financial = null;
       let extractedText = null;
       let ocrSucceeded = false;
+      let ocrProvider = null;
+      let extractionQuality = null;
 
       try {
         const ocrResult = await runOcr(
@@ -560,6 +597,8 @@ async function processReceiptsForTransaction({
         );
         financial = ocrResult.financial;
         extractedText = ocrResult.extractedText;
+        ocrProvider = ocrResult.provider || null;
+        extractionQuality = ocrResult.extractionQuality || null;
         ocrSucceeded = Boolean(financial);
       } catch (ocrError) {
         logger.warn(
@@ -622,6 +661,8 @@ async function processReceiptsForTransaction({
           financial,
           extractedText,
           ocrSucceeded,
+          ocrProvider,
+          extractionQuality,
           workspaceId,
           userId,
         });

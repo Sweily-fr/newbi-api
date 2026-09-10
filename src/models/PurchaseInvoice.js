@@ -47,6 +47,16 @@ const ocrMetadataSchema = new mongoose.Schema(
     bic: { type: String, trim: true },
     confidenceScore: { type: Number, min: 0, max: 1 },
     rawExtractedText: { type: String },
+    // Moteur qui a produit les champs (claude-vision, mistral, tesseract...)
+    provider: { type: String, trim: true },
+    // Qualité de l'extraction :
+    //  - full    : IA (Claude Vision ou analyse Mistral), champs fiables
+    //  - partial : secours sans IA (regex sur le texte OCR), à vérifier
+    //  - none    : aucune donnée extraite, facture créée depuis la transaction
+    extractionQuality: {
+      type: String,
+      enum: ["full", "partial", "none"],
+    },
   },
   { _id: false },
 );

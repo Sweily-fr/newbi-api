@@ -54,3 +54,6 @@ SECURITY_FINDINGS.md
 TEST_INFRA_FINDINGS.md
 
 # Local tooling config
+
+# Cache des fichiers de langue Tesseract (téléchargés au premier OCR)
+.cache/

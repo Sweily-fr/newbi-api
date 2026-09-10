@@ -85,6 +85,8 @@ type PurchaseInvoiceOCRMetadata {
   bic: String
   confidenceScore: Float
   rawExtractedText: String
+  provider: String
+  extractionQuality: String
 }
 
 # Statuts e-invoicing (réception SuperPDP)
