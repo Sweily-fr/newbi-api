@@ -53,9 +53,10 @@ const ocrMetadataSchema = new mongoose.Schema(
     //  - full    : IA (Claude Vision ou analyse Mistral), champs fiables
     //  - partial : secours sans IA (regex sur le texte OCR), à vérifier
     //  - none    : aucune donnée extraite, facture créée depuis la transaction
+    //  - reviewed: partial/none puis enregistrée par l'utilisateur (vérifiée)
     extractionQuality: {
       type: String,
-      enum: ["full", "partial", "none"],
+      enum: ["full", "partial", "none", "reviewed"],
     },
   },
   { _id: false },

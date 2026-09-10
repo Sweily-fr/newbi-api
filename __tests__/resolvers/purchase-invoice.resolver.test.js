@@ -260,6 +260,55 @@ describe("PurchaseInvoice Resolver - Mutation.deletePurchaseInvoice", () => {
   });
 });
 
+describe("PurchaseInvoice Resolver - Mutation.updatePurchaseInvoice (OCR à compléter)", () => {
+  const resolver = purchaseInvoiceResolvers.Mutation.updatePurchaseInvoice;
+
+  it("une facture « À compléter » (partial) devient vérifiée à l'enregistrement", async () => {
+    const { insertedId } = await insertPurchaseInvoice({
+      ocrMetadata: { provider: "tesseract", extractionQuality: "partial" },
+    });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { supplierName: "Blue Harbor Supply Co." },
+      },
+      ctx(),
+    );
+
+    expect(result.supplierName).toBe("Blue Harbor Supply Co.");
+    expect(result.ocrMetadata.extractionQuality).toBe("reviewed");
+    expect(result.ocrMetadata.provider).toBe("tesseract");
+    const saved = await PurchaseInvoice.findById(insertedId);
+    expect(saved.ocrMetadata.extractionQuality).toBe("reviewed");
+  });
+
+  it("une facture « none » devient vérifiée aussi, une facture « full » ne change pas", async () => {
+    const none = await insertPurchaseInvoice({
+      ocrMetadata: { extractionQuality: "none" },
+    });
+    const full = await insertPurchaseInvoice({
+      invoiceNumber: "PI-002",
+      ocrMetadata: { provider: "claude-vision", extractionQuality: "full" },
+    });
+
+    const r1 = await resolver(
+      null,
+      { id: none.insertedId.toString(), input: { notes: "vérifiée" } },
+      ctx(),
+    );
+    const r2 = await resolver(
+      null,
+      { id: full.insertedId.toString(), input: { notes: "ok" } },
+      ctx(),
+    );
+
+    expect(r1.ocrMetadata.extractionQuality).toBe("reviewed");
+    expect(r2.ocrMetadata.extractionQuality).toBe("full");
+  });
+});
+
 describe("PurchaseInvoice Resolver - Mutation.markPurchaseInvoiceAsPaid", () => {
   const resolver = purchaseInvoiceResolvers.Mutation.markPurchaseInvoiceAsPaid;
 
