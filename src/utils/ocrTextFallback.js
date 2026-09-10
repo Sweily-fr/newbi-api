@@ -218,6 +218,10 @@ export function guessVendorName(text) {
   for (const line of lines.slice(0, 8)) {
     if (NOISE_LINE.test(line)) continue;
     const cleaned = line
+      // Balises Markdown (Mistral OCR rend le texte en Markdown : "# Titre",
+      // "**gras**", "| cellule |")
+      .replace(/^[#>*_`|\s-]+/, "")
+      .replace(/[*_`|]+/g, " ")
       .replace(/\b(invoice|facture|re[çc]u|receipt)\b/gi, "")
       .replace(/[|•·]+/g, " ")
       .replace(/\s+/g, " ")

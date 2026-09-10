@@ -82,6 +82,11 @@ describe("ocrTextFallback.guessVendorName", () => {
     expect(guessVendorName(northwind)).toBe("Northwind Digital LLC");
     expect(guessVendorName(frenchInvoice)).toBe("SARL DUPONT PLOMBERIE");
     expect(guessVendorName("FACTURE\n\nACME SAS\n")).toBe("ACME SAS");
+    // Texte Markdown rendu par Mistral OCR
+    expect(guessVendorName("# Blue Harbor Supply Co.\n\n**INVOICE**")).toBe(
+      "Blue Harbor Supply Co.",
+    );
+    expect(guessVendorName("| **ACME SAS** |\n")).toBe("ACME SAS");
     expect(guessVendorName("")).toBeNull();
   });
 });
