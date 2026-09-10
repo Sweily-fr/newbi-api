@@ -112,6 +112,90 @@ function toNonNegativeNumber(value) {
   return n;
 }
 
+const CURRENCY_SYMBOLS = { "€": "EUR", $: "USD", US$: "USD", "£": "GBP" };
+
+function normalizeCurrency(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (CURRENCY_SYMBOLS[raw]) return CURRENCY_SYMBOLS[raw];
+  const code = raw.toUpperCase();
+  return /^[A-Z]{3}$/.test(code) ? code : null;
+}
+
+const round2 = (n) => Math.round(n * 100) / 100;
+
+/**
+ * Montants retenus pour la facture d'achat créée depuis un justificatif.
+ *
+ * Par défaut ce sont les montants lus par l'OCR sur le justificatif. Mais si
+ * celui-ci est libellé dans une autre devise que le compte bancaire (facture
+ * MongoDB en USD payée depuis un compte en EUR), le montant lu ne correspond
+ * pas à la dépense réelle : c'est le débit bancaire, déjà converti par la
+ * banque, qui fait foi. La facture est alors enregistrée dans la devise du
+ * compte, HT et TVA sont ramenés au prorata, et le montant d'origine est
+ * conservé dans `conversion` (repris dans ocrMetadata et les notes).
+ */
+function resolveReceiptAmounts({ transaction, financial }) {
+  const td = financial?.transaction_data || {};
+  const totals = financial?.extracted_fields?.totals || {};
+
+  const ocrTTC =
+    toPositiveNumber(td.amount) || toPositiveNumber(totals.total_ttc) || null;
+  const ocrHT =
+    toPositiveNumber(td.amount_ht) || toPositiveNumber(totals.total_ht) || 0;
+  const ocrTVA =
+    toPositiveNumber(td.tax_amount) || toPositiveNumber(totals.total_tax) || 0;
+  const ocrCurrency = normalizeCurrency(td.currency);
+  const txCurrency = normalizeCurrency(transaction?.currency) || "EUR";
+  const txAmount =
+    typeof transaction?.amount === "number" ? Math.abs(transaction.amount) : 0;
+
+  // Un taux de 0 % est valide (autoliquidation, franchise...) : ne pas
+  // l'écraser par le défaut. À défaut de taux extrait, on le dérive des
+  // montants, et en dernier recours 20 %.
+  const extractedVatRate = toNonNegativeNumber(td.tax_rate);
+  const vatRate =
+    extractedVatRate !== null
+      ? extractedVatRate
+      : ocrHT > 0
+        ? Math.round((ocrTVA / ocrHT) * 10000) / 100
+        : 20;
+
+  const foreignCurrency =
+    Boolean(ocrCurrency) &&
+    ocrCurrency !== txCurrency &&
+    ocrTTC > 0 &&
+    txAmount > 0;
+
+  if (foreignCurrency) {
+    const ratio = txAmount / ocrTTC;
+    const amountHT = ocrHT > 0 ? round2(ocrHT * ratio) : 0;
+    const amountTVA =
+      ocrTVA > 0
+        ? amountHT > 0
+          ? round2(Math.max(txAmount - amountHT, 0))
+          : round2(ocrTVA * ratio)
+        : 0;
+    return {
+      amountTTC: txAmount,
+      amountHT,
+      amountTVA,
+      vatRate,
+      currency: txCurrency,
+      conversion: { originalAmountTTC: ocrTTC, originalCurrency: ocrCurrency },
+    };
+  }
+
+  return {
+    amountTTC: ocrTTC || txAmount || null,
+    amountHT: ocrHT,
+    amountTVA: ocrTVA,
+    vatRate,
+    currency: ocrCurrency || txCurrency,
+    conversion: null,
+  };
+}
+
 function mapCategory(ocrCategory, transactionExpenseCategory) {
   if (ocrCategory && VALID_PI_CATEGORIES.has(ocrCategory)) return ocrCategory;
   if (
@@ -275,7 +359,6 @@ async function createPurchaseInvoiceFromReceipt({
 }) {
   const td = financial?.transaction_data || {};
   const ef = financial?.extracted_fields || {};
-  const totals = ef.totals || {};
 
   const supplierName =
     td.vendor_name ||
@@ -284,11 +367,8 @@ async function createPurchaseInvoiceFromReceipt({
     transaction.description ||
     "Fournisseur inconnu";
 
-  const amountTTC =
-    toPositiveNumber(td.amount) ||
-    toPositiveNumber(totals.total_ttc) ||
-    Math.abs(transaction.amount) ||
-    null;
+  const { amountTTC, amountHT, amountTVA, vatRate, currency, conversion } =
+    resolveReceiptAmounts({ transaction, financial });
 
   if (!amountTTC) {
     throw new Error(
@@ -296,20 +376,9 @@ async function createPurchaseInvoiceFromReceipt({
     );
   }
 
-  const amountHT =
-    toPositiveNumber(td.amount_ht) || toPositiveNumber(totals.total_ht) || 0;
-  const amountTVA =
-    toPositiveNumber(td.tax_amount) || toPositiveNumber(totals.total_tax) || 0;
-  // Un taux de 0 % est valide (autoliquidation, franchise...) : ne pas
-  // l'écraser par le défaut. À défaut de taux extrait, on le dérive des
-  // montants, et en dernier recours 20 %.
-  const extractedVatRate = toNonNegativeNumber(td.tax_rate);
-  const vatRate =
-    extractedVatRate !== null
-      ? extractedVatRate
-      : amountHT > 0
-        ? Math.round((amountTVA / amountHT) * 10000) / 100
-        : 20;
+  const conversionNote = conversion
+    ? ` Montant du justificatif : ${conversion.originalAmountTTC.toFixed(2)} ${conversion.originalCurrency}, débit bancaire retenu : ${amountTTC.toFixed(2)} ${currency}.`
+    : "";
   const category = mapCategory(td.category, transaction.expenseCategory);
   const issueDate =
     parseOcrDate(td.transaction_date || td.invoice_date) ||
@@ -325,7 +394,7 @@ async function createPurchaseInvoiceFromReceipt({
     amountTVA,
     vatRate,
     amountTTC,
-    currency: td.currency || transaction.currency || "EUR",
+    currency,
     // Le débit bancaire a déjà eu lieu : la facture est payée et rapprochée
     status: "PAID",
     paymentDate: transaction.date || new Date(),
@@ -335,7 +404,7 @@ async function createPurchaseInvoiceFromReceipt({
     ),
     category,
     source: "OCR",
-    notes: `Créée automatiquement depuis le justificatif de la transaction "${transaction.description || transaction.externalId || transaction._id}"`,
+    notes: `Créée automatiquement depuis le justificatif de la transaction "${transaction.description || transaction.externalId || transaction._id}".${conversionNote}`,
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
     createdBy: userId,
     linkedTransactionIds: [transaction._id],
@@ -364,8 +433,10 @@ async function createPurchaseInvoiceFromReceipt({
           amountHT: toPositiveNumber(td.amount_ht),
           amountTVA: toPositiveNumber(td.tax_amount),
           vatRate: toNonNegativeNumber(td.tax_rate),
+          // Montant et devise tels que lus sur le justificatif (avant
+          // éventuelle substitution par le débit bancaire converti)
           amountTTC: toPositiveNumber(td.amount),
-          currency: td.currency || undefined,
+          currency: normalizeCurrency(td.currency) || undefined,
           confidenceScore:
             typeof financial?.document_analysis?.confidence === "number" &&
             financial.document_analysis.confidence >= 0 &&
@@ -435,13 +506,14 @@ async function findExistingPurchaseInvoiceForReceipt({
   }
 
   const td = financial?.transaction_data || {};
-  const totals = financial?.extracted_fields?.totals || {};
+  // Même montant que celui qui serait enregistré sur la facture : en devise
+  // étrangère, une facture déjà créée porte le débit bancaire converti.
+  const { amountTTC } = resolveReceiptAmounts({ transaction, financial });
   const candidates = await findPurchaseInvoiceDuplicates({
     workspaceId,
     supplierName: td.vendor_name || td.supplier_name || null,
     invoiceNumber: td.document_number || td.invoice_number || null,
-    amountTTC:
-      toPositiveNumber(td.amount) || toPositiveNumber(totals.total_ttc) || null,
+    amountTTC: amountTTC || null,
     issueDate: parseOcrDate(td.transaction_date || td.invoice_date) || null,
     preferIds: linkedIds,
     limit: 1,
@@ -718,6 +790,7 @@ async function processReceiptsForTransaction({
 }
 
 export default {
+  resolveReceiptAmounts,
   processReceiptsForTransaction,
   isExpenseTransaction,
 };

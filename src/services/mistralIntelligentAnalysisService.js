@@ -119,6 +119,7 @@ INSTRUCTIONS CRITIQUES:
 7. Extrait l'adresse COMPLÈTE du client si présente
 8. Pour le moyen de paiement, cherche: Carte Bancaire, CB, Espèces, Chèque, Virement, etc.
 9. Extrait les informations légales: SIRET, TVA intracommunautaire, RCS, APE
+10. Pour "currency", indique la devise RÉELLEMENT utilisée sur le document (code ISO 4217 : EUR, USD, GBP, CHF...) ; "$" ou "US$" = USD, jamais EUR par défaut
 10. Extrait les totaux: HT, TVA, TTC, montant payé, rendu monnaie
 11. Pour la catégorie, choisis parmi: RENT, SUBSCRIPTIONS, OFFICE_SUPPLIES, SERVICES, TRANSPORT, MEALS, TELECOMMUNICATIONS, INSURANCE, ENERGY, SOFTWARE, HARDWARE, MARKETING, TRAINING, MAINTENANCE, TAXES, UTILITIES, OTHER
 

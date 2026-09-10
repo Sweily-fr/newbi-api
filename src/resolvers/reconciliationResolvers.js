@@ -65,6 +65,7 @@ const reconciliationResolvers = {
                 matchingInvoices: matchingInvoices.map((inv) => ({
                   id: inv._id.toString(),
                   number: inv.number,
+                  prefix: inv.prefix || null,
                   clientName:
                     inv.client?.name ||
                     `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
@@ -148,6 +149,7 @@ const reconciliationResolvers = {
           const scoredInvoices = scored.map(({ invoice: inv, score }) => ({
             id: inv._id.toString(),
             number: inv.number,
+            prefix: inv.prefix || null,
             clientName:
               inv.client?.name ||
               `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
@@ -334,6 +336,7 @@ const reconciliationResolvers = {
             invoice: {
               id: invoice._id.toString(),
               number: invoice.number,
+              prefix: invoice.prefix || null,
               clientName: invoice.client?.name || "",
               totalTTC: invoice.finalTotalTTC || invoice.totalTTC,
               dueDate: invoice.dueDate,
