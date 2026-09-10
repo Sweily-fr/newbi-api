@@ -106,7 +106,7 @@ Structure JSON attendue:
 
   "category": "RENT" | "SUBSCRIPTIONS" | "OFFICE_SUPPLIES" | "SERVICES" | "TRANSPORT" | "MEALS" | "TELECOMMUNICATIONS" | "INSURANCE" | "ENERGY" | "SOFTWARE" | "HARDWARE" | "MARKETING" | "TRAINING" | "MAINTENANCE" | "TAXES" | "UTILITIES" | "OTHER",
 
-  "currency": "EUR",
+  "currency": "code ISO 4217 de la devise du document : EUR, USD, GBP, CHF...",
   "notes": "mentions légales ou notes importantes",
   "confidence": 0.95
 }
@@ -126,7 +126,10 @@ Règles:
 7. DISTINCTION ÉMETTEUR vs CLIENT:
    - Le "vendor" est l'entreprise qui ÉMET/ENVOIE la facture (logo, en-tête, SIRET en pied de page)
    - Le "client" est l'entreprise qui REÇOIT et PAIE la facture
-   - NE PAS confondre les deux - extraire le SIRET de chaque entité séparément`;
+   - NE PAS confondre les deux - extraire le SIRET de chaque entité séparément
+8. DEVISE: "currency" = la devise RÉELLEMENT utilisée sur le document (code ISO 4217)
+   - "$", "US$", "USD" = "USD" ; "£" = "GBP" ; "CHF" = "CHF" ; "€" = "EUR"
+   - Ne JAMAIS répondre "EUR" par défaut si les montants sont dans une autre devise`;
 
 // Configuration des modèles
 const MODELS = {
