@@ -700,6 +700,15 @@ const purchaseInvoiceResolvers = {
           }
         });
 
+        // Une facture pré-remplie sans IA (badge « À compléter ») est
+        // considérée vérifiée dès que l'utilisateur l'enregistre
+        if (
+          ["partial", "none"].includes(invoice.ocrMetadata?.extractionQuality)
+        ) {
+          invoice.ocrMetadata.extractionQuality = "reviewed";
+          invoice.markModified("ocrMetadata");
+        }
+
         // Auto-detect overdue
         if (
           invoice.dueDate &&

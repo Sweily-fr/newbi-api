@@ -287,6 +287,111 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     );
   });
 
+  it("moteurs IA indisponibles : Tesseract + regex pré-remplissent la facture, marquée « partial »", async () => {
+    processFromBase64.mockRejectedValue(
+      new Error("ANTHROPIC_API_KEY manquante"),
+    );
+    processDocumentFromUrl.mockResolvedValue({
+      success: true,
+      provider: "tesseract",
+      extractionQuality: "partial",
+      extractedText:
+        "Northwind Digital LLC INVOICE ... Balance due (USD) $3,577.78",
+      transaction_data: {
+        vendor_name: "Northwind Digital LLC",
+        amount: 3577.78,
+        amount_ht: 3847,
+        tax_amount: 310.78,
+        tax_rate: 8.25,
+        transaction_date: "2026-03-04",
+        due_date: "2026-04-03",
+        document_number: "INV-2026-0042",
+        currency: "USD",
+        category: "OTHER",
+        payment_method: "",
+      },
+      extracted_fields: {
+        totals: { total_ht: 3847, total_tax: 310.78, total_ttc: 3577.78 },
+      },
+    });
+    // Analyse Mistral en quota : analyse de secours (success false)
+    analyzeDocument.mockResolvedValue({
+      success: false,
+      degraded: true,
+      extractionQuality: "partial",
+      transaction_data: { vendor_name: "Fournisseur inconnu", amount: 0 },
+      extracted_fields: {},
+    });
+    const tx = await createExpenseTransaction({
+      amount: -3470.12,
+      description: "CB NORTHWIND DIGITAL",
+    });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
+      });
+
+    expect(invoices).toHaveLength(1);
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.supplierName).toBe("Northwind Digital LLC");
+    expect(invoice.invoiceNumber).toBe("INV-2026-0042");
+    // Combiné au correctif devise : justificatif en USD sur un compte EUR,
+    // la facture porte le débit bancaire converti et garde le montant lu
+    expect(invoice.amountTTC).toBe(3470.12);
+    expect(invoice.currency).toBe("EUR");
+    expect(invoice.ocrMetadata.amountTTC).toBe(3577.78);
+    expect(invoice.ocrMetadata.currency).toBe("USD");
+    expect(invoice.vatRate).toBe(8.25);
+    expect(invoice.ocrMetadata.provider).toBe("tesseract");
+    expect(invoice.ocrMetadata.extractionQuality).toBe("partial");
+    expect(invoice.files[0].ocrProcessed).toBe(true);
+  });
+
+  it("OCR totalement impossible : facture depuis la transaction, marquée « none »", async () => {
+    processFromBase64.mockRejectedValue(
+      new Error("ANTHROPIC_API_KEY manquante"),
+    );
+    processDocumentFromUrl.mockResolvedValue({
+      success: false,
+      error: "Tous les OCR ont échoué",
+      provider: "none",
+    });
+    const tx = await createExpenseTransaction({ amount: -42 });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
+      });
+
+    expect(invoices).toHaveLength(1);
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.amountTTC).toBe(42);
+    expect(invoice.ocrMetadata.extractionQuality).toBe("none");
+    expect(invoice.files[0].ocrProcessed).toBe(false);
+  });
+
+  it("OCR Claude réussi : facture marquée « full » avec le moteur", async () => {
+    mockClaudeSuccess();
+    const tx = await createExpenseTransaction();
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.ocrMetadata.provider).toBe("claude-vision");
+    expect(invoice.ocrMetadata.extractionQuality).toBe("full");
+  });
+
   it("ignore les transactions qui ne sont pas des dépenses", async () => {
     const tx = await createExpenseTransaction({ type: "credit", amount: 250 });
 

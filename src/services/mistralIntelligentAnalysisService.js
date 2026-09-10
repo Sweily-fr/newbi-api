@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { extractInvoiceFieldsFromText } from "../utils/ocrTextFallback.js";
 /**
  * Service d'analyse intelligente avec l'API Chat de Mistral
  * Utilise l'IA pour extraire les données structurées des documents OCR
@@ -427,8 +428,44 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
   getFallbackAnalysis(ocrData) {
     logger.debug("📋 Utilisation de l'analyse de secours");
 
+    // Secours gratuit : champs extraits par regex du texte OCR (montants
+    // FR/EN, devise, dates, numéro, fournisseur). Qualité "partial".
+    const text = ocrData?.extractedText || ocrData?.text || "";
+    try {
+      const fallback = extractInvoiceFieldsFromText(text);
+      if (fallback.found) {
+        logger.debug(
+          `📝 Analyse de secours par regex (TTC: ${fallback.transaction_data.amount} ${fallback.transaction_data.currency}, fournisseur: ${fallback.transaction_data.vendor_name || "?"})`,
+        );
+        return {
+          success: false,
+          degraded: true,
+          extractionQuality: "partial",
+          document_analysis: {
+            document_type: "invoice",
+            confidence: 0.4,
+            language: "fr",
+            provider: "regex-fallback",
+          },
+          transaction_data: {
+            ...fallback.transaction_data,
+            vendor_name:
+              fallback.transaction_data.vendor_name || "Fournisseur inconnu",
+            status: "pending",
+            subcategory: "non_classifie",
+          },
+          extracted_fields: fallback.extracted_fields,
+          raw_content: text,
+        };
+      }
+    } catch (error) {
+      console.warn("⚠️ Analyse de secours regex échouée:", error.message);
+    }
+
     return {
       success: false,
+      degraded: true,
+      extractionQuality: "none",
       document_analysis: {
         document_type: "unknown",
         confidence: 0.3,
