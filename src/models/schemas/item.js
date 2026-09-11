@@ -100,7 +100,30 @@ const itemSchema = new mongoose.Schema({
       },
       message: 'Le pourcentage d\'avancement doit être entre 0 et 100'
     }
-  }
+  },
+  // Liaison entre articles (produits liés du catalogue) : la quantité d'un
+  // article lié est recalculée à partir de celle de l'article principal
+  // (linkedQuantity pour linkedPer unités, arrondi selon linkedRounding).
+  linkKey: {
+    type: String,
+    trim: true,
+  },
+  linkedFromKey: {
+    type: String,
+    trim: true,
+  },
+  linkedQuantity: {
+    type: Number,
+    min: 0,
+  },
+  linkedPer: {
+    type: Number,
+    min: 0,
+  },
+  linkedRounding: {
+    type: String,
+    enum: ['UP', 'DOWN', 'NONE', null],
+  },
 });
 
 export default itemSchema;
