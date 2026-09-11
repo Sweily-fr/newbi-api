@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Product from "../models/Product.js";
 // ✅ Import des wrappers RBAC
 import {
@@ -9,11 +10,93 @@ import {
 import {
   createNotFoundError,
   createAlreadyExistsError,
+  createValidationError,
   AppError,
   ERROR_CODES,
 } from "../utils/errors.js";
 
+/**
+ * Normalise et valide la liste des produits liés envoyée par le client.
+ * - ignore les entrées vides, dédoublonne par produit (première quantité gagne)
+ * - refuse l'auto-liaison, une quantité <= 0 ou un produit hors workspace
+ * Retourne un tableau prêt à être stocké ([{ productId, quantity }]).
+ */
+async function normalizeLinkedProducts(linkedProducts, { workspaceId, selfId }) {
+  if (!Array.isArray(linkedProducts)) return [];
+
+  const seen = new Map();
+  for (const entry of linkedProducts) {
+    if (!entry || !entry.productId) continue;
+    const productId = String(entry.productId);
+
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      throw createValidationError("Identifiant de produit lié invalide", {
+        productId,
+      });
+    }
+    if (selfId && productId === String(selfId)) {
+      throw createValidationError(
+        "Un produit ne peut pas être lié à lui-même",
+        { productId },
+      );
+    }
+    const quantity = Number(entry.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw createValidationError(
+        "La quantité d'un produit lié doit être supérieure à 0",
+        { productId, quantity: entry.quantity },
+      );
+    }
+    if (!seen.has(productId)) {
+      seen.set(productId, { productId, quantity });
+    }
+  }
+
+  const ids = [...seen.keys()];
+  if (ids.length === 0) return [];
+
+  const existing = await Product.find({
+    _id: { $in: ids },
+    workspaceId,
+  })
+    .select("_id")
+    .lean();
+  const existingIds = new Set(existing.map((p) => String(p._id)));
+  const missing = ids.filter((id) => !existingIds.has(id));
+  if (missing.length > 0) {
+    throw createValidationError(
+      "Un ou plusieurs produits liés n'existent pas dans ce catalogue",
+      { productIds: missing },
+    );
+  }
+
+  return ids.map((id) => seen.get(id));
+}
+
 const productResolvers = {
+  Product: {
+    // Résout les produits liés avec leur fiche produit (même workspace).
+    // Les liens vers un produit supprimé entre-temps sont ignorés.
+    linkedProducts: async (product) => {
+      const links = product.linkedProducts || [];
+      if (links.length === 0) return [];
+
+      const targets = await Product.find({
+        _id: { $in: links.map((l) => l.productId) },
+        workspaceId: product.workspaceId,
+      });
+      const byId = new Map(targets.map((p) => [String(p._id), p]));
+
+      return links
+        .filter((l) => byId.has(String(l.productId)))
+        .map((l) => ({
+          productId: String(l.productId),
+          quantity: l.quantity,
+          product: byId.get(String(l.productId)),
+        }));
+    },
+  },
+
   Query: {
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "products"
     product: requireRead("products")(
@@ -137,8 +220,14 @@ const productResolvers = {
         throw createAlreadyExistsError("produit", "nom", input.name);
       }
 
+      const linkedProducts = await normalizeLinkedProducts(
+        input.linkedProducts,
+        { workspaceId },
+      );
+
       const product = new Product({
         ...input,
+        linkedProducts,
         workspaceId: workspaceId,
         createdBy: user.id,
       });
@@ -176,9 +265,16 @@ const productResolvers = {
           }
         }
 
+        if (input.linkedProducts !== undefined) {
+          product.linkedProducts = await normalizeLinkedProducts(
+            input.linkedProducts,
+            { workspaceId: contextWorkspaceId, selfId: id },
+          );
+        }
+
         // Mettre à jour le produit
         Object.keys(input).forEach((key) => {
-          if (key !== "workspaceId") {
+          if (key !== "workspaceId" && key !== "linkedProducts") {
             // Ne pas permettre la modification du workspaceId
             product[key] = input[key];
           }
@@ -208,6 +304,12 @@ const productResolvers = {
         _id: id,
         workspaceId: contextWorkspaceId,
       });
+
+      // Retirer ce produit des produits liés des autres articles du catalogue
+      await Product.updateMany(
+        { workspaceId: contextWorkspaceId, "linkedProducts.productId": id },
+        { $pull: { linkedProducts: { productId: id } } },
+      );
       return true;
     }),
   },

@@ -51,6 +51,23 @@ const productSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  // Produits liés : ajoutés automatiquement dans les articles d'un document
+  // (facture, devis, bon de commande) quand ce produit est sélectionné.
+  // Un seul niveau : les produits liés d'un produit lié ne sont pas propagés.
+  linkedProducts: [{
+    _id: false,
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product',
+      required: true
+    },
+    quantity: {
+      type: Number,
+      required: true,
+      min: [0.0001, 'La quantité d\'un produit lié doit être supérieure à 0'],
+      default: 1
+    }
+  }],
   // Champs personnalisés
   customFields: [{
     fieldId: {
