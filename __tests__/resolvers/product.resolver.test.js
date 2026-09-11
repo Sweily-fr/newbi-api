@@ -259,3 +259,199 @@ describe("Product Resolver - Mutation.deleteProduct (RBAC enforced)", () => {
     ).rejects.toThrow(/permission|delete/i);
   });
 });
+
+describe("Product Resolver - produits liés", () => {
+  const create = productResolvers.Mutation.createProduct;
+  const update = productResolvers.Mutation.updateProduct;
+  const remove = productResolvers.Mutation.deleteProduct;
+  const typeResolver = productResolvers.Product.linkedProducts;
+
+  it("stores linked products on create and resolves them with their product", async () => {
+    const enduit = await insertProduct({ name: "Enduit" });
+    const poncage = await insertProduct({ name: "Ponçage" });
+
+    const peinture = await create(
+      null,
+      {
+        input: {
+          ...buildProductInput({ name: "Peinture" }),
+          workspaceId: organizationId.toString(),
+          linkedProducts: [
+            { productId: enduit._id.toString(), quantity: 2 },
+            {
+              productId: poncage._id.toString(),
+              quantity: 1,
+              per: 20,
+              rounding: "NONE",
+            },
+            // doublon : ignoré, la première quantité gagne
+            { productId: enduit._id.toString(), quantity: 99 },
+          ],
+        },
+      },
+      ctx(),
+    );
+
+    expect(peinture.linkedProducts).toHaveLength(2);
+
+    const resolved = await typeResolver(peinture);
+    expect(resolved.map((l) => l.product.name)).toEqual(["Enduit", "Ponçage"]);
+    expect(resolved.map((l) => l.quantity)).toEqual([2, 1]);
+    // per et rounding par défaut : 1 et UP
+    expect(resolved.map((l) => l.per)).toEqual([1, 20]);
+    expect(resolved.map((l) => l.rounding)).toEqual(["UP", "NONE"]);
+  });
+
+  it("rejects a non-positive base (per) and an unknown rounding", async () => {
+    const peinture = await insertProduct({ name: "Peinture" });
+    const enduit = await insertProduct({ name: "Enduit" });
+
+    await expect(
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [
+              { productId: enduit._id.toString(), quantity: 1, per: 0 },
+            ],
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/base/);
+
+    await expect(
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [
+              { productId: enduit._id.toString(), quantity: 1, rounding: "X" },
+            ],
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/Arrondi/);
+  });
+
+  it("rejects a self link, a non-positive quantity and a product from another workspace", async () => {
+    const peinture = await insertProduct({ name: "Peinture" });
+    const enduit = await insertProduct({ name: "Enduit" });
+    const foreign = await Product.create({
+      ...buildProductInput({ name: "Ailleurs" }),
+      workspaceId: buildOrganizationId(),
+      createdBy: buildUserId(),
+    });
+
+    await expect(
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [{ productId: peinture._id.toString(), quantity: 1 }],
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/lui-même/);
+
+    await expect(
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [{ productId: enduit._id.toString(), quantity: 0 }],
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/supérieure à 0/);
+
+    await expect(
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [{ productId: foreign._id.toString(), quantity: 1 }],
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/n'existent pas/);
+  });
+
+  it("replaces links on update and keeps them when linkedProducts is omitted", async () => {
+    const enduit = await insertProduct({ name: "Enduit" });
+    const lessivage = await insertProduct({ name: "Lessivage" });
+    const peinture = await insertProduct({
+      name: "Peinture",
+      linkedProducts: [{ productId: enduit._id, quantity: 1 }],
+    });
+
+    const renamed = await update(
+      null,
+      { id: peinture._id.toString(), input: { name: "Peinture mate" } },
+      ctx(),
+    );
+    expect(renamed.linkedProducts).toHaveLength(1);
+
+    const relinked = await update(
+      null,
+      {
+        id: peinture._id.toString(),
+        input: {
+          linkedProducts: [{ productId: lessivage._id.toString(), quantity: 3 }],
+        },
+      },
+      ctx(),
+    );
+    expect(relinked.linkedProducts).toHaveLength(1);
+    expect(String(relinked.linkedProducts[0].productId)).toBe(
+      lessivage._id.toString(),
+    );
+
+    const cleared = await update(
+      null,
+      { id: peinture._id.toString(), input: { linkedProducts: [] } },
+      ctx(),
+    );
+    expect(cleared.linkedProducts).toHaveLength(0);
+  });
+
+  it("removes the link from other products when a linked product is deleted", async () => {
+    const enduit = await insertProduct({ name: "Enduit" });
+    const poncage = await insertProduct({ name: "Ponçage" });
+    const peinture = await insertProduct({
+      name: "Peinture",
+      linkedProducts: [
+        { productId: enduit._id, quantity: 2 },
+        { productId: poncage._id, quantity: 1 },
+      ],
+    });
+
+    await remove(null, { id: enduit._id.toString() }, ctx());
+
+    const reloaded = await Product.findById(peinture._id);
+    expect(reloaded.linkedProducts).toHaveLength(1);
+    expect(String(reloaded.linkedProducts[0].productId)).toBe(
+      poncage._id.toString(),
+    );
+  });
+
+  it("ignores dangling links when resolving", async () => {
+    const peinture = await insertProduct({
+      name: "Peinture",
+      linkedProducts: [
+        { productId: new mongoose.Types.ObjectId(), quantity: 2 },
+      ],
+    });
+
+    expect(await typeResolver(peinture)).toEqual([]);
+  });
+});

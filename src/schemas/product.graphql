@@ -1,3 +1,31 @@
+# Produit lié : ajouté automatiquement aux articles d'un document
+# quand le produit parent est sélectionné. product est null si le
+# produit cible a été supprimé.
+# Arrondi appliqué à la quantité calculée d'un produit lié
+enum LinkedProductRounding {
+  UP
+  DOWN
+  NONE
+}
+
+# « quantity » produits liés pour « per » unités du produit principal
+# (ex. 1 pot pour 20 m²). Quantité dans le document = principal × quantity / per,
+# arrondie selon « rounding ».
+type LinkedProduct {
+  productId: ID!
+  quantity: Float!
+  per: Float!
+  rounding: LinkedProductRounding!
+  product: Product
+}
+
+input LinkedProductInput {
+  productId: ID!
+  quantity: Float!
+  per: Float
+  rounding: LinkedProductRounding
+}
+
 type Product {
   id: ID!
   name: String!
@@ -8,6 +36,7 @@ type Product {
   category: String
   reference: String
   customFields: [ProductCustomFieldValue]
+  linkedProducts: [LinkedProduct!]!
   createdBy: User!
   createdAt: String!
   updatedAt: String!
@@ -29,6 +58,7 @@ input CreateProductInput {
   category: String
   reference: String
   customFields: [ProductCustomFieldValueInput]
+  linkedProducts: [LinkedProductInput!]
 }
 
 input UpdateProductInput {
@@ -40,6 +70,7 @@ input UpdateProductInput {
   category: String
   reference: String
   customFields: [ProductCustomFieldValueInput]
+  linkedProducts: [LinkedProductInput!]
 }
 
 extend type Query {
