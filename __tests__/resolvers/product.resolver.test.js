@@ -278,7 +278,12 @@ describe("Product Resolver - produits liés", () => {
           workspaceId: organizationId.toString(),
           linkedProducts: [
             { productId: enduit._id.toString(), quantity: 2 },
-            { productId: poncage._id.toString(), quantity: 1.5 },
+            {
+              productId: poncage._id.toString(),
+              quantity: 1,
+              per: 20,
+              rounding: "NONE",
+            },
             // doublon : ignoré, la première quantité gagne
             { productId: enduit._id.toString(), quantity: 99 },
           ],
@@ -291,7 +296,45 @@ describe("Product Resolver - produits liés", () => {
 
     const resolved = await typeResolver(peinture);
     expect(resolved.map((l) => l.product.name)).toEqual(["Enduit", "Ponçage"]);
-    expect(resolved.map((l) => l.quantity)).toEqual([2, 1.5]);
+    expect(resolved.map((l) => l.quantity)).toEqual([2, 1]);
+    // per et rounding par défaut : 1 et UP
+    expect(resolved.map((l) => l.per)).toEqual([1, 20]);
+    expect(resolved.map((l) => l.rounding)).toEqual(["UP", "NONE"]);
+  });
+
+  it("rejects a non-positive base (per) and an unknown rounding", async () => {
+    const peinture = await insertProduct({ name: "Peinture" });
+    const enduit = await insertProduct({ name: "Enduit" });
+
+    await expect(
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [
+              { productId: enduit._id.toString(), quantity: 1, per: 0 },
+            ],
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/base/);
+
+    await expect(
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [
+              { productId: enduit._id.toString(), quantity: 1, rounding: "X" },
+            ],
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/Arrondi/);
   });
 
   it("rejects a self link, a non-positive quantity and a product from another workspace", async () => {

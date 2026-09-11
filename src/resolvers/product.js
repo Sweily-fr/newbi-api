@@ -15,6 +15,8 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 
+const LINKED_ROUNDINGS = ["UP", "DOWN", "NONE"];
+
 /**
  * Normalise et valide la liste des produits liés envoyée par le client.
  * - ignore les entrées vides, dédoublonne par produit (première quantité gagne)
@@ -47,8 +49,23 @@ async function normalizeLinkedProducts(linkedProducts, { workspaceId, selfId }) 
         { productId, quantity: entry.quantity },
       );
     }
+    const per =
+      entry.per === undefined || entry.per === null ? 1 : Number(entry.per);
+    if (!Number.isFinite(per) || per <= 0) {
+      throw createValidationError(
+        "La base d'un produit lié doit être supérieure à 0",
+        { productId, per: entry.per },
+      );
+    }
+    const rounding = entry.rounding || "UP";
+    if (!LINKED_ROUNDINGS.includes(rounding)) {
+      throw createValidationError("Arrondi de produit lié invalide", {
+        productId,
+        rounding,
+      });
+    }
     if (!seen.has(productId)) {
-      seen.set(productId, { productId, quantity });
+      seen.set(productId, { productId, quantity, per, rounding });
     }
   }
 
@@ -92,6 +109,8 @@ const productResolvers = {
         .map((l) => ({
           productId: String(l.productId),
           quantity: l.quantity,
+          per: l.per ?? 1,
+          rounding: l.rounding || "UP",
           product: byId.get(String(l.productId)),
         }));
     },

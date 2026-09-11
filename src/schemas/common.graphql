@@ -196,6 +196,12 @@ type Item {
   discountType: DiscountType
   details: String
   progressPercentage: Float
+  # Liaison entre articles (produits liés du catalogue)
+  linkKey: String
+  linkedFromKey: String
+  linkedQuantity: Float
+  linkedPer: Float
+  linkedRounding: LinkedProductRounding
 }
 
 input ItemInput {
@@ -208,6 +214,12 @@ input ItemInput {
   discountType: DiscountType
   details: String
   progressPercentage: Float
+  # Liaison entre articles (produits liés du catalogue)
+  linkKey: String
+  linkedFromKey: String
+  linkedQuantity: Float
+  linkedPer: Float
+  linkedRounding: LinkedProductRounding
 }
 
 type Shipping {

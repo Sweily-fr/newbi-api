@@ -54,6 +54,7 @@ const productSchema = new mongoose.Schema({
   // Produits liés : ajoutés automatiquement dans les articles d'un document
   // (facture, devis, bon de commande) quand ce produit est sélectionné.
   // Un seul niveau : les produits liés d'un produit lié ne sont pas propagés.
+  // Les quantités sont proportionnelles à la quantité du produit principal.
   linkedProducts: [{
     _id: false,
     productId: {
@@ -61,11 +62,25 @@ const productSchema = new mongoose.Schema({
       ref: 'Product',
       required: true
     },
+    // « quantity » produits liés pour « per » unités du produit principal
+    // (ex. 1 pot pour 20 m²). La quantité dans le document = principal × quantity / per,
+    // arrondie selon « rounding ».
     quantity: {
       type: Number,
       required: true,
       min: [0.0001, 'La quantité d\'un produit lié doit être supérieure à 0'],
       default: 1
+    },
+    per: {
+      type: Number,
+      required: true,
+      min: [0.0001, 'La base d\'un produit lié doit être supérieure à 0'],
+      default: 1
+    },
+    rounding: {
+      type: String,
+      enum: ['UP', 'DOWN', 'NONE'],
+      default: 'UP'
     }
   }],
   // Champs personnalisés
