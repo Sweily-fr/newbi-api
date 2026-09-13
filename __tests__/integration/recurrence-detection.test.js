@@ -190,6 +190,44 @@ describe("detectForSource TRANSACTION (real Mongo)", () => {
   });
 });
 
+describe("detectForSource — catégorie choisie par l'utilisateur", () => {
+  it("préserve categoryOverride à la re-détection (comme excludedMonths)", async () => {
+    for (let i = 2; i >= 0; i--) {
+      await insertTransaction({
+        description: `PRLV SEPA NETFLIX.COM 10000${i}`,
+        amount: -15.99,
+        date: monthsAgo(i),
+        expenseCategory: null,
+      });
+    }
+    await detectForSource(workspaceId, "TRANSACTION");
+    const [rec] = await DetectedRecurrence.find({ workspaceId }).lean();
+    expect(rec.category).toBe("OTHER");
+    expect(rec.categoryOverride ?? null).toBeNull();
+
+    // L'utilisateur reclasse la récurrence, puis une nouvelle analyse tourne.
+    await DetectedRecurrence.updateOne(
+      { _id: rec._id },
+      {
+        $set: {
+          categoryOverride: "SUBSCRIPTIONS",
+          excludedMonths: ["2030-01"],
+        },
+      },
+    );
+    await detectForSource(workspaceId, "TRANSACTION");
+
+    const recs = await DetectedRecurrence.find({ workspaceId }).lean();
+    expect(recs).toHaveLength(1); // pas de doublon : l'identité reste OTHER
+    expect(recs[0]).toMatchObject({
+      category: "OTHER",
+      categoryOverride: "SUBSCRIPTIONS",
+      excludedMonths: ["2030-01"],
+      isActive: true,
+    });
+  });
+});
+
 describe("detectForSource PURCHASE_INVOICE (régression)", () => {
   it("still detects a supplier recurrence from 3 consecutive monthly invoices", async () => {
     for (let i = 2; i >= 0; i--) {

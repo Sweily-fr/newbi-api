@@ -156,7 +156,15 @@ type DetectedRecurrence {
   source: RecurrenceSource!
   type: ForecastType!
   partyName: String!
+  # Catégorie brute issue de la source (peut être hors ForecastCategory, ex.
+  # OTHER ou TRAVEL pour une transaction bancaire).
   category: String
+  # Catégorie choisie par l'utilisateur (null = catégorie détectée). Commune
+  # à tous les scénarios.
+  categoryOverride: ForecastCategory
+  # Catégorie effectivement utilisée dans les prévisions : categoryOverride
+  # sinon la catégorie détectée rabattue sur l'enum.
+  forecastCategory: ForecastCategory!
   averageAmount: Float!
   frequency: RecurrenceFrequency
   intervalDays: Int
@@ -220,7 +228,10 @@ extend type Query {
 
   # Sans scenarioId : saisies de Base. Avec : saisies de Base (avec leur état
   # hiddenInScenario) + saisies propres au scénario.
-  manualCashflowEntries(workspaceId: ID, scenarioId: ID): [ManualCashflowEntry!]!
+  manualCashflowEntries(
+    workspaceId: ID
+    scenarioId: ID
+  ): [ManualCashflowEntry!]!
 
   # Avec scenarioId : isMuted/isActive reflètent l'état effectif dans ce
   # scénario (surcharges), scenarioOverride signale une surcharge.
@@ -312,6 +323,15 @@ extend type Mutation {
     scenarioId: ID!
     hidden: Boolean!
   ): ManualCashflowEntry!
+
+  # Change la catégorie de prévision d'une récurrence détectée (null = revenir
+  # à la catégorie détectée). La catégorie doit être du même sens (revenu /
+  # dépense) que la récurrence. Commune à tous les scénarios, préservée par
+  # les analyses suivantes.
+  setDetectedRecurrenceCategory(
+    id: ID!
+    category: ForecastCategory
+  ): DetectedRecurrence!
 
   # Supprime définitivement une récurrence détectée. Elle pourra réapparaître
   # à la prochaine analyse si le motif persiste (utiliser le mute pour la
