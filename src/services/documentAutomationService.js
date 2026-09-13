@@ -171,6 +171,76 @@ function buildFileName(pattern, documentContext, extension = "pdf") {
   return sanitizeFileName(fileName) + "." + (extension || "pdf");
 }
 
+/**
+ * Fichier source d'un document déjà chargé (objet complet), selon son type.
+ * Retourne null pour les documents natifs (facture, devis...) dont le PDF est
+ * généré par Newbi.
+ */
+function sourceFileOf(documentType, doc) {
+  if (!doc) return null;
+  if (documentType === "transaction") return doc.receiptFiles?.[0] || null;
+  if (documentType === "purchaseInvoice") return doc.files?.[0] || null;
+  if (documentType === "importedInvoice" || documentType === "importedQuote")
+    return doc.file || null;
+  return null;
+}
+
+/**
+ * Charge le fichier source d'un document à partir de son identifiant
+ * (lecture minimale). Ne lève jamais : null en cas d'échec, le nom construit
+ * servira de repli.
+ */
+async function loadSourceFile(documentType, documentId) {
+  try {
+    const ModelMap = {
+      importedInvoice: [ImportedInvoice, "file"],
+      importedQuote: [ImportedQuote, "file"],
+      purchaseInvoice: [PurchaseInvoice, "files"],
+      transaction: [Transaction, "receiptFiles"],
+    };
+    const entry = ModelMap[documentType];
+    if (!entry) return null;
+    const [Model, field] = entry;
+    const doc = await Model.findById(documentId).select(field).lean();
+    return sourceFileOf(documentType, doc);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Nom d'origine du fichier source (celui donné par l'utilisateur au dépôt),
+ * conservé tel quel dans Documents partagés. Seuls les séparateurs de chemin
+ * et les caractères de contrôle sont neutralisés ; l'extension est ajoutée si
+ * elle manque. Retourne null si aucun nom exploitable (repli sur le pattern).
+ */
+function originalFileNameFor(documentType, sourceFile, extension = "pdf") {
+  if (!sourceFile) return null;
+  let raw = null;
+  if (documentType === "transaction") {
+    raw = sourceFile.filename;
+  } else if (documentType === "purchaseInvoice") {
+    raw = sourceFile.originalFilename || sourceFile.filename;
+  } else if (
+    documentType === "importedInvoice" ||
+    documentType === "importedQuote"
+  ) {
+    raw = sourceFile.originalFileName;
+  }
+  if (!raw || typeof raw !== "string") return null;
+  // Certains fichiers OCR/Qonto stockent une clé "workspace/uuid.pdf" :
+  // ne garder que le nom de fichier.
+  let name = raw
+    .split(/[\\/]/)
+    .pop()
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f]/g, "")
+    .trim();
+  if (!name) return null;
+  if (!/\.[a-z0-9]{1,5}$/i.test(name)) name += `.${extension || "pdf"}`;
+  return name;
+}
+
 // Cache mémoire pour les sous-dossiers résolus (évite les requêtes DB répétées)
 const _folderCache = new Map();
 const FOLDER_CACHE_TTL = 60 * 1000; // 1 minute
@@ -414,13 +484,16 @@ const documentAutomationService = {
             const fileBuffer = Buffer.from(response.data);
             fileMimeType = firstReceipt.mimetype || "application/pdf";
             fileExt = firstReceipt.filename?.split(".").pop() || "pdf";
-            // Reconstruire le nom du fichier avec la bonne extension
-            fileName = buildFileName(
-              automation.actionConfig.documentNaming ||
-                "{documentType}-{number}-{clientName}",
-              documentContext,
-              fileExt,
-            );
+            // Nom d'origine du justificatif ; sinon nom construit avec la
+            // bonne extension
+            fileName =
+              originalFileNameFor("transaction", firstReceipt, fileExt) ||
+              buildFileName(
+                automation.actionConfig.documentNaming ||
+                  "{documentType}-{number}-{clientName}",
+                documentContext,
+                fileExt,
+              );
             uploadResult = await cloudflareService.uploadImage(
               fileBuffer,
               fileName,
@@ -743,12 +816,23 @@ const documentAutomationService = {
             userId,
           );
 
-          // Construire le nom du fichier
-          const fileName = buildFileName(
-            automation.actionConfig.documentNaming ||
-              "{documentType}-{number}-{clientName}",
-            expenseContext,
+          // Nom d'origine du fichier source ; sinon nom construit
+          const sourceFile = await loadSourceFile(
+            logDocType,
+            expenseContext.documentId,
           );
+          const fileName =
+            originalFileNameFor(
+              logDocType,
+              sourceFile,
+              expenseContext.fileExtension || "pdf",
+            ) ||
+            buildFileName(
+              automation.actionConfig.documentNaming ||
+                "{documentType}-{number}-{clientName}",
+              expenseContext,
+              expenseContext.fileExtension || "pdf",
+            );
 
           // Upload ou copie vers R2
           let uploadResult;
@@ -966,7 +1050,11 @@ const documentAutomationService = {
         model: Transaction,
         status: null,
         docType: "transaction",
-        customFilter: { "receiptFiles.0.url": { $exists: true, $ne: null } },
+        // $type plutôt que { $exists, $ne: null } : sur un chemin positionnel
+        // (receiptFiles.0.url) MongoDB ne matche rien avec cette combinaison,
+        // le bouton « play » et le compteur ne trouvaient jamais aucune
+        // transaction (constaté en prod le 14/09/2026).
+        customFilter: { "receiptFiles.0.url": { $type: "string" } },
       },
     };
     return TRIGGER_TO_QUERY[triggerType] || null;
@@ -1408,13 +1496,19 @@ const documentAutomationService = {
       userId,
     );
 
-    // Construire le nom du fichier
-    const fileName = buildFileName(
-      automation.actionConfig.documentNaming ||
-        "{documentType}-{number}-{clientName}",
-      documentContext,
-      fileExt,
-    );
+    // Nom d'origine du fichier source ; sinon nom construit
+    const fileName =
+      originalFileNameFor(
+        documentType,
+        sourceFileOf(documentType, doc),
+        fileExt,
+      ) ||
+      buildFileName(
+        automation.actionConfig.documentNaming ||
+          "{documentType}-{number}-{clientName}",
+        documentContext,
+        fileExt,
+      );
 
     // Upload ou copie vers R2
     let uploadResult;
@@ -1776,12 +1870,19 @@ const documentAutomationService = {
               }
             }
 
-            const fileName = buildFileName(
-              automation.actionConfig.documentNaming ||
-                "{documentType}-{number}-{clientName}",
-              documentContext,
-              fileExt,
-            );
+            // Nom d'origine du fichier source ; sinon nom construit
+            const fileName =
+              originalFileNameFor(
+                config.docType,
+                sourceFileOf(config.docType, doc),
+                fileExt,
+              ) ||
+              buildFileName(
+                automation.actionConfig.documentNaming ||
+                  "{documentType}-{number}-{clientName}",
+                documentContext,
+                fileExt,
+              );
 
             let uploadResult;
             if (r2CopySource) {
