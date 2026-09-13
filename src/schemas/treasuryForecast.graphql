@@ -156,7 +156,22 @@ type DetectedRecurrence {
   source: RecurrenceSource!
   type: ForecastType!
   partyName: String!
+  # Catégorie brute issue de la source (peut être hors ForecastCategory, ex.
+  # OTHER ou TRAVEL pour une transaction bancaire).
   category: String
+  # Surcharges saisies par l'utilisateur via « Modifier » (null = valeur
+  # détectée). Communes à tous les scénarios, préservées par les analyses.
+  categoryOverride: ForecastCategory
+  amountOverride: Float
+  frequencyOverride: RecurrenceFrequency
+  labelOverride: String
+  # Valeurs effectivement utilisées dans les prévisions (surcharge, sinon
+  # valeur détectée ; la catégorie détectée est rabattue sur l'enum).
+  forecastCategory: ForecastCategory!
+  forecastAmount: Float!
+  forecastFrequency: RecurrenceFrequency!
+  forecastName: String!
+  # Valeurs détectées (montant médian, périodicité analysée).
   averageAmount: Float!
   frequency: RecurrenceFrequency
   intervalDays: Int
@@ -181,6 +196,13 @@ input UpsertTreasuryForecastInput {
   type: ForecastType!
   forecastAmount: Float!
   notes: String
+}
+
+input UpdateDetectedRecurrenceInput {
+  category: ForecastCategory
+  amount: Float
+  frequency: RecurrenceFrequency
+  label: String
 }
 
 type ForecastScenario {
@@ -220,7 +242,10 @@ extend type Query {
 
   # Sans scenarioId : saisies de Base. Avec : saisies de Base (avec leur état
   # hiddenInScenario) + saisies propres au scénario.
-  manualCashflowEntries(workspaceId: ID, scenarioId: ID): [ManualCashflowEntry!]!
+  manualCashflowEntries(
+    workspaceId: ID
+    scenarioId: ID
+  ): [ManualCashflowEntry!]!
 
   # Avec scenarioId : isMuted/isActive reflètent l'état effectif dans ce
   # scénario (surcharges), scenarioOverride signale une surcharge.
@@ -312,6 +337,16 @@ extend type Mutation {
     scenarioId: ID!
     hidden: Boolean!
   ): ManualCashflowEntry!
+
+  # « Modifier » une récurrence détectée : chaque champ renseigné remplace la
+  # valeur détectée dans les prévisions, null rétablit la valeur détectée
+  # (tout à null = revenir aux valeurs détectées). La catégorie doit être du
+  # même sens (revenu / dépense) que la récurrence. Commun à tous les
+  # scénarios, préservé par les analyses suivantes.
+  updateDetectedRecurrence(
+    id: ID!
+    input: UpdateDetectedRecurrenceInput!
+  ): DetectedRecurrence!
 
   # Supprime définitivement une récurrence détectée. Elle pourra réapparaître
   # à la prochaine analyse si le motif persiste (utiliser le mute pour la
