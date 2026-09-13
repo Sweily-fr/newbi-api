@@ -22,6 +22,7 @@ import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionServ
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
+import { resolvePurchaseInvoiceCategoryInput } from "../utils/categoryTaxonomy.js";
 import {
   findTransactionsForPurchaseInvoice,
   findPurchaseInvoicesForTransaction,
@@ -602,8 +603,15 @@ const purchaseInvoiceResolvers = {
           context.workspaceId,
         );
 
+        // Sous-catégorie fine (référentiel Transactions) → catégorie large
+        // de l'enum PurchaseInvoiceCategory dérivée côté serveur.
+        const resolvedCategory = resolvePurchaseInvoiceCategoryInput({
+          subcategory: input.subcategory,
+          category: input.category,
+        });
         const invoice = new PurchaseInvoice({
           ...input,
+          ...resolvedCategory,
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
           createdBy: context.user.id,
         });
@@ -623,7 +631,7 @@ const purchaseInvoiceResolvers = {
               name: input.supplierName,
               workspaceId: new mongoose.Types.ObjectId(workspaceId),
               createdBy: context.user.id,
-              defaultCategory: input.category || "OTHER",
+              defaultCategory: resolvedCategory.category || "OTHER",
             });
           }
           invoice.supplierId = supplier._id;
@@ -679,6 +687,7 @@ const purchaseInvoiceResolvers = {
 
         const oldStatus = invoice.status;
         const oldCategory = invoice.category;
+        const oldSubcategory = invoice.subcategory || null;
 
         // Garde-fou d'intégrité : le montant d'une facture rapprochée ne peut
         // pas changer (la transaction bancaire liée ne correspondrait plus).
@@ -699,6 +708,17 @@ const purchaseInvoiceResolvers = {
             invoice[key] = input[key];
           }
         });
+
+        // Sous-catégorie fine → catégorie large dérivée ; un code large seul
+        // efface la sous-catégorie précédente.
+        if (input.subcategory !== undefined || input.category !== undefined) {
+          const resolvedCategory = resolvePurchaseInvoiceCategoryInput({
+            subcategory: input.subcategory,
+            category: input.category,
+          });
+          invoice.category = resolvedCategory.category;
+          invoice.subcategory = resolvedCategory.subcategory;
+        }
 
         // Une facture pré-remplie sans IA (badge « À compléter ») est
         // considérée vérifiée dès que l'utilisateur l'enregistre
@@ -738,9 +758,13 @@ const purchaseInvoiceResolvers = {
 
         // La facture fait foi : un changement de catégorie se propage aux
         // transactions déjà rapprochées
-        if (invoice.category !== oldCategory) {
+        if (
+          invoice.category !== oldCategory ||
+          (invoice.subcategory || null) !== oldSubcategory
+        ) {
           await syncLinkedTransactionCategories({
             category: invoice.category,
+            subcategory: invoice.subcategory,
             workspaceId,
             transactionIds: invoice.linkedTransactionIds || [],
           });
@@ -1077,14 +1101,24 @@ const purchaseInvoiceResolvers = {
     ),
 
     bulkCategorizePurchaseInvoices: requireWrite("expenses")(
-      async (_, { ids, category }, context) => {
+      async (_, { ids, category, subcategory }, context) => {
         const workspaceId = new mongoose.Types.ObjectId(
           context.workspaceId || context.organizationId,
         );
+        if (!category && !subcategory) {
+          throw new AppError(
+            "Choisissez une catégorie",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        const resolvedCategory = resolvePurchaseInvoiceCategoryInput({
+          subcategory,
+          category,
+        });
 
         const result = await PurchaseInvoice.updateMany(
           { _id: { $in: ids }, workspaceId },
-          { $set: { category } },
+          { $set: resolvedCategory },
         );
 
         // La facture fait foi : propager la nouvelle catégorie aux
@@ -1095,7 +1129,8 @@ const purchaseInvoiceResolvers = {
           "linkedTransactionIds.0": { $exists: true },
         }).select("linkedTransactionIds");
         await syncLinkedTransactionCategories({
-          category,
+          category: resolvedCategory.category,
+          subcategory: resolvedCategory.subcategory,
           workspaceId,
           transactionIds: reconciled.flatMap((inv) => inv.linkedTransactionIds),
         });
@@ -1184,6 +1219,7 @@ const purchaseInvoiceResolvers = {
         // catégorie (les deux pages affichent alors le même libellé)
         await syncLinkedTransactionCategories({
           category: invoice.category,
+          subcategory: invoice.subcategory,
           workspaceId,
           transactionIds: newTransactionIds,
         });

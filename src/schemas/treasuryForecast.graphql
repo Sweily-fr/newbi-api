@@ -102,7 +102,10 @@ type ManualCashflowEntry {
   hiddenInScenario: Boolean
   name: String!
   type: ForecastType!
+  # Catégorie large (regroupements du tableau), dérivée de subcategory.
   category: ForecastCategory
+  # Sous-catégorie fine (même référentiel que la page Transactions).
+  subcategory: String
   amount: Float!
   amountDelta: Float
   amountDeltaType: AmountDeltaType
@@ -126,6 +129,9 @@ input UpsertManualCashflowEntryInput {
   name: String!
   type: ForecastType!
   category: ForecastCategory
+  # Sous-catégorie fine (ou code large) : prime sur category, la catégorie
+  # large est dérivée côté serveur.
+  subcategory: String
   amount: Float!
   amountDelta: Float
   amountDeltaType: AmountDeltaType
@@ -162,12 +168,15 @@ type DetectedRecurrence {
   # Surcharges saisies par l'utilisateur via « Modifier » (null = valeur
   # détectée). Communes à tous les scénarios, préservées par les analyses.
   categoryOverride: ForecastCategory
+  subcategoryOverride: String
   amountOverride: Float
   frequencyOverride: RecurrenceFrequency
   labelOverride: String
   # Valeurs effectivement utilisées dans les prévisions (surcharge, sinon
   # valeur détectée ; la catégorie détectée est rabattue sur l'enum).
   forecastCategory: ForecastCategory!
+  # Sous-catégorie fine choisie via « Modifier » (null = aucune).
+  forecastSubcategory: String
   forecastAmount: Float!
   forecastFrequency: RecurrenceFrequency!
   forecastName: String!
@@ -200,6 +209,8 @@ input UpsertTreasuryForecastInput {
 
 input UpdateDetectedRecurrenceInput {
   category: ForecastCategory
+  # Sous-catégorie fine (ou code large) : prime sur category.
+  subcategory: String
   amount: Float
   frequency: RecurrenceFrequency
   label: String
