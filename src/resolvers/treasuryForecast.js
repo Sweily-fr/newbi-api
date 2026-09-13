@@ -14,6 +14,10 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import {
+  loadScenarioOverlay,
+  projectableRecurrenceFilter,
+} from "../utils/forecastScenarioOverlay.js";
 
 // Income categories for filtering
 const INCOME_CATEGORIES = ["SALES", "REFUNDS_RECEIVED", "OTHER_INCOME"];
@@ -122,15 +126,18 @@ export const expandManualEntry = (entry, rangeStart, rangeEnd) => {
 // sections 6b2/6c. Auto-forecast (historical average) is intentionally excluded:
 // it has no entity to delete. `includePast` lifts the future-gating so a past
 // month can still show what had been forecast (read-only consultation); the
-// aggregate chart/table keeps ignoring past forecasts. Returns [{ id, kind,
-// name, category, type, amount, date: Date }] sorted chronologically.
+// aggregate chart/table keeps ignoring past forecasts. `scenarioId` applique
+// le calque du scénario (saisies propres, masquages et exclusions du
+// scénario) sans jamais toucher Base. Returns [{ id, kind, name, category,
+// type, amount, date: Date }] sorted chronologically.
 export const projectForecastOccurrences = async (
   workspaceId,
   rangeStart,
   rangeEnd,
-  { includePast = false } = {},
+  { includePast = false, scenarioId = null } = {},
 ) => {
   const wId = new mongoose.Types.ObjectId(workspaceId);
+  const overlay = await loadScenarioOverlay(scenarioId, wId);
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const mk = (d) =>
@@ -141,12 +148,15 @@ export const projectForecastOccurrences = async (
   const manualEntries = await ManualCashflowEntry.find({
     workspaceId: wId,
     startDate: { $lt: rangeEnd },
+    ...overlay.manualEntryFilter(),
   }).lean();
   for (const entry of manualEntries) {
+    if (overlay.isManualEntryHidden(entry)) continue;
     for (const occ of expandManualEntry(entry, rangeStart, rangeEnd)) {
       const month = mk(occ.date);
       if (!includePast && month < currentMonth) continue;
       if (entry.excludedMonths?.includes(month)) continue;
+      if (overlay.isOccurrenceExcluded("MANUAL", entry._id, month)) continue;
       occurrences.push({
         id: entry._id.toString(),
         kind: "MANUAL",
@@ -161,12 +171,12 @@ export const projectForecastOccurrences = async (
     }
   }
 
-  // --- Active detected recurrences ---
-  const activeRecurrences = await DetectedRecurrence.find({
-    workspaceId: wId,
-    isActive: true,
-    isMuted: false,
-  }).lean();
+  // --- Active detected recurrences (état effectif dans le scénario) ---
+  const activeRecurrences = (
+    await DetectedRecurrence.find(
+      projectableRecurrenceFilter(wId, overlay),
+    ).lean()
+  ).filter((rec) => overlay.isRecurrenceProjected(rec));
   if (activeRecurrences.length > 0) {
     // Dedup window: aligned on the projection window. When past months are
     // included, real invoices of those months must also be considered so a
@@ -247,6 +257,7 @@ export const projectForecastOccurrences = async (
         if (occDate < rangeStart) continue;
         if (!includePast && month < currentMonth) continue;
         if (rec.excludedMonths?.includes(month)) continue;
+        if (overlay.isOccurrenceExcluded("DETECTED", rec._id, month)) continue;
         let category;
         let type = rec.type;
         if (rec.source === "PURCHASE_INVOICE") {
@@ -284,6 +295,28 @@ export const projectForecastOccurrences = async (
   return occurrences;
 };
 
+// Vue d'une récurrence depuis un scénario : isMuted / isActive effectifs et
+// drapeau scenarioOverride. En Base, renvoie le document tel quel.
+const applyRecurrenceOverlay = (rec, overlay) => {
+  if (!overlay?.isScenario) return { ...rec, scenarioOverride: false };
+  return {
+    ...rec,
+    isMuted: overlay.isRecurrenceMuted(rec),
+    isActive: overlay.isRecurrenceProjected(rec),
+    scenarioOverride: overlay.hasRecurrenceOverride(rec),
+  };
+};
+
+// Une entité supprimée (saisie manuelle, récurrence) ne doit plus être
+// référencée par les calques des scénarios du workspace.
+const pullEntityFromScenarios = async (workspaceId, kind, entityId) => {
+  const pull = { excludedOccurrences: { kind, entityId } };
+  if (kind === "MANUAL") pull.hiddenManualEntryIds = entityId;
+  if (kind === "DETECTED")
+    pull.recurrenceOverrides = { recurrenceId: entityId };
+  await ForecastScenario.updateMany({ workspaceId }, { $pull: pull });
+};
+
 const treasuryForecastResolvers = {
   Query: {
     treasuryForecastData: requireRead("expenses")(
@@ -307,14 +340,10 @@ const treasuryForecastResolvers = {
         const now = new Date();
         const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-        // Load scenario multipliers if provided
-        let scenario = null;
-        if (scenarioId) {
-          scenario = await ForecastScenario.findOne({
-            _id: scenarioId,
-            workspaceId: wId,
-          }).lean();
-        }
+        // Scénario : multiplicateurs + calque (saisies propres, masquages,
+        // exclusions) — cf. utils/forecastScenarioOverlay.js.
+        const overlay = await loadScenarioOverlay(scenarioId, wId);
+        const scenario = overlay.scenario;
 
         // Parse start/end as YYYY-MM
         const startMonth = startDate.substring(0, 7);
@@ -521,13 +550,13 @@ const treasuryForecastResolvers = {
         }
 
         // 6b2. Auto-detected recurrences (from monthly cron) — project active
-        // ones for future months. Skip months where a matching purchase invoice
-        // already exists (deduplication).
-        const activeRecurrences = await DetectedRecurrence.find({
-          workspaceId: wId,
-          isActive: true,
-          isMuted: false,
-        }).lean();
+        // ones for future months (état effectif dans le scénario). Skip months
+        // where a matching purchase invoice already exists (deduplication).
+        const activeRecurrences = (
+          await DetectedRecurrence.find(
+            projectableRecurrenceFilter(wId, overlay),
+          ).lean()
+        ).filter((rec) => overlay.isRecurrenceProjected(rec));
         const recurrenceIncomeMap = {};
         const recurrenceExpenseMap = {};
         if (activeRecurrences.length > 0) {
@@ -621,8 +650,11 @@ const treasuryForecastResolvers = {
               const month = mk(occ);
               occ = advance(occ, freq);
               if (month < currentMonth || !monthSet.has(month)) continue;
-              // Occurrence supprimée individuellement pour ce mois.
+              // Occurrence supprimée individuellement pour ce mois (en Base
+              // ou dans ce scénario).
               if (rec.excludedMonths?.includes(month)) continue;
+              if (overlay.isOccurrenceExcluded("DETECTED", rec._id, month))
+                continue;
               if (rec.source === "PURCHASE_INVOICE") {
                 const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
                 if (existingPurchaseKeys.has(key)) continue;
@@ -664,15 +696,19 @@ const treasuryForecastResolvers = {
         const manualEntries = await ManualCashflowEntry.find({
           workspaceId: wId,
           startDate: { $lt: txEndDate },
+          ...overlay.manualEntryFilter(),
         }).lean();
         const manualIncomeMap = {};
         const manualExpenseMap = {};
         for (const entry of manualEntries) {
+          if (overlay.isManualEntryHidden(entry)) continue;
           const occurrences = expandManualEntry(entry, txStartDate, txEndDate);
           for (const occ of occurrences) {
             const m = `${occ.date.getFullYear()}-${String(occ.date.getMonth() + 1).padStart(2, "0")}`;
-            // Occurrence supprimée individuellement pour ce mois.
+            // Occurrence supprimée individuellement pour ce mois (en Base ou
+            // dans ce scénario).
             if (entry.excludedMonths?.includes(m)) continue;
+            if (overlay.isOccurrenceExcluded("MANUAL", entry._id, m)) continue;
             const cat =
               entry.category ||
               (entry.type === "INCOME" ? "OTHER_INCOME" : "OTHER_EXPENSE");
@@ -1005,36 +1041,54 @@ const treasuryForecastResolvers = {
       },
     ),
 
+    // Base : saisies de Base. Scénario : saisies de Base (avec leur état
+    // hiddenInScenario) + saisies propres au scénario.
     manualCashflowEntries: requireRead("expenses")(
-      async (_, { workspaceId: inputWorkspaceId }, context) => {
+      async (_, { workspaceId: inputWorkspaceId, scenarioId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
         );
-        return await ManualCashflowEntry.find({
-          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        const wId = new mongoose.Types.ObjectId(workspaceId);
+        const overlay = await loadScenarioOverlay(scenarioId, wId);
+        const entries = await ManualCashflowEntry.find({
+          workspaceId: wId,
+          ...overlay.manualEntryFilter(),
         })
           .sort({ startDate: 1 })
           .lean();
+        return entries.map((e) => ({
+          ...e,
+          hiddenInScenario: overlay.isManualEntryHidden(e),
+        }));
       },
     ),
 
+    // Dans un scénario, isMuted/isActive sont l'état effectif (surcharge du
+    // scénario sinon Base) et scenarioOverride signale une surcharge.
     detectedRecurrences: requireRead("expenses")(
-      async (_, { workspaceId: inputWorkspaceId }, context) => {
+      async (_, { workspaceId: inputWorkspaceId, scenarioId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
         );
-        return await DetectedRecurrence.find({
-          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        const wId = new mongoose.Types.ObjectId(workspaceId);
+        const overlay = await loadScenarioOverlay(scenarioId, wId);
+        const recurrences = await DetectedRecurrence.find({
+          workspaceId: wId,
         })
           .sort({ isActive: -1, lastDetectedAt: -1 })
           .lean();
+        return recurrences.map((rec) => applyRecurrenceOverlay(rec, overlay));
       },
     ),
 
     forecastMonthDetails: requireRead("expenses")(
-      async (_, { workspaceId: inputWorkspaceId, month }, context) => {
+      async (
+        _,
+        { workspaceId: inputWorkspaceId, month, scenarioId },
+        context,
+      ) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
@@ -1126,6 +1180,7 @@ const treasuryForecastResolvers = {
         const forecastEntries = (
           await projectForecastOccurrences(workspaceId, start, end, {
             includePast: true,
+            scenarioId,
           })
         ).map((o) => ({
           id: o.id,
@@ -1187,7 +1242,7 @@ const treasuryForecastResolvers = {
     forecastOccurrences: requireRead("expenses")(
       async (
         _,
-        { workspaceId: inputWorkspaceId, startMonth, endMonth },
+        { workspaceId: inputWorkspaceId, startMonth, endMonth, scenarioId },
         context,
       ) => {
         const workspaceId = resolveWorkspaceId(
@@ -1210,6 +1265,7 @@ const treasuryForecastResolvers = {
           workspaceId,
           start,
           end,
+          { scenarioId },
         );
         return occurrences.map((o) => ({
           id: o.id,
@@ -1291,6 +1347,12 @@ const treasuryForecastResolvers = {
         if (!result) {
           throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
         }
+        // Les saisies propres au scénario disparaissent avec lui ; les
+        // surcharges (masquages, exclusions) étaient portées par le scénario.
+        await ManualCashflowEntry.deleteMany({
+          workspaceId: result.workspaceId,
+          scenarioId: result._id,
+        });
         return { success: true, message: "Scénario supprimé" };
       },
     ),
@@ -1381,8 +1443,25 @@ const treasuryForecastResolvers = {
           return updated;
         }
 
+        // Saisie créée depuis un scénario : elle lui appartient et n'apparaît
+        // que dans ce scénario (Base intacte). Un scénario inconnu → Base.
+        let scenarioObjId = null;
+        if (input.scenarioId) {
+          const scenario = await ForecastScenario.findOne({
+            _id: input.scenarioId,
+            workspaceId: wObjId,
+          })
+            .select("_id")
+            .lean();
+          if (!scenario) {
+            throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
+          }
+          scenarioObjId = scenario._id;
+        }
+
         const created = await ManualCashflowEntry.create({
           ...payload,
+          scenarioId: scenarioObjId,
           workspaceId: wObjId,
           createdBy: context.user.id,
         });
@@ -1404,6 +1483,7 @@ const treasuryForecastResolvers = {
           );
         }
         await ManualCashflowEntry.deleteOne({ _id: id });
+        await pullEntityFromScenarios(entry.workspaceId, "MANUAL", entry._id);
         return { success: true, message: "Entrée supprimée" };
       },
     ),
@@ -1426,8 +1506,53 @@ const treasuryForecastResolvers = {
     ),
 
     muteDetectedRecurrence: requireWrite("expenses")(
-      async (_, { id, muted }, context) => {
+      async (_, { id, muted, scenarioId }, context) => {
         const workspaceId = context.workspaceId;
+        const wId = new mongoose.Types.ObjectId(workspaceId);
+
+        // Dans un scénario : surcharge propre au scénario, Base intacte. Si
+        // l'état demandé est celui de Base, la surcharge est simplement
+        // retirée (le scénario suit à nouveau Base).
+        if (scenarioId) {
+          const recurrence = await DetectedRecurrence.findOne({
+            _id: id,
+            workspaceId: wId,
+          }).lean();
+          if (!recurrence) {
+            throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
+          }
+          const scenario = await ForecastScenario.findOne({
+            _id: scenarioId,
+            workspaceId: wId,
+          })
+            .select("_id")
+            .lean();
+          if (!scenario) {
+            throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
+          }
+          await ForecastScenario.updateOne(
+            { _id: scenario._id },
+            {
+              $pull: { recurrenceOverrides: { recurrenceId: recurrence._id } },
+            },
+          );
+          if (Boolean(recurrence.isMuted) !== muted) {
+            await ForecastScenario.updateOne(
+              { _id: scenario._id },
+              {
+                $push: {
+                  recurrenceOverrides: {
+                    recurrenceId: recurrence._id,
+                    isMuted: muted,
+                  },
+                },
+              },
+            );
+          }
+          const overlay = await loadScenarioOverlay(scenario._id, wId);
+          return applyRecurrenceOverlay(recurrence, overlay);
+        }
+
         const updated = await DetectedRecurrence.findOneAndUpdate(
           {
             _id: id,
@@ -1460,6 +1585,45 @@ const treasuryForecastResolvers = {
       },
     ),
 
+    // Masque (ou réaffiche) une saisie de Base dans un scénario uniquement.
+    hideManualCashflowEntryInScenario: requireWrite("expenses")(
+      async (_, { id, scenarioId, hidden }, context) => {
+        const wId = new mongoose.Types.ObjectId(context.workspaceId);
+        const entry = await ManualCashflowEntry.findOne({
+          _id: id,
+          workspaceId: wId,
+        }).lean();
+        if (!entry) {
+          throw new AppError(
+            "Entrée manuelle non trouvée",
+            ERROR_CODES.NOT_FOUND,
+          );
+        }
+        if (entry.scenarioId) {
+          throw new AppError(
+            "Cette saisie appartient à un scénario : supprimez-la plutôt",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        const scenario = await ForecastScenario.findOne({
+          _id: scenarioId,
+          workspaceId: wId,
+        })
+          .select("_id")
+          .lean();
+        if (!scenario) {
+          throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
+        }
+        await ForecastScenario.updateOne(
+          { _id: scenario._id },
+          hidden
+            ? { $addToSet: { hiddenManualEntryIds: entry._id } }
+            : { $pull: { hiddenManualEntryIds: entry._id } },
+        );
+        return { ...entry, hiddenInScenario: hidden };
+      },
+    ),
+
     deleteDetectedRecurrence: requireWrite("expenses")(
       async (_, { id }, context) => {
         const recurrence = await DetectedRecurrence.findOne({
@@ -1470,6 +1634,11 @@ const treasuryForecastResolvers = {
           throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
         }
         await DetectedRecurrence.deleteOne({ _id: id });
+        await pullEntityFromScenarios(
+          recurrence.workspaceId,
+          "DETECTED",
+          recurrence._id,
+        );
         return { success: true, message: "Récurrence supprimée" };
       },
     ),
@@ -1477,7 +1646,7 @@ const treasuryForecastResolvers = {
     // Supprime UNE occurrence (un mois) d'une prévision récurrente sans toucher
     // aux autres mois : ajoute le mois à excludedMonths de l'entité ciblée.
     excludeForecastOccurrence: requireWrite("expenses")(
-      async (_, { kind, id, month }, context) => {
+      async (_, { kind, id, month, scenarioId }, context) => {
         const workspaceId = context.workspaceId;
         if (!/^\d{4}-\d{2}$/.test(month)) {
           throw new AppError(
@@ -1487,6 +1656,37 @@ const treasuryForecastResolvers = {
         }
         const Model =
           kind === "MANUAL" ? ManualCashflowEntry : DetectedRecurrence;
+
+        // Dans un scénario : l'exclusion est portée par le scénario, l'entité
+        // (et donc Base) n'est pas modifiée.
+        if (scenarioId) {
+          const wId = new mongoose.Types.ObjectId(workspaceId);
+          const entity = await Model.findOne({ _id: id, workspaceId: wId })
+            .select("_id")
+            .lean();
+          if (!entity) {
+            throw new AppError("Prévision non trouvée", ERROR_CODES.NOT_FOUND);
+          }
+          const scenario = await ForecastScenario.findOne({
+            _id: scenarioId,
+            workspaceId: wId,
+          })
+            .select("_id")
+            .lean();
+          if (!scenario) {
+            throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
+          }
+          const occurrence = { kind, entityId: entity._id, month };
+          await ForecastScenario.updateOne(
+            {
+              _id: scenario._id,
+              excludedOccurrences: { $not: { $elemMatch: occurrence } },
+            },
+            { $push: { excludedOccurrences: occurrence } },
+          );
+          return true;
+        }
+
         const updated = await Model.findOneAndUpdate(
           {
             _id: id,
@@ -1509,6 +1709,9 @@ const treasuryForecastResolvers = {
 
   ManualCashflowEntry: {
     id: (parent) => parent._id?.toString() || parent.id,
+    scenarioId: (parent) =>
+      parent.scenarioId ? parent.scenarioId.toString() : null,
+    hiddenInScenario: (parent) => Boolean(parent.hiddenInScenario),
     startDate: (parent) =>
       parent.startDate instanceof Date
         ? parent.startDate.toISOString()
@@ -1525,6 +1728,7 @@ const treasuryForecastResolvers = {
 
   DetectedRecurrence: {
     id: (parent) => parent._id?.toString() || parent.id,
+    scenarioOverride: (parent) => Boolean(parent.scenarioOverride),
     lastDetectedAt: (parent) =>
       parent.lastDetectedAt instanceof Date
         ? parent.lastDetectedAt.toISOString()
