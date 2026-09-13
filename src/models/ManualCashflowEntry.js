@@ -46,6 +46,15 @@ const manualCashflowEntrySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    // Saisie propre à un scénario (null = scénario Base, visible partout).
+    // Une saisie de scénario n'apparaît que dans ce scénario et disparaît
+    // avec lui.
+    scenarioId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ForecastScenario",
+      default: null,
+      index: true,
+    },
     name: {
       type: String,
       required: true,

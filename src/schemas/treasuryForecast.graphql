@@ -95,6 +95,11 @@ enum AmountDeltaType {
 type ManualCashflowEntry {
   id: ID!
   workspaceId: ID!
+  # Scénario propriétaire (null = Base). Une saisie de scénario n'existe que
+  # dans ce scénario.
+  scenarioId: ID
+  # Saisie de Base masquée dans le scénario consulté (toujours false en Base).
+  hiddenInScenario: Boolean
   name: String!
   type: ForecastType!
   category: ForecastCategory
@@ -115,6 +120,9 @@ type ManualCashflowEntry {
 input UpsertManualCashflowEntryInput {
   id: ID
   workspaceId: ID
+  # À la création seulement : rattache la saisie à ce scénario (sinon Base).
+  # Ignoré à la modification (une saisie ne change pas de scénario).
+  scenarioId: ID
   name: String!
   type: ForecastType!
   category: ForecastCategory
@@ -155,8 +163,12 @@ type DetectedRecurrence {
   occurrenceCount: Int
   lastSeenMonth: String!
   consecutiveMonths: Int!
+  # Dans un scénario : état effectif (surcharge du scénario, sinon Base).
   isActive: Boolean!
   isMuted: Boolean!
+  # true si le scénario consulté surcharge l'état de Base (masquée ou
+  # réactivée dans ce scénario uniquement). Toujours false en Base.
+  scenarioOverride: Boolean
   # Mois (YYYY-MM) dont l'occurrence projetée a été supprimée individuellement.
   excludedMonths: [String!]
   lastDetectedAt: String
@@ -206,14 +218,20 @@ extend type Query {
     endMonth: String!
   ): [TreasuryForecast!]!
 
-  manualCashflowEntries(workspaceId: ID): [ManualCashflowEntry!]!
+  # Sans scenarioId : saisies de Base. Avec : saisies de Base (avec leur état
+  # hiddenInScenario) + saisies propres au scénario.
+  manualCashflowEntries(workspaceId: ID, scenarioId: ID): [ManualCashflowEntry!]!
 
-  detectedRecurrences(workspaceId: ID): [DetectedRecurrence!]!
+  # Avec scenarioId : isMuted/isActive reflètent l'état effectif dans ce
+  # scénario (surcharges), scenarioOverride signale une surcharge.
+  detectedRecurrences(workspaceId: ID, scenarioId: ID): [DetectedRecurrence!]!
 
   # Détails des factures/devis composant un mois donné (format YYYY-MM).
+  # scenarioId : prévisions du mois vues depuis ce scénario.
   forecastMonthDetails(
     workspaceId: ID
     month: String!
+    scenarioId: ID
   ): ForecastMonthDetails!
 
   # Liste à plat des occurrences de prévision (saisies manuelles + récurrences
@@ -222,6 +240,7 @@ extend type Query {
     workspaceId: ID
     startMonth: String!
     endMonth: String!
+    scenarioId: ID
   ): [ForecastEntryItem!]!
 }
 
@@ -278,7 +297,21 @@ extend type Mutation {
   ): ManualCashflowEntry!
   deleteManualCashflowEntry(id: ID!): TreasuryDeleteResult!
 
-  muteDetectedRecurrence(id: ID!, muted: Boolean!): DetectedRecurrence!
+  # Sans scenarioId : masque/réactive en Base (tous les scénarios héritent).
+  # Avec scenarioId : surcharge propre au scénario, Base intacte.
+  muteDetectedRecurrence(
+    id: ID!
+    muted: Boolean!
+    scenarioId: ID
+  ): DetectedRecurrence!
+
+  # Masque (ou réaffiche) une saisie manuelle de Base dans un scénario
+  # uniquement. La saisie elle-même n'est pas modifiée.
+  hideManualCashflowEntryInScenario(
+    id: ID!
+    scenarioId: ID!
+    hidden: Boolean!
+  ): ManualCashflowEntry!
 
   # Supprime définitivement une récurrence détectée. Elle pourra réapparaître
   # à la prochaine analyse si le motif persiste (utiliser le mute pour la
@@ -291,10 +324,12 @@ extend type Mutation {
 
   # Supprime une seule occurrence (un mois) d'une prévision récurrente sans
   # affecter les autres mois (ajoute le mois à excludedMonths).
+  # Avec scenarioId : l'occurrence n'est supprimée que dans ce scénario.
   excludeForecastOccurrence(
     kind: ForecastOccurrenceKind!
     id: ID!
     month: String!
+    scenarioId: ID
   ): Boolean!
 
   upsertForecastScenario(input: UpsertForecastScenarioInput!): ForecastScenario!
