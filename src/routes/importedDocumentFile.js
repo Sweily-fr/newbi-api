@@ -5,6 +5,7 @@ import ImportedInvoice from "../models/ImportedInvoice.js";
 import ImportedQuote from "../models/ImportedQuote.js";
 import ImportedPurchaseOrder from "../models/ImportedPurchaseOrder.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import Transaction from "../models/Transaction.js";
 import cloudflareService from "../services/cloudflareService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
@@ -24,6 +25,17 @@ const DOC_CONFIG = {
   purchaseInvoice: {
     Model: PurchaseInvoice,
     getFile: (doc, fileId) => (fileId ? doc.files?.id(fileId) : doc.files?.[0]),
+  },
+  // Justificatifs attachés directement à une transaction bancaire. Les
+  // anciens justificatifs (migrés via le driver brut) n'ont pas de _id :
+  // sélection par ?index=<n> dans ce cas.
+  transaction: {
+    Model: Transaction,
+    getFile: (doc, fileId, index) => {
+      if (fileId) return doc.receiptFiles?.id(fileId);
+      if (index !== undefined) return doc.receiptFiles?.[index];
+      return doc.receiptFiles?.[0];
+    },
   },
 };
 
@@ -54,17 +66,27 @@ router.get("/imported/:docType/:id/file", validateJWT, async (req, res) => {
       return res.status(404).json({ error: "Document introuvable" });
     }
 
-    // Vérifier l'appartenance de l'utilisateur à l'organisation du document
+    // Vérifier l'appartenance de l'utilisateur à l'organisation du document.
+    // workspaceId est un ObjectId sur les documents importés mais une String
+    // sur Transaction : normaliser avant le lookup.
+    if (!mongoose.Types.ObjectId.isValid(doc.workspaceId)) {
+      return res.status(403).json({ error: "Accès refusé" });
+    }
     const member =
       await EInvoicingSettingsService.getMemberCollection().findOne({
         userId: new mongoose.Types.ObjectId(userId),
-        organizationId: doc.workspaceId,
+        organizationId: new mongoose.Types.ObjectId(String(doc.workspaceId)),
       });
     if (!member) {
       return res.status(403).json({ error: "Accès refusé" });
     }
 
-    const file = config.getFile(doc, req.query.fileId);
+    const rawIndex = req.query.index;
+    const fileIndex =
+      rawIndex !== undefined && /^\d{1,3}$/.test(String(rawIndex))
+        ? Number(rawIndex)
+        : undefined;
+    const file = config.getFile(doc, req.query.fileId, fileIndex);
     if (!file?.url) {
       return res.status(404).json({ error: "Aucun fichier disponible" });
     }
@@ -102,7 +124,10 @@ router.get("/imported/:docType/:id/file", validateJWT, async (req, res) => {
     // Nom de fichier libre (saisi par l'utilisateur à l'import) : le header
     // n'accepte que du Latin-1 → fallback ASCII + variante UTF-8 (RFC 5987).
     const rawName =
-      file.originalFileName || file.originalFilename || `${docType}-${doc._id}`;
+      file.originalFileName ||
+      file.originalFilename ||
+      file.filename ||
+      `${docType}-${doc._id}`;
     const asciiName =
       rawName.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "") ||
       `${docType}-${doc._id}`;
