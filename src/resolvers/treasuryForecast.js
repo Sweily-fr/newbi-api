@@ -29,6 +29,37 @@ const CATEGORY_ALIAS = {
 };
 const normalizeCat = (cat) => CATEGORY_ALIAS[cat] || cat;
 
+// Bucket an expense category into the forecast enum (OTHER and Bridge
+// aliases like TRAVEL don't exist in EXPENSE_CATS).
+const toExpenseCat = (cat) => {
+  const c = normalizeCat(cat || "OTHER");
+  return c === "OTHER" ? "OTHER_EXPENSE" : c;
+};
+
+// Catégorie de prévision d'une récurrence détectée : le choix de
+// l'utilisateur (categoryOverride) prime, sinon la catégorie détectée est
+// rabattue sur l'enum ForecastCategory. Seule source pour toutes les
+// projections (tableau, occurrences, détails du mois) et pour le champ
+// forecastCategory exposé au front.
+export const recurrenceForecastCategory = (rec) => {
+  if (rec.categoryOverride) return rec.categoryOverride;
+  if (rec.source === "INVOICE") return "SALES";
+  if (rec.source === "PURCHASE_INVOICE" || rec.type === "EXPENSE") {
+    return toExpenseCat(rec.category);
+  }
+  return INCOME_CATEGORIES.includes(rec.category)
+    ? rec.category
+    : "OTHER_INCOME";
+};
+// Idem pour le montant, la périodicité et le libellé (« Modifier » une
+// récurrence) : surcharge utilisateur sinon valeur détectée.
+export const recurrenceForecastAmount = (rec) =>
+  rec.amountOverride != null ? rec.amountOverride : rec.averageAmount;
+export const recurrenceForecastFrequency = (rec) =>
+  rec.frequencyOverride || rec.frequency || "MONTHLY";
+export const recurrenceForecastName = (rec) =>
+  rec.labelOverride || rec.partyName;
+
 // Helper: generate array of "YYYY-MM" strings between start and end (inclusive).
 // On itère en arithmétique entière sur (année, mois) : mélanger un parsing UTC
 // (new Date("YYYY-MM-01")) avec setMonth (heure locale) provoquait un off-by-one
@@ -225,10 +256,6 @@ export const projectForecastOccurrences = async (
         .filter((r) => r.source !== "TRANSACTION")
         .map((r) => `${r.partyKey}::${r.type}`),
     );
-    const toExpenseCat = (cat) => {
-      const c = normalizeCat(cat || "OTHER");
-      return c === "OTHER" ? "OTHER_EXPENSE" : c;
-    };
     const monthStep = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
     const dayStep = { WEEKLY: 7, BIWEEKLY: 14 };
     const advance = (date, freq) => {
@@ -244,7 +271,7 @@ export const projectForecastOccurrences = async (
         invoiceRecurrenceKeys.has(`${rec.partyKey}::${rec.type}`)
       )
         continue;
-      const freq = rec.frequency || "MONTHLY";
+      const freq = recurrenceForecastFrequency(rec);
       const anchor = rec.lastSeenDate
         ? new Date(rec.lastSeenDate)
         : new Date((rec.lastSeenMonth || currentMonth) + "-01");
@@ -258,33 +285,25 @@ export const projectForecastOccurrences = async (
         if (!includePast && month < currentMonth) continue;
         if (rec.excludedMonths?.includes(month)) continue;
         if (overlay.isOccurrenceExcluded("DETECTED", rec._id, month)) continue;
-        let category;
+        // La déduplication avec les vraies factures se fait sur la catégorie
+        // détectée (identité de la récurrence), jamais sur la surcharge.
         let type = rec.type;
         if (rec.source === "PURCHASE_INVOICE") {
           const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
           if (existingPurchaseKeys.has(key)) continue;
-          category = toExpenseCat(rec.category);
           type = "EXPENSE";
-        } else if (rec.source === "TRANSACTION") {
-          category =
-            rec.type === "EXPENSE"
-              ? toExpenseCat(rec.category)
-              : INCOME_CATEGORIES.includes(rec.category)
-                ? rec.category
-                : "OTHER_INCOME";
-        } else {
+        } else if (rec.source === "INVOICE") {
           const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${month}`;
           if (existingInvoiceKeys.has(key)) continue;
-          category = "SALES";
           type = "INCOME";
         }
         occurrences.push({
           id: rec._id.toString(),
           kind: "DETECTED",
-          name: rec.partyName,
-          category,
+          name: recurrenceForecastName(rec),
+          category: recurrenceForecastCategory(rec),
           type,
-          amount: rec.averageAmount,
+          amount: recurrenceForecastAmount(rec),
           date: occDate,
         });
       }
@@ -604,13 +623,6 @@ const treasuryForecastResolvers = {
               .filter((r) => r.source !== "TRANSACTION")
               .map((r) => `${r.partyKey}::${r.type}`),
           );
-          // Bucket an expense category into the forecast enum (OTHER and
-          // Bridge aliases like TRAVEL don't exist in EXPENSE_CATS).
-          const toExpenseCat = (cat) => {
-            const c = normalizeCat(cat || "OTHER");
-            return c === "OTHER" ? "OTHER_EXPENSE" : c;
-          };
-
           const mk = (d) =>
             `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
           // Step forward one occurrence at a time according to the detected
@@ -638,7 +650,7 @@ const treasuryForecastResolvers = {
               invoiceRecurrenceKeys.has(`${rec.partyKey}::${rec.type}`)
             )
               continue;
-            const freq = rec.frequency || "MONTHLY";
+            const freq = recurrenceForecastFrequency(rec);
             const anchor = rec.lastSeenDate
               ? new Date(rec.lastSeenDate)
               : new Date((rec.lastSeenMonth || currentMonth) + "-01");
@@ -655,38 +667,25 @@ const treasuryForecastResolvers = {
               if (rec.excludedMonths?.includes(month)) continue;
               if (overlay.isOccurrenceExcluded("DETECTED", rec._id, month))
                 continue;
+              // Déduplication sur la catégorie détectée (identité), somme
+              // dans la catégorie de prévision (surcharge utilisateur ou
+              // catégorie détectée rabattue sur l'enum).
+              let type = rec.type;
               if (rec.source === "PURCHASE_INVOICE") {
                 const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${rec.category || "OTHER"}::${month}`;
                 if (existingPurchaseKeys.has(key)) continue;
-                const cat = toExpenseCat(rec.category);
-                if (!recurrenceExpenseMap[month])
-                  recurrenceExpenseMap[month] = {};
-                recurrenceExpenseMap[month][cat] =
-                  (recurrenceExpenseMap[month][cat] || 0) + rec.averageAmount;
-              } else if (rec.source === "TRANSACTION") {
-                if (rec.type === "EXPENSE") {
-                  const cat = toExpenseCat(rec.category);
-                  if (!recurrenceExpenseMap[month])
-                    recurrenceExpenseMap[month] = {};
-                  recurrenceExpenseMap[month][cat] =
-                    (recurrenceExpenseMap[month][cat] || 0) + rec.averageAmount;
-                } else {
-                  const cat = INCOME_CATEGORIES.includes(rec.category)
-                    ? rec.category
-                    : "OTHER_INCOME";
-                  if (!recurrenceIncomeMap[month])
-                    recurrenceIncomeMap[month] = {};
-                  recurrenceIncomeMap[month][cat] =
-                    (recurrenceIncomeMap[month][cat] || 0) + rec.averageAmount;
-                }
-              } else {
+                type = "EXPENSE";
+              } else if (rec.source === "INVOICE") {
                 const key = `${rec.partyKey || normalizeParty(rec.partyName)}::${month}`;
                 if (existingInvoiceKeys.has(key)) continue;
-                if (!recurrenceIncomeMap[month])
-                  recurrenceIncomeMap[month] = {};
-                recurrenceIncomeMap[month].SALES =
-                  (recurrenceIncomeMap[month].SALES || 0) + rec.averageAmount;
+                type = "INCOME";
               }
+              const cat = recurrenceForecastCategory(rec);
+              const target =
+                type === "INCOME" ? recurrenceIncomeMap : recurrenceExpenseMap;
+              if (!target[month]) target[month] = {};
+              target[month][cat] =
+                (target[month][cat] || 0) + recurrenceForecastAmount(rec);
             }
           }
         }
@@ -1624,6 +1623,80 @@ const treasuryForecastResolvers = {
       },
     ),
 
+    // « Modifier » une récurrence détectée : surcharges de catégorie, montant,
+    // périodicité et libellé (null = valeur détectée). Action de Base, commune
+    // à tous les scénarios : c'est une correction de données, pas une
+    // hypothèse de scénario.
+    updateDetectedRecurrence: requireWrite("expenses")(
+      async (_, { id, input }, context) => {
+        const wId = new mongoose.Types.ObjectId(context.workspaceId);
+        const recurrence = await DetectedRecurrence.findOne({
+          _id: id,
+          workspaceId: wId,
+        }).lean();
+        if (!recurrence) {
+          throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+        const category = input.category || null;
+        if (category) {
+          const isIncomeCat = INCOME_CATEGORIES.includes(category);
+          const isIncomeRec =
+            recurrence.source === "INVOICE" ||
+            (recurrence.source === "TRANSACTION" &&
+              recurrence.type === "INCOME");
+          if (isIncomeCat !== isIncomeRec) {
+            throw new AppError(
+              isIncomeRec
+                ? "Choisissez une catégorie de revenu pour cette récurrence"
+                : "Choisissez une catégorie de dépense pour cette récurrence",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+        }
+        let amount = null;
+        if (input.amount != null) {
+          if (!Number.isFinite(input.amount) || input.amount <= 0) {
+            throw new AppError(
+              "Le montant doit être supérieur à 0",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+          amount = Math.round(input.amount * 100) / 100;
+        }
+        const label = (input.label || "").trim() || null;
+        if (label && label.length > 120) {
+          throw new AppError(
+            "Le libellé ne peut pas dépasser 120 caractères",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        // Une surcharge égale à la valeur détectée n'en est pas une : on la
+        // retire, la récurrence suit à nouveau la détection.
+        const detectedCategory = recurrenceForecastCategory({
+          ...recurrence,
+          categoryOverride: null,
+        });
+        const detectedFrequency = recurrence.frequency || "MONTHLY";
+        const updated = await DetectedRecurrence.findOneAndUpdate(
+          { _id: recurrence._id },
+          {
+            $set: {
+              categoryOverride: category === detectedCategory ? null : category,
+              amountOverride:
+                amount === recurrence.averageAmount ? null : amount,
+              frequencyOverride:
+                input.frequency && input.frequency !== detectedFrequency
+                  ? input.frequency
+                  : null,
+              labelOverride: label === recurrence.partyName ? null : label,
+            },
+          },
+          { new: true, lean: true },
+        );
+        return updated;
+      },
+    ),
+
     deleteDetectedRecurrence: requireWrite("expenses")(
       async (_, { id }, context) => {
         const recurrence = await DetectedRecurrence.findOne({
@@ -1729,6 +1802,15 @@ const treasuryForecastResolvers = {
   DetectedRecurrence: {
     id: (parent) => parent._id?.toString() || parent.id,
     scenarioOverride: (parent) => Boolean(parent.scenarioOverride),
+    categoryOverride: (parent) => parent.categoryOverride || null,
+    amountOverride: (parent) =>
+      parent.amountOverride != null ? parent.amountOverride : null,
+    frequencyOverride: (parent) => parent.frequencyOverride || null,
+    labelOverride: (parent) => parent.labelOverride || null,
+    forecastCategory: (parent) => recurrenceForecastCategory(parent),
+    forecastAmount: (parent) => recurrenceForecastAmount(parent),
+    forecastFrequency: (parent) => recurrenceForecastFrequency(parent),
+    forecastName: (parent) => recurrenceForecastName(parent),
     lastDetectedAt: (parent) =>
       parent.lastDetectedAt instanceof Date
         ? parent.lastDetectedAt.toISOString()

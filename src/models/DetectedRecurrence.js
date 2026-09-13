@@ -40,7 +40,23 @@ const detectedRecurrenceSchema = new mongoose.Schema(
     // Normalized supplier (purchase) or client (invoice) name for matching.
     partyKey: { type: String, required: true },
     partyName: { type: String, required: true },
+    // Catégorie issue de la source (expenseCategory de la transaction,
+    // category de la facture d'achat, SALES pour les factures client). Fait
+    // partie de l'identité de la récurrence (index unique + regroupement du
+    // cron) : ne jamais la modifier à la main.
     category: { type: String },
+    // Surcharges saisies par l'utilisateur (« Modifier » une récurrence).
+    // Chacune prime sur la valeur détectée à la projection, est commune à
+    // tous les scénarios et préservée par le cron de détection (cf.
+    // recurringInvoiceDetectionCron). null = valeur détectée.
+    categoryOverride: { type: String, default: null },
+    amountOverride: { type: Number, default: null, min: 0 },
+    frequencyOverride: {
+      type: String,
+      enum: [...Object.values(RECURRENCE_FREQUENCY), null],
+      default: null,
+    },
+    labelOverride: { type: String, default: null },
     averageAmount: { type: Number, required: true, min: 0 },
     // Périodicité détectée à partir des intervalles entre occurrences.
     frequency: {
