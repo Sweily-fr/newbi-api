@@ -419,6 +419,20 @@ const documentAutomationResolvers = {
 
         const totalDocuments = stats.total;
 
+        // Erreur avant le traitement (requête, dossier cible...) : la
+        // remonter au lieu de la confondre avec « aucun document »
+        if (totalDocuments === 0 && stats.firstError) {
+          return {
+            automationId: automation._id.toString(),
+            status: "FAILED",
+            totalDocuments: 0,
+            message: stats.firstError,
+            successCount: 0,
+            failCount: 0,
+            firstError: stats.firstError,
+          };
+        }
+
         if (
           totalDocuments === 0 ||
           (stats.successCount === 0 &&
