@@ -70,6 +70,10 @@ const manualCashflowEntrySchema = new mongoose.Schema(
       type: String,
       enum: CASHFLOW_CATEGORY,
     },
+    // Sous-catégorie fine choisie par l'utilisateur (même référentiel que la
+    // page Transactions, cf. utils/categoryTaxonomy.js). `category` en est
+    // la catégorie large dérivée, utilisée pour les regroupements.
+    subcategory: { type: String, default: null },
     amount: {
       type: Number,
       required: true,

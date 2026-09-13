@@ -162,6 +162,10 @@ const purchaseInvoiceSchema = new mongoose.Schema(
       enum: Object.values(PURCHASE_INVOICE_CATEGORY),
       default: PURCHASE_INVOICE_CATEGORY.OTHER,
     },
+    // Sous-catégorie fine (même référentiel que la page Transactions, cf.
+    // utils/categoryTaxonomy.js). `category` en est la catégorie large
+    // dérivée ; propagée telle quelle aux transactions rapprochées.
+    subcategory: { type: String, default: null },
     tags: [
       {
         type: String,
