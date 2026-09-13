@@ -118,7 +118,10 @@ type PurchaseInvoice {
   amountTTC: Float!
   currency: String!
   status: PurchaseInvoiceStatus!
+  # Catégorie large (filtres, analytics), dérivée de subcategory.
   category: PurchaseInvoiceCategory!
+  # Sous-catégorie fine (même référentiel que la page Transactions).
+  subcategory: String
   tags: [String!]
   notes: String
   internalReference: String
@@ -313,6 +316,9 @@ input CreatePurchaseInvoiceInput {
   currency: String = "EUR"
   status: PurchaseInvoiceStatus = TO_PROCESS
   category: PurchaseInvoiceCategory = OTHER
+  # Sous-catégorie fine (ou code large) : prime sur category, la catégorie
+  # large est dérivée côté serveur.
+  subcategory: String
   tags: [String!]
   notes: String
   internalReference: String
@@ -334,6 +340,8 @@ input UpdatePurchaseInvoiceInput {
   currency: String
   status: PurchaseInvoiceStatus
   category: PurchaseInvoiceCategory
+  # Sous-catégorie fine (ou code large) : prime sur category.
+  subcategory: String
   tags: [String!]
   notes: String
   internalReference: String
@@ -482,9 +490,11 @@ extend type Mutation {
     status: PurchaseInvoiceStatus!
   ): BulkActionResult!
   bulkDeletePurchaseInvoices(ids: [ID!]!): BulkActionResult!
+  # category ou subcategory (sous-catégorie fine, prime sur category) requis.
   bulkCategorizePurchaseInvoices(
     ids: [ID!]!
-    category: PurchaseInvoiceCategory!
+    category: PurchaseInvoiceCategory
+    subcategory: String
   ): BulkActionResult!
 
   # Ajoute des transactions aux liens existants (N↔N, additif). Erreur si la

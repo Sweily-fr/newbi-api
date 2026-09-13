@@ -17,6 +17,7 @@ import {
   getAllPCGAccounts,
   PCG,
 } from "../utils/pcg-mapping.js";
+import { toExpenseCategory } from "../utils/categoryTaxonomy.js";
 
 const bankingResolvers = {
   Upload: GraphQLUpload,
@@ -320,113 +321,10 @@ const bankingResolvers = {
           // syncs bancaires ne l'écrasent plus (même logique que pcgAccount.isManual)
           updateData.categoryIsManual = true;
 
-          // Mapper vers la catégorie large pour expenseCategory (enum validé)
-          const VALID_EXPENSE_CATEGORIES = [
-            "OFFICE_SUPPLIES",
-            "TRAVEL",
-            "MEALS",
-            "ACCOMMODATION",
-            "SOFTWARE",
-            "HARDWARE",
-            "SERVICES",
-            "MARKETING",
-            "TAXES",
-            "RENT",
-            "UTILITIES",
-            "SALARIES",
-            "INSURANCE",
-            "MAINTENANCE",
-            "TRAINING",
-            "SUBSCRIPTIONS",
-            "OTHER",
-          ];
-
-          if (VALID_EXPENSE_CATEGORIES.includes(input.category)) {
-            // Déjà une catégorie large valide
-            updateData.expenseCategory = input.category;
-          } else {
-            // Sous-catégorie fine → mapper vers la catégorie large
-            const subcategoryToExpenseCategory = {
-              bureau: "OFFICE_SUPPLIES",
-              materiel: "HARDWARE",
-              mobilier: "OFFICE_SUPPLIES",
-              equipement: "HARDWARE",
-              transport: "TRAVEL",
-              carburant: "TRAVEL",
-              parking: "TRAVEL",
-              peage: "TRAVEL",
-              taxi: "TRAVEL",
-              train: "TRAVEL",
-              avion: "TRAVEL",
-              location_vehicule: "TRAVEL",
-              repas: "MEALS",
-              restaurant: "MEALS",
-              hotel: "ACCOMMODATION",
-              marketing: "MARKETING",
-              publicite: "MARKETING",
-              communication: "MARKETING",
-              telephone: "UTILITIES",
-              internet: "UTILITIES",
-              site_web: "SOFTWARE",
-              reseaux_sociaux: "MARKETING",
-              formation: "TRAINING",
-              conference: "TRAINING",
-              livres: "TRAINING",
-              abonnement: "SUBSCRIPTIONS",
-              comptabilite: "SERVICES",
-              juridique: "SERVICES",
-              assurance: "INSURANCE",
-              banque: "SERVICES",
-              conseil: "SERVICES",
-              sous_traitance: "SERVICES",
-              loyer: "RENT",
-              electricite: "UTILITIES",
-              eau: "UTILITIES",
-              chauffage: "UTILITIES",
-              entretien: "MAINTENANCE",
-              logiciel: "SOFTWARE",
-              saas: "SOFTWARE",
-              licence: "SOFTWARE",
-              salaire: "SALARIES",
-              charges_sociales: "SALARIES",
-              recrutement: "SERVICES",
-              impots_taxes: "TAXES",
-              tva: "TAXES",
-              avoirs_remboursement: "OTHER",
-              cadeaux: "OTHER",
-              representation: "OTHER",
-              poste: "OFFICE_SUPPLIES",
-              impression: "OFFICE_SUPPLIES",
-              autre: "OTHER",
-              // Revenus
-              ventes: "SALES",
-              services: "SERVICES",
-              honoraires: "SERVICES",
-              commissions: "SERVICES",
-              consulting: "SERVICES",
-              abonnements_revenus: "SUBSCRIPTIONS",
-              licences_revenus: "SOFTWARE",
-              royalties: "OTHER",
-              loyers_revenus: "RENT",
-              interets: "OTHER",
-              dividendes: "OTHER",
-              plus_values: "OTHER",
-              subventions: "GRANTS",
-              remboursements_revenus: "OTHER",
-              indemnites: "OTHER",
-              cadeaux_recus: "OTHER",
-              autre_revenu: "OTHER",
-              // Catégories propres à l'enum facture d'achat, propagées sur la
-              // transaction au rapprochement (purchaseInvoiceCategorySync) —
-              // sans ce mapping, ré-enregistrer la transaction dégraderait
-              // expenseCategory en OTHER
-              TRANSPORT: "TRAVEL",
-              TELECOMMUNICATIONS: "UTILITIES",
-              ENERGY: "UTILITIES",
-            };
-            updateData.expenseCategory =
-              subcategoryToExpenseCategory[input.category] || "OTHER";
-          }
+          // Catégorie large dérivée (enum expenseCategory) — source unique :
+          // utils/categoryTaxonomy.js, partagée avec les factures d'achat et
+          // les prévisions.
+          updateData.expenseCategory = toExpenseCategory(input.category);
         }
         if (input.vendor) updateData["metadata.vendor"] = input.vendor;
         if (input.paymentMethod)

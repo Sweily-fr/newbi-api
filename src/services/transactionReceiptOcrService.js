@@ -757,6 +757,7 @@ async function processReceiptsForTransaction({
       // la facture créée, pour un affichage identique sur les deux pages
       await syncLinkedTransactionCategories({
         category: invoice.category,
+        subcategory: invoice.subcategory,
         workspaceId,
         transactionIds: [transaction._id],
       });

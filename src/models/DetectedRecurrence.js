@@ -50,6 +50,9 @@ const detectedRecurrenceSchema = new mongoose.Schema(
     // tous les scénarios et préservée par le cron de détection (cf.
     // recurringInvoiceDetectionCron). null = valeur détectée.
     categoryOverride: { type: String, default: null },
+    // Sous-catégorie fine choisie via « Modifier » (categoryOverride en est la
+    // catégorie large dérivée, cf. utils/categoryTaxonomy.js).
+    subcategoryOverride: { type: String, default: null },
     amountOverride: { type: Number, default: null, min: 0 },
     frequencyOverride: {
       type: String,

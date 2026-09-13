@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
 import logger from "./logger.js";
+import {
+  PI_TO_EXPENSE_CATEGORY,
+  toExpenseCategory,
+} from "./categoryTaxonomy.js";
+
+export { PI_TO_EXPENSE_CATEGORY };
 
 /**
  * Propagation de catégorie facture d'achat → transactions rapprochées.
@@ -12,30 +18,6 @@ import logger from "./logger.js";
  * catégorie côté transaction n'est pas répercutée sur la facture.
  */
 
-// category (PurchaseInvoice) -> expenseCategory (Transaction).
-// Inverse de EXPENSE_TO_PI_CATEGORY (transactionReceiptOcrService) : les
-// valeurs communes aux deux enums se mappent 1:1, celles sans équivalent
-// (TRANSPORT, TELECOMMUNICATIONS, ENERGY) vont vers la plus proche.
-export const PI_TO_EXPENSE_CATEGORY = {
-  RENT: "RENT",
-  SUBSCRIPTIONS: "SUBSCRIPTIONS",
-  OFFICE_SUPPLIES: "OFFICE_SUPPLIES",
-  SERVICES: "SERVICES",
-  TRANSPORT: "TRAVEL",
-  MEALS: "MEALS",
-  TELECOMMUNICATIONS: "UTILITIES",
-  INSURANCE: "INSURANCE",
-  ENERGY: "UTILITIES",
-  SOFTWARE: "SOFTWARE",
-  HARDWARE: "HARDWARE",
-  MARKETING: "MARKETING",
-  TRAINING: "TRAINING",
-  MAINTENANCE: "MAINTENANCE",
-  TAXES: "TAXES",
-  UTILITIES: "UTILITIES",
-  OTHER: "OTHER",
-};
-
 /**
  * Aligne la catégorie des transactions liées sur celle de la facture d'achat.
  *
@@ -47,18 +29,25 @@ export const PI_TO_EXPENSE_CATEGORY = {
  * - Best-effort : une erreur est loguée mais ne fait pas échouer le
  *   rapprochement ou la mise à jour de la facture appelante.
  *
+ * - `subcategory` (sous-catégorie fine, même référentiel que la page
+ *   Transactions) : propagée telle quelle dans Transaction.category, la
+ *   catégorie large expenseCategory en est dérivée (categoryTaxonomy).
+ *
  * @param {object} params
  * @param {string} params.category - catégorie de la facture (enum PurchaseInvoice)
+ * @param {string} [params.subcategory] - sous-catégorie fine de la facture
  * @param {string|object} params.workspaceId
  * @param {Array<string|object>} params.transactionIds - transactions liées
  */
 export async function syncLinkedTransactionCategories({
   category,
+  subcategory,
   workspaceId,
   transactionIds,
 }) {
-  if (!category || category === "OTHER") return;
+  if (!subcategory && (!category || category === "OTHER")) return;
   if (!transactionIds || transactionIds.length === 0) return;
+  const fineCategory = subcategory || category;
 
   const Transaction = mongoose.model("Transaction");
   const ids = transactionIds.map((id) =>
@@ -70,15 +59,15 @@ export async function syncLinkedTransactionCategories({
       { _id: { $in: ids }, workspaceId: String(workspaceId) },
       {
         $set: {
-          category,
-          expenseCategory: PI_TO_EXPENSE_CATEGORY[category] || "OTHER",
+          category: fineCategory,
+          expenseCategory: toExpenseCategory(fineCategory),
           categoryIsManual: true,
         },
       },
     );
   } catch (error) {
     logger.error(
-      `[CATEGORY-SYNC] Échec propagation catégorie ${category} vers ${ids.length} transaction(s):`,
+      `[CATEGORY-SYNC] Échec propagation catégorie ${fineCategory} vers ${ids.length} transaction(s):`,
       error,
     );
   }

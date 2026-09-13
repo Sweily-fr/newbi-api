@@ -18,22 +18,25 @@ import {
   loadScenarioOverlay,
   projectableRecurrenceFilter,
 } from "../utils/forecastScenarioOverlay.js";
+import {
+  FORECAST_INCOME_CATEGORIES,
+  isIncomeSubcategory,
+  toForecastCategory,
+  resolveForecastCategoryInput,
+} from "../utils/categoryTaxonomy.js";
 
 // Income categories for filtering
-const INCOME_CATEGORIES = ["SALES", "REFUNDS_RECEIVED", "OTHER_INCOME"];
+const INCOME_CATEGORIES = FORECAST_INCOME_CATEGORIES;
 
-// Map legacy/Bridge category names to forecast category names
-const CATEGORY_ALIAS = {
-  TRAVEL: "TRANSPORT",
-  ACCOMMODATION: "OTHER_EXPENSE",
-};
-const normalizeCat = (cat) => CATEGORY_ALIAS[cat] || cat;
+// Bucket an expense category (Bridge/Transaction enum, ex. TRAVEL, OTHER) into
+// the forecast enum — cf. utils/categoryTaxonomy.js (source unique).
+const toExpenseCat = (cat) => toForecastCategory(cat || "OTHER", "EXPENSE");
 
-// Bucket an expense category into the forecast enum (OTHER and Bridge
-// aliases like TRAVEL don't exist in EXPENSE_CATS).
-const toExpenseCat = (cat) => {
-  const c = normalizeCat(cat || "OTHER");
-  return c === "OTHER" ? "OTHER_EXPENSE" : c;
+// Same bucketing, but keyed like the bank aggregation maps below (OTHER,
+// not OTHER_EXPENSE).
+const normalizeCat = (cat) => {
+  const c = toExpenseCat(cat);
+  return c === "OTHER_EXPENSE" ? "OTHER" : c;
 };
 
 // Catégorie de prévision d'une récurrence détectée : le choix de
@@ -59,6 +62,9 @@ export const recurrenceForecastFrequency = (rec) =>
   rec.frequencyOverride || rec.frequency || "MONTHLY";
 export const recurrenceForecastName = (rec) =>
   rec.labelOverride || rec.partyName;
+// Sous-catégorie fine choisie via « Modifier » (la détection n'en a pas).
+export const recurrenceForecastSubcategory = (rec) =>
+  rec.subcategoryOverride || null;
 
 // Helper: generate array of "YYYY-MM" strings between start and end (inclusive).
 // On itère en arithmétique entière sur (année, mois) : mélanger un parsing UTC
@@ -192,7 +198,9 @@ export const projectForecastOccurrences = async (
         id: entry._id.toString(),
         kind: "MANUAL",
         name: entry.name,
+        // Affichage : la sous-catégorie fine si elle existe.
         category:
+          entry.subcategory ||
           entry.category ||
           (entry.type === "INCOME" ? "OTHER_INCOME" : "OTHER_EXPENSE"),
         type: entry.type,
@@ -301,7 +309,9 @@ export const projectForecastOccurrences = async (
           id: rec._id.toString(),
           kind: "DETECTED",
           name: recurrenceForecastName(rec),
-          category: recurrenceForecastCategory(rec),
+          category:
+            recurrenceForecastSubcategory(rec) ||
+            recurrenceForecastCategory(rec),
           type,
           amount: recurrenceForecastAmount(rec),
           date: occDate,
@@ -1414,10 +1424,18 @@ const treasuryForecastResolvers = {
         );
         const wObjId = new mongoose.Types.ObjectId(workspaceId);
 
+        // Sous-catégorie fine (référentiel Transactions) → catégorie large
+        // de l'enum ForecastCategory dérivée côté serveur.
+        const resolvedCategory = resolveForecastCategoryInput({
+          subcategory: input.subcategory,
+          category: input.category,
+          type: input.type,
+        });
         const payload = {
           name: input.name,
           type: input.type,
-          category: input.category || null,
+          category: resolvedCategory.category,
+          subcategory: resolvedCategory.subcategory,
           amount: input.amount,
           amountDelta: input.amountDelta || 0,
           amountDeltaType: input.amountDeltaType || "AMOUNT",
@@ -1637,13 +1655,23 @@ const treasuryForecastResolvers = {
         if (!recurrence) {
           throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
         }
-        const category = input.category || null;
-        if (category) {
-          const isIncomeCat = INCOME_CATEGORIES.includes(category);
-          const isIncomeRec =
-            recurrence.source === "INVOICE" ||
-            (recurrence.source === "TRANSACTION" &&
-              recurrence.type === "INCOME");
+        const isIncomeRec =
+          recurrence.source === "INVOICE" ||
+          (recurrence.source === "TRANSACTION" && recurrence.type === "INCOME");
+        const rawCategory = input.subcategory || input.category || null;
+        // Sous-catégorie fine → catégorie large dérivée dans le sens de la
+        // récurrence (une sous-catégorie de revenu sur une dépense est
+        // refusée ci-dessous).
+        const resolvedCategory = resolveForecastCategoryInput({
+          subcategory: input.subcategory,
+          category: input.category,
+          type: isIncomeRec ? "INCOME" : "EXPENSE",
+        });
+        const category = resolvedCategory.category;
+        if (rawCategory) {
+          const isIncomeCat =
+            isIncomeSubcategory(rawCategory) ||
+            INCOME_CATEGORIES.includes(rawCategory);
           if (isIncomeCat !== isIncomeRec) {
             throw new AppError(
               isIncomeRec
@@ -1681,7 +1709,11 @@ const treasuryForecastResolvers = {
           { _id: recurrence._id },
           {
             $set: {
-              categoryOverride: category === detectedCategory ? null : category,
+              categoryOverride:
+                category === detectedCategory && !resolvedCategory.subcategory
+                  ? null
+                  : category,
+              subcategoryOverride: resolvedCategory.subcategory,
               amountOverride:
                 amount === recurrence.averageAmount ? null : amount,
               frequencyOverride:
@@ -1803,6 +1835,8 @@ const treasuryForecastResolvers = {
     id: (parent) => parent._id?.toString() || parent.id,
     scenarioOverride: (parent) => Boolean(parent.scenarioOverride),
     categoryOverride: (parent) => parent.categoryOverride || null,
+    subcategoryOverride: (parent) => parent.subcategoryOverride || null,
+    forecastSubcategory: (parent) => recurrenceForecastSubcategory(parent),
     amountOverride: (parent) =>
       parent.amountOverride != null ? parent.amountOverride : null,
     frequencyOverride: (parent) => parent.frequencyOverride || null,
