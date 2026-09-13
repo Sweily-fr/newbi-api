@@ -16,11 +16,15 @@ import "../../src/models/Quote.js";
 import "../../src/models/Transaction.js";
 import resolvers, {
   recurrenceForecastCategory,
+  recurrenceForecastAmount,
+  recurrenceForecastFrequency,
+  recurrenceForecastName,
 } from "../../src/resolvers/treasuryForecast.js";
 
 // Ticket 13/09/2026 : les récurrences détectées tombaient dans « Autres
 // dépenses » (catégorie OTHER des transactions) sans possibilité de les
-// reclasser. La catégorie choisie (categoryOverride) prime à la projection.
+// reclasser. « Modifier » pose des surcharges (catégorie, montant,
+// périodicité, libellé) qui priment à la projection.
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -123,7 +127,7 @@ describe("recurrenceForecastCategory", () => {
   });
 });
 
-describe("setDetectedRecurrenceCategory", () => {
+describe("updateDetectedRecurrence — catégorie", () => {
   it("reclasse la récurrence et la projette dans la nouvelle catégorie", async () => {
     const rec = await createRecurrence();
 
@@ -131,9 +135,9 @@ describe("setDetectedRecurrenceCategory", () => {
     expect(before.length).toBeGreaterThan(0);
     expect(before.every((o) => o.category === "OTHER_EXPENSE")).toBe(true);
 
-    const updated = await Mutation.setDetectedRecurrenceCategory(
+    const updated = await Mutation.updateDetectedRecurrence(
       null,
-      { id: rec._id.toString(), category: "SUBSCRIPTIONS" },
+      { id: rec._id.toString(), input: { category: "SUBSCRIPTIONS" } },
       ctx(),
     );
     expect(updated.categoryOverride).toBe("SUBSCRIPTIONS");
@@ -166,9 +170,9 @@ describe("setDetectedRecurrenceCategory", () => {
 
   it("null revient à la catégorie détectée", async () => {
     const rec = await createRecurrence({ categoryOverride: "SUBSCRIPTIONS" });
-    const updated = await Mutation.setDetectedRecurrenceCategory(
+    const updated = await Mutation.updateDetectedRecurrence(
       null,
-      { id: rec._id.toString(), category: null },
+      { id: rec._id.toString(), input: { category: null } },
       ctx(),
     );
     expect(updated.categoryOverride ?? null).toBeNull();
@@ -178,9 +182,9 @@ describe("setDetectedRecurrenceCategory", () => {
   it("refuse une catégorie de revenu sur une dépense (et inversement)", async () => {
     const expense = await createRecurrence();
     await expect(
-      Mutation.setDetectedRecurrenceCategory(
+      Mutation.updateDetectedRecurrence(
         null,
-        { id: expense._id.toString(), category: "SALES" },
+        { id: expense._id.toString(), input: { category: "SALES" } },
         ctx(),
       ),
     ).rejects.toThrow(/catégorie de dépense/);
@@ -192,9 +196,9 @@ describe("setDetectedRecurrenceCategory", () => {
       category: "OTHER_INCOME",
     });
     await expect(
-      Mutation.setDetectedRecurrenceCategory(
+      Mutation.updateDetectedRecurrence(
         null,
-        { id: income._id.toString(), category: "RENT" },
+        { id: income._id.toString(), input: { category: "RENT" } },
         ctx(),
       ),
     ).rejects.toThrow(/catégorie de revenu/);
@@ -213,9 +217,9 @@ describe("setDetectedRecurrenceCategory", () => {
       },
       ctx(),
     );
-    await Mutation.setDetectedRecurrenceCategory(
+    await Mutation.updateDetectedRecurrence(
       null,
-      { id: rec._id.toString(), category: "SOFTWARE" },
+      { id: rec._id.toString(), input: { category: "SOFTWARE" } },
       ctx(),
     );
     const inScenario = await Query.forecastOccurrences(
@@ -238,11 +242,104 @@ describe("setDetectedRecurrenceCategory", () => {
       workspaceId: new mongoose.Types.ObjectId(),
     });
     await expect(
-      Mutation.setDetectedRecurrenceCategory(
+      Mutation.updateDetectedRecurrence(
         null,
-        { id: other._id.toString(), category: "SOFTWARE" },
+        { id: other._id.toString(), input: { category: "SOFTWARE" } },
         ctx(),
       ),
     ).rejects.toThrow(/non trouvée/);
+  });
+});
+
+describe("updateDetectedRecurrence — montant, périodicité, libellé", () => {
+  it("les surcharges priment à la projection (occurrences et tableau)", async () => {
+    const rec = await createRecurrence();
+    const updated = await Mutation.updateDetectedRecurrence(
+      null,
+      {
+        id: rec._id.toString(),
+        input: {
+          amount: 19.99,
+          frequency: "QUARTERLY",
+          label: "Netflix (abonnement)",
+        },
+      },
+      ctx(),
+    );
+    expect(updated).toMatchObject({
+      amountOverride: 19.99,
+      frequencyOverride: "QUARTERLY",
+      labelOverride: "Netflix (abonnement)",
+      // valeurs détectées intactes
+      averageAmount: 16,
+      frequency: "MONTHLY",
+      partyName: "PRLV SEPA NETFLIX.COM",
+    });
+    expect(recurrenceForecastAmount(updated)).toBe(19.99);
+    expect(recurrenceForecastFrequency(updated)).toBe("QUARTERLY");
+    expect(recurrenceForecastName(updated)).toBe("Netflix (abonnement)");
+
+    const occurrences = await Query.forecastOccurrences(null, horizon(), ctx());
+    // Trimestriel sur 6 mois d'horizon : 2 occurrences max (contre 6 en
+    // mensuel), toutes au montant et au libellé surchargés.
+    expect(occurrences.length).toBeGreaterThan(0);
+    expect(occurrences.length).toBeLessThanOrEqual(2);
+    expect(
+      occurrences.every(
+        (o) => o.amount === 19.99 && o.name === "Netflix (abonnement)",
+      ),
+    ).toBe(true);
+  });
+
+  it("une valeur égale à la valeur détectée ne pose pas de surcharge", async () => {
+    const rec = await createRecurrence();
+    const updated = await Mutation.updateDetectedRecurrence(
+      null,
+      {
+        id: rec._id.toString(),
+        input: {
+          category: "OTHER_EXPENSE",
+          amount: 16,
+          frequency: "MONTHLY",
+          label: "PRLV SEPA NETFLIX.COM",
+        },
+      },
+      ctx(),
+    );
+    expect(updated.categoryOverride ?? null).toBeNull();
+    expect(updated.amountOverride ?? null).toBeNull();
+    expect(updated.frequencyOverride ?? null).toBeNull();
+    expect(updated.labelOverride ?? null).toBeNull();
+  });
+
+  it("tout à null = revenir aux valeurs détectées", async () => {
+    const rec = await createRecurrence({
+      categoryOverride: "SUBSCRIPTIONS",
+      amountOverride: 20,
+      frequencyOverride: "ANNUAL",
+      labelOverride: "X",
+    });
+    const updated = await Mutation.updateDetectedRecurrence(
+      null,
+      { id: rec._id.toString(), input: {} },
+      ctx(),
+    );
+    expect(updated.categoryOverride ?? null).toBeNull();
+    expect(updated.amountOverride ?? null).toBeNull();
+    expect(updated.frequencyOverride ?? null).toBeNull();
+    expect(updated.labelOverride ?? null).toBeNull();
+    expect(recurrenceForecastAmount(updated)).toBe(16);
+    expect(recurrenceForecastFrequency(updated)).toBe("MONTHLY");
+  });
+
+  it("refuse un montant nul ou négatif", async () => {
+    const rec = await createRecurrence();
+    await expect(
+      Mutation.updateDetectedRecurrence(
+        null,
+        { id: rec._id.toString(), input: { amount: 0 } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/supérieur à 0/);
   });
 });

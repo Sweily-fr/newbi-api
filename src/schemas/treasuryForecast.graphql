@@ -159,12 +159,19 @@ type DetectedRecurrence {
   # Catégorie brute issue de la source (peut être hors ForecastCategory, ex.
   # OTHER ou TRAVEL pour une transaction bancaire).
   category: String
-  # Catégorie choisie par l'utilisateur (null = catégorie détectée). Commune
-  # à tous les scénarios.
+  # Surcharges saisies par l'utilisateur via « Modifier » (null = valeur
+  # détectée). Communes à tous les scénarios, préservées par les analyses.
   categoryOverride: ForecastCategory
-  # Catégorie effectivement utilisée dans les prévisions : categoryOverride
-  # sinon la catégorie détectée rabattue sur l'enum.
+  amountOverride: Float
+  frequencyOverride: RecurrenceFrequency
+  labelOverride: String
+  # Valeurs effectivement utilisées dans les prévisions (surcharge, sinon
+  # valeur détectée ; la catégorie détectée est rabattue sur l'enum).
   forecastCategory: ForecastCategory!
+  forecastAmount: Float!
+  forecastFrequency: RecurrenceFrequency!
+  forecastName: String!
+  # Valeurs détectées (montant médian, périodicité analysée).
   averageAmount: Float!
   frequency: RecurrenceFrequency
   intervalDays: Int
@@ -189,6 +196,13 @@ input UpsertTreasuryForecastInput {
   type: ForecastType!
   forecastAmount: Float!
   notes: String
+}
+
+input UpdateDetectedRecurrenceInput {
+  category: ForecastCategory
+  amount: Float
+  frequency: RecurrenceFrequency
+  label: String
 }
 
 type ForecastScenario {
@@ -324,13 +338,14 @@ extend type Mutation {
     hidden: Boolean!
   ): ManualCashflowEntry!
 
-  # Change la catégorie de prévision d'une récurrence détectée (null = revenir
-  # à la catégorie détectée). La catégorie doit être du même sens (revenu /
-  # dépense) que la récurrence. Commune à tous les scénarios, préservée par
-  # les analyses suivantes.
-  setDetectedRecurrenceCategory(
+  # « Modifier » une récurrence détectée : chaque champ renseigné remplace la
+  # valeur détectée dans les prévisions, null rétablit la valeur détectée
+  # (tout à null = revenir aux valeurs détectées). La catégorie doit être du
+  # même sens (revenu / dépense) que la récurrence. Commun à tous les
+  # scénarios, préservé par les analyses suivantes.
+  updateDetectedRecurrence(
     id: ID!
-    category: ForecastCategory
+    input: UpdateDetectedRecurrenceInput!
   ): DetectedRecurrence!
 
   # Supprime définitivement une récurrence détectée. Elle pourra réapparaître

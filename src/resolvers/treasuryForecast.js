@@ -51,6 +51,14 @@ export const recurrenceForecastCategory = (rec) => {
     ? rec.category
     : "OTHER_INCOME";
 };
+// Idem pour le montant, la périodicité et le libellé (« Modifier » une
+// récurrence) : surcharge utilisateur sinon valeur détectée.
+export const recurrenceForecastAmount = (rec) =>
+  rec.amountOverride != null ? rec.amountOverride : rec.averageAmount;
+export const recurrenceForecastFrequency = (rec) =>
+  rec.frequencyOverride || rec.frequency || "MONTHLY";
+export const recurrenceForecastName = (rec) =>
+  rec.labelOverride || rec.partyName;
 
 // Helper: generate array of "YYYY-MM" strings between start and end (inclusive).
 // On itère en arithmétique entière sur (année, mois) : mélanger un parsing UTC
@@ -263,7 +271,7 @@ export const projectForecastOccurrences = async (
         invoiceRecurrenceKeys.has(`${rec.partyKey}::${rec.type}`)
       )
         continue;
-      const freq = rec.frequency || "MONTHLY";
+      const freq = recurrenceForecastFrequency(rec);
       const anchor = rec.lastSeenDate
         ? new Date(rec.lastSeenDate)
         : new Date((rec.lastSeenMonth || currentMonth) + "-01");
@@ -292,10 +300,10 @@ export const projectForecastOccurrences = async (
         occurrences.push({
           id: rec._id.toString(),
           kind: "DETECTED",
-          name: rec.partyName,
+          name: recurrenceForecastName(rec),
           category: recurrenceForecastCategory(rec),
           type,
-          amount: rec.averageAmount,
+          amount: recurrenceForecastAmount(rec),
           date: occDate,
         });
       }
@@ -642,7 +650,7 @@ const treasuryForecastResolvers = {
               invoiceRecurrenceKeys.has(`${rec.partyKey}::${rec.type}`)
             )
               continue;
-            const freq = rec.frequency || "MONTHLY";
+            const freq = recurrenceForecastFrequency(rec);
             const anchor = rec.lastSeenDate
               ? new Date(rec.lastSeenDate)
               : new Date((rec.lastSeenMonth || currentMonth) + "-01");
@@ -677,7 +685,7 @@ const treasuryForecastResolvers = {
                 type === "INCOME" ? recurrenceIncomeMap : recurrenceExpenseMap;
               if (!target[month]) target[month] = {};
               target[month][cat] =
-                (target[month][cat] || 0) + rec.averageAmount;
+                (target[month][cat] || 0) + recurrenceForecastAmount(rec);
             }
           }
         }
@@ -1615,11 +1623,12 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    // Catégorie de prévision choisie par l'utilisateur (null = revenir à la
-    // catégorie détectée). Action de Base, commune à tous les scénarios : la
-    // catégorie est une correction de données, pas une hypothèse de scénario.
-    setDetectedRecurrenceCategory: requireWrite("expenses")(
-      async (_, { id, category }, context) => {
+    // « Modifier » une récurrence détectée : surcharges de catégorie, montant,
+    // périodicité et libellé (null = valeur détectée). Action de Base, commune
+    // à tous les scénarios : c'est une correction de données, pas une
+    // hypothèse de scénario.
+    updateDetectedRecurrence: requireWrite("expenses")(
+      async (_, { id, input }, context) => {
         const wId = new mongoose.Types.ObjectId(context.workspaceId);
         const recurrence = await DetectedRecurrence.findOne({
           _id: id,
@@ -1628,9 +1637,9 @@ const treasuryForecastResolvers = {
         if (!recurrence) {
           throw new AppError("Récurrence non trouvée", ERROR_CODES.NOT_FOUND);
         }
-        const nextCategory = category || null;
-        if (nextCategory) {
-          const isIncomeCat = INCOME_CATEGORIES.includes(nextCategory);
+        const category = input.category || null;
+        if (category) {
+          const isIncomeCat = INCOME_CATEGORIES.includes(category);
           const isIncomeRec =
             recurrence.source === "INVOICE" ||
             (recurrence.source === "TRANSACTION" &&
@@ -1644,9 +1653,44 @@ const treasuryForecastResolvers = {
             );
           }
         }
+        let amount = null;
+        if (input.amount != null) {
+          if (!Number.isFinite(input.amount) || input.amount <= 0) {
+            throw new AppError(
+              "Le montant doit être supérieur à 0",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+          amount = Math.round(input.amount * 100) / 100;
+        }
+        const label = (input.label || "").trim() || null;
+        if (label && label.length > 120) {
+          throw new AppError(
+            "Le libellé ne peut pas dépasser 120 caractères",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        // Une surcharge égale à la valeur détectée n'en est pas une : on la
+        // retire, la récurrence suit à nouveau la détection.
+        const detectedCategory = recurrenceForecastCategory({
+          ...recurrence,
+          categoryOverride: null,
+        });
+        const detectedFrequency = recurrence.frequency || "MONTHLY";
         const updated = await DetectedRecurrence.findOneAndUpdate(
           { _id: recurrence._id },
-          { $set: { categoryOverride: nextCategory } },
+          {
+            $set: {
+              categoryOverride: category === detectedCategory ? null : category,
+              amountOverride:
+                amount === recurrence.averageAmount ? null : amount,
+              frequencyOverride:
+                input.frequency && input.frequency !== detectedFrequency
+                  ? input.frequency
+                  : null,
+              labelOverride: label === recurrence.partyName ? null : label,
+            },
+          },
           { new: true, lean: true },
         );
         return updated;
@@ -1759,7 +1803,14 @@ const treasuryForecastResolvers = {
     id: (parent) => parent._id?.toString() || parent.id,
     scenarioOverride: (parent) => Boolean(parent.scenarioOverride),
     categoryOverride: (parent) => parent.categoryOverride || null,
+    amountOverride: (parent) =>
+      parent.amountOverride != null ? parent.amountOverride : null,
+    frequencyOverride: (parent) => parent.frequencyOverride || null,
+    labelOverride: (parent) => parent.labelOverride || null,
     forecastCategory: (parent) => recurrenceForecastCategory(parent),
+    forecastAmount: (parent) => recurrenceForecastAmount(parent),
+    forecastFrequency: (parent) => recurrenceForecastFrequency(parent),
+    forecastName: (parent) => recurrenceForecastName(parent),
     lastDetectedAt: (parent) =>
       parent.lastDetectedAt instanceof Date
         ? parent.lastDetectedAt.toISOString()

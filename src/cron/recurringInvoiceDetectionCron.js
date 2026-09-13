@@ -289,9 +289,9 @@ export const detectForSource = async (workspaceId, source) => {
             isActive: !prev?.isMuted,
             lastDetectedAt: new Date(),
           },
-          // excludedMonths et categoryOverride sont délibérément absents du
-          // $set : les occurrences supprimées individuellement et la catégorie
-          // choisie par l'utilisateur doivent survivre à chaque re-détection.
+          // excludedMonths et les *Override (catégorie, montant, périodicité,
+          // libellé saisis via « Modifier ») sont délibérément absents du
+          // $set : ils doivent survivre à chaque re-détection.
           $setOnInsert: {
             workspaceId,
             source,

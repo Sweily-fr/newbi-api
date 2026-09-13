@@ -191,7 +191,7 @@ describe("detectForSource TRANSACTION (real Mongo)", () => {
 });
 
 describe("detectForSource — catégorie choisie par l'utilisateur", () => {
-  it("préserve categoryOverride à la re-détection (comme excludedMonths)", async () => {
+  it("préserve les surcharges à la re-détection (comme excludedMonths)", async () => {
     for (let i = 2; i >= 0; i--) {
       await insertTransaction({
         description: `PRLV SEPA NETFLIX.COM 10000${i}`,
@@ -211,6 +211,9 @@ describe("detectForSource — catégorie choisie par l'utilisateur", () => {
       {
         $set: {
           categoryOverride: "SUBSCRIPTIONS",
+          amountOverride: 19.99,
+          frequencyOverride: "QUARTERLY",
+          labelOverride: "Netflix",
           excludedMonths: ["2030-01"],
         },
       },
@@ -222,8 +225,12 @@ describe("detectForSource — catégorie choisie par l'utilisateur", () => {
     expect(recs[0]).toMatchObject({
       category: "OTHER",
       categoryOverride: "SUBSCRIPTIONS",
+      amountOverride: 19.99,
+      frequencyOverride: "QUARTERLY",
+      labelOverride: "Netflix",
       excludedMonths: ["2030-01"],
       isActive: true,
+      averageAmount: 16, // la détection continue de mettre à jour ses valeurs
     });
   });
 });

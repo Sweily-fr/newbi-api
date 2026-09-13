@@ -45,11 +45,18 @@ const detectedRecurrenceSchema = new mongoose.Schema(
     // partie de l'identité de la récurrence (index unique + regroupement du
     // cron) : ne jamais la modifier à la main.
     category: { type: String },
-    // Catégorie de prévision (ForecastCategory) choisie par l'utilisateur.
-    // Prime sur `category` à la projection, commune à tous les scénarios et
-    // préservée par le cron de détection (cf. recurringInvoiceDetectionCron).
-    // null = catégorie détectée.
+    // Surcharges saisies par l'utilisateur (« Modifier » une récurrence).
+    // Chacune prime sur la valeur détectée à la projection, est commune à
+    // tous les scénarios et préservée par le cron de détection (cf.
+    // recurringInvoiceDetectionCron). null = valeur détectée.
     categoryOverride: { type: String, default: null },
+    amountOverride: { type: Number, default: null, min: 0 },
+    frequencyOverride: {
+      type: String,
+      enum: [...Object.values(RECURRENCE_FREQUENCY), null],
+      default: null,
+    },
+    labelOverride: { type: String, default: null },
     averageAmount: { type: Number, required: true, min: 0 },
     // Périodicité détectée à partir des intervalles entre occurrences.
     frequency: {
