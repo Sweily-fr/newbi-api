@@ -394,13 +394,37 @@ const scorePurchaseInvoiceAgainstTransaction = (
   return score;
 };
 
+// Clause Mongo "ressemble à la facture d'achat" : montant à ±10 % ou nom du
+// fournisseur dans le libellé. Sert à repêcher, sans saisie de l'utilisateur,
+// les transactions hors fenêtre ou déjà rapprochées qui concernent visiblement
+// cette facture (facture saisie après le paiement, relevé Qonto couvrant
+// plusieurs prélèvements). Null si la facture n'a ni montant ni fournisseur.
+const similarTransactionClause = (purchaseInvoice) => {
+  const or = [];
+  const amount = purchaseInvoice.amountTTC || 0;
+  if (amount > 0) {
+    or.push({ amount: { $gte: -(amount * 1.1), $lte: -(amount * 0.9) } });
+  }
+  const supplier = (purchaseInvoice.supplierName || "").trim();
+  if (normalizeText(supplier).length >= 3) {
+    or.push({ description: { $regex: escapeRegex(supplier), $options: "i" } });
+  }
+  return or.length > 0 ? { $or: or } : null;
+};
+
 /**
  * Transactions (débits) candidates pour une facture d'achat : rattachement
- * manuel côté facture d'achat. Par défaut, transactions encore à rapprocher
- * datées après l'émission (marge de 3 jours). Une recherche explicite
- * contourne la fenêtre de dates et inclut les transactions déjà rapprochées
- * (une transaction Qonto peut porter plusieurs factures d'achat, et une
- * facture créée après le paiement doit rester rattachable).
+ * manuel côté facture d'achat.
+ *
+ * Sans recherche : les transactions encore à rapprocher datées après
+ * l'émission (marge de 3 jours), PLUS celles qui ressemblent à la facture
+ * (montant ou fournisseur) même si elles sont hors fenêtre ou déjà
+ * rapprochées à une autre facture. Avant, ces dernières n'apparaissaient
+ * qu'après saisie d'un terme, ce que rien n'indiquait : une facture créée
+ * après son paiement semblait impossible à rapprocher.
+ *
+ * Avec recherche : toutes les transactions non ignorées qui correspondent au
+ * terme (libellé, référence ou montant), sans fenêtre de dates.
  */
 export async function findTransactionsForPurchaseInvoice(
   purchaseInvoice,
@@ -409,21 +433,15 @@ export async function findTransactionsForPurchaseInvoice(
 ) {
   const term = (search || "").trim();
 
-  const txQuery = {
+  const baseQuery = {
     workspaceId,
     deletedAt: null,
-    reconciliationStatus: term
-      ? { $nin: ["ignored"] }
-      : { $in: ["unmatched", "suggested"] },
+    reconciliationStatus: { $nin: ["ignored"] },
     amount: { $lt: 0 },
     _id: { $nin: purchaseInvoice.linkedTransactionIds || [] },
   };
 
-  const minTxDate = earliestTransactionDateForInvoice(purchaseInvoice);
-  if (!term && minTxDate) {
-    txQuery.date = { $gte: minTxDate };
-  }
-
+  let transactions;
   if (term) {
     const regex = { $regex: escapeRegex(term), $options: "i" };
     const or = [{ description: regex }, { reference: regex }];
@@ -437,12 +455,38 @@ export async function findTransactionsForPurchaseInvoice(
         },
       });
     }
-    txQuery.$or = or;
-  }
+    transactions = await Transaction.find({ ...baseQuery, $or: or })
+      .sort({ date: -1 })
+      .limit(200);
+  } else {
+    const pendingQuery = {
+      ...baseQuery,
+      reconciliationStatus: { $in: ["unmatched", "suggested"] },
+    };
+    const minTxDate = earliestTransactionDateForInvoice(purchaseInvoice);
+    if (minTxDate) pendingQuery.date = { $gte: minTxDate };
+    const pending = await Transaction.find(pendingQuery)
+      .sort({ date: -1 })
+      .limit(200);
 
-  const transactions = await Transaction.find(txQuery)
-    .sort({ date: -1 })
-    .limit(200);
+    const similar = similarTransactionClause(purchaseInvoice);
+    const others = similar
+      ? await Transaction.find({
+          ...baseQuery,
+          _id: {
+            $nin: [
+              ...(purchaseInvoice.linkedTransactionIds || []),
+              ...pending.map((tx) => tx._id),
+            ],
+          },
+          ...similar,
+        })
+          .sort({ date: -1 })
+          .limit(100)
+      : [];
+
+    transactions = [...pending, ...others];
+  }
 
   const scored = transactions.map((tx) => ({
     transaction: tx,
@@ -459,6 +503,89 @@ export async function findTransactionsForPurchaseInvoice(
     scored: scored.slice(0, 50),
     invoiceAmount: purchaseInvoice.amountTTC || 0,
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Rapprochement automatique à la création : fenêtre autour de la date de
+// paiement déclarée, ou entre l'émission (marge 3 j) et l'échéance + 45 j.
+const AUTO_RECONCILE_PAYMENT_DATE_MARGIN_MS = 5 * DAY_MS;
+const AUTO_RECONCILE_AFTER_DUE_MS = 45 * DAY_MS;
+// Deux candidates à moins de 7 j d'écart de la date de référence : ambigu
+// (abonnement au même montant chaque mois), on laisse l'utilisateur choisir.
+const AUTO_RECONCILE_AMBIGUITY_MS = 7 * DAY_MS;
+
+/**
+ * Transaction à rapprocher automatiquement à une facture d'achat qui vient
+ * d'être créée (saisie, OCR, import Gmail ou Qonto), ou null.
+ *
+ * Confiance haute uniquement : débit encore à rapprocher, montant à ±1 %,
+ * fournisseur ou numéro de facture reconnu dans le libellé, date dans la
+ * fenêtre. Plusieurs candidates : la plus proche de la date de référence
+ * (paiement déclaré, sinon émission), sauf si la suivante est à moins de
+ * 7 jours d'écart (ambiguïté : rien n'est lié, les suggestions restent).
+ *
+ * Sert au cas « facture ajoutée après son paiement » : avant, seul le flux
+ * inverse (transaction arrivant après la facture, à la synchro bancaire)
+ * rapprochait automatiquement.
+ */
+export async function findAutoReconcileTransactionForPurchaseInvoice(
+  purchaseInvoice,
+  workspaceId,
+) {
+  const amount = purchaseInvoice.amountTTC || 0;
+  if (!(amount > 0) || !purchaseInvoice.issueDate) return null;
+  const issueTime = new Date(purchaseInvoice.issueDate).getTime();
+  if (Number.isNaN(issueTime)) return null;
+
+  const paymentTime = purchaseInvoice.paymentDate
+    ? new Date(purchaseInvoice.paymentDate).getTime()
+    : NaN;
+  const hasPaymentDate = !Number.isNaN(paymentTime);
+  const dueTime = purchaseInvoice.dueDate
+    ? new Date(purchaseInvoice.dueDate).getTime()
+    : NaN;
+
+  const refTime = hasPaymentDate ? paymentTime : issueTime;
+  const minTime = hasPaymentDate
+    ? paymentTime - AUTO_RECONCILE_PAYMENT_DATE_MARGIN_MS
+    : earliestTransactionDateForInvoice(purchaseInvoice).getTime();
+  const maxTime = hasPaymentDate
+    ? paymentTime + AUTO_RECONCILE_PAYMENT_DATE_MARGIN_MS
+    : (Number.isNaN(dueTime) ? issueTime : Math.max(dueTime, issueTime)) +
+      AUTO_RECONCILE_AFTER_DUE_MS;
+
+  const tolerance = Math.max(amount * 0.01, 0.01);
+  const candidates = await Transaction.find({
+    workspaceId,
+    deletedAt: null,
+    reconciliationStatus: { $nin: ["matched", "ignored"] },
+    amount: { $gte: -(amount + tolerance), $lte: -(amount - tolerance) },
+    date: { $gte: new Date(minTime), $lte: new Date(maxTime) },
+    _id: { $nin: purchaseInvoice.linkedTransactionIds || [] },
+  })
+    .sort({ date: -1 })
+    .limit(50);
+
+  const confident = candidates
+    .filter(
+      (tx) =>
+        supplierNameMatches(tx, purchaseInvoice) ||
+        purchaseInvoiceReferenceMatches(tx, purchaseInvoice),
+    )
+    .map((tx) => ({
+      tx,
+      distance: Math.abs(new Date(tx.date).getTime() - refTime),
+    }))
+    .sort((a, b) => a.distance - b.distance);
+
+  if (confident.length === 0) return null;
+  if (
+    confident.length > 1 &&
+    confident[1].distance - confident[0].distance < AUTO_RECONCILE_AMBIGUITY_MS
+  ) {
+    return null;
+  }
+  return confident[0].tx;
 }
 
 /**

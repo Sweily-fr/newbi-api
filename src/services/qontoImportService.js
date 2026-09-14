@@ -18,6 +18,8 @@ import { syncQuoteIfNeeded as syncQuoteToPennylane } from "./pennylaneSyncHelper
 import { syncPurchaseInvoiceIfNeeded as syncPurchaseInvoiceToPennylane } from "./pennylaneSyncHelper.js";
 import documentAutomationService from "./documentAutomationService.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
+import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import { autoReconcilePurchaseInvoice } from "./purchaseInvoiceLinkService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -499,15 +501,84 @@ export async function importSupplierInvoices(account, userId) {
         }
 
         const attachmentId = si.attachment_id || si.display_attachment_id;
-        if (!attachmentId) {
-          result.skipped++;
-          continue;
-        }
-
         const invoiceNumber =
           si.invoice_number || `QONTO-${qontoId.slice(0, 8).toUpperCase()}`;
         const supplierName =
           si.supplier_name || si.issuer_name || "Fournisseur Qonto";
+
+        // Filet anti-doublon inter-sources : la même facture a pu être saisie
+        // à la main dans Newbi (sans passer par le push Qonto), créée par
+        // l'OCR d'un justificatif de transaction ou reçue par Gmail. On la
+        // complète (qontoId, fichier, paiement) au lieu d'en créer une 2e.
+        const [duplicateOf] = await findPurchaseInvoiceDuplicates({
+          workspaceId: workspaceObjectId,
+          supplierName: si.supplier_name || si.issuer_name || null,
+          invoiceNumber: si.invoice_number || null,
+          amountTTC,
+          issueDate: toDate(si.issue_date) || null,
+          limit: 1,
+        });
+        if (duplicateOf) {
+          const update = { $set: {} };
+          if (!duplicateOf.qontoId) update.$set.qontoId = qontoId;
+          if ((duplicateOf.files || []).length === 0 && attachmentId) {
+            const dupFile = await fetchAttachmentToR2(
+              credentials,
+              attachmentId,
+              {
+                workspaceId,
+                userId,
+                fallbackName: si.file_name || `facture-achat-${invoiceNumber}`,
+              },
+            );
+            if (dupFile) {
+              update.$push = {
+                files: {
+                  filename: dupFile.upload.key || dupFile.fileName,
+                  originalFilename: dupFile.fileName,
+                  mimetype: dupFile.mimeType,
+                  path: dupFile.upload.key,
+                  size: dupFile.buffer.length,
+                  url: dupFile.upload.url,
+                  ocrProcessed: false,
+                  ocrData: null,
+                },
+              };
+            }
+          }
+          // Update ciblé (pas de save()) : pas de revalidation d'une facture
+          // legacy qui pourrait porter des champs hors enum.
+          if (Object.keys(update.$set).length > 0 || update.$push) {
+            await PurchaseInvoice.updateOne({ _id: duplicateOf._id }, update);
+          }
+          const fresh = await PurchaseInvoice.findById(duplicateOf._id);
+          if (
+            si.status === "paid" &&
+            fresh.status !== "PAID" &&
+            fresh.status !== "ARCHIVED"
+          ) {
+            await applyPurchaseInvoicePaid(fresh, {
+              paymentDate: toDate(si.payment_date) || new Date(),
+              workspaceId,
+              userId,
+            });
+          }
+          await autoReconcilePurchaseInvoice({
+            invoice: fresh,
+            workspaceId,
+            userId,
+          });
+          result.updated++;
+          logger.info(
+            `[QONTO-IMPORT] Facture fournisseur Qonto ${qontoId} rattachée à la facture d'achat existante ${fresh._id} (${fresh.supplierName} ${fresh.invoiceNumber || ""}, org=${workspaceId})`,
+          );
+          continue;
+        }
+
+        if (!attachmentId) {
+          result.skipped++;
+          continue;
+        }
 
         const file = await fetchAttachmentToR2(credentials, attachmentId, {
           workspaceId,
@@ -581,6 +652,13 @@ export async function importSupplierInvoices(account, userId) {
         logger.info(
           `[QONTO-IMPORT] Facture fournisseur ${invoiceNumber} (${supplierName}) importée depuis Qonto (org=${workspaceId})`,
         );
+        // Facture déjà payée côté banque : rapprochement automatique avec la
+        // transaction passée (confiance haute uniquement).
+        await autoReconcilePurchaseInvoice({
+          invoice: createdPurchase,
+          workspaceId,
+          userId,
+        });
         await notifyImported({
           userId,
           workspaceId,

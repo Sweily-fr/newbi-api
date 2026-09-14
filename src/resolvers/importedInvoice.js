@@ -31,6 +31,8 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import Client from "../models/Client.js";
 import { detachImportedInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
+import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import { autoReconcilePurchaseInvoice } from "../services/purchaseInvoiceLinkService.js";
 import {
   matchExistingClient,
   resolveImportedClient,
@@ -637,14 +639,70 @@ async function findOrCreateSupplier(vendor, workspaceId, userId) {
 // Rapprochement client partagé par tous les flux d'import (OCR, Qonto,
 // Gmail) : voir utils/clientMatching.js. Ré-exporté ci-dessous pour les tests.
 
-async function convertSingleImportedInvoice(importedInvoice, userId) {
+async function convertSingleImportedInvoice(
+  importedInvoice,
+  userId,
+  { forceCreate = false } = {},
+) {
+  const workspaceObjectId = new mongoose.Types.ObjectId(
+    importedInvoice.workspaceId,
+  );
+  const file = importedInvoice.file;
+
+  // Filet anti-doublon : la même facture fournisseur a pu être saisie à la
+  // main, créée par l'OCR d'un justificatif de transaction ou importée de
+  // Qonto. On rattache alors le fichier à la facture existante au lieu d'en
+  // créer une deuxième (sauf forceCreate, après avertissement côté front).
+  if (!forceCreate) {
+    const [existing] = await findPurchaseInvoiceDuplicates({
+      workspaceId: workspaceObjectId,
+      supplierName: importedInvoice.vendor?.name || null,
+      invoiceNumber: importedInvoice.originalInvoiceNumber || null,
+      amountTTC: importedInvoice.totalTTC || null,
+      issueDate: importedInvoice.invoiceDate || null,
+      limit: 1,
+    });
+    if (existing) {
+      const alreadyHasFile =
+        !file?.url || (existing.files || []).some((f) => f.url === file.url);
+      if (!alreadyHasFile) {
+        await PurchaseInvoice.updateOne(
+          { _id: existing._id },
+          {
+            $push: {
+              files: {
+                filename: file.cloudflareKey || file.originalFileName,
+                originalFilename: file.originalFileName,
+                mimetype: file.mimeType || "application/pdf",
+                path: file.url,
+                size: file.fileSize || 1,
+                url: file.url,
+                ocrProcessed: true,
+              },
+            },
+          },
+        );
+      }
+      importedInvoice.status = "VALIDATED";
+      await importedInvoice.save();
+      logger.info(
+        `[IMPORTED INVOICE] Conversion ${importedInvoice._id} : facture d'achat existante ${existing._id} réutilisée (${existing.supplierName} ${existing.invoiceNumber || ""})`,
+      );
+      const fresh = await PurchaseInvoice.findById(existing._id);
+      await autoReconcilePurchaseInvoice({
+        invoice: fresh,
+        workspaceId: workspaceObjectId,
+        userId,
+      });
+      return fresh;
+    }
+  }
+
   const supplier = await findOrCreateSupplier(
     importedInvoice.vendor,
     importedInvoice.workspaceId,
     userId,
   );
-
-  const file = importedInvoice.file;
   const files = file
     ? [
         {
@@ -693,13 +751,21 @@ async function convertSingleImportedInvoice(importedInvoice, userId) {
     files,
     ocrMetadata,
     source: "OCR",
-    workspaceId: new mongoose.Types.ObjectId(importedInvoice.workspaceId),
+    workspaceId: workspaceObjectId,
     createdBy: userId,
   });
 
   // Mark the imported invoice as VALIDATED
   importedInvoice.status = "VALIDATED";
   await importedInvoice.save();
+
+  // Facture reçue après son paiement : rapprochement automatique avec la
+  // transaction déjà passée (confiance haute uniquement).
+  await autoReconcilePurchaseInvoice({
+    invoice: purchaseInvoice,
+    workspaceId: workspaceObjectId,
+    userId,
+  });
 
   return purchaseInvoice;
 }
@@ -1818,7 +1884,7 @@ const importedInvoiceResolvers = {
      * Convertit une facture importée en facture d'achat (PurchaseInvoice)
      */
     convertImportedInvoiceToPurchaseInvoice: requireWrite("importedInvoices")(
-      async (_, { id }, { user, workspaceId }) => {
+      async (_, { id, forceCreate = false }, { user, workspaceId }) => {
         const importedInvoice = await ImportedInvoice.findOne({
           _id: id,
           workspaceId,
@@ -1831,7 +1897,9 @@ const importedInvoiceResolvers = {
             `Impossible de convertir : statut actuel "${importedInvoice.status}" (attendu PENDING_REVIEW)`,
           );
         }
-        return convertSingleImportedInvoice(importedInvoice, user.id);
+        return convertSingleImportedInvoice(importedInvoice, user.id, {
+          forceCreate,
+        });
       },
     ),
 

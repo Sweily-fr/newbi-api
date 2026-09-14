@@ -325,6 +325,9 @@ input CreatePurchaseInvoiceInput {
   paymentDate: String
   paymentMethod: PurchaseInvoicePaymentMethod
   source: String = "MANUAL"
+  # Créer même si une facture similaire existe (après l'avertissement de
+  # doublon). Sans ce drapeau, la création est refusée en cas de doublon.
+  forceCreate: Boolean = false
 }
 
 input UpdatePurchaseInvoiceInput {

@@ -12,6 +12,7 @@ import {
   findInvoicesForTransaction,
   findTransactionsForPurchaseInvoice,
   findPurchaseInvoicesForTransaction,
+  findAutoReconcileTransactionForPurchaseInvoice,
   setReconciliationIgnored,
 } from "../../src/utils/reconciliationMatching.js";
 
@@ -322,44 +323,163 @@ describe("findTransactionsForPurchaseInvoice", () => {
     expect(scored[1].score).toBe(0);
   });
 
-  it("applique la fenêtre de dates par défaut, et l'ignore en recherche (facture créée après le paiement)", async () => {
+  it("hors fenêtre de dates : proposée par défaut si elle ressemble à la facture (montant), sinon seulement en recherche", async () => {
     const pi = await insertPurchaseInvoice({
       issueDate: new Date("2026-08-15T00:00:00.000Z"),
     });
+    // Facture créée après le paiement : même montant, antérieure à l'émission
     const before = await createDebit({
       date: new Date("2026-07-21T00:00:00.000Z"),
       description: "CB HOSTINGER",
     });
+    // Antérieure aussi, mais rien à voir avec la facture
+    const unrelated = await createDebit({
+      date: new Date("2026-07-20T00:00:00.000Z"),
+      amount: -500,
+      description: "OVH",
+    });
 
     const byDefault = await findTransactionsForPurchaseInvoice(pi, workspaceId);
-    expect(byDefault.scored).toHaveLength(0);
+    expect(byDefault.scored.map((s) => s.transaction._id.toString())).toEqual([
+      before._id.toString(),
+    ]);
 
     const withSearch = await findTransactionsForPurchaseInvoice(
       pi,
       workspaceId,
-      "hostinger",
+      "ovh",
     );
     expect(withSearch.scored.map((s) => s.transaction._id.toString())).toEqual([
-      before._id.toString(),
+      unrelated._id.toString(),
     ]);
   });
 
-  it("en recherche, inclut une transaction déjà rapprochée (relevé multi-prélèvements) mais jamais une ignorée", async () => {
+  it("déjà rapprochée : proposée par défaut si elle ressemble à la facture (fournisseur), après les transactions à rapprocher à score égal ; jamais une ignorée", async () => {
     const pi = await insertPurchaseInvoice();
-    const matched = await createDebit({ reconciliationStatus: "matched" });
+    const pending = await createDebit();
+    const matched = await createDebit({
+      reconciliationStatus: "matched",
+      amount: -12,
+      description: "PRLV QONTO frais",
+    });
     await createDebit({ reconciliationStatus: "ignored" });
+    await createDebit({
+      reconciliationStatus: "matched",
+      amount: -500,
+      description: "OVH",
+    });
 
     const byDefault = await findTransactionsForPurchaseInvoice(pi, workspaceId);
-    expect(byDefault.scored).toHaveLength(0);
+    expect(byDefault.scored.map((s) => s.transaction._id.toString())).toEqual([
+      pending._id.toString(),
+      matched._id.toString(),
+    ]);
 
     const withSearch = await findTransactionsForPurchaseInvoice(
       pi,
       workspaceId,
-      "29",
+      "frais",
     );
     expect(withSearch.scored.map((s) => s.transaction._id.toString())).toEqual([
       matched._id.toString(),
     ]);
+  });
+});
+
+describe("findAutoReconcileTransactionForPurchaseInvoice", () => {
+  it("retient le débit au même montant et au fournisseur reconnu, jamais un rapproché, un ignoré ou un autre montant", async () => {
+    const pi = await insertPurchaseInvoice();
+    const good = await createDebit();
+    await createDebit({ reconciliationStatus: "matched" });
+    await createDebit({ reconciliationStatus: "ignored" });
+    await createDebit({ amount: -28 });
+    await createDebit({ description: "CB AMAZON" });
+
+    const found = await findAutoReconcileTransactionForPurchaseInvoice(
+      pi,
+      workspaceId,
+    );
+    expect(found?._id.toString()).toBe(good._id.toString());
+  });
+
+  it("retient le débit reconnu par numéro de facture dans le libellé", async () => {
+    const pi = await insertPurchaseInvoice({ invoiceNumber: "F-2026-001234" });
+    const byRef = await createDebit({
+      description: "PRLV SEPA F2026001234 SOCIETE X",
+    });
+
+    const found = await findAutoReconcileTransactionForPurchaseInvoice(
+      pi,
+      workspaceId,
+    );
+    expect(found?._id.toString()).toBe(byRef._id.toString());
+  });
+
+  it("ne lie rien avant l'émission ni trop longtemps après l'échéance", async () => {
+    const pi = await insertPurchaseInvoice({
+      issueDate: new Date("2026-07-31T00:00:00.000Z"),
+      dueDate: new Date("2026-08-15T00:00:00.000Z"),
+    });
+    await createDebit({ date: new Date("2026-07-20T00:00:00.000Z") });
+    await createDebit({ date: new Date("2026-10-15T00:00:00.000Z") });
+
+    expect(
+      await findAutoReconcileTransactionForPurchaseInvoice(pi, workspaceId),
+    ).toBeNull();
+
+    const inWindow = await createDebit({
+      date: new Date("2026-09-10T00:00:00.000Z"),
+    });
+    const found = await findAutoReconcileTransactionForPurchaseInvoice(
+      pi,
+      workspaceId,
+    );
+    expect(found?._id.toString()).toBe(inWindow._id.toString());
+  });
+
+  it("date de paiement déclarée : fenêtre serrée autour du paiement, la plus proche gagne", async () => {
+    const pi = await insertPurchaseInvoice({
+      issueDate: new Date("2026-07-01T00:00:00.000Z"),
+      paymentDate: new Date("2026-08-02T00:00:00.000Z"),
+    });
+    await createDebit({ date: new Date("2026-07-02T00:00:00.000Z") });
+    const paid = await createDebit({
+      date: new Date("2026-08-03T00:00:00.000Z"),
+    });
+
+    const found = await findAutoReconcileTransactionForPurchaseInvoice(
+      pi,
+      workspaceId,
+    );
+    expect(found?._id.toString()).toBe(paid._id.toString());
+  });
+
+  it("abonnement mensuel : deux candidates proches = ambigu, rien n'est lié", async () => {
+    const pi = await insertPurchaseInvoice({
+      issueDate: new Date("2026-08-01T00:00:00.000Z"),
+    });
+    await createDebit({ date: new Date("2026-08-02T00:00:00.000Z") });
+    await createDebit({ date: new Date("2026-08-04T00:00:00.000Z") });
+
+    expect(
+      await findAutoReconcileTransactionForPurchaseInvoice(pi, workspaceId),
+    ).toBeNull();
+  });
+
+  it("abonnement mensuel : la candidate la plus proche gagne si la suivante est à plus de 7 jours", async () => {
+    const pi = await insertPurchaseInvoice({
+      issueDate: new Date("2026-08-01T00:00:00.000Z"),
+    });
+    const august = await createDebit({
+      date: new Date("2026-08-02T00:00:00.000Z"),
+    });
+    await createDebit({ date: new Date("2026-09-02T00:00:00.000Z") });
+
+    const found = await findAutoReconcileTransactionForPurchaseInvoice(
+      pi,
+      workspaceId,
+    );
+    expect(found?._id.toString()).toBe(august._id.toString());
   });
 });
 
