@@ -15,15 +15,18 @@ dotenv.config();
 const FRENCH_INVOICE_PATTERNS = {
   // Numéros de facture - formats courants français
   // Priorité aux formats explicites type "FA137", "FAC-2024-001"
+  // Le numéro est capturé en entier, préfixe et segments compris : un numéro
+  // Newbi « F-202603-0012 » était auparavant tronqué à « 202603 » (capture
+  // limitée à 6 chiffres après le préfixe, préfixe exclu).
   INVOICE_NUMBER: [
     // Format M.G.E COUVERTURE: "Numéro du fature FA137" (avec faute d'orthographe)
-    /(?:Numéro\s*d[ue]\s*fa[ct]ure|N°\s*fa[ct]ure|Numéro\s*facture)[:\s]*([A-Z]{1,4}\d{2,6})/i,
-    // Format standard: "Facture N° FA137" ou "FACTURE FA137"
-    /(?:Facture|FACTURE|Invoice)[:\s]*(?:N°\s*)?([A-Z]{1,4}\d{2,6})/i,
-    // Format avec tiret: "FAC-2024-001", "F-12345"
-    /(?:FA|FAC|FACT|INV|F)[-]?(\d{3,6})/i,
+    /(?:Numéro\s*d[ue]\s*fa[ct]ure|N°\s*fa[ct]ure|Numéro\s*facture)[:\s]*([A-Z]{1,4}-?\d{2,}(?:[-/]\d+)*)/i,
+    // Format standard: "Facture N° FA137", "FACTURE F-202603-0012"
+    /(?:Facture|FACTURE|Invoice)[:\s]*(?:N°\s*)?([A-Z]{1,4}-?\d{2,}(?:[-/]\d+)*)/i,
+    // Format avec tiret: "FAC-2024-001", "F-12345", "F-202603-0012"
+    /\b((?:FA|FAC|FACT|INV|F)-?\d{3,}(?:[-/]\d+)*)\b/i,
     // Format long avec année: "2024/12345", "2024-FA-001"
-    /(\d{4}[-/][A-Z]*[-/]?\d{3,})/,
+    /\b(\d{4}[-/][A-Z]*[-/]?\d{3,}(?:[-/]\d+)*)\b/,
   ],
 
   // Dates - formats français (JJ/MM/AAAA, JJ-MM-AAAA, etc.)
@@ -702,7 +705,9 @@ INSTRUCTIONS CRITIQUES:
 
 3. NUMÉRO DE FACTURE:
    - Cherche "Facture", "N° facture", "Numéro de fature", "FA", "FAC"
-   - Format courant: FA123, FAC-2024-001, etc.
+   - Format courant: FA123, FAC-2024-001, F-202603-0012, etc.
+   - Reprendre le numéro COMPLET tel qu'imprimé (préfixe, tirets et tous les
+     segments de chiffres), ne jamais le tronquer
 
 4. MONTANTS - TRÈS IMPORTANT:
    - Pour les factures BTP avec AUTOLIQUIDATION TVA: TVA = 0, cherche "NET A PAYER"
@@ -910,8 +915,10 @@ ${relevantText}
    - N° TVA: Format FR + 11 chiffres (FR79981602451)
 
 6. NUMÉRO DE FACTURE (CRITIQUE):
-   - Chercher "Numéro du fature" ou "Numéro de facture" → format FA + chiffres (ex: FA137, FA129)
-   - Le numéro commence TOUJOURS par des lettres (FA, FAC, F) suivies de chiffres
+   - Chercher "Numéro du fature" ou "Numéro de facture" → format FA + chiffres (ex: FA137, FA129, F-202603-0012)
+   - Le numéro commence en général par des lettres (FA, FAC, F) suivies de chiffres
+   - Reprendre le numéro COMPLET tel qu'imprimé : préfixe, tirets et tous les
+     segments de chiffres (« F-202603-0012 » ne doit pas devenir « 202603 »)
    - NE PAS confondre avec:
      * "Montant H.T. Marche" (c'est un montant en euros, pas un numéro)
      * "Numéro de commande" (ex: 4500390579)

@@ -627,7 +627,15 @@ const importedInvoiceResolvers = {
     importedInvoiceClientSuggestion: withWorkspace(
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
-        return suggestClientForImportedInvoice(workspaceId, invoice);
+        const client = await suggestClientForImportedInvoice(
+          workspaceId,
+          invoice,
+        );
+        // Documents `.lean()` : pas de virtuel `id`, or le type Client exige
+        // `id: ID!` (sinon « Cannot return null for non-nullable field
+        // Client.id » à chaque ouverture d'une facture importée sans client).
+        if (!client) return null;
+        return { ...client, id: String(client._id) };
       },
     ),
 
