@@ -16,6 +16,11 @@ import {
   setReconciliationIgnored,
 } from "../utils/reconciliationMatching.js";
 import { transactionHasNoLinks } from "../utils/transactionLinks.js";
+import {
+  buildReconciliationLinkEntry,
+  forgetReconciliationLink,
+  reconciliationLinkPull,
+} from "../utils/reconciliationLinkOrigin.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 // Résumé d'une facture importée au format ReconciliationInvoice (number =
@@ -54,7 +59,12 @@ const reconciliationResolvers = {
           return {
             success: true,
             suggestions: suggestions.map(
-              ({ transaction, matchingInvoices, confidence }) => ({
+              ({
+                transaction,
+                matchingInvoices,
+                matchingImportedInvoices = [],
+                confidence,
+              }) => ({
                 transaction: {
                   id: transaction._id.toString(),
                   amount: transaction.amount,
@@ -62,17 +72,26 @@ const reconciliationResolvers = {
                   date: transaction.date,
                   reconciliationStatus: transaction.reconciliationStatus,
                 },
-                matchingInvoices: matchingInvoices.map((inv) => ({
-                  id: inv._id.toString(),
-                  number: inv.number,
-                  prefix: inv.prefix || null,
-                  clientName:
-                    inv.client?.name ||
-                    `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
-                  totalTTC: inv.finalTotalTTC || inv.totalTTC,
-                  dueDate: inv.dueDate,
-                  status: inv.status,
-                })),
+                // Factures Newbi puis factures clients importées, distinguées
+                // par kind (le front appelle la mutation de liaison adaptée).
+                matchingInvoices: [
+                  ...matchingInvoices.map((inv) => ({
+                    id: inv._id.toString(),
+                    number: inv.number,
+                    prefix: inv.prefix || null,
+                    clientName:
+                      inv.client?.name ||
+                      `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
+                    totalTTC: inv.finalTotalTTC || inv.totalTTC,
+                    dueDate: inv.dueDate,
+                    status: inv.status,
+                    kind: "newbi",
+                  })),
+                  ...matchingImportedInvoices.map((inv) => ({
+                    ...importedInvoiceSummary(inv),
+                    kind: "imported",
+                  })),
+                ],
                 confidence,
               }),
             ),
@@ -270,6 +289,22 @@ const reconciliationResolvers = {
             };
           }
 
+          // Origine du lien (étiquette « rapproché depuis… »), si le client
+          // l'a précisée.
+          const linkEntry = buildReconciliationLinkEntry({
+            documentType: "INVOICE",
+            documentId: invoiceId,
+            origin: input.origin,
+            userId: user?.id,
+          });
+          if (linkEntry) {
+            await forgetReconciliationLink(
+              { _id: transactionId, workspaceId },
+              "INVOICE",
+              [invoiceId],
+            );
+          }
+
           // Relation N↔N : on utilise $addToSet des deux côtés pour être
           // idempotent (rejoue la même liaison = no-op) et supporter les
           // paiements groupés (1 transaction → N factures) et échelonnements
@@ -278,6 +313,9 @@ const reconciliationResolvers = {
             { _id: transactionId, workspaceId, deletedAt: null },
             {
               $addToSet: { linkedInvoiceIds: invoiceId },
+              ...(linkEntry
+                ? { $push: { reconciliationLinks: linkEntry } }
+                : {}),
               $set: {
                 reconciliationStatus: "matched",
                 reconciliationDate: new Date(),
@@ -365,10 +403,15 @@ const reconciliationResolvers = {
             };
           }
 
-          // Délier côté transaction ($pull idempotent).
+          // Délier côté transaction ($pull idempotent), origine du lien comprise.
           const transaction = await Transaction.findOneAndUpdate(
             { _id: transactionId, workspaceId },
-            { $pull: { linkedInvoiceIds: invoiceId } },
+            {
+              $pull: {
+                linkedInvoiceIds: invoiceId,
+                ...reconciliationLinkPull("INVOICE", [invoiceId]),
+              },
+            },
             { new: true },
           );
 
@@ -425,7 +468,7 @@ const reconciliationResolvers = {
     // sémantique que linkTransactionToInvoice : $addToSet des deux côtés,
     // la facture est considérée encaissée (COMPLETED) à la date du virement.
     linkTransactionToImportedInvoice: withOrganization(
-      async (parent, { input }, { workspaceId }) => {
+      async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId, importedInvoiceId } = input;
 
@@ -443,10 +486,27 @@ const reconciliationResolvers = {
             };
           }
 
+          const linkEntry = buildReconciliationLinkEntry({
+            documentType: "IMPORTED_INVOICE",
+            documentId: target._id,
+            origin: input.origin,
+            userId: user?.id,
+          });
+          if (linkEntry) {
+            await forgetReconciliationLink(
+              { _id: transactionId, workspaceId },
+              "IMPORTED_INVOICE",
+              [target._id],
+            );
+          }
+
           const transaction = await Transaction.findOneAndUpdate(
             { _id: transactionId, workspaceId, deletedAt: null },
             {
               $addToSet: { linkedImportedInvoiceIds: target._id },
+              ...(linkEntry
+                ? { $push: { reconciliationLinks: linkEntry } }
+                : {}),
               $set: {
                 reconciliationStatus: "matched",
                 reconciliationDate: new Date(),
@@ -504,7 +564,14 @@ const reconciliationResolvers = {
 
           const transaction = await Transaction.findOneAndUpdate(
             { _id: transactionId, workspaceId },
-            { $pull: { linkedImportedInvoiceIds: importedInvoiceId } },
+            {
+              $pull: {
+                linkedImportedInvoiceIds: importedInvoiceId,
+                ...reconciliationLinkPull("IMPORTED_INVOICE", [
+                  importedInvoiceId,
+                ]),
+              },
+            },
             { new: true },
           );
           if (transaction && transactionHasNoLinks(transaction)) {

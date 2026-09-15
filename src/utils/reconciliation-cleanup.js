@@ -48,7 +48,15 @@ export async function detachPurchaseInvoicesFromTransactions(
 
     await Transaction.updateMany(
       { workspaceId: wsId, linkedPurchaseInvoiceIds: { $in: ids } },
-      { $pull: { linkedPurchaseInvoiceIds: { $in: ids } } },
+      {
+        $pull: {
+          linkedPurchaseInvoiceIds: { $in: ids },
+          reconciliationLinks: {
+            documentType: "PURCHASE_INVOICE",
+            documentId: { $in: ids },
+          },
+        },
+      },
     );
 
     // Nettoyer les pointeurs des justificatifs (créés par l'OCR auto)
@@ -104,7 +112,15 @@ export async function detachImportedInvoicesFromTransactions(
 
     await Transaction.updateMany(
       { _id: { $in: affectedIds } },
-      { $pull: { linkedImportedInvoiceIds: { $in: ids } } },
+      {
+        $pull: {
+          linkedImportedInvoiceIds: { $in: ids },
+          reconciliationLinks: {
+            documentType: "IMPORTED_INVOICE",
+            documentId: { $in: ids },
+          },
+        },
+      },
     );
     await Transaction.updateMany(
       { _id: { $in: affectedIds }, $and: NO_LINKED_DOCUMENTS_CLAUSES },
