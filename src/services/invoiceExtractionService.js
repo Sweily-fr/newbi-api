@@ -20,9 +20,10 @@ const FRENCH_INVOICE_PATTERNS = {
   // limitée à 6 chiffres après le préfixe, préfixe exclu).
   INVOICE_NUMBER: [
     // Format M.G.E COUVERTURE: "Numéro du fature FA137" (avec faute d'orthographe)
-    /(?:Numéro\s*d[ue]\s*fa[ct]ure|N°\s*fa[ct]ure|Numéro\s*facture)[:\s]*([A-Z]{1,4}-?\d{2,}(?:[-/]\d+)*)/i,
-    // Format standard: "Facture N° FA137", "FACTURE F-202603-0012"
-    /(?:Facture|FACTURE|Invoice)[:\s]*(?:N°\s*)?([A-Z]{1,4}-?\d{2,}(?:[-/]\d+)*)/i,
+    /(?:Numéro\s*d[ue]\s*fa[ct]ure|N°\s*fa[ct]ure|Numéro\s*facture)[:\s]*([A-Z]{1,4}(?:-?[A-Z]{1,4})?-?\d{2,}(?:[-/]\d+)*)/i,
+    // Format standard: "Facture N° FA137", "FACTURE F-202603-0012",
+    // préfixe à deux blocs "Numéro de facture: DY-UY2026-0113"
+    /(?:Facture|FACTURE|Invoice)[:\s]*(?:N°\s*)?([A-Z]{1,4}(?:-?[A-Z]{1,4})?-?\d{2,}(?:[-/]\d+)*)/i,
     // Format avec tiret: "FAC-2024-001", "F-12345", "F-202603-0012"
     /\b((?:FA|FAC|FACT|INV|F)-?\d{3,}(?:[-/]\d+)*)\b/i,
     // Format long avec année: "2024/12345", "2024-FA-001"

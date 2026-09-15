@@ -19,6 +19,12 @@ describe("invoiceExtractionService.extractWithPatterns — numéro de facture", 
     );
     expect(number("FACTURE F-202609-0003")).toBe("F-202609-0003");
     expect(number("Numéro de facture : F-202609-0003")).toBe("F-202609-0003");
+    // Préfixe à deux blocs, cas réel du 15/09/2026 (tronqué en « 2026-0113 »)
+    expect(
+      number(
+        "Numéro de facture: DY-UY2026-0113\nDate d'émission: 20/08/2026\nRéf. projet: SIT-2026-090",
+      ),
+    ).toBe("DY-UY2026-0113");
   });
 
   it("garde les formats courts et à segments", () => {
