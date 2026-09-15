@@ -484,7 +484,10 @@ class InvoiceExtractionService {
     // Appliquer chaque pattern
     for (const [field, patterns] of Object.entries(FRENCH_INVOICE_PATTERNS)) {
       for (const pattern of patterns) {
-        const match = text.match(pattern);
+        const match =
+          field === "INVOICE_NUMBER"
+            ? this.matchInvoiceNumber(text, pattern)
+            : text.match(pattern);
         if (match) {
           const fieldKey = this.patternToFieldKey(field);
           if (field === "POSTAL_CODE_CITY" && match[1] && match[2]) {
@@ -499,6 +502,30 @@ class InvoiceExtractionService {
     }
 
     return result;
+  }
+
+  /**
+   * Premier match d'un pattern de numéro de facture dont le contexte n'est pas
+   * une autre référence (« Réf. projet : 2026-0451 », « Dossier », « Chantier »,
+   * « N° de commande »…) : l'OCR de secours prenait ces identifiants pour le
+   * numéro de facture. Un contexte qui mentionne aussi « facture » reste accepté.
+   */
+  matchInvoiceNumber(text, pattern) {
+    const flags = pattern.flags.includes("g")
+      ? pattern.flags
+      : pattern.flags + "g";
+    const global = new RegExp(pattern.source, flags);
+    for (const match of text.matchAll(global)) {
+      const before = text.slice(Math.max(0, match.index - 40), match.index);
+      const otherReference =
+        /r[ée]f(?:[ée]rence)?\.?\s*(?:projet|chantier|dossier|affaire|client|interne)?|projet|chantier|dossier|affaire|commande|devis|contrat|n[°º]\s*client/i.test(
+          before,
+        );
+      const invoiceContext = /factur|invoice/i.test(before);
+      if (otherReference && !invoiceContext) continue;
+      return match;
+    }
+    return null;
   }
 
   /**
@@ -708,6 +735,9 @@ INSTRUCTIONS CRITIQUES:
    - Format courant: FA123, FAC-2024-001, F-202603-0012, etc.
    - Reprendre le numéro COMPLET tel qu'imprimé (préfixe, tirets et tous les
      segments de chiffres), ne jamais le tronquer
+   - NE PAS confondre avec une "Référence" / "Réf. projet" / "Chantier" /
+     "Dossier" / "Affaire" / "N° de commande" / "N° de devis" / "N° client" :
+     ce ne sont pas des numéros de facture (null si aucun numéro de facture)
 
 4. MONTANTS - TRÈS IMPORTANT:
    - Pour les factures BTP avec AUTOLIQUIDATION TVA: TVA = 0, cherche "NET A PAYER"
@@ -920,6 +950,7 @@ ${relevantText}
    - Reprendre le numéro COMPLET tel qu'imprimé : préfixe, tirets et tous les
      segments de chiffres (« F-202603-0012 » ne doit pas devenir « 202603 »)
    - NE PAS confondre avec:
+     * "Référence" / "Réf. projet" / "Projet" / "Chantier" / "Affaire" / "N° client" / "N° de devis" (autres identifiants, jamais le numéro de facture)
      * "Montant H.T. Marche" (c'est un montant en euros, pas un numéro)
      * "Numéro de commande" (ex: 4500390579)
      * "Numéro de Dossier" (ex: 2.43323.1-RBL)

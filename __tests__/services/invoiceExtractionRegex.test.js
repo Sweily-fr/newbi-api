@@ -25,7 +25,21 @@ describe("invoiceExtractionService.extractWithPatterns — numéro de facture", 
     expect(number("Numéro du fature FA137")).toBe("FA137");
     expect(number("FACTURE FAC-2024-001 Total")).toBe("FAC-2024-001");
     expect(number("Invoice INV-12345")).toBe("INV-12345");
-    expect(number("Réf 2024/12345 client")).toBe("2024/12345");
+    expect(number("Facture 2024/12345 client")).toBe("2024/12345");
+  });
+
+  it("ignore une référence projet, dossier ou commande", () => {
+    expect(
+      number(
+        "Réf. projet : 2026-0451\nChantier : Rénovation\nFacture N° F-202603-0012",
+      ),
+    ).toBe("F-202603-0012");
+    expect(number("N° de commande : FAC-2024-001\nFacture N° FA137")).toBe(
+      "FA137",
+    );
+    expect(number("Référence dossier : FAC-2024-001 sans numéro") ?? null).toBe(
+      null,
+    );
   });
 
   it("ne capture pas un fragment au milieu d'une référence", () => {
