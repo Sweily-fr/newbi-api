@@ -2,17 +2,15 @@
  * Liaison facture d'achat ↔ transactions bancaires (débits).
  *
  * Source unique des effets d'un rapprochement, partagée par la mutation
- * manuelle (reconcilePurchaseInvoice) et le rapprochement automatique à la
- * création d'une facture d'achat (saisie, OCR, conversion Gmail, import
- * Qonto) : liens N↔N des deux côtés, facture payée/rapprochée, catégorie
- * propagée aux transactions, signalement de paiement SuperPDP et
- * automatisations « facture payée ».
+ * manuelle (reconcilePurchaseInvoice) et tout autre chemin de liaison :
+ * liens N↔N des deux côtés, facture payée/rapprochée, catégorie propagée aux
+ * transactions, signalement de paiement SuperPDP et automatisations
+ * « facture payée ».
  */
 import mongoose from "mongoose";
 import Transaction from "../models/Transaction.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
-import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
 import documentAutomationService from "./documentAutomationService.js";
 import logger from "../utils/logger.js";
 
@@ -110,47 +108,4 @@ export async function linkPurchaseInvoiceToTransactions({
   return { invoice, newTransactionIds };
 }
 
-/**
- * Rapprochement automatique d'une facture d'achat qui vient d'être créée
- * avec une transaction déjà passée en banque (confiance haute uniquement,
- * cf. findAutoReconcileTransactionForPurchaseInvoice). Ne fait rien si la
- * facture porte déjà un lien. Ne jette jamais : un échec ici ne doit pas
- * faire échouer la création.
- *
- * @returns {Promise<import("mongoose").Document|null>} la transaction liée, ou null
- */
-export async function autoReconcilePurchaseInvoice({
-  invoice,
-  workspaceId,
-  userId = null,
-}) {
-  if (!invoice || (invoice.linkedTransactionIds || []).length > 0) return null;
-  try {
-    const transaction = await findAutoReconcileTransactionForPurchaseInvoice(
-      invoice,
-      String(workspaceId),
-    );
-    if (!transaction) return null;
-    await linkPurchaseInvoiceToTransactions({
-      invoice,
-      transactionIds: [transaction._id],
-      workspaceId,
-      userId,
-      paymentDate: transaction.date || null,
-    });
-    logger.info(
-      `[PI LINK] Facture d'achat ${invoice._id} rapprochée automatiquement à la transaction ${transaction._id} (${transaction.description || ""})`,
-    );
-    return transaction;
-  } catch (error) {
-    logger.warn(
-      `[PI LINK] Rapprochement automatique impossible pour la facture ${invoice?._id}: ${error.message}`,
-    );
-    return null;
-  }
-}
-
-export default {
-  linkPurchaseInvoiceToTransactions,
-  autoReconcilePurchaseInvoice,
-};
+export default { linkPurchaseInvoiceToTransactions };

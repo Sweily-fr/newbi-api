@@ -91,6 +91,13 @@ const create = (input) =>
     ctx(),
   );
 
+const candidate = (purchaseInvoiceId) =>
+  purchaseInvoiceResolvers.Query.purchaseInvoiceReconcileCandidate(
+    null,
+    { purchaseInvoiceId },
+    ctx(),
+  );
+
 describe("createPurchaseInvoice : filet anti-doublon et rapprochement automatique", () => {
   it("refuse une facture similaire (même numéro + fournisseur) sans forceCreate, l'accepte avec", async () => {
     await create(baseInput());
@@ -105,28 +112,9 @@ describe("createPurchaseInvoice : filet anti-doublon et rapprochement automatiqu
     expect(await PurchaseInvoice.countDocuments({})).toBe(2);
   });
 
-  it("facture ajoutée après le paiement : rapprochée automatiquement à la transaction passée", async () => {
+  it("facture ajoutée après le paiement : rien n'est lié à la création, la transaction passée est proposée pour confirmation", async () => {
     const tx = await createDebit();
     await createDebit({ amount: -12, description: "PRLV QONTO" });
-
-    const invoice = await create(baseInput());
-
-    expect(invoice.status).toBe("PAID");
-    expect(invoice.isReconciled).toBe(true);
-    expect(invoice.linkedTransactionIds.map(String)).toEqual([
-      tx._id.toString(),
-    ]);
-    expect(invoice.paymentDate.toISOString()).toBe("2026-07-21T00:00:00.000Z");
-
-    const freshTx = await Transaction.findById(tx._id);
-    expect(freshTx.reconciliationStatus).toBe("matched");
-    expect(freshTx.linkedPurchaseInvoiceIds.map(String)).toEqual([
-      invoice._id.toString(),
-    ]);
-  });
-
-  it("ne rapproche pas automatiquement sans correspondance sûre (fournisseur absent du libellé)", async () => {
-    const tx = await createDebit({ description: "CB 4512XXXX" });
 
     const invoice = await create(baseInput());
 
@@ -134,6 +122,27 @@ describe("createPurchaseInvoice : filet anti-doublon et rapprochement automatiqu
     expect(invoice.linkedTransactionIds).toHaveLength(0);
     const freshTx = await Transaction.findById(tx._id);
     expect(freshTx.reconciliationStatus).toBe("unmatched");
+
+    const proposed = await candidate(invoice._id.toString());
+    expect(proposed?.id).toBe(tx._id.toString());
+    expect(proposed.description).toBe("CB HOSTINGER");
+  });
+
+  it("ne propose rien sans correspondance sûre (fournisseur absent du libellé) ni quand la facture est déjà liée", async () => {
+    const tx = await createDebit({ description: "CB 4512XXXX" });
+    const invoice = await create(baseInput());
+    expect(await candidate(invoice._id.toString())).toBeNull();
+
+    await purchaseInvoiceResolvers.Mutation.reconcilePurchaseInvoice(
+      null,
+      {
+        purchaseInvoiceId: invoice._id.toString(),
+        transactionIds: [tx._id.toString()],
+      },
+      ctx(),
+    );
+    await createDebit();
+    expect(await candidate(invoice._id.toString())).toBeNull();
   });
 
   it("reconcilePurchaseInvoice reste additif et refuse une paire déjà liée", async () => {
@@ -218,7 +227,7 @@ describe("convertImportedInvoiceToPurchaseInvoice : filet anti-doublon", () => {
     expect(freshImported.status).toBe("VALIDATED");
   });
 
-  it("crée une nouvelle facture avec forceCreate, ou sans doublon, et la rapproche à la transaction passée", async () => {
+  it("crée une nouvelle facture avec forceCreate, sans la lier automatiquement (la transaction reste proposée)", async () => {
     await create(baseInput());
     const tx = await createDebit();
     const imported = await createImported();
@@ -227,13 +236,11 @@ describe("convertImportedInvoiceToPurchaseInvoice : filet anti-doublon", () => {
 
     expect(await PurchaseInvoice.countDocuments({})).toBe(2);
     expect(created.source).toBe("OCR");
-    expect(created.status).toBe("PAID");
-    expect(created.linkedTransactionIds.map(String)).toEqual([
-      tx._id.toString(),
-    ]);
+    expect(created.status).toBe("TO_PROCESS");
+    expect(created.linkedTransactionIds).toHaveLength(0);
     const freshTx = await Transaction.findById(tx._id);
-    expect(freshTx.linkedPurchaseInvoiceIds.map(String)).toEqual([
-      created._id.toString(),
-    ]);
+    expect(freshTx.reconciliationStatus).toBe("unmatched");
+    const proposed = await candidate(created._id.toString());
+    expect(proposed?.id).toBe(tx._id.toString());
   });
 });

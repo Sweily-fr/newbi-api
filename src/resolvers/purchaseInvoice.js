@@ -29,10 +29,8 @@ import {
 } from "../utils/reconciliationMatching.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
 import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
-import {
-  linkPurchaseInvoiceToTransactions,
-  autoReconcilePurchaseInvoice,
-} from "../services/purchaseInvoiceLinkService.js";
+import { linkPurchaseInvoiceToTransactions } from "../services/purchaseInvoiceLinkService.js";
+import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
 
 const formatEuros = (value) =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(
@@ -494,6 +492,31 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
+    // Facture d'achat créée alors que le paiement est déjà passé : transaction
+    // à proposer avec confirmation (montant ±1 %, fournisseur ou numéro dans
+    // le libellé, fenêtre de dates, sans ambiguïté). Null sinon : les
+    // candidates restent visibles dans transactionsForPurchaseInvoice.
+    purchaseInvoiceReconcileCandidate: requireRead("expenses")(
+      async (_, { purchaseInvoiceId }, context) => {
+        const workspaceId = context.workspaceId || context.organizationId;
+        const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
+        if ((invoice.linkedTransactionIds || []).length > 0) return null;
+        const tx = await findAutoReconcileTransactionForPurchaseInvoice(
+          invoice,
+          workspaceId,
+        );
+        if (!tx) return null;
+        return {
+          id: tx._id.toString(),
+          amount: tx.amount,
+          description: tx.description,
+          date: tx.date,
+          reconciliationStatus: tx.reconciliationStatus,
+          score: null,
+        };
+      },
+    ),
+
     // Rattachement manuel côté transaction : factures d'achat candidates
     // (non rapprochées d'abord, puis déjà rapprochées à une autre transaction).
     purchaseInvoicesForTransaction: requireRead("expenses")(
@@ -712,16 +735,9 @@ const purchaseInvoiceResolvers = {
             );
         }
 
-        // Facture ajoutée après son paiement : rapprochement automatique avec
-        // la transaction déjà passée (confiance haute uniquement). Le flux
-        // inverse (transaction arrivant après la facture) est géré à la
-        // synchronisation bancaire.
-        await autoReconcilePurchaseInvoice({
-          invoice,
-          workspaceId,
-          userId: context.user.id,
-        });
-
+        // Facture ajoutée après son paiement : pas de lien automatique, le
+        // front interroge purchaseInvoiceReconcileCandidate et demande
+        // confirmation avant de rapprocher.
         return invoice;
       },
     ),

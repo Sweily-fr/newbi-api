@@ -439,6 +439,12 @@ extend type Query {
     search: String
   ): TransactionsForPurchaseInvoiceResponse!
 
+  # Facture d'achat créée alors que le paiement est déjà passé : transaction
+  # sûre à proposer avec confirmation (null si aucune ou si ambiguïté).
+  purchaseInvoiceReconcileCandidate(
+    purchaseInvoiceId: ID!
+  ): ReconciliationTransaction
+
   # Factures d'achat rattachables à une transaction. search : fournisseur,
   # numéro, ou montant.
   purchaseInvoicesForTransaction(

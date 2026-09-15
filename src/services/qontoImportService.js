@@ -19,7 +19,6 @@ import { syncPurchaseInvoiceIfNeeded as syncPurchaseInvoiceToPennylane } from ".
 import documentAutomationService from "./documentAutomationService.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
-import { autoReconcilePurchaseInvoice } from "./purchaseInvoiceLinkService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -563,11 +562,6 @@ export async function importSupplierInvoices(account, userId) {
               userId,
             });
           }
-          await autoReconcilePurchaseInvoice({
-            invoice: fresh,
-            workspaceId,
-            userId,
-          });
           result.updated++;
           logger.info(
             `[QONTO-IMPORT] Facture fournisseur Qonto ${qontoId} rattachée à la facture d'achat existante ${fresh._id} (${fresh.supplierName} ${fresh.invoiceNumber || ""}, org=${workspaceId})`,
@@ -652,13 +646,6 @@ export async function importSupplierInvoices(account, userId) {
         logger.info(
           `[QONTO-IMPORT] Facture fournisseur ${invoiceNumber} (${supplierName}) importée depuis Qonto (org=${workspaceId})`,
         );
-        // Facture déjà payée côté banque : rapprochement automatique avec la
-        // transaction passée (confiance haute uniquement).
-        await autoReconcilePurchaseInvoice({
-          invoice: createdPurchase,
-          workspaceId,
-          userId,
-        });
         await notifyImported({
           userId,
           workspaceId,

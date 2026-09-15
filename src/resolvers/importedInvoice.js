@@ -32,7 +32,6 @@ import Supplier from "../models/Supplier.js";
 import Client from "../models/Client.js";
 import { detachImportedInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
-import { autoReconcilePurchaseInvoice } from "../services/purchaseInvoiceLinkService.js";
 import {
   matchExistingClient,
   resolveImportedClient,
@@ -688,13 +687,7 @@ async function convertSingleImportedInvoice(
       logger.info(
         `[IMPORTED INVOICE] Conversion ${importedInvoice._id} : facture d'achat existante ${existing._id} réutilisée (${existing.supplierName} ${existing.invoiceNumber || ""})`,
       );
-      const fresh = await PurchaseInvoice.findById(existing._id);
-      await autoReconcilePurchaseInvoice({
-        invoice: fresh,
-        workspaceId: workspaceObjectId,
-        userId,
-      });
-      return fresh;
+      return PurchaseInvoice.findById(existing._id);
     }
   }
 
@@ -758,14 +751,6 @@ async function convertSingleImportedInvoice(
   // Mark the imported invoice as VALIDATED
   importedInvoice.status = "VALIDATED";
   await importedInvoice.save();
-
-  // Facture reçue après son paiement : rapprochement automatique avec la
-  // transaction déjà passée (confiance haute uniquement).
-  await autoReconcilePurchaseInvoice({
-    invoice: purchaseInvoice,
-    workspaceId: workspaceObjectId,
-    userId,
-  });
 
   return purchaseInvoice;
 }
