@@ -248,6 +248,114 @@ const normalizeCompanyName = (s) =>
   stripAccents(s).replace(/\s+/g, " ").trim().toLowerCase();
 
 /**
+ * Identité de l'organisation (émetteur des factures clients importées) :
+ * noms, SIREN, n° de TVA, e-mail, pour reconnaître son propre bloc dans les
+ * données OCR. Pas de modèle mongoose "Organization" : collection brute.
+ */
+async function loadOwnCompany(workspaceId) {
+  const org = await mongoose.connection.db.collection("organization").findOne(
+    { _id: new mongoose.Types.ObjectId(String(workspaceId)) },
+    {
+      projection: {
+        name: 1,
+        companyName: 1,
+        commercialName: 1,
+        siret: 1,
+        siren: 1,
+        vatNumber: 1,
+        companyEmail: 1,
+      },
+    },
+  );
+  if (!org) return null;
+  return {
+    // Clé tolérante : casse, accents, ponctuation et formes juridiques
+    // ignorées ("NEWBIBBB SAS" = "Newbibbb").
+    names: [org.name, org.companyName, org.commercialName]
+      .filter(Boolean)
+      .map(clientLooseKey)
+      .filter(Boolean),
+    siren: siretDigits(org.siren || org.siret).slice(0, 9) || null,
+    vat: (org.vatNumber || "").replace(/\s/g, "").toUpperCase() || null,
+    email: normalizeEmail(org.companyEmail) || null,
+  };
+}
+
+/**
+ * Vrai si le bloc (client ou vendor lu par l'OCR) désigne l'organisation
+ * elle-même : même nom, même SIREN (via SIRET), même n° de TVA ou même e-mail.
+ */
+export function isOwnCompany(party, own) {
+  if (!party || !own) return false;
+  const name = clientLooseKey(party.name);
+  if (name && own.names.includes(name)) return true;
+  const digits = siretDigits(party.siret);
+  if (own.siren && digits.length >= 9 && digits.slice(0, 9) === own.siren) {
+    return true;
+  }
+  const vat = (party.vatNumber || "").replace(/\s/g, "").toUpperCase();
+  if (own.vat && vat && vat === own.vat) return true;
+  const email = normalizeEmail(party.email);
+  if (own.email && email && email === own.email) return true;
+  return false;
+}
+
+/**
+ * L'OCR met parfois l'émetteur (l'organisation) dans le bloc client. Sur une
+ * facture client importée, le client est forcément l'autre partie : si le
+ * bloc client est l'organisation, on prend le bloc vendor quand il désigne
+ * quelqu'un d'autre, sinon on vide le client pour laisser le repli texte
+ * (matchClientInText) trouver la contrepartie.
+ */
+export async function excludeOwnCompanyFromClient(invoiceData, workspaceId) {
+  const client = invoiceData?.client;
+  if (!client?.name && !client?.siret && !client?.email) return;
+  let own = null;
+  try {
+    own = await loadOwnCompany(workspaceId);
+  } catch (e) {
+    logger.warn(
+      `excludeOwnCompanyFromClient : organisation ${workspaceId} illisible (${e.message})`,
+    );
+    return;
+  }
+  if (!own || !isOwnCompany(client, own)) return;
+
+  const vendor = invoiceData.vendor;
+  if (vendor?.name && !isOwnCompany(vendor, own)) {
+    logger.debug(
+      `excludeOwnCompanyFromClient : client « ${client.name} » = organisation, contrepartie prise dans le bloc vendor « ${vendor.name} »`,
+    );
+    invoiceData.client = {
+      ...client,
+      id: null,
+      name: vendor.name,
+      address: vendor.address || null,
+      city: vendor.city || null,
+      postalCode: vendor.postalCode || null,
+      siret: vendor.siret || null,
+      email: vendor.email || null,
+      clientNumber: null,
+    };
+    return;
+  }
+  logger.debug(
+    `excludeOwnCompanyFromClient : client « ${client.name} » = organisation, aucune contrepartie lue, client vidé`,
+  );
+  invoiceData.client = {
+    ...client,
+    id: null,
+    name: null,
+    address: null,
+    city: null,
+    postalCode: null,
+    siret: null,
+    email: null,
+    clientNumber: null,
+  };
+}
+
+/**
  * Bascule vendor → client quand l'OCR n'a pas distingué les deux parties :
  * un document importé côté "factures clients" désigne le client par le
  * bloc "vendor" si le vrai émetteur est l'organisation elle-même. Si le
@@ -257,17 +365,8 @@ export async function fillClientFromVendor(invoiceData, workspaceId) {
   const vendorName = invoiceData?.vendor?.name?.trim();
   if (invoiceData?.client?.name || !vendorName) return;
   try {
-    // Pas de modèle mongoose "Organization" enregistré : collection brute.
-    const org = await mongoose.connection.db
-      .collection("organization")
-      .findOne(
-        { _id: new mongoose.Types.ObjectId(String(workspaceId)) },
-        { projection: { name: 1, companyName: 1 } },
-      );
-    const ownNames = [org?.name, org?.companyName]
-      .filter(Boolean)
-      .map(normalizeCompanyName);
-    if (ownNames.includes(normalizeCompanyName(vendorName))) return;
+    const own = await loadOwnCompany(workspaceId);
+    if (own && isOwnCompany(invoiceData.vendor, own)) return;
   } catch (e) {
     logger.warn(
       `fillClientFromVendor : organisation ${workspaceId} illisible (${e.message}), bascule appliquée par défaut`,
@@ -292,6 +391,7 @@ export async function fillClientFromVendor(invoiceData, workspaceId) {
  * Ne jette jamais : un échec de rapprochement ne doit pas bloquer l'import.
  */
 export async function resolveImportedClient(invoiceData, workspaceId, clients) {
+  await excludeOwnCompanyFromClient(invoiceData, workspaceId);
   await fillClientFromVendor(invoiceData, workspaceId);
   try {
     let matched = null;
