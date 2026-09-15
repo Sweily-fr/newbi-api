@@ -37,6 +37,10 @@ type Transaction {
   # Factures clients importées (Qonto, OCR, Gmail) soldées par cette transaction.
   linkedImportedInvoiceIds: [ID!]!
   linkedImportedInvoices: [LinkedImportedInvoiceSummary!]!
+  # Origine de chaque lien de rapprochement (« comment le lien a été fait »),
+  # clé (documentType, documentId). Les liens antérieurs à cette mémoire
+  # n'ont pas d'entrée.
+  reconciliationLinks: [ReconciliationLink!]!
   linkedExpenseId: ID
   reconciliationStatus: ReconciliationStatusEnum
   reconciliationDate: DateTime
@@ -91,6 +95,34 @@ type LinkedPurchaseInvoiceFile {
   url: String
   filename: String
   mimetype: String
+}
+
+enum ReconciliationDocumentType {
+  INVOICE
+  PURCHASE_INVOICE
+  IMPORTED_INVOICE
+}
+
+"""
+Geste à l'origine d'un lien de rapprochement.
+DOCUMENT = depuis la fiche du document, TRANSACTION = depuis le tiroir de la
+transaction, RECEIPT = justificatif déposé sur la transaction, SUGGESTION =
+suggestion automatique confirmée.
+"""
+enum ReconciliationLinkOrigin {
+  DOCUMENT
+  TRANSACTION
+  RECEIPT
+  SUGGESTION
+}
+
+type ReconciliationLink {
+  documentType: ReconciliationDocumentType!
+  documentId: ID!
+  origin: ReconciliationLinkOrigin!
+  linkedAt: DateTime
+  linkedBy: ID
+  linkedByName: String
 }
 
 enum ReconciliationStatusEnum {

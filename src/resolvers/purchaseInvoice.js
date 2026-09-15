@@ -30,6 +30,7 @@ import {
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
 import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
 import { linkPurchaseInvoiceToTransactions } from "../services/purchaseInvoiceLinkService.js";
+import { reconciliationLinkPull } from "../utils/reconciliationLinkOrigin.js";
 import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
 
 const formatEuros = (value) =>
@@ -1206,7 +1207,7 @@ const purchaseInvoiceResolvers = {
     ),
 
     reconcilePurchaseInvoice: requireWrite("expenses")(
-      async (_, { purchaseInvoiceId, transactionIds }, context) => {
+      async (_, { purchaseInvoiceId, transactionIds, origin }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
@@ -1246,6 +1247,7 @@ const purchaseInvoiceResolvers = {
           transactionIds,
           workspaceId,
           userId: context.user.id,
+          origin: origin || null,
         });
         if (newTransactionIds.length === 0) {
           throw new AppError(
@@ -1270,10 +1272,16 @@ const purchaseInvoiceResolvers = {
 
         const txObjectId = new mongoose.Types.ObjectId(transactionId);
 
-        // Côté transaction : $pull + pointeur du justificatif OCR nettoyé.
+        // Côté transaction : $pull (lien + origine) + pointeur du justificatif
+        // OCR nettoyé.
         await Transaction.updateOne(
           { _id: txObjectId, workspaceId: wsId },
-          { $pull: { linkedPurchaseInvoiceIds: invoice._id } },
+          {
+            $pull: {
+              linkedPurchaseInvoiceIds: invoice._id,
+              ...reconciliationLinkPull("PURCHASE_INVOICE", [invoice._id]),
+            },
+          },
         );
         await Transaction.updateOne(
           {

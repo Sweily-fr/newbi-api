@@ -166,6 +166,33 @@ const transactionSchema = new mongoose.Schema(
       default: [],
       index: true,
     },
+    // Origine de chaque lien de rapprochement (« comment le lien a été
+    // fait »), clé (documentType, documentId). Voir
+    // utils/reconciliationLinkOrigin.js. Les liens antérieurs à cette mémoire
+    // n'ont pas d'entrée.
+    reconciliationLinks: {
+      type: [
+        {
+          documentType: {
+            type: String,
+            enum: ["INVOICE", "PURCHASE_INVOICE", "IMPORTED_INVOICE"],
+            required: true,
+          },
+          documentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            required: true,
+          },
+          origin: {
+            type: String,
+            enum: ["DOCUMENT", "TRANSACTION", "RECEIPT", "SUGGESTION"],
+            required: true,
+          },
+          linkedAt: { type: Date, default: Date.now },
+          linkedBy: { type: String, default: null },
+        },
+      ],
+      default: [],
+    },
 
     // Rapprochement avec justificatif/dépense (pour les sorties d'argent)
     linkedExpenseId: {

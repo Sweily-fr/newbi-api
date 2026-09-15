@@ -154,15 +154,19 @@ describe("createPurchaseInvoice : filet anti-doublon et rapprochement automatiqu
     });
     const invoice = await create(baseInput());
 
-    const reconcile = (ids) =>
+    const reconcile = (ids, origin) =>
       purchaseInvoiceResolvers.Mutation.reconcilePurchaseInvoice(
         null,
-        { purchaseInvoiceId: invoice._id.toString(), transactionIds: ids },
+        {
+          purchaseInvoiceId: invoice._id.toString(),
+          transactionIds: ids,
+          origin,
+        },
         ctx(),
       );
 
-    await reconcile([tx1._id.toString()]);
-    const after = await reconcile([tx2._id.toString()]);
+    await reconcile([tx1._id.toString()], "DOCUMENT");
+    const after = await reconcile([tx2._id.toString()], "TRANSACTION");
     expect(after.linkedTransactionIds.map(String).sort()).toEqual(
       [tx1._id.toString(), tx2._id.toString()].sort(),
     );
@@ -171,13 +175,58 @@ describe("createPurchaseInvoice : filet anti-doublon et rapprochement automatiqu
     await expect(reconcile([tx1._id.toString()])).rejects.toThrow(
       /déjà rapprochée/,
     );
-    for (const tx of [tx1, tx2]) {
+    for (const [tx, origin] of [
+      [tx1, "DOCUMENT"],
+      [tx2, "TRANSACTION"],
+    ]) {
       const fresh = await Transaction.findById(tx._id);
       expect(fresh.reconciliationStatus).toBe("matched");
       expect(fresh.linkedPurchaseInvoiceIds.map(String)).toEqual([
         invoice._id.toString(),
       ]);
+      // Origine du lien mémorisée (étiquette « rapproché depuis… »).
+      expect(fresh.reconciliationLinks).toHaveLength(1);
+      expect(fresh.reconciliationLinks[0]).toMatchObject({
+        documentType: "PURCHASE_INVOICE",
+        origin,
+        linkedBy: userId.toString(),
+      });
+      expect(fresh.reconciliationLinks[0].documentId.toString()).toBe(
+        invoice._id.toString(),
+      );
     }
+
+    // Déliaison unitaire : l'origine part avec le lien.
+    await purchaseInvoiceResolvers.Mutation.unlinkPurchaseInvoiceFromTransaction(
+      null,
+      {
+        purchaseInvoiceId: invoice._id.toString(),
+        transactionId: tx1._id.toString(),
+      },
+      ctx(),
+    );
+    const unlinked = await Transaction.findById(tx1._id);
+    expect(unlinked.linkedPurchaseInvoiceIds).toHaveLength(0);
+    expect(unlinked.reconciliationLinks).toHaveLength(0);
+    expect(unlinked.reconciliationStatus).toBe("unmatched");
+  });
+
+  it("sans origine fournie (client legacy), le lien est créé sans mémoire d'origine", async () => {
+    const tx = await createDebit({ description: "CB 4512XXXX" });
+    const invoice = await create(baseInput());
+    await purchaseInvoiceResolvers.Mutation.reconcilePurchaseInvoice(
+      null,
+      {
+        purchaseInvoiceId: invoice._id.toString(),
+        transactionIds: [tx._id.toString()],
+      },
+      ctx(),
+    );
+    const fresh = await Transaction.findById(tx._id);
+    expect(fresh.linkedPurchaseInvoiceIds.map(String)).toEqual([
+      invoice._id.toString(),
+    ]);
+    expect(fresh.reconciliationLinks).toHaveLength(0);
   });
 });
 

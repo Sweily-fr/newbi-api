@@ -511,6 +511,8 @@ extend type Mutation {
   reconcilePurchaseInvoice(
     purchaseInvoiceId: ID!
     transactionIds: [ID!]!
+    # Geste à l'origine du lien (étiquette « rapproché depuis… »).
+    origin: ReconciliationLinkOrigin
   ): PurchaseInvoice!
   # Retire UN lien (facture d'achat, transaction).
   unlinkPurchaseInvoiceFromTransaction(

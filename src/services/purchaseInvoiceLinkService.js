@@ -13,6 +13,10 @@ import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategor
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import documentAutomationService from "./documentAutomationService.js";
 import logger from "../utils/logger.js";
+import {
+  buildReconciliationLinkEntry,
+  forgetReconciliationLink,
+} from "../utils/reconciliationLinkOrigin.js";
 
 const toObjectId = (id) =>
   id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(id);
@@ -27,6 +31,8 @@ const toObjectId = (id) =>
  * @param {string|ObjectId} params.workspaceId
  * @param {string} [params.userId] pour les automatisations (facultatif)
  * @param {Date} [params.paymentDate] date de paiement à poser si la facture n'en a pas
+ * @param {string} [params.origin] geste à l'origine du lien (DOCUMENT,
+ *   TRANSACTION, RECEIPT, SUGGESTION) ; inconnu = pas de mémoire d'origine
  * @returns {Promise<{invoice: import("mongoose").Document, newTransactionIds: string[]}>}
  *   newTransactionIds vide si toutes les transactions étaient déjà liées
  */
@@ -36,6 +42,7 @@ export async function linkPurchaseInvoiceToTransactions({
   workspaceId,
   userId = null,
   paymentDate = null,
+  origin = null,
 }) {
   const wsId = toObjectId(workspaceId);
   const alreadyLinked = new Set(
@@ -56,6 +63,21 @@ export async function linkPurchaseInvoiceToTransactions({
   invoice.status = "PAID";
   invoice.paymentDate = invoice.paymentDate || paymentDate || new Date();
 
+  // Origine du lien (étiquette « rapproché depuis… »), si connue.
+  const linkEntry = buildReconciliationLinkEntry({
+    documentType: "PURCHASE_INVOICE",
+    documentId: invoice._id,
+    origin,
+    userId,
+  });
+  if (linkEntry) {
+    await forgetReconciliationLink(
+      { _id: { $in: newTransactionIds }, workspaceId: wsId },
+      "PURCHASE_INVOICE",
+      [invoice._id],
+    );
+  }
+
   // Lien N↔N par référence : la transaction « porte » la facture d'achat
   // (linkedPurchaseInvoiceIds). Le justificatif reste sur la facture.
   await Transaction.updateMany(
@@ -63,6 +85,7 @@ export async function linkPurchaseInvoiceToTransactions({
     {
       $set: { reconciliationStatus: "matched", reconciliationDate: new Date() },
       $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
+      ...(linkEntry ? { $push: { reconciliationLinks: linkEntry } } : {}),
     },
   );
 

@@ -1117,6 +1117,39 @@ const bankingResolvers = {
         return [];
       }
     },
+    // Origine des liens de rapprochement + nom de l'utilisateur (best-effort).
+    reconciliationLinks: async (parent) => {
+      const links = parent.reconciliationLinks || [];
+      if (links.length === 0) return [];
+      const userIds = [
+        ...new Set(links.map((l) => l.linkedBy).filter(Boolean)),
+      ].filter((id) => /^[0-9a-fA-F]{24}$/.test(String(id)));
+      const names = new Map();
+      if (userIds.length > 0) {
+        try {
+          const User = (await import("../models/User.js")).default;
+          const users = await User.find({ _id: { $in: userIds } })
+            .select("profile.firstName profile.lastName email")
+            .lean();
+          for (const u of users) {
+            const name = [u.profile?.firstName, u.profile?.lastName]
+              .filter(Boolean)
+              .join(" ");
+            names.set(u._id.toString(), name || u.email || null);
+          }
+        } catch (error) {
+          console.error("[BANKING] Erreur noms des rapprocheurs:", error);
+        }
+      }
+      return links.map((l) => ({
+        documentType: l.documentType,
+        documentId: l.documentId?.toString(),
+        origin: l.origin,
+        linkedAt: l.linkedAt || null,
+        linkedBy: l.linkedBy || null,
+        linkedByName: l.linkedBy ? names.get(String(l.linkedBy)) || null : null,
+      }));
+    },
     userId: async (transaction) => {
       if (transaction.userId && typeof transaction.userId === "object") {
         return transaction.userId; // Déjà populé

@@ -77,6 +77,9 @@ type ImportedInvoicesForTransactionResponse {
 input ReconciliationImportedLinkInput {
   transactionId: ID!
   importedInvoiceId: ID!
+  # Geste à l'origine du lien (étiquette « rapproché depuis… »). Ignoré en
+  # déliaison.
+  origin: ReconciliationLinkOrigin
 }
 
 # Enums
@@ -90,6 +93,8 @@ enum ReconciliationConfidence {
 input ReconciliationLinkInput {
   transactionId: ID!
   invoiceId: ID!
+  # Geste à l'origine du lien (étiquette « rapproché depuis… »).
+  origin: ReconciliationLinkOrigin
 }
 
 input ReconciliationUnlinkInput {
