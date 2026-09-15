@@ -90,6 +90,27 @@ type ImportedInvoiceOcrData {
   processedAt: String
 }
 
+# Valeurs lues par une nouvelle analyse OCR (reanalyzeImportedInvoice) :
+# rien n'est enregistré, l'utilisateur compare et applique ce qu'il veut.
+type ImportedInvoiceOcrProposal {
+  originalInvoiceNumber: String
+  # Client Newbi rapproché sur les valeurs relues (null si aucun ne correspond)
+  clientId: ID
+  clientMatched: Boolean
+  clientName: String
+  clientSiret: String
+  invoiceDate: String
+  dueDate: String
+  totalHT: Float
+  totalVAT: Float
+  totalTTC: Float
+  currency: String
+  category: ExpenseCategory
+  paymentMethod: PaymentMethodType
+  confidence: Float
+  provider: String
+}
+
 # Type principal de facture importée
 type ImportedInvoice {
   id: ID!
@@ -327,6 +348,12 @@ extend type Mutation {
     id: ID!
     input: UpdateImportedInvoiceInput!
   ): ImportedInvoice!
+
+  """
+  Relance l'analyse OCR sur le fichier de la facture et renvoie les valeurs
+  lues sans les enregistrer (consomme un import du quota OCR).
+  """
+  reanalyzeImportedInvoice(id: ID!): ImportedInvoiceOcrProposal!
 
   """
   Valide une facture importée

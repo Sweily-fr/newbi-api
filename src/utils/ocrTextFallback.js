@@ -46,6 +46,9 @@ export function detectCurrency(text) {
  */
 export function parseLocalizedAmount(raw) {
   if (raw === null || raw === undefined) return null;
+  // Déjà un nombre (regex FR : cleanExtractedValue parse les montants) : ne
+  // pas le repasser par l'analyse texte, « 580.8 » y devenait 5808.
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
   let s = String(raw)
     .replace(/[^\d.,\s-]/g, "")
     .trim();
