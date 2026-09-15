@@ -1575,6 +1575,17 @@ const importedInvoiceResolvers = {
           );
         }
 
+        // Rapprochement client rejoué sur les valeurs relues (nom, SIRET,
+        // e-mail) : le client Newbi proposé peut différer de l'actuel.
+        await resolveImportedClient(invoiceData, workspaceId);
+        let matchedClient = null;
+        if (invoiceData.client?.id) {
+          matchedClient = await Client.findOne({
+            _id: invoiceData.client.id,
+            workspaceId,
+          }).lean();
+        }
+
         if (consumedQuota && plan) {
           await recordOcrUsage(user.id, workspaceId, plan, {
             fileName: filename,
@@ -1588,7 +1599,11 @@ const importedInvoiceResolvers = {
 
         return {
           originalInvoiceNumber: invoiceData.originalInvoiceNumber || null,
-          clientName: invoiceData.client?.name || null,
+          clientId: matchedClient ? String(matchedClient._id) : null,
+          clientMatched: !!matchedClient,
+          clientName: matchedClient
+            ? clientDisplayName(matchedClient) || invoiceData.client?.name
+            : invoiceData.client?.name || null,
           clientSiret: invoiceData.client?.siret || null,
           invoiceDate: toIso(invoiceData.invoiceDate),
           dueDate: toIso(invoiceData.dueDate),

@@ -94,6 +94,9 @@ type ImportedInvoiceOcrData {
 # rien n'est enregistré, l'utilisateur compare et applique ce qu'il veut.
 type ImportedInvoiceOcrProposal {
   originalInvoiceNumber: String
+  # Client Newbi rapproché sur les valeurs relues (null si aucun ne correspond)
+  clientId: ID
+  clientMatched: Boolean
   clientName: String
   clientSiret: String
   invoiceDate: String

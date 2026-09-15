@@ -33,7 +33,12 @@ vi.mock("../../src/services/claudeVisionOcrService.js", () => ({
 
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
-import { buildOrganizationId, buildUserId } from "../factories/index.js";
+import {
+  buildClientDoc,
+  buildOrganizationId,
+  buildUserId,
+} from "../factories/index.js";
+import Client from "../../src/models/Client.js";
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import ImportedInvoice from "../../src/models/ImportedInvoice.js";
 import importedInvoiceResolvers from "../../src/resolvers/importedInvoice.js";
@@ -81,6 +86,14 @@ const seedInvoice = (overrides = {}) =>
 describe("reanalyzeImportedInvoice", () => {
   it("relit le fichier R2, renvoie les valeurs OCR et ne modifie pas la facture", async () => {
     const invoice = await seedInvoice();
+    const burgerQueen = await Client.create(
+      buildClientDoc({
+        workspaceId: organizationId,
+        createdBy: userId,
+        name: "BURGER QUEEN",
+        siret: "90388774300019",
+      }),
+    );
     getObjectByUrl.mockResolvedValue({
       buffer: Buffer.from("%PDF-1.4 fake"),
       contentType: "application/pdf",
@@ -123,6 +136,10 @@ describe("reanalyzeImportedInvoice", () => {
     expect(proposal.totalTTC).toBe(1200);
     expect(proposal.invoiceDate).toMatch(/^2026-03-12/);
     expect(proposal.provider).toBe("claude-vision");
+    // Rapprochement client rejoué sur le nom relu
+    expect(proposal.clientMatched).toBe(true);
+    expect(proposal.clientId).toBe(String(burgerQueen._id));
+    expect(proposal.clientName).toBe("BURGER QUEEN");
 
     const unchanged = await ImportedInvoice.findById(invoice._id).lean();
     expect(unchanged.originalInvoiceNumber).toBe("202603");
