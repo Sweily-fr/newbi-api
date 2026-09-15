@@ -326,6 +326,101 @@ async function processInvoiceWithOcr(
 }
 
 /**
+ * Chaîne OCR complète sur un fichier déjà en mémoire (import direct et
+ * réanalyse d'une facture existante) : vérification du quota, Claude Vision
+ * si disponible, sinon OCR hybride (Mindee / Google / Mistral / Tesseract)
+ * depuis l'URL R2. Ne lève jamais : en cas d'échec total, invoiceData reste
+ * vide et l'appelant décide (import en champs vides, ou erreur de réanalyse).
+ * @returns {Promise<{invoiceData: Object, ocrProvider: string|null, consumedQuota: boolean, plan: string|null}>}
+ */
+async function runOcrPipeline({
+  fileBuffer,
+  fileUrl,
+  filename,
+  mimetype,
+  workspaceId,
+  userId,
+  label = "ocr",
+}) {
+  let invoiceData = {};
+  let ocrProvider = null;
+  let plan = null;
+  let consumedQuota = false;
+  try {
+    const quotaResult = await checkUserOcrQuota(userId, workspaceId, 1);
+    plan = quotaResult.plan;
+
+    if (claudeVisionOcrService.isAvailable()) {
+      const base64Data = fileBuffer.toString("base64");
+      const contentHash = crypto
+        .createHash("sha256")
+        .update(fileBuffer)
+        .digest("hex");
+
+      logger.debug(`🔍 ${label}: Claude Vision pour ${filename}`);
+      const rawResult = await claudeVisionOcrService.processFromBase64(
+        base64Data,
+        mimetype,
+        filename,
+        contentHash,
+      );
+
+      if (!rawResult.success) {
+        throw createInternalServerError(
+          `Erreur OCR: ${rawResult.error || rawResult.message}`,
+        );
+      }
+
+      const structuredResult =
+        claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+      if (structuredResult.transaction_data) {
+        invoiceData = transformOcrToInvoiceDataV2(
+          structuredResult,
+          structuredResult,
+        );
+      } else {
+        const extractionResult =
+          await invoiceExtractionService.extractInvoiceData(structuredResult);
+        invoiceData = transformOcrToInvoiceDataV2(
+          structuredResult,
+          extractionResult,
+        );
+      }
+      ocrProvider = rawResult.provider || "claude-vision";
+    } else {
+      logger.debug(`🔍 ${label}: Fallback OCR hybride pour ${filename}`);
+      invoiceData = await processInvoiceWithOcr(
+        fileUrl,
+        filename,
+        mimetype,
+        workspaceId,
+      );
+      ocrProvider = invoiceData.ocrData?.provider || "hybrid";
+    }
+    consumedQuota = true;
+  } catch (claudeError) {
+    console.warn(
+      `⚠️ OCR principal indisponible pour ${filename} (${claudeError.message}). Fallback OCR hybride (Mindee / Google / Mistral).`,
+    );
+    try {
+      invoiceData = await processInvoiceWithOcr(
+        fileUrl,
+        filename,
+        mimetype,
+        workspaceId,
+      );
+      ocrProvider = invoiceData.ocrData?.provider || "hybrid";
+    } catch (fallbackError) {
+      console.warn(
+        `⚠️ OCR de fallback échec pour ${filename}: ${fallbackError.message}. Champs vides, à compléter via la sidebar.`,
+      );
+    }
+  }
+  return { invoiceData, ocrProvider, consumedQuota, plan };
+}
+
+/**
  * Transforme les données d'extraction améliorées en données de facture
  */
 function transformOcrToInvoiceDataV2(ocrResult, extractionResult) {
@@ -1014,93 +1109,18 @@ const importedInvoiceResolvers = {
             organizationId,
           );
 
-          // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
+          // Chaîne OCR : Claude Vision (quota) → OCR hybride (fallback).
           // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
-          let invoiceData = {};
-          let ocrProvider = null;
-          let plan = null;
-          let consumedQuota = false;
-          try {
-            const quotaResult = await checkUserOcrQuota(
-              user.id,
+          const { invoiceData, ocrProvider, consumedQuota, plan } =
+            await runOcrPipeline({
+              fileBuffer,
+              fileUrl: uploadResult.url,
+              filename,
+              mimetype,
               workspaceId,
-              1,
-            );
-            plan = quotaResult.plan;
-
-            if (claudeVisionOcrService.isAvailable()) {
-              const base64Data = fileBuffer.toString("base64");
-              const contentHash = crypto
-                .createHash("sha256")
-                .update(fileBuffer)
-                .digest("hex");
-
-              logger.debug(
-                `🔍 importInvoiceDirect: Claude Vision pour ${filename}`,
-              );
-              const rawResult = await claudeVisionOcrService.processFromBase64(
-                base64Data,
-                mimetype,
-                filename,
-                contentHash,
-              );
-
-              if (!rawResult.success) {
-                throw createInternalServerError(
-                  `Erreur OCR: ${rawResult.error || rawResult.message}`,
-                );
-              }
-
-              const structuredResult =
-                claudeVisionOcrService.toInvoiceFormat(rawResult);
-
-              if (structuredResult.transaction_data) {
-                invoiceData = transformOcrToInvoiceDataV2(
-                  structuredResult,
-                  structuredResult,
-                );
-              } else {
-                const extractionResult =
-                  await invoiceExtractionService.extractInvoiceData(
-                    structuredResult,
-                  );
-                invoiceData = transformOcrToInvoiceDataV2(
-                  structuredResult,
-                  extractionResult,
-                );
-              }
-              ocrProvider = rawResult.provider || "claude-vision";
-            } else {
-              logger.debug(
-                `🔍 importInvoiceDirect: Fallback OCR hybride pour ${filename}`,
-              );
-              invoiceData = await processInvoiceWithOcr(
-                uploadResult.url,
-                filename,
-                mimetype,
-                workspaceId,
-              );
-              ocrProvider = invoiceData.ocrData?.provider || "hybrid";
-            }
-            consumedQuota = true;
-          } catch (claudeError) {
-            console.warn(
-              `⚠️ OCR principal indisponible pour ${filename} (${claudeError.message}). Fallback OCR hybride (Mindee / Google / Mistral).`,
-            );
-            try {
-              invoiceData = await processInvoiceWithOcr(
-                uploadResult.url,
-                filename,
-                mimetype,
-                workspaceId,
-              );
-              ocrProvider = invoiceData.ocrData?.provider || "hybrid";
-            } catch (fallbackError) {
-              console.warn(
-                `⚠️ OCR de fallback échec pour ${filename}: ${fallbackError.message}. Champs vides, à compléter via la sidebar.`,
-              );
-            }
-          }
+              userId: user.id,
+              label: "importInvoiceDirect",
+            });
 
           await resolveImportedClient(invoiceData, workspaceId);
 
@@ -1499,6 +1519,103 @@ const importedInvoiceResolvers = {
 
         await invoice.save();
         return invoice;
+      },
+    ),
+
+    /**
+     * Relance l'analyse OCR sur le fichier d'une facture importée et renvoie
+     * les valeurs lues, sans rien enregistrer : l'utilisateur compare avec les
+     * valeurs actuelles dans la sidebar et choisit ce qu'il applique (via
+     * updateImportedInvoice). Consomme un import du quota OCR comme un import.
+     */
+    reanalyzeImportedInvoice: requireWrite("importedInvoices")(
+      async (_, { id }, context) => {
+        const { user, workspaceId } = context;
+        const invoice = await checkInvoiceAccess(id, workspaceId);
+        const file = invoice.file;
+        if (!file?.url) {
+          throw createValidationError(
+            "Aucun fichier associé à cette facture, impossible de relancer l'analyse",
+          );
+        }
+
+        let object;
+        try {
+          object = await cloudflareService.getObjectByUrl(file.url);
+        } catch (error) {
+          if (
+            error?.name === "NoSuchKey" ||
+            error?.$metadata?.httpStatusCode === 404
+          ) {
+            throw createNotFoundError(
+              "Le fichier de cette facture est introuvable sur le stockage",
+            );
+          }
+          throw error;
+        }
+
+        const filename = file.originalFileName || `facture-${invoice._id}.pdf`;
+        const mimetype =
+          file.mimeType || object.contentType || "application/pdf";
+
+        const { invoiceData, ocrProvider, consumedQuota, plan } =
+          await runOcrPipeline({
+            fileBuffer: object.buffer,
+            fileUrl: file.url,
+            filename,
+            mimetype,
+            workspaceId,
+            userId: user.id,
+            label: "reanalyzeImportedInvoice",
+          });
+
+        if (!ocrProvider) {
+          throw createInternalServerError(
+            "L'analyse OCR n'a pas pu lire ce document, réessayez plus tard",
+          );
+        }
+
+        // Rapprochement client rejoué sur les valeurs relues (nom, SIRET,
+        // e-mail) : le client Newbi proposé peut différer de l'actuel.
+        await resolveImportedClient(invoiceData, workspaceId);
+        let matchedClient = null;
+        if (invoiceData.client?.id) {
+          matchedClient = await Client.findOne({
+            _id: invoiceData.client.id,
+            workspaceId,
+          }).lean();
+        }
+
+        if (consumedQuota && plan) {
+          await recordOcrUsage(user.id, workspaceId, plan, {
+            fileName: filename,
+            provider: ocrProvider,
+            success: true,
+          });
+        }
+
+        const toIso = (d) =>
+          d instanceof Date && !isNaN(d.getTime()) ? d.toISOString() : null;
+
+        return {
+          originalInvoiceNumber: invoiceData.originalInvoiceNumber || null,
+          clientId: matchedClient ? String(matchedClient._id) : null,
+          clientMatched: !!matchedClient,
+          clientName: matchedClient
+            ? clientDisplayName(matchedClient) || invoiceData.client?.name
+            : invoiceData.client?.name || null,
+          clientSiret: invoiceData.client?.siret || null,
+          invoiceDate: toIso(invoiceData.invoiceDate),
+          dueDate: toIso(invoiceData.dueDate),
+          totalHT: invoiceData.totalHT ?? null,
+          totalVAT: invoiceData.totalVAT ?? null,
+          totalTTC: invoiceData.totalTTC ?? null,
+          currency: invoiceData.currency || null,
+          category: invoiceData.category || null,
+          paymentMethod: invoiceData.paymentMethod || null,
+          confidence: invoiceData.ocrData?.confidence ?? null,
+          provider: ocrProvider,
+        };
       },
     ),
 

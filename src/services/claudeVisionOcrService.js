@@ -129,7 +129,14 @@ Règles:
    - NE PAS confondre les deux - extraire le SIRET de chaque entité séparément
 8. DEVISE: "currency" = la devise RÉELLEMENT utilisée sur le document (code ISO 4217)
    - "$", "US$", "USD" = "USD" ; "£" = "GBP" ; "CHF" = "CHF" ; "€" = "EUR"
-   - Ne JAMAIS répondre "EUR" par défaut si les montants sont dans une autre devise`;
+   - Ne JAMAIS répondre "EUR" par défaut si les montants sont dans une autre devise
+9. NUMÉRO DE FACTURE (invoice_number) : UNIQUEMENT le numéro de la facture elle-même,
+   généralement à côté de "Facture", "Facture N°", "N° de facture", "Invoice".
+   - Le reprendre COMPLET tel qu'imprimé (préfixe, tirets, tous les segments : "F-202603-0012")
+   - NE JAMAIS mettre à la place : "Référence" / "Réf." / "Référence projet", "Projet",
+     "Chantier", "Dossier", "Affaire", "N° de commande", "N° de devis", "N° client",
+     "Contrat", "Bon de commande". Ce sont d'autres identifiants, pas le numéro de facture.
+   - Si seul un identifiant de ce type existe et qu'aucun numéro de facture n'est imprimé → null`;
 
 // Configuration des modèles
 const MODELS = {

@@ -20,9 +20,10 @@ const FRENCH_INVOICE_PATTERNS = {
   // limitée à 6 chiffres après le préfixe, préfixe exclu).
   INVOICE_NUMBER: [
     // Format M.G.E COUVERTURE: "Numéro du fature FA137" (avec faute d'orthographe)
-    /(?:Numéro\s*d[ue]\s*fa[ct]ure|N°\s*fa[ct]ure|Numéro\s*facture)[:\s]*([A-Z]{1,4}-?\d{2,}(?:[-/]\d+)*)/i,
-    // Format standard: "Facture N° FA137", "FACTURE F-202603-0012"
-    /(?:Facture|FACTURE|Invoice)[:\s]*(?:N°\s*)?([A-Z]{1,4}-?\d{2,}(?:[-/]\d+)*)/i,
+    /(?:Numéro\s*d[ue]\s*fa[ct]ure|N°\s*fa[ct]ure|Numéro\s*facture)[:\s]*([A-Z]{1,4}(?:-?[A-Z]{1,4})?-?\d{2,}(?:[-/]\d+)*)/i,
+    // Format standard: "Facture N° FA137", "FACTURE F-202603-0012",
+    // préfixe à deux blocs "Numéro de facture: DY-UY2026-0113"
+    /(?:Facture|FACTURE|Invoice)[:\s]*(?:N°\s*)?([A-Z]{1,4}(?:-?[A-Z]{1,4})?-?\d{2,}(?:[-/]\d+)*)/i,
     // Format avec tiret: "FAC-2024-001", "F-12345", "F-202603-0012"
     /\b((?:FA|FAC|FACT|INV|F)-?\d{3,}(?:[-/]\d+)*)\b/i,
     // Format long avec année: "2024/12345", "2024-FA-001"
@@ -42,7 +43,9 @@ const FRENCH_INVOICE_PATTERNS = {
     /(?:Net\s*à|Paiement\s*à)\s*(\d+)\s*jours/i,
   ],
 
-  // Montants - formats français avec virgule décimale
+  // Montants - formats français avec virgule décimale. Le séparateur « | »
+  // est toléré entre le libellé et le montant : Mistral OCR rend les totaux
+  // en tableau Markdown (« | Total HT | | | 484,00 € | »).
   // NET A PAYER en priorité (montant final après déductions)
   NET_TO_PAY: [
     /NET\s*A\s*PAYER[^0-9]*([0-9\s]+[,.]\d{2})/i,
@@ -59,17 +62,17 @@ const FRENCH_INVOICE_PATTERNS = {
 
   TOTAL_TTC: [
     /TOTAL\s*T\.?T\.?C\.?[^0-9]*([0-9\s]+[,.]\d{2})/i,
-    /(?:Total\s*TTC|Montant\s*TTC)[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:Total\s*TTC|Montant\s*TTC)[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
   ],
 
   TOTAL_HT: [
     /TOTAL\s*H\.?T\.?\s*CUMUL\s*FIN\s*DE\s*MOIS[^0-9]*([0-9\s]+[,.]\d{2})/i,
-    /(?:Total\s*HT|Montant\s*HT|Base\s*HT|TOTAL\s*HT)[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:Total\s*HT|Montant\s*HT|Base\s*HT|TOTAL\s*HT)[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
   ],
 
   TVA_AMOUNT: [
-    /(?:TVA|Montant\s*TVA|Total\s*TVA)[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
-    /(?:TVA\s*(?:\d+(?:[,.]\d+)?%?))[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:TVA|Montant\s*TVA|Total\s*TVA)[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:TVA\s*(?:\d+(?:[,.]\d+)?%?))[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
   ],
 
   TVA_RATE: [
@@ -484,7 +487,10 @@ class InvoiceExtractionService {
     // Appliquer chaque pattern
     for (const [field, patterns] of Object.entries(FRENCH_INVOICE_PATTERNS)) {
       for (const pattern of patterns) {
-        const match = text.match(pattern);
+        const match =
+          field === "INVOICE_NUMBER"
+            ? this.matchInvoiceNumber(text, pattern)
+            : text.match(pattern);
         if (match) {
           const fieldKey = this.patternToFieldKey(field);
           if (field === "POSTAL_CODE_CITY" && match[1] && match[2]) {
@@ -499,6 +505,30 @@ class InvoiceExtractionService {
     }
 
     return result;
+  }
+
+  /**
+   * Premier match d'un pattern de numéro de facture dont le contexte n'est pas
+   * une autre référence (« Réf. projet : 2026-0451 », « Dossier », « Chantier »,
+   * « N° de commande »…) : l'OCR de secours prenait ces identifiants pour le
+   * numéro de facture. Un contexte qui mentionne aussi « facture » reste accepté.
+   */
+  matchInvoiceNumber(text, pattern) {
+    const flags = pattern.flags.includes("g")
+      ? pattern.flags
+      : pattern.flags + "g";
+    const global = new RegExp(pattern.source, flags);
+    for (const match of text.matchAll(global)) {
+      const before = text.slice(Math.max(0, match.index - 40), match.index);
+      const otherReference =
+        /r[ée]f(?:[ée]rence)?\.?\s*(?:projet|chantier|dossier|affaire|client|interne)?|projet|chantier|dossier|affaire|commande|devis|contrat|n[°º]\s*client/i.test(
+          before,
+        );
+      const invoiceContext = /factur|invoice/i.test(before);
+      if (otherReference && !invoiceContext) continue;
+      return match;
+    }
+    return null;
   }
 
   /**
@@ -708,6 +738,9 @@ INSTRUCTIONS CRITIQUES:
    - Format courant: FA123, FAC-2024-001, F-202603-0012, etc.
    - Reprendre le numéro COMPLET tel qu'imprimé (préfixe, tirets et tous les
      segments de chiffres), ne jamais le tronquer
+   - NE PAS confondre avec une "Référence" / "Réf. projet" / "Chantier" /
+     "Dossier" / "Affaire" / "N° de commande" / "N° de devis" / "N° client" :
+     ce ne sont pas des numéros de facture (null si aucun numéro de facture)
 
 4. MONTANTS - TRÈS IMPORTANT:
    - Pour les factures BTP avec AUTOLIQUIDATION TVA: TVA = 0, cherche "NET A PAYER"
@@ -920,6 +953,7 @@ ${relevantText}
    - Reprendre le numéro COMPLET tel qu'imprimé : préfixe, tirets et tous les
      segments de chiffres (« F-202603-0012 » ne doit pas devenir « 202603 »)
    - NE PAS confondre avec:
+     * "Référence" / "Réf. projet" / "Projet" / "Chantier" / "Affaire" / "N° client" / "N° de devis" (autres identifiants, jamais le numéro de facture)
      * "Montant H.T. Marche" (c'est un montant en euros, pas un numéro)
      * "Numéro de commande" (ex: 4500390579)
      * "Numéro de Dossier" (ex: 2.43323.1-RBL)
