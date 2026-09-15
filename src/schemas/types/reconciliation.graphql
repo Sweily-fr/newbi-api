@@ -24,6 +24,9 @@ type ReconciliationInvoice {
   dueDate: DateTime
   status: String
   score: Int
+  # "newbi" (facture émise sur Newbi) ou "imported" (facture client importée :
+  # Qonto, OCR, Gmail). Sert à choisir la mutation de liaison.
+  kind: String
 }
 
 type ReconciliationSuggestionsResponse {
@@ -77,6 +80,9 @@ type ImportedInvoicesForTransactionResponse {
 input ReconciliationImportedLinkInput {
   transactionId: ID!
   importedInvoiceId: ID!
+  # Geste à l'origine du lien (étiquette « rapproché depuis… »). Ignoré en
+  # déliaison.
+  origin: ReconciliationLinkOrigin
 }
 
 # Enums
@@ -90,6 +96,8 @@ enum ReconciliationConfidence {
 input ReconciliationLinkInput {
   transactionId: ID!
   invoiceId: ID!
+  # Geste à l'origine du lien (étiquette « rapproché depuis… »).
+  origin: ReconciliationLinkOrigin
 }
 
 input ReconciliationUnlinkInput {

@@ -29,6 +29,14 @@ import {
 } from "../utils/reconciliationMatching.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
 import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
+import { linkPurchaseInvoiceToTransactions } from "../services/purchaseInvoiceLinkService.js";
+import { reconciliationLinkPull } from "../utils/reconciliationLinkOrigin.js";
+import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
+
+const formatEuros = (value) =>
+  new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(
+    value || 0,
+  );
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -485,6 +493,31 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
+    // Facture d'achat créée alors que le paiement est déjà passé : transaction
+    // à proposer avec confirmation (montant ±1 %, fournisseur ou numéro dans
+    // le libellé, fenêtre de dates, sans ambiguïté). Null sinon : les
+    // candidates restent visibles dans transactionsForPurchaseInvoice.
+    purchaseInvoiceReconcileCandidate: requireRead("expenses")(
+      async (_, { purchaseInvoiceId }, context) => {
+        const workspaceId = context.workspaceId || context.organizationId;
+        const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
+        if ((invoice.linkedTransactionIds || []).length > 0) return null;
+        const tx = await findAutoReconcileTransactionForPurchaseInvoice(
+          invoice,
+          workspaceId,
+        );
+        if (!tx) return null;
+        return {
+          id: tx._id.toString(),
+          amount: tx.amount,
+          description: tx.description,
+          date: tx.date,
+          reconciliationStatus: tx.reconciliationStatus,
+          score: null,
+        };
+      },
+    ),
+
     // Rattachement manuel côté transaction : factures d'achat candidates
     // (non rapprochées d'abord, puis déjà rapprochées à une autre transaction).
     purchaseInvoicesForTransaction: requireRead("expenses")(
@@ -603,14 +636,41 @@ const purchaseInvoiceResolvers = {
           context.workspaceId,
         );
 
+        const { forceCreate = false, ...invoiceInput } = input;
+
+        // Filet anti-doublon côté serveur (mêmes règles que l'avertissement
+        // du front : même numéro confirmé par fournisseur ou montant, sinon
+        // fournisseur + montant + date proche). Le front passe forceCreate
+        // après « Créer quand même » ; sans ce drapeau, un client qui saute
+        // l'avertissement (autre app, appel direct) ne crée pas de doublon.
+        if (!forceCreate) {
+          const duplicates = await findPurchaseInvoiceDuplicates({
+            workspaceId,
+            supplierName: invoiceInput.supplierName,
+            invoiceNumber: invoiceInput.invoiceNumber,
+            amountTTC: invoiceInput.amountTTC,
+            issueDate: invoiceInput.issueDate
+              ? new Date(invoiceInput.issueDate)
+              : null,
+            limit: 1,
+          });
+          if (duplicates.length > 0) {
+            const d = duplicates[0];
+            throw new AppError(
+              `Une facture similaire existe déjà : ${d.supplierName || "fournisseur"}${d.invoiceNumber ? ` - ${d.invoiceNumber}` : ""} (${formatEuros(d.amountTTC)}). Ouvrez-la pour la rattacher à la transaction, ou confirmez la création.`,
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+        }
+
         // Sous-catégorie fine (référentiel Transactions) → catégorie large
         // de l'enum PurchaseInvoiceCategory dérivée côté serveur.
         const resolvedCategory = resolvePurchaseInvoiceCategoryInput({
-          subcategory: input.subcategory,
-          category: input.category,
+          subcategory: invoiceInput.subcategory,
+          category: invoiceInput.category,
         });
         const invoice = new PurchaseInvoice({
-          ...input,
+          ...invoiceInput,
           ...resolvedCategory,
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
           createdBy: context.user.id,
@@ -676,6 +736,9 @@ const purchaseInvoiceResolvers = {
             );
         }
 
+        // Facture ajoutée après son paiement : pas de lien automatique, le
+        // front interroge purchaseInvoiceReconcileCandidate et demande
+        // confirmation avant de rapprocher.
         return invoice;
       },
     ),
@@ -1144,7 +1207,7 @@ const purchaseInvoiceResolvers = {
     ),
 
     reconcilePurchaseInvoice: requireWrite("expenses")(
-      async (_, { purchaseInvoiceId, transactionIds }, context) => {
+      async (_, { purchaseInvoiceId, transactionIds, origin }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
 
@@ -1176,84 +1239,22 @@ const purchaseInvoiceResolvers = {
         // peut couvrir plusieurs prélèvements (relevé mensuel Qonto : abonnement
         // + frais), une transaction peut porter plusieurs factures d'achat.
         // Pour retirer un lien : unlinkPurchaseInvoiceFromTransaction.
-        const alreadyLinked = new Set(
-          (invoice.linkedTransactionIds || []).map(String),
-        );
-        const newTransactionIds = [
-          ...new Set(transactionIds.map(String)),
-        ].filter((id) => !alreadyLinked.has(id));
+        // Effets (liens, statut, catégorie, SuperPDP, automatisations) dans
+        // purchaseInvoiceLinkService, partagés avec le rapprochement
+        // automatique à la création.
+        const { newTransactionIds } = await linkPurchaseInvoiceToTransactions({
+          invoice,
+          transactionIds,
+          workspaceId,
+          userId: context.user.id,
+          origin: origin || null,
+        });
         if (newTransactionIds.length === 0) {
           throw new AppError(
             "Cette transaction est déjà rapprochée à cette facture",
             ERROR_CODES.VALIDATION_ERROR,
           );
         }
-
-        invoice.linkedTransactionIds = [
-          ...(invoice.linkedTransactionIds || []),
-          ...newTransactionIds.map((id) => new mongoose.Types.ObjectId(id)),
-        ];
-        invoice.isReconciled = true;
-        invoice.status = "PAID";
-        invoice.paymentDate = invoice.paymentDate || new Date();
-
-        // Lien N↔N par référence : la transaction "porte" la facture d'achat
-        // (linkedPurchaseInvoiceIds). Le justificatif reste sur la facture et
-        // est accessible via le lien — pas de copie de fichier. Le lien
-        // fonctionne donc même si la facture n'a pas de justificatif.
-        await Transaction.updateMany(
-          {
-            _id: { $in: newTransactionIds },
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-          },
-          {
-            $set: {
-              reconciliationStatus: "matched",
-              reconciliationDate: new Date(),
-            },
-            $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
-          },
-        );
-
-        // La facture fait foi : les transactions rapprochées prennent sa
-        // catégorie (les deux pages affichent alors le même libellé)
-        await syncLinkedTransactionCategories({
-          category: invoice.category,
-          subcategory: invoice.subcategory,
-          workspaceId,
-          transactionIds: newTransactionIds,
-        });
-
-        // Signaler le paiement à SuperPDP si e-facture reçue (best-effort)
-        await reportPurchaseInvoicePaymentIfNeeded(invoice, workspaceId);
-
-        await invoice.save();
-
-        // Automatisations documents partagés (fire-and-forget)
-        documentAutomationService
-          .executeAutomationsForExpense(
-            "PURCHASE_INVOICE_PAID",
-            workspaceId,
-            {
-              documentId: invoice._id.toString(),
-              documentType: "purchaseInvoice",
-              documentNumber: invoice.invoiceNumber || "",
-              supplierName: invoice.supplierName || "",
-              fileUrl: invoice.files?.[0]?.url || null,
-              fileKey: invoice.files?.[0]?.path || null,
-              fileName: invoice.files?.[0]?.originalFilename || null,
-              mimeType: invoice.files?.[0]?.mimetype || "application/pdf",
-              issueDate: invoice.invoiceDate || invoice.createdAt,
-              clientId: invoice.supplierId || null,
-            },
-            context.user.id,
-          )
-          .catch((err) =>
-            console.error(
-              "Erreur automatisation documents (PI reconcile):",
-              err,
-            ),
-          );
 
         return invoice;
       },
@@ -1271,10 +1272,16 @@ const purchaseInvoiceResolvers = {
 
         const txObjectId = new mongoose.Types.ObjectId(transactionId);
 
-        // Côté transaction : $pull + pointeur du justificatif OCR nettoyé.
+        // Côté transaction : $pull (lien + origine) + pointeur du justificatif
+        // OCR nettoyé.
         await Transaction.updateOne(
           { _id: txObjectId, workspaceId: wsId },
-          { $pull: { linkedPurchaseInvoiceIds: invoice._id } },
+          {
+            $pull: {
+              linkedPurchaseInvoiceIds: invoice._id,
+              ...reconciliationLinkPull("PURCHASE_INVOICE", [invoice._id]),
+            },
+          },
         );
         await Transaction.updateOne(
           {

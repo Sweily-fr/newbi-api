@@ -390,9 +390,14 @@ extend type Mutation {
   ): PurchaseExtraImportsResult!
 
   """
-  Convertit une facture importée en facture d'achat (PurchaseInvoice)
+  Convertit une facture importée en facture d'achat (PurchaseInvoice).
+  Si une facture d'achat similaire existe déjà, le fichier lui est rattaché
+  et elle est renvoyée à la place, sauf forceCreate.
   """
-  convertImportedInvoiceToPurchaseInvoice(id: ID!): PurchaseInvoice!
+  convertImportedInvoiceToPurchaseInvoice(
+    id: ID!
+    forceCreate: Boolean = false
+  ): PurchaseInvoice!
 
   """
   Convertit plusieurs factures importées en factures d'achat

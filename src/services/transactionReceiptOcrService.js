@@ -8,6 +8,10 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import {
+  buildReconciliationLinkEntry,
+  forgetReconciliationLink,
+} from "../utils/reconciliationLinkOrigin.js";
 import crypto from "crypto";
 
 /**
@@ -740,10 +744,23 @@ async function processReceiptsForTransaction({
         });
       }
 
+      // Origine du lien : justificatif déposé (étiquette côté UI).
+      const receiptLink = buildReconciliationLinkEntry({
+        documentType: "PURCHASE_INVOICE",
+        documentId: invoice._id,
+        origin: "RECEIPT",
+        userId,
+      });
+      await forgetReconciliationLink(
+        { _id: transaction._id, workspaceId },
+        "PURCHASE_INVOICE",
+        [invoice._id],
+      );
       await Transaction.updateOne(
         { _id: transaction._id, workspaceId },
         {
           $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
+          $push: { reconciliationLinks: receiptLink },
           $set: {
             reconciliationStatus: "matched",
             reconciliationDate: new Date(),

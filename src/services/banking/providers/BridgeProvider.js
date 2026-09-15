@@ -1111,6 +1111,19 @@ export class BridgeProvider extends BankingProvider {
                 updatedTransactionData.reconciliationDate =
                   manualMatch.reconciliationDate;
               }
+              if ((manualMatch.linkedImportedInvoiceIds || []).length > 0) {
+                updatedTransactionData.linkedImportedInvoiceIds =
+                  manualMatch.linkedImportedInvoiceIds;
+                updatedTransactionData.reconciliationStatus =
+                  manualMatch.reconciliationStatus;
+                updatedTransactionData.reconciliationDate =
+                  manualMatch.reconciliationDate;
+              }
+              // Origine des liens : conservée avec les liens eux-mêmes.
+              if ((manualMatch.reconciliationLinks || []).length > 0) {
+                updatedTransactionData.reconciliationLinks =
+                  manualMatch.reconciliationLinks;
+              }
               if (manualMatch.linkedExpenseId) {
                 updatedTransactionData.linkedExpenseId =
                   manualMatch.linkedExpenseId;
