@@ -52,3 +52,26 @@ describe("invoiceExtractionService.extractWithPatterns — numéro de facture", 
     expect(number("REF12345 sans numéro") ?? null).toBeNull();
   });
 });
+
+// Mistral OCR rend les totaux en tableau Markdown : les libellés et les
+// montants sont séparés par des « | ». Cas réel du 15/09/2026 : HT à 0 et
+// TVA absente alors que le texte contenait bien 484,00 € et 96,80 €.
+describe("invoiceExtractionService.extractWithPatterns — montants en tableau Markdown", () => {
+  const text = [
+    "|  Description | Qté | TVA (%) | Total HT  |",
+    "| --- | --- | --- | --- |",
+    "|  ordi test | 1 unité | 20 % | 384,00 €  |",
+    "|  Total HT |   |   |  484,00 €  |",
+    "|  TVA 20% |   |   |  96,80 €  |",
+    "|  Total TVA |   |   |  96,80 €  |",
+    "|  Total TTC |   |   |  580,80 €  |",
+  ].join("\n");
+
+  it("lit HT, TVA et TTC malgré les séparateurs de colonnes", () => {
+    const r = invoiceExtractionService.extractWithPatterns(text);
+    expect(r.totalHT).toBe(484);
+    expect(r.tvaAmount).toBe(96.8);
+    expect(r.totalTTC).toBe(580.8);
+    expect(r.tvaRate).toBe(20);
+  });
+});

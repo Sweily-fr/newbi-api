@@ -43,7 +43,9 @@ const FRENCH_INVOICE_PATTERNS = {
     /(?:Net\s*à|Paiement\s*à)\s*(\d+)\s*jours/i,
   ],
 
-  // Montants - formats français avec virgule décimale
+  // Montants - formats français avec virgule décimale. Le séparateur « | »
+  // est toléré entre le libellé et le montant : Mistral OCR rend les totaux
+  // en tableau Markdown (« | Total HT | | | 484,00 € | »).
   // NET A PAYER en priorité (montant final après déductions)
   NET_TO_PAY: [
     /NET\s*A\s*PAYER[^0-9]*([0-9\s]+[,.]\d{2})/i,
@@ -60,17 +62,17 @@ const FRENCH_INVOICE_PATTERNS = {
 
   TOTAL_TTC: [
     /TOTAL\s*T\.?T\.?C\.?[^0-9]*([0-9\s]+[,.]\d{2})/i,
-    /(?:Total\s*TTC|Montant\s*TTC)[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:Total\s*TTC|Montant\s*TTC)[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
   ],
 
   TOTAL_HT: [
     /TOTAL\s*H\.?T\.?\s*CUMUL\s*FIN\s*DE\s*MOIS[^0-9]*([0-9\s]+[,.]\d{2})/i,
-    /(?:Total\s*HT|Montant\s*HT|Base\s*HT|TOTAL\s*HT)[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:Total\s*HT|Montant\s*HT|Base\s*HT|TOTAL\s*HT)[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
   ],
 
   TVA_AMOUNT: [
-    /(?:TVA|Montant\s*TVA|Total\s*TVA)[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
-    /(?:TVA\s*(?:\d+(?:[,.]\d+)?%?))[:\s€]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:TVA|Montant\s*TVA|Total\s*TVA)[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
+    /(?:TVA\s*(?:\d+(?:[,.]\d+)?%?))[:\s€|]*([0-9\s]+[,.]\d{2})\s*€?/i,
   ],
 
   TVA_RATE: [

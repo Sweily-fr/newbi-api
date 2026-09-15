@@ -152,3 +152,13 @@ describe("ocrTextFallback.extractInvoiceFieldsFromText", () => {
     expect(extractInvoiceFieldsFromText("   \n  ").found).toBe(false);
   });
 });
+
+import { parseLocalizedAmount as parseAmountForNumbers } from "../../src/utils/ocrTextFallback.js";
+
+describe("parseLocalizedAmount — valeur déjà numérique", () => {
+  it("renvoie le nombre tel quel (580.8 devenait 5808)", () => {
+    expect(parseAmountForNumbers(580.8)).toBe(580.8);
+    expect(parseAmountForNumbers(484)).toBe(484);
+    expect(parseAmountForNumbers(NaN)).toBeNull();
+  });
+});
