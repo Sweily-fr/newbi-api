@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 
+import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import {
   buildClientDoc,
@@ -188,6 +189,69 @@ describe("resolveImportedClient — repli texte", () => {
     const matched = await resolveImportedClient(invoiceData, workspaceId);
     expect(matched._id.toString()).toBe(oasis._id.toString());
     expect(invoiceData.client.id).toBe(oasis._id.toString());
+    expect(invoiceData.client.name).toBe("ASSOCIATION : UNE OASIS");
+  });
+});
+
+// L'OCR met parfois l'émetteur (l'organisation) dans le bloc client. Sur une
+// facture client importée, le client est toujours l'autre partie.
+describe("resolveImportedClient — le client ne peut pas être l'émetteur", () => {
+  const seedOrganization = () =>
+    mongoose.connection.db.collection("organization").insertOne({
+      _id: new mongoose.Types.ObjectId(String(workspaceId)),
+      name: "Newbibbb",
+      companyName: "Newbibbb",
+      siret: "12345678900011",
+      siren: "123456789",
+      vatNumber: "FR70981576549",
+      companyEmail: "dylan.lobjois@sweily.fr",
+    });
+
+  it("prend le bloc vendor quand le client lu est l'organisation", async () => {
+    await seedOrganization();
+    const oasis = await seedClient({ name: "ASSOCIATION : UNE OASIS" });
+    const invoiceData = {
+      client: { name: "Newbibbb", siret: "12345678900011" },
+      vendor: { name: "ASSOCIATION : UNE OASIS", siret: "90388774300019" },
+    };
+    const matched = await resolveImportedClient(invoiceData, workspaceId);
+    expect(invoiceData.client.name).toBe("ASSOCIATION : UNE OASIS");
+    expect(invoiceData.client.siret).toBe("90388774300019");
+    expect(matched._id.toString()).toBe(oasis._id.toString());
+  });
+
+  it("reconnaît l'organisation par le nom avec forme juridique, puis cherche dans le texte", async () => {
+    await seedOrganization();
+    const oasis = await seedClient({ name: "ASSOCIATION : UNE OASIS" });
+    const invoiceData = {
+      client: { name: "NEWBIBBB SAS" },
+      vendor: { name: "Newbibbb" },
+      ocrData: {
+        extractedText: "Facture\nNewbibbb\nASSOCIATION : UNE OASIS\nTotal 968",
+      },
+    };
+    const matched = await resolveImportedClient(invoiceData, workspaceId);
+    expect(matched._id.toString()).toBe(oasis._id.toString());
+    expect(invoiceData.client.name).toBe("ASSOCIATION : UNE OASIS");
+  });
+
+  it("reconnaît l'organisation par le SIREN quand le nom est illisible", async () => {
+    await seedOrganization();
+    const invoiceData = {
+      client: { name: "N3wb1bb", siret: "123 456 789 00011" },
+      vendor: { name: "ASSOCIATION : UNE OASIS" },
+    };
+    await resolveImportedClient(invoiceData, workspaceId);
+    expect(invoiceData.client.name).toBe("ASSOCIATION : UNE OASIS");
+  });
+
+  it("ne touche à rien quand le client lu est bien la contrepartie", async () => {
+    await seedOrganization();
+    const invoiceData = {
+      client: { name: "ASSOCIATION : UNE OASIS" },
+      vendor: { name: "Newbibbb" },
+    };
+    await resolveImportedClient(invoiceData, workspaceId);
     expect(invoiceData.client.name).toBe("ASSOCIATION : UNE OASIS");
   });
 });
