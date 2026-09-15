@@ -59,7 +59,12 @@ const reconciliationResolvers = {
           return {
             success: true,
             suggestions: suggestions.map(
-              ({ transaction, matchingInvoices, confidence }) => ({
+              ({
+                transaction,
+                matchingInvoices,
+                matchingImportedInvoices = [],
+                confidence,
+              }) => ({
                 transaction: {
                   id: transaction._id.toString(),
                   amount: transaction.amount,
@@ -67,17 +72,26 @@ const reconciliationResolvers = {
                   date: transaction.date,
                   reconciliationStatus: transaction.reconciliationStatus,
                 },
-                matchingInvoices: matchingInvoices.map((inv) => ({
-                  id: inv._id.toString(),
-                  number: inv.number,
-                  prefix: inv.prefix || null,
-                  clientName:
-                    inv.client?.name ||
-                    `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
-                  totalTTC: inv.finalTotalTTC || inv.totalTTC,
-                  dueDate: inv.dueDate,
-                  status: inv.status,
-                })),
+                // Factures Newbi puis factures clients importées, distinguées
+                // par kind (le front appelle la mutation de liaison adaptée).
+                matchingInvoices: [
+                  ...matchingInvoices.map((inv) => ({
+                    id: inv._id.toString(),
+                    number: inv.number,
+                    prefix: inv.prefix || null,
+                    clientName:
+                      inv.client?.name ||
+                      `${inv.client?.firstName || ""} ${inv.client?.lastName || ""}`.trim(),
+                    totalTTC: inv.finalTotalTTC || inv.totalTTC,
+                    dueDate: inv.dueDate,
+                    status: inv.status,
+                    kind: "newbi",
+                  })),
+                  ...matchingImportedInvoices.map((inv) => ({
+                    ...importedInvoiceSummary(inv),
+                    kind: "imported",
+                  })),
+                ],
                 confidence,
               }),
             ),

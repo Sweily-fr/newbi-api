@@ -24,6 +24,9 @@ type ReconciliationInvoice {
   dueDate: DateTime
   status: String
   score: Int
+  # "newbi" (facture émise sur Newbi) ou "imported" (facture client importée :
+  # Qonto, OCR, Gmail). Sert à choisir la mutation de liaison.
+  kind: String
 }
 
 type ReconciliationSuggestionsResponse {

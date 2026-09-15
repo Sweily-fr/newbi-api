@@ -6,6 +6,7 @@ import { buildOrganizationId } from "../factories/index.js";
 import Transaction from "../../src/models/Transaction.js";
 import Invoice from "../../src/models/Invoice.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
+import ImportedInvoice from "../../src/models/ImportedInvoice.js";
 import {
   findReconciliationSuggestions,
   findTransactionsForInvoice,
@@ -83,6 +84,62 @@ describe("findReconciliationSuggestions", () => {
       suggestions[0].matchingInvoices.map((i) => i._id.toString()),
     ).toEqual([invoice._id.toString()]);
     expect(suggestions[0].confidence).toBe("high");
+  });
+
+  it("suggère aussi une facture client importée non encaissée (kind imported côté resolver)", async () => {
+    const tx = await createTransaction({
+      amount: 1500,
+      description: "VIR SEPA STUDIO KARMA",
+    });
+    const importedId = new mongoose.Types.ObjectId();
+    await ImportedInvoice.collection.insertOne({
+      _id: importedId,
+      workspaceId: orgId,
+      importedBy: new mongoose.Types.ObjectId(),
+      status: "VALIDATED",
+      source: "QONTO",
+      originalInvoiceNumber: "Q-2026-0777",
+      vendor: { name: "Ma Société" },
+      client: { name: "Studio Karma" },
+      invoiceDate: new Date("2026-05-20T00:00:00.000Z"),
+      totalTTC: 1500,
+      linkedTransactionIds: [],
+      file: {
+        url: "https://r2.example.com/q.pdf",
+        cloudflareKey: "q.pdf",
+        originalFileName: "q.pdf",
+      },
+    });
+    // Déjà encaissée : jamais suggérée.
+    await ImportedInvoice.collection.insertOne({
+      _id: new mongoose.Types.ObjectId(),
+      workspaceId: orgId,
+      importedBy: new mongoose.Types.ObjectId(),
+      status: "COMPLETED",
+      source: "QONTO",
+      originalInvoiceNumber: "Q-2026-0778",
+      client: { name: "Studio Karma" },
+      invoiceDate: new Date("2026-05-20T00:00:00.000Z"),
+      totalTTC: 1500,
+      linkedTransactionIds: [],
+      file: {
+        url: "https://r2.example.com/q2.pdf",
+        cloudflareKey: "q2.pdf",
+        originalFileName: "q2.pdf",
+      },
+    });
+
+    const { suggestions } = await findReconciliationSuggestions(workspaceId);
+
+    const forTx = suggestions.find(
+      (s) => s.transaction._id.toString() === tx._id.toString(),
+    );
+    expect(forTx).toBeTruthy();
+    expect(forTx.matchingInvoices).toHaveLength(0);
+    expect(forTx.matchingImportedInvoices.map((i) => i._id.toString())).toEqual(
+      [importedId.toString()],
+    );
+    expect(forTx.confidence).toBe("high");
   });
 
   it("exclut une transaction antérieure de plusieurs mois à la facture", async () => {

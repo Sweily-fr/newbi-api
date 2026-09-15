@@ -136,22 +136,43 @@ export async function findReconciliationSuggestions(workspaceId) {
 
   const candidateInvoices = [...pendingInvoices, ...completedInvoices];
 
+  // Factures clients importées (Qonto, OCR, Gmail) pas encore encaissées :
+  // mêmes règles de correspondance via la vue « facture de vente »
+  // (importedInvoiceAsInvoiceLike). Renvoyées à part (matchingImportedInvoices)
+  // pour que l'appelant sache quelle mutation de liaison appeler.
+  const importedCandidates = await ImportedInvoice.find({
+    workspaceId,
+    status: { $in: ["UPLOADED", "PENDING_REVIEW", "VALIDATED"] },
+    ...UNLINKED_INVOICE_CLAUSE,
+  })
+    .sort({ invoiceDate: -1 })
+    .limit(500);
+  const importedLikes = importedCandidates.map((doc) => ({
+    doc,
+    like: importedInvoiceAsInvoiceLike(doc),
+  }));
+
   const suggestions = [];
   for (const transaction of unmatchedTransactions) {
     const matchingInvoices = candidateInvoices.filter((invoice) =>
       invoiceMatchesTransaction(transaction, invoice),
     );
-    if (matchingInvoices.length > 0) {
+    const matchingImportedLikes = importedLikes.filter(({ like }) =>
+      invoiceMatchesTransaction(transaction, like),
+    );
+    if (matchingInvoices.length > 0 || matchingImportedLikes.length > 0) {
+      const strong = (inv) =>
+        amountMatches(transaction, inv) ||
+        invoiceReferenceMatches(transaction, inv);
       suggestions.push({
         transaction,
         matchingInvoices,
-        confidence: matchingInvoices.some(
-          (inv) =>
-            amountMatches(transaction, inv) ||
-            invoiceReferenceMatches(transaction, inv),
-        )
-          ? "high"
-          : "medium",
+        matchingImportedInvoices: matchingImportedLikes.map(({ doc }) => doc),
+        confidence:
+          matchingInvoices.some(strong) ||
+          matchingImportedLikes.some(({ like }) => strong(like))
+            ? "high"
+            : "medium",
       });
     }
   }
