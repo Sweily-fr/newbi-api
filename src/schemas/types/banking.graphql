@@ -75,6 +75,14 @@ type LinkedImportedInvoiceSummary {
   issueDate: DateTime
   dueDate: DateTime
   source: String
+  # Fichier d'origine (PDF/image), pour l'aperçu depuis le tiroir transaction
+  file: LinkedImportedInvoiceFile
+}
+
+type LinkedImportedInvoiceFile {
+  url: String
+  originalFileName: String
+  mimeType: String
 }
 
 """
@@ -92,6 +100,9 @@ type LinkedPurchaseInvoiceSummary {
 }
 
 type LinkedPurchaseInvoiceFile {
+  # Identifiant du sous-document, pour cibler le fichier dans le proxy d'aperçu
+  # (/documents/imported/purchaseInvoice/:id/file?fileId=)
+  id: ID
   url: String
   filename: String
   mimetype: String
