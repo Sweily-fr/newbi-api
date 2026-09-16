@@ -13,6 +13,7 @@ import {
   forgetReconciliationLink,
 } from "../utils/reconciliationLinkOrigin.js";
 import crypto from "crypto";
+import exchangeRateService from "./exchangeRateService.js";
 
 /**
  * Service de création automatique de factures d'achat depuis les justificatifs
@@ -870,9 +871,267 @@ async function analyzePurchaseInvoiceFile({
   };
 }
 
+const normKey = (v) =>
+  String(v || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+/**
+ * Relit tous les justificatifs d'une facture d'achat et en déduit une
+ * proposition combinée :
+ *  - chaque fichier est analysé (en parallèle) ;
+ *  - les montants lus dans une autre devise que celle de la facture sont
+ *    convertis au taux BCE du jour du document (repli : dernier taux) ;
+ *  - les fichiers décrivant le même document (même numéro, ou même
+ *    fournisseur + même TTC sans numéro) sont dédoublonnés : une facture en
+ *    deux formats ou une facture + sa preuve de paiement ne comptent qu'une
+ *    fois ;
+ *  - les documents distincts sont additionnés (plusieurs reçus pour une
+ *    même dépense) ;
+ *  - si une transaction bancaire liée existe dans la devise cible et qu'au
+ *    moins un document était en devise étrangère, le débit bancaire fait foi
+ *    pour le TTC (HT/TVA au prorata), comme pour l'automatisation.
+ * Rien n'est enregistré.
+ */
+async function analyzePurchaseInvoiceFiles({
+  files,
+  workspaceId,
+  targetCurrency = "EUR",
+  transaction = null,
+}) {
+  const settled = await Promise.allSettled(
+    files.map((f) =>
+      analyzePurchaseInvoiceFile({
+        receiptFile: f.receiptFile,
+        fileBuffer: f.fileBuffer,
+        workspaceId,
+      }),
+    ),
+  );
+
+  const results = [];
+  for (let i = 0; i < files.length; i += 1) {
+    const r = settled[i];
+    const base = { fileId: files[i].fileId, filename: files[i].filename };
+    if (r.status !== "fulfilled") {
+      results.push({
+        ...base,
+        ok: false,
+        error: r.reason?.message || "Analyse échouée",
+        proposal: null,
+      });
+      continue;
+    }
+    if (!r.value.hasData) {
+      results.push({
+        ...base,
+        ok: false,
+        error: "Aucune valeur exploitable lue",
+        proposal: r.value,
+      });
+      continue;
+    }
+    results.push({ ...base, ok: true, error: null, proposal: r.value });
+  }
+
+  // Conversion par fichier vers la devise de la facture
+  let conversionUnavailable = false;
+  for (const r of results) {
+    if (!r.ok) continue;
+    const p = r.proposal;
+    const from = p.currency || targetCurrency;
+    if (from === targetCurrency) {
+      r.converted = {
+        amountHT: p.amountHT,
+        amountTVA: p.amountTVA,
+        amountTTC: p.amountTTC,
+        rate: null,
+        rateDate: null,
+      };
+      continue;
+    }
+    const fx = await exchangeRateService.getRate(
+      from,
+      targetCurrency,
+      p.invoiceDate || new Date(),
+    );
+    if (!fx) {
+      conversionUnavailable = true;
+      r.converted = {
+        amountHT: null,
+        amountTVA: null,
+        amountTTC: null,
+        rate: null,
+        rateDate: null,
+      };
+      continue;
+    }
+    const conv = (v) =>
+      v === null || v === undefined ? null : round2(v * fx.rate);
+    r.converted = {
+      amountHT: conv(p.amountHT),
+      amountTVA: conv(p.amountTVA),
+      amountTTC: conv(p.amountTTC),
+      rate: fx.rate,
+      rateDate: fx.date,
+    };
+  }
+
+  // Dédoublonnage : même document lu dans plusieurs fichiers
+  const readable = results.filter((r) => r.ok);
+  const groups = [];
+  for (const r of readable) {
+    const num = normKey(r.proposal.invoiceNumber);
+    const supplier = normKey(r.proposal.supplierName);
+    const ttc = r.converted.amountTTC ?? r.proposal.amountTTC;
+    const group = groups.find((g) => {
+      if (num && g.num) return num === g.num;
+      if (num || g.num) return false;
+      return (
+        supplier &&
+        supplier === g.supplier &&
+        ttc !== null &&
+        g.ttc !== null &&
+        Math.abs(ttc - g.ttc) < 0.01
+      );
+    });
+    if (group) {
+      group.members.push(r);
+      if (!group.num && num) group.num = num;
+    } else {
+      groups.push({ num, supplier, ttc, members: [r] });
+    }
+  }
+  // Représentant : le plus confiant, à défaut le plus complet
+  const score = (r) =>
+    (r.proposal.confidence || 0) * 100 +
+    [
+      "supplierName",
+      "invoiceNumber",
+      "invoiceDate",
+      "amountHT",
+      "amountTTC",
+    ].filter((k) => r.proposal[k] !== null && r.proposal[k] !== undefined)
+      .length;
+  const distinct = groups.map((g) => {
+    const rep = [...g.members].sort((a, b) => score(b) - score(a))[0];
+    for (const m of g.members) {
+      m.duplicateOf = m === rep ? null : rep.fileId;
+    }
+    return rep;
+  });
+
+  // Proposition combinée
+  let combined = null;
+  let conversionMethod = "none";
+  let conversionNote = null;
+  let bankAmount = null;
+  if (distinct.length > 0) {
+    const anyForeign = distinct.some(
+      (r) => (r.proposal.currency || targetCurrency) !== targetCurrency,
+    );
+    const usable = distinct.filter((r) => r.converted.amountTTC !== null);
+    const base = [...distinct].sort((a, b) => score(b) - score(a))[0].proposal;
+    const sum = (key) => {
+      const vals = usable
+        .map((r) => r.converted[key])
+        .filter((v) => v !== null && v !== undefined);
+      return vals.length ? round2(vals.reduce((a, b) => a + b, 0)) : null;
+    };
+    let amountTTC = sum("amountTTC");
+    let amountHT = sum("amountHT");
+    let amountTVA = sum("amountTVA");
+    if (amountTVA === null && amountHT !== null && amountTTC !== null) {
+      amountTVA = round2(Math.max(amountTTC - amountHT, 0));
+    }
+    const rates = distinct
+      .map((r) => r.proposal.vatRate)
+      .filter((v) => v !== null && v !== undefined);
+    let vatRate =
+      rates.length && rates.every((v) => v === rates[0])
+        ? rates[0]
+        : amountHT && amountTVA !== null
+          ? round2((amountTVA / amountHT) * 100)
+          : null;
+    const dates = distinct
+      .map((r) => r.proposal.invoiceDate)
+      .filter((d) => d instanceof Date && !isNaN(d.getTime()));
+    const dues = distinct
+      .map((r) => r.proposal.dueDate)
+      .filter((d) => d instanceof Date && !isNaN(d.getTime()));
+
+    if (anyForeign) {
+      conversionMethod = conversionUnavailable ? "unavailable" : "rate";
+      if (conversionMethod === "rate") {
+        const parts = distinct
+          .filter((r) => r.converted.rate)
+          .map(
+            (r) =>
+              `1 ${r.proposal.currency} = ${r.converted.rate} ${targetCurrency} (BCE ${r.converted.rateDate})`,
+          );
+        conversionNote = [...new Set(parts)].join(" ; ");
+      } else {
+        conversionNote =
+          "Taux de change indisponible : montants en devise étrangère non convertis.";
+      }
+    }
+
+    // Débit bancaire lié : fait foi si devise étrangère
+    const txCurrency =
+      normalizeCurrency(transaction?.currency) || targetCurrency;
+    const txAmount =
+      typeof transaction?.amount === "number"
+        ? Math.abs(transaction.amount)
+        : 0;
+    if (anyForeign && txAmount > 0 && txCurrency === targetCurrency) {
+      bankAmount = txAmount;
+      const ref = amountTTC && amountTTC > 0 ? amountTTC : null;
+      const ratio = ref ? txAmount / ref : null;
+      amountHT =
+        ratio && amountHT !== null ? round2(amountHT * ratio) : amountHT;
+      amountTVA =
+        amountHT !== null ? round2(Math.max(txAmount - amountHT, 0)) : null;
+      amountTTC = txAmount;
+      conversionMethod = "bank";
+      conversionNote = `Débit bancaire retenu : ${txAmount.toFixed(2)} ${targetCurrency}, montants HT/TVA ramenés au prorata.`;
+    }
+
+    combined = {
+      supplierName: base.supplierName,
+      invoiceNumber: distinct.length === 1 ? base.invoiceNumber : null,
+      invoiceDate: dates.length ? new Date(Math.min(...dates)) : null,
+      dueDate: dues.length ? new Date(Math.max(...dues)) : null,
+      amountHT,
+      amountTVA,
+      vatRate,
+      amountTTC,
+      currency: targetCurrency,
+      category: base.category,
+      paymentMethod: base.paymentMethod,
+      confidence: base.confidence,
+      provider: base.provider,
+      extractionQuality: distinct.some(
+        (r) => r.proposal.extractionQuality === "partial",
+      )
+        ? "partial"
+        : "full",
+    };
+  }
+
+  return {
+    files: results,
+    combined,
+    distinctCount: distinct.length,
+    conversionMethod,
+    conversionNote,
+    bankAmount,
+  };
+}
+
 export default {
   resolveReceiptAmounts,
   processReceiptsForTransaction,
   isExpenseTransaction,
   analyzePurchaseInvoiceFile,
+  analyzePurchaseInvoiceFiles,
 };
