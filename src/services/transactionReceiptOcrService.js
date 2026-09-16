@@ -1086,14 +1086,23 @@ async function analyzePurchaseInvoiceFiles({
     if (anyForeign && txAmount > 0 && txCurrency === targetCurrency) {
       bankAmount = txAmount;
       const ref = amountTTC && amountTTC > 0 ? amountTTC : null;
-      const ratio = ref ? txAmount / ref : null;
-      amountHT =
-        ratio && amountHT !== null ? round2(amountHT * ratio) : amountHT;
-      amountTVA =
-        amountHT !== null ? round2(Math.max(txAmount - amountHT, 0)) : null;
-      amountTTC = txAmount;
-      conversionMethod = "bank";
-      conversionNote = `Débit bancaire retenu : ${txAmount.toFixed(2)} ${targetCurrency}, montants HT/TVA ramenés au prorata.`;
+      // Le débit ne fait foi que s'il correspond bien à ce document : écart
+      // au montant converti ≤ 15 % (frais et taux de la banque). Au-delà,
+      // la transaction liée n'est probablement pas ce paiement (acompte,
+      // mauvais lien) : on garde le taux BCE et on le signale.
+      const plausible = !ref || Math.abs(txAmount - ref) / ref <= 0.15;
+      if (plausible) {
+        const ratio = ref ? txAmount / ref : null;
+        amountHT =
+          ratio && amountHT !== null ? round2(amountHT * ratio) : amountHT;
+        amountTVA =
+          amountHT !== null ? round2(Math.max(txAmount - amountHT, 0)) : null;
+        amountTTC = txAmount;
+        conversionMethod = "bank";
+        conversionNote = `Débit bancaire retenu : ${txAmount.toFixed(2)} ${targetCurrency}, montants HT/TVA ramenés au prorata.`;
+      } else if (conversionMethod === "rate") {
+        conversionNote = `${conversionNote}. Débit bancaire lié (${txAmount.toFixed(2)} ${targetCurrency}) trop éloigné du montant lu (${ref.toFixed(2)} ${targetCurrency}) : non retenu.`;
+      }
     }
 
     combined = {
