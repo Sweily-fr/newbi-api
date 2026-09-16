@@ -89,6 +89,26 @@ type PurchaseInvoiceOCRMetadata {
   extractionQuality: String
 }
 
+# Valeurs lues par une nouvelle analyse OCR (reanalyzePurchaseInvoice) :
+# rien n'est enregistré, l'utilisateur compare et applique ce qu'il veut.
+type PurchaseInvoiceOcrProposal {
+  supplierName: String
+  invoiceNumber: String
+  invoiceDate: String
+  dueDate: String
+  amountHT: Float
+  amountTVA: Float
+  vatRate: Float
+  amountTTC: Float
+  currency: String
+  category: PurchaseInvoiceCategory
+  paymentMethod: PurchaseInvoicePaymentMethod
+  confidence: Float
+  provider: String
+  # full = IA, partial = secours regex sans IA (à vérifier)
+  extractionQuality: String
+}
+
 # Statuts e-invoicing (réception SuperPDP)
 enum PurchaseInvoiceEInvoiceStatus {
   NOT_APPLICABLE
@@ -539,6 +559,11 @@ extend type Mutation {
     statusCode: String!
     reason: String
   ): PurchaseInvoice!
+
+  # Relance l'analyse OCR sur un justificatif de la facture (le premier si
+  # fileId absent) et renvoie les valeurs lues sans les enregistrer.
+  # Consomme un import du quota OCR.
+  reanalyzePurchaseInvoice(id: ID!, fileId: ID): PurchaseInvoiceOcrProposal!
 
   createSupplier(input: CreateSupplierInput!): Supplier!
   updateSupplier(id: ID!, input: UpdateSupplierInput!): Supplier!

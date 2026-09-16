@@ -807,8 +807,72 @@ async function processReceiptsForTransaction({
   return createdInvoices;
 }
 
+/**
+ * Relit un fichier de facture d'achat (même chaîne OCR que les justificatifs
+ * de transaction : Claude Vision puis pipeline hybride) et renvoie les
+ * valeurs lues au format facture d'achat, sans rien enregistrer. Sert à la
+ * mutation reanalyzePurchaseInvoice : l'utilisateur compare et applique.
+ */
+async function analyzePurchaseInvoiceFile({
+  receiptFile,
+  fileBuffer,
+  workspaceId,
+}) {
+  const { financial, provider, extractionQuality } = await runOcr(
+    receiptFile,
+    fileBuffer,
+    workspaceId,
+  );
+  const td = financial?.transaction_data || {};
+  const hasData = Boolean(
+    td.vendor_name ||
+    td.supplier_name ||
+    td.document_number ||
+    td.invoice_number ||
+    toPositiveNumber(td.amount),
+  );
+  const confidence =
+    typeof financial?.document_analysis?.confidence === "number" &&
+    financial.document_analysis.confidence >= 0 &&
+    financial.document_analysis.confidence <= 1
+      ? financial.document_analysis.confidence
+      : null;
+  const amountHT = toPositiveNumber(td.amount_ht);
+  const amountTTC = toPositiveNumber(td.amount);
+  const amountTVA =
+    toPositiveNumber(td.tax_amount) ??
+    (amountHT && amountTTC && amountTTC > amountHT
+      ? round2(amountTTC - amountHT)
+      : null);
+  const vatRate =
+    toNonNegativeNumber(td.tax_rate) ??
+    (amountHT && amountTVA ? round2((amountTVA / amountHT) * 100) : null);
+  const ocrCategory = td.category ? String(td.category).toUpperCase() : null;
+  return {
+    hasData,
+    supplierName: td.vendor_name || td.supplier_name || null,
+    invoiceNumber: td.document_number || td.invoice_number || null,
+    invoiceDate: parseOcrDate(td.transaction_date || td.invoice_date),
+    dueDate: parseOcrDate(td.due_date),
+    amountHT,
+    amountTVA,
+    vatRate,
+    amountTTC,
+    currency: normalizeCurrency(td.currency),
+    category:
+      ocrCategory && VALID_PI_CATEGORIES.has(ocrCategory) ? ocrCategory : null,
+    paymentMethod: td.payment_method
+      ? mapPaymentMethod(td.payment_method, null)
+      : null,
+    confidence,
+    provider: provider || null,
+    extractionQuality: extractionQuality || "full",
+  };
+}
+
 export default {
   resolveReceiptAmounts,
   processReceiptsForTransaction,
   isExpenseTransaction,
+  analyzePurchaseInvoiceFile,
 };

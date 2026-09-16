@@ -32,6 +32,8 @@ import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
 import { linkPurchaseInvoiceToTransactions } from "../services/purchaseInvoiceLinkService.js";
 import { reconciliationLinkPull } from "../utils/reconciliationLinkOrigin.js";
 import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
+import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
+import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
 
 const formatEuros = (value) =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(
@@ -916,6 +918,97 @@ const purchaseInvoiceResolvers = {
 
         await PurchaseInvoice.deleteOne({ _id: id });
         return { success: true, message: "Facture d'achat supprimée" };
+      },
+    ),
+
+    /**
+     * Relance l'analyse OCR sur un justificatif de la facture d'achat et
+     * renvoie les valeurs lues, sans rien enregistrer : l'utilisateur compare
+     * avec les valeurs actuelles dans le tiroir et choisit ce qu'il applique
+     * (via updatePurchaseInvoice). Même mécanique que reanalyzeImportedInvoice.
+     */
+    reanalyzePurchaseInvoice: requireWrite("expenses")(
+      async (_, { id, fileId }, context) => {
+        const workspaceId = context.workspaceId || context.organizationId;
+        const invoice = await checkAccess(id, workspaceId);
+        const file = fileId
+          ? invoice.files?.find((f) => String(f._id) === String(fileId))
+          : invoice.files?.[0];
+        if (!file?.url) {
+          throw new AppError(
+            "Aucun justificatif associé à cette facture, impossible de relancer l'analyse",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
+        const { plan } = await checkUserOcrQuota(
+          context.user.id,
+          workspaceId,
+          1,
+        );
+
+        let object = null;
+        try {
+          object = await cloudflareService.getObjectByUrl(file.url);
+        } catch (error) {
+          if (
+            error?.name === "NoSuchKey" ||
+            error?.$metadata?.httpStatusCode === 404
+          ) {
+            throw new AppError(
+              "Le justificatif est introuvable sur le stockage",
+              ERROR_CODES.NOT_FOUND,
+            );
+          }
+          logger.warn(
+            `⚠️ [PI OCR] Lecture R2 impossible pour ${file.url}: ${error.message}`,
+          );
+        }
+
+        const filename =
+          file.originalFilename ||
+          file.filename ||
+          `facture-${invoice._id}.pdf`;
+        const mimetype =
+          file.mimetype || object?.contentType || "application/pdf";
+
+        let proposal;
+        try {
+          proposal =
+            await transactionReceiptOcrService.analyzePurchaseInvoiceFile({
+              receiptFile: { url: file.url, filename, mimetype },
+              fileBuffer: object?.buffer || null,
+              workspaceId,
+            });
+        } catch (error) {
+          logger.error(`❌ [PI OCR] Relance échouée pour ${filename}:`, error);
+          throw new AppError(
+            "L'analyse OCR n'a pas pu lire ce document, réessayez plus tard",
+            ERROR_CODES.INTERNAL_ERROR,
+          );
+        }
+        if (!proposal.hasData) {
+          throw new AppError(
+            "L'analyse OCR n'a rien lu d'exploitable sur ce document",
+            ERROR_CODES.INTERNAL_ERROR,
+          );
+        }
+
+        if (plan) {
+          await recordOcrUsage(context.user.id, workspaceId, plan, {
+            fileName: filename,
+            provider: proposal.provider,
+            success: true,
+          });
+        }
+
+        const toIso = (d) =>
+          d instanceof Date && !isNaN(d.getTime()) ? d.toISOString() : null;
+        return {
+          ...proposal,
+          invoiceDate: toIso(proposal.invoiceDate),
+          dueDate: toIso(proposal.dueDate),
+        };
       },
     ),
 
