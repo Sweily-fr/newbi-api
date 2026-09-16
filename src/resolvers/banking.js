@@ -1075,6 +1075,7 @@ const bankingResolvers = {
           amountTTC: inv.amountTTC,
           issueDate: inv.issueDate,
           files: (inv.files || []).map((f) => ({
+            id: f._id ? f._id.toString() : null,
             url: f.url,
             filename: f.originalFilename || f.filename,
             mimetype: f.mimetype,
@@ -1108,6 +1109,13 @@ const bankingResolvers = {
           issueDate: inv.invoiceDate,
           dueDate: inv.dueDate,
           source: inv.source,
+          file: inv.file?.url
+            ? {
+                url: inv.file.url,
+                originalFileName: inv.file.originalFileName || null,
+                mimeType: inv.file.mimeType || null,
+              }
+            : null,
         }));
       } catch (error) {
         console.error(
