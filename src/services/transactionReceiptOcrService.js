@@ -809,6 +809,35 @@ async function processReceiptsForTransaction({
 }
 
 /**
+ * Rend HT / TVA / TTC cohérents entre eux. Le TTC (montant dû) et la TVA
+ * (ligne explicite) sont les valeurs les plus fiables d'une facture ; le
+ * « HT » lu est souvent un sous-total avant remise, frais ou avoir. Donc :
+ *  - TTC et TVA connus → HT = TTC − TVA ;
+ *  - TTC et HT connus sans TVA → TVA = TTC − HT ;
+ *  - HT et TVA connus sans TTC → TTC = HT + TVA.
+ * Le taux explicite est gardé, sinon dérivé de TVA / HT.
+ */
+function reconcileAmounts({ amountHT, amountTVA, amountTTC, vatRate }) {
+  let ht = amountHT;
+  let tva = amountTVA;
+  let ttc = amountTTC;
+  if (ttc !== null && tva !== null && ttc >= tva) {
+    ht = round2(ttc - tva);
+  } else if (ttc !== null && ht !== null && ttc >= ht) {
+    tva = round2(ttc - ht);
+  } else if (ttc === null && ht !== null && tva !== null) {
+    ttc = round2(ht + tva);
+  }
+  const rate =
+    vatRate !== null && vatRate !== undefined
+      ? vatRate
+      : ht && tva !== null
+        ? round2((tva / ht) * 100)
+        : null;
+  return { amountHT: ht, amountTVA: tva, amountTTC: ttc, vatRate: rate };
+}
+
+/**
  * Relit un fichier de facture d'achat (même chaîne OCR que les justificatifs
  * de transaction : Claude Vision puis pipeline hybride) et renvoie les
  * valeurs lues au format facture d'achat, sans rien enregistrer. Sert à la
@@ -838,16 +867,12 @@ async function analyzePurchaseInvoiceFile({
     financial.document_analysis.confidence <= 1
       ? financial.document_analysis.confidence
       : null;
-  const amountHT = toPositiveNumber(td.amount_ht);
-  const amountTTC = toPositiveNumber(td.amount);
-  const amountTVA =
-    toPositiveNumber(td.tax_amount) ??
-    (amountHT && amountTTC && amountTTC > amountHT
-      ? round2(amountTTC - amountHT)
-      : null);
-  const vatRate =
-    toNonNegativeNumber(td.tax_rate) ??
-    (amountHT && amountTVA ? round2((amountTVA / amountHT) * 100) : null);
+  const { amountHT, amountTVA, amountTTC, vatRate } = reconcileAmounts({
+    amountHT: toPositiveNumber(td.amount_ht),
+    amountTVA: toPositiveNumber(td.tax_amount),
+    amountTTC: toPositiveNumber(td.amount),
+    vatRate: toNonNegativeNumber(td.tax_rate),
+  });
   const ocrCategory = td.category ? String(td.category).toUpperCase() : null;
   return {
     hasData,
@@ -1038,21 +1063,24 @@ async function analyzePurchaseInvoiceFiles({
         .filter((v) => v !== null && v !== undefined);
       return vals.length ? round2(vals.reduce((a, b) => a + b, 0)) : null;
     };
-    let amountTTC = sum("amountTTC");
-    let amountHT = sum("amountHT");
-    let amountTVA = sum("amountTVA");
-    if (amountTVA === null && amountHT !== null && amountTTC !== null) {
-      amountTVA = round2(Math.max(amountTTC - amountHT, 0));
-    }
+    // Somme des TTC et des TVA des documents distincts, HT déduit (les
+    // montants de chaque fichier ont déjà été rendus cohérents).
+    const summed = reconcileAmounts({
+      amountTTC: sum("amountTTC"),
+      amountTVA: sum("amountTVA"),
+      amountHT: sum("amountHT"),
+      vatRate: null,
+    });
+    let { amountTTC, amountHT, amountTVA } = summed;
     const rates = distinct
       .map((r) => r.proposal.vatRate)
       .filter((v) => v !== null && v !== undefined);
     let vatRate =
-      rates.length && rates.every((v) => v === rates[0])
+      distinct.length === 1 && rates.length
         ? rates[0]
-        : amountHT && amountTVA !== null
-          ? round2((amountTVA / amountHT) * 100)
-          : null;
+        : rates.length > 1 && rates.every((v) => v === rates[0])
+          ? rates[0]
+          : summed.vatRate;
     const dates = distinct
       .map((r) => r.proposal.invoiceDate)
       .filter((d) => d instanceof Date && !isNaN(d.getTime()));
