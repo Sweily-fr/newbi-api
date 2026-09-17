@@ -146,6 +146,10 @@ const cacheSet = async (key, value, ttlSeconds = 30) => {
   }
 };
 
+// Client ioredis brut (hash, expire…) pour les usages qui dépassent get/set.
+// Retourne null quand Redis est indisponible : l'appelant doit prévoir un repli.
+const getCacheClient = () => cacheClient;
+
 // Invalidation d'un pattern de clés
 const cacheDel = async (...keys) => {
   if (!cacheClient) return;
@@ -165,4 +169,5 @@ export {
   cacheGet,
   cacheSet,
   cacheDel,
+  getCacheClient,
 };
