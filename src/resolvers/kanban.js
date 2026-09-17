@@ -14,6 +14,10 @@ import { publishNotification } from "./notification.js";
 import { sendPushToUser } from "../services/pushNotificationService.js";
 import Client from "../models/Client.js";
 import {
+  listTaskPresence,
+  setTaskPresence as storeTaskPresence,
+} from "../services/kanbanPresenceService.js";
+import {
   maybeTriggerClaudeDev,
   hasClaudeMention,
   claudeDevApplies,
@@ -24,6 +28,7 @@ import {
 const BOARD_UPDATED = "BOARD_UPDATED";
 const TASK_UPDATED = "TASK_UPDATED";
 const COLUMN_UPDATED = "COLUMN_UPDATED";
+const TASK_PRESENCE = "TASK_PRESENCE";
 
 // Board introuvable = refus métier attendu (board supprimé par un collègue,
 // changement d'organisation en cours, accès retiré au tableau), pas un
@@ -75,6 +80,34 @@ const safePublish = (channel, payload, context = "") => {
   } catch (error) {
     logger.error(`❌ [Kanban] Erreur getPubSub ${context}:`, error);
   }
+};
+
+// ── Présence sur les tâches ────────────────────────────────────────────────
+// Identité diffusée aux autres membres du tableau : même règle d'affichage
+// que les membres assignés (nom + prénom, image nettoyée).
+const presenceIdentity = (user) => {
+  const rawImage = user.image || user.avatar;
+  const image =
+    rawImage && rawImage !== "null" && rawImage !== "" ? rawImage : null;
+  let name = "";
+  if (user.name && user.lastName) name = `${user.name} ${user.lastName}`;
+  else if (user.name) name = user.name;
+  else if (user.lastName) name = user.lastName;
+  else name = user.email || "Utilisateur";
+  return { id: user._id?.toString() || String(user.id), name, image };
+};
+
+const assertBoardInWorkspace = async (boardId, workspaceId) => {
+  const exists = await Board.exists({ _id: boardId, workspaceId });
+  if (!exists) throw boardNotFoundError();
+};
+
+const publishTaskPresence = (boardId, workspaceId, viewers) => {
+  safePublish(
+    `${TASK_PRESENCE}_${workspaceId}_${boardId}`,
+    { boardId: String(boardId), workspaceId: String(workspaceId), viewers },
+    "Présence tâche",
+  );
 };
 
 // Fonction utilitaire pour enrichir une tâche avec les infos utilisateur dynamiques
@@ -1000,6 +1033,14 @@ const resolvers = {
       },
     ),
 
+    taskPresence: withWorkspace(
+      async (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        await assertBoardInWorkspace(boardId, finalWorkspaceId);
+        return listTaskPresence({ workspaceId: finalWorkspaceId, boardId });
+      },
+    ),
+
     activeTimers: withWorkspace(
       async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -1118,6 +1159,28 @@ const resolvers = {
   },
 
   Mutation: {
+    // Présence : pas une écriture métier, donc hors du verrou d'abonnement
+    // (voir l'exclusion dans le wrapper checkSubscriptionActive en bas de
+    // fichier) - un membre en lecture seule peut aussi être « sur » une tâche.
+    setTaskPresence: withWorkspace(
+      async (
+        _,
+        { boardId, taskId, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        await assertBoardInWorkspace(boardId, finalWorkspaceId);
+        const { viewers, changed } = await storeTaskPresence({
+          workspaceId: finalWorkspaceId,
+          boardId,
+          user: presenceIdentity(user),
+          taskId: taskId || null,
+        });
+        if (changed) publishTaskPresence(boardId, finalWorkspaceId, viewers);
+        return true;
+      },
+    ),
+
     // Board mutations
     createBoard: withWorkspace(
       async (
@@ -4274,18 +4337,76 @@ const resolvers = {
         return payload;
       },
     },
+
+    taskPresence: {
+      subscribe: withWorkspace(
+        (
+          _,
+          { boardId, workspaceId },
+          { user, workspaceId: contextWorkspaceId },
+        ) => {
+          const finalWorkspaceId = workspaceId || contextWorkspaceId;
+          try {
+            const pubsub = getPubSub();
+            const iterator = pubsub.asyncIterableIterator([
+              `${TASK_PRESENCE}_${finalWorkspaceId}_${boardId}`,
+            ]);
+            // Fermeture du WebSocket (onglet fermé, navigation) : le transport
+            // appelle return() sur l'itérateur. On en profite pour retirer la
+            // présence de cet utilisateur sans attendre l'expiration du
+            // battement de cœur, pour que les autres voient la carte se
+            // libérer tout de suite.
+            const originalReturn = iterator.return?.bind(iterator);
+            iterator.return = async (...args) => {
+              storeTaskPresence({
+                workspaceId: finalWorkspaceId,
+                boardId,
+                user: presenceIdentity(user),
+                taskId: null,
+              })
+                .then(({ viewers, changed }) => {
+                  if (changed) {
+                    publishTaskPresence(boardId, finalWorkspaceId, viewers);
+                  }
+                })
+                .catch((error) => {
+                  logger.warn(
+                    "[Kanban] Nettoyage présence à la déconnexion impossible:",
+                    error.message,
+                  );
+                });
+              return originalReturn
+                ? originalReturn(...args)
+                : { value: undefined, done: true };
+            };
+            return iterator;
+          } catch (error) {
+            logger.error(
+              "❌ [Kanban] Erreur subscription taskPresence:",
+              error,
+            );
+            throw new Error("Subscription failed");
+          }
+        },
+      ),
+      resolve: (payload) => payload,
+    },
   },
 };
 
 // Wrap all mutations with subscription check
 const originalMutations = resolvers.Mutation;
+// setTaskPresence est exclue : simple signal de présence, aucune donnée modifiée.
+const MUTATIONS_WITHOUT_SUBSCRIPTION_CHECK = new Set(["setTaskPresence"]);
 resolvers.Mutation = Object.fromEntries(
   Object.entries(originalMutations).map(([name, fn]) => [
     name,
-    async (parent, args, context, info) => {
-      await checkSubscriptionActive(context);
-      return fn(parent, args, context, info);
-    },
+    MUTATIONS_WITHOUT_SUBSCRIPTION_CHECK.has(name)
+      ? fn
+      : async (parent, args, context, info) => {
+          await checkSubscriptionActive(context);
+          return fn(parent, args, context, info);
+        },
   ]),
 );
 

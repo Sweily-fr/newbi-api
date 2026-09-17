@@ -283,6 +283,9 @@ type Query {
   column(id: ID!, workspaceId: ID): Column
   tasks(boardId: ID!, columnId: ID, workspaceId: ID): [Task!]!
   task(id: ID!, workspaceId: ID): Task
+  # Qui a une tâche ouverte sur ce tableau en ce moment (état initial,
+  # les mises à jour arrivent par la subscription taskPresence)
+  taskPresence(boardId: ID!, workspaceId: ID): [TaskPresenceViewer!]!
   activeTimers(workspaceId: ID): [Task!]!
   organizationMembers(workspaceId: ID!): [OrganizationMember!]!
   usersInfo(userIds: [String!]!): [UserInfo!]!
@@ -314,6 +317,10 @@ type Mutation {
   updateTimerSettings(taskId: ID!, hourlyRate: Float, roundingOption: String, workspaceId: ID): Task!
   addManualTime(taskId: ID!, seconds: Int!, description: String, workspaceId: ID): Task!
 
+  # Présence : taskId = tâche ouverte, null = plus aucune tâche ouverte.
+  # Rappelée régulièrement (battement de cœur) tant que la tâche reste ouverte.
+  setTaskPresence(boardId: ID!, taskId: ID, workspaceId: ID): Boolean!
+
   # Mutations pour les images de tâches
   uploadTaskImage(taskId: ID!, file: Upload!, imageType: String, workspaceId: ID): TaskImageUploadResult!
   deleteTaskImage(taskId: ID!, imageId: ID!, workspaceId: ID): Task!
@@ -328,6 +335,21 @@ type Subscription {
   boardUpdated(workspaceId: ID!): BoardUpdatePayload!
   taskUpdated(boardId: ID!, workspaceId: ID!): TaskUpdatePayload
   columnUpdated(boardId: ID!, workspaceId: ID!): ColumnUpdatePayload!
+  taskPresence(boardId: ID!, workspaceId: ID!): TaskPresencePayload!
+}
+
+type TaskPresenceViewer {
+  userId: ID!
+  taskId: ID!
+  name: String
+  image: String
+  since: String
+}
+
+type TaskPresencePayload {
+  boardId: ID!
+  workspaceId: ID!
+  viewers: [TaskPresenceViewer!]!
 }
 
 type BoardUpdatePayload {
