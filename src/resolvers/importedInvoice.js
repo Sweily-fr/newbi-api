@@ -1987,4 +1987,10 @@ importedInvoiceResolvers.Mutation = Object.fromEntries(
 
 export default importedInvoiceResolvers;
 // Exposés pour les tests unitaires (rapprochement client des importées)
-export { matchExistingClient, resolveImportedClient, fillClientFromVendor };
+export {
+  matchExistingClient,
+  resolveImportedClient,
+  fillClientFromVendor,
+  checkUserOcrQuota,
+  recordOcrUsage,
+};
