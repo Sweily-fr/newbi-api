@@ -83,18 +83,34 @@ const safePublish = (channel, payload, context = "") => {
 };
 
 // ── Présence sur les tâches ────────────────────────────────────────────────
-// Identité diffusée aux autres membres du tableau : même règle d'affichage
-// que les membres assignés (nom + prénom, image nettoyée).
-const presenceIdentity = (user) => {
-  const rawImage = user.image || user.avatar;
+// Identité diffusée aux autres membres du tableau : même source et même
+// règle d'affichage que usersInfo (avatars des membres assignés). On relit la
+// collection brute : le document Mongoose `User` du contexte ne déclare pas
+// les champs Better Auth (`name`, `lastName`, `image` à la racine), ils y
+// sont invisibles et on retomberait sur l'e-mail sans photo.
+const presenceIdentity = async (contextUser) => {
+  const id = contextUser._id?.toString() || String(contextUser.id);
+  let user = null;
+  try {
+    user = await mongoose.connection.db
+      .collection("user")
+      .findOne({ _id: new ObjectId(id) });
+  } catch (error) {
+    logger.warn("[Kanban] Identité présence illisible:", error.message);
+  }
+  user = user || {};
+  const rawImage =
+    user.image || user.avatar || user.profile?.profilePictureUrl || null;
   const image =
     rawImage && rawImage !== "null" && rawImage !== "" ? rawImage : null;
-  let name = "";
-  if (user.name && user.lastName) name = `${user.name} ${user.lastName}`;
-  else if (user.name) name = user.name;
-  else if (user.lastName) name = user.lastName;
-  else name = user.email || "Utilisateur";
-  return { id: user._id?.toString() || String(user.id), name, image };
+  const firstName = user.name || user.profile?.firstName || "";
+  const lastName = user.lastName || user.profile?.lastName || "";
+  const name =
+    [firstName, lastName].filter(Boolean).join(" ") ||
+    user.email ||
+    contextUser.email ||
+    "Utilisateur";
+  return { id, name, image };
 };
 
 const assertBoardInWorkspace = async (boardId, workspaceId) => {
@@ -1173,7 +1189,7 @@ const resolvers = {
         const { viewers, changed } = await storeTaskPresence({
           workspaceId: finalWorkspaceId,
           boardId,
-          user: presenceIdentity(user),
+          user: await presenceIdentity(user),
           taskId: taskId || null,
         });
         if (changed) publishTaskPresence(boardId, finalWorkspaceId, viewers);
@@ -4358,10 +4374,11 @@ const resolvers = {
             // libérer tout de suite.
             const originalReturn = iterator.return?.bind(iterator);
             iterator.return = async (...args) => {
+              // Retrait : seul l'id compte, pas besoin de relire le profil
               storeTaskPresence({
                 workspaceId: finalWorkspaceId,
                 boardId,
-                user: presenceIdentity(user),
+                user: { id: user._id?.toString() || String(user.id) },
                 taskId: null,
               })
                 .then(({ viewers, changed }) => {
