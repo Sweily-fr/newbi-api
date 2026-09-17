@@ -99,6 +99,20 @@ export const invoiceMatchesTransaction = (transaction, invoice) => {
 };
 
 /**
+ * Statuts d'une facture client importée à partir desquels elle peut être
+ * rapprochée d'une transaction (suggestions automatiques, rattachement manuel,
+ * mutation de liaison). UPLOADED / PENDING_REVIEW sont exclus : les données
+ * OCR (montant, client, numéro) n'ont pas encore été vérifiées par
+ * l'utilisateur, il doit d'abord valider la facture.
+ */
+export const IMPORTED_RECONCILABLE_STATUSES = ["VALIDATED", "COMPLETED"];
+
+/** Statuts importés encore non encaissés, candidats aux suggestions. */
+const IMPORTED_SUGGESTION_STATUSES = IMPORTED_RECONCILABLE_STATUSES.filter(
+  (status) => status !== "COMPLETED",
+);
+
+/**
  * Suggestions automatiques : transactions à rapprocher × factures candidates.
  *
  * Deux requêtes factures séparées, chacune avec son propre plafond, pour que
@@ -136,13 +150,15 @@ export async function findReconciliationSuggestions(workspaceId) {
 
   const candidateInvoices = [...pendingInvoices, ...completedInvoices];
 
-  // Factures clients importées (Qonto, OCR, Gmail) pas encore encaissées :
-  // mêmes règles de correspondance via la vue « facture de vente »
+  // Factures clients importées (Qonto, OCR, Gmail) validées et pas encore
+  // encaissées : mêmes règles de correspondance via la vue « facture de vente »
   // (importedInvoiceAsInvoiceLike). Renvoyées à part (matchingImportedInvoices)
-  // pour que l'appelant sache quelle mutation de liaison appeler.
+  // pour que l'appelant sache quelle mutation de liaison appeler. Les factures
+  // encore « à vérifier » ne sont jamais proposées (toast) : l'utilisateur
+  // doit d'abord valider les données OCR.
   const importedCandidates = await ImportedInvoice.find({
     workspaceId,
-    status: { $in: ["UPLOADED", "PENDING_REVIEW", "VALIDATED"] },
+    status: { $in: IMPORTED_SUGGESTION_STATUSES },
     ...UNLINKED_INVOICE_CLAUSE,
   })
     .sort({ invoiceDate: -1 })
@@ -693,13 +709,6 @@ export const importedInvoiceAsInvoiceLike = (doc) => ({
   client: { name: doc.client?.name || doc.vendor?.name || "" },
   linkedTransactionIds: doc.linkedTransactionIds || [],
 });
-
-const IMPORTED_RECONCILABLE_STATUSES = [
-  "UPLOADED",
-  "PENDING_REVIEW",
-  "VALIDATED",
-  "COMPLETED",
-];
 
 /**
  * Transactions (crédits) candidates pour une facture importée : mêmes règles

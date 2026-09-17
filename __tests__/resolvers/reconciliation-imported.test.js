@@ -117,9 +117,7 @@ describe("linkTransactionToImportedInvoice", () => {
     ]);
     const freshInv = await ImportedInvoice.findById(inv._id);
     expect(freshInv.status).toBe("COMPLETED");
-    expect(freshInv.paymentDate.toISOString()).toBe(
-      "2026-08-28T00:00:00.000Z",
-    );
+    expect(freshInv.paymentDate.toISOString()).toBe("2026-08-28T00:00:00.000Z");
     expect(freshInv.linkedTransactionIds.map(String)).toEqual([
       tx._id.toString(),
     ]);
@@ -141,6 +139,22 @@ describe("linkTransactionToImportedInvoice", () => {
     expect(freshA.linkedTransactionIds.map(String).sort()).toEqual(
       [tx._id.toString(), tx2._id.toString()].sort(),
     );
+  });
+
+  it("refuse une facture pas encore validée (OCR à vérifier ou PDF sans OCR)", async () => {
+    const tx = await createCredit();
+    for (const status of ["PENDING_REVIEW", "UPLOADED"]) {
+      const inv = await createImported({ status });
+      const res = await link(tx._id.toString(), inv._id.toString());
+      expect(res.success).toBe(false);
+      expect(res.message).toMatch(/validée/);
+      const fresh = await ImportedInvoice.findById(inv._id);
+      expect(fresh.status).toBe(status);
+      expect(fresh.linkedTransactionIds).toHaveLength(0);
+    }
+    const freshTx = await Transaction.findById(tx._id);
+    expect(freshTx.reconciliationStatus).toBe("unmatched");
+    expect(freshTx.linkedImportedInvoiceIds).toHaveLength(0);
   });
 
   it("refuse une facture rejetée ou archivée, ou d'un autre workspace", async () => {
@@ -258,12 +272,20 @@ describe("queries de rattachement manuel", () => {
       totalTTC: 50,
     });
 
+    // Pas encore validée : absente de la liste de rattachement manuel même
+    // si elle matche parfaitement la transaction.
+    const pending = await createImported({ status: "PENDING_REVIEW" });
+
     const byTx =
       await reconciliationResolvers.Query.importedInvoicesForTransaction(
         null,
         { transactionId: tx._id.toString() },
         ctx(),
       );
+    expect(byTx.invoices.map((i) => i.id)).not.toContain(
+      pending._id.toString(),
+    );
+    expect(byTx.invoices).toHaveLength(2);
     expect(byTx.invoices[0].id).toBe(inv._id.toString());
     expect(byTx.invoices[0].score).toBe(150);
     expect(byTx.invoices[1].score).toBe(0);

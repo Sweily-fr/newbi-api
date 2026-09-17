@@ -14,6 +14,7 @@ import {
   findImportedInvoicesForTransaction,
   findTransactionsForImportedInvoice,
   setReconciliationIgnored,
+  IMPORTED_RECONCILABLE_STATUSES,
 } from "../utils/reconciliationMatching.js";
 import { transactionHasNoLinks } from "../utils/transactionLinks.js";
 import {
@@ -479,7 +480,14 @@ const reconciliationResolvers = {
           if (!target) {
             return { success: false, message: "Facture importée non trouvée" };
           }
-          if (["REJECTED", "ARCHIVED"].includes(target.status)) {
+          if (["UPLOADED", "PENDING_REVIEW"].includes(target.status)) {
+            return {
+              success: false,
+              message:
+                "Cette facture importée doit d'abord être validée avant d'être rapprochée",
+            };
+          }
+          if (!IMPORTED_RECONCILABLE_STATUSES.includes(target.status)) {
             return {
               success: false,
               message: `Impossible de rapprocher une facture importée au statut ${target.status}`,

@@ -110,24 +110,31 @@ describe("findReconciliationSuggestions", () => {
         originalFileName: "q.pdf",
       },
     });
-    // Déjà encaissée : jamais suggérée.
-    await ImportedInvoice.collection.insertOne({
-      _id: new mongoose.Types.ObjectId(),
-      workspaceId: orgId,
-      importedBy: new mongoose.Types.ObjectId(),
-      status: "COMPLETED",
-      source: "QONTO",
-      originalInvoiceNumber: "Q-2026-0778",
-      client: { name: "Studio Karma" },
-      invoiceDate: new Date("2026-05-20T00:00:00.000Z"),
-      totalTTC: 1500,
-      linkedTransactionIds: [],
-      file: {
-        url: "https://r2.example.com/q2.pdf",
-        cloudflareKey: "q2.pdf",
-        originalFileName: "q2.pdf",
-      },
-    });
+    // Déjà encaissée : jamais suggérée. Pas encore validée par l'utilisateur
+    // (OCR à vérifier / PDF sans OCR) : jamais suggérée non plus.
+    for (const [status, number] of [
+      ["COMPLETED", "Q-2026-0778"],
+      ["PENDING_REVIEW", "Q-2026-0779"],
+      ["UPLOADED", "Q-2026-0780"],
+    ]) {
+      await ImportedInvoice.collection.insertOne({
+        _id: new mongoose.Types.ObjectId(),
+        workspaceId: orgId,
+        importedBy: new mongoose.Types.ObjectId(),
+        status,
+        source: "QONTO",
+        originalInvoiceNumber: number,
+        client: { name: "Studio Karma" },
+        invoiceDate: new Date("2026-05-20T00:00:00.000Z"),
+        totalTTC: 1500,
+        linkedTransactionIds: [],
+        file: {
+          url: `https://r2.example.com/${number}.pdf`,
+          cloudflareKey: `${number}.pdf`,
+          originalFileName: `${number}.pdf`,
+        },
+      });
+    }
 
     const { suggestions } = await findReconciliationSuggestions(workspaceId);
 
