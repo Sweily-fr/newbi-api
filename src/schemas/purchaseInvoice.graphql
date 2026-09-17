@@ -89,6 +89,56 @@ type PurchaseInvoiceOCRMetadata {
   extractionQuality: String
 }
 
+# Valeurs lues par une nouvelle analyse OCR (reanalyzePurchaseInvoice) :
+# rien n'est enregistré, l'utilisateur compare et applique ce qu'il veut.
+type PurchaseInvoiceOcrProposal {
+  supplierName: String
+  invoiceNumber: String
+  invoiceDate: String
+  dueDate: String
+  amountHT: Float
+  amountTVA: Float
+  vatRate: Float
+  amountTTC: Float
+  currency: String
+  category: PurchaseInvoiceCategory
+  paymentMethod: PurchaseInvoicePaymentMethod
+  confidence: Float
+  provider: String
+  # full = IA, partial = secours regex sans IA (à vérifier)
+  extractionQuality: String
+}
+
+# Résultat par fichier d'une relance OCR sur tous les justificatifs
+type PurchaseInvoiceOcrFileResult {
+  fileId: ID
+  filename: String
+  ok: Boolean!
+  error: String
+  # Valeurs lues, dans la devise du document
+  proposal: PurchaseInvoiceOcrProposal
+  # Montants ramenés dans la devise de la facture (taux BCE du jour du document)
+  convertedAmountHT: Float
+  convertedAmountTVA: Float
+  convertedAmountTTC: Float
+  rate: Float
+  rateDate: String
+  # Fichier décrivant le même document qu'un autre (non compté dans la somme)
+  duplicateOf: ID
+}
+
+# Relance OCR sur tous les justificatifs : détail par fichier + proposition
+# combinée (documents distincts additionnés, dans la devise de la facture).
+type PurchaseInvoiceOcrMultiProposal {
+  files: [PurchaseInvoiceOcrFileResult!]!
+  combined: PurchaseInvoiceOcrProposal
+  distinctCount: Int!
+  # none | rate (taux BCE) | bank (débit bancaire lié) | unavailable
+  conversionMethod: String
+  conversionNote: String
+  bankAmount: Float
+}
+
 # Statuts e-invoicing (réception SuperPDP)
 enum PurchaseInvoiceEInvoiceStatus {
   NOT_APPLICABLE
@@ -539,6 +589,15 @@ extend type Mutation {
     statusCode: String!
     reason: String
   ): PurchaseInvoice!
+
+  # Relance l'analyse OCR sur un justificatif de la facture (le premier si
+  # fileId absent) et renvoie les valeurs lues sans les enregistrer.
+  # Consomme un import du quota OCR.
+  reanalyzePurchaseInvoice(id: ID!, fileId: ID): PurchaseInvoiceOcrProposal!
+  # Relance l'analyse sur tous les justificatifs de la facture, dédoublonne,
+  # additionne les documents distincts et convertit en devise de la facture.
+  # Consomme un import du quota OCR par fichier.
+  reanalyzePurchaseInvoiceFiles(id: ID!): PurchaseInvoiceOcrMultiProposal!
 
   createSupplier(input: CreateSupplierInput!): Supplier!
   updateSupplier(id: ID!, input: UpdateSupplierInput!): Supplier!
