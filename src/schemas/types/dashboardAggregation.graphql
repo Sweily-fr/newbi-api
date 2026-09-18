@@ -35,6 +35,29 @@ type CategoryAggregation {
   transactionCount: Int!
 }
 
+"""
+Un côté (ventes ou achats) du cadre Facturation de l'accueil, borné au mois
+calendaire courant par date d'émission. Montants TTC.
+"""
+type DashboardBillingMonthSide {
+  """Total TTC des factures émises sur le mois"""
+  total: Float!
+  count: Int!
+  """Non réglé (en cours / à payer), retards inclus"""
+  pending: Float!
+  pendingCount: Int!
+  """Non réglé avec échéance dépassée (sous-ensemble de pending)"""
+  overdue: Float!
+  overdueCount: Int!
+}
+
+type DashboardBillingMonth {
+  """Mois calendaire couvert, au format YYYY-MM (heure de Paris)"""
+  month: String!
+  sales: DashboardBillingMonthSide!
+  purchases: DashboardBillingMonthSide!
+}
+
 input DashboardPeriodInput {
   """Preset: cumul-month, cumul-quarter, cumul-year, 30d, 90d, 365d, 730d"""
   preset: String
@@ -61,6 +84,11 @@ extend type Query {
     # alors uniquement le solde des comptes bancaires connectés (Bridge).
     excludeManual: Boolean
   ): TreasuryChartData!
+
+  """
+  Cadre Facturation de l'accueil : ventes et achats du mois courant.
+  """
+  dashboardBillingMonth(workspaceId: ID!): DashboardBillingMonth!
 
   dashboardCategoryAggregation(
     workspaceId: ID!
