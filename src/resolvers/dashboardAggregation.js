@@ -3,6 +3,8 @@ import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
 import Invoice from "../models/Invoice.js";
+import ImportedInvoice from "../models/ImportedInvoice.js";
+import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { aggregateByCategory } from "../utils/bank-categories.js";
 
 /**
@@ -168,6 +170,76 @@ async function getAccountsBalance(
   }, cashBalance);
 
   return { accounts, balance };
+}
+
+/**
+ * Minuit (heure de Paris) d'un jour calendaire, en instant UTC.
+ * Indépendant du fuseau du serveur : on mesure le décalage Paris/UTC à cet
+ * instant (1 h ou 2 h selon l'heure d'été) et on le retranche.
+ */
+function parisMidnight(year, monthIndex, day = 1) {
+  const utcGuess = new Date(Date.UTC(year, monthIndex, day, 0, 0, 0));
+  const asParis = new Date(
+    utcGuess.toLocaleString("en-US", { timeZone: "Europe/Paris" }),
+  );
+  const asUtc = new Date(utcGuess.toLocaleString("en-US", { timeZone: "UTC" }));
+  return new Date(utcGuess.getTime() - (asParis - asUtc));
+}
+
+/**
+ * Mois calendaire courant en heure de Paris : libellé YYYY-MM, bornes
+ * [startDate, endDate[ et minuit du jour courant (pour les retards).
+ */
+function currentParisMonth(now = new Date()) {
+  const ymd = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris",
+  }).format(now);
+  const [y, m, d] = ymd.split("-").map(Number);
+  return {
+    month: `${y}-${String(m).padStart(2, "0")}`,
+    startDate: parisMidnight(y, m - 1, 1),
+    endDate: parisMidnight(y, m, 1),
+    today: parisMidnight(y, m - 1, d),
+  };
+}
+
+/**
+ * Étape $group commune aux côtés ventes/achats du cadre Facturation :
+ * total émis, non réglé (retards inclus) et en retard, en montant et en nombre.
+ */
+function billingSideGroup({ amountExpr, isUnpaid, isOverdue }) {
+  return {
+    $group: {
+      _id: null,
+      total: { $sum: amountExpr },
+      count: { $sum: 1 },
+      pending: { $sum: { $cond: [isUnpaid, amountExpr, 0] } },
+      pendingCount: { $sum: { $cond: [isUnpaid, 1, 0] } },
+      overdue: { $sum: { $cond: [isOverdue, amountExpr, 0] } },
+      overdueCount: { $sum: { $cond: [isOverdue, 1, 0] } },
+    },
+  };
+}
+
+const EMPTY_BILLING_SIDE = {
+  total: 0,
+  count: 0,
+  pending: 0,
+  pendingCount: 0,
+  overdue: 0,
+  overdueCount: 0,
+};
+
+function roundBillingSide(side) {
+  const s = side || EMPTY_BILLING_SIDE;
+  return {
+    total: Math.round(s.total * 100) / 100,
+    count: s.count,
+    pending: Math.round(s.pending * 100) / 100,
+    pendingCount: s.pendingCount,
+    overdue: Math.round(s.overdue * 100) / 100,
+    overdueCount: s.overdueCount,
+  };
 }
 
 const dashboardAggregationResolvers = {
@@ -338,6 +410,101 @@ const dashboardAggregationResolvers = {
         };
       },
     ),
+
+    /**
+     * Cadre Facturation de l'accueil : ventes et achats du mois calendaire
+     * courant (heure de Paris), par date d'émission, en TTC.
+     *
+     * Ventes = factures Newbi émises (PENDING/OVERDUE/COMPLETED) + factures
+     * clients importées validées (VALIDATED/COMPLETED). Les importées sont
+     * affichées « Terminée » dans la liste (réputées réglées), elles ne
+     * comptent donc ni en cours ni en retard.
+     * Achats = mêmes règles que les tuiles de la page Factures d'achat :
+     * total du mois toutes factures, à payer = TO_PAY + OVERDUE.
+     * En retard = statut OVERDUE, ou non réglée avec échéance dépassée
+     * (le passage automatique en OVERDUE n'a lieu qu'à la modification).
+     */
+    dashboardBillingMonth: withWorkspace(async (parent, { workspaceId }) => {
+      const wid = new mongoose.Types.ObjectId(workspaceId);
+      const { month, startDate, endDate, today } = currentParisMonth();
+      const inMonth = { $gte: startDate, $lt: endDate };
+      // Un champ absent est « inférieur » à une date en aggregation : on
+      // exige un vrai type date, sinon les factures sans échéance passeraient
+      // en retard.
+      const dueDatePassed = [
+        { $eq: [{ $type: "$dueDate" }, "date"] },
+        { $lt: ["$dueDate", today] },
+      ];
+
+      const [[invoiceSide], [importedSide], [purchaseSide]] = await Promise.all(
+        [
+          Invoice.aggregate([
+            {
+              $match: {
+                workspaceId: wid,
+                status: { $in: ["PENDING", "OVERDUE", "COMPLETED"] },
+                issueDate: inMonth,
+              },
+            },
+            billingSideGroup({
+              amountExpr: {
+                $ifNull: ["$finalTotalTTC", { $ifNull: ["$totalTTC", 0] }],
+              },
+              isUnpaid: { $in: ["$status", ["PENDING", "OVERDUE"]] },
+              isOverdue: {
+                $or: [
+                  { $eq: ["$status", "OVERDUE"] },
+                  { $and: [{ $eq: ["$status", "PENDING"] }, ...dueDatePassed] },
+                ],
+              },
+            }),
+          ]),
+          ImportedInvoice.aggregate([
+            {
+              $match: {
+                workspaceId: wid,
+                status: { $in: ["VALIDATED", "COMPLETED"] },
+                invoiceDate: inMonth,
+              },
+            },
+            billingSideGroup({
+              amountExpr: { $ifNull: ["$totalTTC", 0] },
+              isUnpaid: false,
+              isOverdue: false,
+            }),
+          ]),
+          PurchaseInvoice.aggregate([
+            { $match: { workspaceId: wid, issueDate: inMonth } },
+            billingSideGroup({
+              amountExpr: { $ifNull: ["$amountTTC", 0] },
+              isUnpaid: { $in: ["$status", ["TO_PAY", "OVERDUE"]] },
+              isOverdue: {
+                $or: [
+                  { $eq: ["$status", "OVERDUE"] },
+                  { $and: [{ $eq: ["$status", "TO_PAY"] }, ...dueDatePassed] },
+                ],
+              },
+            }),
+          ]),
+        ],
+      );
+
+      const inv = invoiceSide || EMPTY_BILLING_SIDE;
+      const imp = importedSide || EMPTY_BILLING_SIDE;
+
+      return {
+        month,
+        sales: roundBillingSide({
+          total: inv.total + imp.total,
+          count: inv.count + imp.count,
+          pending: inv.pending,
+          pendingCount: inv.pendingCount,
+          overdue: inv.overdue,
+          overdueCount: inv.overdueCount,
+        }),
+        purchases: roundBillingSide(purchaseSide),
+      };
+    }),
 
     /**
      * Agrégation par catégorie pour les pie charts (income ou expense)
