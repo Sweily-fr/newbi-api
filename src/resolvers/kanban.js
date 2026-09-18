@@ -16,6 +16,7 @@ import Client from "../models/Client.js";
 import {
   listTaskPresence,
   setTaskPresence as storeTaskPresence,
+  clearTaskPresenceIfIdle,
 } from "../services/kanbanPresenceService.js";
 import {
   maybeTriggerClaudeDev,
@@ -29,6 +30,10 @@ const BOARD_UPDATED = "BOARD_UPDATED";
 const TASK_UPDATED = "TASK_UPDATED";
 const COLUMN_UPDATED = "COLUMN_UPDATED";
 const TASK_PRESENCE = "TASK_PRESENCE";
+// Délai avant de retirer la présence d'un onglet dont le WebSocket s'est
+// fermé : une reconnexion (micro-coupure, changement de wifi, redéploiement)
+// se ré-annonce bien avant, une vraie fermeture jamais.
+const PRESENCE_DISCONNECT_GRACE_MS = 5000;
 
 // Board introuvable = refus métier attendu (board supprimé par un collègue,
 // changement d'organisation en cours, accès retiré au tableau), pas un
@@ -1053,7 +1058,14 @@ const resolvers = {
       async (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         await assertBoardInWorkspace(boardId, finalWorkspaceId);
-        return listTaskPresence({ workspaceId: finalWorkspaceId, boardId });
+        const { viewers, changed } = await listTaskPresence({
+          workspaceId: finalWorkspaceId,
+          boardId,
+        });
+        // Les clients relisent régulièrement : si cette lecture a purgé un
+        // onglet expiré, tout le monde doit le voir disparaître.
+        if (changed) publishTaskPresence(boardId, finalWorkspaceId, viewers);
+        return viewers;
       },
     ),
 
@@ -1181,7 +1193,7 @@ const resolvers = {
     setTaskPresence: withWorkspace(
       async (
         _,
-        { boardId, taskId, workspaceId },
+        { boardId, taskId, clientId, workspaceId },
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -1190,6 +1202,7 @@ const resolvers = {
           workspaceId: finalWorkspaceId,
           boardId,
           user: await presenceIdentity(user),
+          clientId: clientId || null,
           taskId: taskId || null,
         });
         if (changed) publishTaskPresence(boardId, finalWorkspaceId, viewers);
@@ -4358,7 +4371,7 @@ const resolvers = {
       subscribe: withWorkspace(
         (
           _,
-          { boardId, workspaceId },
+          { boardId, workspaceId, clientId },
           { user, workspaceId: contextWorkspaceId },
         ) => {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -4367,31 +4380,39 @@ const resolvers = {
             const iterator = pubsub.asyncIterableIterator([
               `${TASK_PRESENCE}_${finalWorkspaceId}_${boardId}`,
             ]);
-            // Fermeture du WebSocket (onglet fermé, navigation) : le transport
-            // appelle return() sur l'itérateur. On en profite pour retirer la
-            // présence de cet utilisateur sans attendre l'expiration du
-            // battement de cœur, pour que les autres voient la carte se
-            // libérer tout de suite.
+            // Fermeture du WebSocket (onglet fermé, navigation, coupure) : le
+            // transport appelle return() sur l'itérateur. On retire alors la
+            // présence de cet onglet, mais après un délai de grâce : une
+            // simple reconnexion se ré-annonce entre-temps et personne ne
+            // voit la carte « se libérer » pour rien.
             const originalReturn = iterator.return?.bind(iterator);
             iterator.return = async (...args) => {
-              // Retrait : seul l'id compte, pas besoin de relire le profil
-              storeTaskPresence({
-                workspaceId: finalWorkspaceId,
-                boardId,
-                user: { id: user._id?.toString() || String(user.id) },
-                taskId: null,
-              })
-                .then(({ viewers, changed }) => {
-                  if (changed) {
-                    publishTaskPresence(boardId, finalWorkspaceId, viewers);
-                  }
+              const disconnectedAt = Date.now();
+              const userId = user._id?.toString() || String(user.id);
+              setTimeout(() => {
+                clearTaskPresenceIfIdle({
+                  workspaceId: finalWorkspaceId,
+                  boardId,
+                  userId,
+                  clientId: clientId || null,
+                  disconnectedAt,
                 })
-                .catch((error) => {
-                  logger.warn(
-                    "[Kanban] Nettoyage présence à la déconnexion impossible:",
-                    error.message,
-                  );
-                });
+                  .then((result) => {
+                    if (result?.changed) {
+                      publishTaskPresence(
+                        boardId,
+                        finalWorkspaceId,
+                        result.viewers,
+                      );
+                    }
+                  })
+                  .catch((error) => {
+                    logger.warn(
+                      "[Kanban] Nettoyage présence à la déconnexion impossible:",
+                      error.message,
+                    );
+                  });
+              }, PRESENCE_DISCONNECT_GRACE_MS).unref?.();
               return originalReturn
                 ? originalReturn(...args)
                 : { value: undefined, done: true };

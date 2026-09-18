@@ -319,7 +319,8 @@ type Mutation {
 
   # Présence : taskId = tâche ouverte, null = plus aucune tâche ouverte.
   # Rappelée régulièrement (battement de cœur) tant que la tâche reste ouverte.
-  setTaskPresence(boardId: ID!, taskId: ID, workspaceId: ID): Boolean!
+  # clientId : identifiant de l'onglet (un utilisateur peut en avoir plusieurs).
+  setTaskPresence(boardId: ID!, taskId: ID, clientId: String, workspaceId: ID): Boolean!
 
   # Mutations pour les images de tâches
   uploadTaskImage(taskId: ID!, file: Upload!, imageType: String, workspaceId: ID): TaskImageUploadResult!
@@ -335,7 +336,7 @@ type Subscription {
   boardUpdated(workspaceId: ID!): BoardUpdatePayload!
   taskUpdated(boardId: ID!, workspaceId: ID!): TaskUpdatePayload
   columnUpdated(boardId: ID!, workspaceId: ID!): ColumnUpdatePayload!
-  taskPresence(boardId: ID!, workspaceId: ID!): TaskPresencePayload!
+  taskPresence(boardId: ID!, workspaceId: ID!, clientId: String): TaskPresencePayload!
 }
 
 type TaskPresenceViewer {
