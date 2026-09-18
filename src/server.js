@@ -1,21 +1,10 @@
-import dotenv from "dotenv";
+// Doit rester le premier import : charge le .env avant tout autre module
+import { envFile } from "./config/env.js";
 import path from "path";
 import { fileURLToPath } from "url";
 
-// Configuration des chemins (doit être avant dotenv.config)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Charger le fichier .env selon l'environnement
-const envFile =
-  process.env.NODE_ENV === "production"
-    ? ".env.production"
-    : process.env.NODE_ENV === "staging"
-      ? ".env.staging"
-      : ".env";
-
-const envPath = path.resolve(process.cwd(), envFile);
-dotenv.config({ path: envPath });
 
 logger.debug(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
 logger.debug(`📄 Fichier .env chargé: ${envFile}`);
@@ -42,6 +31,12 @@ import { ApolloServer } from "apollo-server-express";
 import { createServer } from "http";
 import { execute, subscribe } from "graphql";
 import { SubscriptionServer } from "subscriptions-transport-ws";
+import { WebSocketServer } from "ws";
+import {
+  COLLAB_PATH,
+  handleCollabConnection,
+  destroyKanbanCollabServer,
+} from "./collab/kanbanCollabServer.js";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import depthLimit from "graphql-depth-limit";
 import { createDataLoaders } from "./dataloaders/index.js";
@@ -551,11 +546,34 @@ async function startServer() {
         logger.info("🔌 [WebSocket] Client déconnecté");
       },
     },
-    {
-      server: httpServer,
-      path: "/graphql",
-    },
+    // noServer : deux serveurs WebSocket (GraphQL et collab) partagent le
+    // même port, l'aiguillage par chemin se fait sur l'événement upgrade
+    // ci-dessous. Deux serveurs `ws` attachés au même httpServer avec des
+    // chemins différents se rejetteraient mutuellement les connexions.
+    { noServer: true },
   );
+
+  // Éditeur collaboratif des descriptions de tâches (Yjs / Hocuspocus)
+  const collabWss = new WebSocketServer({ noServer: true });
+  httpServer.on("upgrade", (request, socket, head) => {
+    let pathname = "/";
+    try {
+      pathname = new URL(request.url, "http://localhost").pathname;
+    } catch {
+      // URL invalide : traitée comme inconnue
+    }
+    if (pathname === "/graphql") {
+      subscriptionServer.server.handleUpgrade(request, socket, head, (ws) => {
+        subscriptionServer.server.emit("connection", ws, request);
+      });
+    } else if (pathname === COLLAB_PATH) {
+      collabWss.handleUpgrade(request, socket, head, (ws) => {
+        handleCollabConnection(ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
 
   // Initialiser Redis PubSub
   try {
@@ -696,6 +714,8 @@ async function startServer() {
     logger.info("🛑 Arrêt du serveur en cours...");
     try {
       emailReminderScheduler.stop();
+      // Flush des descriptions collaboratives en attente d'enregistrement
+      await destroyKanbanCollabServer();
       subscriptionServer.close();
       await closeRedis();
       logger.info("✅ Serveur arrêté proprement");
@@ -713,6 +733,7 @@ async function startServer() {
       const { stopInvoiceReminderCron } =
         await import("./cron/invoiceReminderCron.js");
       await stopInvoiceReminderCron();
+      await destroyKanbanCollabServer();
       subscriptionServer.close();
       await closeRedis();
       logger.info("✅ Serveur arrêté proprement");

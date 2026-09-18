@@ -4448,5 +4448,23 @@ resolvers.Mutation = Object.fromEntries(
   ]),
 );
 
+// Diffuse une tâche modifiée hors resolver (ex. enregistrement de l'édition
+// collaborative de la description) sur le même canal que updateTask, pour que
+// cartes, liste, Gantt et modale des autres membres se rafraîchissent.
+export const publishTaskUpdated = async (task, workspaceId) => {
+  const enrichedTask = await enrichTaskWithUserInfo(task);
+  safePublish(
+    `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
+    {
+      type: "UPDATED",
+      task: enrichedTask,
+      boardId: enrichedTask.boardId,
+      workspaceId,
+    },
+    "Tâche mise à jour (collab)",
+  );
+  return enrichedTask;
+};
+
 export { enrichTaskWithUserInfo };
 export default resolvers;
