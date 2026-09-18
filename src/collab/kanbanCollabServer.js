@@ -37,7 +37,12 @@ const ACTIVITY_DEDUP_MS = 10 * 60 * 1000;
 // Même schéma que l'éditeur côté front (StarterKit v3 inclut gras, italique,
 // souligné, listes, citation, code, lien). L'historique est désactivé :
 // c'est Yjs qui gère l'annulation en collaboratif.
-export const collabExtensions = [StarterKit.configure({ undoRedo: false })];
+// TrailingNode est désactivé : il ajoute un paragraphe vide en fin de
+// document à l'ouverture (texte finissant par une liste, une citation…), ce
+// qui compte comme une modification signée par celui qui a ouvert la tâche.
+export const collabExtensions = [
+  StarterKit.configure({ undoRedo: false, trailingNode: false }),
+];
 
 const sha1 = (s) =>
   crypto
@@ -72,6 +77,17 @@ export const ydocToHtml = (document) => {
 };
 
 const authenticate = async ({ token, documentName }) => {
+  try {
+    return await authenticateOrThrow({ token, documentName });
+  } catch (error) {
+    logger.warn(
+      `[Collab] Connexion refusée sur ${documentName}: ${error.message}`,
+    );
+    throw error;
+  }
+};
+
+const authenticateOrThrow = async ({ token, documentName }) => {
   const taskId = taskIdFromDocumentName(documentName);
   if (!taskId) throw new Error("Document inconnu");
   if (!token) throw new Error("Non authentifié");
@@ -94,6 +110,7 @@ const authenticate = async ({ token, documentName }) => {
   );
   if (!organization) throw new Error("Accès refusé");
 
+  logger.info(`[Collab] ${userId} connecté sur la tâche ${taskId}`);
   return {
     user: { id: userId },
     taskId,
@@ -104,6 +121,7 @@ const authenticate = async ({ token, documentName }) => {
 
 const loadDocument = async ({ documentName, document }) => {
   const taskId = taskIdFromDocumentName(documentName);
+  logger.info(`[Collab] Chargement du document de la tâche ${taskId}`);
   const task = await Task.findById(taskId).select("description");
   if (!task) return document;
   const html = task.description || "";
@@ -134,6 +152,9 @@ const storeDocument = async ({ documentName, document, lastContext }) => {
   if (!task) return;
 
   if ((task.description || "") !== html) {
+    logger.info(
+      `[Collab] Description de ${taskId} enregistrée (${html.length} car.) par ${userId || "?"}`,
+    );
     task.description = html;
     task.updatedAt = new Date();
     if (userId) {
