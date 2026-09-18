@@ -195,7 +195,8 @@ const storeDocument = async ({ documentName, document, lastContext }) => {
 
 let hocuspocus = null;
 
-export const createKanbanCollabServer = () => {
+// `authenticate` injectable pour les tests (pas de JWT sous la main)
+export const createKanbanCollabServer = ({ authenticate: authFn } = {}) => {
   if (hocuspocus) return hocuspocus;
 
   // Même connexion Redis que le reste de l'API (REDIS_URL en prod/staging,
@@ -230,7 +231,7 @@ export const createKanbanCollabServer = () => {
     maxDebounce: 10000,
     unloadImmediately: false,
     extensions,
-    onAuthenticate: authenticate,
+    onAuthenticate: authFn || authenticate,
     onLoadDocument: loadDocument,
     onStoreDocument: storeDocument,
   });
