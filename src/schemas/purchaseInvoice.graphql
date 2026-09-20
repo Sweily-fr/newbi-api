@@ -107,6 +107,17 @@ type PurchaseInvoiceOcrProposal {
   provider: String
   # full = IA, partial = secours regex sans IA (à vérifier)
   extractionQuality: String
+  # Document en devise étrangère (relance sur un fichier) : montants ci-dessus
+  # ramenés dans la devise de la facture, valeurs lues d'origine ici.
+  originalAmountHT: Float
+  originalAmountTVA: Float
+  originalAmountTTC: Float
+  originalCurrency: String
+  rate: Float
+  rateDate: String
+  # none | rate (taux BCE) | bank (débit bancaire lié) | unavailable
+  conversionMethod: String
+  conversionNote: String
 }
 
 # Résultat par fichier d'une relance OCR sur tous les justificatifs
