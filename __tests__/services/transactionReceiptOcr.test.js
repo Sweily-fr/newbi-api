@@ -392,6 +392,71 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     expect(invoice.ocrMetadata.extractionQuality).toBe("full");
   });
 
+  it("catégorie choisie à la main sur la transaction : la facture l'hérite, la transaction n'est pas écrasée", async () => {
+    mockClaudeSuccess(); // l'OCR propose OFFICE_SUPPLIES
+    const tx = await createExpenseTransaction({
+      category: "banque",
+      expenseCategory: "SERVICES",
+      categoryIsManual: true,
+    });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.subcategory).toBe("banque");
+    expect(invoice.category).toBe("SERVICES");
+
+    const updatedTx = await Transaction.findById(tx._id);
+    expect(updatedTx.category).toBe("banque");
+    expect(updatedTx.expenseCategory).toBe("SERVICES");
+    expect(updatedTx.categoryIsManual).toBe(true);
+  });
+
+  it("catégorie manuelle hors référentiel : l'OCR reprend la main et la facture est propagée", async () => {
+    mockClaudeSuccess();
+    const tx = await createExpenseTransaction({
+      category: "332",
+      categoryIsManual: true,
+    });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.category).toBe("OFFICE_SUPPLIES");
+    expect(invoice.subcategory).toBeNull();
+  });
+
+  it("sans catégorie manuelle : la facture OCR est propagée à la transaction (comportement historique)", async () => {
+    mockClaudeSuccess();
+    const tx = await createExpenseTransaction({ category: "abonnement" });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+
+    const invoice = await PurchaseInvoice.findById(invoices[0]._id);
+    expect(invoice.category).toBe("OFFICE_SUPPLIES");
+    const updatedTx = await Transaction.findById(tx._id);
+    expect(updatedTx.category).toBe("OFFICE_SUPPLIES");
+    expect(updatedTx.categoryIsManual).toBe(true);
+  });
+
   it("ignore les transactions qui ne sont pas des dépenses", async () => {
     const tx = await createExpenseTransaction({ type: "credit", amount: 250 });
 
