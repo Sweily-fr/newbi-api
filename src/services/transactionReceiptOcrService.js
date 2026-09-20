@@ -923,7 +923,12 @@ async function analyzePurchaseInvoiceFiles({
   workspaceId,
   targetCurrency = "EUR",
   transaction = null,
+  // Devise du document quand l'OCR ne la lit pas (ex. devise d'origine notée
+  // sur la facture à sa création) : évite de prendre des dollars pour des
+  // euros faute de symbole reconnu.
+  defaultCurrency = null,
 }) {
+  const fallbackCurrency = normalizeCurrency(defaultCurrency);
   const settled = await Promise.allSettled(
     files.map((f) =>
       analyzePurchaseInvoiceFile({
@@ -964,6 +969,7 @@ async function analyzePurchaseInvoiceFiles({
   for (const r of results) {
     if (!r.ok) continue;
     const p = r.proposal;
+    if (!p.currency && fallbackCurrency) p.currency = fallbackCurrency;
     const from = p.currency || targetCurrency;
     if (from === targetCurrency) {
       r.converted = {
