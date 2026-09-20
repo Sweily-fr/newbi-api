@@ -972,13 +972,37 @@ const purchaseInvoiceResolvers = {
         const mimetype =
           file.mimetype || object?.contentType || "application/pdf";
 
-        let proposal;
+        // Une facture d'achat vient d'une transaction en devise du compte :
+        // un document en devise étrangère est ramené dans la devise de la
+        // facture par la même règle que la relance multi-fichiers (débit
+        // bancaire lié prioritaire, sinon taux BCE du jour du document).
+        let transaction = null;
+        if (invoice.linkedTransactionIds?.length) {
+          const { default: Transaction } =
+            await import("../models/Transaction.js");
+          transaction = await Transaction.findOne({
+            _id: { $in: invoice.linkedTransactionIds },
+          })
+            .select("amount currency")
+            .lean();
+        }
+
+        let result;
         try {
-          proposal =
-            await transactionReceiptOcrService.analyzePurchaseInvoiceFile({
-              receiptFile: { url: file.url, filename, mimetype },
-              fileBuffer: object?.buffer || null,
+          result =
+            await transactionReceiptOcrService.analyzePurchaseInvoiceFiles({
+              files: [
+                {
+                  fileId: String(file._id),
+                  filename,
+                  receiptFile: { url: file.url, filename, mimetype },
+                  fileBuffer: object?.buffer || null,
+                },
+              ],
               workspaceId,
+              targetCurrency: invoice.currency || "EUR",
+              transaction,
+              defaultCurrency: invoice.ocrMetadata?.currency || null,
             });
         } catch (error) {
           logger.error(`❌ [PI OCR] Relance échouée pour ${filename}:`, error);
@@ -987,12 +1011,20 @@ const purchaseInvoiceResolvers = {
             ERROR_CODES.INTERNAL_ERROR,
           );
         }
-        if (!proposal.hasData) {
+        const read = result.files[0];
+        if (!read?.ok) {
+          if (read?.error && read.error !== "Aucune valeur exploitable lue") {
+            throw new AppError(
+              "L'analyse OCR n'a pas pu lire ce document, réessayez plus tard",
+              ERROR_CODES.INTERNAL_ERROR,
+            );
+          }
           throw new AppError(
             "L'analyse OCR n'a rien lu d'exploitable sur ce document",
             ERROR_CODES.INTERNAL_ERROR,
           );
         }
+        const proposal = result.combined || read.proposal;
 
         if (plan) {
           await recordOcrUsage(context.user.id, workspaceId, plan, {
@@ -1004,10 +1036,21 @@ const purchaseInvoiceResolvers = {
 
         const toIso = (d) =>
           d instanceof Date && !isNaN(d.getTime()) ? d.toISOString() : null;
+        const targetCurrency = invoice.currency || "EUR";
+        const foreign =
+          read.proposal.currency && read.proposal.currency !== targetCurrency;
         return {
           ...proposal,
           invoiceDate: toIso(proposal.invoiceDate),
           dueDate: toIso(proposal.dueDate),
+          originalAmountHT: foreign ? read.proposal.amountHT : null,
+          originalAmountTVA: foreign ? read.proposal.amountTVA : null,
+          originalAmountTTC: foreign ? read.proposal.amountTTC : null,
+          originalCurrency: foreign ? read.proposal.currency : null,
+          rate: read.converted?.rate ?? null,
+          rateDate: read.converted?.rateDate ?? null,
+          conversionMethod: result.conversionMethod,
+          conversionNote: result.conversionNote,
         };
       },
     ),
@@ -1083,6 +1126,7 @@ const purchaseInvoiceResolvers = {
               workspaceId,
               targetCurrency: invoice.currency || "EUR",
               transaction,
+              defaultCurrency: invoice.ocrMetadata?.currency || null,
             });
         } catch (error) {
           logger.error(`❌ [PI OCR] Relance multi-fichiers échouée:`, error);

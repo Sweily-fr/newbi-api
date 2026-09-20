@@ -184,6 +184,9 @@ enum ExpenseCategory {
 
 type ReceiptFile {
   id: ID!
+  # Facture d'achat créée ou reconnue à partir de ce fichier (OCR) : le
+  # front n'affiche alors pas le fichier en double avec la facture liée
+  purchaseInvoiceId: ID
   url: String
   key: String
   filename: String
