@@ -80,6 +80,7 @@ import bankingSyncRoutes from "./routes/banking-sync.js";
 import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
+import publicEInvoicingDirectoryRoutes from "./routes/publicEInvoicingDirectory.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
@@ -384,6 +385,10 @@ async function startServer() {
 
   // Routes leads guides (publique, sans auth)
   app.use("/api/leads", guideLeadsRoutes);
+
+  // Annuaire facturation électronique (publique, sans auth, rate-limitée) :
+  // simulateur « Es-tu concerné ? » des LP
+  app.use("/api/public/einvoicing", publicEInvoicingDirectoryRoutes);
 
   // Routes tracking d'ouverture d'email (publique, sans auth)
   app.use("/tracking", emailTrackingRoutes);
