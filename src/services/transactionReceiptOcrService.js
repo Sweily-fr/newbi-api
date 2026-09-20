@@ -7,6 +7,7 @@ import Transaction from "../models/Transaction.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
+import { resolvePurchaseInvoiceCategoryInput } from "../utils/categoryTaxonomy.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
 import {
   buildReconciliationLinkEntry,
@@ -212,6 +213,34 @@ function mapCategory(ocrCategory, transactionExpenseCategory) {
   return "OTHER";
 }
 
+/**
+ * Catégorie de la facture d'achat créée depuis un justificatif.
+ *
+ * Une catégorie choisie à la main sur la transaction (categoryIsManual) est
+ * une décision explicite de l'utilisateur : elle prime sur la catégorie
+ * devinée par l'OCR, et la facture l'hérite (sous-catégorie fine + catégorie
+ * large dérivée) pour que les deux pages concordent. Sinon, comportement
+ * historique : l'OCR propose, puis la facture est propagée à la transaction.
+ *
+ * @returns {{ category: string, subcategory: string|null }}
+ */
+function resolveReceiptInvoiceCategory({ transaction, ocrCategory }) {
+  if (transaction.categoryIsManual && transaction.category) {
+    const resolved = resolvePurchaseInvoiceCategoryInput({
+      subcategory: transaction.category,
+    });
+    // Code hors référentiel (ex. code Bridge brut) : impossible à
+    // représenter sur la facture, on retombe sur l'OCR.
+    if (resolved.subcategory || resolved.category !== "OTHER") {
+      return resolved;
+    }
+  }
+  return {
+    category: mapCategory(ocrCategory, transaction.expenseCategory),
+    subcategory: null,
+  };
+}
+
 function mapPaymentMethod(ocrPaymentMethod, transactionPaymentMethod) {
   const candidates = [ocrPaymentMethod, transactionPaymentMethod];
   for (const candidate of candidates) {
@@ -384,7 +413,10 @@ async function createPurchaseInvoiceFromReceipt({
   const conversionNote = conversion
     ? ` Montant du justificatif : ${conversion.originalAmountTTC.toFixed(2)} ${conversion.originalCurrency}, débit bancaire retenu : ${amountTTC.toFixed(2)} ${currency}.`
     : "";
-  const category = mapCategory(td.category, transaction.expenseCategory);
+  const { category, subcategory } = resolveReceiptInvoiceCategory({
+    transaction,
+    ocrCategory: td.category,
+  });
   const issueDate =
     parseOcrDate(td.transaction_date || td.invoice_date) ||
     transaction.date ||
@@ -408,6 +440,7 @@ async function createPurchaseInvoiceFromReceipt({
       transaction.metadata?.paymentMethod,
     ),
     category,
+    subcategory,
     source: "OCR",
     notes: `Créée automatiquement depuis le justificatif de la transaction "${transaction.description || transaction.externalId || transaction._id}".${conversionNote}`,
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -772,13 +805,17 @@ async function processReceiptsForTransaction({
       );
 
       // La facture fait foi : la transaction rapprochée prend la catégorie de
-      // la facture créée, pour un affichage identique sur les deux pages
-      await syncLinkedTransactionCategories({
-        category: invoice.category,
-        subcategory: invoice.subcategory,
-        workspaceId,
-        transactionIds: [transaction._id],
-      });
+      // la facture créée, pour un affichage identique sur les deux pages.
+      // Exception : catégorie choisie à la main sur la transaction, c'est
+      // alors la facture qui vient d'en hériter (cf. resolveReceiptInvoiceCategory).
+      if (!(transaction.categoryIsManual && transaction.category)) {
+        await syncLinkedTransactionCategories({
+          category: invoice.category,
+          subcategory: invoice.subcategory,
+          workspaceId,
+          transactionIds: [transaction._id],
+        });
+      }
 
       createdInvoices.push(invoice);
       if (!existing) {
