@@ -58,6 +58,7 @@ import documentAutomationResolvers from "./documentAutomation.js";
 import purchaseInvoiceResolvers from "./purchaseInvoice.js";
 import treasuryForecastResolvers from "./treasuryForecast.js";
 import purchaseOrderResolvers from "./purchaseOrder.js";
+import deliveryNoteResolvers from "./deliveryNote.js";
 import importedPurchaseOrderResolvers from "./importedPurchaseOrder.js";
 import financialAnalyticsResolvers from "./financialAnalytics.js";
 import pennylaneResolvers from "./pennylaneResolvers.js";
@@ -128,6 +129,7 @@ const resolvers = mergeResolvers([
   purchaseInvoiceResolvers,
   treasuryForecastResolvers,
   purchaseOrderResolvers,
+  deliveryNoteResolvers,
   importedPurchaseOrderResolvers,
   financialAnalyticsResolvers,
   pennylaneResolvers,

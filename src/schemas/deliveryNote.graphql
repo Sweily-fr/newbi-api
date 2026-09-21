@@ -1,0 +1,176 @@
+# Bon de livraison (BL) : atteste la remise de marchandises.
+# Aucun montant, aucune TVA : seulement des produits et des quantités.
+# Cycle : Devis → BL → Facture (ou Facture → BL, ou BL isolé).
+
+enum DeliveryNoteStatus {
+  DRAFT
+  PENDING
+  SHIPPED
+  DELIVERED
+  CANCELED
+}
+
+# Ligne de bon de livraison : jamais de prix ni de TVA.
+type DeliveryNoteItem {
+  description: String!
+  details: String
+  reference: String
+  productId: String
+  quantity: Float!
+  # Préparation v2 « livraison partielle » : en MVP deliveredQuantity = quantity
+  orderedQuantity: Float
+  deliveredQuantity: Float
+  unit: String
+}
+
+input DeliveryNoteItemInput {
+  description: String!
+  details: String
+  reference: String
+  productId: String
+  quantity: Float!
+  orderedQuantity: Float
+  deliveredQuantity: Float
+  unit: String
+}
+
+type DeliveryNote {
+  id: ID!
+  prefix: String
+  number: String!
+  issueDate: String!
+  deliveryDate: String
+  client: EmbeddedClient!
+  companyInfo: Company!
+  items: [DeliveryNoteItem!]!
+  status: DeliveryNoteStatus!
+  # Livraison
+  deliveryAddress: Address
+  carrier: String
+  trackingNumber: String
+  notes: String
+  # Réception
+  receivedBy: String
+  receivedAt: String
+  signatureDataUrl: String
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  customFields: [CustomField!]
+  appearance: Appearance
+  clientPositionRight: Boolean
+  # Documents liés
+  sourceQuote: Quote
+  sourceInvoice: Invoice
+  linkedInvoices: [Invoice]
+  # Email tracking
+  emailTracking: EmailTracking
+  createdBy: User!
+  createdAt: String!
+  updatedAt: String!
+  archivedPdfKey: String
+  archivedPdfStoredAt: String
+  archivedPdfSource: String
+}
+
+type DeliveryNotePagination {
+  deliveryNotes: [DeliveryNote!]!
+  totalCount: Int!
+  hasNextPage: Boolean!
+}
+
+type DeliveryNoteStats {
+  totalCount: Int!
+  draftCount: Int!
+  pendingCount: Int!
+  shippedCount: Int!
+  deliveredCount: Int!
+  canceledCount: Int!
+}
+
+input CreateDeliveryNoteInput {
+  prefix: String
+  number: String
+  issueDate: String!
+  deliveryDate: String
+  client: ClientInput!
+  companyInfo: CompanyInput
+  items: [DeliveryNoteItemInput!]!
+  status: DeliveryNoteStatus = DRAFT
+  deliveryAddress: AddressInput
+  carrier: String
+  trackingNumber: String
+  notes: String
+  receivedBy: String
+  receivedAt: String
+  signatureDataUrl: String
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  customFields: [CustomFieldInput!]
+  appearance: AppearanceInput
+  clientPositionRight: Boolean
+  sourceQuoteId: ID
+  sourceInvoiceId: ID
+}
+
+input UpdateDeliveryNoteInput {
+  prefix: String
+  number: String
+  issueDate: String
+  deliveryDate: String
+  client: ClientInput
+  companyInfo: CompanyInput
+  items: [DeliveryNoteItemInput!]
+  status: DeliveryNoteStatus
+  deliveryAddress: AddressInput
+  carrier: String
+  trackingNumber: String
+  notes: String
+  receivedBy: String
+  receivedAt: String
+  signatureDataUrl: String
+  headerNotes: String
+  footerNotes: String
+  termsAndConditions: String
+  termsAndConditionsLinkTitle: String
+  termsAndConditionsLink: String
+  customFields: [CustomFieldInput!]
+  appearance: AppearanceInput
+  clientPositionRight: Boolean
+}
+
+# Réception : nom du réceptionnaire, date et signature manuscrite optionnelle.
+input DeliveryNoteReceptionInput {
+  receivedBy: String
+  receivedAt: String
+  signatureDataUrl: String
+}
+
+extend type Query {
+  deliveryNote(workspaceId: ID!, id: ID!): DeliveryNote!
+  deliveryNotes(workspaceId: ID!, startDate: String, endDate: String, status: DeliveryNoteStatus, search: String, page: Int, limit: Int): DeliveryNotePagination!
+  deliveryNoteStats(workspaceId: ID!): DeliveryNoteStats!
+  nextDeliveryNumber(workspaceId: ID!, prefix: String, autoNumbering: Boolean): String!
+  checkDeliveryNumberExists(workspaceId: ID!, number: String!, prefix: String!, excludeId: ID): Boolean!
+  deliveryNoteDocumentUrl(workspaceId: ID!, deliveryNoteId: ID!): String
+}
+
+extend type Mutation {
+  createDeliveryNote(workspaceId: ID!, input: CreateDeliveryNoteInput!): DeliveryNote!
+  updateDeliveryNote(id: ID!, workspaceId: ID!, input: UpdateDeliveryNoteInput!): DeliveryNote!
+  deleteDeliveryNote(id: ID!, workspaceId: ID!): Boolean!
+  changeDeliveryNoteStatus(id: ID!, workspaceId: ID!, status: DeliveryNoteStatus!): DeliveryNote!
+  # Marque le BL comme livré en enregistrant la réception (réceptionnaire, date, signature)
+  recordDeliveryNoteReception(id: ID!, workspaceId: ID!, input: DeliveryNoteReceptionInput!): DeliveryNote!
+  sendDeliveryNote(id: ID!, workspaceId: ID!, email: String!): Boolean!
+  archiveDeliveryNotePdf(workspaceId: ID!, deliveryNoteId: ID!, file: Upload!): DeliveryNote!
+  # Génération croisée
+  createDeliveryNoteFromQuote(quoteId: ID!, workspaceId: ID!): DeliveryNote!
+  createDeliveryNoteFromInvoice(invoiceId: ID!, workspaceId: ID!): DeliveryNote!
+  createInvoiceFromDeliveryNote(deliveryNoteId: ID!, workspaceId: ID!): Invoice!
+}

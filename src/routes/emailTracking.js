@@ -2,6 +2,7 @@ import express from "express";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
 import CreditNote from "../models/CreditNote.js";
 import SignatureRequest from "../models/SignatureRequest.js";
 import logger from "../utils/logger.js";
@@ -24,6 +25,7 @@ const DOCUMENT_MODELS = [
   { model: Invoice, type: "invoice" },
   { model: Quote, type: "quote" },
   { model: PurchaseOrder, type: "purchaseOrder" },
+  { model: DeliveryNote, type: "deliveryNote" },
   { model: CreditNote, type: "creditNote" },
 ];
 

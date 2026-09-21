@@ -11,6 +11,7 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
 import {
   requireWrite,
   requireRead,
@@ -242,6 +243,13 @@ const quoteResolvers = {
     // true si une facture existe déjà via un bon de commande issu de ce devis.
     // Sert au front à masquer/désactiver les boutons de conversion pour éviter
     // les doublons devis→facture vs devis→BC→facture.
+    // Bons de livraison créés à partir de ce devis (DeliveryNote.sourceQuote)
+    linkedDeliveryNotes: async (quote) => {
+      return await DeliveryNote.find({
+        sourceQuote: quote._id,
+        workspaceId: quote.workspaceId,
+      }).sort({ createdAt: -1 });
+    },
     hasPurchaseOrderInvoices: async (quote) => {
       const count = await PurchaseOrder.countDocuments({
         sourceQuoteId: quote._id,

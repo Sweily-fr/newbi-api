@@ -243,6 +243,10 @@ function buildR2Targets({ userIdStr, purgeOrgIds }) {
       bucket: cf.documentBuckets.purchaseOrder,
       prefix: `purchaseOrders/${orgId}/`,
     });
+    targets.push({
+      bucket: cf.documentBuckets.deliveryNote,
+      prefix: `deliveryNotes/${orgId}/`,
+    });
   }
 
   // Dédupliquer (certains buckets peuvent partager la même valeur d'env)

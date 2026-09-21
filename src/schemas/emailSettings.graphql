@@ -8,6 +8,7 @@ type EmailSettings {
   quoteEmailTemplate: String
   creditNoteEmailTemplate: String
   purchaseOrderEmailTemplate: String
+  deliveryNoteEmailTemplate: String
   useCustomFooter: Boolean
   customEmailFooter: String
   verified: Boolean!
@@ -24,6 +25,7 @@ input EmailSettingsInput {
   quoteEmailTemplate: String
   creditNoteEmailTemplate: String
   purchaseOrderEmailTemplate: String
+  deliveryNoteEmailTemplate: String
   useCustomFooter: Boolean
   customEmailFooter: String
 }

@@ -4,6 +4,7 @@ import { validateJWT } from "../middlewares/better-auth-jwt.js";
 import Quote from "../models/Quote.js";
 import CreditNote from "../models/CreditNote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
 import cloudflareService from "../services/cloudflareService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
@@ -15,6 +16,7 @@ const DOC_CONFIG = {
   quote: { Model: Quote, draftStatus: "DRAFT" },
   creditNote: { Model: CreditNote, draftStatus: null },
   purchaseOrder: { Model: PurchaseOrder, draftStatus: "DRAFT" },
+  deliveryNote: { Model: DeliveryNote, draftStatus: "DRAFT" },
 };
 
 /**

@@ -2,6 +2,7 @@ import Quote from "../models/Quote.js";
 import Invoice from "../models/Invoice.js";
 import CreditNote from "../models/CreditNote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
 import DocumentCounter from "../models/DocumentCounter.js";
 
 const _getNow = () => new Date();
@@ -555,6 +556,7 @@ const FINALIZED_STATUSES = {
     "DELIVERED",
     "CANCELED",
   ],
+  deliveryNote: ["PENDING", "SHIPPED", "DELIVERED", "CANCELED"],
   // Les avoirs n'ont pas de brouillon : tous sont finalisés (même périmètre
   // que getExistingMaxNumber dans DocumentCounter).
   creditNote: ["CREATED", "PENDING", "COMPLETED", "CANCELED"],
@@ -564,6 +566,7 @@ const MODEL_LABELS = {
   invoice: "facture",
   quote: "devis",
   purchaseOrder: "bon de commande",
+  deliveryNote: "bon de livraison",
   creditNote: "avoir",
 };
 
@@ -573,6 +576,7 @@ const MODEL_LAST_LABELS = {
   invoice: "La dernière facture",
   quote: "Le dernier devis",
   purchaseOrder: "Le dernier bon de commande",
+  deliveryNote: "Le dernier bon de livraison",
   creditNote: "Le dernier avoir",
 };
 
@@ -604,7 +608,7 @@ const buildLastDocumentSentence = (documentType, prefix, maxNumber, scoped) => {
  * - autoNumbering=false → séquence par préfixe (filtre sur le préfixe).
  * - autoNumbering=true  → séquence continue (tous préfixes confondus).
  *
- * @param {("invoice"|"quote"|"purchaseOrder")} documentType
+ * @param {("invoice"|"quote"|"purchaseOrder"|"deliveryNote")} documentType
  */
 const validateNumberSequence = async (
   documentType,
@@ -621,6 +625,7 @@ const validateNumberSequence = async (
     invoice: Invoice,
     quote: Quote,
     purchaseOrder: PurchaseOrder,
+    deliveryNote: DeliveryNote,
     creditNote: CreditNote,
   };
   const model = modelMap[documentType];
@@ -1279,11 +1284,75 @@ const generatePurchaseOrderNumber = async (customPrefix, options = {}) => {
   return await generatePurchaseOrderSequentialNumber(prefix, options);
 };
 
+/**
+ * Génère un numéro séquentiel pour les bons de livraison
+ * La numérotation est séquentielle PAR PRÉFIXE (même mécanique que les BC)
+ */
+const generateDeliveryNoteSequentialNumber = async (prefix, options = {}) => {
+  const workspaceId = options.workspaceId || options.userId || "default";
+  const autoNumbering = options.autoNumbering === true;
+
+  if (options.manualNumber && /^\d+$/.test(options.manualNumber)) {
+    const query = {
+      status: { $in: FINALIZED_STATUSES.deliveryNote },
+    };
+    if (prefix && !autoNumbering) query.prefix = prefix;
+    if (options.workspaceId) query.workspaceId = options.workspaceId;
+    else if (options.userId) query.createdBy = options.userId;
+
+    const existingCount = await DeliveryNote.countDocuments(
+      query,
+      sessionOpts(options),
+    );
+    if (existingCount === 0) {
+      return options.manualNumber;
+    }
+  }
+
+  const nextNumber = await DocumentCounter.getNextNumber(
+    "deliveryNote",
+    prefix || "",
+    workspaceId,
+    { session: options.session, global: autoNumbering },
+  );
+
+  return String(nextNumber).padStart(4, "0");
+};
+
+/**
+ * Génère un numéro de bon de livraison
+ * - Brouillon → numéro provisoire DRAFT-<timestamp> (ne consomme pas la séquence)
+ * - Finalisé → BL-YYYYMM + séquence atomique par workspace (0001, 0002…)
+ */
+const generateDeliveryNoteNumber = async (customPrefix, options = {}) => {
+  let prefix;
+  if (customPrefix) {
+    prefix = customPrefix;
+  } else {
+    const now = _getNow();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    prefix = `BL-${year}${month}`;
+  }
+
+  if (options.isDraft) {
+    const timestamp = Date.now();
+    return `DRAFT-${timestamp}`;
+  }
+
+  if (options.manualNumber) {
+    return options.manualNumber;
+  }
+
+  return await generateDeliveryNoteSequentialNumber(prefix, options);
+};
+
 export {
   generateInvoiceNumber,
   generateQuoteNumber,
   generateCreditNoteNumber,
   generatePurchaseOrderNumber,
+  generateDeliveryNoteNumber,
   validateInvoiceNumberSequence,
   validateNumberSequence,
 };
