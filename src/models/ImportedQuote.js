@@ -76,8 +76,14 @@ const importedQuoteSchema = new mongoose.Schema(
     // Source de l'import
     source: {
       type: String,
-      enum: ["OCR_UPLOAD", "QONTO", "MANUAL"],
+      enum: ["OCR_UPLOAD", "QONTO", "ABBY", "MANUAL"],
       default: "OCR_UPLOAD",
+    },
+    // === ABBY (devis finalisé dans Abby, importé par le cron) ===
+    abbyId: {
+      type: String,
+      sparse: true,
+      index: true,
     },
     // === QONTO (devis créé dans Qonto, importé par le cron) ===
     qontoId: {

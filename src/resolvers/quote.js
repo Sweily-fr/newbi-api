@@ -40,6 +40,7 @@ import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "../services/qontoSyncHelper.js";
+import { syncQuoteIfNeeded as syncQuoteToAbbyIfNeeded } from "../services/abbySyncHelper.js";
 import { cancelActiveQuoteSignatures } from "../services/quoteSignatureSync.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
@@ -1049,6 +1050,10 @@ const quoteResolvers = {
               quote,
               context.organizationId || workspaceId,
             ).catch((err) => console.error("Erreur sync Qonto devis:", err));
+            syncQuoteToAbbyIfNeeded(
+              quote,
+              context.organizationId || workspaceId,
+            ).catch((err) => console.error("Erreur sync Abby devis:", err));
           }
 
           return await quote.populate("createdBy");
@@ -1404,6 +1409,10 @@ const quoteResolvers = {
             quote,
             context.organizationId || workspaceId,
           ).catch((err) => console.error("Erreur sync Qonto devis:", err));
+          syncQuoteToAbbyIfNeeded(
+            quote,
+            context.organizationId || workspaceId,
+          ).catch((err) => console.error("Erreur sync Abby devis:", err));
         }
 
         return await quote.populate("createdBy");
@@ -1764,6 +1773,10 @@ const quoteResolvers = {
           quote,
           context.organizationId || workspaceId,
         ).catch((err) => console.error("Erreur sync Qonto devis:", err));
+        syncQuoteToAbbyIfNeeded(
+          quote,
+          context.organizationId || workspaceId,
+        ).catch((err) => console.error("Erreur sync Abby devis:", err));
 
         return await quote.populate("createdBy");
       }),

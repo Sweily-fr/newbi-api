@@ -1,0 +1,171 @@
+# === ABBY INTEGRATION TYPES ===
+
+"""
+Compte Abby connecté à une organisation
+"""
+type AbbyAccount {
+  id: ID!
+  organizationId: String!
+  isConnected: Boolean!
+  companyName: String
+  abbyCompanyId: String
+  isTestMode: Boolean!
+  incomeProductType: Int!
+  lastSyncAt: String
+  syncStatus: String!
+  syncError: String
+  lastImportAt: String
+  importError: String
+  stats: AbbyStats
+  autoSync: AbbyAutoSync
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+Statistiques de synchronisation Abby
+"""
+type AbbyStats {
+  invoicesSynced: Int!
+  quotesSynced: Int!
+  clientsSynced: Int!
+  clientInvoicesImported: Int!
+  quotesImported: Int!
+}
+
+"""
+Préférences de synchronisation automatique Abby
+"""
+type AbbyAutoSync {
+  "Newbi → Abby : factures clients encaissées → livre des recettes"
+  invoices: Boolean!
+  "Newbi → Abby : devis envoyés ou acceptés → devis Abby"
+  quotes: Boolean!
+  "Abby → Newbi : factures finalisées dans Abby"
+  importClientInvoices: Boolean!
+  "Abby → Newbi : devis finalisés dans Abby"
+  importQuotes: Boolean!
+}
+
+"""
+Résultat d'une opération Abby
+"""
+type AbbyResult {
+  success: Boolean!
+  message: String
+  account: AbbyAccount
+}
+
+"""
+Résultat du test de connexion Abby
+"""
+type AbbyConnectionResult {
+  success: Boolean!
+  message: String
+  companyName: String
+  companyId: String
+  isTestMode: Boolean
+}
+
+"""
+Résultat de synchronisation d'une entité vers Abby
+"""
+type AbbySyncResult {
+  success: Boolean!
+  message: String
+  abbyId: String
+}
+
+"""
+Résultat détaillé d'une synchronisation complète vers Abby
+"""
+type AbbySyncAllResult {
+  success: Boolean!
+  message: String
+  invoicesSynced: Int
+  invoicesErrors: Int
+  quotesSynced: Int
+  quotesErrors: Int
+}
+
+"""
+Résultat d'un import Abby → Newbi
+"""
+type AbbyImportResult {
+  success: Boolean!
+  message: String
+  clientInvoicesImported: Int
+  clientInvoicesUpdated: Int
+  clientInvoicesErrors: Int
+  quotesImported: Int
+  quotesUpdated: Int
+  quotesErrors: Int
+}
+
+"""
+Input pour les préférences de sync automatique Abby
+"""
+input AbbyAutoSyncInput {
+  invoices: Boolean
+  quotes: Boolean
+  importClientInvoices: Boolean
+  importQuotes: Boolean
+}
+
+# === QUERIES ===
+
+extend type Query {
+  """
+  Récupérer le compte Abby de l'organisation active
+  """
+  myAbbyAccount: AbbyAccount
+}
+
+# === MUTATIONS ===
+
+extend type Mutation {
+  """
+  Tester une clé API Abby sans sauvegarder
+  """
+  testAbbyConnection(apiKey: String!): AbbyConnectionResult!
+
+  """
+  Connecter Abby à l'organisation (sauvegarde la clé après test)
+  """
+  connectAbby(apiKey: String!): AbbyResult!
+
+  """
+  Déconnecter Abby de l'organisation
+  """
+  disconnectAbby: AbbyResult!
+
+  """
+  Mettre à jour les préférences de synchronisation automatique
+  """
+  updateAbbyAutoSync(autoSync: AbbyAutoSyncInput!): AbbyResult!
+
+  """
+  Choisir le type de produit Abby des recettes créées par Newbi (1 à 5)
+  """
+  updateAbbyIncomeProductType(productType: Int!): AbbyResult!
+
+  """
+  Enregistrer une facture encaissée dans le livre des recettes Abby
+  """
+  syncInvoiceToAbby(invoiceId: ID!): AbbySyncResult!
+
+  """
+  Créer un devis Newbi dans Abby (signé s'il est accepté)
+  """
+  syncQuoteToAbby(quoteId: ID!): AbbySyncResult!
+
+  """
+  Lancer une synchronisation complète vers Abby
+  """
+  syncAllToAbby: AbbySyncAllResult!
+
+  """
+  Importer maintenant les factures et devis finalisés dans Abby vers Newbi
+  """
+  importFromAbby: AbbyImportResult!
+}
