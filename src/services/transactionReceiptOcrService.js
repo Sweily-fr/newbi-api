@@ -534,7 +534,10 @@ async function createPurchaseInvoiceFromReceipt({
  *
  * Dans les deux cas, la facture retenue doit pouvoir « absorber » le débit
  * (cf. purchaseInvoiceCanAbsorbTransaction) : au-delà, ce n'est pas un
- * doublon mais une autre facture.
+ * doublon mais une autre facture. Exception : même numéro de facture lu par
+ * l'OCR, le numéro identifie la facture (relevé mensuel couvrant plusieurs
+ * débits, facture en devise déposée sur chaque prélèvement) et créer un
+ * second document au même numéro serait pire.
  */
 async function findExistingPurchaseInvoiceForReceipt({
   transaction,
@@ -544,6 +547,7 @@ async function findExistingPurchaseInvoiceForReceipt({
 }) {
   const linkedIds = transaction.linkedPurchaseInvoiceIds || [];
   let candidate = null;
+  let ocrNumber = null;
 
   if (!ocrSucceeded) {
     if (linkedIds.length === 0) return null;
@@ -553,13 +557,14 @@ async function findExistingPurchaseInvoiceForReceipt({
     }).sort({ createdAt: -1 });
   } else {
     const td = financial?.transaction_data || {};
+    ocrNumber = td.document_number || td.invoice_number || null;
     // Même montant que celui qui serait enregistré sur la facture : en devise
     // étrangère, une facture déjà créée porte le débit bancaire converti.
     const { amountTTC } = resolveReceiptAmounts({ transaction, financial });
     const candidates = await findPurchaseInvoiceDuplicates({
       workspaceId,
       supplierName: td.vendor_name || td.supplier_name || null,
-      invoiceNumber: td.document_number || td.invoice_number || null,
+      invoiceNumber: ocrNumber,
       amountTTC: amountTTC || null,
       issueDate:
         parseOcrDate(td.transaction_date || td.invoice_date) ||
@@ -572,6 +577,7 @@ async function findExistingPurchaseInvoiceForReceipt({
   }
 
   if (!candidate) return null;
+  if (sameInvoiceNumber(ocrNumber, candidate.invoiceNumber)) return candidate;
   if (!(await purchaseInvoiceCanAbsorbTransaction(candidate, transaction))) {
     logger.info(
       `ℹ️ [RECEIPT OCR] Facture ${candidate._id} (${candidate.amountTTC} ${candidate.currency || "EUR"}) déjà couverte par ses transactions liées, pas de rattachement de la transaction ${transaction._id} (${transaction.amount})`,
@@ -580,6 +586,14 @@ async function findExistingPurchaseInvoiceForReceipt({
   }
   return candidate;
 }
+
+const normalizeInvoiceNumber = (n) =>
+  (n || "").toString().toLowerCase().replace(/\s+/g, "");
+
+const sameInvoiceNumber = (a, b) => {
+  const na = normalizeInvoiceNumber(a);
+  return na.length >= 3 && na === normalizeInvoiceNumber(b);
+};
 
 /**
  * Tolérance sur la somme des débits rattachés à une facture : 1 % (arrondis
