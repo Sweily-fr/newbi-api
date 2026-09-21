@@ -81,6 +81,10 @@ type Invoice {
   # Bon de commande source — résolu à l'inverse via PurchaseOrder.linkedInvoices
   # (le modèle Invoice ne stocke pas de référence vers le BC)
   sourcePurchaseOrder: PurchaseOrder
+  # Bon de livraison source — résolu à l'inverse via DeliveryNote.linkedInvoices
+  sourceDeliveryNote: DeliveryNote
+  # Bons de livraison générés depuis cette facture (DeliveryNote.sourceInvoice)
+  linkedDeliveryNotes: [DeliveryNote]
   createdAt: String!
   updatedAt: String!
 }

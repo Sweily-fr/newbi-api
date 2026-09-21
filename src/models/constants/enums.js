@@ -44,6 +44,18 @@ const PURCHASE_ORDER_STATUS = {
 };
 
 /**
+ * Statuts possibles pour un bon de livraison (cycle logistique, pas de
+ * notion de paiement)
+ */
+const DELIVERY_NOTE_STATUS = {
+  DRAFT: "DRAFT",
+  PENDING: "PENDING",
+  SHIPPED: "SHIPPED",
+  DELIVERED: "DELIVERED",
+  CANCELED: "CANCELED",
+};
+
+/**
  * Types de remise possibles
  */
 const DISCOUNT_TYPE = {
@@ -67,6 +79,7 @@ export {
   QUOTE_STATUS,
   CREDIT_NOTE_STATUS,
   PURCHASE_ORDER_STATUS,
+  DELIVERY_NOTE_STATUS,
   DISCOUNT_TYPE,
   PAYMENT_METHOD,
 };

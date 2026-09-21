@@ -3,13 +3,14 @@ import Invoice from "./Invoice.js";
 import Quote from "./Quote.js";
 import CreditNote from "./CreditNote.js";
 import PurchaseOrder from "./PurchaseOrder.js";
+import DeliveryNote from "./DeliveryNote.js";
 
 const documentCounterSchema = new mongoose.Schema(
   {
     documentType: {
       type: String,
       required: true,
-      enum: ["invoice", "quote", "creditNote", "purchaseOrder"],
+      enum: ["invoice", "quote", "creditNote", "purchaseOrder", "deliveryNote"],
     },
     prefix: { type: String, required: true },
     workspaceId: { type: String, required: true },
@@ -133,6 +134,10 @@ async function getExistingMaxNumber(
         "DELIVERED",
         "CANCELED",
       ],
+    },
+    deliveryNote: {
+      model: DeliveryNote,
+      statuses: ["PENDING", "SHIPPED", "DELIVERED", "CANCELED"],
     },
   };
 

@@ -371,6 +371,7 @@ export async function deleteUserAccount(userId, organizationId) {
       { name: "treasuryforecasts", filter: { workspaceId: orgObjectId } },
       { name: "purchaseinvoices", filter: { workspaceId: orgObjectId } },
       { name: "purchaseorders", filter: { workspaceId: orgObjectId } },
+      { name: "deliverynotes", filter: { workspaceId: orgObjectId } },
       { name: "suppliers", filter: { workspaceId: orgObjectId } },
       { name: "importedinvoices", filter: { workspaceId: orgObjectId } },
       { name: "importedquotes", filter: { workspaceId: orgObjectId } },

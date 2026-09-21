@@ -45,6 +45,11 @@ const emailSettingsSchema = new mongoose.Schema({
     default: "",
     trim: true,
   },
+  deliveryNoteEmailTemplate: {
+    type: String,
+    default: "",
+    trim: true,
+  },
   // Personnalisation du bas de l'email
   useCustomFooter: {
     type: Boolean,

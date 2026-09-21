@@ -137,6 +137,28 @@ const documentEmailResolvers = {
         return result;
       },
     ),
+
+    sendDeliveryNoteEmail: requireWrite("deliveryNotes")(
+      async (_, { workspaceId, input }, context) => {
+        const result = await sendDocumentEmail({
+          documentId: input.documentId,
+          documentType: DOCUMENT_TYPES.DELIVERY_NOTE,
+          workspaceId: resolveWorkspaceId(workspaceId, context.workspaceId),
+          emailSubject: input.emailSubject,
+          emailBody: input.emailBody,
+          recipientEmail: input.recipientEmail,
+          ccEmails: input.ccEmails || [],
+          bccEmails: input.bccEmails || [],
+          pdfBase64: input.pdfBase64 || null,
+          senderEmail: context?.user?.email || null,
+          extraAttachments: input.attachments || [],
+          useCustomFooter: input.useCustomFooter,
+          customEmailFooter: input.customEmailFooter,
+        });
+
+        return result;
+      },
+    ),
   },
 };
 

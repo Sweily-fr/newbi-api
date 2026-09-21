@@ -60,6 +60,8 @@ type Quote {
   linkedPurchaseOrders: [PurchaseOrder]
   # true si au moins une facture a été créée via un bon de commande issu de ce devis
   hasPurchaseOrderInvoices: Boolean
+  # Bons de livraison créés à partir de ce devis (DeliveryNote.sourceQuote)
+  linkedDeliveryNotes: [DeliveryNote]
   situationInvoicedTotal: Float
   archivedPdfKey: String
   archivedPdfStoredAt: String
