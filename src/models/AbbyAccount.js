@@ -1,0 +1,111 @@
+import mongoose from "mongoose";
+import { applyFieldEncryption, decrypt } from "../utils/encryption.js";
+
+/**
+ * Compte Abby (logiciel de facturation / comptabilité des indépendants)
+ * connecté à une organisation Newbi par clé API.
+ *
+ * Contrairement à Qonto ou Pennylane, Abby est lui-même un outil de
+ * facturation : on ne recrée jamais une facture Newbi dans Abby (elle
+ * recevrait un second numéro fiscal). Le sens Newbi → Abby enregistre les
+ * factures encaissées dans le livre des recettes d'Abby et crée les devis
+ * envoyés comme devis Abby. Le sens Abby → Newbi importe par polling les
+ * factures et devis finalisés dans Abby.
+ */
+
+const abbyAccountSchema = new mongoose.Schema(
+  {
+    organizationId: {
+      type: String,
+      required: true,
+    },
+    // Clé API générée dans Abby → Paramètres → Intégrations → Clés API (suk_…)
+    apiKey: {
+      type: String,
+      required: true,
+    },
+    isConnected: {
+      type: Boolean,
+      default: true,
+    },
+    companyName: {
+      type: String,
+      trim: true,
+    },
+    abbyCompanyId: {
+      type: String,
+    },
+    // Compte Abby en mode test : ses documents portent `test: true` et ne
+    // sont listés qu'avec ce filtre (cf. abbyService.listBillings)
+    isTestMode: {
+      type: Boolean,
+      default: false,
+    },
+    // Nature (référentiel Abby) des recettes créées par Newbi, vérifiée dans
+    // l'interface Abby le 21/09/2026 : 1 vente de marchandises (BIC),
+    // 2 prestations de services (BNC), 3 prestations de services artisanales
+    // ou commerciales (BIC), 4 vente de produits fabriqués (BIC), 5 débours.
+    incomeProductType: {
+      type: Number,
+      enum: [1, 2, 3, 4, 5],
+      default: 2,
+    },
+    lastSyncAt: {
+      type: Date,
+    },
+    syncStatus: {
+      type: String,
+      enum: ["IDLE", "IN_PROGRESS", "SUCCESS", "ERROR"],
+      default: "IDLE",
+    },
+    syncError: {
+      type: String,
+    },
+    stats: {
+      invoicesSynced: { type: Number, default: 0 },
+      quotesSynced: { type: Number, default: 0 },
+      clientsSynced: { type: Number, default: 0 },
+      clientInvoicesImported: { type: Number, default: 0 },
+      quotesImported: { type: Number, default: 0 },
+    },
+    autoSync: {
+      // Newbi → Abby
+      invoices: { type: Boolean, default: true },
+      quotes: { type: Boolean, default: true },
+      // Abby → Newbi (cron de polling, cf. abbyImportCron)
+      importClientInvoices: { type: Boolean, default: true },
+      importQuotes: { type: Boolean, default: true },
+    },
+    // Borne basse (date d'émission) du polling Abby → Newbi
+    importCursors: {
+      clientInvoices: { type: Date },
+      quotes: { type: Date },
+    },
+    lastImportAt: {
+      type: Date,
+    },
+    importError: {
+      type: String,
+    },
+    connectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+  },
+  { timestamps: true },
+);
+
+// Un seul compte Abby par organisation
+abbyAccountSchema.index({ organizationId: 1 }, { unique: true });
+
+// Même convention que PennylaneAccount / QontoAccount : la lecture directe de
+// `apiKey` renvoie le chiffré, le déchiffrement est explicite.
+abbyAccountSchema.methods.getDecryptedApiKey = function () {
+  return decrypt(this.apiKey);
+};
+
+applyFieldEncryption(abbyAccountSchema, ["apiKey"]);
+
+const AbbyAccount = mongoose.model("AbbyAccount", abbyAccountSchema);
+
+export default AbbyAccount;
