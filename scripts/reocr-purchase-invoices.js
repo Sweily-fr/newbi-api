@@ -161,6 +161,18 @@ async function applyProposal(invoice, c) {
     workspaceId: wsId,
     name: { $regex: `^${escapeRegex(c.supplierName)}$`, $options: "i" },
   });
+  // Nom lu tronqué (« Canva » pour « Canva Pty. Ltd. ») : si c'est le début
+  // d'une seule fiche existante, on réutilise cette fiche et son nom complet.
+  if (!supplier) {
+    const byPrefix = await Supplier.find({
+      workspaceId: wsId,
+      name: { $regex: `^${escapeRegex(c.supplierName)}\\b`, $options: "i" },
+    }).limit(2);
+    if (byPrefix.length === 1) {
+      supplier = byPrefix[0];
+      c.supplierName = supplier.name;
+    }
+  }
   if (!supplier) {
     supplier = await Supplier.create({
       name: c.supplierName,
@@ -236,6 +248,54 @@ async function reocr() {
     } catch (err) {
       plan.push({ invoice, ok: false, reason: err.message });
       console.log(`✗ erreur : ${err.message}`);
+    }
+  }
+
+  // Même numéro lu sur plusieurs factures (même PDF déposé deux fois) : on
+  // ne l'applique qu'à celle dont la date d'émission colle à la date lue,
+  // les autres sont laissées telles quelles.
+  const byNumber = new Map();
+  for (const p of plan) {
+    if (!p.ok || !p.combined.invoiceNumber) continue;
+    const key = p.combined.invoiceNumber.replace(/\s+/g, "").toLowerCase();
+    if (!byNumber.has(key)) byNumber.set(key, []);
+    byNumber.get(key).push(p);
+  }
+  for (const [, group] of byNumber) {
+    if (group.length < 2) continue;
+    const gap = (p) =>
+      Math.abs(
+        new Date(p.invoice.issueDate) - new Date(p.combined.invoiceDate),
+      );
+    const keep = group.reduce((a, b) => (gap(b) < gap(a) ? b : a));
+    for (const p of group) {
+      if (p === keep) continue;
+      p.ok = false;
+      p.reason = `numéro ${p.combined.invoiceNumber} lu aussi sur ${keep.invoice._id} (${day(keep.invoice.issueDate)}), probablement le même PDF déposé deux fois`;
+      console.log(
+        `  ✗ ${p.invoice._id} ${day(p.invoice.issueDate)} laissée telle quelle : ${p.reason}`,
+      );
+    }
+  }
+  // Numéro déjà porté par une autre facture du workspace hors du lot.
+  for (const p of plan) {
+    if (!p.ok || !p.combined.invoiceNumber) continue;
+    const clash = await PurchaseInvoice.findOne({
+      workspaceId: p.invoice.workspaceId,
+      _id: { $nin: plan.map((x) => x.invoice._id) },
+      invoiceNumber: {
+        $regex: `^${escapeRegex(p.combined.invoiceNumber)}$`,
+        $options: "i",
+      },
+    })
+      .select("_id issueDate")
+      .lean();
+    if (clash) {
+      p.ok = false;
+      p.reason = `numéro ${p.combined.invoiceNumber} déjà porté par ${clash._id} (${day(clash.issueDate)})`;
+      console.log(
+        `  ✗ ${p.invoice._id} ${day(p.invoice.issueDate)} laissée telle quelle : ${p.reason}`,
+      );
     }
   }
 
