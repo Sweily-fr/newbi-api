@@ -522,10 +522,19 @@ async function createPurchaseInvoiceFromReceipt({
  * sur la transaction ne doit pas donner deux factures).
  *
  * - OCR réussi : recherche par numéro / fournisseur / montant / date, en
- *   privilégiant les factures déjà liées à la transaction.
+ *   privilégiant les factures déjà liées à la transaction. Sans date lue sur
+ *   le PDF, c'est la date de la transaction qui sert de repère (la même que
+ *   prendrait la facture créée) : un abonnement mensuel a le même fournisseur
+ *   et le même montant tous les mois, seule la date distingue les factures.
+ *   Incident 21/09/2026 : 23 justificatifs Canva de 2024-2025 (OCR sans date
+ *   ni numéro) empilés sur la facture d'août 2026.
  * - OCR échoué : aucune donnée fiable ; si la transaction porte déjà une
  *   facture d'achat, le justificatif lui est rattaché (créer une facture
  *   "fallback" au montant de la transaction doublerait la dépense).
+ *
+ * Dans les deux cas, la facture retenue doit pouvoir « absorber » le débit
+ * (cf. purchaseInvoiceCanAbsorbTransaction) : au-delà, ce n'est pas un
+ * doublon mais une autre facture.
  */
 async function findExistingPurchaseInvoiceForReceipt({
   transaction,
@@ -534,29 +543,82 @@ async function findExistingPurchaseInvoiceForReceipt({
   workspaceId,
 }) {
   const linkedIds = transaction.linkedPurchaseInvoiceIds || [];
+  let candidate = null;
 
   if (!ocrSucceeded) {
     if (linkedIds.length === 0) return null;
-    return PurchaseInvoice.findOne({
+    candidate = await PurchaseInvoice.findOne({
       _id: { $in: linkedIds },
       workspaceId: new mongoose.Types.ObjectId(workspaceId),
     }).sort({ createdAt: -1 });
+  } else {
+    const td = financial?.transaction_data || {};
+    // Même montant que celui qui serait enregistré sur la facture : en devise
+    // étrangère, une facture déjà créée porte le débit bancaire converti.
+    const { amountTTC } = resolveReceiptAmounts({ transaction, financial });
+    const candidates = await findPurchaseInvoiceDuplicates({
+      workspaceId,
+      supplierName: td.vendor_name || td.supplier_name || null,
+      invoiceNumber: td.document_number || td.invoice_number || null,
+      amountTTC: amountTTC || null,
+      issueDate:
+        parseOcrDate(td.transaction_date || td.invoice_date) ||
+        transaction.date ||
+        null,
+      preferIds: linkedIds,
+      limit: 1,
+    });
+    candidate = candidates[0] || null;
   }
 
-  const td = financial?.transaction_data || {};
-  // Même montant que celui qui serait enregistré sur la facture : en devise
-  // étrangère, une facture déjà créée porte le débit bancaire converti.
-  const { amountTTC } = resolveReceiptAmounts({ transaction, financial });
-  const candidates = await findPurchaseInvoiceDuplicates({
-    workspaceId,
-    supplierName: td.vendor_name || td.supplier_name || null,
-    invoiceNumber: td.document_number || td.invoice_number || null,
-    amountTTC: amountTTC || null,
-    issueDate: parseOcrDate(td.transaction_date || td.invoice_date) || null,
-    preferIds: linkedIds,
-    limit: 1,
-  });
-  return candidates[0] || null;
+  if (!candidate) return null;
+  if (!(await purchaseInvoiceCanAbsorbTransaction(candidate, transaction))) {
+    logger.info(
+      `ℹ️ [RECEIPT OCR] Facture ${candidate._id} (${candidate.amountTTC} ${candidate.currency || "EUR"}) déjà couverte par ses transactions liées, pas de rattachement de la transaction ${transaction._id} (${transaction.amount})`,
+    );
+    return null;
+  }
+  return candidate;
+}
+
+/**
+ * Tolérance sur la somme des débits rattachés à une facture : 1 % (arrondis
+ * de conversion de devise) et jamais moins d'un centime.
+ */
+const ABSORB_TOLERANCE_RATIO = 0.01;
+
+/**
+ * Une facture d'achat peut se voir rattacher un débit supplémentaire tant que
+ * la somme des transactions déjà liées (hors celle-ci) plus ce débit ne
+ * dépasse pas son TTC : paiement en plusieurs fois, facture mensuelle
+ * regroupant plusieurs prélèvements. Une facture de 11,99 € déjà payée par un
+ * débit de 11,99 € ne peut pas en absorber un second : c'est une autre
+ * facture (abonnement du mois suivant), pas un doublon.
+ *
+ * Sans TTC exploitable sur la facture, on ne tranche pas (rattachement
+ * autorisé comme avant).
+ */
+async function purchaseInvoiceCanAbsorbTransaction(invoice, transaction) {
+  const ttc = Number(invoice?.amountTTC);
+  const debit = Math.abs(Number(transaction?.amount) || 0);
+  if (!(ttc > 0) || !(debit > 0)) return true;
+
+  const otherIds = (invoice.linkedTransactionIds || []).filter(
+    (id) => String(id) !== String(transaction._id),
+  );
+  let alreadyCovered = 0;
+  if (otherIds.length > 0) {
+    const linked = await Transaction.find({ _id: { $in: otherIds } })
+      .select("amount")
+      .lean();
+    alreadyCovered = linked.reduce(
+      (sum, t) => sum + Math.abs(Number(t.amount) || 0),
+      0,
+    );
+  }
+
+  const tolerance = Math.max(ttc * ABSORB_TOLERANCE_RATIO, 0.01);
+  return alreadyCovered + debit <= ttc + tolerance;
 }
 
 /**
@@ -1207,6 +1269,11 @@ async function analyzePurchaseInvoiceFiles({
     bankAmount,
   };
 }
+
+export {
+  findExistingPurchaseInvoiceForReceipt,
+  purchaseInvoiceCanAbsorbTransaction,
+};
 
 export default {
   resolveReceiptAmounts,
