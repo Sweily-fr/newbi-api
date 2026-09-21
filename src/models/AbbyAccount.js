@@ -41,9 +41,10 @@ const abbyAccountSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    // Type de produit (référentiel Abby) utilisé pour les recettes créées par
-    // Newbi : 1 vente de marchandises, 2 prestation commerciale/artisanale,
-    // 3 prestation libérale (BNC), 4/5 autres (cf. schéma Abby).
+    // Nature (référentiel Abby) des recettes créées par Newbi, vérifiée dans
+    // l'interface Abby le 21/09/2026 : 1 vente de marchandises (BIC),
+    // 2 prestations de services (BNC), 3 prestations de services artisanales
+    // ou commerciales (BIC), 4 vente de produits fabriqués (BIC), 5 débours.
     incomeProductType: {
       type: Number,
       enum: [1, 2, 3, 4, 5],

@@ -295,7 +295,7 @@ describe("abbyService.syncCustomerInvoice", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("enregistre la recette avec le client retrouvé, le PDF et le type de produit", async () => {
+  it("enregistre la recette (montants en centimes, client en texte) avec le PDF et le type de produit", async () => {
     const calls = stubRouter({
       "GET /organizations": jsonResponse({
         docs: [{ id: "org-lex", name: "LexCorp", siret: "12345678900012" }],
@@ -310,10 +310,10 @@ describe("abbyService.syncCustomerInvoice", () => {
 
     const body = bodyOf(calls.find((c) => c.url.pathname === "/incomeBook"));
     expect(body).toMatchObject({
-      client: "org-lex",
-      priceWithoutTax: 100,
-      priceTotalTax: 120,
-      vatAmount: 20,
+      client: "LexCorp",
+      priceWithoutTax: 10000,
+      priceTotalTax: 12000,
+      vatAmount: 2000,
       reference: "F-2026-042",
       productType: 3,
       paidAt: "2026-09-15T10:00:00.000Z",
@@ -340,17 +340,21 @@ describe("abbyService.syncCustomerInvoice", () => {
     expect(body.file).toBeUndefined();
   });
 
-  it("la raison du refus Abby remonte dans le message", async () => {
-    stubRouter({
+  it("un client Abby non créé n'empêche pas la recette ; le refus du livre remonte dans le message", async () => {
+    const calls = stubRouter({
       "GET /organizations": jsonResponse({ docs: [] }),
       "POST /organization": jsonResponse(
+        { statusCode: 400, message: "Validation failed" },
+        400,
+      ),
+      "POST /incomeBook": jsonResponse(
         {
           statusCode: 400,
           message: "Validation failed",
           errors: [
             {
-              property: "name",
-              constraints: { isString: "name must be a string" },
+              property: "client",
+              constraints: { isString: "client must be a string" },
             },
           ],
         },
@@ -358,8 +362,9 @@ describe("abbyService.syncCustomerInvoice", () => {
       ),
     });
     const result = await abbyService.syncCustomerInvoice(apiKey, invoice);
+    expect(calls.some((c) => c.url.pathname === "/incomeBook")).toBe(true);
     expect(result.success).toBe(false);
-    expect(result.message).toMatch(/name must be a string/);
+    expect(result.message).toMatch(/client must be a string/);
   });
 });
 
@@ -406,11 +411,11 @@ describe("abbyService.syncPurchaseInvoice", () => {
     expect(entry).toMatchObject({
       valueDate: "2026-09-18T08:00:00.000Z",
       paymentMethodUsed: 1,
-      amount: 120,
+      amount: 12000,
       thirdPartyId: "tparty_1",
       label: "Fournisseur Test - FT-99",
       reference: "FT-99",
-      entries: [{ isPersonal: false, amount: 120 }],
+      entries: [{ isPersonal: false, amount: 12000 }],
     });
   });
 

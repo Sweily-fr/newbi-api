@@ -99,6 +99,14 @@ function digits(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
+/**
+ * Euros → centimes (entier)
+ */
+function toCents(value) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+
 function round2(value) {
   const n = parseFloat(value);
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
@@ -485,15 +493,21 @@ const abbyService = {
         };
       }
 
-      let customerId = null;
-      if (invoice.client) {
-        customerId = await this._findOrCreateCustomer(apiKey, invoice.client);
-      }
-      if (!customerId) {
+      // Le client du livre des recettes est un texte libre (affiché tel quel
+      // dans Abby). Le client Abby est tout de même créé s'il n'existe pas,
+      // pour qu'il apparaisse dans l'annuaire clients d'Abby.
+      const clientName = clientSearchName(invoice.client);
+      if (!clientName) {
         return {
           success: false,
-          message: "Impossible de trouver ou créer le client dans Abby",
+          message:
+            "Impossible d'enregistrer la recette : nom du client manquant",
         };
+      }
+      try {
+        await this._findOrCreateCustomer(apiKey, invoice.client);
+      } catch (error) {
+        logger.warn(`[ABBY] Client non créé dans Abby: ${error.message}`);
       }
 
       const ref = `${invoice.prefix || ""}${invoice.number || ""}`.trim();
@@ -504,11 +518,12 @@ const abbyService = {
       );
       const pdfUrl = pdfUrlOf(invoice);
 
+      // Montants du livre des recettes en centimes
       const payload = {
-        client: customerId,
-        priceWithoutTax: totalHT,
-        priceTotalTax: totalTTC,
-        vatAmount: totalVAT,
+        client: clientName,
+        priceWithoutTax: toCents(totalHT),
+        priceTotalTax: toCents(totalTTC),
+        vatAmount: toCents(totalVAT),
         reference: ref || String(invoice._id),
         productType: [1, 2, 3, 4, 5].includes(Number(productType))
           ? Number(productType)
@@ -629,16 +644,18 @@ const abbyService = {
         };
       }
 
+      // Montants du livre des achats en centimes (comme toute l'API v2)
+      const amountCents = toCents(amount);
       const payload = {
         valueDate: toIsoDate(
           purchaseInvoice.paymentDate || purchaseInvoice.issueDate,
         ),
         paymentMethodUsed: mapPaymentMethod(purchaseInvoice.paymentMethod),
-        amount,
+        amount: amountCents,
         thirdPartyId,
         label: `${purchaseInvoice.supplierName || "Fournisseur"} - ${ref}`,
         reference: ref,
-        entries: [{ isPersonal: false, amount }],
+        entries: [{ isPersonal: false, amount: amountCents }],
       };
 
       const data = await abbyRequest(
@@ -855,6 +872,7 @@ export {
   mapPaymentMethod,
   mapVatCodeToRate,
   fromCents,
+  toCents,
   fromTimestamp,
   toParisDay,
 };
