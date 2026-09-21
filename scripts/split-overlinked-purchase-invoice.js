@@ -305,7 +305,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("❌ Erreur:", err);
-  process.exit(1);
-});
+// Sortie explicite : les singletons importés avec le service OCR (cache,
+// clients HTTP) gardent la boucle Node ouverte après la fin du travail.
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error("❌ Erreur:", err);
+    process.exit(1);
+  });
