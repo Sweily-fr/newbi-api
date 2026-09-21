@@ -138,9 +138,12 @@ Règles:
      "Contrat", "Bon de commande". Ce sont d'autres identifiants, pas le numéro de facture.
    - Si seul un identifiant de ce type existe et qu'aucun numéro de facture n'est imprimé → null`;
 
-// Configuration des modèles
+// Configuration des modèles. Identifiants sans suffixe de date : le
+// « claude-sonnet-4-20250514 » codé jusqu'au 22/09/2026 a été retiré par
+// Anthropic (404 en prod depuis au moins juillet 2026, tout l'OCR passait
+// par les moteurs de secours).
 const MODELS = {
-  SONNET: process.env.CLAUDE_VISION_MODEL || "claude-sonnet-4-20250514",
+  SONNET: process.env.CLAUDE_VISION_MODEL || "claude-sonnet-5",
   HAIKU: process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-20251001",
 };
 
@@ -498,10 +501,10 @@ Ne retourne QUE le JSON, rien d'autre.`,
     let lastError = null;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
+        // Pas de `temperature` : paramètre retiré sur Claude Sonnet 5 (400).
         const response = await this.client.messages.create({
           model,
           max_tokens: maxTokens,
-          temperature: 0,
           system: INVOICE_EXTRACTION_PROMPT,
           messages: [{ role: "user", content: messageContent }],
         });
