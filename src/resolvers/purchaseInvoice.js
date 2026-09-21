@@ -18,6 +18,7 @@ import {
   syncPurchaseInvoiceIfNeeded as syncPurchaseInvoiceToQontoIfNeeded,
   syncPurchaseInvoicePaidToQonto,
 } from "../services/qontoSyncHelper.js";
+import { syncPurchaseInvoiceIfNeeded as syncPurchaseInvoiceToAbbyIfNeeded } from "../services/abbySyncHelper.js";
 import { importReceivedInvoices } from "../services/purchaseInvoiceReceptionService.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
@@ -849,6 +850,12 @@ const purchaseInvoiceResolvers = {
           ).catch((err) =>
             console.error("Erreur sync Qonto facture d'achat:", err),
           );
+          syncPurchaseInvoiceToAbbyIfNeeded(
+            invoice,
+            context.organizationId || workspaceId,
+          ).catch((err) =>
+            console.error("Erreur sync Abby facture d'achat:", err),
+          );
           if (invoice.status === "PAID") {
             syncPurchaseInvoicePaidToQonto(
               invoice,
@@ -1318,6 +1325,12 @@ const purchaseInvoiceResolvers = {
           context.organizationId || workspaceId,
         ).catch((err) =>
           console.error("Erreur sync Qonto facture d'achat (paid):", err),
+        );
+        syncPurchaseInvoiceToAbbyIfNeeded(
+          invoice,
+          context.organizationId || workspaceId,
+        ).catch((err) =>
+          console.error("Erreur sync Abby facture d'achat (paid):", err),
         );
         // Paiement → Qonto (facture déjà connue de Qonto)
         syncPurchaseInvoicePaidToQonto(

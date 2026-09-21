@@ -45,6 +45,7 @@ import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncInvoiceIfNeeded as syncInvoiceToQontoIfNeeded } from "../services/qontoSyncHelper.js";
+import { syncInvoiceIfNeeded as syncInvoiceToAbbyIfNeeded } from "../services/abbySyncHelper.js";
 import { triggerInvoiceFacturXArchive } from "../services/invoiceFacturXArchiveService.js";
 import {
   autoPushEventToConnections,
@@ -194,6 +195,11 @@ export async function applyInvoicePaid(
   // Sync Qonto (fire-and-forget)
   syncInvoiceToQontoIfNeeded(invoice, organizationId || workspaceId).catch(
     (err) => console.error("Erreur sync Qonto (paid):", err),
+  );
+
+  // Sync Abby (fire-and-forget) — livre des recettes à l'encaissement
+  syncInvoiceToAbbyIfNeeded(invoice, organizationId || workspaceId).catch(
+    (err) => console.error("Erreur sync Abby (paid):", err),
   );
 
   return invoice;
@@ -1872,6 +1878,12 @@ const invoiceResolvers = {
               ).catch((err) =>
                 console.error("Erreur sync Qonto (création):", err),
               );
+              syncInvoiceToAbbyIfNeeded(
+                invoice,
+                context.organizationId || workspaceId,
+              ).catch((err) =>
+                console.error("Erreur sync Abby (création):", err),
+              );
             }
 
             return await invoice.populate("createdBy");
@@ -2636,6 +2648,12 @@ const invoiceResolvers = {
               ).catch((err) =>
                 console.error("Erreur sync Qonto (finalisation):", err),
               );
+              syncInvoiceToAbbyIfNeeded(
+                updatedInvoice,
+                context.organizationId || workspaceId,
+              ).catch((err) =>
+                console.error("Erreur sync Abby (finalisation):", err),
+              );
             }
 
             return updatedInvoice;
@@ -3120,6 +3138,12 @@ const invoiceResolvers = {
           invoice,
           context.organizationId || workspaceId,
         ).catch((err) => console.error("Erreur sync Qonto:", err));
+
+        // Sync Abby (fire-and-forget)
+        syncInvoiceToAbbyIfNeeded(
+          invoice,
+          context.organizationId || workspaceId,
+        ).catch((err) => console.error("Erreur sync Abby:", err));
 
         // Archivage Factur-X sur R2 à la finalisation (DRAFT → PENDING).
         // Fire-and-forget, ne bloque pas la réponse.

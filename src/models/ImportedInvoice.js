@@ -93,6 +93,13 @@ const importedInvoiceSchema = new mongoose.Schema(
       index: true,
     },
 
+    // === ABBY (facture finalisée dans Abby, importée par le cron) ===
+    abbyId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+
     // === QONTO (facture client créée dans Qonto, importée par le cron) ===
     qontoId: {
       type: String,
@@ -232,7 +239,7 @@ const importedInvoiceSchema = new mongoose.Schema(
     // Source de l'import
     source: {
       type: String,
-      enum: ["QONTO", "OCR_UPLOAD", "GMAIL", "MANUAL"],
+      enum: ["QONTO", "ABBY", "OCR_UPLOAD", "GMAIL", "MANUAL"],
       default: "OCR_UPLOAD",
     },
     gmailMessageId: {

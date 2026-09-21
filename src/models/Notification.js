@@ -200,7 +200,12 @@ const DOCUMENT_LABELS = {
   },
 };
 
-const SOURCE_LABELS = { QONTO: "Qonto", GMAIL: "Gmail", SUPERPDP: "la PDP" };
+const SOURCE_LABELS = {
+  QONTO: "Qonto",
+  ABBY: "Abby",
+  GMAIL: "Gmail",
+  SUPERPDP: "la PDP",
+};
 
 /**
  * Notification « document importé depuis une plateforme externe » (Qonto…).

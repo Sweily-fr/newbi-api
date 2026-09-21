@@ -381,6 +381,10 @@ export async function deleteUserAccount(userId, organizationId) {
         name: "qontoaccounts",
         filter: { organizationId: String(orgObjectId) },
       },
+      {
+        name: "abbyaccounts",
+        filter: { organizationId: String(orgObjectId) },
+      },
       { name: "installedapps", filter: { workspaceId: orgObjectId } },
     ];
 

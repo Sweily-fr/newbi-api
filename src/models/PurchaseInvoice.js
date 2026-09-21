@@ -261,6 +261,17 @@ const purchaseInvoiceSchema = new mongoose.Schema(
       default: "NOT_SYNCED",
     },
 
+    // === ABBY SYNC ===
+    abbyId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    abbySyncStatus: {
+      type: String,
+      enum: ["NOT_SYNCED", "SYNCED", "ERROR"],
+      default: "NOT_SYNCED",
+    },
     // === QONTO SYNC ===
     qontoId: {
       type: String,
