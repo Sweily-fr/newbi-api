@@ -7,10 +7,10 @@ import { applyFieldEncryption, decrypt } from "../utils/encryption.js";
  *
  * Contrairement à Qonto ou Pennylane, Abby est lui-même un outil de
  * facturation : on ne recrée jamais une facture Newbi dans Abby (elle
- * recevrait un second numéro). Le sens Newbi → Abby alimente les livres
- * comptables d'Abby (livre des recettes à l'encaissement d'une facture,
- * livre des achats au paiement d'une facture d'achat). Le sens Abby → Newbi
- * importe par polling les factures et devis finalisés dans Abby.
+ * recevrait un second numéro fiscal). Le sens Newbi → Abby enregistre les
+ * factures encaissées dans le livre des recettes d'Abby et crée les devis
+ * envoyés comme devis Abby. Le sens Abby → Newbi importe par polling les
+ * factures et devis finalisés dans Abby.
  */
 
 const abbyAccountSchema = new mongoose.Schema(
@@ -63,7 +63,7 @@ const abbyAccountSchema = new mongoose.Schema(
     },
     stats: {
       invoicesSynced: { type: Number, default: 0 },
-      expensesSynced: { type: Number, default: 0 },
+      quotesSynced: { type: Number, default: 0 },
       clientsSynced: { type: Number, default: 0 },
       clientInvoicesImported: { type: Number, default: 0 },
       quotesImported: { type: Number, default: 0 },
@@ -71,7 +71,7 @@ const abbyAccountSchema = new mongoose.Schema(
     autoSync: {
       // Newbi → Abby
       invoices: { type: Boolean, default: true },
-      supplierInvoices: { type: Boolean, default: true },
+      quotes: { type: Boolean, default: true },
       // Abby → Newbi (cron de polling, cf. abbyImportCron)
       importClientInvoices: { type: Boolean, default: true },
       importQuotes: { type: Boolean, default: true },

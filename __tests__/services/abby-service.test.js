@@ -10,6 +10,8 @@ import abbyService, {
   normalizeName,
   mapPaymentMethod,
   mapVatCodeToRate,
+  mapVatRateToCode,
+  mapUnit,
   fromCents,
   fromTimestamp,
   toParisDay,
@@ -77,6 +79,17 @@ describe("abbyService helpers", () => {
     expect(mapVatCodeToRate("FR_210")).toBe(2.1);
     expect(mapVatCodeToRate("FR_00HT")).toBe(0);
     expect(mapVatCodeToRate(null)).toBe(0);
+  });
+
+  it("mapVatRateToCode et mapUnit", () => {
+    expect(mapVatRateToCode(20)).toBe("FR_2000");
+    expect(mapVatRateToCode(5.5)).toBe("FR_550");
+    expect(mapVatRateToCode(0)).toBe("FR_00HT");
+    expect(mapVatRateToCode(7)).toBe("FR_2000");
+    expect(mapUnit("heure")).toBe("hour");
+    expect(mapUnit("forfait")).toBe("fixed_rate");
+    expect(mapUnit("m²")).toBe("square_meter");
+    expect(mapUnit("")).toBe("unit");
   });
 
   it("fromCents / fromTimestamp / toParisDay", () => {
@@ -368,70 +381,211 @@ describe("abbyService.syncCustomerInvoice", () => {
   });
 });
 
-describe("abbyService.syncPurchaseInvoice", () => {
-  const purchaseInvoice = {
-    _id: "pi-1",
-    status: "PAID",
-    supplierName: "Fournisseur Test",
-    invoiceNumber: "FT-99",
-    amountTTC: 120,
-    paymentMethod: "BANK_TRANSFER",
-    paymentDate: new Date("2026-09-18T08:00:00.000Z"),
-    issueDate: new Date("2026-09-10T08:00:00.000Z"),
+describe("abbyService.syncQuote", () => {
+  const quote = {
+    _id: "q-1",
+    prefix: "D-",
+    number: "2026-007",
+    status: "PENDING",
+    issueDate: new Date("2026-09-01T10:00:00.000Z"),
+    validUntil: new Date("2026-10-01T10:00:00.000Z"),
+    headerNotes: "Merci",
+    discount: 5,
+    discountType: "PERCENTAGE",
+    client: { type: "COMPANY", name: "LexCorp" },
+    items: [
+      {
+        description: "Prestation",
+        quantity: 2,
+        unitPrice: 500,
+        vatRate: 20,
+        unit: "jour",
+        discount: 10,
+        discountType: "PERCENTAGE",
+      },
+      { description: "Frais", quantity: 1, unitPrice: 12.5, vatRate: 0 },
+    ],
   };
 
-  it("refuse une facture d'achat non payée", async () => {
+  const estimateRouter = (extra = {}) =>
+    stubRouter({
+      "GET /organizations": jsonResponse({
+        docs: [{ id: "org-lex", name: "LexCorp" }],
+      }),
+      "POST /v2/billing/estimate/org-lex": jsonResponse({ id: "est-1" }, 201),
+      "PATCH /v2/billing/est-1/lines": jsonResponse({ id: "est-1" }),
+      "PATCH /v2/billing/est-1/title": jsonResponse({ id: "est-1" }),
+      "PATCH /v2/billing/estimate/est-1/timeline": jsonResponse({
+        id: "est-1",
+      }),
+      "PATCH /v2/billing/estimate/est-1/general-informations": jsonResponse({
+        id: "est-1",
+      }),
+      "PATCH /v2/billing/est-1/finalize": jsonResponse({
+        id: "est-1",
+        number: "D-2026-0003",
+        state: "finalized",
+      }),
+      "PATCH /v2/billing/estimate/est-1/sign": jsonResponse({
+        id: "est-1",
+        state: "signed",
+      }),
+      "DELETE /v2/billing/est-1": jsonResponse(null, 204),
+      ...extra,
+    });
+
+  it("refuse un devis brouillon ou annulé", async () => {
     const calls = stubRouter({});
-    const result = await abbyService.syncPurchaseInvoice(apiKey, {
-      ...purchaseInvoice,
-      status: "TO_PAY",
+    const result = await abbyService.syncQuote(apiKey, {
+      ...quote,
+      status: "DRAFT",
     });
     expect(result.success).toBe(false);
     expect(calls).toHaveLength(0);
   });
 
-  it("crée le fournisseur s'il n'existe pas puis l'entrée du livre des achats", async () => {
-    const calls = stubRouter({
-      "GET /providers": jsonResponse({ data: [] }),
-      "POST /provider": jsonResponse({ id: "tparty_1" }, 201),
-      "POST /v2/purchaseRegister": jsonResponse({ id: "acbook_1" }, 201),
+  it("crée, remplit, date, finalise le devis (lignes en centimes, codes TVA, remises)", async () => {
+    const calls = estimateRouter();
+    const result = await abbyService.syncQuote(apiKey, quote);
+    expect(result).toMatchObject({
+      success: true,
+      abbyId: "est-1",
+      abbyNumber: "D-2026-0003",
     });
-    const result = await abbyService.syncPurchaseInvoice(
-      apiKey,
-      purchaseInvoice,
-    );
-    expect(result).toMatchObject({ success: true, abbyId: "acbook_1" });
 
-    const provider = bodyOf(calls.find((c) => c.url.pathname === "/provider"));
-    expect(provider).toEqual({ name: "Fournisseur Test" });
-
-    const entry = bodyOf(
-      calls.find((c) => c.url.pathname === "/v2/purchaseRegister"),
+    const lines = bodyOf(
+      calls.find((c) => c.url.pathname === "/v2/billing/est-1/lines"),
     );
-    expect(entry).toMatchObject({
-      valueDate: "2026-09-18T08:00:00.000Z",
-      paymentMethodUsed: 1,
-      amount: 12000,
-      thirdPartyId: "tparty_1",
-      label: "Fournisseur Test - FT-99",
-      reference: "FT-99",
-      entries: [{ isPersonal: false, amount: 12000 }],
+    expect(lines.lines).toEqual([
+      {
+        designation: "Prestation",
+        quantityUnit: "day",
+        type: "service_delivery",
+        vatCode: "FR_2000",
+        isTaxIncluded: false,
+        unitPrice: 50000,
+        quantity: 2,
+        discount: { mode: "PERCENTAGE", amount: 1000 },
+      },
+      {
+        designation: "Frais",
+        quantityUnit: "unit",
+        type: "service_delivery",
+        vatCode: "FR_00HT",
+        isTaxIncluded: false,
+        unitPrice: 1250,
+        quantity: 1,
+      },
+    ]);
+    expect(lines.discount).toEqual({ mode: "PERCENTAGE", amount: 500 });
+
+    const title = bodyOf(
+      calls.find((c) => c.url.pathname === "/v2/billing/est-1/title"),
+    );
+    expect(title.title).toBe("Devis Newbi D-2026-007");
+
+    const timeline = bodyOf(
+      calls.find(
+        (c) => c.url.pathname === "/v2/billing/estimate/est-1/timeline",
+      ),
+    );
+    expect(timeline).toEqual({
+      emittedAt: Math.floor(quote.issueDate.getTime() / 1000),
+      expiredAt: Math.floor(quote.validUntil.getTime() / 1000),
+      paymentDelay: "thirty_days",
     });
+
+    const general = bodyOf(
+      calls.find(
+        (c) =>
+          c.url.pathname === "/v2/billing/estimate/est-1/general-informations",
+      ),
+    );
+    expect(general).toEqual({ headerNote: "Merci" });
+
+    expect(
+      calls.some((c) => c.url.pathname === "/v2/billing/est-1/finalize"),
+    ).toBe(true);
+    expect(
+      calls.some((c) => c.url.pathname === "/v2/billing/estimate/est-1/sign"),
+    ).toBe(false);
   });
 
-  it("réutilise un fournisseur trouvé par nom normalisé", async () => {
-    const calls = stubRouter({
-      "GET /providers": jsonResponse({
-        data: [{ id: "tparty_x", name: "FOURNISSEUR TEST" }],
-      }),
-      "POST /v2/purchaseRegister": jsonResponse({ id: "acbook_2" }, 201),
+  it("signe le devis Abby quand le devis Newbi est accepté", async () => {
+    const calls = estimateRouter();
+    await abbyService.syncQuote(apiKey, { ...quote, status: "COMPLETED" });
+    expect(
+      calls.some((c) => c.url.pathname === "/v2/billing/estimate/est-1/sign"),
+    ).toBe(true);
+  });
+
+  it("validité absente → 30 jours après l'émission ; avancement partiel → quantité 1 au HT réel", async () => {
+    const calls = estimateRouter();
+    const { validUntil, ...noValidity } = quote;
+    await abbyService.syncQuote(apiKey, {
+      ...noValidity,
+      discount: 0,
+      items: [
+        {
+          description: "Situation",
+          quantity: 4,
+          unitPrice: 100,
+          vatRate: 10,
+          progressPercentage: 50,
+        },
+      ],
     });
-    await abbyService.syncPurchaseInvoice(apiKey, purchaseInvoice);
-    expect(calls.some((c) => c.url.pathname === "/provider")).toBe(false);
-    const entry = bodyOf(
-      calls.find((c) => c.url.pathname === "/v2/purchaseRegister"),
+    const timeline = bodyOf(
+      calls.find(
+        (c) => c.url.pathname === "/v2/billing/estimate/est-1/timeline",
+      ),
     );
-    expect(entry.thirdPartyId).toBe("tparty_x");
+    expect(timeline.expiredAt - timeline.emittedAt).toBe(30 * 24 * 3600);
+    const lines = bodyOf(
+      calls.find((c) => c.url.pathname === "/v2/billing/est-1/lines"),
+    );
+    expect(lines.lines[0]).toMatchObject({
+      unitPrice: 20000,
+      quantity: 1,
+      vatCode: "FR_1000",
+    });
+    expect(lines.discount).toBeUndefined();
+  });
+
+  it("supprime le brouillon Abby si la finalisation échoue", async () => {
+    const calls = estimateRouter({
+      "PATCH /v2/billing/est-1/finalize": jsonResponse(
+        { statusCode: 400, message: "billing.estimate.not_finalizable" },
+        400,
+      ),
+    });
+    const result = await abbyService.syncQuote(apiKey, quote);
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/not_finalizable/);
+    expect(
+      calls.some(
+        (c) => c.method === "DELETE" && c.url.pathname === "/v2/billing/est-1",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("abbyService.signEstimate", () => {
+  it("signe et tolère un devis déjà signé", async () => {
+    stubRouter({
+      "PATCH /v2/billing/estimate/e1/sign": jsonResponse({ state: "signed" }),
+      "PATCH /v2/billing/estimate/e2/sign": jsonResponse(
+        { statusCode: 400, message: "billing.estimate.already_signed" },
+        400,
+      ),
+      "PATCH /v2/billing/estimate/e3/sign": jsonResponse(
+        { statusCode: 400, message: "billing.estimate.draft_cannot_be_signed" },
+        400,
+      ),
+    });
+    expect((await abbyService.signEstimate(apiKey, "e1")).success).toBe(true);
+    expect((await abbyService.signEstimate(apiKey, "e2")).success).toBe(true);
+    expect((await abbyService.signEstimate(apiKey, "e3")).success).toBe(false);
   });
 });
 

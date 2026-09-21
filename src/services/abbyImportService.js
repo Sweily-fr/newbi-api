@@ -3,6 +3,8 @@ import ImportedInvoice from "../models/ImportedInvoice.js";
 import ImportedQuote from "../models/ImportedQuote.js";
 import Quote from "../models/Quote.js";
 import Notification from "../models/Notification.js";
+import { cancelActiveQuoteSignatures } from "./quoteSignatureSync.js";
+import documentAutomationService from "./documentAutomationService.js";
 import { matchExistingClient } from "../utils/clientMatching.js";
 import abbyService, {
   fromCents,
@@ -349,6 +351,46 @@ async function applyAbbyQuoteState(doc, state, userId) {
 }
 
 /**
+ * Décision du client prise dans Abby sur un devis envoyé depuis Newbi :
+ * signé → accepté, refusé → annulé (mêmes effets qu'une décision manuelle).
+ */
+async function applyPushedQuoteDecision(quote, state, { workspaceId, userId }) {
+  if (quote.status !== "PENDING") return false;
+  const decision =
+    state === "signed" ? "COMPLETED" : state === "refused" ? "CANCELED" : null;
+  if (!decision) return false;
+
+  quote.status = decision;
+  await quote.save();
+  logger.info(
+    `[ABBY-IMPORT] Devis ${quote.prefix || ""}${quote.number} ${decision === "COMPLETED" ? "signé" : "refusé"} dans Abby (org=${workspaceId})`,
+  );
+
+  cancelActiveQuoteSignatures(quote._id).catch((err) =>
+    logger.warn(`[ABBY-IMPORT] annulation signatures devis: ${err.message}`),
+  );
+  documentAutomationService
+    .executeAutomations(
+      decision === "COMPLETED" ? "QUOTE_ACCEPTED" : "QUOTE_CANCELED",
+      workspaceId,
+      {
+        documentId: quote._id.toString(),
+        documentType: "quote",
+        documentNumber: quote.number,
+        prefix: quote.prefix || "",
+        clientName: quote.client?.name || "",
+        issueDate: quote.issueDate || quote.createdAt,
+        clientId: quote.client?._id || quote.clientId || null,
+      },
+      userId,
+    )
+    .catch((err) =>
+      logger.error(`[ABBY-IMPORT] automatisations devis: ${err.message}`),
+    );
+  return true;
+}
+
+/**
  * Importe les devis finalisés dans Abby et suit le statut des devis déjà
  * importés (signé / refusé)
  */
@@ -370,6 +412,35 @@ export async function importQuotes(account, userId) {
     const emittedAt = toDate(doc.emittedAt);
     try {
       const abbyId = String(doc.id);
+
+      // Devis poussé par Newbi : jamais réimporté, mais la décision du client
+      // prise dans Abby (signé / refusé) est répercutée sur le devis Newbi.
+      const pushed = await Quote.findOne({ workspaceId, abbyId });
+      if (pushed) {
+        if (
+          await applyPushedQuoteDecision(pushed, doc.state, {
+            workspaceId,
+            userId,
+          })
+        ) {
+          result.updated++;
+          await notifyImported({
+            userId,
+            workspaceId,
+            documentType: "QUOTE",
+            documentId: pushed._id,
+            documentNumber: `${pushed.prefix || ""}${pushed.number || ""}`,
+            counterpartName: pushed.client?.name,
+            amountTTC: pushed.finalTotalTTC,
+            url: "/dashboard/outils/devis",
+            event: pushed.status === "COMPLETED" ? "ACCEPTED" : "REFUSED",
+          });
+        } else {
+          result.skipped++;
+        }
+        continue;
+      }
+
       const existing = await ImportedQuote.findOne({ workspaceId, abbyId });
       if (existing) {
         if (await applyAbbyQuoteState(existing, doc.state, userId)) {

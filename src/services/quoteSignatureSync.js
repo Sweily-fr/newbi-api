@@ -4,6 +4,7 @@ import logger from "../utils/logger.js";
 import documentAutomationService from "./documentAutomationService.js";
 import { syncQuoteIfNeeded } from "./pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "./qontoSyncHelper.js";
+import { syncQuoteIfNeeded as syncQuoteToAbbyIfNeeded } from "./abbySyncHelper.js";
 import esignatureService from "./esignatureService.js";
 import { publishSignatureStatus } from "./esignaturePubsub.js";
 
@@ -130,6 +131,13 @@ export async function acceptQuoteOnSignature(signatureRequest) {
     signatureRequest.organizationId || workspaceId,
   ).catch((err) =>
     logger.error(`Auto-acceptation devis — sync Qonto: ${err.message}`),
+  );
+
+  syncQuoteToAbbyIfNeeded(
+    quote,
+    signatureRequest.organizationId || workspaceId,
+  ).catch((err) =>
+    logger.error(`Auto-acceptation devis — sync Abby: ${err.message}`),
   );
 
   return true;

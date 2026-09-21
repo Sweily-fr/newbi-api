@@ -7,8 +7,9 @@ import logger from "../utils/logger.js";
  * Même contrat que qontoSyncHelper : appelé après les changements de statut
  * dans les resolvers, ne lève jamais (loggue et échoue silencieusement).
  *
- * Abby tient des livres comptables : une facture n'y est enregistrée qu'une
- * fois encaissée (COMPLETED), une facture d'achat qu'une fois payée (PAID).
+ * Une facture n'est enregistrée dans Abby (livre des recettes) qu'une fois
+ * encaissée (COMPLETED) ; un devis est créé dans Abby dès son envoi (PENDING)
+ * et signé quand il est accepté (COMPLETED).
  */
 
 async function findConnectedAccount(workspaceId, flag) {
@@ -84,45 +85,47 @@ export async function syncInvoiceIfNeeded(invoice, workspaceId) {
 }
 
 /**
- * Facture d'achat payée → livre des achats Abby
+ * Devis envoyé ou accepté → devis Abby. Un devis déjà créé dans Abby qui
+ * devient accepté dans Newbi est marqué signé dans Abby.
  */
-export async function syncPurchaseInvoiceIfNeeded(
-  purchaseInvoice,
-  workspaceId,
-) {
+export async function syncQuoteIfNeeded(quote, workspaceId) {
   try {
-    if (!purchaseInvoice || !workspaceId) return;
-    if (purchaseInvoice.status !== "PAID") return;
-    if (purchaseInvoice.abbySyncStatus === "SYNCED") return;
+    if (!quote || !workspaceId) return;
+    if (!["PENDING", "COMPLETED"].includes(quote.status)) return;
 
-    const account = await findConnectedAccount(workspaceId, "supplierInvoices");
+    const account = await findConnectedAccount(workspaceId, "quotes");
     if (!account) return;
 
-    const label = purchaseInvoice.invoiceNumber || purchaseInvoice._id;
-    logger.info(
-      `[ABBY] Auto-sync facture d'achat ${label} (livre des achats)...`,
-    );
+    const label = `${quote.prefix || ""}${quote.number || quote._id}`;
+    const apiKey = account.getDecryptedApiKey();
 
-    const result = await abbyService.syncPurchaseInvoice(
-      account.getDecryptedApiKey(),
-      purchaseInvoice,
-    );
+    if (quote.abbySyncStatus === "SYNCED") {
+      if (quote.status === "COMPLETED" && quote.abbyId) {
+        const signed = await abbyService.signEstimate(apiKey, quote.abbyId);
+        logger.info(
+          `[ABBY] Devis ${label} accepté → signature Abby ${signed.success ? "OK" : `refusée: ${signed.message}`}`,
+        );
+      }
+      return;
+    }
 
-    const PurchaseInvoice = (await import("../models/PurchaseInvoice.js"))
-      .default;
-    await markSynced(PurchaseInvoice, purchaseInvoice._id, result);
+    logger.info(`[ABBY] Auto-sync devis ${label} (status=${quote.status})...`);
+    const result = await abbyService.syncQuote(apiKey, quote);
+
+    const Quote = (await import("../models/Quote.js")).default;
+    await markSynced(Quote, quote._id, result);
 
     if (result.success) {
-      account.stats.expensesSynced += 1;
+      account.stats.quotesSynced += 1;
       account.lastSyncAt = new Date();
       await account.save();
-      logger.info(`[ABBY] Auto-sync facture d'achat ${label} → OK`);
+      logger.info(`[ABBY] Auto-sync devis ${label} → OK`);
     } else {
       logger.warn(
-        `[ABBY] Auto-sync facture d'achat ${label} → ERREUR: ${result.message}`,
+        `[ABBY] Auto-sync devis ${label} → ERREUR: ${result.message}`,
       );
     }
   } catch (error) {
-    logger.error(`[ABBY] Erreur auto-sync facture d'achat: ${error.message}`);
+    logger.error(`[ABBY] Erreur auto-sync devis: ${error.message}`);
   }
 }

@@ -2,7 +2,7 @@ import abbyService from "../services/abbyService.js";
 import { importFromAbby } from "../services/abbyImportService.js";
 import AbbyAccount from "../models/AbbyAccount.js";
 import Invoice from "../models/Invoice.js";
-import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import Quote from "../models/Quote.js";
 import logger from "../utils/logger.js";
 import {
   checkSubscriptionActive,
@@ -205,7 +205,7 @@ const abbyResolvers = {
 
         for (const field of [
           "invoices",
-          "supplierInvoices",
+          "quotes",
           "importClientInvoices",
           "importQuotes",
         ]) {
@@ -299,13 +299,9 @@ const abbyResolvers = {
     },
 
     /**
-     * Enregistre une facture d'achat payée dans le livre des achats Abby
+     * Crée un devis Newbi dans Abby
      */
-    syncPurchaseInvoiceToAbby: async (
-      _,
-      { purchaseInvoiceId },
-      { user, organizationId },
-    ) => {
+    syncQuoteToAbby: async (_, { quoteId }, { user, organizationId }) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
@@ -317,26 +313,21 @@ const abbyResolvers = {
           return { success: false, message: "Abby n'est pas connecté" };
         }
 
-        const purchaseInvoice = await PurchaseInvoice.findOne({
-          _id: purchaseInvoiceId,
+        const quote = await Quote.findOne({
+          _id: quoteId,
           workspaceId: organizationId,
         });
-        if (!purchaseInvoice) {
-          return { success: false, message: "Facture d'achat non trouvée" };
+        if (!quote) {
+          return { success: false, message: "Devis non trouvé" };
         }
 
-        const result = await abbyService.syncPurchaseInvoice(
+        const result = await abbyService.syncQuote(
           account.getDecryptedApiKey(),
-          purchaseInvoice,
+          quote,
         );
-        return applySyncResult(
-          purchaseInvoice,
-          account,
-          result,
-          "expensesSynced",
-        );
+        return applySyncResult(quote, account, result, "quotesSynced");
       } catch (error) {
-        logger.error("Erreur sync facture d'achat Abby:", error);
+        logger.error("Erreur sync devis Abby:", error);
         return { success: false, message: error.message };
       }
     },
@@ -394,7 +385,7 @@ const abbyResolvers = {
       try {
         const result = await abbyService.syncAll(organizationId, {
           Invoice,
-          PurchaseInvoice,
+          Quote,
         });
 
         return {
@@ -402,8 +393,8 @@ const abbyResolvers = {
           message: result.message,
           invoicesSynced: result.results?.invoices?.synced || 0,
           invoicesErrors: result.results?.invoices?.errors || 0,
-          expensesSynced: result.results?.expenses?.synced || 0,
-          expensesErrors: result.results?.expenses?.errors || 0,
+          quotesSynced: result.results?.quotes?.synced || 0,
+          quotesErrors: result.results?.quotes?.errors || 0,
         };
       } catch (error) {
         logger.error("Erreur syncAll Abby:", error);
@@ -420,7 +411,7 @@ const ABBY_BLOCK = [
   "updateAbbyAutoSync",
   "updateAbbyIncomeProductType",
   "syncInvoiceToAbby",
-  "syncPurchaseInvoiceToAbby",
+  "syncQuoteToAbby",
   "syncAllToAbby",
   "importFromAbby",
 ];

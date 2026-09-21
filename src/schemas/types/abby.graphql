@@ -27,7 +27,7 @@ Statistiques de synchronisation Abby
 """
 type AbbyStats {
   invoicesSynced: Int!
-  expensesSynced: Int!
+  quotesSynced: Int!
   clientsSynced: Int!
   clientInvoicesImported: Int!
   quotesImported: Int!
@@ -39,8 +39,8 @@ Préférences de synchronisation automatique Abby
 type AbbyAutoSync {
   "Newbi → Abby : factures clients encaissées → livre des recettes"
   invoices: Boolean!
-  "Newbi → Abby : factures d'achat payées → livre des achats"
-  supplierInvoices: Boolean!
+  "Newbi → Abby : devis envoyés ou acceptés → devis Abby"
+  quotes: Boolean!
   "Abby → Newbi : factures finalisées dans Abby"
   importClientInvoices: Boolean!
   "Abby → Newbi : devis finalisés dans Abby"
@@ -84,8 +84,8 @@ type AbbySyncAllResult {
   message: String
   invoicesSynced: Int
   invoicesErrors: Int
-  expensesSynced: Int
-  expensesErrors: Int
+  quotesSynced: Int
+  quotesErrors: Int
 }
 
 """
@@ -107,7 +107,7 @@ Input pour les préférences de sync automatique Abby
 """
 input AbbyAutoSyncInput {
   invoices: Boolean
-  supplierInvoices: Boolean
+  quotes: Boolean
   importClientInvoices: Boolean
   importQuotes: Boolean
 }
@@ -155,9 +155,9 @@ extend type Mutation {
   syncInvoiceToAbby(invoiceId: ID!): AbbySyncResult!
 
   """
-  Enregistrer une facture d'achat payée dans le livre des achats Abby
+  Créer un devis Newbi dans Abby (signé s'il est accepté)
   """
-  syncPurchaseInvoiceToAbby(purchaseInvoiceId: ID!): AbbySyncResult!
+  syncQuoteToAbby(quoteId: ID!): AbbySyncResult!
 
   """
   Lancer une synchronisation complète vers Abby

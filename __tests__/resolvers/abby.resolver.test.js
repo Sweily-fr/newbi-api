@@ -17,12 +17,12 @@ import { seedOrgMembership, buildContext } from "../helpers/auth.js";
 const {
   testConnectionMock,
   syncCustomerInvoiceMock,
-  syncPurchaseInvoiceMock,
+  syncQuoteMock,
   syncAllMock,
 } = vi.hoisted(() => ({
   testConnectionMock: vi.fn(),
   syncCustomerInvoiceMock: vi.fn(),
-  syncPurchaseInvoiceMock: vi.fn(),
+  syncQuoteMock: vi.fn(),
   syncAllMock: vi.fn(),
 }));
 
@@ -31,7 +31,8 @@ vi.mock("../../src/services/abbyService.js", () => ({
     testConnection: testConnectionMock,
     syncClient: vi.fn(),
     syncCustomerInvoice: syncCustomerInvoiceMock,
-    syncPurchaseInvoice: syncPurchaseInvoiceMock,
+    syncQuote: syncQuoteMock,
+    signEstimate: vi.fn(),
     syncAll: syncAllMock,
   },
 }));
@@ -86,7 +87,7 @@ beforeEach(async () => {
   await clearMongo();
   testConnectionMock.mockReset();
   syncCustomerInvoiceMock.mockReset();
-  syncPurchaseInvoiceMock.mockReset();
+  syncQuoteMock.mockReset();
   syncAllMock.mockReset();
   importFromAbbyMock.mockReset();
   await seedOrgMembership({ userId, organizationId, role: "owner" });
@@ -224,7 +225,7 @@ describe("abby.Mutation.updateAbbyAutoSync / updateAbbyIncomeProductType", () =>
     expect(result.success).toBe(true);
     const account = await AbbyAccount.findOne({ organizationId });
     expect(account.autoSync.invoices).toBe(false);
-    expect(account.autoSync.supplierInvoices).toBe(true);
+    expect(account.autoSync.quotes).toBe(true);
     expect(account.autoSync.importQuotes).toBe(false);
   });
 
@@ -387,7 +388,7 @@ describe("abby.Mutation.importFromAbby / syncAllToAbby", () => {
       message: "ok",
       results: {
         invoices: { synced: 2, errors: 1 },
-        expenses: { synced: 3, errors: 0 },
+        quotes: { synced: 3, errors: 0 },
       },
     });
     const result = await resolvers.Mutation.syncAllToAbby(null, {}, baseCtx());
@@ -395,8 +396,8 @@ describe("abby.Mutation.importFromAbby / syncAllToAbby", () => {
       success: true,
       invoicesSynced: 2,
       invoicesErrors: 1,
-      expensesSynced: 3,
-      expensesErrors: 0,
+      quotesSynced: 3,
+      quotesErrors: 0,
     });
   });
 });

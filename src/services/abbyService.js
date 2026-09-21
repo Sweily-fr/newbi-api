@@ -11,13 +11,15 @@ import AbbyAccount from "../models/AbbyAccount.js";
  *  - Clients: GET /organizations?search=, POST /organization,
  *             GET /contacts?search=, POST /contact
  *  - Recettes : POST /incomeBook (facture Newbi encaissée)
- *  - Achats   : GET /providers?search=, POST /provider, POST /v2/purchaseRegister
+ *  - Devis    : POST /v2/billing/estimate/{customerId}, PATCH lines/title/
+ *               timeline, finalize, sign (devis Newbi créé comme devis Abby)
  *  - Documents Abby : GET /v2/billings (liste), GET /v2/billing/{id},
  *             GET /v2/billing/{id}/download (PDF)
  *
  * Abby est un outil de facturation : on ne recrée jamais une facture Newbi
- * dans Abby (double numérotation). Les factures encaissées vont dans le livre
- * des recettes, les factures d'achat payées dans le livre des achats.
+ * dans Abby (double numérotation fiscale). Les factures encaissées vont dans le
+ * livre des recettes ; les devis, sans valeur fiscale, sont créés comme devis
+ * Abby (numéro Abby, numéro Newbi dans le titre).
  *
  * Même contrat que qontoService : chaque méthode publique renvoie
  * { success, message, abbyId? } et ne lève jamais.
@@ -52,6 +54,136 @@ const VAT_CODE_RATES = {
   FR_00UE: 0,
   FR_0HUE: 0,
 };
+
+const MAX_DESIGNATION_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 1800;
+
+// Unités Newbi → unités Abby (enum ProductUnit)
+const UNIT_MAP = {
+  "": "unit",
+  unité: "unit",
+  unite: "unit",
+  pièce: "unit",
+  piece: "unit",
+  u: "unit",
+  unit: "unit",
+  heure: "hour",
+  heures: "hour",
+  h: "hour",
+  hour: "hour",
+  jour: "day",
+  jours: "day",
+  j: "day",
+  day: "day",
+  semaine: "week",
+  week: "week",
+  mois: "month",
+  month: "month",
+  an: "year",
+  année: "year",
+  annee: "year",
+  year: "year",
+  minute: "minute",
+  min: "minute",
+  g: "gram",
+  gramme: "gram",
+  gram: "gram",
+  kg: "kilogram",
+  kilogramme: "kilogram",
+  kilogram: "kilogram",
+  tonne: "ton",
+  t: "ton",
+  ton: "ton",
+  litre: "liter",
+  l: "liter",
+  liter: "liter",
+  mètre: "meter",
+  metre: "meter",
+  m: "meter",
+  meter: "meter",
+  km: "kilometer",
+  "m²": "square_meter",
+  m2: "square_meter",
+  square_meter: "square_meter",
+  "m³": "cubic_meter",
+  m3: "cubic_meter",
+  cubic_meter: "cubic_meter",
+  ml: "linear_meter",
+  lot: "batch",
+  batch: "batch",
+  forfait: "fixed_rate",
+  fixed_rate: "fixed_rate",
+  personne: "person",
+  person: "person",
+  page: "page",
+  mot: "word",
+  word: "word",
+  licence: "license",
+  license: "license",
+  article: "article",
+  nuit: "overnight_stay",
+  nuitée: "overnight_stay",
+};
+
+function mapUnit(unit) {
+  if (!unit) return "unit";
+  const normalized = String(unit).toLowerCase().trim();
+  return UNIT_MAP[normalized] || "unit";
+}
+
+// Taux de TVA Newbi → code TVA Abby (taux inconnu → 20 %)
+const VAT_RATE_CODES = {
+  0: "FR_00HT",
+  2.1: "FR_210",
+  5.5: "FR_550",
+  8.5: "FR_850",
+  10: "FR_1000",
+  20: "FR_2000",
+};
+
+function mapVatRateToCode(rate) {
+  const value = parseFloat(rate);
+  if (!Number.isFinite(value) || value <= 0) return "FR_00HT";
+  return VAT_RATE_CODES[value] || "FR_2000";
+}
+
+function truncate(value, max) {
+  if (!value) return "";
+  const str = String(value);
+  return str.length > max ? str.slice(0, max) : str;
+}
+
+/**
+ * Date → timestamp Abby (secondes)
+ */
+function toTimestamp(date) {
+  const d = date ? new Date(date) : new Date();
+  return Math.floor(
+    (Number.isNaN(d.getTime()) ? Date.now() : d.getTime()) / 1000,
+  );
+}
+
+/**
+ * HT d'une ligne (même logique que calculateInvoiceTotals côté resolver) :
+ * quantity × unitPrice × avancement, moins la remise de ligne.
+ */
+function computeItemHT(item) {
+  const quantity = item.quantity || 0;
+  const unitPrice = item.unitPrice || 0;
+  let itemHT = quantity * unitPrice;
+  const progress =
+    item.progressPercentage != null ? item.progressPercentage : 100;
+  itemHT = itemHT * (progress / 100);
+  const discount = item.discount || 0;
+  if (discount > 0) {
+    if ((item.discountType || "PERCENTAGE") === "PERCENTAGE") {
+      itemHT = itemHT * (1 - Math.min(discount, 100) / 100);
+    } else {
+      itemHT = Math.max(0, itemHT - discount);
+    }
+  }
+  return itemHT;
+}
 
 function mapPaymentMethod(method) {
   return PAYMENT_METHOD_MAP[String(method || "").toUpperCase()] || 1;
@@ -554,128 +686,218 @@ const abbyService = {
   },
 
   /**
-   * Cherche le fournisseur Abby (SIRET puis nom exact normalisé), sinon le crée.
-   * Endpoints: GET /providers?search=, POST /provider
-   * @returns {Promise<string>} id du tiers Abby (tparty_…)
+   * Lignes Abby d'un devis Newbi (prix en centimes, TVA par code, remise de
+   * ligne). Une ligne à avancement partiel est envoyée à quantité 1 au HT réel.
    */
-  async _findOrCreateProvider(apiKey, purchaseInvoice) {
-    const name = String(purchaseInvoice.supplierName || "").trim();
-    if (!name) {
-      throw new Error(
-        "Impossible de trouver ou créer le fournisseur dans Abby : nom manquant",
-      );
-    }
-    let supplier = purchaseInvoice.supplier || null;
-    if (!supplier && purchaseInvoice.supplierId) {
-      try {
-        const Supplier = (await import("../models/Supplier.js")).default;
-        supplier = await Supplier.findById(purchaseInvoice.supplierId)
-          .select("name siret vatNumber")
-          .lean();
-      } catch (error) {
-        logger.warn(
-          `[ABBY] Fournisseur ${purchaseInvoice.supplierId} illisible: ${error.message}`,
-        );
+  _buildEstimateLines(quote) {
+    const isReverseCharge = !!quote.isReverseCharge;
+    return (quote.items || []).map((item) => {
+      const label = String(item.description || "Article").trim() || "Article";
+      const progress =
+        item.progressPercentage != null ? item.progressPercentage : 100;
+      const line = {
+        designation: truncate(label, MAX_DESIGNATION_LENGTH),
+        ...(label.length > MAX_DESIGNATION_LENGTH && {
+          description: truncate(label, MAX_DESCRIPTION_LENGTH),
+        }),
+        ...(item.details && {
+          description: truncate(item.details, MAX_DESCRIPTION_LENGTH),
+        }),
+        quantityUnit: mapUnit(item.unit),
+        type: "service_delivery",
+        vatCode: isReverseCharge ? "FR_00HT" : mapVatRateToCode(item.vatRate),
+        isTaxIncluded: false,
+      };
+      if (progress !== 100) {
+        return {
+          ...line,
+          unitPrice: toCents(computeItemHT(item)),
+          quantity: 1,
+        };
       }
-    }
-    supplier = supplier || {};
-    const siret = digits(supplier.siret);
-    const target = normalizeName(name);
-
-    try {
-      const list = await abbyRequest(
-        apiKey,
-        "GET",
-        `/providers${query({ page: 1, limit: 25, search: name })}`,
-      );
-      const providers = list?.data || list?.docs || [];
-      const match =
-        (siret && providers.find((p) => digits(p.siret) === siret)) ||
-        providers.find(
-          (p) =>
-            normalizeName(p.name) === target ||
-            normalizeName(p.commercialName) === target,
-        );
-      if (match) return String(match.id);
-    } catch (error) {
-      throw new Error(
-        `Impossible de trouver ou créer le fournisseur dans Abby : ${error.message}`,
-      );
-    }
-
-    const created = await abbyRequest(apiKey, "POST", "/provider", {
-      name,
-      ...(siret.length === 14 && { siret }),
-      ...(supplier.vatNumber && { vatNumber: supplier.vatNumber }),
+      line.unitPrice = toCents(item.unitPrice);
+      line.quantity = Number(item.quantity) || 0;
+      if (item.discount > 0) {
+        line.discount =
+          item.discountType === "FIXED"
+            ? { mode: "AMOUNT", amount: toCents(item.discount) }
+            : {
+                mode: "PERCENTAGE",
+                amount: toCents(Math.min(item.discount, 100)),
+              };
+      }
+      return line;
     });
-    if (!created?.id) {
-      throw new Error(
-        "Impossible de trouver ou créer le fournisseur dans Abby : réponse sans identifiant",
-      );
-    }
-    return String(created.id);
   },
 
   /**
-   * Facture d'achat Newbi payée → livre des achats Abby
-   * Endpoint: POST /v2/purchaseRegister
-   * Abby n'expose pas d'upload de fichier par API : la pièce n'est pas jointe.
+   * Devis Newbi → devis Abby (brouillon, lignes, titre, dates, finalisation,
+   * signature si le devis Newbi est accepté).
+   * Endpoints: POST /v2/billing/estimate/{customerId}, PATCH …/lines,
+   * PATCH …/title, PATCH /v2/billing/estimate/{id}/timeline,
+   * PATCH …/general-informations, PATCH …/finalize, PATCH …/sign
+   *
+   * Abby attribue son propre numéro (D-AAAA-NNNN) : le numéro Newbi est repris
+   * dans le titre du devis Abby.
    */
-  async syncPurchaseInvoice(apiKey, purchaseInvoice) {
+  async syncQuote(apiKey, quote) {
+    let estimateId = null;
     try {
-      if (purchaseInvoice.status !== "PAID") {
+      if (!["PENDING", "COMPLETED"].includes(quote.status)) {
         return {
           success: false,
-          message:
-            "Seules les factures d'achat payées sont enregistrées dans le livre des achats Abby",
+          message: "Seuls les devis envoyés ou acceptés sont créés dans Abby",
         };
       }
-
-      const thirdPartyId = await this._findOrCreateProvider(
-        apiKey,
-        purchaseInvoice,
-      );
-      const ref = purchaseInvoice.invoiceNumber || String(purchaseInvoice._id);
-      const amount = round2(purchaseInvoice.amountTTC);
-      if (!(amount > 0)) {
+      const lines = this._buildEstimateLines(quote);
+      if (lines.length === 0) {
         return {
           success: false,
-          message: "Montant TTC manquant sur la facture d'achat",
+          message: "Le devis n'a aucun article à synchroniser",
         };
       }
+      if (!quote.client) {
+        return {
+          success: false,
+          message: "Impossible de trouver ou créer le client dans Abby",
+        };
+      }
+      const customerId = await this._findOrCreateCustomer(apiKey, quote.client);
 
-      // Montants du livre des achats en centimes (comme toute l'API v2)
-      const amountCents = toCents(amount);
-      const payload = {
-        valueDate: toIsoDate(
-          purchaseInvoice.paymentDate || purchaseInvoice.issueDate,
-        ),
-        paymentMethodUsed: mapPaymentMethod(purchaseInvoice.paymentMethod),
-        amount: amountCents,
-        thirdPartyId,
-        label: `${purchaseInvoice.supplierName || "Fournisseur"} - ${ref}`,
-        reference: ref,
-        entries: [{ isPersonal: false, amount: amountCents }],
-      };
-
-      const data = await abbyRequest(
+      const created = await abbyRequest(
         apiKey,
         "POST",
-        "/v2/purchaseRegister",
-        payload,
+        `/v2/billing/estimate/${customerId}`,
+        {},
       );
-      const abbyId = data?.id || data?._id || "";
-      logger.info(
-        `[ABBY] Facture d'achat ${ref} enregistrée dans le livre des achats Abby (${abbyId})`,
+      estimateId = created?.id;
+      if (!estimateId) {
+        throw new Error("réponse Abby sans identifiant de devis");
+      }
+
+      const linesPayload = { lines };
+      if (quote.discount > 0) {
+        linesPayload.discount =
+          quote.discountType === "PERCENTAGE"
+            ? {
+                mode: "PERCENTAGE",
+                amount: toCents(Math.min(quote.discount, 100)),
+              }
+            : { mode: "AMOUNT", amount: toCents(quote.discount) };
+      }
+      await abbyRequest(
+        apiKey,
+        "PATCH",
+        `/v2/billing/${estimateId}/lines`,
+        linesPayload,
       );
 
+      const ref = `${quote.prefix || ""}${quote.number || ""}`.trim();
+      await abbyRequest(apiKey, "PATCH", `/v2/billing/${estimateId}/title`, {
+        title: truncate(`Devis Newbi ${ref || quote._id}`, 120),
+      });
+
+      const issueDate = quote.issueDate
+        ? new Date(quote.issueDate)
+        : new Date();
+      const validUntil = quote.validUntil
+        ? new Date(quote.validUntil)
+        : new Date(issueDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+      await abbyRequest(
+        apiKey,
+        "PATCH",
+        `/v2/billing/estimate/${estimateId}/timeline`,
+        {
+          emittedAt: toTimestamp(issueDate),
+          expiredAt: toTimestamp(
+            validUntil > issueDate
+              ? validUntil
+              : new Date(issueDate.getTime() + 24 * 60 * 60 * 1000),
+          ),
+          paymentDelay: "thirty_days",
+        },
+      );
+
+      const general = {};
+      if (quote.headerNotes)
+        general.headerNote = truncate(quote.headerNotes, 1000);
+      if (quote.footerNotes)
+        general.footerNote = truncate(quote.footerNotes, 2000);
+      if (quote.termsAndConditions) {
+        general.generalTermsAndConditionsOfSale = truncate(
+          quote.termsAndConditions,
+          5000,
+        );
+      }
+      if (quote.isReverseCharge) {
+        general.vatMention = "reverse_charge";
+      }
+      if (Object.keys(general).length > 0) {
+        try {
+          await abbyRequest(
+            apiKey,
+            "PATCH",
+            `/v2/billing/estimate/${estimateId}/general-informations`,
+            general,
+          );
+        } catch (error) {
+          logger.warn(
+            `[ABBY] Informations générales du devis ${ref} ignorées: ${error.message}`,
+          );
+        }
+      }
+
+      const finalized = await abbyRequest(
+        apiKey,
+        "PATCH",
+        `/v2/billing/${estimateId}/finalize`,
+        {},
+      );
+
+      if (quote.status === "COMPLETED") {
+        await this.signEstimate(apiKey, estimateId);
+      }
+
+      logger.info(
+        `[ABBY] Devis ${ref || quote._id} créé sur Abby (${finalized?.number || estimateId})`,
+      );
       return {
         success: true,
-        abbyId: String(abbyId),
-        message: "Facture d'achat enregistrée dans le livre des achats Abby",
+        abbyId: String(estimateId),
+        abbyNumber: finalized?.number || null,
+        message: `Devis créé dans Abby${finalized?.number ? ` (${finalized.number})` : ""}`,
       };
     } catch (error) {
-      logger.error(`[ABBY] syncPurchaseInvoice failed: ${error.message}`);
+      logger.error(`[ABBY] syncQuote failed: ${error.message}`);
+      // Brouillon orphelin : supprimé pour ne pas encombrer Abby
+      if (estimateId) {
+        await abbyRequest(apiKey, "DELETE", `/v2/billing/${estimateId}`, null, {
+          raw: true,
+        }).catch(() => {});
+      }
+      return { success: false, message: error.message };
+    }
+  },
+
+  /**
+   * Marque un devis Abby comme signé (devis Newbi accepté après création)
+   * Endpoint: PATCH /v2/billing/estimate/{id}/sign
+   */
+  async signEstimate(apiKey, estimateId) {
+    try {
+      await abbyRequest(
+        apiKey,
+        "PATCH",
+        `/v2/billing/estimate/${estimateId}/sign`,
+        {},
+      );
+      return { success: true, message: "Devis signé dans Abby" };
+    } catch (error) {
+      // Déjà signé côté Abby : rien à faire
+      if (/already_signed|already signed|est déjà signé/i.test(error.message)) {
+        return { success: true, message: "Devis déjà signé dans Abby" };
+      }
+      logger.warn(`[ABBY] signEstimate ${estimateId}: ${error.message}`);
       return { success: false, message: error.message };
     }
   },
@@ -759,9 +981,9 @@ const abbyService = {
   },
 
   /**
-   * Sync complète : factures encaissées + factures d'achat payées
+   * Sync complète : factures encaissées + devis envoyés ou acceptés
    */
-  async syncAll(organizationId, { Invoice, PurchaseInvoice }) {
+  async syncAll(organizationId, { Invoice, Quote }) {
     const account = await AbbyAccount.findOne({ organizationId });
     if (!account || !account.isConnected) {
       return { success: false, message: "Compte Abby non connecté" };
@@ -770,7 +992,7 @@ const abbyService = {
     const apiKey = account.getDecryptedApiKey();
     const results = {
       invoices: { synced: 0, errors: 0 },
-      expenses: { synced: 0, errors: 0 },
+      quotes: { synced: 0, errors: 0 },
     };
 
     account.syncStatus = "IN_PROGRESS";
@@ -809,31 +1031,29 @@ const abbyService = {
         }
       }
 
-      // 2. Factures d'achat payées → livre des achats
-      if (account.autoSync.supplierInvoices && PurchaseInvoice) {
-        const purchaseInvoices = await PurchaseInvoice.find({
+      // 2. Devis envoyés ou acceptés → devis Abby
+      if (account.autoSync.quotes && Quote) {
+        const quotes = await Quote.find({
           workspaceId: organizationId,
-          status: "PAID",
+          status: { $in: ["PENDING", "COMPLETED"] },
           abbySyncStatus: { $ne: "SYNCED" },
         }).limit(50);
 
-        logger.info(
-          `[ABBY] syncAll: ${purchaseInvoices.length} factures d'achat à enregistrer`,
-        );
+        logger.info(`[ABBY] syncAll: ${quotes.length} devis à créer`);
 
-        for (const pi of purchaseInvoices) {
-          const result = await this.syncPurchaseInvoice(apiKey, pi);
+        for (const quote of quotes) {
+          const result = await this.syncQuote(apiKey, quote);
           if (result.success) {
-            pi.abbySyncStatus = "SYNCED";
-            pi.abbyId = result.abbyId;
-            await pi.save();
-            results.expenses.synced++;
+            quote.abbySyncStatus = "SYNCED";
+            quote.abbyId = result.abbyId;
+            await quote.save();
+            results.quotes.synced++;
           } else {
-            pi.abbySyncStatus = "ERROR";
-            await pi.save();
-            results.expenses.errors++;
+            quote.abbySyncStatus = "ERROR";
+            await quote.save();
+            results.quotes.errors++;
             logger.warn(
-              `[ABBY] syncAll facture d'achat ${pi.invoiceNumber || pi._id}: ${result.message}`,
+              `[ABBY] syncAll devis ${quote.prefix || ""}${quote.number || quote._id}: ${result.message}`,
             );
           }
         }
@@ -843,11 +1063,11 @@ const abbyService = {
       account.lastSyncAt = new Date();
       account.syncError = null;
       account.stats.invoicesSynced += results.invoices.synced;
-      account.stats.expensesSynced += results.expenses.synced;
+      account.stats.quotesSynced += results.quotes.synced;
       await account.save();
 
-      const total = results.invoices.synced + results.expenses.synced;
-      const totalErrors = results.invoices.errors + results.expenses.errors;
+      const total = results.invoices.synced + results.quotes.synced;
+      const totalErrors = results.invoices.errors + results.quotes.errors;
 
       return {
         success: true,
@@ -874,6 +1094,9 @@ export {
   fromCents,
   toCents,
   fromTimestamp,
+  toTimestamp,
   toParisDay,
+  mapUnit,
+  mapVatRateToCode,
 };
 export default abbyService;
