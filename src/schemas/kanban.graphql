@@ -269,6 +269,13 @@ type OrganizationMember {
   role: String
 }
 
+# Présence d'un membre du workspace (avatars du tableau)
+type MemberPresence {
+  userId: String!
+  isOnline: Boolean!
+  lastSeenAt: DateTime
+}
+
 type UserInfo {
   id: String!
   name: String!
@@ -288,6 +295,8 @@ type Query {
   taskPresence(boardId: ID!, workspaceId: ID): [TaskPresenceViewer!]!
   activeTimers(workspaceId: ID): [Task!]!
   organizationMembers(workspaceId: ID!): [OrganizationMember!]!
+  # En ligne / dernière activité des membres du workspace (polling léger)
+  organizationMembersPresence(workspaceId: ID!): [MemberPresence!]!
   usersInfo(userIds: [String!]!): [UserInfo!]!
 }
 
