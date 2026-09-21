@@ -89,6 +89,12 @@ class CloudflareService {
       creditNote: process.env.CREDIT_NOTES_BUCKET || "app-credit-notes-prod",
       purchaseOrder:
         process.env.PURCHASE_ORDERS_BUCKET || "app-purchase-orders-prod",
+      // Bons de livraison : bucket dédié si configuré, sinon celui des bons
+      // de commande (les clés sont préfixées par type : deliveryNotes/…).
+      deliveryNote:
+        process.env.DELIVERY_NOTES_BUCKET ||
+        process.env.PURCHASE_ORDERS_BUCKET ||
+        "app-purchase-orders-prod",
     };
 
     if (!this.bucketName) {

@@ -46,6 +46,7 @@ const emailSettingsResolvers = {
           quoteEmailTemplate: "",
           creditNoteEmailTemplate: "",
           purchaseOrderEmailTemplate: "",
+          deliveryNoteEmailTemplate: "",
           useCustomFooter: false,
           customEmailFooter: "",
           verified: false,

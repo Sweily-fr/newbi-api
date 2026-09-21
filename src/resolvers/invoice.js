@@ -2,6 +2,7 @@ import Invoice from "../models/Invoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
 import Event from "../models/Event.js";
 import Client from "../models/Client.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
@@ -398,6 +399,32 @@ const invoiceResolvers = {
       } catch (error) {
         logger.error("[Invoice.sourcePurchaseOrder] Erreur:", error);
         return null;
+      }
+    },
+
+    // Bon de livraison source — résolu à l'inverse via DeliveryNote.linkedInvoices
+    sourceDeliveryNote: async (invoice) => {
+      try {
+        return await DeliveryNote.findOne({
+          linkedInvoices: invoice._id,
+          workspaceId: invoice.workspaceId,
+        });
+      } catch (error) {
+        logger.error("[Invoice.sourceDeliveryNote] Erreur:", error);
+        return null;
+      }
+    },
+
+    // Bons de livraison générés depuis cette facture
+    linkedDeliveryNotes: async (invoice) => {
+      try {
+        return await DeliveryNote.find({
+          sourceInvoice: invoice._id,
+          workspaceId: invoice.workspaceId,
+        }).sort({ createdAt: -1 });
+      } catch (error) {
+        logger.error("[Invoice.linkedDeliveryNotes] Erreur:", error);
+        return [];
       }
     },
 

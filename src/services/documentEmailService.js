@@ -4,6 +4,7 @@ import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import CreditNote from "../models/CreditNote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
 import Client from "../models/Client.js";
 import EmailSettings from "../models/EmailSettings.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
@@ -20,6 +21,7 @@ const DOCUMENT_TYPES = {
   QUOTE: "quote",
   CREDIT_NOTE: "creditNote",
   PURCHASE_ORDER: "purchaseOrder",
+  DELIVERY_NOTE: "deliveryNote",
 };
 
 const DOCUMENT_LABELS = {
@@ -29,6 +31,11 @@ const DOCUMENT_LABELS = {
   purchaseOrder: {
     singular: "bon de commande",
     plural: "bons de commande",
+    article: "le",
+  },
+  deliveryNote: {
+    singular: "bon de livraison",
+    plural: "bons de livraison",
     article: "le",
   },
 };
@@ -51,6 +58,9 @@ async function getDocument(documentId, documentType, workspaceId) {
       break;
     case DOCUMENT_TYPES.PURCHASE_ORDER:
       document = await PurchaseOrder.findOne({ _id: documentId, workspaceId });
+      break;
+    case DOCUMENT_TYPES.DELIVERY_NOTE:
+      document = await DeliveryNote.findOne({ _id: documentId, workspaceId });
       break;
     default:
       throw new Error(`Type de document inconnu: ${documentType}`);
@@ -90,6 +100,9 @@ async function generateDocumentPdf(documentId, documentType) {
     case DOCUMENT_TYPES.PURCHASE_ORDER:
       endpoint = "/api/purchase-orders/generate-pdf";
       break;
+    case DOCUMENT_TYPES.DELIVERY_NOTE:
+      endpoint = "/api/delivery-notes/generate-pdf";
+      break;
     default:
       throw new Error(`Type de document inconnu: ${documentType}`);
   }
@@ -105,6 +118,8 @@ async function generateDocumentPdf(documentId, documentType) {
       body.creditNoteId = documentId;
     } else if (documentType === DOCUMENT_TYPES.PURCHASE_ORDER) {
       body.purchaseOrderId = documentId;
+    } else if (documentType === DOCUMENT_TYPES.DELIVERY_NOTE) {
+      body.deliveryNoteId = documentId;
     }
 
     // Authentification serveur-à-serveur via secret interne : les routes
@@ -710,6 +725,7 @@ async function sendDocumentEmail({
     quote: Quote,
     creditNote: CreditNote,
     purchaseOrder: PurchaseOrder,
+    deliveryNote: DeliveryNote,
   };
   const TrackingModel = ModelMap[documentType];
   if (TrackingModel) {
@@ -840,13 +856,15 @@ async function sendDocumentEmail({
     (documentType === DOCUMENT_TYPES.INVOICE ||
       documentType === DOCUMENT_TYPES.QUOTE ||
       documentType === DOCUMENT_TYPES.CREDIT_NOTE ||
-      documentType === DOCUMENT_TYPES.PURCHASE_ORDER)
+      documentType === DOCUMENT_TYPES.PURCHASE_ORDER ||
+      documentType === DOCUMENT_TYPES.DELIVERY_NOTE)
   ) {
     const ModelMap = {
       invoice: Invoice,
       quote: Quote,
       creditNote: CreditNote,
       purchaseOrder: PurchaseOrder,
+      deliveryNote: DeliveryNote,
     };
     const Model = ModelMap[documentType];
     if (Model) {
