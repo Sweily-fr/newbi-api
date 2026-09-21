@@ -64,6 +64,7 @@ import {
   validateJWT,
 } from "./middlewares/better-auth-jwt.js";
 import { betterAuthMiddleware } from "./middlewares/better-auth.js";
+import { touchUserActivity } from "./services/userActivityService.js";
 import { initializeRedis, closeRedis } from "./config/redis.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
@@ -440,6 +441,9 @@ async function startServer() {
       try {
         // Auth unifiée : cookie session (principal) + JWT fallback (WebSocket)
         let user = await betterAuthJWTMiddleware(req);
+
+        // Présence : dernière activité (throttlé, non bloquant)
+        if (user?._id) touchUserActivity(user._id);
 
         // Récupérer l'organizationId depuis les headers (envoyé par le frontend)
         const organizationId = req.headers["x-organization-id"] || null;

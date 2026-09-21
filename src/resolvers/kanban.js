@@ -18,6 +18,7 @@ import {
   setTaskPresence as storeTaskPresence,
   clearTaskPresenceIfIdle,
 } from "../services/kanbanPresenceService.js";
+import { getUsersPresence } from "../services/userActivityService.js";
 import {
   maybeTriggerClaudeDev,
   hasClaudeMention,
@@ -711,6 +712,34 @@ const resolvers = {
       },
     ),
 
+    organizationMembersPresence: withWorkspace(
+      async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        try {
+          const orgId =
+            typeof finalWorkspaceId === "string"
+              ? new ObjectId(finalWorkspaceId)
+              : finalWorkspaceId;
+          const members = await db
+            .collection("member")
+            .find({ organizationId: orgId }, { projection: { userId: 1 } })
+            .toArray();
+          const userIds = members.map((m) => m.userId).filter(Boolean);
+          const presence = await getUsersPresence(db, userIds);
+          return Array.from(presence.entries()).map(([userId, p]) => ({
+            userId,
+            isOnline: p.isOnline,
+            lastSeenAt: p.lastSeenAt,
+          }));
+        } catch (error) {
+          logger.error(
+            `❌ [Kanban] organizationMembersPresence: ${error.message}`,
+          );
+          return [];
+        }
+      },
+    ),
+
     organizationMembers: withWorkspace(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -1055,7 +1084,11 @@ const resolvers = {
     ),
 
     taskPresence: withWorkspace(
-      async (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      async (
+        _,
+        { boardId, workspaceId },
+        { workspaceId: contextWorkspaceId },
+      ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         await assertBoardInWorkspace(boardId, finalWorkspaceId);
         const { viewers, changed } = await listTaskPresence({
