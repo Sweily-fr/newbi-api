@@ -17,11 +17,14 @@
  *
  * Usage :
  *   NODE_ENV=production node scripts/backfill-receipt-purchase-invoices.js \
- *     --workspace <id> [--ids <txId,txId>] [--limit <n>] [--apply]
+ *     --workspace <id> [--user <id>] [--ids <txId,txId>] [--limit <n>] [--apply]
  *   NODE_ENV=production node scripts/backfill-receipt-purchase-invoices.js \
  *     --restore <backup.json> --apply
  *
  *   Sans --apply : aperçu (aucun OCR lancé, aucune écriture).
+ *   --user : auteur des factures créées quand le justificatif n'en porte pas
+ *   (dépôts anciens : `uploadedBy` absent). Par défaut, le propriétaire du
+ *   workspace.
  *   --restore : réinstalle l'état des transactions sauvegardé et supprime les
  *   factures d'achat créées par le lot correspondant.
  */
@@ -48,6 +51,7 @@ const argValue = (name) => {
 };
 const APPLY = args.includes("--apply");
 const WORKSPACE = argValue("--workspace");
+const USER = argValue("--user");
 const IDS = argValue("--ids");
 const LIMIT = Number(argValue("--limit")) || 0;
 const RESTORE_FILE = argValue("--restore");
@@ -108,6 +112,22 @@ async function selectTransactions() {
   return LIMIT > 0 ? withPending.slice(0, LIMIT) : withPending;
 }
 
+/**
+ * Auteur de repli pour les factures créées : l'option --user, sinon le
+ * propriétaire du workspace. Les justificatifs déposés avant que
+ * `uploadedBy` ne soit renseigné n'en portent pas, et `createdBy` est requis
+ * sur une facture d'achat.
+ */
+async function resolveFallbackUserId(workspaceId) {
+  if (USER) return String(USER);
+  const wsId = new mongoose.Types.ObjectId(String(workspaceId));
+  const owner = await mongoose.connection.db.collection("member").findOne({
+    organizationId: { $in: [String(workspaceId), wsId] },
+    role: "owner",
+  });
+  return owner?.userId ? String(owner.userId) : null;
+}
+
 async function backfill() {
   const transactions = await selectTransactions();
   if (transactions.length === 0) {
@@ -136,21 +156,29 @@ async function backfill() {
     return;
   }
 
+  const fallbackUserId = await resolveFallbackUserId(WORKSPACE);
+  if (!fallbackUserId) {
+    console.error(
+      "Aucun propriétaire trouvé pour ce workspace : préciser --user <id>.",
+    );
+    process.exit(1);
+  }
+
   const backupFile = writeBackup(WORKSPACE, transactions);
   console.log(`\n💾 Sauvegarde écrite : ${backupFile}`);
+  console.log(
+    `Auteur des factures sans justificatif signé : ${fallbackUserId}`,
+  );
   console.log("Traitement (OCR réel, une transaction à la fois)...\n");
 
   const created = [];
   const failed = [];
   for (const t of transactions) {
     const userId = String(
-      t.receiptFiles?.find((f) => f.uploadedBy)?.uploadedBy || t.userId || "",
+      t.receiptFiles?.find((f) => f.uploadedBy)?.uploadedBy ||
+        t.userId ||
+        fallbackUserId,
     );
-    if (!userId) {
-      failed.push({ t, reason: "aucun utilisateur connu sur la transaction" });
-      console.log(`  ✗ ${t._id} ${day(t.date)} : aucun utilisateur connu`);
-      continue;
-    }
     try {
       const invoices =
         await transactionReceiptOcrService.processReceiptsForTransaction({
