@@ -9,6 +9,11 @@ import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
+import {
+  ensureReceiptFileIds,
+  findTransactionReceiptFile,
+  syntheticReceiptFileId,
+} from "../utils/transactionReceiptFiles.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 import { buildPageQuery } from "../utils/transaction-page-query.js";
@@ -555,9 +560,8 @@ const bankingResolvers = {
             };
           }
 
-          const fileToRemove = transaction.receiptFiles?.find(
-            (f) => String(f._id) === String(fileId),
-          );
+          await ensureReceiptFileIds(transaction);
+          const fileToRemove = findTransactionReceiptFile(transaction, fileId);
 
           if (!fileToRemove) {
             return {
@@ -980,14 +984,17 @@ const bankingResolvers = {
       parent.reference || parent.metadata?.bridgeProviderDescription || null,
     // receiptFiles : fallback sur le legacy receiptFile (objet) si pas encore migré
     // Génère un id synthétique stable si _id manque (subdocs migrés via raw driver)
-    receiptFiles: (parent) => {
+    receiptFiles: async (parent) => {
       const txId = parent._id?.toString() || parent.id || "tx";
       if (
         Array.isArray(parent.receiptFiles) &&
         parent.receiptFiles.length > 0
       ) {
+        // Justificatif sans _id (données anciennes) : identifiant attribué et
+        // persisté à la lecture, pour que suppression et aperçu le retrouvent.
+        await ensureReceiptFileIds(parent);
         return parent.receiptFiles.map((r, idx) => ({
-          id: r._id?.toString() || r.id || `${txId}-receipt-${idx}`,
+          id: r._id?.toString() || r.id || syntheticReceiptFileId(txId, idx),
           url: r.url,
           key: r.key,
           filename: r.filename,
