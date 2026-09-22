@@ -4,6 +4,8 @@
 
 # Dépendances
 node_modules/
+# aussi un lien symbolique node_modules (worktrees), pas seulement le dossier
+node_modules
 
 # Logs
 logs
