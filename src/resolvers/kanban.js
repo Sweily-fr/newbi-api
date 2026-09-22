@@ -18,6 +18,14 @@ import {
   setTaskPresence as storeTaskPresence,
   clearTaskPresenceIfIdle,
 } from "../services/kanbanPresenceService.js";
+import {
+  linkTasks,
+  unlinkTasks,
+  detachTaskLinks,
+  normalizeLinkedTaskIds,
+  loadLinkedTaskInfos,
+  searchLinkableTasks,
+} from "../services/kanbanTaskLinkService.js";
 import { getUsersPresence } from "../services/userActivityService.js";
 import {
   maybeTriggerClaudeDev,
@@ -597,6 +605,18 @@ const buildUserDisplayInfo = (u) => {
   };
 };
 
+// Auteur d'une activité (nom + photo) à partir de l'utilisateur du contexte,
+// avec le même repli que createTask/updateTask. Utilisé par les liens de tâches.
+const resolveActivityAuthor = async (context, user) => {
+  if (!user?.id) return { userName: null, userImage: null };
+  const usersMap = await loadTaskUsersInfo(context, [String(user.id)]);
+  const info = usersMap[String(user.id)];
+  return {
+    userName: info?.name || user.name || user.email || "Utilisateur",
+    userImage: info?.image || null,
+  };
+};
+
 // Loader par requête des infos utilisateur : les resolvers Task.comments
 // et Task.activity tournent en parallèle sur des dizaines de tâches, on
 // déduplique donc les lookups Mongo via un cache de promesses porté par
@@ -1099,6 +1119,23 @@ const resolvers = {
         // onglet expiré, tout le monde doit le voir disparaître.
         if (changed) publishTaskPresence(boardId, finalWorkspaceId, viewers);
         return viewers;
+      },
+    ),
+
+    searchTasks: withWorkspace(
+      async (
+        _,
+        { search, boardId, excludeTaskId, limit, workspaceId },
+        { workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        return searchLinkableTasks({
+          workspaceId: finalWorkspaceId,
+          search,
+          boardId,
+          excludeTaskId,
+          limit,
+        });
       },
     ),
 
@@ -1658,6 +1695,12 @@ const resolvers = {
           }
         }
 
+        // Tâches à lier dès la création : posées après le save (lien symétrique)
+        const linkedTaskIds = normalizeLinkedTaskIds(
+          cleanedInput.linkedTaskIds,
+        );
+        delete cleanedInput.linkedTaskIds;
+
         const task = new Task({
           ...cleanedInput,
           status: cleanedInput.status || cleanedInput.columnId,
@@ -1666,7 +1709,33 @@ const resolvers = {
           position: position,
           activity: initialActivity,
         });
-        const savedTask = await task.save();
+        let savedTask = await task.save();
+
+        if (linkedTaskIds.length > 0) {
+          const linkedTasksToPublish = [];
+          for (const linkedTaskId of linkedTaskIds) {
+            try {
+              const { linkedTask } = await linkTasks({
+                taskId: savedTask._id,
+                linkedTaskId,
+                workspaceId: finalWorkspaceId,
+                user,
+                userName: creatorName,
+                userImage: creatorImage,
+              });
+              if (linkedTask) linkedTasksToPublish.push(linkedTask);
+            } catch (error) {
+              // Une tâche liée introuvable ne doit pas faire échouer la création
+              logger.warn(
+                `⚠️ [CreateTask] Lien impossible vers ${linkedTaskId}: ${error.message}`,
+              );
+            }
+          }
+          savedTask = (await Task.findById(savedTask._id)) || savedTask;
+          for (const linkedTask of linkedTasksToPublish) {
+            await publishTaskUpdated(linkedTask, finalWorkspaceId);
+          }
+        }
 
         // Enrichir la tâche avec les infos utilisateur AVANT de publier
         const enrichedTask = await enrichTaskWithUserInfo(savedTask);
@@ -2569,6 +2638,19 @@ const resolvers = {
         });
 
         if (result.deletedCount > 0) {
+          // Retirer la tâche supprimée des tâches qui lui étaient liées et
+          // diffuser leur mise à jour (le lien disparaît en temps réel)
+          const affected = await detachTaskLinks(id, finalWorkspaceId);
+          if (affected.length > 0) {
+            const affectedTasks = await Task.find({
+              _id: { $in: affected.map((t) => t._id) },
+              workspaceId: finalWorkspaceId,
+            });
+            for (const affectedTask of affectedTasks) {
+              await publishTaskUpdated(affectedTask, finalWorkspaceId);
+            }
+          }
+
           // Enrichir la tâche avant suppression pour inclure les commentaires avec photos
           const enrichedTask = await enrichTaskWithUserInfo(task);
 
@@ -2587,6 +2669,80 @@ const resolvers = {
         }
 
         return result.deletedCount > 0;
+      },
+    ),
+
+    linkTask: withWorkspace(
+      async (
+        _,
+        { taskId, linkedTaskId, workspaceId },
+        context,
+      ) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const author = await resolveActivityAuthor(context, user);
+        const { task, linkedTask, changed } = await linkTasks({
+          taskId,
+          linkedTaskId,
+          workspaceId: finalWorkspaceId,
+          user,
+          ...author,
+        });
+        if (changed && linkedTask) {
+          // La tâche liée peut être sur un autre tableau : diffusée sur son canal
+          await publishTaskUpdated(linkedTask, finalWorkspaceId);
+        }
+        const enrichedTask = await enrichTaskWithUserInfo(task);
+        if (changed) {
+          safePublish(
+            `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
+            {
+              type: "UPDATED",
+              task: enrichedTask,
+              boardId: enrichedTask.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Tâche liée",
+          );
+        }
+        return enrichedTask;
+      },
+    ),
+
+    unlinkTask: withWorkspace(
+      async (
+        _,
+        { taskId, linkedTaskId, workspaceId },
+        context,
+      ) => {
+        const { user, workspaceId: contextWorkspaceId } = context;
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const author = await resolveActivityAuthor(context, user);
+        const { task, linkedTask, changed } = await unlinkTasks({
+          taskId,
+          linkedTaskId,
+          workspaceId: finalWorkspaceId,
+          user,
+          ...author,
+        });
+        if (changed && linkedTask) {
+          // La tâche liée peut être sur un autre tableau : diffusée sur son canal
+          await publishTaskUpdated(linkedTask, finalWorkspaceId);
+        }
+        const enrichedTask = await enrichTaskWithUserInfo(task);
+        if (changed) {
+          safePublish(
+            `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
+            {
+              type: "UPDATED",
+              task: enrichedTask,
+              boardId: enrichedTask.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Tâche déliée",
+          );
+        }
+        return enrichedTask;
       },
     ),
 
@@ -4156,6 +4312,14 @@ const resolvers = {
   },
 
   Task: {
+    // Tâches liées : ids → résumés (titre, tableau, colonne), batchés par requête
+    linkedTasks: async (task, _args, context) => {
+      if (!Array.isArray(task.linkedTasks) || task.linkedTasks.length === 0) {
+        return [];
+      }
+      return loadLinkedTaskInfos(context, task.linkedTasks, task.workspaceId);
+    },
+
     // Résoudre le client assigné à la tâche
     // Utilise le client pré-chargé par Board.tasks si disponible (évite N+1)
     client: async (task) => {
@@ -4482,9 +4646,11 @@ resolvers.Mutation = Object.fromEntries(
 );
 
 // Diffuse une tâche modifiée hors resolver (ex. enregistrement de l'édition
-// collaborative de la description) sur le même canal que updateTask, pour que
-// cartes, liste, Gantt et modale des autres membres se rafraîchissent.
+// collaborative de la description, tâche liée sur un autre tableau) sur le
+// même canal que updateTask, pour que cartes, liste, Gantt et modale des
+// autres membres se rafraîchissent.
 export const publishTaskUpdated = async (task, workspaceId) => {
+  if (!task) return null;
   const enrichedTask = await enrichTaskWithUserInfo(task);
   safePublish(
     `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
