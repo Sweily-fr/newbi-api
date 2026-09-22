@@ -47,6 +47,7 @@ export function toLinkedTaskInfo(task, boardsById = {}, columnsById = {}) {
     boardTitle: boardsById[boardId]?.title || null,
     columnId,
     columnTitle: columnsById[columnId]?.title || null,
+    columnColor: columnsById[columnId]?.color || null,
     status: task.status || columnId,
     priority: task.priority || null,
     dueDate: task.dueDate || null,
@@ -77,7 +78,7 @@ async function loadBoardsAndColumns(tasks, workspaceId) {
       : [],
     columnIds.length > 0
       ? Column.find({ _id: { $in: columnIds }, workspaceId })
-          .select("title")
+          .select("title color")
           .lean()
       : [],
   ]);
@@ -192,6 +193,36 @@ export async function searchLinkableTasks({
     workspaceId,
   );
   return tasks.map((t) => toLinkedTaskInfo(t, boardsById, columnsById));
+}
+
+/**
+ * Nombre de tâches par colonne pour un workspace, calculé en UNE agrégation
+ * par requête GraphQL et mémorisé sur le contexte : le sélecteur de tâches
+ * liées affiche le compteur de chaque colonne de chaque tableau, ce qui
+ * ferait autant de countDocuments que de colonnes sans ce batch.
+ */
+export async function loadColumnTaskCounts(context, workspaceId) {
+  if (!workspaceId) return {};
+  const key = String(workspaceId);
+  const cache =
+    context && typeof context === "object"
+      ? (context._columnTaskCountCache ??= new Map())
+      : new Map();
+
+  if (!cache.has(key)) {
+    cache.set(
+      key,
+      Task.aggregate([
+        { $match: { workspaceId: new ObjectId(key) } },
+        { $group: { _id: "$columnId", count: { $sum: 1 } } },
+      ])
+        .then((rows) =>
+          Object.fromEntries(rows.map((r) => [String(r._id), r.count])),
+        )
+        .catch(() => ({})),
+    );
+  }
+  return cache.get(key);
 }
 
 const buildLinkActivity = ({ user, userName, userImage, verb, otherTask }) => ({

@@ -33,6 +33,8 @@ type Column {
   boardId: ID!
   order: Int!
   tasks: [Task!]!
+  # Nombre de tâches de la colonne (batché par requête)
+  taskCount: Int
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -136,6 +138,7 @@ type LinkedTaskInfo {
   boardTitle: String
   columnId: String!
   columnTitle: String
+  columnColor: String
   status: String!
   priority: String
   dueDate: DateTime
