@@ -749,6 +749,7 @@ const purchaseInvoiceResolvers = {
         const oldStatus = invoice.status;
         const oldCategory = invoice.category;
         const oldSubcategory = invoice.subcategory || null;
+        const oldSupplierName = invoice.supplierName;
 
         // Garde-fou d'intégrité : le montant d'une facture rapprochée ne peut
         // pas changer (la transaction bancaire liée ne correspondrait plus).
@@ -769,6 +770,46 @@ const purchaseInvoiceResolvers = {
             invoice[key] = input[key];
           }
         });
+
+        // Nouveau nom de fournisseur sans fiche explicite : la fiche liée
+        // suit (identifiants, récurrence bancaire, nom ; cf.
+        // supplierResolution.js) et impose son nom si elle existe déjà.
+        if (
+          input.supplierName !== undefined &&
+          input.supplierId === undefined &&
+          input.supplierName &&
+          input.supplierName !== oldSupplierName
+        ) {
+          let transaction = null;
+          if (invoice.linkedTransactionIds?.length) {
+            const { default: Transaction } =
+              await import("../models/Transaction.js");
+            transaction = await Transaction.findOne({
+              _id: { $in: invoice.linkedTransactionIds },
+            })
+              .select("description metadata.bridgeCleanDescription")
+              .lean();
+          }
+          try {
+            const { supplier, matchedBy } = await resolveSupplier({
+              workspaceId,
+              name: input.supplierName,
+              siret: invoice.ocrMetadata?.supplierSiret || null,
+              vatNumber: invoice.ocrMetadata?.supplierVatNumber || null,
+              transaction,
+              userId: context.user.id,
+              category: invoice.category || "OTHER",
+            });
+            invoice.supplierId = supplier._id;
+            if (matchedBy !== "created" && supplier.name) {
+              invoice.supplierName = supplier.name;
+            }
+          } catch (err) {
+            logger.warn(
+              `⚠️ [PI] Fiche fournisseur non résolue pour « ${input.supplierName} » : ${err.message}`,
+            );
+          }
+        }
 
         // Sous-catégorie fine → catégorie large dérivée ; un code large seul
         // efface la sous-catégorie précédente.
@@ -979,7 +1020,9 @@ const purchaseInvoiceResolvers = {
           transaction = await Transaction.findOne({
             _id: { $in: invoice.linkedTransactionIds },
           })
-            .select("amount currency")
+            .select(
+              "amount currency description metadata.bridgeCleanDescription",
+            )
             .lean();
         }
 
@@ -1110,7 +1153,9 @@ const purchaseInvoiceResolvers = {
           transaction = await Transaction.findOne({
             _id: { $in: invoice.linkedTransactionIds },
           })
-            .select("amount currency")
+            .select(
+              "amount currency description metadata.bridgeCleanDescription",
+            )
             .lean();
         }
 
