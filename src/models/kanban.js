@@ -374,6 +374,15 @@ const taskSchema = new mongoose.Schema(
     },
     // Membres assignés à la tâche (seulement les userId, les infos sont récupérées depuis la collection user)
     assignedMembers: [String],
+    // Tâches liées (informatif) : lien symétrique, si A est liée à B alors B
+    // est liée à A. Peuvent appartenir à un autre tableau du même workspace.
+    // Les infos (titre, tableau...) sont résolues dynamiquement côté GraphQL.
+    linkedTasks: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Task",
+      },
+    ],
     // Images attachées à la description de la tâche
     images: [taskImageSchema],
     // Commentaires
@@ -431,6 +440,8 @@ taskSchema.index({
 });
 // Index pour Column.tasks resolver (recherche par columnId + workspaceId)
 taskSchema.index({ columnId: 1, workspaceId: 1 });
+// Index pour retrouver les tâches liées à une tâche (liens symétriques, nettoyage à la suppression)
+taskSchema.index({ workspaceId: 1, linkedTasks: 1 });
 // Index legacy pour la migration
 boardSchema.index({ userId: 1, createdAt: -1 });
 columnSchema.index({ boardId: 1, order: 1 });

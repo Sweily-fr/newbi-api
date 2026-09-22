@@ -114,6 +114,8 @@ type Task {
   client: Client
   assignedMembers: [String!]
   assignedMembersInfo: [AssignedMemberInfo!]
+  # Tâches liées (informatif, lien symétrique), résolues avec leur tableau
+  linkedTasks: [LinkedTaskInfo!]
   images: [TaskImage!]
   comments: [Comment!]
   activity: [Activity!]
@@ -123,6 +125,20 @@ type Task {
   userId: ID
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+# Résumé d'une tâche liée : de quoi l'afficher et naviguer dessus
+# (même tableau ou autre tableau du workspace)
+type LinkedTaskInfo {
+  id: ID!
+  title: String!
+  boardId: ID!
+  boardTitle: String
+  columnId: String!
+  columnTitle: String
+  status: String!
+  priority: String
+  dueDate: DateTime
 }
 
 type Tag {
@@ -207,6 +223,8 @@ input CreateTaskInput {
   checklist: [ChecklistItemInput!]
   clientId: ID
   assignedMembers: [String!]
+  # Tâches à lier dès la création (le lien est posé des deux côtés)
+  linkedTaskIds: [ID!]
   timeTracking: TimeTrackingInput
 }
 
@@ -290,6 +308,15 @@ type Query {
   column(id: ID!, workspaceId: ID): Column
   tasks(boardId: ID!, columnId: ID, workspaceId: ID): [Task!]!
   task(id: ID!, workspaceId: ID): Task
+  # Recherche de tâches à lier : sans `search`, les tâches du tableau `boardId` ;
+  # avec `search`, toutes les tâches du workspace dont le titre correspond.
+  searchTasks(
+    search: String
+    boardId: ID
+    excludeTaskId: ID
+    limit: Int
+    workspaceId: ID
+  ): [LinkedTaskInfo!]!
   # Qui a une tâche ouverte sur ce tableau en ce moment (état initial,
   # les mises à jour arrivent par la subscription taskPresence)
   taskPresence(boardId: ID!, workspaceId: ID): [TaskPresenceViewer!]!
@@ -315,6 +342,10 @@ type Mutation {
   updateTask(input: UpdateTaskInput!, workspaceId: ID): Task!
   deleteTask(id: ID!, workspaceId: ID): Boolean!
   moveTask(id: ID!, columnId: String!, position: Int!, workspaceId: ID): Task!
+
+  # Lien symétrique entre deux tâches du même workspace (informatif)
+  linkTask(taskId: ID!, linkedTaskId: ID!, workspaceId: ID): Task!
+  unlinkTask(taskId: ID!, linkedTaskId: ID!, workspaceId: ID): Task!
   
   addComment(taskId: ID!, input: CommentInput!, workspaceId: ID): Task!
   updateComment(taskId: ID!, commentId: ID!, content: String!, mentionedUserIds: [ID!], workspaceId: ID): Task!
