@@ -93,6 +93,9 @@ type PurchaseInvoiceOCRMetadata {
 # rien n'est enregistré, l'utilisateur compare et applique ce qu'il veut.
 type PurchaseInvoiceOcrProposal {
   supplierName: String
+  # Fiche fournisseur existante retrouvée (identifiants, récurrence bancaire,
+  # nom) : supplierName est alors le nom de cette fiche
+  supplierId: ID
   invoiceNumber: String
   invoiceDate: String
   dueDate: String

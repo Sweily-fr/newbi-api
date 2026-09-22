@@ -876,3 +876,87 @@ describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
     expect(r.vatRate).toBe(20);
   });
 });
+
+describe("analyzePurchaseInvoiceFiles : fournisseur de la proposition", () => {
+  beforeEach(async () => {
+    await clearMongo();
+    vi.clearAllMocks();
+  });
+
+  it("« Relancer l'analyse » propose la fiche désignée par la récurrence bancaire, pas le nom brut lu", async () => {
+    // Fiche établie + fiche parasite issue du libellé bancaire
+    const canva = await Supplier.create({
+      name: "Canva Pty. Ltd.",
+      workspaceId,
+      createdBy: userId,
+      defaultCategory: "SUBSCRIPTIONS",
+    });
+    await Supplier.create({
+      name: "Canva*",
+      workspaceId,
+      createdBy: userId,
+      defaultCategory: "OTHER",
+    });
+    const previous = await PurchaseInvoice.create({
+      supplierName: canva.name,
+      supplierId: canva._id,
+      issueDate: new Date("2026-07-25"),
+      amountHT: 11.99,
+      amountTVA: 0,
+      amountTTC: 11.99,
+      currency: "EUR",
+      status: "PAID",
+      category: "SUBSCRIPTIONS",
+      source: "OCR",
+      workspaceId,
+      createdBy: userId,
+      invoiceNumber: "04953-11522994",
+    });
+    await createExpenseTransaction({
+      amount: -11.99,
+      description: "Canva*",
+      linkedPurchaseInvoiceIds: [previous._id],
+    });
+    const current = await createExpenseTransaction({
+      amount: -11.99,
+      description: "CANVA* I04254-13054515",
+    });
+
+    mockClaudeSuccess();
+    toInvoiceFormat.mockReturnValue({
+      transaction_data: {
+        document_number: "04254-13054515",
+        transaction_date: "25/08/2024",
+        vendor_name: "Canva",
+        amount: 11.99,
+        currency: "EUR",
+      },
+      extracted_fields: { totals: { total_ttc: 11.99 } },
+      document_analysis: { confidence: 0.95 },
+    });
+
+    const result =
+      await transactionReceiptOcrService.analyzePurchaseInvoiceFiles({
+        files: [
+          {
+            fileId: "f1",
+            filename: "Canva_Août_24.pdf",
+            receiptFile: {
+              url: "https://receipts.newbi.fr/aout.pdf",
+              filename: "Canva_Août_24.pdf",
+              mimetype: "application/pdf",
+            },
+            fileBuffer: Buffer.from("fake-pdf"),
+          },
+        ],
+        workspaceId,
+        targetCurrency: "EUR",
+        transaction: current.toObject(),
+      });
+
+    expect(result.combined.supplierName).toBe("Canva Pty. Ltd.");
+    expect(result.combined.supplierId).toBe(canva._id.toString());
+    // Aucune fiche créée par une simple proposition
+    expect(await Supplier.countDocuments({ workspaceId })).toBe(2);
+  });
+});
