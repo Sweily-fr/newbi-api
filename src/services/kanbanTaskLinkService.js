@@ -47,6 +47,7 @@ export function toLinkedTaskInfo(task, boardsById = {}, columnsById = {}) {
     boardTitle: boardsById[boardId]?.title || null,
     columnId,
     columnTitle: columnsById[columnId]?.title || null,
+    columnColor: columnsById[columnId]?.color || null,
     status: task.status || columnId,
     priority: task.priority || null,
     dueDate: task.dueDate || null,
@@ -77,7 +78,7 @@ async function loadBoardsAndColumns(tasks, workspaceId) {
       : [],
     columnIds.length > 0
       ? Column.find({ _id: { $in: columnIds }, workspaceId })
-          .select("title")
+          .select("title color")
           .lean()
       : [],
   ]);
@@ -142,19 +143,29 @@ export async function loadLinkedTaskInfos(context, taskIds, workspaceId) {
 
 /**
  * Recherche de tâches candidates à la liaison.
- * - sans `search` : les tâches du tableau `boardId` (ordre des colonnes/positions)
- * - avec `search` : toutes les tâches du workspace dont le titre contient le texte
+ * - avec `columnId` : les tâches de cette colonne (étape), dans l'ordre du
+ *   tableau, `search` optionnel pour affiner dans la colonne
+ * - sinon sans `search` : les tâches du tableau `boardId`
+ * - sinon avec `search` : toutes les tâches du workspace dont le titre
+ *   contient le texte
  */
 export async function searchLinkableTasks({
   workspaceId,
   search = "",
   boardId = null,
+  columnId = null,
   excludeTaskId = null,
   limit = 20,
 }) {
   if (!workspaceId) return [];
-  const cappedLimit = Math.min(Math.max(Number(limit) || 20, 1), 50);
   const trimmed = (search || "").trim();
+  const hasColumn = columnId && isValidObjectId(String(columnId));
+  // Une colonne est bornée par nature : on remonte toute son étape (plafond
+  // large) pour que le sélecteur par étape n'en cache aucune.
+  const cappedLimit = Math.min(
+    Math.max(Number(limit) || (hasColumn ? 200 : 20), 1),
+    hasColumn ? 200 : 50,
+  );
 
   const query = { workspaceId };
   if (excludeTaskId && isValidObjectId(String(excludeTaskId))) {
@@ -162,15 +173,18 @@ export async function searchLinkableTasks({
   }
   if (trimmed) {
     query.title = { $regex: escapeRegex(trimmed, 100), $options: "i" };
-  } else if (boardId && isValidObjectId(String(boardId))) {
+  }
+  if (hasColumn) {
+    query.columnId = String(columnId);
+    if (boardId && isValidObjectId(String(boardId))) query.boardId = boardId;
+  } else if (!trimmed) {
+    if (!boardId || !isValidObjectId(String(boardId))) return [];
     query.boardId = boardId;
-  } else {
-    return [];
   }
 
   const tasks = await Task.find(query)
     .select("title boardId columnId status priority dueDate updatedAt")
-    .sort(trimmed ? { updatedAt: -1 } : { position: 1 })
+    .sort(trimmed && !hasColumn ? { updatedAt: -1 } : { position: 1 })
     .limit(cappedLimit)
     .lean();
 
@@ -179,6 +193,36 @@ export async function searchLinkableTasks({
     workspaceId,
   );
   return tasks.map((t) => toLinkedTaskInfo(t, boardsById, columnsById));
+}
+
+/**
+ * Nombre de tâches par colonne pour un workspace, calculé en UNE agrégation
+ * par requête GraphQL et mémorisé sur le contexte : le sélecteur de tâches
+ * liées affiche le compteur de chaque colonne de chaque tableau, ce qui
+ * ferait autant de countDocuments que de colonnes sans ce batch.
+ */
+export async function loadColumnTaskCounts(context, workspaceId) {
+  if (!workspaceId) return {};
+  const key = String(workspaceId);
+  const cache =
+    context && typeof context === "object"
+      ? (context._columnTaskCountCache ??= new Map())
+      : new Map();
+
+  if (!cache.has(key)) {
+    cache.set(
+      key,
+      Task.aggregate([
+        { $match: { workspaceId: new ObjectId(key) } },
+        { $group: { _id: "$columnId", count: { $sum: 1 } } },
+      ])
+        .then((rows) =>
+          Object.fromEntries(rows.map((r) => [String(r._id), r.count])),
+        )
+        .catch(() => ({})),
+    );
+  }
+  return cache.get(key);
 }
 
 const buildLinkActivity = ({ user, userName, userImage, verb, otherTask }) => ({
