@@ -971,9 +971,12 @@ async function analyzePurchaseInvoiceFile({
     vatRate: toNonNegativeNumber(td.tax_rate),
   });
   const ocrCategory = td.category ? String(td.category).toUpperCase() : null;
+  const ef = financial?.extracted_fields || {};
   return {
     hasData,
     supplierName: td.vendor_name || td.supplier_name || null,
+    supplierSiret: ef.vendor_siret || null,
+    supplierVatNumber: ef.vendor_vat_number || null,
     invoiceNumber: td.document_number || td.invoice_number || null,
     invoiceDate: parseOcrDate(td.transaction_date || td.invoice_date),
     dueDate: parseOcrDate(td.due_date),
@@ -1236,8 +1239,34 @@ async function analyzePurchaseInvoiceFiles({
       }
     }
 
+    // Fiche fournisseur existante (identifiants, récurrence bancaire, nom) :
+    // la proposition porte alors le nom de la fiche, pas le nom brut lu.
+    let supplierName = base.supplierName;
+    let supplierId = null;
+    if (supplierName) {
+      try {
+        const { supplier } = await resolveSupplier({
+          workspaceId,
+          name: supplierName,
+          siret: base.supplierSiret || null,
+          vatNumber: base.supplierVatNumber || null,
+          transaction,
+          create: false,
+        });
+        if (supplier) {
+          supplierName = supplier.name;
+          supplierId = supplier._id.toString();
+        }
+      } catch (err) {
+        logger.warn(
+          `⚠️ [RECEIPT OCR] Résolution fournisseur impossible (${err.message})`,
+        );
+      }
+    }
+
     combined = {
-      supplierName: base.supplierName,
+      supplierName,
+      supplierId,
       invoiceNumber: distinct.length === 1 ? base.invoiceNumber : null,
       invoiceDate: dates.length ? new Date(Math.min(...dates)) : null,
       dueDate: dues.length ? new Date(Math.max(...dues)) : null,
