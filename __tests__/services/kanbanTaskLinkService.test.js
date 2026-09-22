@@ -282,4 +282,36 @@ describe("searchLinkableTasks", () => {
   it("ne renvoie rien sans tableau ni recherche", async () => {
     expect(await searchLinkableTasks({ workspaceId })).toEqual([]);
   });
+
+  it("par étape : les tâches d'une colonne dans l'ordre du tableau, recherche optionnelle dans la colonne", async () => {
+    const board = await makeBoard("Projet");
+    const todo = await makeColumn(board, "À faire");
+    const done = await makeColumn(board, "Terminé");
+    const self = await makeTask(board, todo, "Moi", { position: 0 });
+    await makeTask(board, todo, "Facture B", { position: 2 });
+    await makeTask(board, todo, "Facture A", { position: 1 });
+    await makeTask(board, done, "Facture terminée", { position: 0 });
+
+    const column = await searchLinkableTasks({
+      workspaceId,
+      columnId: todo._id,
+      excludeTaskId: self._id,
+    });
+    expect(column.map((t) => t.title)).toEqual(["Facture A", "Facture B"]);
+
+    const filtered = await searchLinkableTasks({
+      workspaceId,
+      columnId: todo._id,
+      search: "facture b",
+    });
+    expect(filtered.map((t) => t.title)).toEqual(["Facture B"]);
+
+    // Une colonne d'un autre workspace ne renvoie rien
+    const foreignBoard = await makeBoard("Ailleurs", otherWorkspaceId);
+    const foreignCol = await makeColumn(foreignBoard, "À faire");
+    await makeTask(foreignBoard, foreignCol, "Étrangère");
+    expect(
+      await searchLinkableTasks({ workspaceId, columnId: foreignCol._id }),
+    ).toEqual([]);
+  });
 });

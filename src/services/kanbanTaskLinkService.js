@@ -142,19 +142,29 @@ export async function loadLinkedTaskInfos(context, taskIds, workspaceId) {
 
 /**
  * Recherche de tâches candidates à la liaison.
- * - sans `search` : les tâches du tableau `boardId` (ordre des colonnes/positions)
- * - avec `search` : toutes les tâches du workspace dont le titre contient le texte
+ * - avec `columnId` : les tâches de cette colonne (étape), dans l'ordre du
+ *   tableau, `search` optionnel pour affiner dans la colonne
+ * - sinon sans `search` : les tâches du tableau `boardId`
+ * - sinon avec `search` : toutes les tâches du workspace dont le titre
+ *   contient le texte
  */
 export async function searchLinkableTasks({
   workspaceId,
   search = "",
   boardId = null,
+  columnId = null,
   excludeTaskId = null,
   limit = 20,
 }) {
   if (!workspaceId) return [];
-  const cappedLimit = Math.min(Math.max(Number(limit) || 20, 1), 50);
   const trimmed = (search || "").trim();
+  const hasColumn = columnId && isValidObjectId(String(columnId));
+  // Une colonne est bornée par nature : on remonte toute son étape (plafond
+  // large) pour que le sélecteur par étape n'en cache aucune.
+  const cappedLimit = Math.min(
+    Math.max(Number(limit) || (hasColumn ? 200 : 20), 1),
+    hasColumn ? 200 : 50,
+  );
 
   const query = { workspaceId };
   if (excludeTaskId && isValidObjectId(String(excludeTaskId))) {
@@ -162,15 +172,18 @@ export async function searchLinkableTasks({
   }
   if (trimmed) {
     query.title = { $regex: escapeRegex(trimmed, 100), $options: "i" };
-  } else if (boardId && isValidObjectId(String(boardId))) {
+  }
+  if (hasColumn) {
+    query.columnId = String(columnId);
+    if (boardId && isValidObjectId(String(boardId))) query.boardId = boardId;
+  } else if (!trimmed) {
+    if (!boardId || !isValidObjectId(String(boardId))) return [];
     query.boardId = boardId;
-  } else {
-    return [];
   }
 
   const tasks = await Task.find(query)
     .select("title boardId columnId status priority dueDate updatedAt")
-    .sort(trimmed ? { updatedAt: -1 } : { position: 1 })
+    .sort(trimmed && !hasColumn ? { updatedAt: -1 } : { position: 1 })
     .limit(cappedLimit)
     .lean();
 

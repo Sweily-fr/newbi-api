@@ -1125,7 +1125,7 @@ const resolvers = {
     searchTasks: withWorkspace(
       async (
         _,
-        { search, boardId, excludeTaskId, limit, workspaceId },
+        { search, boardId, columnId, excludeTaskId, limit, workspaceId },
         { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -1133,6 +1133,7 @@ const resolvers = {
           workspaceId: finalWorkspaceId,
           search,
           boardId,
+          columnId,
           excludeTaskId,
           limit,
         });
