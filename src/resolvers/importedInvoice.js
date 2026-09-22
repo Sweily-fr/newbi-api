@@ -29,6 +29,7 @@ import {
 import documentAutomationService from "../services/documentAutomationService.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
+import { resolveSupplier } from "../utils/supplierResolution.js";
 import Client from "../models/Client.js";
 import { detachImportedInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
@@ -594,22 +595,18 @@ async function findOrCreateSupplier(vendor, workspaceId, userId) {
 
   const wsId = new mongoose.Types.ObjectId(workspaceId);
 
-  // Search by siret first
-  if (vendor.siret) {
-    const bySiret = await Supplier.findOne({
-      workspaceId: wsId,
-      siret: vendor.siret,
-    });
-    if (bySiret) return bySiret;
-  }
-
-  // Search by name (case-insensitive)
-  const escapedName = vendor.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const byName = await Supplier.findOne({
+  // Identifiants (SIRET / TVA), nom identique, nom commençant pareil :
+  // cf. supplierResolution.js. Création ici pour garder les coordonnées
+  // du vendeur (email, téléphone, adresse) sur la nouvelle fiche.
+  const { supplier: existing } = await resolveSupplier({
     workspaceId: wsId,
-    name: { $regex: new RegExp(`^${escapedName}$`, "i") },
+    name: vendor.name,
+    siret: vendor.siret || null,
+    vatNumber: vendor.vatNumber || null,
+    userId,
+    create: false,
   });
-  if (byName) return byName;
+  if (existing) return existing;
 
   // Create new supplier
   return Supplier.create({
@@ -726,7 +723,8 @@ async function convertSingleImportedInvoice(
   };
 
   const purchaseInvoice = await PurchaseInvoice.create({
-    supplierName: importedInvoice.vendor?.name || "Fournisseur inconnu",
+    supplierName:
+      supplier?.name || importedInvoice.vendor?.name || "Fournisseur inconnu",
     supplierId: supplier?._id || null,
     invoiceNumber: importedInvoice.originalInvoiceNumber || null,
     issueDate: importedInvoice.invoiceDate

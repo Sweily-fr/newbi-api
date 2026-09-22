@@ -5,10 +5,10 @@ import hybridOcrService from "./hybridOcrService.js";
 import mistralIntelligentAnalysisService from "./mistralIntelligentAnalysisService.js";
 import Transaction from "../models/Transaction.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
-import Supplier from "../models/Supplier.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import { resolvePurchaseInvoiceCategoryInput } from "../utils/categoryTaxonomy.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import { resolveSupplier } from "../utils/supplierResolution.js";
 import {
   buildReconciliationLinkEntry,
   forgetReconciliationLink,
@@ -352,31 +352,6 @@ async function runOcr(receiptFile, fileBuffer, workspaceId) {
   };
 }
 
-async function findOrCreateSupplier(
-  supplierName,
-  workspaceId,
-  userId,
-  category,
-) {
-  let supplier = await Supplier.findOne({
-    workspaceId: new mongoose.Types.ObjectId(workspaceId),
-    name: {
-      $regex: `^${supplierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-      $options: "i",
-    },
-  });
-
-  if (!supplier) {
-    supplier = await Supplier.create({
-      name: supplierName,
-      workspaceId: new mongoose.Types.ObjectId(workspaceId),
-      createdBy: userId,
-      defaultCategory: category || "OTHER",
-    });
-  }
-  return supplier;
-}
-
 /**
  * Crée la facture d'achat pour un justificatif donné et lie la transaction.
  */
@@ -496,13 +471,22 @@ async function createPurchaseInvoiceFromReceipt({
   });
 
   try {
-    const supplier = await findOrCreateSupplier(
-      supplierName,
+    // Fiche fournisseur : identifiants lus, récurrence bancaire, puis nom
+    // (cf. supplierResolution.js). Une fiche existante impose son nom à la
+    // facture : « Canva » lu sur le PDF devient « Canva Pty. Ltd. ».
+    const { supplier, matchedBy } = await resolveSupplier({
       workspaceId,
+      name: supplierName,
+      siret: ef.vendor_siret || null,
+      vatNumber: ef.vendor_vat_number || null,
+      transaction,
       userId,
       category,
-    );
+    });
     invoice.supplierId = supplier._id;
+    if (matchedBy !== "created" && supplier.name) {
+      invoice.supplierName = supplier.name;
+    }
   } catch (supplierError) {
     // Nom invalide pour le schéma Supplier (ex: < 2 ou > 100 caractères) :
     // la facture est créée sans fournisseur lié
