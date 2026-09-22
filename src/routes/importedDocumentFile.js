@@ -6,6 +6,7 @@ import ImportedQuote from "../models/ImportedQuote.js";
 import ImportedPurchaseOrder from "../models/ImportedPurchaseOrder.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Transaction from "../models/Transaction.js";
+import { findTransactionReceiptFile } from "../utils/transactionReceiptFiles.js";
 import cloudflareService from "../services/cloudflareService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
@@ -27,12 +28,13 @@ const DOC_CONFIG = {
     getFile: (doc, fileId) => (fileId ? doc.files?.id(fileId) : doc.files?.[0]),
   },
   // Justificatifs attachés directement à une transaction bancaire. Les
-  // anciens justificatifs (migrés via le driver brut) n'ont pas de _id :
-  // sélection par ?index=<n> dans ce cas.
+  // anciens justificatifs (migrés via le driver brut) n'avaient pas de _id :
+  // findTransactionReceiptFile accepte aussi l'identifiant de repli
+  // `<tx>-receipt-<n>`, et ?index=<n> reste possible.
   transaction: {
     Model: Transaction,
     getFile: (doc, fileId, index) => {
-      if (fileId) return doc.receiptFiles?.id(fileId);
+      if (fileId) return findTransactionReceiptFile(doc, fileId);
       if (index !== undefined) return doc.receiptFiles?.[index];
       return doc.receiptFiles?.[0];
     },
