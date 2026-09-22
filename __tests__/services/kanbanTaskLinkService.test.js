@@ -9,6 +9,7 @@ import {
   detachTaskLinks,
   normalizeLinkedTaskIds,
   loadLinkedTaskInfos,
+  loadColumnTaskCounts,
   searchLinkableTasks,
 } from "../../src/services/kanbanTaskLinkService.js";
 
@@ -24,10 +25,10 @@ const user = { id: userId.toString(), name: "Alice" };
 const makeBoard = async (title, ws = workspaceId) =>
   Board.create({ title, workspaceId: ws, userId });
 
-const makeColumn = async (board, title) =>
+const makeColumn = async (board, title, color = "#000") =>
   Column.create({
     title,
-    color: "#000",
+    color,
     boardId: board._id,
     order: 0,
     workspaceId: board.workspaceId,
@@ -198,7 +199,7 @@ describe("loadLinkedTaskInfos", () => {
     const board1 = await makeBoard("Tableau 1");
     const board2 = await makeBoard("Tableau 2");
     const col1 = await makeColumn(board1, "À faire");
-    const col2 = await makeColumn(board2, "Terminé");
+    const col2 = await makeColumn(board2, "Terminé", "#22C55E");
     const a = await makeTask(board1, col1, "A");
     const b = await makeTask(board2, col2, "B", { priority: "high" });
     const ghost = new mongoose.Types.ObjectId();
@@ -217,6 +218,7 @@ describe("loadLinkedTaskInfos", () => {
         boardTitle: "Tableau 2",
         columnId: col2._id.toString(),
         columnTitle: "Terminé",
+        columnColor: "#22C55E",
         status: col2._id.toString(),
         priority: "high",
         dueDate: null,
@@ -235,6 +237,30 @@ describe("loadLinkedTaskInfos", () => {
     expect(await loadLinkedTaskInfos({}, [foreign._id], workspaceId)).toEqual(
       [],
     );
+  });
+});
+
+describe("loadColumnTaskCounts", () => {
+  it("compte les tâches par colonne, une seule agrégation par requête, sans fuite entre workspaces", async () => {
+    const board = await makeBoard("Projet");
+    const todo = await makeColumn(board, "À faire");
+    const done = await makeColumn(board, "Terminé");
+    await makeTask(board, todo, "A");
+    await makeTask(board, todo, "B");
+    await makeTask(board, done, "C");
+    const otherBoard = await makeBoard("Ailleurs", otherWorkspaceId);
+    const otherCol = await makeColumn(otherBoard, "À faire");
+    await makeTask(otherBoard, otherCol, "Étrangère");
+
+    const context = {};
+    const counts = await loadColumnTaskCounts(context, workspaceId);
+
+    expect(counts[todo._id.toString()]).toBe(2);
+    expect(counts[done._id.toString()]).toBe(1);
+    expect(counts[otherCol._id.toString()]).toBeUndefined();
+    // Deuxième appel : même promesse mémorisée sur le contexte
+    expect(await loadColumnTaskCounts(context, workspaceId)).toBe(counts);
+    expect(context._columnTaskCountCache.size).toBe(1);
   });
 });
 
@@ -281,5 +307,37 @@ describe("searchLinkableTasks", () => {
 
   it("ne renvoie rien sans tableau ni recherche", async () => {
     expect(await searchLinkableTasks({ workspaceId })).toEqual([]);
+  });
+
+  it("par étape : les tâches d'une colonne dans l'ordre du tableau, recherche optionnelle dans la colonne", async () => {
+    const board = await makeBoard("Projet");
+    const todo = await makeColumn(board, "À faire");
+    const done = await makeColumn(board, "Terminé");
+    const self = await makeTask(board, todo, "Moi", { position: 0 });
+    await makeTask(board, todo, "Facture B", { position: 2 });
+    await makeTask(board, todo, "Facture A", { position: 1 });
+    await makeTask(board, done, "Facture terminée", { position: 0 });
+
+    const column = await searchLinkableTasks({
+      workspaceId,
+      columnId: todo._id,
+      excludeTaskId: self._id,
+    });
+    expect(column.map((t) => t.title)).toEqual(["Facture A", "Facture B"]);
+
+    const filtered = await searchLinkableTasks({
+      workspaceId,
+      columnId: todo._id,
+      search: "facture b",
+    });
+    expect(filtered.map((t) => t.title)).toEqual(["Facture B"]);
+
+    // Une colonne d'un autre workspace ne renvoie rien
+    const foreignBoard = await makeBoard("Ailleurs", otherWorkspaceId);
+    const foreignCol = await makeColumn(foreignBoard, "À faire");
+    await makeTask(foreignBoard, foreignCol, "Étrangère");
+    expect(
+      await searchLinkableTasks({ workspaceId, columnId: foreignCol._id }),
+    ).toEqual([]);
   });
 });

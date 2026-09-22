@@ -33,6 +33,8 @@ type Column {
   boardId: ID!
   order: Int!
   tasks: [Task!]!
+  # Nombre de tâches de la colonne (batché par requête)
+  taskCount: Int
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -136,6 +138,7 @@ type LinkedTaskInfo {
   boardTitle: String
   columnId: String!
   columnTitle: String
+  columnColor: String
   status: String!
   priority: String
   dueDate: DateTime
@@ -308,11 +311,14 @@ type Query {
   column(id: ID!, workspaceId: ID): Column
   tasks(boardId: ID!, columnId: ID, workspaceId: ID): [Task!]!
   task(id: ID!, workspaceId: ID): Task
-  # Recherche de tâches à lier : sans `search`, les tâches du tableau `boardId` ;
-  # avec `search`, toutes les tâches du workspace dont le titre correspond.
+  # Recherche de tâches à lier :
+  # - `columnId` : les tâches de cette colonne (ordre du tableau), `search` optionnel
+  # - sinon sans `search` : les tâches du tableau `boardId`
+  # - sinon avec `search` : toutes les tâches du workspace dont le titre correspond
   searchTasks(
     search: String
     boardId: ID
+    columnId: ID
     excludeTaskId: ID
     limit: Int
     workspaceId: ID

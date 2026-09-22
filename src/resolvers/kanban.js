@@ -24,6 +24,7 @@ import {
   detachTaskLinks,
   normalizeLinkedTaskIds,
   loadLinkedTaskInfos,
+  loadColumnTaskCounts,
   searchLinkableTasks,
 } from "../services/kanbanTaskLinkService.js";
 import { getUsersPresence } from "../services/userActivityService.js";
@@ -1125,7 +1126,7 @@ const resolvers = {
     searchTasks: withWorkspace(
       async (
         _,
-        { search, boardId, excludeTaskId, limit, workspaceId },
+        { search, boardId, columnId, excludeTaskId, limit, workspaceId },
         { workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -1133,6 +1134,7 @@ const resolvers = {
           workspaceId: finalWorkspaceId,
           search,
           boardId,
+          columnId,
           excludeTaskId,
           limit,
         });
@@ -4301,6 +4303,10 @@ const resolvers = {
   },
 
   Column: {
+    taskCount: async (parent, _args, context) => {
+      const counts = await loadColumnTaskCounts(context, parent.workspaceId);
+      return counts[String(parent.id)] ?? 0;
+    },
     tasks: async (parent) => {
       return await Task.find({
         columnId: parent.id,
