@@ -1,5 +1,6 @@
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
+import { resolveSupplier } from "../utils/supplierResolution.js";
 import mongoose from "mongoose";
 import cloudflareService from "../services/cloudflareService.js";
 import superPdpService from "../services/superPdpService.js";
@@ -678,25 +679,20 @@ const purchaseInvoiceResolvers = {
           createdBy: context.user.id,
         });
 
-        // Auto-create supplier if not linked
+        // Fiche fournisseur si non liée : nom identique, sinon fiche dont le
+        // nom commence pareil (cf. supplierResolution.js), sinon création.
+        // Une fiche existante impose son nom à la facture.
         if (!input.supplierId && input.supplierName) {
-          let supplier = await Supplier.findOne({
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            name: {
-              $regex: `^${input.supplierName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-              $options: "i",
-            },
+          const { supplier, matchedBy } = await resolveSupplier({
+            workspaceId,
+            name: input.supplierName,
+            userId: context.user.id,
+            category: resolvedCategory.category || "OTHER",
           });
-
-          if (!supplier) {
-            supplier = await Supplier.create({
-              name: input.supplierName,
-              workspaceId: new mongoose.Types.ObjectId(workspaceId),
-              createdBy: context.user.id,
-              defaultCategory: resolvedCategory.category || "OTHER",
-            });
-          }
           invoice.supplierId = supplier._id;
+          if (matchedBy !== "created" && supplier.name) {
+            invoice.supplierName = supplier.name;
+          }
         }
 
         await invoice.save();
