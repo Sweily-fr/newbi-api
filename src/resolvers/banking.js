@@ -995,6 +995,13 @@ const bankingResolvers = {
         await ensureReceiptFileIds(parent);
         return parent.receiptFiles.map((r, idx) => ({
           id: r._id?.toString() || r.id || syntheticReceiptFileId(txId, idx),
+          // Facture d'achat issue de ce justificatif : le front s'en sert pour
+          // ne pas afficher le document en double et pour savoir que l'analyse
+          // est terminée. Oublié dans cette projection jusqu'au 23/09/2026, le
+          // champ arrivait donc toujours à null malgré le schéma.
+          purchaseInvoiceId: r.purchaseInvoiceId
+            ? r.purchaseInvoiceId.toString()
+            : null,
           url: r.url,
           key: r.key,
           filename: r.filename,
