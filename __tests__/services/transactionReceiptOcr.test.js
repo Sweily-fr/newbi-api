@@ -650,6 +650,139 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     );
   });
 
+  it("deux justificatifs déposés en une fois : une facture chacun (analyse en parallèle)", async () => {
+    // Chaque fichier a ses propres données OCR : la réponse dépend du nom du
+    // fichier passé à Claude, l'ordre d'exécution n'a donc pas d'importance.
+    processFromBase64.mockImplementation(async (_b64, _mime, filename) => ({
+      success: true,
+      extractedText: `FACTURE ${filename}`,
+      data: { filename },
+    }));
+    toInvoiceFormat.mockImplementation((raw) =>
+      raw.data.filename === "receipt-1.pdf"
+        ? {
+            transaction_data: {
+              document_number: "INV-2026-042",
+              transaction_date: "18/07/2026",
+              vendor_name: "Amazon EU SARL",
+              amount: 120.5,
+              currency: "EUR",
+              category: "OFFICE_SUPPLIES",
+            },
+            extracted_fields: { totals: { total_ttc: 120.5 } },
+            document_analysis: { confidence: 0.95 },
+          }
+        : {
+            transaction_data: {
+              document_number: "SFR-2026-0099",
+              transaction_date: "18/07/2026",
+              vendor_name: "SFR Business",
+              amount: 59.5,
+              currency: "EUR",
+              category: "TELECOMMUNICATIONS",
+            },
+            extracted_fields: { totals: { total_ttc: 59.5 } },
+            document_analysis: { confidence: 0.9 },
+          },
+    );
+
+    const tx = await createExpenseTransaction({
+      amount: -180,
+      receiptFiles: [
+        {
+          url: "https://receipts.newbi.fr/receipt-1.pdf",
+          key: "receipts/receipt-1.pdf",
+          filename: "receipt-1.pdf",
+          mimetype: "application/pdf",
+          size: 1234,
+          uploadedBy: userId,
+        },
+        {
+          url: "https://receipts.newbi.fr/receipt-2.pdf",
+          key: "receipts/receipt-2.pdf",
+          filename: "receipt-2.pdf",
+          mimetype: "application/pdf",
+          size: 999,
+          uploadedBy: userId,
+        },
+      ],
+    });
+
+    const invoices =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: tx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: {
+          "receipts/receipt-1.pdf": Buffer.from("fake-pdf-1"),
+          "receipts/receipt-2.pdf": Buffer.from("fake-pdf-2"),
+        },
+      });
+
+    expect(invoices).toHaveLength(2);
+    expect(await PurchaseInvoice.countDocuments()).toBe(2);
+
+    const updatedTx = await Transaction.findById(tx._id);
+    expect(updatedTx.linkedPurchaseInvoiceIds).toHaveLength(2);
+    // Chaque justificatif pointe vers sa propre facture
+    expect(updatedTx.receiptFiles[0].purchaseInvoiceId).toBeTruthy();
+    expect(updatedTx.receiptFiles[1].purchaseInvoiceId).toBeTruthy();
+    expect(String(updatedTx.receiptFiles[0].purchaseInvoiceId)).not.toBe(
+      String(updatedTx.receiptFiles[1].purchaseInvoiceId),
+    );
+  });
+
+  it("deux justificatifs de la même facture déposés en une fois : une seule facture d'achat", async () => {
+    // Même document déposé deux fois (photo + PDF) : l'analyse est parallèle
+    // mais la déduplication reste séquentielle, pas de facture en double.
+    mockClaudeSuccess();
+
+    const tx = await createExpenseTransaction({
+      amount: -120.5,
+      receiptFiles: [
+        {
+          url: "https://receipts.newbi.fr/receipt-1.pdf",
+          key: "receipts/receipt-1.pdf",
+          filename: "receipt-1.pdf",
+          mimetype: "application/pdf",
+          size: 1234,
+          uploadedBy: userId,
+        },
+        {
+          url: "https://receipts.newbi.fr/receipt-1-photo.jpg",
+          key: "receipts/receipt-1-photo.jpg",
+          filename: "receipt-1-photo.jpg",
+          mimetype: "image/jpeg",
+          size: 4321,
+          uploadedBy: userId,
+        },
+      ],
+    });
+
+    await transactionReceiptOcrService.processReceiptsForTransaction({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: {
+        "receipts/receipt-1.pdf": Buffer.from("fake-pdf"),
+        "receipts/receipt-1-photo.jpg": Buffer.from("fake-jpg"),
+      },
+    });
+
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+    const invoice = await PurchaseInvoice.findOne();
+    expect(invoice.files).toHaveLength(2);
+
+    const updatedTx = await Transaction.findById(tx._id);
+    expect(updatedTx.linkedPurchaseInvoiceIds).toHaveLength(1);
+    expect(String(updatedTx.receiptFiles[0].purchaseInvoiceId)).toBe(
+      invoice._id.toString(),
+    );
+    expect(String(updatedTx.receiptFiles[1].purchaseInvoiceId)).toBe(
+      invoice._id.toString(),
+    );
+  });
+
   it("OCR en échec sur une transaction déjà rapprochée : rattache le fichier à la facture liée, sans facture fallback", async () => {
     processFromBase64.mockRejectedValue(new Error("Claude indisponible"));
     processDocumentFromUrl.mockResolvedValue({ success: false });

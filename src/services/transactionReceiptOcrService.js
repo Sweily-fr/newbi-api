@@ -44,6 +44,10 @@ const VALID_PI_CATEGORIES = new Set(
 // comme interrompu (crash/restart) et redevient traitable
 const STALE_CLAIM_MS = 15 * 60 * 1000;
 
+// Justificatifs analysés en parallèle sur une même transaction. Plafonné pour
+// ne pas saturer les quotas des fournisseurs OCR sur un dépôt en lot.
+const OCR_CONCURRENCY = 3;
+
 // expenseCategory (Transaction) -> category (PurchaseInvoice)
 const EXPENSE_TO_PI_CATEGORY = {
   OFFICE_SUPPLIES: "OFFICE_SUPPLIES",
@@ -355,6 +359,63 @@ async function runOcr(receiptFile, fileBuffer, workspaceId) {
 /**
  * Crée la facture d'achat pour un justificatif donné et lie la transaction.
  */
+/**
+ * Lance l'OCR des justificatifs en parallèle (plafonné) : c'est la seule
+ * étape longue de la chaîne, plusieurs secondes par fichier. La création des
+ * factures reste séquentielle côté appelant pour que la déduplication voie
+ * les factures créées par les justificatifs précédents.
+ *
+ * Ne rejette jamais : un OCR en échec rend un résultat vide, la facture est
+ * alors créée depuis les données de la transaction (comportement inchangé).
+ *
+ * @returns {Promise<Map<string, Object>>} résultat indexé par id de justificatif
+ */
+async function runOcrForFiles(files, buffersByKey, workspaceId) {
+  const results = new Map();
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < files.length) {
+      const receiptFile = files[cursor];
+      cursor += 1;
+      const startedAt = Date.now();
+      try {
+        const ocrResult = await runOcr(
+          receiptFile,
+          buffersByKey[receiptFile.key] || null,
+          workspaceId,
+        );
+        results.set(String(receiptFile._id), {
+          financial: ocrResult.financial,
+          extractedText: ocrResult.extractedText,
+          ocrProvider: ocrResult.provider || null,
+          extractionQuality: ocrResult.extractionQuality || null,
+          ocrSucceeded: Boolean(ocrResult.financial),
+        });
+        logger.info(
+          `⏱️ [RECEIPT OCR] ${receiptFile.filename} analysé en ${((Date.now() - startedAt) / 1000).toFixed(1)}s (${ocrResult.provider || "inconnu"})`,
+        );
+      } catch (ocrError) {
+        results.set(String(receiptFile._id), {
+          financial: null,
+          extractedText: null,
+          ocrProvider: null,
+          extractionQuality: null,
+          ocrSucceeded: false,
+        });
+        logger.warn(
+          `⚠️ [RECEIPT OCR] OCR impossible pour ${receiptFile.filename} après ${((Date.now() - startedAt) / 1000).toFixed(1)}s, création de la facture avec les données de la transaction: ${ocrError.message}`,
+        );
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(OCR_CONCURRENCY, files.length) }, worker),
+  );
+  return results;
+}
+
 async function createPurchaseInvoiceFromReceipt({
   transaction,
   receiptFile,
@@ -723,10 +784,12 @@ async function processReceiptsForTransaction({
   }
 
   const createdInvoices = [];
+  const startedAt = Date.now();
 
+  // 1) Claim atomique de chaque justificatif (rapide) pour éviter un double
+  //    traitement en cas d'appels concurrents (upload + update simultanés).
+  const claimedFiles = [];
   for (const receiptFile of pendingFiles) {
-    // Claim atomique du fichier pour éviter un double traitement en cas
-    // d'appels concurrents (upload + update simultanés).
     const claimed = await Transaction.findOneAndUpdate(
       {
         _id: transaction._id,
@@ -750,31 +813,31 @@ async function processReceiptsForTransaction({
       },
       { new: true, arrayFilters: [{ "elem._id": receiptFile._id }] },
     );
-    if (!claimed) continue;
+    if (claimed) claimedFiles.push(receiptFile);
+  }
+  if (claimedFiles.length === 0) {
+    return [];
+  }
 
+  // 2) OCR de tous les justificatifs en parallèle (étape longue).
+  const ocrResults = await runOcrForFiles(
+    claimedFiles,
+    buffersByKey,
+    workspaceId,
+  );
+  const ocrElapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+
+  // 3) Déduplication, création et liaison : séquentiel à dessein, chaque
+  //    justificatif doit voir les factures créées par les précédents.
+  for (const receiptFile of claimedFiles) {
     try {
-      let financial = null;
-      let extractedText = null;
-      let ocrSucceeded = false;
-      let ocrProvider = null;
-      let extractionQuality = null;
-
-      try {
-        const ocrResult = await runOcr(
-          receiptFile,
-          buffersByKey[receiptFile.key] || null,
-          workspaceId,
-        );
-        financial = ocrResult.financial;
-        extractedText = ocrResult.extractedText;
-        ocrProvider = ocrResult.provider || null;
-        extractionQuality = ocrResult.extractionQuality || null;
-        ocrSucceeded = Boolean(financial);
-      } catch (ocrError) {
-        logger.warn(
-          `⚠️ [RECEIPT OCR] OCR impossible pour ${receiptFile.filename}, création de la facture avec les données de la transaction: ${ocrError.message}`,
-        );
-      }
+      const {
+        financial = null,
+        extractedText = null,
+        ocrSucceeded = false,
+        ocrProvider = null,
+        extractionQuality = null,
+      } = ocrResults.get(String(receiptFile._id)) || {};
 
       // Re-vérification finale : l'OCR peut durer plusieurs secondes, la
       // transaction a pu être ignorée ou rapprochée à la main entre-temps.
@@ -902,6 +965,9 @@ async function processReceiptsForTransaction({
     }
   }
 
+  logger.info(
+    `⏱️ [RECEIPT OCR] ${claimedFiles.length} justificatif(s) traité(s) en ${((Date.now() - startedAt) / 1000).toFixed(1)}s dont ${ocrElapsed}s d'OCR (transaction ${transaction._id})`,
+  );
   return createdInvoices;
 }
 

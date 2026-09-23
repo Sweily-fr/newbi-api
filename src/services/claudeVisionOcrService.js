@@ -14,6 +14,7 @@ import { assertSafeDownloadUrl } from "../utils/ssrfGuard.js";
 import Anthropic from "@anthropic-ai/sdk";
 import fetch from "node-fetch";
 import crypto from "crypto";
+import sharp from "sharp";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -150,6 +151,12 @@ const MODELS = {
 // Seuils de complexité
 const COMPLEXITY_THRESHOLD_KB = 100; // Factures < 100KB = simples
 
+// Résolution maximale exploitée par la vision Claude (Sonnet 5 / Opus 4.7+ :
+// 2576 px sur le grand côté). Au-delà, l'API redimensionne elle-même avant de
+// lire l'image : la réduire ici ne change donc pas ce que voit le modèle, mais
+// évite d'envoyer plusieurs Mo inutiles (photo de ticket prise au téléphone).
+const MAX_VISION_EDGE_PX = 2576;
+
 class ClaudeVisionOcrService {
   constructor() {
     this.apiKey = process.env.ANTHROPIC_API_KEY;
@@ -194,6 +201,48 @@ class ClaudeVisionOcrService {
       return "image/jpeg";
     if (lowerUrl.endsWith(".webp")) return "image/webp";
     return "application/pdf"; // Default
+  }
+
+  /**
+   * Réduit une image trop grande à la résolution maximale réellement lue par
+   * la vision Claude. Les pixels vus par le modèle sont les mêmes (l'API
+   * applique la même borne côté serveur), seul le temps de transfert change.
+   * Le format d'origine est conservé ; en cas d'échec de sharp, l'image
+   * d'origine est renvoyée telle quelle.
+   *
+   * @param {string} base64Data
+   * @param {string} mimeType
+   * @returns {Promise<string>} base64 (redimensionné ou inchangé)
+   */
+  async downscaleImageForVision(base64Data, mimeType) {
+    if (!mimeType || !mimeType.startsWith("image/")) return base64Data;
+
+    try {
+      const input = Buffer.from(base64Data, "base64");
+      const metadata = await sharp(input).metadata();
+      const longEdge = Math.max(metadata.width || 0, metadata.height || 0);
+      if (!longEdge || longEdge <= MAX_VISION_EDGE_PX) return base64Data;
+
+      const resized = await sharp(input)
+        .rotate() // respecte l'orientation EXIF avant de perdre les métadonnées
+        .resize({
+          width: MAX_VISION_EDGE_PX,
+          height: MAX_VISION_EDGE_PX,
+          fit: "inside",
+          withoutEnlargement: true,
+        })
+        .toBuffer();
+
+      logger.debug(
+        `   🗜️ Image réduite pour la vision : ${longEdge}px → ${MAX_VISION_EDGE_PX}px (${Math.round(input.length / 1024)} Ko → ${Math.round(resized.length / 1024)} Ko)`,
+      );
+      return resized.toString("base64");
+    } catch (error) {
+      logger.warn(
+        `⚠️ Redimensionnement impossible (${error.message}), image envoyée telle quelle`,
+      );
+      return base64Data;
+    }
   }
 
   /**
@@ -445,7 +494,8 @@ class ClaudeVisionOcrService {
       );
     }
 
-    // Détecter la complexité
+    // Détecter la complexité sur la donnée d'origine : le choix du modèle ne
+    // doit pas changer parce que l'image a été réduite juste après.
     const complexity = this.detectInvoiceComplexity(base64Data);
     // En mode batch, on utilise Haiku pour les documents simples ; sinon toujours Sonnet pour la qualité
     const model =
@@ -459,13 +509,17 @@ class ClaudeVisionOcrService {
     // Construire le message
     const claudeMediaType =
       mimeType === "application/pdf" ? "application/pdf" : mimeType;
+    const payloadData = await this.downscaleImageForVision(
+      base64Data,
+      claudeMediaType,
+    );
     const messageContent = [
       {
         type: claudeMediaType === "application/pdf" ? "document" : "image",
         source: {
           type: "base64",
           media_type: claudeMediaType,
-          data: base64Data,
+          data: payloadData,
         },
       },
       {
