@@ -622,14 +622,31 @@ async function findExistingPurchaseInvoiceForReceipt({
   }
 
   if (!candidate) return null;
-  if (sameInvoiceNumber(ocrNumber, candidate.invoiceNumber)) return candidate;
-  if (!(await purchaseInvoiceCanAbsorbTransaction(candidate, transaction))) {
+
+  const canAbsorb = await purchaseInvoiceCanAbsorbTransaction(
+    candidate,
+    transaction,
+  );
+  if (canAbsorb) return { invoice: candidate, linkTransaction: true };
+
+  // Facture déjà couverte par d'autres débits. Deux issues selon la raison
+  // pour laquelle on est tombé dessus :
+  if (sameInvoiceNumber(ocrNumber, candidate.invoiceNumber)) {
+    // C'est littéralement le même document (même numéro lu). Le fichier a sa
+    // place sur cette facture, il ne faut surtout pas en créer une seconde.
+    // Mais ce débit-ci n'est pas couvert pour autant : un justificatif déposé
+    // sur le mauvais mois ne doit pas marquer la dépense comme justifiée.
     logger.info(
-      `ℹ️ [RECEIPT OCR] Facture ${candidate._id} (${candidate.amountTTC} ${candidate.currency || "EUR"}) déjà couverte par ses transactions liées, pas de rattachement de la transaction ${transaction._id} (${transaction.amount})`,
+      `ℹ️ [RECEIPT OCR] Facture ${candidate._id} (${candidate.amountTTC} ${candidate.currency || "EUR"}) déjà couverte : justificatif rattaché au document, mais transaction ${transaction._id} (${transaction.amount}) laissée à rapprocher`,
     );
-    return null;
+    return { invoice: candidate, linkTransaction: false };
   }
-  return candidate;
+  // Simple ressemblance (fournisseur + montant + dates proches) : ce n'est
+  // pas le même document, on crée la facture manquante.
+  logger.info(
+    `ℹ️ [RECEIPT OCR] Facture ${candidate._id} (${candidate.amountTTC} ${candidate.currency || "EUR"}) déjà couverte par ses transactions liées, pas de rattachement de la transaction ${transaction._id} (${transaction.amount})`,
+  );
+  return null;
 }
 
 const normalizeInvoiceNumber = (n) =>
@@ -662,14 +679,32 @@ async function purchaseInvoiceCanAbsorbTransaction(invoice, transaction) {
   const debit = Math.abs(Number(transaction?.amount) || 0);
   if (!(ttc > 0) || !(debit > 0)) return true;
 
+  // Devises différentes : comparer les nombres n'a aucun sens (une facture de
+  // 100 USD n'est pas couverte par 100 EUR). On ne tranche pas. Une facture
+  // créée depuis un justificatif porte toujours la devise du compte (le débit
+  // bancaire converti, cf. resolveReceiptAmounts) ; le cas vient donc des
+  // factures saisies à la main ou importées.
+  const invoiceCurrency = normalizeCurrency(invoice?.currency) || "EUR";
+  const debitCurrency = normalizeCurrency(transaction?.currency) || "EUR";
+  if (invoiceCurrency !== debitCurrency) return true;
+
   const otherIds = (invoice.linkedTransactionIds || []).filter(
     (id) => String(id) !== String(transaction._id),
   );
   let alreadyCovered = 0;
   if (otherIds.length > 0) {
     const linked = await Transaction.find({ _id: { $in: otherIds } })
-      .select("amount")
+      .select("amount currency")
       .lean();
+    // Un débit dans une autre devise n'est pas additionnable : on s'abstient
+    // plutôt que de fausser le total.
+    if (
+      linked.some(
+        (t) => (normalizeCurrency(t.currency) || "EUR") !== debitCurrency,
+      )
+    ) {
+      return true;
+    }
     alreadyCovered = linked.reduce(
       (sum, t) => sum + Math.abs(Number(t.amount) || 0),
       0,
@@ -692,6 +727,7 @@ async function attachReceiptToExistingPurchaseInvoice({
   financial,
   ocrSucceeded,
   workspaceId,
+  linkTransaction = true,
 }) {
   const alreadyHasFile = (invoice.files || []).some(
     (f) => f.path === receiptFile.key || f.url === receiptFile.url,
@@ -704,10 +740,14 @@ async function attachReceiptToExistingPurchaseInvoice({
     : invoice.status;
   const paymentDate = invoice.paymentDate || transaction.date || new Date();
 
-  const update = {
-    $set: { isReconciled: true, status: nextStatus, paymentDate },
-    $addToSet: { linkedTransactionIds: transaction._id },
-  };
+  // Sans liaison de la transaction, on ne touche ni au statut ni au
+  // rapprochement de la facture : on ne fait qu'y déposer le fichier.
+  const update = linkTransaction
+    ? {
+        $set: { isReconciled: true, status: nextStatus, paymentDate },
+        $addToSet: { linkedTransactionIds: transaction._id },
+      }
+    : {};
   if (!alreadyHasFile) {
     update.$push = {
       files: {
@@ -722,6 +762,10 @@ async function attachReceiptToExistingPurchaseInvoice({
       },
     };
   }
+
+  // Rien à écrire (fichier déjà présent et pas de liaison) : on rend la
+  // facture telle quelle, un update vide ferait échouer Mongo.
+  if (Object.keys(update).length === 0) return invoice;
 
   // Update ciblé (pas de save()) : ne revalide pas tout le document, des
   // factures legacy peuvent avoir des champs hors enum.
@@ -809,6 +853,8 @@ async function processReceiptsForTransaction({
         $set: {
           "receiptFiles.$[elem].ocrProcessed": true,
           "receiptFiles.$[elem].ocrClaimedAt": new Date(),
+          // Nouvelle tentative : on efface l'échec précédent
+          "receiptFiles.$[elem].ocrError": null,
         },
       },
       { new: true, arrayFilters: [{ "elem._id": receiptFile._id }] },
@@ -853,6 +899,8 @@ async function processReceiptsForTransaction({
             $set: {
               "receiptFiles.$[elem].ocrProcessed": false,
               "receiptFiles.$[elem].ocrClaimedAt": null,
+              "receiptFiles.$[elem].ocrError":
+                "Transaction mise de côté pendant l'analyse, aucune facture d'achat n'a été créée.",
             },
           },
           { arrayFilters: [{ "elem._id": receiptFile._id }] },
@@ -873,19 +921,23 @@ async function processReceiptsForTransaction({
         ocrSucceeded,
         workspaceId,
       });
+      // La facture peut être retrouvée sans que la transaction doive y être
+      // liée : même document, mais facture déjà couverte par d'autres débits.
+      const linkTransaction = existing ? existing.linkTransaction : true;
 
       let invoice;
       if (existing) {
         invoice = await attachReceiptToExistingPurchaseInvoice({
-          invoice: existing,
+          invoice: existing.invoice,
           transaction,
           receiptFile,
           financial,
           ocrSucceeded,
           workspaceId,
+          linkTransaction,
         });
         logger.info(
-          `ℹ️ [RECEIPT OCR] Justificatif ${receiptFile.filename} rattaché à la facture d'achat existante ${existing._id} (transaction ${transaction._id})`,
+          `ℹ️ [RECEIPT OCR] Justificatif ${receiptFile.filename} rattaché à la facture d'achat existante ${existing.invoice._id}${linkTransaction ? "" : " (transaction non liée : facture déjà couverte)"} (transaction ${transaction._id})`,
         );
       } else {
         invoice = await createPurchaseInvoiceFromReceipt({
@@ -901,43 +953,57 @@ async function processReceiptsForTransaction({
         });
       }
 
-      // Origine du lien : justificatif déposé (étiquette côté UI).
-      const receiptLink = buildReconciliationLinkEntry({
-        documentType: "PURCHASE_INVOICE",
-        documentId: invoice._id,
-        origin: "RECEIPT",
-        userId,
-      });
-      await forgetReconciliationLink(
-        { _id: transaction._id, workspaceId },
-        "PURCHASE_INVOICE",
-        [invoice._id],
-      );
-      await Transaction.updateOne(
-        { _id: transaction._id, workspaceId },
-        {
-          $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
-          $push: { reconciliationLinks: receiptLink },
-          $set: {
-            reconciliationStatus: "matched",
-            reconciliationDate: new Date(),
-            "receiptFiles.$[elem].purchaseInvoiceId": invoice._id,
-          },
-        },
-        { arrayFilters: [{ "elem._id": receiptFile._id }] },
-      );
-
-      // La facture fait foi : la transaction rapprochée prend la catégorie de
-      // la facture créée, pour un affichage identique sur les deux pages.
-      // Exception : catégorie choisie à la main sur la transaction, c'est
-      // alors la facture qui vient d'en hériter (cf. resolveReceiptInvoiceCategory).
-      if (!(transaction.categoryIsManual && transaction.category)) {
-        await syncLinkedTransactionCategories({
-          category: invoice.category,
-          subcategory: invoice.subcategory,
-          workspaceId,
-          transactionIds: [transaction._id],
+      if (linkTransaction) {
+        // Origine du lien : justificatif déposé (étiquette côté UI).
+        const receiptLink = buildReconciliationLinkEntry({
+          documentType: "PURCHASE_INVOICE",
+          documentId: invoice._id,
+          origin: "RECEIPT",
+          userId,
         });
+        await forgetReconciliationLink(
+          { _id: transaction._id, workspaceId },
+          "PURCHASE_INVOICE",
+          [invoice._id],
+        );
+        await Transaction.updateOne(
+          { _id: transaction._id, workspaceId },
+          {
+            $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
+            $push: { reconciliationLinks: receiptLink },
+            $set: {
+              reconciliationStatus: "matched",
+              reconciliationDate: new Date(),
+              "receiptFiles.$[elem].purchaseInvoiceId": invoice._id,
+            },
+          },
+          { arrayFilters: [{ "elem._id": receiptFile._id }] },
+        );
+
+        // La facture fait foi : la transaction rapprochée prend la catégorie de
+        // la facture créée, pour un affichage identique sur les deux pages.
+        // Exception : catégorie choisie à la main sur la transaction, c'est
+        // alors la facture qui vient d'en hériter (cf. resolveReceiptInvoiceCategory).
+        if (!(transaction.categoryIsManual && transaction.category)) {
+          await syncLinkedTransactionCategories({
+            category: invoice.category,
+            subcategory: invoice.subcategory,
+            workspaceId,
+            transactionIds: [transaction._id],
+          });
+        }
+      } else {
+        // Facture déjà couverte : on note seulement d'où vient le fichier, la
+        // dépense reste à rapprocher et n'hérite pas de la catégorie.
+        await Transaction.updateOne(
+          { _id: transaction._id, workspaceId },
+          {
+            $set: {
+              "receiptFiles.$[elem].purchaseInvoiceId": invoice._id,
+            },
+          },
+          { arrayFilters: [{ "elem._id": receiptFile._id }] },
+        );
       }
 
       createdInvoices.push(invoice);
@@ -947,7 +1013,8 @@ async function processReceiptsForTransaction({
         );
       }
     } catch (error) {
-      // Libérer le claim pour permettre un retraitement ultérieur
+      // Libérer le claim pour permettre un retraitement ultérieur, et garder
+      // la raison pour que l'utilisateur soit averti au lieu d'attendre.
       console.error(
         `❌ [RECEIPT OCR] Échec création facture d'achat pour ${receiptFile.filename}:`,
         error.message,
@@ -958,6 +1025,9 @@ async function processReceiptsForTransaction({
           $set: {
             "receiptFiles.$[elem].ocrProcessed": false,
             "receiptFiles.$[elem].ocrClaimedAt": null,
+            "receiptFiles.$[elem].ocrError": String(
+              error.message || "Erreur inconnue",
+            ).slice(0, 300),
           },
         },
         { arrayFilters: [{ "elem._id": receiptFile._id }] },
