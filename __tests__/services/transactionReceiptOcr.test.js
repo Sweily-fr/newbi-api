@@ -282,8 +282,16 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     const all = await PurchaseInvoice.find({ workspaceId });
     expect(all).toHaveLength(1);
     expect(all[0].amountTTC).toBe(9.25);
-    expect(all[0].linkedTransactionIds.map(String)).toEqual(
-      expect.arrayContaining([tx1._id.toString(), tx2._id.toString()]),
+    // Le document est unique et porte les deux fichiers, mais une facture de
+    // 9,25 € ne peut pas justifier deux débits de 9,25 € : le second est un
+    // autre mois d'abonnement, il reste à rapprocher.
+    expect(all[0].linkedTransactionIds.map(String)).toEqual([
+      tx1._id.toString(),
+    ]);
+    const freshTx2 = await Transaction.findById(tx2._id);
+    expect(freshTx2.linkedPurchaseInvoiceIds).toHaveLength(0);
+    expect(String(freshTx2.receiptFiles[0].purchaseInvoiceId)).toBe(
+      all[0]._id.toString(),
     );
   });
 
@@ -540,8 +548,10 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
   });
 
   it("une même facture déposée sur deux transactions ne donne qu'une facture d'achat (relevé mensuel)", async () => {
+    // Paiement en deux fois : 90,50 + 30 = 120,50, le TTC de la facture. La
+    // somme tient, les deux débits sont donc bien couverts par ce document.
     mockClaudeSuccess();
-    const tx1 = await createExpenseTransaction({ amount: -120.5 });
+    const tx1 = await createExpenseTransaction({ amount: -90.5 });
     const tx2 = await createExpenseTransaction({
       amount: -30,
       receiptFiles: [
@@ -585,6 +595,50 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     expect(updatedTx2.linkedPurchaseInvoiceIds.map(String)).toEqual([
       invoice._id.toString(),
     ]);
+  });
+
+  it("justificatif du mauvais mois : rattaché à la facture, mais la dépense reste à rapprocher", async () => {
+    // Cas Adobe du 24/09/2026 : le document de juillet déposé sur le
+    // prélèvement d'août. Même numéro de facture, donc même document, mais la
+    // facture est déjà soldée par le débit de juillet.
+    mockClaudeSuccess();
+    const julyTx = await createExpenseTransaction({ amount: -120.5 });
+    const [invoice] =
+      await transactionReceiptOcrService.processReceiptsForTransaction({
+        transactionId: julyTx._id.toString(),
+        workspaceId,
+        userId,
+        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+      });
+    expect(invoice).toBeTruthy();
+
+    const augustTx = await createExpenseTransaction({ amount: -120.5 });
+
+    await transactionReceiptOcrService.processReceiptsForTransaction({
+      transactionId: augustTx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
+
+    // Pas de facture en double : le document reste unique
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+    const freshInvoice = await PurchaseInvoice.findById(invoice._id);
+    // Même clé de stockage : le fichier n'est pas ajouté deux fois
+    expect(freshInvoice.files).toHaveLength(1);
+    // La facture n'a pas absorbé le second débit
+    expect(freshInvoice.linkedTransactionIds.map(String)).toEqual([
+      julyTx._id.toString(),
+    ]);
+
+    // La dépense d'août n'est pas marquée comme justifiée
+    const freshAugust = await Transaction.findById(augustTx._id);
+    expect(freshAugust.linkedPurchaseInvoiceIds).toHaveLength(0);
+    expect(freshAugust.reconciliationStatus).not.toBe("matched");
+    // Mais on sait où est parti le fichier
+    expect(String(freshAugust.receiptFiles[0].purchaseInvoiceId)).toBe(
+      invoice._id.toString(),
+    );
   });
 
   it("crée une seconde facture d'achat si le justificatif est différent (plusieurs justificatifs par transaction)", async () => {

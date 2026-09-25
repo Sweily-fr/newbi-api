@@ -125,7 +125,7 @@ describe("findExistingPurchaseInvoiceForReceipt", () => {
       workspaceId: workspaceId.toString(),
     });
 
-    expect(existing?._id.toString()).toBe(augustInvoice._id.toString());
+    expect(existing?.invoice._id.toString()).toBe(augustInvoice._id.toString());
   });
 
   it("rattache une facture saisie à la main dont le débit tombe quelques jours plus tard", async () => {
@@ -142,7 +142,63 @@ describe("findExistingPurchaseInvoiceForReceipt", () => {
       workspaceId: workspaceId.toString(),
     });
 
-    expect(existing?._id.toString()).toBe(invoice._id.toString());
+    expect(existing?.invoice._id.toString()).toBe(invoice._id.toString());
+  });
+
+  it("même numéro mais facture déjà couverte : fichier rattaché, transaction laissée à rapprocher", async () => {
+    // Cas Adobe du 24/09/2026 : le justificatif de juillet déposé sur le
+    // prélèvement d'août. Le document est bien celui de cette facture, mais ce
+    // second débit n'est pas couvert par elle.
+    const julyTx = await makeTransaction({ date: "2026-07-28" });
+    const invoice = await makeInvoice({
+      issueDate: "2026-07-28",
+      invoiceNumber: "IEE-2026-0001",
+      linkedTransactionIds: [julyTx._id],
+    });
+    const augustTx = await makeTransaction({ date: "2026-08-29" });
+
+    const existing = await findExistingPurchaseInvoiceForReceipt({
+      transaction: augustTx,
+      financial: {
+        transaction_data: {
+          vendor_name: "Canva",
+          amount: 11.99,
+          document_number: "IEE-2026-0001",
+          invoice_date: "2026-07-28",
+        },
+      },
+      ocrSucceeded: true,
+      workspaceId: workspaceId.toString(),
+    });
+
+    expect(existing?.invoice._id.toString()).toBe(invoice._id.toString());
+    // Le fichier a sa place sur la facture, pas le débit
+    expect(existing?.linkTransaction).toBe(false);
+  });
+
+  it("facture non couverte : le même numéro lie bien la transaction", async () => {
+    const invoice = await makeInvoice({
+      issueDate: "2026-07-28",
+      invoiceNumber: "IEE-2026-0002",
+    });
+    const tx = await makeTransaction({ date: "2026-07-30" });
+
+    const existing = await findExistingPurchaseInvoiceForReceipt({
+      transaction: tx,
+      financial: {
+        transaction_data: {
+          vendor_name: "Canva",
+          amount: 11.99,
+          document_number: "IEE-2026-0002",
+          invoice_date: "2026-07-28",
+        },
+      },
+      ocrSucceeded: true,
+      workspaceId: workspaceId.toString(),
+    });
+
+    expect(existing?.invoice._id.toString()).toBe(invoice._id.toString());
+    expect(existing?.linkTransaction).toBe(true);
   });
 
   it("OCR échoué : garde la facture déjà liée à la transaction", async () => {
@@ -160,7 +216,7 @@ describe("findExistingPurchaseInvoiceForReceipt", () => {
       workspaceId: workspaceId.toString(),
     });
 
-    expect(existing?._id.toString()).toBe(invoice._id.toString());
+    expect(existing?.invoice._id.toString()).toBe(invoice._id.toString());
   });
 });
 
@@ -210,6 +266,26 @@ describe("purchaseInvoiceCanAbsorbTransaction", () => {
     });
 
     expect(await purchaseInvoiceCanAbsorbTransaction(invoice, tx)).toBe(true);
+  });
+
+  it("devises différentes : ne tranche pas, le rattachement reste possible", async () => {
+    // Comparer 11,99 USD à 11,99 EUR n'a pas de sens : on s'abstient plutôt
+    // que de refuser à tort.
+    const paidTx = await makeTransaction({ date: "2026-08-25" });
+    const invoice = await makeInvoice({
+      issueDate: "2026-08-25",
+      linkedTransactionIds: [paidTx._id],
+    });
+    await PurchaseInvoice.updateOne(
+      { _id: invoice._id },
+      { $set: { currency: "USD" } },
+    );
+    const fresh = await PurchaseInvoice.findById(invoice._id);
+    const otherTx = await makeTransaction({ date: "2026-09-25" });
+
+    expect(await purchaseInvoiceCanAbsorbTransaction(fresh, otherTx)).toBe(
+      true,
+    );
   });
 
   it("tolère les arrondis de conversion de devise", async () => {
