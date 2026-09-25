@@ -96,6 +96,9 @@ type LinkedPurchaseInvoiceSummary {
   status: String
   amountTTC: Float
   issueDate: DateTime
+  # « full », « partial » ou « none » : ce que l'analyse a réellement pu lire
+  # sur le document. Sert à prévenir que la facture est à compléter.
+  extractionQuality: String
   files: [LinkedPurchaseInvoiceFile!]!
 }
 
@@ -187,6 +190,9 @@ type ReceiptFile {
   # Facture d'achat créée ou reconnue à partir de ce fichier (OCR) : le
   # front n'affiche alors pas le fichier en double avec la facture liée
   purchaseInvoiceId: ID
+  # Dernière erreur d'analyse, non nulle tant qu'une nouvelle tentative n'a
+  # pas eu lieu : permet d'avertir au lieu de laisser attendre
+  ocrError: String
   url: String
   key: String
   filename: String

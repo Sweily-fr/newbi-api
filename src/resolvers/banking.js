@@ -1002,6 +1002,7 @@ const bankingResolvers = {
           purchaseInvoiceId: r.purchaseInvoiceId
             ? r.purchaseInvoiceId.toString()
             : null,
+          ocrError: r.ocrError || null,
           url: r.url,
           key: r.key,
           filename: r.filename,
@@ -1088,6 +1089,7 @@ const bankingResolvers = {
           status: inv.status,
           amountTTC: inv.amountTTC,
           issueDate: inv.issueDate,
+          extractionQuality: inv.ocrMetadata?.extractionQuality || null,
           files: (inv.files || []).map((f) => ({
             id: f._id ? f._id.toString() : null,
             url: f.url,

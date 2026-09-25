@@ -853,6 +853,8 @@ async function processReceiptsForTransaction({
         $set: {
           "receiptFiles.$[elem].ocrProcessed": true,
           "receiptFiles.$[elem].ocrClaimedAt": new Date(),
+          // Nouvelle tentative : on efface l'échec précédent
+          "receiptFiles.$[elem].ocrError": null,
         },
       },
       { new: true, arrayFilters: [{ "elem._id": receiptFile._id }] },
@@ -897,6 +899,8 @@ async function processReceiptsForTransaction({
             $set: {
               "receiptFiles.$[elem].ocrProcessed": false,
               "receiptFiles.$[elem].ocrClaimedAt": null,
+              "receiptFiles.$[elem].ocrError":
+                "Transaction mise de côté pendant l'analyse, aucune facture d'achat n'a été créée.",
             },
           },
           { arrayFilters: [{ "elem._id": receiptFile._id }] },
@@ -1009,7 +1013,8 @@ async function processReceiptsForTransaction({
         );
       }
     } catch (error) {
-      // Libérer le claim pour permettre un retraitement ultérieur
+      // Libérer le claim pour permettre un retraitement ultérieur, et garder
+      // la raison pour que l'utilisateur soit averti au lieu d'attendre.
       console.error(
         `❌ [RECEIPT OCR] Échec création facture d'achat pour ${receiptFile.filename}:`,
         error.message,
@@ -1020,6 +1025,9 @@ async function processReceiptsForTransaction({
           $set: {
             "receiptFiles.$[elem].ocrProcessed": false,
             "receiptFiles.$[elem].ocrClaimedAt": null,
+            "receiptFiles.$[elem].ocrError": String(
+              error.message || "Erreur inconnue",
+            ).slice(0, 300),
           },
         },
         { arrayFilters: [{ "elem._id": receiptFile._id }] },
