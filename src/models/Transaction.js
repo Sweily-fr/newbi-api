@@ -305,6 +305,10 @@ const transactionSchema = new mongoose.Schema(
         // avoir produit de facture.
         ocrProcessed: { type: Boolean, default: false },
         ocrClaimedAt: { type: Date, default: null },
+        // Dernière erreur d'analyse, pour la dire à l'utilisateur au lieu de
+        // le laisser attendre un résultat qui ne viendra pas. Remise à null
+        // au claim suivant (nouvelle tentative).
+        ocrError: { type: String, default: null },
         purchaseInvoiceId: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "PurchaseInvoice",

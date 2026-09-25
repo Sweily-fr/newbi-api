@@ -37,6 +37,25 @@ describe("Transaction.receiptFiles", () => {
     expect(files[1].purchaseInvoiceId).toBeNull();
   });
 
+  it("expose la dernière erreur d'analyse, pour avertir au lieu de laisser attendre", async () => {
+    const files = await receiptFiles({
+      _id: new mongoose.Types.ObjectId(),
+      receiptFiles: [
+        {
+          _id: new mongoose.Types.ObjectId(),
+          ocrError: "Fichier illisible",
+          url: "https://receipts.newbi.fr/a.pdf",
+        },
+        {
+          _id: new mongoose.Types.ObjectId(),
+          url: "https://receipts.newbi.fr/b.pdf",
+        },
+      ],
+    });
+    expect(files[0].ocrError).toBe("Fichier illisible");
+    expect(files[1].ocrError).toBeNull();
+  });
+
   it("garde un identifiant pour chaque justificatif", async () => {
     const id = new mongoose.Types.ObjectId();
     const files = await receiptFiles({
