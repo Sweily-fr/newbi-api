@@ -11,6 +11,12 @@
 import crypto from "crypto";
 
 /**
+ * Préfixe d'un user-agent de l'app mobile : le nom de bundle suivi du numéro
+ * de build ("Newbi/29", "appnewbi/5", "NewbiStaging/12"...).
+ */
+const APP_UA_PREFIX = /^([a-z-]*newbi[a-z-]*)\/(\d+)?/i;
+
+/**
  * Clé stable d'appareil : hash du user-agent privé de ses chiffres, pour
  * qu'une mise à jour de l'app ou du navigateur ne crée pas un nouvel
  * appareil (c'est justement le changement de version qu'on veut suivre
@@ -22,6 +28,10 @@ import crypto from "crypto";
 export const deviceKeyFor = (userAgent) => {
   const normalized = String(userAgent || "")
     .toLowerCase()
+    // Le nom de bundle de l'app a changé au fil des builds ("app-newbi",
+    // "appnewbi", "Newbi", variantes dev/staging) : on le ramène à une
+    // valeur unique pour que l'appareil ne se dédouble pas.
+    .replace(APP_UA_PREFIX, "newbi/")
     .replace(/\d+/g, "")
     .replace(/[^a-z/;.() -]+/g, "")
     .replace(/\s+/g, " ")
@@ -42,17 +52,25 @@ export const parseDevice = (userAgent) => {
   if (!s) return { kind: "unknown", platform: "unknown", label: "Inconnu", appBuild: null };
 
   // App mobile native : "Newbi/29 CFNetwork/3826.500.111 Darwin/24.4.0" (iOS)
-  // ou un UA okhttp (Android).
-  const app = s.match(/^Newbi\/(\d+)/);
+  // ou un UA okhttp (Android). Le préfixe suit le nom de bundle du build :
+  // "Newbi" en prod aujourd'hui, mais aussi "appnewbi" (ancien slug, encore
+  // installé chez des clients) et les variantes dev/staging.
+  const app = s.match(APP_UA_PREFIX);
   if (app) {
     const ios = /CFNetwork|Darwin/i.test(s);
     const android = /okhttp|Android/i.test(s);
     const platform = ios ? "ios" : android ? "android" : "mobile";
+    const os = ios ? "iOS" : android ? "Android" : "mobile";
+    const variant = /staging/i.test(app[1])
+      ? " (staging)"
+      : /dev/i.test(app[1])
+        ? " (dev)"
+        : "";
     return {
       kind: "app",
       platform,
-      label: `App ${ios ? "iOS" : android ? "Android" : "mobile"}`,
-      appBuild: app[1],
+      label: `App ${os}${variant}`,
+      appBuild: app[2] || null,
     };
   }
   if (/okhttp/i.test(s)) {
