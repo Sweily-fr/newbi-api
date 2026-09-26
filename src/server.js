@@ -65,6 +65,7 @@ import {
 } from "./middlewares/better-auth-jwt.js";
 import { betterAuthMiddleware } from "./middlewares/better-auth.js";
 import { touchUserActivity } from "./services/userActivityService.js";
+import { touchDeviceHistory } from "./services/deviceHistoryService.js";
 import { initializeRedis, closeRedis } from "./config/redis.js";
 import typeDefs from "./schemas/index.js";
 import resolvers from "./resolvers/index.js";
@@ -293,6 +294,7 @@ async function startServer() {
         "x-workspace-id",
         "x-organization-id", // Nouveau: ID de l'organisation
         "x-user-role", // Nouveau: Rôle de l'utilisateur
+        "x-app-client", // Client + version ("web/9e2a5ab", "mobile/1.0.13")
       ],
       exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
     }),
@@ -444,6 +446,9 @@ async function startServer() {
 
         // Présence : dernière activité (throttlé, non bloquant)
         if (user?._id) touchUserActivity(user._id);
+
+        // Historique appareils + versions d'app (throttlé, non bloquant)
+        if (user?._id) touchDeviceHistory(user._id, req);
 
         // Récupérer l'organizationId depuis les headers (envoyé par le frontend)
         const organizationId = req.headers["x-organization-id"] || null;
