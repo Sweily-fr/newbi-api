@@ -217,12 +217,6 @@ async function main() {
         !known.some((t) => Math.abs(t - login.at.getTime()) < SAME_LOGIN_MS),
     );
 
-    const first = device.logins[0]?.at;
-    const last = device.logins[device.logins.length - 1]?.at;
-    console.log(
-      `${current ? "↻" : "+"} ${device.userId} | ${device.label} | ${missing.length}/${device.logins.length} connexion(s) à ajouter${completable.length ? `, ${completable.length} build(s) à compléter` : ""} | ${iso(first)} → ${iso(last)} | ${[...device.sources].join(", ")}`,
-    );
-
     // Connexions déjà journalisées mais sans build : on le complète depuis
     // le user-agent de la session correspondante.
     const completable = (current?.logins || []).filter(
@@ -234,6 +228,12 @@ async function main() {
             Math.abs(new Date(login.at).getTime() - l.at.getTime()) <
               SAME_LOGIN_MS,
         ),
+    );
+
+    const first = device.logins[0]?.at;
+    const last = device.logins[device.logins.length - 1]?.at;
+    console.log(
+      `${current ? "↻" : "+"} ${device.userId} | ${device.label} | ${missing.length}/${device.logins.length} connexion(s) à ajouter${completable.length ? `, ${completable.length} build(s) à compléter` : ""} | ${iso(first)} → ${iso(last)} | ${[...device.sources].join(", ")}`,
     );
 
     if (missing.length === 0 && completable.length === 0) continue;
