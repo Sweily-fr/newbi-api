@@ -81,6 +81,20 @@ export const parseDevice = (userAgent) => {
     return { kind: "bot", platform: "bot", label: "Navigateur headless", appBuild: null };
   }
 
+  // Clients HTTP hors navigateur (scripts, tests, monitoring) : à ne pas
+  // afficher comme un navigateur, ce ne sont pas des appareils de client.
+  const tool = s.match(
+    /^(curl|wget|PostmanRuntime|insomnia|python-requests|httpie|axios|node-fetch|undici|got|Go-http-client|libwww-perl|Java|Apache-HttpClient)/i,
+  );
+  if (tool) {
+    return {
+      kind: "bot",
+      platform: "tool",
+      label: `Outil HTTP (${tool[1].toLowerCase()})`,
+      appBuild: null,
+    };
+  }
+
   let browser = "Navigateur";
   if (/OPR\//.test(s)) browser = "Opera";
   else if (/Edg\//.test(s)) browser = "Edge";
