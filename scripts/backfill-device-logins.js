@@ -98,7 +98,13 @@ function collect(revocations, sessions) {
       if (userAgent) device.userAgent = String(userAgent);
       if (ipAddress) device.ipAddress = String(ipAddress);
     }
-    device.logins.push({ at: date, ipAddress: String(ipAddress || "") });
+    device.logins.push({
+      at: date,
+      ipAddress: String(ipAddress || ""),
+      // Build de l'app au moment de cette connexion, lu dans le user-agent
+      // de la session : c'est ce qui date une version côté app.
+      appBuild: parseDevice(userAgent).appBuild,
+    });
   };
 
   for (const entry of revocations) {
@@ -197,6 +203,7 @@ async function main() {
   let created = 0;
   let enriched = 0;
   let addedLogins = 0;
+  let completedBuilds = 0;
 
   for (const device of devices.values()) {
     const filter = { userId: device.userId, deviceKey: device.deviceKey };
@@ -213,11 +220,25 @@ async function main() {
     const first = device.logins[0]?.at;
     const last = device.logins[device.logins.length - 1]?.at;
     console.log(
-      `${current ? "↻" : "+"} ${device.userId} | ${device.label} | ${missing.length}/${device.logins.length} connexion(s) à ajouter | ${iso(first)} → ${iso(last)} | ${[...device.sources].join(", ")}`,
+      `${current ? "↻" : "+"} ${device.userId} | ${device.label} | ${missing.length}/${device.logins.length} connexion(s) à ajouter${completable.length ? `, ${completable.length} build(s) à compléter` : ""} | ${iso(first)} → ${iso(last)} | ${[...device.sources].join(", ")}`,
     );
 
-    if (missing.length === 0) continue;
+    // Connexions déjà journalisées mais sans build : on le complète depuis
+    // le user-agent de la session correspondante.
+    const completable = (current?.logins || []).filter(
+      (login) =>
+        !login.appBuild &&
+        device.logins.some(
+          (l) =>
+            l.appBuild &&
+            Math.abs(new Date(login.at).getTime() - l.at.getTime()) <
+              SAME_LOGIN_MS,
+        ),
+    );
+
+    if (missing.length === 0 && completable.length === 0) continue;
     addedLogins += missing.length;
+    completedBuilds += completable.length;
     if (current) enriched += 1;
     else created += 1;
     if (DRY_RUN) continue;
@@ -225,6 +246,16 @@ async function main() {
     const logins = [...(current?.logins || []), ...missing].sort(
       (a, b) => new Date(a.at) - new Date(b.at),
     );
+    for (const login of logins) {
+      if (login.appBuild) continue;
+      const known = device.logins.find(
+        (l) =>
+          l.appBuild &&
+          Math.abs(new Date(login.at).getTime() - l.at.getTime()) <
+            SAME_LOGIN_MS,
+      );
+      if (known) login.appBuild = known.appBuild;
+    }
     const update = {
       $set: {
         logins: logins.slice(-MAX_LOGINS),
@@ -248,7 +279,7 @@ async function main() {
   }
 
   console.log(
-    `\n${DRY_RUN ? "[DRY-RUN] " : ""}${addedLogins} connexion(s) ajoutée(s) : ${created} appareil(s) créé(s), ${enriched} enrichi(s)`,
+    `\n${DRY_RUN ? "[DRY-RUN] " : ""}${addedLogins} connexion(s) ajoutée(s), ${completedBuilds} build(s) complété(s) : ${created} appareil(s) créé(s), ${enriched} enrichi(s)`,
   );
 
   await mongoose.disconnect();
