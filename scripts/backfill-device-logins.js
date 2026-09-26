@@ -92,10 +92,19 @@ function collect(revocations, sessions) {
       devices.set(id, device);
     }
     device.sources.add(source);
-    // Garder le user-agent et l'IP les plus récents de l'appareil.
+    // Garder le user-agent, l'IP et le build les plus récents de l'appareil :
+    // l'identité affichée doit décrire la dernière connexion connue, pas la
+    // première rencontrée (un client met son app à jour entre deux).
     if (!device.latestAt || date > device.latestAt) {
       device.latestAt = date;
-      if (userAgent) device.userAgent = String(userAgent);
+      if (userAgent) {
+        device.userAgent = String(userAgent);
+        const latest = parseDevice(userAgent);
+        device.kind = latest.kind;
+        device.platform = latest.platform;
+        device.label = latest.label;
+        device.appBuild = latest.appBuild;
+      }
       if (ipAddress) device.ipAddress = String(ipAddress);
     }
     device.logins.push({
@@ -175,7 +184,28 @@ async function main() {
     console.log("   (relancer avec --fix-keys pour les supprimer)");
   }
 
-  // 2. Connexions reconstituées
+  // 2. Le build de l'appareil doit être celui de son user-agent stocké : les
+  // premières exécutions gardaient celui de la plus ancienne connexion, ce qui
+  // affichait un appareil comme resté sur une vieille version.
+  let repairedBuilds = 0;
+  for (const doc of existing) {
+    if (stale.includes(doc)) continue;
+    const uaBuild = parseDevice(doc.userAgent).appBuild;
+    if (!uaBuild || doc.appBuild === uaBuild) continue;
+    repairedBuilds += 1;
+    console.log(
+      `   build corrigé : ${doc.appBuild ?? "-"} → ${uaBuild} (${String(doc.userAgent).slice(0, 45)})`,
+    );
+    if (!DRY_RUN) {
+      await collection.updateOne(
+        { _id: doc._id },
+        { $set: { appBuild: uaBuild } },
+      );
+    }
+  }
+  console.log(`${repairedBuilds} build(s) d'appareil corrigé(s)`);
+
+  // 3. Connexions reconstituées
   const [revocations, sessions] = await Promise.all([
     db.collection("session_revocation_log").find({}).toArray(),
     db
@@ -279,7 +309,7 @@ async function main() {
   }
 
   console.log(
-    `\n${DRY_RUN ? "[DRY-RUN] " : ""}${addedLogins} connexion(s) ajoutée(s), ${completedBuilds} build(s) complété(s) : ${created} appareil(s) créé(s), ${enriched} enrichi(s)`,
+    `\n${DRY_RUN ? "[DRY-RUN] " : ""}${addedLogins} connexion(s) ajoutée(s), ${completedBuilds} build(s) complété(s), ${repairedBuilds} build(s) d'appareil corrigé(s) : ${created} appareil(s) créé(s), ${enriched} enrichi(s)`,
   );
 
   await mongoose.disconnect();
