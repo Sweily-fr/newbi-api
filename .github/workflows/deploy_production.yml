@@ -6,6 +6,15 @@ on:
       - main
   workflow_dispatch: # Permet le déclenchement manuel
 
+# Un seul déploiement prod à la fois, même raison qu'en staging : deux runs
+# simultanés partagent le dossier ~/api.newbi.fr, et `npm ci` y supprime
+# node_modules avant de réinstaller. Ici le risque est plus lourd qu'en staging,
+# l'étape PM2 fait `pm2 delete newbi` puis `pm2 start` : deux runs entrelacés
+# peuvent laisser l'API arrêtée ou sur un node_modules incomplet.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy to Production Server
