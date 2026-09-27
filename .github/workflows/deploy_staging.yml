@@ -6,6 +6,18 @@ on:
       - develop
   workflow_dispatch: # Permet le déclenchement manuel
 
+# Un seul déploiement staging à la fois. Deux pushes rapprochés sur develop
+# (merges enchaînés) lançaient deux workflows en parallèle sur le MÊME dossier
+# ~/staging : `npm ci` commence par supprimer node_modules, la seconde
+# exécution effaçait donc ce que la première installait. Résultat le 26/09/2026
+# (23:41:18 et 23:41:37) : node_modules à moitié installé, express absent, API
+# staging en boucle de crash et 502 pendant 19 h, les deux runs marqués
+# « success ». cancel-in-progress: false = on met en file plutôt que d'annuler,
+# pour que le dernier commit déployé soit bien le dernier poussé.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy to Staging Server
