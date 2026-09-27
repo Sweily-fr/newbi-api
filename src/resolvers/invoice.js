@@ -53,6 +53,7 @@ import {
   updateEventInExternalCalendars,
   deleteEventFromExternalCalendars,
 } from "../services/calendar/CalendarSyncService.js";
+import { buildLinkedInvoiceItems } from "../utils/linkedInvoiceItems.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -3390,11 +3391,6 @@ const invoiceResolvers = {
           workspaceId: workspaceId,
         });
 
-        // Calculer le prix HT pour obtenir le montant TTC exact
-        // Si numericAmount = 120€ TTC avec 20% TVA, alors HT = 120 / 1.20 = 100€
-        const vatRate = 20;
-        const unitPriceHT = numericAmount / (1 + vatRate / 100);
-
         // Libellé de l'article selon le type de facture liée
         const quoteRef = `${quote.prefix}-${quote.number}`;
         let itemDescription;
@@ -3428,20 +3424,13 @@ const invoiceResolvers = {
           companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
           sourceQuote: quote._id,
 
-          // Créer un article unique avec le montant spécifié
-          items: [
-            {
-              description: itemDescription,
-              quantity: 1,
-              unitPrice: unitPriceHT,
-              vatRate: vatRate,
-              unit: "forfait",
-              discount: 0,
-              discountType: "FIXED",
-              details: "",
-              vatExemptionText: "",
-            },
-          ],
+          // Article(s) portant le montant à facturer, au(x) taux de TVA du devis
+          // (une ligne par taux si le devis en mélange plusieurs)
+          items: buildLinkedInvoiceItems({
+            quote,
+            amountTTC: numericAmount,
+            description: itemDescription,
+          }),
 
           // Paramètres par défaut de FACTURE (depuis l'organisation), pas ceux du devis
           headerNotes:
