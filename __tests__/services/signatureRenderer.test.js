@@ -1,0 +1,374 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  normalizeSignature,
+  plainText,
+  renderSignature,
+  requiredIcons,
+  SAMPLE_SIGNATURE,
+  listTemplates,
+} from "../../src/services/signatureRenderer/index.js";
+import {
+  GMAIL_MAX_CHARS,
+  SOCIAL_NETWORKS,
+  TEMPLATE_IDS,
+} from "../../src/services/signatureRenderer/constants.js";
+import {
+  glyphFor,
+  iconKey,
+  iconSpec,
+  iconSvg,
+  iconUrl,
+} from "../../src/services/signatureRenderer/icons.js";
+import {
+  hex,
+  normalizeUrl,
+  telHref,
+} from "../../src/services/signatureRenderer/primitives.js";
+
+/** Signature « maximale » : tous les blocs activés. */
+const FULL = {
+  ...SAMPLE_SIGNATURE,
+  identity: {
+    ...SAMPLE_SIGNATURE.identity,
+    department: "Studio",
+    tagline: "Le design au service du sens",
+  },
+  contact: { ...SAMPLE_SIGNATURE.contact, phone: "+33 1 23 45 67 89" },
+  social: [
+    { network: "linkedin", url: "linkedin.com/in/camille" },
+    { network: "instagram", url: "https://instagram.com/atelier" },
+    { network: "x", url: "https://x.com/atelier" },
+  ],
+  images: {
+    photo: {
+      url: "https://cdn.example.com/photo.jpg",
+      width: 200,
+      height: 200,
+    },
+    logo: { url: "https://cdn.example.com/logo.png", width: 300, height: 100 },
+    banner: {
+      url: "https://cdn.example.com/banner.jpg",
+      width: 1200,
+      height: 300,
+    },
+  },
+  cta: {
+    enabled: true,
+    label: "Prendre rendez-vous",
+    url: "calendly.com/camille",
+  },
+  banner: {
+    enabled: true,
+    url: "atelier-nord.fr/offre",
+    alt: "Offre de rentrée",
+  },
+  disclaimer: { enabled: true, text: "Ce message est confidentiel." },
+};
+
+const tags = (html, name) =>
+  html.match(new RegExp(`<${name}\\b[^>]*>`, "g")) || [];
+
+describe("signatureRenderer — compatibilité clients mail", () => {
+  for (const templateId of TEMPLATE_IDS) {
+    describe(`modèle ${templateId}`, () => {
+      const { html, chars, warnings } = renderSignature({
+        ...FULL,
+        templateId,
+      });
+
+      it("produit un HTML compact, sans retour à la ligne ni feuille de style", () => {
+        expect(html.length).toBeGreaterThan(500);
+        expect(html).not.toMatch(/\n/);
+        expect(html).not.toMatch(/<style/i);
+        expect(html).not.toMatch(/class="/);
+        expect(chars).toBe(html.length);
+      });
+
+      it("n'utilise aucune propriété ignorée par Outlook", () => {
+        expect(html).not.toMatch(/<div/i);
+        expect(html).not.toMatch(/display:\s*flex/);
+        expect(html).not.toMatch(/display:\s*grid/);
+        expect(html).not.toMatch(/position:\s*(absolute|relative|fixed)/);
+        expect(html).not.toMatch(/float:/);
+        expect(html).not.toMatch(/margin:/);
+        expect(html).not.toMatch(/background-image/);
+        expect(html).not.toMatch(/background:\s*url/);
+        expect(html).not.toMatch(/object-fit/);
+        expect(html).not.toMatch(/opacity:/);
+      });
+
+      it("déclare chaque table pour les clients mail", () => {
+        const tables = tags(html, "table");
+        expect(tables.length).toBeGreaterThan(0);
+        for (const t of tables) {
+          expect(t).toContain('cellpadding="0"');
+          expect(t).toContain('cellspacing="0"');
+          expect(t).toContain('border="0"');
+          expect(t).toContain("mso-table-lspace:0pt");
+          expect(t).not.toMatch(/style="[^"]*padding:/);
+        }
+      });
+
+      it("dimensionne et décrit chaque image, en https", () => {
+        const images = tags(html, "img");
+        expect(images.length).toBeGreaterThan(0);
+        for (const i of images) {
+          expect(i).toMatch(/ src="https:\/\//);
+          expect(i).toMatch(/ width="\d+"/);
+          expect(i).toMatch(/ alt="/);
+          expect(i).toContain("display:block");
+          expect(i).toContain("border:0");
+        }
+      });
+
+      it("ne laisse aucune cellule vide (effondrée par Outlook)", () => {
+        expect(html).not.toMatch(/<td[^>]*><\/td>/);
+      });
+
+      it("ne produit que des liens absolus, tel: ou mailto:", () => {
+        const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]);
+        expect(hrefs.length).toBeGreaterThan(0);
+        for (const h of hrefs) {
+          expect(h).toMatch(/^(https?:\/\/|tel:|mailto:)/);
+        }
+        expect(hrefs).toContain("tel:+33612345678");
+        expect(hrefs).toContain("mailto:camille@atelier-nord.fr");
+        expect(hrefs).toContain("https://calendly.com/camille");
+        expect(hrefs).toContain("https://linkedin.com/in/camille");
+      });
+
+      it("reste sous la limite de Gmail même avec tous les blocs", () => {
+        expect(chars).toBeLessThan(GMAIL_MAX_CHARS);
+        expect(warnings.filter((w) => w.includes("Gmail"))).toHaveLength(0);
+      });
+
+      it("garde un fond transparent pour le mode sombre", () => {
+        expect(html).toContain("background-color:transparent");
+      });
+    });
+  }
+
+  it("liste les 8 modèles avec leurs capacités", () => {
+    const templates = listTemplates();
+    expect(templates.map((t) => t.id)).toEqual(TEMPLATE_IDS);
+    for (const t of templates) {
+      expect(t.name).toBeTruthy();
+      expect(typeof t.supports.photo).toBe("boolean");
+    }
+  });
+});
+
+describe("signatureRenderer — sécurité et échappement", () => {
+  it("échappe tout texte utilisateur, dans le HTML et les attributs", () => {
+    const { html } = renderSignature({
+      ...SAMPLE_SIGNATURE,
+      identity: {
+        firstName: 'Martin <b>"CEO"</b>',
+        lastName: "Dupont & Fils",
+        jobTitle: "<script>alert(1)</script>",
+        company: "",
+      },
+      contact: { ...SAMPLE_SIGNATURE.contact, address: "1 rue <Église>" },
+      cta: {
+        enabled: true,
+        label: "Go",
+        url: 'https://x.fr/?a=1"><img src=x onerror=alert(1)>',
+      },
+    });
+    expect(html).not.toContain("<b>");
+    expect(html).not.toContain("<script");
+    expect(html).toContain("Martin &lt;b&gt;");
+    expect(html).toContain("Dupont &amp; Fils");
+    expect(html).toContain("&lt;Église&gt;");
+    // La valeur reste confinée dans l'attribut href : guillemet et chevrons échappés
+    expect(html).toContain(
+      'href="https://x.fr/?a=1&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"',
+    );
+  });
+
+  it("refuse les URL javascript: et complète les URL sans protocole", () => {
+    expect(normalizeUrl("javascript:alert(1)")).toBe("");
+    expect(normalizeUrl("calendly.com/moi")).toBe("https://calendly.com/moi");
+    expect(normalizeUrl(" HTTPS://x.fr/ ")).toBe("HTTPS://x.fr/");
+    expect(normalizeUrl("#")).toBe("");
+    expect(normalizeUrl("//cdn.x.fr/a")).toBe("https://cdn.x.fr/a");
+  });
+
+  it("rend le téléphone cliquable, sans caractère invisible", () => {
+    const { html } = renderSignature({
+      ...SAMPLE_SIGNATURE,
+      contact: {
+        email: "",
+        phone: "06 00 00 00 00",
+        mobile: "",
+        website: "",
+        address: "",
+      },
+    });
+    expect(html).toContain('href="tel:0600000000"');
+    expect(html).not.toMatch(/&#8203;|&#8288;|\u200b|\u2060/);
+    expect(telHref("00 33 6 12")).toBe("+33612");
+  });
+});
+
+describe("signatureRenderer — normalisation", () => {
+  it("retombe sur les valeurs par défaut pour toute valeur inconnue", () => {
+    const n = normalizeSignature({
+      templateId: "hack",
+      style: {
+        fontFamily: "Comic Sans",
+        fontSize: 99,
+        primaryColor: "rouge",
+        photoShape: "hexagon",
+        spacing: "huge",
+        iconStyle: "3d",
+        iconSize: 2,
+      },
+      social: [
+        { network: "myspace", url: "x" },
+        { network: "linkedin", url: "  " },
+        { network: "x", url: "x.com/a" },
+      ],
+    });
+    expect(n.templateId).toBe("classic");
+    expect(n.style.fontFamily).toBe("arial");
+    expect(n.style.fontSize).toBe(18);
+    expect(n.style.primaryColor).toBe("#5a50ff");
+    expect(n.style.photoShape).toBe("circle");
+    expect(n.style.spacing).toBe("normal");
+    expect(n.style.iconStyle).toBe("rounded");
+    expect(n.style.iconSize).toBe(16);
+    expect(n.social).toEqual([{ network: "x", url: "x.com/a" }]);
+  });
+
+  it("normalise les couleurs hex courtes et invalides", () => {
+    expect(hex("#ABC", "#000000")).toBe("#aabbcc");
+    expect(hex("5A50FF", "#000000")).toBe("#5a50ff");
+    expect(hex("rgb(0,0,0)", "#111111")).toBe("#111111");
+  });
+
+  it("rend une signature vide sans erreur", () => {
+    const { html, text } = renderSignature({});
+    expect(html).toBe("");
+    expect(text).toBe("");
+  });
+
+  it("avertit quand le logo est un JPEG (fond blanc en mode sombre)", () => {
+    const { warnings } = renderSignature({
+      ...SAMPLE_SIGNATURE,
+      images: {
+        ...SAMPLE_SIGNATURE.images,
+        logo: { url: "https://cdn/x/logo.jpg" },
+      },
+    });
+    expect(warnings.some((w) => w.includes("JPEG"))).toBe(true);
+  });
+
+  it("produit un texte brut lisible", () => {
+    const text = plainText(normalizeSignature(FULL));
+    expect(text).toContain("Camille Durand");
+    expect(text).toContain("Directrice artistique · Studio");
+    expect(text).toContain("atelier-nord.fr");
+    expect(text).toContain("https://calendly.com/camille");
+    expect(text).not.toMatch(/<[a-z]/);
+  });
+});
+
+describe("signatureRenderer — photo", () => {
+  const withShape = (photoShape) =>
+    renderSignature({ ...SAMPLE_SIGNATURE, style: { photoShape } }).html;
+
+  it("ajoute le repli VML Outlook pour les photos rondes et arrondies", () => {
+    expect(withShape("circle")).toContain("<v:roundrect");
+    expect(withShape("circle")).toContain('arcsize="50%"');
+    expect(withShape("circle")).toContain("border-radius:50%");
+    expect(withShape("rounded")).toContain('arcsize="15%"');
+  });
+
+  it("n'en ajoute pas pour une photo carrée", () => {
+    expect(withShape("square")).not.toContain("<v:roundrect");
+    expect(withShape("square")).not.toContain("border-radius");
+  });
+});
+
+describe("signatureRenderer — icônes", () => {
+  it("connaît un glyphe pour chaque réseau du catalogue", () => {
+    for (const network of Object.keys(SOCIAL_NETWORKS)) {
+      const spec = iconSpec({
+        kind: "social",
+        name: network,
+        style: "rounded",
+        color: "5a50ff",
+      });
+      expect(glyphFor(spec), network).not.toBeNull();
+      expect(iconSvg(spec)).toMatch(/^<svg /);
+    }
+  });
+
+  it("connaît un glyphe pour chaque icône de contact", () => {
+    for (const name of ["phone", "smartphone", "mail", "globe", "map-pin"]) {
+      const spec = iconSpec({ kind: "contact", name, color: "#5F6368" });
+      expect(glyphFor(spec)).not.toBeNull();
+      expect(iconSvg(spec)).toContain('stroke="#5f6368"');
+    }
+  });
+
+  it("dérive une clé et une URL déterministes", () => {
+    const spec = iconSpec({
+      kind: "social",
+      name: "linkedin",
+      style: "circle",
+      color: "#0A66C2",
+    });
+    expect(iconKey(spec)).toBe("v2/social/linkedin/circle-0a66c2.png");
+    expect(iconUrl(spec)).toMatch(
+      /^https:\/\/.+\/v2\/social\/linkedin\/circle-0a66c2\.png$/,
+    );
+  });
+
+  it("force le style « plain » pour les icônes de contact", () => {
+    expect(
+      iconSpec({ kind: "contact", name: "mail", style: "circle", color: "000" })
+        .style,
+    ).toBe("plain");
+  });
+
+  it("utilise la couleur de marque en mode brand, la couleur principale sinon", () => {
+    const base = {
+      ...SAMPLE_SIGNATURE,
+      social: [{ network: "linkedin", url: "https://l" }],
+      contact: {
+        ...SAMPLE_SIGNATURE.contact,
+        phone: "",
+        mobile: "",
+        email: "",
+        website: "",
+        address: "",
+      },
+    };
+    const brand = requiredIcons({ ...base, style: { iconColorMode: "brand" } });
+    expect(brand).toEqual([
+      expect.objectContaining({ name: "linkedin", color: "0a66c2" }),
+    ]);
+    const primary = requiredIcons({
+      ...base,
+      style: { iconColorMode: "primary", primaryColor: "#123456" },
+    });
+    expect(primary[0].color).toBe("123456");
+    const custom = requiredIcons({
+      ...base,
+      style: { iconColorMode: "custom", iconColor: "#abcdef" },
+    });
+    expect(custom[0].color).toBe("abcdef");
+  });
+
+  it("ne demande pas d'icônes de contact quand elles sont masquées", () => {
+    const specs = requiredIcons({
+      ...SAMPLE_SIGNATURE,
+      social: [],
+      style: { showContactIcons: false },
+    });
+    expect(specs).toEqual([]);
+  });
+});

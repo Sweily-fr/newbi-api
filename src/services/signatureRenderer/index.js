@@ -1,0 +1,268 @@
+/**
+ * Générateur de signatures de mail v2.
+ *
+ * Source unique du HTML : l'aperçu de l'éditeur, le bouton Copier, le
+ * téléchargement et les tests passent tous par `renderSignature`. Ce que
+ * l'utilisateur voit est exactement ce qu'il colle dans son client mail.
+ */
+
+import { buildBlocks } from "./blocks.js";
+import {
+  ALIGNMENTS,
+  DEFAULT_STYLE,
+  FONT_FAMILIES,
+  GMAIL_MAX_CHARS,
+  ICON_COLOR_MODES,
+  ICON_STYLES,
+  PHOTO_SHAPES,
+  SOCIAL_NETWORKS,
+  SPACING,
+  SPACINGS,
+  TEMPLATE_IDS,
+} from "./constants.js";
+import {
+  contactIconSpec,
+  iconUrl as defaultIconUrl,
+  socialIconSpec,
+} from "./icons.js";
+import { displayUrl, hex, normalizeUrl } from "./primitives.js";
+import TEMPLATES, { listTemplates } from "./templates.js";
+
+export { listTemplates };
+
+const clamp = (n, min, max, fallback) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(v)));
+};
+const oneOf = (value, allowed, fallback) =>
+  allowed.includes(value) ? value : fallback;
+const str = (v, max = 200) =>
+  v === null || v === undefined
+    ? ""
+    : String(v).replace(/\s+/g, " ").trim().slice(0, max);
+const bool = (v, fallback = false) => (typeof v === "boolean" ? v : fallback);
+
+/**
+ * Applique les valeurs par défaut et borne chaque champ. Le rendu ne voit
+ * jamais une valeur hors des listes autorisées.
+ */
+export function normalizeSignature(input = {}) {
+  const s = input.style || {};
+  const style = {
+    fontFamily: oneOf(
+      s.fontFamily,
+      Object.keys(FONT_FAMILIES),
+      DEFAULT_STYLE.fontFamily,
+    ),
+    fontSize: clamp(s.fontSize, 11, 18, DEFAULT_STYLE.fontSize),
+    primaryColor: hex(s.primaryColor, DEFAULT_STYLE.primaryColor),
+    textColor: hex(s.textColor, DEFAULT_STYLE.textColor),
+    mutedColor: hex(s.mutedColor, DEFAULT_STYLE.mutedColor),
+    photoShape: oneOf(s.photoShape, PHOTO_SHAPES, DEFAULT_STYLE.photoShape),
+    photoSize: clamp(s.photoSize, 40, 160, DEFAULT_STYLE.photoSize),
+    logoWidth: clamp(s.logoWidth, 40, 300, DEFAULT_STYLE.logoWidth),
+    iconStyle: oneOf(s.iconStyle, ICON_STYLES, DEFAULT_STYLE.iconStyle),
+    iconColorMode: oneOf(
+      s.iconColorMode,
+      ICON_COLOR_MODES,
+      DEFAULT_STYLE.iconColorMode,
+    ),
+    iconColor: hex(s.iconColor, DEFAULT_STYLE.iconColor),
+    iconSize: clamp(s.iconSize, 16, 40, DEFAULT_STYLE.iconSize),
+    showContactIcons: bool(s.showContactIcons, DEFAULT_STYLE.showContactIcons),
+    separatorColor: hex(s.separatorColor, DEFAULT_STYLE.separatorColor),
+    spacing: oneOf(s.spacing, SPACINGS, DEFAULT_STYLE.spacing),
+    align: oneOf(s.align, ALIGNMENTS, DEFAULT_STYLE.align),
+  };
+
+  const id = input.identity || {};
+  const c = input.contact || {};
+  const im = input.images || {};
+  const image = (v) =>
+    v && v.url
+      ? {
+          url: String(v.url),
+          key: v.key ? String(v.key) : "",
+          width: clamp(v.width, 1, 4000, 0) || undefined,
+          height: clamp(v.height, 1, 4000, 0) || undefined,
+        }
+      : null;
+
+  const social = Array.isArray(input.social)
+    ? input.social
+        .filter((x) => x && SOCIAL_NETWORKS[x.network] && str(x.url))
+        .map((x) => ({ network: x.network, url: str(x.url, 500) }))
+    : [];
+
+  const cta = input.cta || {};
+  const banner = input.banner || {};
+  const disclaimer = input.disclaimer || {};
+
+  return {
+    templateId: oneOf(input.templateId, TEMPLATE_IDS, "classic"),
+    identity: {
+      firstName: str(id.firstName, 80),
+      lastName: str(id.lastName, 80),
+      jobTitle: str(id.jobTitle, 120),
+      department: str(id.department, 120),
+      company: str(id.company, 120),
+      tagline: str(id.tagline, 200),
+    },
+    contact: {
+      email: str(c.email, 200),
+      phone: str(c.phone, 40),
+      mobile: str(c.mobile, 40),
+      website: str(c.website, 300),
+      address: str(c.address, 300),
+    },
+    social,
+    images: {
+      photo: image(im.photo),
+      logo: image(im.logo),
+      banner: image(im.banner),
+    },
+    cta: {
+      enabled: bool(cta.enabled),
+      label: str(cta.label, 60),
+      url: str(cta.url, 500),
+      backgroundColor: hex(cta.backgroundColor, style.primaryColor),
+      textColor: hex(cta.textColor, "#ffffff"),
+    },
+    banner: {
+      enabled: bool(banner.enabled),
+      url: str(banner.url, 500),
+      alt: str(banner.alt, 120),
+    },
+    disclaimer: {
+      enabled: bool(disclaimer.enabled),
+      text: str(disclaimer.text, 1000),
+    },
+    style,
+  };
+}
+
+/** Icônes référencées par le HTML d'une signature (à garantir sur R2). */
+export function requiredIcons(input) {
+  const sig = normalizeSignature(input);
+  const st = sig.style;
+  const specs = [];
+  if (st.showContactIcons) {
+    const color =
+      st.iconColorMode === "custom" ? st.iconColor : st.primaryColor;
+    for (const field of ["phone", "mobile", "email", "website", "address"]) {
+      if (sig.contact[field]) specs.push(contactIconSpec(field, color));
+    }
+  }
+  for (const s of sig.social) {
+    const color =
+      st.iconColorMode === "brand"
+        ? SOCIAL_NETWORKS[s.network].hex
+        : st.iconColorMode === "custom"
+          ? st.iconColor
+          : st.primaryColor;
+    specs.push(socialIconSpec(s.network, st.iconStyle, color));
+  }
+  return specs;
+}
+
+/** Version texte brut, pour les clients en mode texte. */
+export function plainText(sig) {
+  const { identity, contact } = sig;
+  const lines = [
+    [identity.firstName, identity.lastName].filter(Boolean).join(" "),
+    [identity.jobTitle, identity.department].filter(Boolean).join(" · "),
+    identity.company,
+    identity.tagline,
+    contact.phone,
+    contact.mobile,
+    contact.email,
+    contact.website ? displayUrl(contact.website) : "",
+    contact.address,
+    ...sig.social.map((s) => normalizeUrl(s.url)),
+    sig.cta.enabled && sig.cta.label
+      ? `${sig.cta.label} : ${normalizeUrl(sig.cta.url)}`
+      : "",
+    sig.disclaimer.enabled ? sig.disclaimer.text : "",
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+/**
+ * Rend une signature.
+ * @returns {{ html: string, text: string, chars: number, warnings: string[] }}
+ */
+export function renderSignature(input, { iconUrl = defaultIconUrl } = {}) {
+  const sig = normalizeSignature(input);
+  const st = sig.style;
+  const ctx = {
+    sig,
+    st,
+    font: FONT_FAMILIES[st.fontFamily],
+    sp: SPACING[st.spacing],
+    iconUrl,
+  };
+  const blocks = buildBlocks(ctx);
+  const template = TEMPLATES[sig.templateId] || TEMPLATES.classic;
+  const body = template.render(blocks, ctx);
+
+  // Table englobante : fond transparent (mode sombre), aucune largeur fixe
+  // (le contenu dicte la largeur, la signature reste lisible sur mobile).
+  const html = body
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;background-color:transparent;"><tr><td style="font-family:${ctx.font};">${body}</td></tr></table>`
+    : "";
+
+  const warnings = [];
+  if (html.length > GMAIL_MAX_CHARS) {
+    warnings.push(
+      `La signature dépasse la limite de Gmail (${html.length} caractères sur ${GMAIL_MAX_CHARS}). Retirez un élément ou raccourcissez les textes.`,
+    );
+  }
+  if (sig.contact.website && !/^https?:\/\//i.test(sig.contact.website)) {
+    // Information seulement : l'URL est complétée automatiquement.
+  }
+  if (sig.images.logo?.url && /\.jpe?g($|\?)/i.test(sig.images.logo.url)) {
+    warnings.push(
+      "Le logo est un JPEG : il aura un fond blanc en mode sombre. Préférez un PNG à fond transparent.",
+    );
+  }
+
+  return { html, text: plainText(sig), chars: html.length, warnings };
+}
+
+/** Données d'exemple, pour les vignettes de modèles et les tests. */
+export const SAMPLE_SIGNATURE = {
+  templateId: "classic",
+  identity: {
+    firstName: "Camille",
+    lastName: "Durand",
+    jobTitle: "Directrice artistique",
+    department: "",
+    company: "Atelier Nord",
+    tagline: "",
+  },
+  contact: {
+    email: "camille@atelier-nord.fr",
+    phone: "",
+    mobile: "+33 6 12 34 56 78",
+    website: "atelier-nord.fr",
+    address: "12 rue des Lilas, 75011 Paris",
+  },
+  social: [
+    { network: "linkedin", url: "https://linkedin.com/in/camille-durand" },
+    { network: "instagram", url: "https://instagram.com/atelier.nord" },
+  ],
+  images: {
+    photo: {
+      url: "https://www.newbi.fr/images/signature-v2/sample-photo.jpg",
+      width: 200,
+      height: 200,
+    },
+    logo: null,
+    banner: null,
+  },
+  cta: { enabled: false },
+  banner: { enabled: false },
+  disclaimer: { enabled: false },
+  style: {},
+};

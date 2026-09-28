@@ -1,0 +1,262 @@
+# Signatures de mail v2
+#
+# Le HTML n'est jamais stocké : `renderEmailSignatureV2` le régénère à partir
+# des données, pour l'aperçu comme pour la copie. Les valeurs de choix
+# (modèle, police, forme…) sont des String validées côté serveur, pour
+# pouvoir en ajouter sans casser le schéma.
+
+type SignatureImageV2 {
+  url: String!
+  key: String
+  width: Int
+  height: Int
+}
+
+type SignatureSocialV2 {
+  network: String!
+  url: String!
+}
+
+type SignatureIdentityV2 {
+  firstName: String!
+  lastName: String!
+  jobTitle: String!
+  department: String!
+  company: String!
+  tagline: String!
+}
+
+type SignatureContactV2 {
+  email: String!
+  phone: String!
+  mobile: String!
+  website: String!
+  address: String!
+}
+
+type SignatureImagesV2 {
+  photo: SignatureImageV2
+  logo: SignatureImageV2
+  banner: SignatureImageV2
+}
+
+type SignatureCtaV2 {
+  enabled: Boolean!
+  label: String!
+  url: String!
+  backgroundColor: String!
+  textColor: String!
+}
+
+type SignatureBannerV2 {
+  enabled: Boolean!
+  url: String!
+  alt: String!
+}
+
+type SignatureDisclaimerV2 {
+  enabled: Boolean!
+  text: String!
+}
+
+type SignatureStyleV2 {
+  fontFamily: String!
+  fontSize: Int!
+  primaryColor: String!
+  textColor: String!
+  mutedColor: String!
+  photoShape: String!
+  photoSize: Int!
+  logoWidth: Int!
+  iconStyle: String!
+  iconColorMode: String!
+  iconColor: String!
+  iconSize: Int!
+  showContactIcons: Boolean!
+  separatorColor: String!
+  spacing: String!
+  align: String!
+}
+
+type EmailSignatureV2 {
+  id: ID!
+  name: String!
+  isDefault: Boolean!
+  templateId: String!
+  identity: SignatureIdentityV2!
+  contact: SignatureContactV2!
+  social: [SignatureSocialV2!]!
+  images: SignatureImagesV2!
+  cta: SignatureCtaV2!
+  banner: SignatureBannerV2!
+  disclaimer: SignatureDisclaimerV2!
+  style: SignatureStyleV2!
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+"""
+Résultat d'un rendu : le HTML à coller, sa version texte, sa taille et les
+avertissements de compatibilité (limite Gmail, logo JPEG…).
+"""
+type SignatureRenderV2 {
+  html: String!
+  text: String!
+  chars: Int!
+  warnings: [String!]!
+}
+
+type SignatureTemplateSupportsV2 {
+  photo: Boolean!
+  logo: Boolean!
+  align: Boolean!
+}
+
+type SignatureTemplateV2 {
+  id: String!
+  name: String!
+  description: String!
+  supports: SignatureTemplateSupportsV2!
+}
+
+type SignatureSocialNetworkV2 {
+  id: String!
+  label: String!
+  brandColor: String!
+  host: String!
+}
+
+type SignatureFontV2 {
+  id: String!
+  label: String!
+  stack: String!
+}
+
+"""
+Référentiel de l'éditeur : modèles, réseaux, polices et limites.
+"""
+type SignatureCatalogV2 {
+  templates: [SignatureTemplateV2!]!
+  networks: [SignatureSocialNetworkV2!]!
+  fonts: [SignatureFontV2!]!
+  gmailMaxChars: Int!
+}
+
+input SignatureSocialV2Input {
+  network: String!
+  url: String!
+}
+
+input SignatureIdentityV2Input {
+  firstName: String
+  lastName: String
+  jobTitle: String
+  department: String
+  company: String
+  tagline: String
+}
+
+input SignatureContactV2Input {
+  email: String
+  phone: String
+  mobile: String
+  website: String
+  address: String
+}
+
+input SignatureCtaV2Input {
+  enabled: Boolean
+  label: String
+  url: String
+  backgroundColor: String
+  textColor: String
+}
+
+input SignatureBannerV2Input {
+  enabled: Boolean
+  url: String
+  alt: String
+}
+
+input SignatureDisclaimerV2Input {
+  enabled: Boolean
+  text: String
+}
+
+input SignatureStyleV2Input {
+  fontFamily: String
+  fontSize: Int
+  primaryColor: String
+  textColor: String
+  mutedColor: String
+  photoShape: String
+  photoSize: Int
+  logoWidth: Int
+  iconStyle: String
+  iconColorMode: String
+  iconColor: String
+  iconSize: Int
+  showContactIcons: Boolean
+  separatorColor: String
+  spacing: String
+  align: String
+}
+
+"""
+Contenu d'une signature. Les images ne se passent pas ici : elles sont
+envoyées par `uploadEmailSignatureV2Image` et rattachées au document.
+"""
+input EmailSignatureV2Input {
+  name: String
+  templateId: String
+  identity: SignatureIdentityV2Input
+  contact: SignatureContactV2Input
+  social: [SignatureSocialV2Input!]
+  cta: SignatureCtaV2Input
+  banner: SignatureBannerV2Input
+  disclaimer: SignatureDisclaimerV2Input
+  style: SignatureStyleV2Input
+}
+
+enum SignatureImageKindV2 {
+  PHOTO
+  LOGO
+  BANNER
+}
+
+extend type Query {
+  emailSignaturesV2: [EmailSignatureV2!]!
+  emailSignatureV2(id: ID!): EmailSignatureV2
+  signatureCatalogV2: SignatureCatalogV2!
+
+  """
+  Rendu d'une signature non enregistrée (aperçu en direct). Sans `id`, les
+  images du document ne sont pas connues : passer `id` pour les inclure.
+  """
+  renderEmailSignatureV2(input: EmailSignatureV2Input!, id: ID): SignatureRenderV2!
+
+  """
+  Rendu d'un modèle avec des données d'exemple (vignettes de la galerie).
+  """
+  renderSignatureTemplateV2(templateId: String!, style: SignatureStyleV2Input): SignatureRenderV2!
+}
+
+extend type Mutation {
+  createEmailSignatureV2(input: EmailSignatureV2Input!): EmailSignatureV2!
+  updateEmailSignatureV2(id: ID!, input: EmailSignatureV2Input!): EmailSignatureV2!
+  deleteEmailSignatureV2(id: ID!): Boolean!
+  duplicateEmailSignatureV2(id: ID!): EmailSignatureV2!
+  setDefaultEmailSignatureV2(id: ID!): EmailSignatureV2!
+
+  """
+  Envoie et traite une image (recadrage, retina, transparence conservée),
+  puis la rattache à la signature.
+  """
+  uploadEmailSignatureV2Image(
+    id: ID!
+    kind: SignatureImageKindV2!
+    file: Upload!
+  ): EmailSignatureV2!
+
+  removeEmailSignatureV2Image(id: ID!, kind: SignatureImageKindV2!): EmailSignatureV2!
+}
