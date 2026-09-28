@@ -6,6 +6,11 @@
  *   node scripts/migrate-email-signatures-v2.js            # simulation
  *   node scripts/migrate-email-signatures-v2.js --apply    # écriture
  *   node scripts/migrate-email-signatures-v2.js --apply --only <idV1>
+ *   node scripts/migrate-email-signatures-v2.js --reprocess-photos   # photos déjà migrées
+ *
+ * Les photos et bandeaux sont retraités par sharp (recadrage carré « cover »
+ * pour la photo, retina, transparence conservée) : Gmail n'a aucun recadrage
+ * CSS, l'image doit arriver déjà à la bonne forme. Le logo est repris tel quel.
  *
  * Idempotent : une signature v1 déjà migrée (champ `migratedFrom` côté v2)
  * est ignorée. Les images ne sont pas copiées : la v2 référence les mêmes
@@ -17,6 +22,7 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import EmailSignatureV2 from "../src/models/EmailSignatureV2.js";
+import { storeSignatureImage } from "../src/services/signatureAssets.js";
 import { normalizeSignature } from "../src/services/signatureRenderer/index.js";
 import {
   FONT_FAMILIES,
@@ -24,6 +30,9 @@ import {
 } from "../src/services/signatureRenderer/constants.js";
 
 const APPLY = process.argv.includes("--apply");
+// Recadre les photos des signatures déjà migrées dont l'image n'a pas été
+// traitée (URL v1 reprise telle quelle, dimensions inconnues).
+const REPROCESS = process.argv.includes("--reprocess-photos");
 const onlyIndex = process.argv.indexOf("--only");
 const ONLY = onlyIndex > -1 ? process.argv[onlyIndex + 1] : null;
 
@@ -184,6 +193,50 @@ export function mapLegacySignature(doc) {
   return { name, normalized };
 }
 
+/**
+ * Télécharge une image v1 et la fait passer par le traitement v2 (recadrage
+ * carré pour la photo), stockée sous l'identifiant de la signature v2.
+ * Retourne null si l'image n'est pas récupérable (l'URL v1 est alors gardée).
+ */
+async function reprocessImage(url, kind, userId, signatureId, size) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return storeSignatureImage({
+    buffer,
+    kind,
+    userId,
+    signatureId,
+    options: kind === "PHOTO" ? { size } : {},
+  });
+}
+
+async function reprocessDocImages(v2, log) {
+  for (const [field, kind] of [
+    ["photo", "PHOTO"],
+    ["banner", "BANNER"],
+  ]) {
+    const image = v2.images?.[field];
+    if (!image?.url || (image.width && image.height)) continue;
+    try {
+      const stored = await reprocessImage(
+        image.url,
+        kind,
+        v2.createdBy,
+        v2._id,
+        v2.style?.photoSize || 84,
+      );
+      v2.images[field] = stored;
+      v2.markModified("images");
+      log(`recadrage ${field} ok (${stored.width}x${stored.height})`);
+    } catch (error) {
+      log(
+        `recadrage ${field} impossible, URL d'origine conservée : ${error.message}`,
+      );
+    }
+  }
+}
+
 async function resolveWorkspaceId(doc, db) {
   if (doc.workspaceId) return doc.workspaceId;
   const member = await db
@@ -197,6 +250,30 @@ async function main() {
   await mongoose.connect(process.env.MONGODB_URI);
   const db = mongoose.connection.db;
   const legacy = db.collection("emailsignatures");
+
+  if (REPROCESS) {
+    const pending = await EmailSignatureV2.find({
+      $or: [
+        {
+          "images.photo.url": { $exists: true },
+          "images.photo.width": { $exists: false },
+        },
+        {
+          "images.banner.url": { $exists: true },
+          "images.banner.width": { $exists: false },
+        },
+      ],
+    });
+    console.log(
+      `${pending.length} signature(s) v2 avec image(s) non recadrée(s).`,
+    );
+    for (const v2 of pending) {
+      await reprocessDocImages(v2, (m) => console.log(`  ${v2._id} : ${m}`));
+      await v2.save();
+    }
+    await mongoose.disconnect();
+    return;
+  }
 
   const filter = ONLY ? { _id: new mongoose.Types.ObjectId(ONLY) } : {};
   const docs = await legacy.find(filter).sort({ createdAt: 1 }).toArray();
@@ -261,6 +338,7 @@ async function main() {
           disclaimer: normalized.disclaimer,
           style: normalized.style,
         });
+        await reprocessDocImages(v2, (m) => console.log(`      ${m}`));
         await v2.save();
         console.log(`  ✓ ${doc._id} → ${v2._id} : ${summary}`);
       } else {
