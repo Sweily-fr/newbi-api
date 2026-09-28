@@ -87,6 +87,16 @@ const emailSignatureSchema = new mongoose.Schema(
       youtube: { type: String, trim: true, default: null },
     },
 
+    // Taille par réseau, quand elle diffère de la taille globale socialSize
+    socialSizes: {
+      facebook: { type: Number, default: null },
+      instagram: { type: Number, default: null },
+      linkedin: { type: Number, default: null },
+      x: { type: Number, default: null },
+      github: { type: Number, default: null },
+      youtube: { type: Number, default: null },
+    },
+
     // URLs des icônes personnalisées sur Cloudflare
     customSocialIcons: {
       facebook: { type: String, trim: true, default: "" },

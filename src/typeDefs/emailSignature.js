@@ -1,16 +1,16 @@
-import { gql } from 'apollo-server-express';
+import { gql } from "apollo-server-express";
 
 const emailSignatureTypeDefs = gql`
   type EmailSignature {
     id: ID!
     signatureName: String!
     isDefault: Boolean!
-    
+
     # Informations personnelles
     firstName: String!
     lastName: String!
     position: String!
-    
+
     # Informations de contact
     email: String!
     phone: String
@@ -18,30 +18,31 @@ const emailSignatureTypeDefs = gql`
     website: String
     address: String
     companyName: String
-    
+
     # Réseaux sociaux
     socialNetworks: SocialNetworks
     socialColors: SocialColors
+    socialSizes: SocialSizes
     customSocialIcons: CustomSocialIcons
-    
+
     # Options d'affichage des icônes
     showPhoneIcon: Boolean!
     showMobileIcon: Boolean!
     showEmailIcon: Boolean!
     showAddressIcon: Boolean!
     showWebsiteIcon: Boolean!
-    
+
     # Couleurs
     primaryColor: String!
     colors: SignatureColors!
-    
+
     # Configuration layout
     nameSpacing: Int!
     nameAlignment: String!
     layout: String!
     orientation: String
     columnWidths: ColumnWidths!
-    
+
     # Images
     photo: String
     photoKey: String
@@ -51,7 +52,7 @@ const emailSignatureTypeDefs = gql`
     imageSize: Int!
     imageShape: String!
     logoSize: Int!
-    
+
     # Séparateurs
     separatorVerticalWidth: Int!
     separatorHorizontalWidth: Int!
@@ -73,12 +74,12 @@ const emailSignatureTypeDefs = gql`
     # Social global settings
     socialGlobalColor: String
     socialSize: Int
-    
+
     # Typographie
     fontFamily: String!
     fontSize: FontSizes!
     typography: DetailedTypography!
-    
+
     # Métadonnées
     createdBy: ID!
     createdAt: String!
@@ -134,6 +135,19 @@ const emailSignatureTypeDefs = gql`
     x: String
     github: String
     youtube: String
+  }
+
+  """
+  Taille en pixels de l'icône de chaque réseau, quand elle diffère de la
+  taille globale socialSize.
+  """
+  type SocialSizes {
+    facebook: Int
+    instagram: Int
+    linkedin: Int
+    x: Int
+    github: Int
+    youtube: Int
   }
 
   type CustomSocialIcons {
@@ -203,12 +217,12 @@ const emailSignatureTypeDefs = gql`
   input EmailSignatureInput {
     signatureName: String!
     isDefault: Boolean
-    
+
     # Informations personnelles
     firstName: String!
     lastName: String!
     position: String!
-    
+
     # Informations de contact
     email: String!
     phone: String
@@ -216,30 +230,31 @@ const emailSignatureTypeDefs = gql`
     website: String
     address: String
     companyName: String
-    
+
     # Réseaux sociaux
     socialNetworks: SocialNetworksInput
     socialColors: SocialColorsInput
+    socialSizes: SocialSizesInput
     customSocialIcons: CustomSocialIconsInput
-    
+
     # Options d'affichage des icônes
     showPhoneIcon: Boolean
     showMobileIcon: Boolean
     showEmailIcon: Boolean
     showAddressIcon: Boolean
     showWebsiteIcon: Boolean
-    
+
     # Couleurs
     primaryColor: String
     colors: SignatureColorsInput
-    
+
     # Configuration layout
     nameSpacing: Int
     nameAlignment: String
     layout: String
     orientation: String
     columnWidths: ColumnWidthsInput
-    
+
     # Images
     photo: String
     photoKey: String
@@ -249,7 +264,7 @@ const emailSignatureTypeDefs = gql`
     imageSize: Int
     imageShape: String
     logoSize: Int
-    
+
     # Séparateurs
     separatorVerticalWidth: Int
     separatorHorizontalWidth: Int
@@ -335,6 +350,15 @@ const emailSignatureTypeDefs = gql`
     youtube: String
   }
 
+  input SocialSizesInput {
+    facebook: Int
+    instagram: Int
+    linkedin: Int
+    x: Int
+    github: Int
+    youtube: Int
+  }
+
   input CustomSocialIconsInput {
     facebook: String
     instagram: String
@@ -397,12 +421,12 @@ const emailSignatureTypeDefs = gql`
     id: ID!
     signatureName: String
     isDefault: Boolean
-    
+
     # Informations personnelles
     firstName: String
     lastName: String
     position: String
-    
+
     # Informations de contact
     email: String
     phone: String
@@ -410,30 +434,31 @@ const emailSignatureTypeDefs = gql`
     website: String
     address: String
     companyName: String
-    
+
     # Réseaux sociaux
     socialNetworks: SocialNetworksInput
     socialColors: SocialColorsInput
+    socialSizes: SocialSizesInput
     customSocialIcons: CustomSocialIconsInput
-    
+
     # Options d'affichage des icônes
     showPhoneIcon: Boolean
     showMobileIcon: Boolean
     showEmailIcon: Boolean
     showAddressIcon: Boolean
     showWebsiteIcon: Boolean
-    
+
     # Couleurs
     primaryColor: String
     colors: SignatureColorsInput
-    
+
     # Configuration layout
     nameSpacing: Int
     nameAlignment: String
     layout: String
     orientation: String
     columnWidths: ColumnWidthsInput
-    
+
     # Images
     photo: String
     photoKey: String
@@ -443,7 +468,7 @@ const emailSignatureTypeDefs = gql`
     imageSize: Int
     imageShape: String
     logoSize: Int
-    
+
     # Séparateurs
     separatorVerticalWidth: Int
     separatorHorizontalWidth: Int
@@ -475,10 +500,10 @@ const emailSignatureTypeDefs = gql`
   extend type Query {
     # Récupérer toutes les signatures de l'utilisateur connecté
     getMyEmailSignatures: [EmailSignature!]!
-    
+
     # Récupérer une signature spécifique
     getEmailSignature(id: ID!): EmailSignature
-    
+
     # Récupérer la signature par défaut de l'utilisateur
     getDefaultEmailSignature: EmailSignature
   }
@@ -486,13 +511,13 @@ const emailSignatureTypeDefs = gql`
   extend type Mutation {
     # Créer une nouvelle signature
     createEmailSignature(input: EmailSignatureInput!): EmailSignature!
-    
+
     # Mettre à jour une signature existante
     updateEmailSignature(input: UpdateEmailSignatureInput!): EmailSignature!
-    
+
     # Supprimer une signature
     deleteEmailSignature(id: ID!): Boolean!
-    
+
     # Définir une signature comme par défaut
     setDefaultEmailSignature(id: ID!): EmailSignature!
   }
