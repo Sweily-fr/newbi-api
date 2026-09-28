@@ -1,6 +1,6 @@
 /**
  * Migration des signatures de mail v1 (collection `emailsignatures`) vers la
- * v2 (collection `emailsignaturev2s`).
+ * v2 (collection `emailsignaturev2`).
  *
  * Usage :
  *   node scripts/migrate-email-signatures-v2.js            # simulation
