@@ -19,6 +19,7 @@ type EmailSignature {
   # Réseaux sociaux
   socialNetworks: SocialNetworks
   socialColors: SocialColors
+  socialSizes: SocialSizes
   customSocialIcons: CustomSocialIcons
   socialGlobalColor: String
   socialSize: Int
@@ -110,6 +111,19 @@ type SocialColors {
   x: String
   github: String
   youtube: String
+}
+
+"""
+Taille en pixels de l'icône de chaque réseau, quand elle diffère de la
+taille globale socialSize.
+"""
+type SocialSizes {
+  facebook: Int
+  instagram: Int
+  linkedin: Int
+  x: Int
+  github: Int
+  youtube: Int
 }
 
 type CustomSocialIcons {
@@ -243,6 +257,7 @@ input EmailSignatureInput {
   # Réseaux sociaux
   socialNetworks: SocialNetworksInput
   socialColors: SocialColorsInput
+  socialSizes: SocialSizesInput
   customSocialIcons: CustomSocialIconsInput
   socialGlobalColor: String
   socialSize: Int
@@ -331,6 +346,15 @@ input SocialColorsInput {
   youtube: String
 }
 
+input SocialSizesInput {
+  facebook: Int
+  instagram: Int
+  linkedin: Int
+  x: Int
+  github: Int
+  youtube: Int
+}
+
 input CustomSocialIconsInput {
   facebook: String
   instagram: String
@@ -417,6 +441,7 @@ input UpdateEmailSignatureInput {
   # Réseaux sociaux
   socialNetworks: SocialNetworksInput
   socialColors: SocialColorsInput
+  socialSizes: SocialSizesInput
   customSocialIcons: CustomSocialIconsInput
   socialGlobalColor: String
   socialSize: Int
