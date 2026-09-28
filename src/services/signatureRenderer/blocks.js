@@ -24,7 +24,15 @@ import {
 } from "./primitives.js";
 
 export function buildBlocks(ctx) {
-  const { sig, st, font, sp, iconUrl } = ctx;
+  const { sig, st, font, sp, iconUrl, markers } = ctx;
+
+  // Marqueurs d'aperçu : en mode éditeur, chaque élément porte l'identifiant
+  // du champ qui le pilote (data-sig-field). Jamais présents dans le HTML
+  // copié : le rendu « propre » n'active pas cette option.
+  const markInline = (field, html) =>
+    markers && html ? `<span data-sig-field="${field}">${html}</span>` : html;
+  const markBlock = (field, html) =>
+    markers && html ? `<div data-sig-field="${field}">${html}</div>` : html;
   const { identity, contact, images } = sig;
 
   const text = (size, color, extra = {}) =>
@@ -52,7 +60,10 @@ export function buildBlocks(ctx) {
   const blocks = {
     name({ color = st.textColor, size = base + 3 } = {}) {
       return fullName
-        ? span(fullName, text(size, color, { weight: "bold" }))
+        ? markInline(
+            "firstName",
+            span(fullName, text(size, color, { weight: "bold" })),
+          )
         : "";
     },
 
@@ -64,17 +75,25 @@ export function buildBlocks(ctx) {
       return vstack(
         [
           withName ? blocks.name({ color: nameColor }) : "",
-          titleLine ? span(titleLine, text(base, st.mutedColor)) : "",
+          titleLine
+            ? markInline("jobTitle", span(titleLine, text(base, st.mutedColor)))
+            : "",
           identity.company
-            ? span(
-                identity.company,
-                text(base, st.textColor, { weight: "bold" }),
+            ? markInline(
+                "company",
+                span(
+                  identity.company,
+                  text(base, st.textColor, { weight: "bold" }),
+                ),
               )
             : "",
           identity.tagline
-            ? span(
-                identity.tagline,
-                text(base - 1, st.mutedColor, { italic: true }),
+            ? markInline(
+                "tagline",
+                span(
+                  identity.tagline,
+                  text(base - 1, st.mutedColor, { italic: true }),
+                ),
               )
             : "",
         ],
@@ -86,11 +105,19 @@ export function buildBlocks(ctx) {
     identityInline() {
       const parts = [
         fullName
-          ? span(fullName, text(base + 1, st.textColor, { weight: "bold" }))
+          ? markInline(
+              "firstName",
+              span(fullName, text(base + 1, st.textColor, { weight: "bold" })),
+            )
           : "",
-        titleLine ? span(titleLine, text(base, st.mutedColor)) : "",
+        titleLine
+          ? markInline("jobTitle", span(titleLine, text(base, st.mutedColor)))
+          : "",
         identity.company
-          ? span(identity.company, text(base, st.textColor))
+          ? markInline(
+              "company",
+              span(identity.company, text(base, st.textColor)),
+            )
           : "",
       ].filter(Boolean);
       if (parts.length === 0) return "";
@@ -124,7 +151,10 @@ export function buildBlocks(ctx) {
       const items = blocks.contactItems();
       if (items.length === 0) return "";
       const lines = items.map((item) => {
-        const contentHtml = `<span style="${item.style}">${item.html}</span>`;
+        const contentHtml = markInline(
+          item.field,
+          `<span style="${item.style}">${item.html}</span>`,
+        );
         if (!icons) return { contentHtml };
         const spec = contactIconSpec(item.field, contactIconColor);
         const iconHtml = img({
@@ -144,7 +174,9 @@ export function buildBlocks(ctx) {
       if (items.length === 0) return "";
       const sep = span("  ·  ", text(base, st.mutedColor));
       return items
-        .map((i) => `<span style="${i.style}">${i.html}</span>`)
+        .map((i) =>
+          markInline(i.field, `<span style="${i.style}">${i.html}</span>`),
+        )
         .join(sep);
     },
 
@@ -158,21 +190,27 @@ export function buildBlocks(ctx) {
           href: normalizeUrl(s.url),
           alt: SOCIAL_NETWORKS[s.network].label,
         }));
-      return iconRow(items, {
-        size,
-        gap: Math.max(6, Math.round(size / 3)),
-        align,
-      });
+      return markBlock(
+        "social",
+        iconRow(items, {
+          size,
+          gap: Math.max(6, Math.round(size / 3)),
+          align,
+        }),
+      );
     },
 
     photo({ size = st.photoSize, shape = st.photoShape } = {}) {
       if (!images.photo?.url) return "";
-      return photo({
-        src: images.photo.url,
-        size,
-        shape,
-        alt: fullName || "Photo",
-      });
+      return markBlock(
+        "photo",
+        photo({
+          src: images.photo.url,
+          size,
+          shape,
+          alt: fullName || "Photo",
+        }),
+      );
     },
 
     logo({ width = st.logoWidth } = {}) {
@@ -189,7 +227,10 @@ export function buildBlocks(ctx) {
         alt: identity.company || "Logo",
       });
       const href = normalizeUrl(contact.website);
-      return href ? link(href, image, { color: st.textColor }) : image;
+      return markBlock(
+        "logo",
+        href ? link(href, image, { color: st.textColor }) : image,
+      );
     },
 
     cta() {
@@ -197,14 +238,17 @@ export function buildBlocks(ctx) {
       if (!c.enabled || !c.label) return "";
       const href = normalizeUrl(c.url);
       if (!href) return "";
-      return button({
-        label: c.label,
-        href,
-        background: c.backgroundColor || st.primaryColor,
-        color: c.textColor || "#ffffff",
-        font,
-        size: base,
-      });
+      return markBlock(
+        "cta",
+        button({
+          label: c.label,
+          href,
+          background: c.backgroundColor || st.primaryColor,
+          color: c.textColor || "#ffffff",
+          font,
+          size: base,
+        }),
+      );
     },
 
     banner() {
@@ -223,13 +267,19 @@ export function buildBlocks(ctx) {
         style: "max-width:100%;",
       });
       const href = normalizeUrl(sig.banner.url);
-      return href ? link(href, image, { color: st.textColor }) : image;
+      return markBlock(
+        "banner",
+        href ? link(href, image, { color: st.textColor }) : image,
+      );
     },
 
     disclaimer() {
       const d = sig.disclaimer;
       if (!d.enabled || !d.text) return "";
-      return `<span style="${text(Math.max(10, base - 3), st.mutedColor)}">${esc(d.text)}</span>`;
+      return markInline(
+        "disclaimer",
+        `<span style="${text(Math.max(10, base - 3), st.mutedColor)}">${esc(d.text)}</span>`,
+      );
     },
 
     hsep() {

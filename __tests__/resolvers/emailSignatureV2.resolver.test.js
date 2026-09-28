@@ -349,6 +349,8 @@ describe("EmailSignatureV2 — rendu", () => {
     expect(result.html).toContain("linkedin/rounded-123456.png");
     expect(result.text).toContain("Camille Durand");
     expect(result.chars).toBe(result.html.length);
+    expect(result.html).not.toContain("data-sig-field");
+    expect(result.previewHtml).toContain('data-sig-field="firstName"');
   });
 
   it("inclut les images du document quand un id est fourni", async () => {

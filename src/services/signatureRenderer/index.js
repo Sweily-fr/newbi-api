@@ -203,7 +203,10 @@ export function plainText(sig) {
  * Rend une signature.
  * @returns {{ html: string, text: string, chars: number, warnings: string[] }}
  */
-export function renderSignature(input, { iconUrl = defaultIconUrl } = {}) {
+export function renderSignature(
+  input,
+  { iconUrl = defaultIconUrl, markers = false } = {},
+) {
   const sig = normalizeSignature(input);
   const st = sig.style;
   const ctx = {
@@ -212,6 +215,7 @@ export function renderSignature(input, { iconUrl = defaultIconUrl } = {}) {
     font: FONT_FAMILIES[st.fontFamily],
     sp: SPACING[st.spacing],
     iconUrl,
+    markers,
   };
   const blocks = buildBlocks(ctx);
   const template = TEMPLATES[sig.templateId] || TEMPLATES.classic;

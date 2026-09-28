@@ -105,6 +105,11 @@ avertissements de compatibilité (limite Gmail, logo JPEG…).
 """
 type SignatureRenderV2 {
   html: String!
+  """
+  Même HTML avec, sur chaque élément, l'identifiant du champ qui le pilote
+  (data-sig-field). Réservé à l'aperçu de l'éditeur, jamais à copier.
+  """
+  previewHtml: String!
   text: String!
   chars: Int!
   warnings: [String!]!

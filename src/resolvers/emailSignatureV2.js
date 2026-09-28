@@ -147,6 +147,18 @@ async function ensureIconsSoon(data) {
   ]);
 }
 
+/**
+ * Rendu propre (à copier) + rendu d'aperçu, dont chaque élément porte
+ * l'identifiant du champ qui le pilote, pour l'éditeur.
+ */
+function withPreview(data) {
+  const result = renderSignature(data);
+  return {
+    ...result,
+    previewHtml: renderSignature(data, { markers: true }).html,
+  };
+}
+
 async function readUpload(file) {
   const { createReadStream, filename, mimetype } = await file;
   if (!mimetype || !mimetype.startsWith("image/")) {
@@ -171,7 +183,7 @@ const emailSignatureV2Resolvers = {
     render: async (doc) => {
       const data = plain(doc);
       await ensureIconsSoon(data);
-      return renderSignature(data);
+      return withPreview(data);
     },
   },
 
@@ -206,7 +218,7 @@ const emailSignatureV2Resolvers = {
         if (id) current = plain(await findOwned(id, ctx));
         const data = mergeInput(current, input || {});
         await ensureIconsSoon(data);
-        return renderSignature(data);
+        return withPreview(data);
       },
     ),
 
@@ -215,7 +227,8 @@ const emailSignatureV2Resolvers = {
         await ensureSamplePhoto();
         const data = { ...SAMPLE_SIGNATURE, templateId, style: style || {} };
         await ensureIconsSoon(data);
-        return renderSignature(data);
+        const result = renderSignature(data);
+        return { ...result, previewHtml: result.html };
       },
     ),
   },
