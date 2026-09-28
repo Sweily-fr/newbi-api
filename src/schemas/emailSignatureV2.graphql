@@ -91,6 +91,10 @@ type EmailSignatureV2 {
   banner: SignatureBannerV2!
   disclaimer: SignatureDisclaimerV2!
   style: SignatureStyleV2!
+  """
+  Rendu à jour de la signature (HTML, texte, taille, avertissements).
+  """
+  render: SignatureRenderV2!
   createdAt: DateTime
   updatedAt: DateTime
 }

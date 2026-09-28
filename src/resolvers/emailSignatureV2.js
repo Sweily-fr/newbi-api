@@ -167,6 +167,11 @@ const emailSignatureV2Resolvers = {
       banner: doc.images?.banner || null,
     }),
     social: (doc) => doc.social || [],
+    render: async (doc) => {
+      const data = plain(doc);
+      await ensureIconsSoon(data);
+      return renderSignature(data);
+    },
   },
 
   Query: {
