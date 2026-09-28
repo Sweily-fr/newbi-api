@@ -9,6 +9,7 @@ import productResolvers from "./product.js";
 import contactResolvers from "./contact.js";
 import companySearchResolvers from "./companySearch.js";
 import emailSignatureResolvers from "./emailSignature.js";
+import emailSignatureV2Resolvers from "./emailSignatureV2.js";
 import integrationResolvers from "./integration.js";
 import documentSettingsResolvers from "./documentSettings.js";
 import expenseResolvers from "./expense.js";
@@ -82,6 +83,7 @@ const resolvers = mergeResolvers([
   contactResolvers,
   companySearchResolvers,
   emailSignatureResolvers,
+  emailSignatureV2Resolvers,
   integrationResolvers,
   documentSettingsResolvers,
   expenseResolvers,
