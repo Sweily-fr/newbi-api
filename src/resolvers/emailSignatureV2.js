@@ -35,6 +35,7 @@ import {
 import {
   deleteSignatureImages,
   ensureIcons,
+  ensureSamplePhoto,
   storeSignatureImage,
 } from "../services/signatureAssets.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -211,6 +212,7 @@ const emailSignatureV2Resolvers = {
 
     renderSignatureTemplateV2: requireRead("signatures")(
       async (_, { templateId, style }) => {
+        await ensureSamplePhoto();
         const data = { ...SAMPLE_SIGNATURE, templateId, style: style || {} };
         await ensureIconsSoon(data);
         return renderSignature(data);

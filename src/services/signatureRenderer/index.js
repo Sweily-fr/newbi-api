@@ -24,6 +24,7 @@ import {
   contactIconSpec,
   iconUrl as defaultIconUrl,
   socialIconSpec,
+  SAMPLE_PHOTO_URL,
 } from "./icons.js";
 import { displayUrl, hex, normalizeUrl } from "./primitives.js";
 import TEMPLATES, { listTemplates } from "./templates.js";
@@ -89,9 +90,19 @@ export function normalizeSignature(input = {}) {
         }
       : null;
 
+  // Un réseau ajouté sans URL est conservé (la ligne vient d'être créée dans
+  // l'éditeur) ; seul le rendu ignore les entrées sans lien. Un réseau ne
+  // figure qu'une fois.
+  const seen = new Set();
   const social = Array.isArray(input.social)
     ? input.social
-        .filter((x) => x && SOCIAL_NETWORKS[x.network] && str(x.url))
+        .filter(
+          (x) =>
+            x &&
+            SOCIAL_NETWORKS[x.network] &&
+            !seen.has(x.network) &&
+            seen.add(x.network),
+        )
         .map((x) => ({ network: x.network, url: str(x.url, 500) }))
     : [];
 
@@ -253,11 +264,7 @@ export const SAMPLE_SIGNATURE = {
     { network: "instagram", url: "https://instagram.com/atelier.nord" },
   ],
   images: {
-    photo: {
-      url: "https://www.newbi.fr/images/signature-v2/sample-photo.jpg",
-      width: 200,
-      height: 200,
-    },
+    photo: { url: SAMPLE_PHOTO_URL, width: 200, height: 200 },
     logo: null,
     banner: null,
   },

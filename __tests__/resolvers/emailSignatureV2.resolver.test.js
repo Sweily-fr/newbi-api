@@ -16,6 +16,7 @@ import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 // Pas de R2 ni de sharp en test : les assets sont simulés.
 vi.mock("../../src/services/signatureAssets.js", () => ({
   ensureIcons: vi.fn().mockResolvedValue(undefined),
+  ensureSamplePhoto: vi.fn().mockResolvedValue(undefined),
   storeSignatureImage: vi.fn().mockResolvedValue({
     url: "https://cdn.test/photo.jpg",
     key: "u/s/ImgProfil/photo.jpg",

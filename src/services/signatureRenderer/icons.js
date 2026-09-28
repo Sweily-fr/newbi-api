@@ -121,6 +121,15 @@ export function iconSvg(spec, size = 128) {
   )} ${offsetY.toFixed(2)}) scale(${scale.toFixed(4)})" fill="#ffffff">${glyph.inner}</g></svg>`;
 }
 
+/** Photo d'exemple des vignettes de modèles, générée à la demande sur R2. */
+export const SAMPLE_PHOTO_KEY = "v2/sample/photo.jpg";
+export const SAMPLE_PHOTO_URL = `${ICONS_PUBLIC_URL}/${SAMPLE_PHOTO_KEY}`;
+
+/** Avatar neutre (buste sur fond doux), 400x400. */
+export function samplePhotoSvg() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"><rect width="400" height="400" fill="#e8e6ff"/><circle cx="200" cy="150" r="70" fill="#5a50ff"/><path d="M60 400c0-88 62-150 140-150s140 62 140 150z" fill="#5a50ff"/></svg>`;
+}
+
 export function contactIconSpec(field, color) {
   return iconSpec({ kind: "contact", name: CONTACT_ICONS[field], color });
 }

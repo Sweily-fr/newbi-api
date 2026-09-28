@@ -12,7 +12,13 @@ import sharp from "sharp";
 import cloudflareService from "./cloudflareService.js";
 import logger from "../utils/logger.js";
 import { ICONS_BUCKET, ICON_PNG_SIZE } from "./signatureRenderer/constants.js";
-import { iconKey, iconSvg, iconUrl } from "./signatureRenderer/icons.js";
+import {
+  iconKey,
+  iconSvg,
+  iconUrl,
+  SAMPLE_PHOTO_KEY,
+  samplePhotoSvg,
+} from "./signatureRenderer/icons.js";
 
 /** Clés dont l'existence sur R2 a déjà été vérifiée dans ce processus. */
 const knownKeys = new Set();
@@ -77,6 +83,34 @@ export async function ensureIcon(spec) {
     );
   }
   return url;
+}
+
+/** Garantit la photo d'exemple des vignettes sur R2 (une fois par processus). */
+let samplePhotoReady = false;
+export async function ensureSamplePhoto() {
+  if (samplePhotoReady) return;
+  try {
+    if (!(await objectExists(SAMPLE_PHOTO_KEY))) {
+      const jpeg = await sharp(Buffer.from(samplePhotoSvg()))
+        .jpeg({ quality: 88 })
+        .toBuffer();
+      await cloudflareService.client.send(
+        new PutObjectCommand({
+          Bucket: ICONS_BUCKET,
+          Key: SAMPLE_PHOTO_KEY,
+          Body: jpeg,
+          ContentType: "image/jpeg",
+          CacheControl: "public, max-age=31536000, immutable",
+        }),
+      );
+      logger.info(
+        `[signatureAssets] Photo d'exemple générée : ${SAMPLE_PHOTO_KEY}`,
+      );
+    }
+    samplePhotoReady = true;
+  } catch (error) {
+    logger.error(`[signatureAssets] Photo d'exemple : ${error.message}`);
+  }
 }
 
 export async function ensureIcons(specs) {

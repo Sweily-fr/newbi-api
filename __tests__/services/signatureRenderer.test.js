@@ -239,7 +239,12 @@ describe("signatureRenderer — normalisation", () => {
     expect(n.style.spacing).toBe("normal");
     expect(n.style.iconStyle).toBe("rounded");
     expect(n.style.iconSize).toBe(16);
-    expect(n.social).toEqual([{ network: "x", url: "x.com/a" }]);
+    // Un réseau sans URL est conservé (ligne en cours de saisie), les
+    // inconnus et doublons sont retirés
+    expect(n.social).toEqual([
+      { network: "linkedin", url: "" },
+      { network: "x", url: "x.com/a" },
+    ]);
   });
 
   it("normalise les couleurs hex courtes et invalides", () => {
