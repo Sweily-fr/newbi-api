@@ -280,6 +280,40 @@ describe("signatureRenderer — normalisation", () => {
   });
 });
 
+describe("signatureRenderer — marqueurs d'aperçu", () => {
+  it("n'ajoute aucun marqueur au HTML à copier", () => {
+    const { html } = renderSignature(FULL);
+    expect(html).not.toContain("data-sig-field");
+  });
+
+  it("marque chaque élément en mode aperçu, sans changer le contenu", () => {
+    const { html } = renderSignature(FULL, { markers: true });
+    for (const field of [
+      "firstName",
+      "jobTitle",
+      "company",
+      "tagline",
+      "phone",
+      "mobile",
+      "email",
+      "website",
+      "address",
+      "social",
+      "photo",
+      "logo",
+      "cta",
+      "banner",
+      "disclaimer",
+    ]) {
+      expect(html, field).toContain(`data-sig-field="${field}"`);
+    }
+    const clean = renderSignature(FULL).html;
+    expect(html.replace(/<\/?(span|div)( data-sig-field="[^"]*")?>/g, "")).toBe(
+      clean.replace(/<\/?(span|div)( data-sig-field="[^"]*")?>/g, ""),
+    );
+  });
+});
+
 describe("signatureRenderer — photo", () => {
   const withShape = (photoShape) =>
     renderSignature({ ...SAMPLE_SIGNATURE, style: { photoShape } }).html;
