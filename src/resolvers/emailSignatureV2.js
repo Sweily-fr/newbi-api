@@ -7,6 +7,7 @@
  * données, garantir les icônes sur R2 et traiter les images.
  */
 
+import mongoose from "mongoose";
 import EmailSignatureV2 from "../models/EmailSignatureV2.js";
 import {
   requireDelete,
@@ -38,6 +39,7 @@ import {
   deleteSignatureImages,
   ensureIcons,
   ensureSamplePhoto,
+  importSignatureImage,
   storeSignatureImage,
 } from "../services/signatureAssets.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -53,6 +55,45 @@ const plain = (value) =>
     : value
       ? JSON.parse(JSON.stringify(value))
       : {};
+
+/**
+ * Photo de profil de l'utilisateur, même règle que les avatars du kanban.
+ * Lecture de la collection brute : le modèle Mongoose `User` ne déclare pas
+ * les champs Better Auth (`image` à la racine).
+ */
+async function profilePhotoUrl(ctx) {
+  const user = await mongoose.connection.db
+    .collection("user")
+    .findOne(
+      { _id: new mongoose.Types.ObjectId(String(ctx.user.id)) },
+      { projection: { image: 1, avatar: 1, "profile.profilePictureUrl": 1 } },
+    );
+  const url =
+    user?.image || user?.avatar || user?.profile?.profilePictureUrl || "";
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+/** Une nouvelle signature démarre avec la photo de profil, si elle existe. */
+async function attachProfilePhoto(doc, ctx) {
+  try {
+    const url = await profilePhotoUrl(ctx);
+    if (!url) return;
+    doc.images.photo = await importSignatureImage({
+      url,
+      kind: "PHOTO",
+      userId: ctx.user.id,
+      signatureId: doc._id,
+      options: { size: doc.style?.photoSize || 84 },
+    });
+    doc.markModified("images");
+    await doc.save();
+  } catch (error) {
+    // Sans photo, la signature reste utilisable : on n'échoue pas la création
+    logger.warn(
+      `[Signature v2] Photo de profil non importée : ${error.message}`,
+    );
+  }
+}
 
 async function findOwned(id, ctx) {
   const doc = await EmailSignatureV2.findOne({ _id: id, ...scope(ctx) });
@@ -273,6 +314,7 @@ const emailSignatureV2Resolvers = {
         });
         applyNormalized(doc, normalized);
         await doc.save();
+        await attachProfilePhoto(doc, ctx);
         return doc;
       },
     ),

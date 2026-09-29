@@ -202,6 +202,29 @@ export async function storeSignatureImage({
   };
 }
 
+/**
+ * Importe une image distante (photo de profil de l'utilisateur) et la traite
+ * comme un envoi. Délai court : la création d'une signature ne doit pas
+ * attendre un hébergeur lent.
+ */
+export async function importSignatureImage({
+  url,
+  kind,
+  userId,
+  signatureId,
+  options,
+  timeoutMs = 5000,
+}) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const length = Number(response.headers.get("content-length") || 0);
+  if (length > MAX_IMAGE_BYTES) throw new Error("Image trop lourde");
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return storeSignatureImage({ buffer, kind, userId, signatureId, options });
+}
+
 export async function deleteSignatureImages(userId, signatureId) {
   for (const type of Object.values(R2_IMAGE_TYPE)) {
     try {

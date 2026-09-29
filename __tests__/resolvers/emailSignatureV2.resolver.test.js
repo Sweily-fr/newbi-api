@@ -23,6 +23,12 @@ vi.mock("../../src/services/signatureAssets.js", () => ({
     width: 168,
     height: 168,
   }),
+  importSignatureImage: vi.fn().mockResolvedValue({
+    url: "https://cdn.test/profil.jpg",
+    key: "u/s/ImgProfil/profil.jpg",
+    width: 168,
+    height: 168,
+  }),
   deleteSignatureImages: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../src/services/cloudflareService.js", () => ({
@@ -36,7 +42,11 @@ vi.mock("../../src/services/cloudflareService.js", () => ({
 
 import EmailSignatureV2 from "../../src/models/EmailSignatureV2.js";
 import resolvers from "../../src/resolvers/emailSignatureV2.js";
-import { storeSignatureImage } from "../../src/services/signatureAssets.js";
+import mongoose from "mongoose";
+import {
+  importSignatureImage,
+  storeSignatureImage,
+} from "../../src/services/signatureAssets.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -75,6 +85,56 @@ const input = (overrides = {}) => ({
   social: [{ network: "linkedin", url: "linkedin.com/in/camille" }],
   style: { primaryColor: "#123456" },
   ...overrides,
+});
+
+describe("EmailSignatureV2 — photo de profil par défaut", () => {
+  const users = () => mongoose.connection.db.collection("user");
+
+  it("reprend la photo de profil de l'utilisateur à la création", async () => {
+    await users().insertOne({
+      _id: new mongoose.Types.ObjectId(String(userId)),
+      avatar: "https://cdn.test/avatar.jpeg",
+    });
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    expect(importSignatureImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://cdn.test/avatar.jpeg",
+        kind: "PHOTO",
+      }),
+    );
+    const saved = await EmailSignatureV2.findById(doc._id).lean();
+    expect(saved.images.photo.url).toBe("https://cdn.test/profil.jpg");
+  });
+
+  it("crée la signature sans photo si l'utilisateur n'en a pas", async () => {
+    importSignatureImage.mockClear();
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    expect(importSignatureImage).not.toHaveBeenCalled();
+    expect(doc.images.photo).toBeFalsy();
+  });
+
+  it("ne fait pas échouer la création si l'import échoue", async () => {
+    await users().insertOne({
+      _id: new mongoose.Types.ObjectId(String(userId)),
+      image: "https://cdn.test/cassee.png",
+    });
+    importSignatureImage.mockRejectedValueOnce(new Error("HTTP 404"));
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    expect(doc.id).toBeTruthy();
+    expect(doc.images.photo).toBeFalsy();
+  });
 });
 
 describe("EmailSignatureV2 — création", () => {
