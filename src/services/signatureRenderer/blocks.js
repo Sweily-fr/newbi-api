@@ -4,7 +4,7 @@
  * contentent de les agencer.
  */
 
-import { SOCIAL_NETWORKS } from "./constants.js";
+import { LOGO_MAX_HEIGHT, SOCIAL_NETWORKS } from "./constants.js";
 import { contactIconSpec, socialIconSpec } from "./icons.js";
 import {
   button,
@@ -240,10 +240,14 @@ export function buildBlocks(ctx) {
     logo({ width = st.logoWidth, align = "left" } = {}) {
       const l = images.logo;
       if (!l?.url) return "";
-      const height =
-        l.width && l.height
-          ? Math.round((width * l.height) / l.width)
-          : undefined;
+      // Largeur = réglage de l'utilisateur, mais jamais plus haut que
+      // LOGO_MAX_HEIGHT : un logo carré ou vertical reste discret.
+      let height;
+      if (l.width && l.height) {
+        const ratio = l.width / l.height;
+        width = Math.min(width, Math.round(LOGO_MAX_HEIGHT * ratio));
+        height = Math.round(width / ratio);
+      }
       const image = img({
         src: l.url,
         width,

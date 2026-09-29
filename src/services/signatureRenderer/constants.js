@@ -177,7 +177,7 @@ export const DEFAULT_STYLE = {
   mutedColor: "#5f6368",
   photoShape: "circle",
   photoSize: 84,
-  logoWidth: 120,
+  logoWidth: 100,
   iconStyle: "rounded",
   iconColorMode: "primary",
   iconColor: "#5a50ff",
@@ -189,6 +189,9 @@ export const DEFAULT_STYLE = {
 };
 
 export const IMAGE_KINDS = ["PHOTO", "LOGO", "BANNER"];
+
+/** Hauteur maximale d'un logo dans la signature (la largeur suit le ratio). */
+export const LOGO_MAX_HEIGHT = 48;
 
 /** Taille des icônes générées sur R2 (affichées jusqu'à 64px en retina). */
 export const ICON_PNG_SIZE = 128;

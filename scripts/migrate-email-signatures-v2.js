@@ -210,6 +210,7 @@ async function reprocessImage(url, kind, userId, signatureId, size) {
 async function reprocessDocImages(v2, log) {
   for (const [field, kind] of [
     ["photo", "PHOTO"],
+    ["logo", "LOGO"],
     ["banner", "BANNER"],
   ]) {
     const image = v2.images?.[field];
@@ -257,6 +258,10 @@ async function main() {
         {
           "images.banner.url": { $exists: true },
           "images.banner.width": { $exists: false },
+        },
+        {
+          "images.logo.url": { $exists: true },
+          "images.logo.width": { $exists: false },
         },
       ],
     });
