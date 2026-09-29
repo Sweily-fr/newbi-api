@@ -30,6 +30,7 @@ const BASE_PRESET = {
   iconSize: 22,
   spacing: "normal",
   showContactIcons: true,
+  logoWidth: 100,
 };
 
 const TEMPLATES = {

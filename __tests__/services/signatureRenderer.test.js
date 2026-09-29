@@ -314,6 +314,32 @@ describe("signatureRenderer — marqueurs d'aperçu", () => {
   });
 });
 
+describe("signatureRenderer — logo", () => {
+  const withLogo = (logo, logoWidth) =>
+    renderSignature({
+      ...SAMPLE_SIGNATURE,
+      images: { ...SAMPLE_SIGNATURE.images, logo },
+      style: { ...SAMPLE_SIGNATURE.style, logoWidth },
+    }).html;
+
+  it("plafonne la hauteur du logo, la largeur suit le ratio", () => {
+    const tall = withLogo(
+      { url: "https://cdn/l.png", width: 200, height: 200 },
+      140,
+    );
+    expect(tall).toMatch(
+      /<img src="https:\/\/cdn\/l\.png" width="48" height="48"/,
+    );
+    const wide = withLogo(
+      { url: "https://cdn/l.png", width: 600, height: 150 },
+      140,
+    );
+    expect(wide).toMatch(
+      /<img src="https:\/\/cdn\/l\.png" width="140" height="35"/,
+    );
+  });
+});
+
 describe("signatureRenderer — photo", () => {
   const withShape = (photoShape) =>
     renderSignature({ ...SAMPLE_SIGNATURE, style: { photoShape } }).html;
