@@ -225,6 +225,34 @@ const TEMPLATES = {
     theme: { nameDelta: 6, companyColor: "primary" },
   },
 
+  // D'après une signature de référence choisie par l'utilisateur (30/09) :
+  // photo ronde, trait fin, nom en capitales espacées, poste en italique,
+  // icônes et trait dans la couleur du texte. La signature manuscrite qui
+  // chevauchait la photo n'est pas reprise (superposition impossible en
+  // e-mail : Outlook et Gmail l'ignorent).
+  epure: {
+    name: "Épuré",
+    description:
+      "Photo ronde, trait fin, nom en capitales espacées et poste en italique : sobre, en noir.",
+    preset: {
+      ...BASE_PRESET,
+      fontSize: 12,
+      photoSize: 112,
+      iconStyle: "plain",
+      divider: "line",
+      accent: "none",
+    },
+    theme: {
+      nameDelta: 4,
+      nameCaps: true,
+      nameTracking: 3,
+      titleItalic: true,
+      titleTracking: 1,
+      contactTracking: 0.5,
+      contactIconColor: "text",
+      dividerColor: "text",
+    },
+  },
   line: {
     name: "Une ligne",
     description:

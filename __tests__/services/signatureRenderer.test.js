@@ -1346,6 +1346,30 @@ describe("signatureRenderer — traits et bordures sur mesure", () => {
   });
 });
 
+describe("signatureRenderer — modèle Épuré", () => {
+  const html = () =>
+    renderSignature({
+      ...FULL,
+      templateId: "epure",
+      style: { textColor: "#111111", iconColorMode: "primary" },
+    }).html;
+
+  it("nom en capitales espacées, poste en italique espacé", () => {
+    expect(html()).toMatch(/text-transform:uppercase;letter-spacing:3px;/);
+    expect(html()).toMatch(/font-style:italic;[^"]*letter-spacing:1px;/);
+  });
+
+  it("trait et icônes des coordonnées dans la couleur du texte", () => {
+    expect(html()).toContain('bgcolor="#111111"');
+    expect(html()).toMatch(/v2\/contact\/phone\/[^"]*-111111\.png/);
+  });
+
+  it("n'agit pas sur les autres modèles", () => {
+    const modern = renderSignature({ ...FULL, templateId: "modern" }).html;
+    expect(modern).not.toContain("letter-spacing:3px");
+  });
+});
+
 describe("signatureRenderer — icônes des coordonnées et limite Gmail", () => {
   it("taille des icônes des coordonnées : 16 px sauf réglage, bornée", () => {
     const icon = (contactIconSize) =>

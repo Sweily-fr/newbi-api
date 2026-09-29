@@ -56,9 +56,17 @@ export function buildBlocks(ctx) {
   // Style d'un élément de texte : valeurs du modèle, remplacées par les
   // réglages propres à l'élément quand il y en a.
   const elements = st.elements || {};
+  // `tracking` : espacement des lettres voulu par le modèle, en px
   const resolve = (
     key,
-    { size, color, bold = false, italic = false, uppercase = false },
+    {
+      size,
+      color,
+      bold = false,
+      italic = false,
+      uppercase = false,
+      tracking = 0,
+    },
   ) => {
     const o = elements[key] || {};
     const eff = {
@@ -68,6 +76,7 @@ export function buildBlocks(ctx) {
       bold: o.bold ?? bold,
       italic: o.italic ?? italic,
       uppercase: o.uppercase ?? uppercase,
+      tracking,
     };
     if (ctx.resolved && !ctx.resolved[key]) ctx.resolved[key] = eff;
     return eff;
@@ -79,11 +88,16 @@ export function buildBlocks(ctx) {
       color: eff.color,
       weight: eff.bold ? "bold" : "normal",
       italic: eff.italic,
-    }) + (eff.uppercase ? "text-transform:uppercase;" : "");
+    }) +
+    (eff.uppercase ? "text-transform:uppercase;" : "") +
+    (eff.tracking ? `letter-spacing:${eff.tracking}px;` : "");
   const styled = (key, defaults) => styleOf(resolve(key, defaults));
 
   // Prénom / nom : réglages du nom complet, puis ceux propres à la partie
-  const partResolve = (part, { size, color, bold = true }) => {
+  const partResolve = (
+    part,
+    { size, color, bold = true, uppercase = false, tracking = 0 },
+  ) => {
     const merged = { ...(elements.name || {}), ...(elements[part] || {}) };
     const eff = {
       fontFamily: merged.fontFamily || st.fontFamily,
@@ -91,7 +105,8 @@ export function buildBlocks(ctx) {
       color: merged.color || color,
       bold: merged.bold ?? bold,
       italic: merged.italic ?? false,
-      uppercase: merged.uppercase ?? false,
+      uppercase: merged.uppercase ?? uppercase,
+      tracking,
     };
     if (ctx.resolved && !ctx.resolved[part]) ctx.resolved[part] = eff;
     return eff;
@@ -170,11 +185,17 @@ export function buildBlocks(ctx) {
      */
     nameOf(
       parts,
-      { size = base + 3, color = st.textColor, mark = (k, h) => h } = {},
+      {
+        size = base + 3,
+        color = st.textColor,
+        mark = (k, h) => h,
+        uppercase = false,
+        tracking = 0,
+      } = {},
     ) {
       const present = parts.filter((p) => identity[p]);
       if (present.length === 0) return "";
-      const defaults = { size, color, bold: true };
+      const defaults = { size, color, bold: true, uppercase, tracking };
       const own = present.some(hasOwnStyle);
       const inner = present
         .map((p) => {
@@ -368,11 +389,14 @@ export function buildBlocks(ctx) {
     // ── Rendu élément par élément (mise en page par emplacements) ──────────
 
     /** Poste (et service) seul. */
-    titleItem({ color = st.mutedColor } = {}) {
+    titleItem({ color = st.mutedColor, italic = false, tracking = 0 } = {}) {
       return titleLine
         ? markInline(
             "jobTitle",
-            styledSpan(titleHtml, styled("jobTitle", { size: base, color })),
+            styledSpan(
+              titleHtml,
+              styled("jobTitle", { size: base, color, italic, tracking }),
+            ),
           )
         : "";
     },
@@ -495,14 +519,17 @@ export function buildBlocks(ctx) {
         align = "left",
         inverse = false,
         attrsFor = () => "",
+        tracking = 0,
+        iconColor: iconColorOf = null,
       } = {},
     ) {
       const white = "#ffffff";
       const lineStyle = styled("contact", {
         size: base,
         color: inverse ? white : st.mutedColor,
+        tracking,
       });
-      const iconColor = inverse ? white : contactIconColor;
+      const iconColor = inverse ? white : iconColorOf || contactIconColor;
       const LABELS = {
         phone: "T",
         mobile: "M",

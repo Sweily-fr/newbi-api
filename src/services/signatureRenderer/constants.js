@@ -24,6 +24,7 @@ export const TEMPLATE_IDS = [
   "bold",
   "centered",
   "line",
+  "epure",
 ];
 export const DEFAULT_TEMPLATE_ID = TEMPLATE_IDS[0];
 
@@ -31,9 +32,9 @@ export const DEFAULT_TEMPLATE_ID = TEMPLATE_IDS[0];
  * Modèles proposés dans la galerie de l'éditeur (le premier est celui des
  * nouvelles signatures). Les autres restent rendus tels quels pour les
  * signatures qui les utilisent : le 30/09/2026, l'utilisateur n'a gardé que
- * le Bandeau « pour le moment ».
+ * le Bandeau « pour le moment », puis a demandé Épuré.
  */
-export const GALLERY_TEMPLATE_IDS = ["header"];
+export const GALLERY_TEMPLATE_IDS = ["header", "epure"];
 
 /**
  * Polices « web safe » : ce sont les seules qui s'affichent à l'identique

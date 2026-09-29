@@ -167,7 +167,11 @@ export function renderLayout(b, ctx, theme = {}) {
           ...(inverse ? { borderColor: st.photoBorderColor || WHITE } : {}),
         });
       case "title":
-        return b.titleItem({ color: c.title });
+        return b.titleItem({
+          color: c.title,
+          italic: Boolean(theme.titleItalic),
+          tracking: theme.titleTracking || 0,
+        });
       case "company":
         return b.companyItem({ color: c.company });
       case "tagline":
@@ -273,6 +277,8 @@ export function renderLayout(b, ctx, theme = {}) {
             size: nameSize,
             color: colors(inverse).name,
             mark: markSpan,
+            uppercase: Boolean(theme.nameCaps),
+            tracking: theme.nameTracking || 0,
           }),
         });
         continue;
@@ -317,6 +323,14 @@ export function renderLayout(b, ctx, theme = {}) {
                   inverse,
                   attrsFor: (f) =>
                     ctx.markers ? ` data-sig-block="${f}"` : "",
+                  tracking: theme.contactTracking || 0,
+                  // Icônes dans la couleur du texte si le modèle le veut
+                  // (une couleur choisie par l'utilisateur l'emporte)
+                  iconColor:
+                    theme.contactIconColor === "text" &&
+                    st.iconColorMode !== "custom"
+                      ? st.textColor
+                      : null,
                 }),
         });
         continue;
@@ -524,7 +538,12 @@ export function renderLayout(b, ctx, theme = {}) {
     st.divider === "none"
       ? null
       : {
-          color: st.divider === "line" ? st.separatorColor : P,
+          color:
+            st.divider !== "line"
+              ? P
+              : theme.dividerColor === "text"
+                ? st.textColor
+                : st.separatorColor,
           width: st.dividerThickness || (st.divider === "bar" ? 4 : 1),
           length: st.dividerLength,
           valign: st.photoValign,

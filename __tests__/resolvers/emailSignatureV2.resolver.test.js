@@ -412,12 +412,12 @@ describe("EmailSignatureV2 — lecture et isolation", () => {
 
   it("expose le catalogue de l'éditeur", async () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
-    expect(catalog.templates.length).toBe(11);
+    expect(catalog.templates.length).toBe(12);
     expect(catalog.templates[0].id).toBe("modern");
-    // Seul le Bandeau est proposé dans la galerie pour le moment
+    // Seuls le Bandeau et Épuré sont proposés dans la galerie pour le moment
     expect(
       catalog.templates.filter((t) => t.inGallery).map((t) => t.id),
-    ).toEqual(["header"]);
+    ).toEqual(["header", "epure"]);
     expect(catalog.templates[0].preset.fontFamily).toBe("arial");
     expect(catalog.templates[0].preset.photoSize).toBe(92);
     expect(catalog.networks.find((n) => n.id === "linkedin").brandColor).toBe(
