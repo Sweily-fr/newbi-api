@@ -121,11 +121,28 @@ type SignatureTemplateSupportsV2 {
   align: Boolean!
 }
 
+"""
+Typographie et formes propres à un modèle, appliquées quand on le choisit.
+Les couleurs n'en font jamais partie.
+"""
+type SignatureTemplatePresetV2 {
+  fontFamily: String
+  fontSize: Int
+  photoShape: String
+  photoSize: Int
+  logoWidth: Int
+  iconStyle: String
+  iconSize: Int
+  spacing: String
+  showContactIcons: Boolean
+}
+
 type SignatureTemplateV2 {
   id: String!
   name: String!
   description: String!
   supports: SignatureTemplateSupportsV2!
+  preset: SignatureTemplatePresetV2!
 }
 
 type SignatureSocialNetworkV2 {

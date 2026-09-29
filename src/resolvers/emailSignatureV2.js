@@ -25,12 +25,14 @@ import {
   renderSignature,
   requiredIcons,
   SAMPLE_SIGNATURE,
+  templatePreset,
 } from "../services/signatureRenderer/index.js";
 import {
   FONT_FAMILIES,
   FONT_LABELS,
   GMAIL_MAX_CHARS,
   SOCIAL_NETWORKS,
+  DEFAULT_TEMPLATE_ID,
 } from "../services/signatureRenderer/constants.js";
 import {
   deleteSignatureImages,
@@ -225,7 +227,27 @@ const emailSignatureV2Resolvers = {
     renderSignatureTemplateV2: requireRead("signatures")(
       async (_, { templateId, style }) => {
         await ensureSamplePhoto();
-        const data = { ...SAMPLE_SIGNATURE, templateId, style: style || {} };
+        // Vignette = typographie du modèle + couleurs de l'utilisateur
+        const colors = Object.fromEntries(
+          Object.entries(style || {}).filter(
+            ([k, v]) =>
+              [
+                "primaryColor",
+                "textColor",
+                "mutedColor",
+                "iconColorMode",
+                "iconColor",
+                "separatorColor",
+              ].includes(k) &&
+              v !== null &&
+              v !== undefined,
+          ),
+        );
+        const data = {
+          ...SAMPLE_SIGNATURE,
+          templateId,
+          style: { ...templatePreset(templateId), ...colors },
+        };
         await ensureIconsSoon(data);
         const result = renderSignature(data);
         return { ...result, previewHtml: result.html };
@@ -238,9 +260,11 @@ const emailSignatureV2Resolvers = {
       async (_, { input }, ctx) => {
         const name = await availableName(input?.name, ctx);
         const isFirst = !(await EmailSignatureV2.exists(scope(ctx)));
+        // Une nouvelle signature démarre avec la typographie de son modèle
+        const preset = templatePreset(input?.templateId || DEFAULT_TEMPLATE_ID);
         const normalized = mergeInput(
           { images: { photo: null, logo: null, banner: null } },
-          input || {},
+          { ...(input || {}), style: { ...preset, ...(input?.style || {}) } },
         );
         const doc = new EmailSignatureV2({
           name,

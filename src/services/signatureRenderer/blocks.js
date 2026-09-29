@@ -300,6 +300,18 @@ export function buildBlocks(ctx) {
       return hsep(st.separatorColor);
     },
 
+    /** Trait horizontal paramétrable : largeur (px ou pleine), couleur, hauteur. */
+    rule({
+      width = null,
+      color = st.separatorColor,
+      height = 1,
+      align = "left",
+    } = {}) {
+      const w = width ? `width="${width}"` : 'width="100%"';
+      const ws = width ? `width:${width}px;` : "width:100%;";
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${ws}"><tr><td ${w} height="${height}" bgcolor="${color}" style="${ws}height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
+    },
+
     /** Trait fin dans la couleur principale, plus court (accent). */
     accent({ width = 40, height = 3 } = {}) {
       return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td width="${width}" height="${height}" bgcolor="${st.primaryColor}" style="width:${width}px;height:${height}px;background-color:${st.primaryColor};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
