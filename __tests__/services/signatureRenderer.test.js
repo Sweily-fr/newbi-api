@@ -149,7 +149,7 @@ describe("signatureRenderer — compatibilité clients mail", () => {
     });
   }
 
-  it("liste les 8 modèles avec leurs capacités", () => {
+  it("liste les modèles avec leurs capacités, dans l'ordre de la galerie", () => {
     const templates = listTemplates();
     expect(templates.map((t) => t.id)).toEqual(TEMPLATE_IDS);
     for (const t of templates) {
@@ -231,7 +231,7 @@ describe("signatureRenderer — normalisation", () => {
         { network: "x", url: "x.com/a" },
       ],
     });
-    expect(n.templateId).toBe("classic");
+    expect(n.templateId).toBe("modern");
     expect(n.style.fontFamily).toBe("arial");
     expect(n.style.fontSize).toBe(18);
     expect(n.style.primaryColor).toBe("#5a50ff");
