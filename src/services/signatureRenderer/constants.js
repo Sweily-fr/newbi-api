@@ -340,6 +340,16 @@ export const ELEMENT_FONT_SIZE = { min: 9, max: 36 };
 /** Hauteur maximale d'un logo dans la signature (la largeur suit le ratio). */
 export const LOGO_MAX_HEIGHT = 48;
 
+/**
+ * Largeur de logo au-delà de laquelle ce plafond grandit d'autant : il ne
+ * bride que les tailles courantes (120 px = largeur des signatures migrées),
+ * un logo agrandi dans l'éditeur grandit vraiment.
+ */
+export const LOGO_CAP_WIDTH = 120;
+
+/** Taille des icônes des coordonnées, sauf réglage. */
+export const CONTACT_ICON_SIZE = 16;
+
 /** Taille des icônes générées sur R2 (affichées jusqu'à 64px en retina). */
 export const ICON_PNG_SIZE = 128;
 

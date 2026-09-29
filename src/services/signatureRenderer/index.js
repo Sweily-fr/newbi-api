@@ -244,6 +244,7 @@ export function normalizeSignature(input = {}) {
   style.frameThickness = sized("frameThickness", 1, 8);
   style.frameWidth = sized("frameWidth", 240, 720);
   style.frameBarLength = sized("frameBarLength", 16, 720);
+  style.contactIconSize = sized("contactIconSize", 12, 32);
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   style.blocks = normalizeBlocks(s.blocks ?? tpl.blocks);
   style.columns = normalizeColumns(s.columns ?? tpl.columns);
@@ -406,8 +407,10 @@ export function renderSignature(
 
   const warnings = [];
   if (html.length > GMAIL_MAX_CHARS) {
+    // Gmail en retire une partie au collage (code pour Outlook) : le
+    // dépassement est possible, pas certain
     warnings.push(
-      `La signature dépasse la limite de Gmail (${html.length} caractères sur ${GMAIL_MAX_CHARS}). Retirez un élément ou raccourcissez les textes.`,
+      "La signature peut dépasser la limite de 10 000 caractères de Gmail. Si Gmail la refuse, retirez un élément (réseaux, bandeau…) ou raccourcissez les textes.",
     );
   }
   if (sig.contact.website && !/^https?:\/\//i.test(sig.contact.website)) {
@@ -441,6 +444,9 @@ function effectiveLines(st, theme = {}) {
     accentThickness: st.accentThickness || (thin ? 2 : 3),
     dividerThickness: st.dividerThickness || (st.divider === "bar" ? 4 : 1),
     frameThickness: st.frameThickness || (barFrame ? 4 : 1),
+    // Plafonds du modèle : l'éditeur borne ses curseurs à ce qui s'affiche
+    photoMax: theme.photoMax || 160,
+    iconMax: theme.socialMax || 40,
   };
 }
 

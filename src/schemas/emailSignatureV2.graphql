@@ -191,6 +191,8 @@ type SignatureStyleV2 {
   frameWidth: Int!
   "Longueur de la barre de l'encadré (à gauche, en haut), en px (0 : toute la longueur)."
   frameBarLength: Int!
+  "Taille des icônes des coordonnées, en px (0 : 16 px)."
+  contactIconSize: Int!
   """
   Réglages par bloc (name, jobTitle, company, tagline, contact, social,
   photo, logo, accent, cta, banner, disclaimer) : { width, spaceBefore,
@@ -262,6 +264,10 @@ type SignatureLinesV2 {
   accentThickness: Int!
   dividerThickness: Int!
   frameThickness: Int!
+  "Taille de photo maximale du modèle, en px."
+  photoMax: Int!
+  "Taille d'icône de réseau maximale du modèle, en px."
+  iconMax: Int!
 }
 
 type SignatureTemplateSupportsV2 {
@@ -447,6 +453,7 @@ input SignatureStyleV2Input {
   frameThickness: Int
   frameWidth: Int
   frameBarLength: Int
+  contactIconSize: Int
   "Remplace l'ensemble des réglages par bloc (envoyer l'objet complet)."
   blocks: JSON
   columns: JSON

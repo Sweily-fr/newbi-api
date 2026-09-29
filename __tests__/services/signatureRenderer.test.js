@@ -355,12 +355,16 @@ describe("signatureRenderer — logo", () => {
     }).html;
 
   it("plafonne la hauteur du logo, la largeur suit le ratio", () => {
-    const tall = withLogo(
-      { url: "https://cdn/l.png", width: 200, height: 200 },
-      140,
-    );
-    expect(tall).toMatch(
+    const square = { url: "https://cdn/l.png", width: 200, height: 200 };
+    expect(withLogo(square, 120)).toMatch(
       /<img src="https:\/\/cdn\/l\.png" width="48" height="48"/,
+    );
+    // Agrandi au-delà de 120 px, le plafond grandit d'autant
+    expect(withLogo(square, 140)).toMatch(
+      /<img src="https:\/\/cdn\/l\.png" width="56" height="56"/,
+    );
+    expect(withLogo(square, 240)).toMatch(
+      /<img src="https:\/\/cdn\/l\.png" width="96" height="96"/,
     );
     const wide = withLogo(
       { url: "https://cdn/l.png", width: 600, height: 150 },
@@ -1298,7 +1302,13 @@ describe("signatureRenderer — traits et bordures sur mesure", () => {
       accentThickness: 3,
       dividerThickness: 1,
       frameThickness: 1,
+      photoMax: 160,
+      iconMax: 40,
     });
+    // Plafonds du modèle, pour borner les curseurs de l'éditeur
+    expect(
+      renderSignature({ ...FULL, templateId: "line" }).lines,
+    ).toMatchObject({ photoMax: 64, iconMax: 22 });
     const bold = renderSignature({
       ...FULL,
       templateId: "bold",
@@ -1333,6 +1343,39 @@ describe("signatureRenderer — traits et bordures sur mesure", () => {
         }
       }
     }
+  });
+});
+
+describe("signatureRenderer — icônes des coordonnées et limite Gmail", () => {
+  it("taille des icônes des coordonnées : 16 px sauf réglage, bornée", () => {
+    const icon = (contactIconSize) =>
+      renderSignature({
+        ...FULL,
+        templateId: "modern",
+        style: { contactIconSize },
+      }).html.match(/contact\/phone\/[^"]*" width="(\d+)" height="(\d+)"/);
+    expect(icon(undefined).slice(1)).toEqual(["16", "16"]);
+    expect(icon(24).slice(1)).toEqual(["24", "24"]);
+    expect(icon(99).slice(1)).toEqual(["32", "32"]);
+    expect(icon(4).slice(1)).toEqual(["12", "12"]);
+  });
+
+  it("prévient que la signature peut dépasser la limite de Gmail", () => {
+    const long = renderSignature({
+      ...FULL,
+      templateId: "split",
+      identity: { ...FULL.identity, tagline: "x".repeat(200) },
+      social: Object.keys(SOCIAL_NETWORKS).map((network) => ({
+        network,
+        url: `https://${network}.com/un-profil-avec-un-nom-assez-long`,
+      })),
+      disclaimer: { enabled: true, text: "Mention ".repeat(120) },
+    });
+    expect(long.chars).toBeGreaterThan(10000);
+    expect(long.warnings[0]).toMatch(/peut dépasser la limite de 10 000/);
+    expect(
+      renderSignature({ ...FULL, templateId: "modern" }).warnings.join(" "),
+    ).not.toMatch(/Gmail/);
   });
 });
 

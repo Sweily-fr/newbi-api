@@ -6,6 +6,8 @@
 
 import {
   FONT_FAMILIES,
+  CONTACT_ICON_SIZE,
+  LOGO_CAP_WIDTH,
   LOGO_MAX_HEIGHT,
   SOCIAL_NETWORKS,
 } from "./constants.js";
@@ -254,11 +256,13 @@ export function buildBlocks(ctx) {
       const l = images.logo;
       if (!l?.url) return "";
       // Largeur = réglage de l'utilisateur, mais jamais plus haut que
-      // LOGO_MAX_HEIGHT : un logo carré ou vertical reste discret.
+      // LOGO_MAX_HEIGHT : un logo carré ou vertical reste discret. Agrandi
+      // au-delà de LOGO_CAP_WIDTH, le plafond grandit d'autant.
       let height;
       if (l.width && l.height) {
         const ratio = l.width / l.height;
-        width = Math.min(width, Math.round(maxHeight * ratio));
+        const cap = Math.round(maxHeight * Math.max(1, width / LOGO_CAP_WIDTH));
+        width = Math.min(width, Math.round(cap * ratio));
         height = Math.round(width / ratio);
       }
       const image = img({
@@ -530,8 +534,8 @@ export function buildBlocks(ctx) {
             attrs,
             iconHtml: img({
               src: iconUrl(spec),
-              width: 16,
-              height: 16,
+              width: st.contactIconSize || CONTACT_ICON_SIZE,
+              height: st.contactIconSize || CONTACT_ICON_SIZE,
               alt: "",
             }),
             contentHtml,

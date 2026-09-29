@@ -58,6 +58,8 @@ const BASE_PRESET = {
   frameThickness: 0,
   frameWidth: 0,
   frameBarLength: 0,
+  // Icônes des coordonnées (0 : 16 px)
+  contactIconSize: 0,
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   blocks: {},
   columns: {},
