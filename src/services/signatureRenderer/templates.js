@@ -86,8 +86,9 @@ const TEMPLATES = {
             html: b.photo({
               shape: "circle",
               size: Math.min(st.photoSize, 80),
-              border: 3,
-              borderColor: white,
+              // Contour blanc par défaut sur le bandeau, réglable comme ailleurs
+              border: st.photoBorder || 3,
+              borderColor: st.photoBorderColor || white,
             }),
             valign: "middle",
           },
