@@ -1724,7 +1724,34 @@ const sendShareAccessRejectedEmail = async (
   }
 };
 
+/**
+ * E-mail de test d'une signature : quelques lignes, puis la signature
+ * telle qu'elle sera collée dans la messagerie, pour la vérifier dans un
+ * vrai client (liens, images, mode sombre).
+ */
+const sendSignatureTestEmail = async (
+  email,
+  { signatureHtml, signatureText, signatureName },
+) => {
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: email,
+    subject: `Test de votre signature « ${signatureName} » - Newbi`,
+    html: `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="margin:0;padding:24px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#1f1f1f;"><p style="margin:0 0 12px 0;">Bonjour,</p><p style="margin:0 0 12px 0;">Voici votre signature telle qu'elle apparaîtra dans vos e-mails. Vérifiez les liens, les images et, si votre messagerie le permet, le mode sombre.</p><p style="margin:0 0 24px 0;">Bien à vous,</p>${signatureHtml}</body></html>`,
+    text: `Bonjour,\n\nVoici votre signature telle qu'elle apparaîtra dans vos e-mails.\n\nBien à vous,\n\n${signatureText}`,
+  };
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    logger.error(`Envoi de l'e-mail de test de signature : ${error.message}`);
+    return false;
+  }
+};
+
 export {
+  sendSignatureTestEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,
   sendPasswordResetConfirmationEmail,

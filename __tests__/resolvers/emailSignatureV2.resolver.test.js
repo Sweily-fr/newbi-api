@@ -31,6 +31,9 @@ vi.mock("../../src/services/signatureAssets.js", () => ({
   }),
   deleteSignatureImages: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../../src/utils/mailer.js", () => ({
+  sendSignatureTestEmail: vi.fn().mockResolvedValue(true),
+}));
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: {
     copySignatureImage: vi
@@ -47,6 +50,7 @@ import {
   importSignatureImage,
   storeSignatureImage,
 } from "../../src/services/signatureAssets.js";
+import { sendSignatureTestEmail } from "../../src/utils/mailer.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -815,5 +819,99 @@ describe("EmailSignatureV2 — emplacements", () => {
       "firstName",
       "lastName",
     ]);
+  });
+});
+
+describe("EmailSignatureV2 — vignettes avec ses informations", () => {
+  it("montre les modèles avec le nom de la signature, sinon l'exemple", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input({ identity: { firstName: "Léa", lastName: "Martin" } }) },
+      ctx(),
+    );
+    const own = await Query.renderSignatureTemplateV2(
+      null,
+      { templateId: "classic", id: doc.id },
+      ctx(),
+    );
+    expect(own.html).toContain("Léa Martin");
+    expect(own.html).not.toContain("Camille Durand");
+
+    const empty = await Mutation.createEmailSignatureV2(
+      null,
+      {
+        input: input({
+          name: "Vide",
+          identity: { firstName: "", lastName: "" },
+        }),
+      },
+      ctx(),
+    );
+    const sample = await Query.renderSignatureTemplateV2(
+      null,
+      { templateId: "classic", id: empty.id },
+      ctx(),
+    );
+    expect(sample.html).toContain("Camille Durand");
+  });
+
+  it("refuse la signature d'un autre utilisateur", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    await expect(
+      Query.renderSignatureTemplateV2(
+        null,
+        { templateId: "classic", id: doc.id },
+        otherCtx(),
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe("EmailSignatureV2 — e-mail de test", () => {
+  beforeEach(() => {
+    sendSignatureTestEmail.mockClear();
+    sendSignatureTestEmail.mockResolvedValue(true);
+  });
+
+  it("envoie la signature à l'adresse de l'utilisateur, puis impose un délai", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    const email = await Mutation.sendEmailSignatureV2Test(
+      null,
+      { id: doc.id },
+      ctx(),
+    );
+    expect(email).toBe("test@test.com");
+    expect(sendSignatureTestEmail).toHaveBeenCalledTimes(1);
+    const [to, payload] = sendSignatureTestEmail.mock.calls[0];
+    expect(to).toBe("test@test.com");
+    expect(payload.signatureHtml).toContain("Camille Durand");
+    expect(payload.signatureName).toBe("Pro");
+    // Deuxième envoi immédiat : refusé
+    await expect(
+      Mutation.sendEmailSignatureV2Test(null, { id: doc.id }, ctx()),
+    ).rejects.toThrow(/patientez/);
+  });
+
+  it("signale un échec d'envoi sans bloquer le suivant", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      otherCtx(),
+    );
+    sendSignatureTestEmail.mockResolvedValueOnce(false);
+    await expect(
+      Mutation.sendEmailSignatureV2Test(null, { id: doc.id }, otherCtx()),
+    ).rejects.toThrow(/n'a pas pu être envoyé/);
+    await expect(
+      Mutation.sendEmailSignatureV2Test(null, { id: doc.id }, otherCtx()),
+    ).resolves.toBe("test@test.com");
   });
 });

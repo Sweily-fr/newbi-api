@@ -15,10 +15,12 @@ import {
 } from "../middlewares/rbac.js";
 import {
   createAlreadyExistsError,
+  createInternalServerError,
   createNotFoundError,
   createValidationError,
 } from "../utils/errors.js";
 import logger from "../utils/logger.js";
+import { sendSignatureTestEmail } from "../utils/mailer.js";
 import {
   listTemplates,
   normalizeSignature,
@@ -47,6 +49,10 @@ import {
   listWorkspaceMembers,
   memberSignatureProfile,
 } from "../services/signatureProfile.js";
+
+/** Un e-mail de test au plus toutes les 20 secondes par utilisateur. */
+const TEST_COOLDOWN_MS = 20_000;
+const lastTestSent = new Map();
 
 const scope = (ctx) => ({
   createdBy: ctx.user.id,
@@ -336,7 +342,7 @@ const emailSignatureV2Resolvers = {
     ),
 
     renderSignatureTemplateV2: requireRead("signatures")(
-      async (_, { templateId, style }) => {
+      async (_, { templateId, style, id }, ctx) => {
         await ensureSamplePhoto();
         // Vignette = typographie du modèle + couleurs de l'utilisateur
         const colors = Object.fromEntries(
@@ -354,8 +360,26 @@ const emailSignatureV2Resolvers = {
               v !== undefined,
           ),
         );
+        // Vos propres informations dès que la signature a un nom : on
+        // choisit un modèle en voyant ce qu'il donne pour soi. Le bandeau et
+        // la mention, identiques d'un modèle à l'autre, sont laissés de côté.
+        let content = SAMPLE_SIGNATURE;
+        if (id) {
+          const own = plain(await findOwned(id, ctx));
+          if (own.identity?.firstName || own.identity?.lastName) {
+            content = {
+              identity: own.identity,
+              contact: own.contact,
+              social: own.social,
+              images: own.images,
+              cta: own.cta,
+              banner: { enabled: false },
+              disclaimer: { enabled: false },
+            };
+          }
+        }
         const data = {
-          ...SAMPLE_SIGNATURE,
+          ...content,
           templateId,
           style: { ...templatePreset(templateId), ...colors },
         };
@@ -367,6 +391,50 @@ const emailSignatureV2Resolvers = {
   },
 
   Mutation: {
+    sendEmailSignatureV2Test: requireRead("signatures")(
+      async (_, { id }, ctx) => {
+        const email = ctx.user?.email;
+        if (!email) {
+          throw createValidationError(
+            "Aucune adresse e-mail n'est associée à votre compte.",
+          );
+        }
+        const userId = String(ctx.user.id);
+        if (Date.now() - (lastTestSent.get(userId) || 0) < TEST_COOLDOWN_MS) {
+          throw createValidationError(
+            "Un e-mail de test vient d'être envoyé : patientez quelques secondes.",
+          );
+        }
+        const data = plain(await findOwned(id, ctx));
+        // Les icônes doivent exister avant l'envoi (générées à la demande)
+        const specs = requiredIcons(data);
+        if (specs.length > 0) {
+          await ensureIcons(specs).catch((error) =>
+            logger.warn(`[signatures v2] ensureIcons : ${error.message}`),
+          );
+        }
+        const { html, text } = renderSignature(data);
+        if (!html) {
+          throw createValidationError(
+            "La signature est vide : ajoutez au moins votre nom.",
+          );
+        }
+        lastTestSent.set(userId, Date.now());
+        const sent = await sendSignatureTestEmail(email, {
+          signatureHtml: html,
+          signatureText: text,
+          signatureName: data.name || "Ma signature",
+        });
+        if (!sent) {
+          lastTestSent.delete(userId);
+          throw createInternalServerError(
+            "L'e-mail de test n'a pas pu être envoyé. Réessayez dans un instant.",
+          );
+        }
+        return email;
+      },
+    ),
+
     createEmailSignatureV2: requireWrite("signatures")(
       async (_, { input, memberUserId }, ctx) => {
         const name = await availableName(input?.name, ctx);

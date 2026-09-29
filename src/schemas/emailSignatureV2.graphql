@@ -480,9 +480,14 @@ extend type Query {
   renderEmailSignatureV2(input: EmailSignatureV2Input!, id: ID): SignatureRenderV2!
 
   """
-  Rendu d'un modèle avec des données d'exemple (vignettes de la galerie).
+  Rendu d'un modèle (vignettes de la galerie) : avec les informations de la
+  signature `id` si elle a un nom, sinon avec des données d'exemple.
   """
-  renderSignatureTemplateV2(templateId: String!, style: SignatureStyleV2Input): SignatureRenderV2!
+  renderSignatureTemplateV2(
+    templateId: String!
+    style: SignatureStyleV2Input
+    id: ID
+  ): SignatureRenderV2!
 }
 
 extend type Mutation {
@@ -505,6 +510,12 @@ extend type Mutation {
   deleteEmailSignatureV2(id: ID!): Boolean!
   duplicateEmailSignatureV2(id: ID!): EmailSignatureV2!
   setDefaultEmailSignatureV2(id: ID!): EmailSignatureV2!
+
+  """
+  Envoie la signature à l'adresse e-mail de l'utilisateur connecté, pour la
+  vérifier dans sa vraie messagerie. Renvoie l'adresse utilisée.
+  """
+  sendEmailSignatureV2Test(id: ID!): String!
 
   """
   Envoie et traite une image (recadrage, retina, transparence conservée),
