@@ -98,12 +98,8 @@ export function renderLayout(b, ctx, theme = {}) {
           size: photoSize,
           // Colonne photo : centrée par sa cellule, comme avant
           align: slot === "visual" || across === "right" ? "left" : across,
-          ...(slot === "header" && inverse
-            ? {
-                border: st.photoBorder || 3,
-                borderColor: st.photoBorderColor || WHITE,
-              }
-            : {}),
+          // Sur un fond de couleur, contour blanc par défaut
+          ...(inverse ? { borderColor: st.photoBorderColor || WHITE } : {}),
         });
       case "name":
         return b.name({ size: nameSize, color: c.name });
@@ -183,10 +179,12 @@ export function renderLayout(b, ctx, theme = {}) {
         });
         continue;
       }
-      if (st.titleStyle === "caps" && k === "title") {
-        const group = ["title"];
+      // Poste en capitales (suivi de la société s'ils se touchent) ; une
+      // société placée ailleurs reste en capitales, comme le poste
+      if (st.titleStyle === "caps" && (k === "title" || k === "company")) {
+        const group = [k];
         i += 1;
-        if (items[i] === "company") {
+        if (k === "title" && items[i] === "company") {
           group.push("company");
           i += 1;
         }

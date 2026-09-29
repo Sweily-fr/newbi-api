@@ -7,6 +7,7 @@ import {
   requiredIcons,
   SAMPLE_SIGNATURE,
   listTemplates,
+  templatePreset,
 } from "../../src/services/signatureRenderer/index.js";
 import {
   GMAIL_MAX_CHARS,
@@ -842,6 +843,40 @@ describe("signatureRenderer — emplacements libres", () => {
     expect(phone).toBeGreaterThan(photo);
     // Le poste reste dans la colonne de texte, après la colonne photo
     expect(title).toBeGreaterThan(phone);
+  });
+
+  it("poste en capitales : la société placée ailleurs reste en capitales", () => {
+    const slots = slotsOf({});
+    const html = render({
+      titleStyle: "caps",
+      slots: {
+        ...slots,
+        side: ["company"],
+        text: slots.text.filter((k) => k !== "company"),
+      },
+    });
+    const company = html.slice(
+      html.indexOf("Atelier Nord") - 200,
+      html.indexOf("Atelier Nord"),
+    );
+    expect(company).toContain("text-transform:uppercase;");
+  });
+
+  it("contour de photo du Bandeau : réglage du modèle, blanc par défaut", () => {
+    // Le préréglage s'applique quand on choisit le modèle (comme les vignettes)
+    const preset = templatePreset("header");
+    const header = renderSignature({
+      ...FULL,
+      templateId: "header",
+      style: preset,
+    }).html;
+    expect(header).toContain("border:3px solid #ffffff;");
+    const none = renderSignature({
+      ...FULL,
+      templateId: "header",
+      style: { ...preset, photoBorder: 0 },
+    }).html;
+    expect(none).not.toContain("border:3px solid #ffffff;");
   });
 
   it("valide les emplacements : doublons retirés, oubliés remis à leur place", () => {

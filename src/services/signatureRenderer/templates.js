@@ -69,6 +69,8 @@ const TEMPLATES = {
     preset: {
       ...BASE_PRESET,
       photoSize: 72,
+      // Contour de la photo sur le bandeau (blanc par défaut), réglable
+      photoBorder: 3,
       identityZone: "band-top",
       accent: "none",
       socialPosition: "side",
