@@ -129,6 +129,8 @@ type SignatureStyleV2 {
   footerStrip: Boolean!
   "Éléments placés en dehors de l'encadré : social, logo, cta, banner, disclaimer."
   outside: [String!]!
+  "Ordre de la colonne de texte : identity, contact, social, logo."
+  textOrder: [String!]!
   """
   Réglages par élément (seulement ceux modifiés).
   """
@@ -348,6 +350,7 @@ input SignatureStyleV2Input {
   logoPosition: String
   footerStrip: Boolean
   outside: [String!]
+  textOrder: [String!]
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

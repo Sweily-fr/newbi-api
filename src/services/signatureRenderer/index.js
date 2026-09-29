@@ -24,6 +24,7 @@ import {
   FRAMES,
   LAYOUT_CHOICES,
   OUTSIDE_ITEMS,
+  TEXT_BLOCKS,
   TEXT_ELEMENTS,
 } from "./constants.js";
 import {
@@ -109,6 +110,16 @@ export function normalizeSignature(input = {}) {
   ) {
     layout.contactStyle = "plain";
   }
+  // Ordre de la colonne de texte : permutation valide, complétée
+  const order = Array.isArray(s.textOrder)
+    ? s.textOrder.filter(
+        (k, i, a) => TEXT_BLOCKS.includes(k) && a.indexOf(k) === i,
+      )
+    : [];
+  const textOrder = [
+    ...order,
+    ...TEXT_BLOCKS.filter((k) => !order.includes(k)),
+  ];
   const outside = Array.isArray(s.outside)
     ? OUTSIDE_ITEMS.filter((k) => s.outside.includes(k))
     : [...(tpl.outside || [])];
@@ -146,6 +157,7 @@ export function normalizeSignature(input = {}) {
     ...layout,
     footerStrip: bool(s.footerStrip, Boolean(tpl.footerStrip)),
     outside,
+    textOrder,
     elements: normalizeElements(s.elements),
   };
   // Tenu à jour pour les anciens clients : icônes = style « icons »

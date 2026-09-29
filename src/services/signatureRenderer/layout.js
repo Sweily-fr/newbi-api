@@ -50,6 +50,9 @@ export function renderLayout(b, ctx, theme = {}) {
   const { st, sp, sig } = ctx;
   const P = st.primaryColor;
   const r = st.radius;
+  // Aperçu seulement : chaque bloc déplaçable est repéré (poignée de l'éditeur)
+  const mark = (name, html) =>
+    ctx.markers && html ? `<div data-sig-block="${name}">${html}</div>` : html;
   const hasPhoto = Boolean(sig.images.photo?.url);
   const L = effectiveLayout(st, hasPhoto);
   const onBand = L.zone !== "plain";
@@ -110,30 +113,36 @@ export function renderLayout(b, ctx, theme = {}) {
   }
 
   // ── Coordonnées, réseaux, logo ────────────────────────────────────────
-  const contact =
+  const contact = mark(
+    "contact",
     st.contactStyle === "inline"
       ? b.contactInline()
       : b.contact({
           icons: st.contactStyle === "icons",
           labels: st.contactStyle === "labels",
           align: L.align,
-        });
+        }),
+  );
   const socialSize = Math.min(st.iconSize, theme.socialMax || 40);
-  const social = (align = "left") => b.social({ align, size: socialSize });
-  const logo = (align = "left", maxHeight) => b.logo({ align, maxHeight });
+  const social = (align = "left") =>
+    mark("social", b.social({ align, size: socialSize }));
+  const logo = (align = "left", maxHeight) =>
+    mark("logo", b.logo({ align, maxHeight }));
 
   // ── Photo ─────────────────────────────────────────────────────────────
   const photoSize = Math.min(st.photoSize, theme.photoMax || 160);
-  const photo = (extra = {}) => b.photo({ size: photoSize, ...extra });
+  const photo = (extra = {}) =>
+    mark("photo", b.photo({ size: photoSize, ...extra }));
 
   // Colonne de texte : ce qui accompagne l'identité
-  const textItems = [
-    onBand ? "" : identity,
-    accent,
+  const identityBlock = mark("identity", identity);
+  const textBlocks = {
+    identity: onBand ? "" : [identityBlock, accent],
     contact,
-    L.socialPosition === "text" ? social(L.align) : "",
-    L.logoPosition === "text" ? logo(L.align, 40) : "",
-  ];
+    social: L.socialPosition === "text" ? social(L.align) : "",
+    logo: L.logoPosition === "text" ? logo(L.align, 40) : "",
+  };
+  const textItems = st.textOrder.flatMap((k) => textBlocks[k] || []);
   const textColumn = vstack(textItems, { gap: sp.block, align: L.align });
 
   // Colonne à droite (réseaux, logo) et ligne du bas
@@ -154,14 +163,14 @@ export function renderLayout(b, ctx, theme = {}) {
 
   const footerInside = ["cta", "banner", "disclaimer"]
     .filter((k) => !outside.has(k))
-    .map((k) => b[k]())
+    .map((k) => mark(k, b[k]()))
     .filter(Boolean);
   const footerOutside = [
     L.socialPosition === "bottom" && outside.has("social") ? social() : "",
     L.logoPosition === "bottom" && outside.has("logo") ? logo() : "",
     ...["cta", "banner", "disclaimer"]
       .filter((k) => outside.has(k))
-      .map((k) => b[k]()),
+      .map((k) => mark(k, b[k]())),
   ].filter(Boolean);
 
   const strip = L.boxed && st.footerStrip && bottomRow;
@@ -181,26 +190,26 @@ export function renderLayout(b, ctx, theme = {}) {
     const bandPhoto = photo({ shape: st.photoShape, ...ring });
     const vertical = st.photoPosition === "top";
     const bandContent = vertical
-      ? vstack([photo({ ...ring, align: "center" }), identity], {
+      ? vstack([photo({ ...ring, align: "center" }), identityBlock], {
           gap: sp.block,
           align: "center",
         })
       : hstack(
           st.photoPosition === "right"
             ? [
-                { html: identity, valign: "middle" },
+                { html: identityBlock, valign: "middle" },
                 { html: bandPhoto, valign: st.photoValign },
               ]
             : [
                 { html: bandPhoto, valign: st.photoValign },
-                { html: identity, valign: "middle" },
+                { html: identityBlock, valign: "middle" },
               ],
           { gap: sp.gap + 2 },
         );
     band = bandContent;
     body = spread(textColumn, side, { valign: "bottom" });
   } else if (L.zone === "band-left") {
-    const inner = vstack([photo({ align: "center" }), identity], {
+    const inner = vstack([photo({ align: "center" }), identityBlock], {
       gap: sp.line + 6,
       align: "center",
     });

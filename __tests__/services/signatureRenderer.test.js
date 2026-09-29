@@ -313,7 +313,7 @@ describe("signatureRenderer — marqueurs d'aperçu", () => {
     }
     const clean = renderSignature(FULL).html;
     const strip = (h) =>
-      h.replace(/<\/?(span|div)( data-sig-(field|edit)="[^"]*")?>/g, "");
+      h.replace(/<\/?(span|div)( data-sig-(field|edit|block)="[^"]*")?>/g, "");
     expect(strip(html)).toBe(strip(clean));
     expect(clean).not.toContain("data-sig-");
   });
@@ -704,5 +704,58 @@ describe("signatureRenderer — mise en page réglable", () => {
       expect(html.length).toBeLessThan(GMAIL_MAX_CHARS);
       expect(html).toContain("Camille");
     }
+  });
+});
+
+describe("signatureRenderer — ordre de la colonne de texte", () => {
+  const html = (textOrder) =>
+    renderSignature({
+      ...FULL,
+      templateId: "modern",
+      style: { textOrder, socialPosition: "text" },
+    }).html;
+
+  it("place identité, coordonnées et réseaux dans l'ordre choisi", () => {
+    const def = html(undefined);
+    expect(def.indexOf("Camille")).toBeLessThan(
+      def.indexOf("camille@atelier-nord.fr"),
+    );
+    const swapped = html(["contact", "identity", "social", "logo"]);
+    expect(swapped.indexOf("camille@atelier-nord.fr")).toBeLessThan(
+      swapped.indexOf(">Camille"),
+    );
+    const socialFirst = html(["social", "identity", "contact", "logo"]);
+    expect(socialFirst.indexOf("linkedin.com/in/camille")).toBeLessThan(
+      socialFirst.indexOf("camille@atelier-nord.fr"),
+    );
+  });
+
+  it("complète un ordre partiel ou invalide", () => {
+    const sig = normalizeSignature({
+      style: { textOrder: ["contact", "x", "contact"] },
+    });
+    expect(sig.style.textOrder).toEqual([
+      "contact",
+      "identity",
+      "social",
+      "logo",
+    ]);
+  });
+
+  it("repère chaque bloc déplaçable dans l'aperçu seulement", () => {
+    const preview = renderSignature(FULL, { markers: true }).html;
+    for (const k of [
+      "identity",
+      "contact",
+      "photo",
+      "social",
+      "logo",
+      "cta",
+      "banner",
+      "disclaimer",
+    ]) {
+      expect(preview, k).toContain(`data-sig-block="${k}"`);
+    }
+    expect(renderSignature(FULL).html).not.toContain("data-sig-block");
   });
 });

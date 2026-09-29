@@ -13,6 +13,7 @@ import {
   FRAMES,
   LAYOUT_CHOICES,
   OUTSIDE_ITEMS,
+  TEXT_BLOCKS,
   ICON_COLOR_MODES,
   ICON_STYLES,
   PHOTO_SHAPES,
@@ -86,6 +87,10 @@ const styleSchema = new mongoose.Schema(
     footerStrip: { type: Boolean, default: undefined },
     outside: {
       type: [{ type: String, enum: OUTSIDE_ITEMS }],
+      default: undefined,
+    },
+    textOrder: {
+      type: [{ type: String, enum: TEXT_BLOCKS }],
       default: undefined,
     },
     // Réglages par élément de texte (nom, poste…), validés par le générateur

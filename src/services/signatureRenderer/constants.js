@@ -92,6 +92,13 @@ export const LAYOUT_CHOICES = {
   logoPosition: ["text", "photo", "side", "bottom"],
 };
 
+/**
+ * Ordre de la colonne de texte (de haut en bas). Le trait d'accent suit
+ * toujours l'identité ; réseaux et logo n'y figurent que placés « sous le
+ * texte ».
+ */
+export const TEXT_BLOCKS = ["identity", "contact", "social", "logo"];
+
 /** Éléments qu'on peut sortir de l'encadré. */
 export const OUTSIDE_ITEMS = ["social", "logo", "cta", "banner", "disclaimer"];
 
