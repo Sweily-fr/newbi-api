@@ -13,6 +13,7 @@ import {
   SOCIAL_NETWORKS,
   TEMPLATE_IDS,
 } from "../../src/services/signatureRenderer/constants.js";
+import { tint } from "../../src/services/signatureRenderer/primitives.js";
 import {
   glyphFor,
   iconKey,
@@ -117,7 +118,10 @@ describe("signatureRenderer — compatibilité clients mail", () => {
           expect(i).toMatch(/ src="https:\/\//);
           expect(i).toMatch(/ width="\d+"/);
           expect(i).toMatch(/ alt="/);
-          expect(i).toContain("display:block");
+          // Bloc partout, sauf les icônes en ligne des mises en page centrées
+          expect(i).toMatch(
+            /display:block|display:inline-block;vertical-align:middle/,
+          );
           expect(i).toContain("border:0");
         }
       });
@@ -512,5 +516,50 @@ describe("signatureRenderer — réglages par élément", () => {
       expect(html).not.toMatch(/margin|display:flex|class=/);
       expect(html).toContain("font-size:22px");
     }
+  });
+});
+
+describe("signatureRenderer — encadrés et contour de photo", () => {
+  const render = (style, templateId = "modern") =>
+    renderSignature({
+      ...SAMPLE_SIGNATURE,
+      templateId,
+      style: { ...SAMPLE_SIGNATURE.style, ...style },
+    }).html;
+
+  it("encadre la signature par une cellule (contour, fond, barres)", () => {
+    expect(render({ frame: "outline", radius: 8 })).toMatch(
+      /border:1px solid #[0-9a-f]{6};border-radius:8px;padding:/,
+    );
+    expect(render({ frame: "soft" })).toMatch(/bgcolor="#[0-9a-f]{6}"/);
+    expect(render({ frame: "accent-left" })).toContain("border-left:4px solid");
+    expect(render({ frame: "accent-top" })).toContain("border-top:4px solid");
+    expect(render({ frame: "none" })).not.toContain(
+      "border-radius:12px;padding",
+    );
+  });
+
+  it("fond teinté : couleur claire calculée, jamais de transparence", () => {
+    const html = render({ frame: "soft", primaryColor: "#5a50ff" });
+    expect(html).not.toMatch(/rgba|opacity/);
+    expect(tint("#5a50ff", 0.07)).toBe("#f3f3ff");
+  });
+
+  it("les modèles à cadre propre ignorent l'encadré global", () => {
+    const html = render({ frame: "accent-left" }, "header");
+    expect(html).not.toContain("border-left:4px solid");
+  });
+
+  it("contour de photo : bordure de l'image et trait VML pour Outlook", () => {
+    const html = render({ photoBorder: 3, photoBorderColor: "#ff0000" });
+    expect(html).toContain("border:3px solid #ff0000;");
+    expect(html).toContain(
+      'stroked="t" strokecolor="#ff0000" strokeweight="3px"',
+    );
+  });
+
+  it("valeurs hors bornes ramenées dans la liste", () => {
+    const html = render({ frame: "néon", radius: 99, photoBorder: 40 });
+    expect(html).not.toContain("border:40px");
   });
 });

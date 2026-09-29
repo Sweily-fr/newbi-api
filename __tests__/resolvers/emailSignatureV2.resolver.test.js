@@ -399,7 +399,7 @@ describe("EmailSignatureV2 — lecture et isolation", () => {
 
   it("expose le catalogue de l'éditeur", async () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
-    expect(catalog.templates.length).toBe(7);
+    expect(catalog.templates.length).toBe(11);
     expect(catalog.templates[0].id).toBe("modern");
     expect(catalog.templates[0].preset.fontFamily).toBe("arial");
     expect(catalog.templates[0].preset.photoSize).toBe(92);

@@ -238,14 +238,36 @@ export function buildBlocks(ctx) {
       return items;
     },
 
-    contact({ icons = st.showContactIcons, align = st.align } = {}) {
+    contact({
+      icons = st.showContactIcons,
+      align = st.align,
+      labels = false,
+    } = {}) {
       const items = blocks.contactItems();
       if (items.length === 0) return "";
+      // Initiales à la place des icônes (T, M, E, W, A) : du texte seul,
+      // donc aucune image à charger, net dans tous les clients.
+      const LABELS = {
+        phone: "T",
+        mobile: "M",
+        email: "E",
+        website: "W",
+        address: "A",
+      };
+      const labelStyle = text(Math.max(10, base - 2), st.primaryColor, {
+        weight: "bold",
+      });
       const lines = items.map((item) => {
         const contentHtml = markInline(
           item.field,
           `<span style="${item.style}">${item.html}</span>`,
         );
+        if (labels) {
+          return {
+            iconHtml: `<span style="${labelStyle}">${LABELS[item.field]}</span>`,
+            contentHtml,
+          };
+        }
         if (!icons) return { contentHtml };
         const spec = contactIconSpec(item.field, contactIconColor);
         const iconHtml = img({
@@ -291,7 +313,13 @@ export function buildBlocks(ctx) {
       );
     },
 
-    photo({ size = st.photoSize, shape = st.photoShape, align = "left" } = {}) {
+    photo({
+      size = st.photoSize,
+      shape = st.photoShape,
+      align = "left",
+      border = st.photoBorder,
+      borderColor = st.photoBorderColor || st.primaryColor,
+    } = {}) {
       if (!images.photo?.url) return "";
       return markBlock(
         "photo",
@@ -301,13 +329,19 @@ export function buildBlocks(ctx) {
             size,
             shape,
             alt: fullName || "Photo",
+            border,
+            borderColor,
           }),
           align,
         ),
       );
     },
 
-    logo({ width = st.logoWidth, align = "left" } = {}) {
+    logo({
+      width = st.logoWidth,
+      align = "left",
+      maxHeight = LOGO_MAX_HEIGHT,
+    } = {}) {
       const l = images.logo;
       if (!l?.url) return "";
       // Largeur = réglage de l'utilisateur, mais jamais plus haut que
@@ -315,7 +349,7 @@ export function buildBlocks(ctx) {
       let height;
       if (l.width && l.height) {
         const ratio = l.width / l.height;
-        width = Math.min(width, Math.round(LOGO_MAX_HEIGHT * ratio));
+        width = Math.min(width, Math.round(maxHeight * ratio));
         height = Math.round(width / ratio);
       }
       const image = img({
@@ -407,8 +441,8 @@ export function buildBlocks(ctx) {
     },
 
     /** Trait fin dans la couleur principale, plus court (accent). */
-    accent({ width = 40, height = 3 } = {}) {
-      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td width="${width}" height="${height}" bgcolor="${st.primaryColor}" style="width:${width}px;height:${height}px;background-color:${st.primaryColor};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
+    accent({ width = 40, height = 3, align = "left" } = {}) {
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${align === "center" ? ' align="center"' : ""} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td width="${width}" height="${height}" bgcolor="${st.primaryColor}" style="width:${width}px;height:${height}px;background-color:${st.primaryColor};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
     },
 
     /** Pied commun : bandeau, bouton, mention, empilés sous le corps. */

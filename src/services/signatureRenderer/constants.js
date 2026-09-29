@@ -14,7 +14,11 @@ export const GMAIL_MAX_CHARS = 10000;
 /** Ordre = ordre de la galerie. Le premier est le modèle par défaut. */
 export const TEMPLATE_IDS = [
   "modern",
+  "header",
+  "framed",
   "card",
+  "split",
+  "editorial",
   "elegant",
   "classic",
   "bold",
@@ -57,6 +61,13 @@ export const ICON_STYLES = ["circle", "rounded", "square", "plain"];
 export const ICON_COLOR_MODES = ["brand", "primary", "custom"];
 export const SPACINGS = ["compact", "normal", "airy"];
 export const ALIGNMENTS = ["left", "center"];
+
+/**
+ * Encadré de la signature entière : aucun, contour fin, fond teinté, barre
+ * d'accent à gauche ou en haut. Uniquement des bordures et fonds de
+ * cellule : compris par Gmail, Outlook et Apple Mail.
+ */
+export const FRAMES = ["none", "outline", "soft", "accent-left", "accent-top"];
 
 /** Espacements en pixels : entre lignes d'un bloc, entre blocs, entre colonnes. */
 export const SPACING = {
@@ -186,6 +197,11 @@ export const DEFAULT_STYLE = {
   separatorColor: "#e0e0e0",
   spacing: "normal",
   align: "left",
+  frame: "none",
+  frameColor: "",
+  radius: 12,
+  photoBorder: 0,
+  photoBorderColor: "",
 };
 
 export const IMAGE_KINDS = ["PHOTO", "LOGO", "BANNER"];

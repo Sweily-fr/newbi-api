@@ -10,6 +10,7 @@ import mongoose from "mongoose";
 import {
   ALIGNMENTS,
   FONT_FAMILIES,
+  FRAMES,
   ICON_COLOR_MODES,
   ICON_STYLES,
   PHOTO_SHAPES,
@@ -67,6 +68,11 @@ const styleSchema = new mongoose.Schema(
     separatorColor: { type: String, default: "#e0e0e0" },
     spacing: { type: String, enum: SPACINGS, default: "normal" },
     align: { type: String, enum: ALIGNMENTS, default: "left" },
+    frame: { type: String, enum: FRAMES, default: "none" },
+    frameColor: { type: String, default: "" },
+    radius: { type: Number, min: 0, max: 24, default: 12 },
+    photoBorder: { type: Number, min: 0, max: 6, default: 0 },
+    photoBorderColor: { type: String, default: "" },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },

@@ -60,6 +60,20 @@ export function hex(value, fallback) {
   return fallback;
 }
 
+/**
+ * Mélange une couleur avec du blanc (`amount` = part de la couleur). Donne
+ * des fonds teintés clairs, calculés une fois : aucun rgba ni transparence,
+ * que Outlook ne comprend pas.
+ */
+export function tint(color, amount) {
+  const c = hex(color, "#000000").slice(1);
+  const mix = (i) =>
+    Math.round(parseInt(c.slice(i, i + 2), 16) * amount + 255 * (1 - amount))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${mix(0)}${mix(2)}${mix(4)}`;
+}
+
 export const TABLE_STYLE =
   "border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;";
 
@@ -143,7 +157,11 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
       return `<tr><td${alignAttr} style="${alignStyle}padding:0 0 ${last ? 0 : gap}px 0;">${row}</td></tr>`;
     })
     .join("");
-  return table(rowsHtml);
+  // La table elle-même est centrée par attribut : text-align ne centre pas
+  // une table imbriquée, et Outlook ignore margin:auto.
+  return table(rowsHtml, {
+    attrs: align === "center" ? 'align="center"' : "",
+  });
 }
 
 /**
@@ -190,6 +208,20 @@ export function iconLines(
       { gap, align },
     );
   }
+  // Centré : icône en ligne devant le texte, dans une cellule centrée ;
+  // une table par ligne alourdirait le HTML (limite Gmail de 10 000
+  // caractères). L'espace est une espace insécable : Outlook ignore les
+  // marges d'image.
+  if (align === "center") {
+    return vstack(
+      items.map((l) =>
+        l.iconHtml
+          ? `${l.iconHtml.replace("display:block;", "display:inline-block;vertical-align:middle;")}&nbsp;&nbsp;${l.contentHtml}`
+          : l.contentHtml,
+      ),
+      { gap, align: "center" },
+    );
+  }
   const rows = items
     .map((l, i) => {
       const pad = i === items.length - 1 ? 0 : gap;
@@ -230,24 +262,37 @@ export function iconRow(items, { size, gap = 8, align = "left" } = {}) {
  * Photo : VML pour Outlook bureau (qui ignore border-radius), <img> arrondie
  * partout ailleurs. La photo est servie déjà recadrée en carré.
  */
-export function photo({ src, size, shape = "circle", alt = "Photo" }) {
+export function photo({
+  src,
+  size,
+  shape = "circle",
+  alt = "Photo",
+  border = 0,
+  borderColor = "#ffffff",
+}) {
   const radius =
     shape === "circle"
       ? "50%"
       : shape === "rounded"
         ? `${Math.round(size * 0.15)}px`
         : "0";
+  // Contour : bordure de l'image (arrondie avec elle), trait VML pour Outlook
+  const ring = border > 0 ? `border:${border}px solid ${borderColor};` : "";
   const image = img({
     src,
     width: size,
     height: size,
     alt,
-    style: shape === "square" ? "" : `border-radius:${radius};`,
+    style: `${shape === "square" ? "" : `border-radius:${radius};`}${ring}`,
   });
   if (shape === "square") return image;
   const arcsize = shape === "circle" ? "50%" : "15%";
+  const stroke =
+    border > 0
+      ? `stroked="t" strokecolor="${borderColor}" strokeweight="${border}px"`
+      : 'stroked="f"';
   return (
-    `<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="width:${size}px;height:${size}px;" arcsize="${arcsize}" stroked="f"><v:fill type="frame" src="${escAttr(
+    `<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="width:${size}px;height:${size}px;" arcsize="${arcsize}" ${stroke}><v:fill type="frame" src="${escAttr(
       src,
     )}" /><w:anchorlock/></v:roundrect><![endif]-->` +
     `<!--[if !mso]><!-->${image}<!--<![endif]-->`

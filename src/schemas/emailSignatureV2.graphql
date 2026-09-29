@@ -99,6 +99,18 @@ type SignatureStyleV2 {
   spacing: String!
   align: String!
   """
+  Encadré de toute la signature : none, outline, soft, accent-left, accent-top.
+  """
+  frame: String!
+  "Couleur de l'encadré ; vide = déduite de la couleur principale."
+  frameColor: String!
+  "Arrondi des encadrés et blocs de couleur, en px (0-24)."
+  radius: Int!
+  "Épaisseur du contour de la photo, en px (0-6)."
+  photoBorder: Int!
+  "Couleur du contour de la photo ; vide = couleur principale."
+  photoBorderColor: String!
+  """
   Réglages par élément (seulement ceux modifiés).
   """
   elements: SignatureElementStylesV2!
@@ -155,6 +167,8 @@ type SignatureTemplateSupportsV2 {
   photo: Boolean!
   logo: Boolean!
   align: Boolean!
+  "Faux quand le modèle dessine déjà son propre cadre."
+  frame: Boolean!
 }
 
 """
@@ -292,6 +306,11 @@ input SignatureStyleV2Input {
   separatorColor: String
   spacing: String
   align: String
+  frame: String
+  frameColor: String
+  radius: Int
+  photoBorder: Int
+  photoBorderColor: String
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """
