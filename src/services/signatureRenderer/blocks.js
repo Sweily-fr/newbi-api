@@ -33,6 +33,13 @@ export function buildBlocks(ctx) {
     markers && html ? `<span data-sig-field="${field}">${html}</span>` : html;
   const markBlock = (field, html) =>
     markers && html ? `<div data-sig-field="${field}">${html}</div>` : html;
+
+  // Une image en display:block ne se centre pas par text-align : on la pose
+  // dans une table alignée (l'attribut align est compris partout).
+  const centered = (html, align) =>
+    align === "center" && html
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td>${html}</td></tr></table>`
+      : html;
   const { identity, contact, images } = sig;
 
   const text = (size, color, extra = {}) =>
@@ -214,20 +221,23 @@ export function buildBlocks(ctx) {
       );
     },
 
-    photo({ size = st.photoSize, shape = st.photoShape } = {}) {
+    photo({ size = st.photoSize, shape = st.photoShape, align = "left" } = {}) {
       if (!images.photo?.url) return "";
       return markBlock(
         "photo",
-        photo({
-          src: images.photo.url,
-          size,
-          shape,
-          alt: fullName || "Photo",
-        }),
+        centered(
+          photo({
+            src: images.photo.url,
+            size,
+            shape,
+            alt: fullName || "Photo",
+          }),
+          align,
+        ),
       );
     },
 
-    logo({ width = st.logoWidth } = {}) {
+    logo({ width = st.logoWidth, align = "left" } = {}) {
       const l = images.logo;
       if (!l?.url) return "";
       const height =
@@ -243,7 +253,10 @@ export function buildBlocks(ctx) {
       const href = normalizeUrl(contact.website);
       return markBlock(
         "logo",
-        href ? link(href, image, { color: st.textColor }) : image,
+        centered(
+          href ? link(href, image, { color: st.textColor }) : image,
+          align,
+        ),
       );
     },
 

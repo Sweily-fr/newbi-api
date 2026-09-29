@@ -70,7 +70,11 @@ const TEMPLATES = {
     render(b, { st, sp }) {
       const inner = vstack(
         [
-          b.photo({ shape: "circle", size: Math.min(st.photoSize, 96) }),
+          b.photo({
+            shape: "circle",
+            size: Math.min(st.photoSize, 96),
+            align: "center",
+          }),
           b.identity({
             nameColor: "#ffffff",
             nameSize: st.fontSize + 4,
@@ -114,13 +118,17 @@ const TEMPLATES = {
     render(b, { st, sp }) {
       return vstack(
         [
-          b.photo({ shape: "circle", size: Math.min(st.photoSize, 80) }),
+          b.photo({
+            shape: "circle",
+            size: Math.min(st.photoSize, 80),
+            align: "center",
+          }),
           b.name({ size: st.fontSize + 10, color: st.textColor }),
           b.caption(),
           b.rule({ width: 56, color: st.primaryColor, height: 2 }),
           b.contact({ icons: false, align: "center" }),
           b.social({ size: Math.min(st.iconSize, 20), align: "center" }),
-          b.logo(),
+          b.logo({ align: "center" }),
           b.footer({ align: "center" }),
         ],
         { gap: sp.block, align: "center" },
@@ -182,8 +190,9 @@ const TEMPLATES = {
       showContactIcons: true,
     },
     render(b, { st, sp }) {
-      const bar = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;height:100%;"><tr><td width="5" bgcolor="${st.primaryColor}" style="width:5px;background-color:${st.primaryColor};border-radius:3px;font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
-      const column = vstack(
+      // La barre est une bordure de cellule : elle suit la hauteur du texte
+      // dans tous les clients (une table imbriquée ne s'étirerait pas).
+      const column = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:4px solid ${st.primaryColor};padding:2px 0 2px ${sp.gap}px;">${vstack(
         [
           b.name({ color: st.primaryColor, size: st.fontSize + 9 }),
           b.identity({ withName: false }),
@@ -191,11 +200,10 @@ const TEMPLATES = {
           b.social(),
         ],
         { gap: sp.block },
-      );
+      )}</td></tr></table>`;
       const body = hstack(
         [
           { html: b.photo(), valign: "middle" },
-          { html: bar, valign: "middle", width: 5 },
           { html: column, valign: "middle" },
         ],
         { gap: sp.gap },
@@ -222,7 +230,7 @@ const TEMPLATES = {
     render(b, { st, sp }) {
       return vstack(
         [
-          b.photo({ shape: "circle" }),
+          b.photo({ shape: "circle", align: "center" }),
           b.identity({
             nameSize: st.fontSize + 6,
             companyColor: st.primaryColor,
@@ -231,7 +239,7 @@ const TEMPLATES = {
           b.accent({ width: 40, height: 3 }),
           b.contact({ align: "center" }),
           b.social({ align: "center" }),
-          b.logo(),
+          b.logo({ align: "center" }),
           b.footer({ align: "center" }),
         ],
         { gap: sp.block, align: "center" },
