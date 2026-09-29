@@ -737,23 +737,34 @@ describe("EmailSignatureV2 — mise en page", () => {
     const { EmailSignatureV2: T } = resolvers;
     const legacy = await EmailSignatureV2.findById(doc._id);
     legacy.style.photoPosition = undefined;
-    expect(T.style(legacy)).toMatchObject({ photoPosition: "top", align: "center" });
+    expect(T.style(legacy)).toMatchObject({
+      photoPosition: "top",
+      align: "center",
+    });
 
     await Mutation.updateEmailSignatureV2(
       null,
       {
         id: String(doc._id),
-        input: { style: { photoPosition: "right", outside: ["cta", "inconnu"] } },
+        input: {
+          style: { photoPosition: "right", outside: ["cta", "inconnu"] },
+        },
       },
       ctx(),
     );
     const saved = await EmailSignatureV2.findById(doc._id);
-    expect(T.style(saved)).toMatchObject({ photoPosition: "right", outside: ["cta"] });
+    expect(T.style(saved)).toMatchObject({
+      photoPosition: "right",
+      outside: ["cta"],
+    });
   });
 
   it("expose les réglages de départ complets de chaque modèle", async () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
     const header = catalog.templates.find((t) => t.id === "header");
-    expect(header.defaults).toMatchObject({ identityZone: "band-top", frame: "outline" });
+    expect(header.defaults).toMatchObject({
+      identityZone: "band-top",
+      frame: "outline",
+    });
   });
 });

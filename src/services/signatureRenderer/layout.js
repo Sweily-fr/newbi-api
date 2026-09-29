@@ -100,7 +100,11 @@ export function renderLayout(b, ctx, theme = {}) {
 
   let accent = "";
   if (!onBand && st.accent === "short") {
-    accent = b.accent({ width: theme.accentWidth || 40, height: 3, align: L.align });
+    accent = b.accent({
+      width: theme.accentWidth || 40,
+      height: 3,
+      align: L.align,
+    });
   } else if (!onBand && st.accent === "thin") {
     accent = b.rule({ width: 56, color: P, height: 2, align: L.align });
   }
@@ -170,7 +174,10 @@ export function renderLayout(b, ctx, theme = {}) {
   let band = ""; // bloc de couleur en tête (identityZone band-top)
 
   if (L.zone === "band-top") {
-    const ring = { border: st.photoBorder || 3, borderColor: st.photoBorderColor || WHITE };
+    const ring = {
+      border: st.photoBorder || 3,
+      borderColor: st.photoBorderColor || WHITE,
+    };
     const bandPhoto = photo({ shape: st.photoShape, ...ring });
     const vertical = st.photoPosition === "top";
     const bandContent = vertical
@@ -193,13 +200,10 @@ export function renderLayout(b, ctx, theme = {}) {
     band = bandContent;
     body = spread(textColumn, side, { valign: "bottom" });
   } else if (L.zone === "band-left") {
-    const inner = vstack(
-      [
-        photo({ align: "center" }),
-        identity,
-      ],
-      { gap: sp.line + 6, align: "center" },
-    );
+    const inner = vstack([photo({ align: "center" }), identity], {
+      gap: sp.line + 6,
+      align: "center",
+    });
     const block = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td align="center" bgcolor="${P}" style="background-color:${P};padding:20px 22px;border-radius:${r}px;text-align:center;">${inner}</td></tr></table>`;
     body = hstack(
       [
@@ -232,7 +236,9 @@ export function renderLayout(b, ctx, theme = {}) {
       const pad = L.boxed ? "20px 26px" : `0 0 0 ${sp.gap + 6}px`;
       const padRight = L.boxed ? "20px 26px" : `0 ${sp.gap + 6}px 0 0`;
       const textCell = `<td valign="${textValign}" style="vertical-align:${textValign};padding:${right ? padRight : pad};">${spread(textColumn, side)}</td>`;
-      body = box(`<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`);
+      body = box(
+        `<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`,
+      );
       bodyFlush = L.boxed;
     } else if (side && (st.divider === "line" || st.divider === "accent")) {
       // Photo, texte et colonne de droite séparés par le même trait
@@ -272,10 +278,10 @@ export function renderLayout(b, ctx, theme = {}) {
     }
   } else {
     // Photo au-dessus (ou pas de photo)
-    const main = vstack(
-      [photo({ align: L.align }), textColumn],
-      { gap: sp.block, align: L.align },
-    );
+    const main = vstack([photo({ align: L.align }), textColumn], {
+      gap: sp.block,
+      align: L.align,
+    });
     if (side && st.divider !== "none") {
       body = hstack(
         [
@@ -382,10 +388,14 @@ function frameContent({
       }
       const prev = rows[i - 1];
       const padTop =
-        i === 0 || prev.kind === "band" || prev.kind === "strip" || prev.kind === "flush"
+        i === 0 ||
+        prev.kind === "band" ||
+        prev.kind === "strip" ||
+        prev.kind === "flush"
           ? padY
           : 0;
-      const padBottom = i === last || rows[i + 1]?.kind !== "body" ? padY : sp.block;
+      const padBottom =
+        i === last || rows[i + 1]?.kind !== "body" ? padY : sp.block;
       const sides = outline
         ? `border-left:1px solid ${border};border-right:1px solid ${border};${
             i === 0 ? `border-top:1px solid ${border};` : ""
@@ -397,7 +407,10 @@ function frameContent({
       }
       const bg = outline ? "" : ` bgcolor="${fill}"`;
       const bgStyle = outline ? "" : `background-color:${fill};`;
-      const padding = row.kind === "flush" ? "padding:0;" : `padding:${padTop}px ${padX}px ${padBottom}px ${padX}px;`;
+      const padding =
+        row.kind === "flush"
+          ? "padding:0;"
+          : `padding:${padTop}px ${padX}px ${padBottom}px ${padX}px;`;
       return `<tr><td${bg} style="${bgStyle}${padding}${sides}${radius}">${row.html}</td></tr>`;
     })
     .join("");

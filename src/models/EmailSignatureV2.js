@@ -84,7 +84,10 @@ const styleSchema = new mongoose.Schema(
       ]),
     ),
     footerStrip: { type: Boolean, default: undefined },
-    outside: { type: [{ type: String, enum: OUTSIDE_ITEMS }], default: undefined },
+    outside: {
+      type: [{ type: String, enum: OUTSIDE_ITEMS }],
+      default: undefined,
+    },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },

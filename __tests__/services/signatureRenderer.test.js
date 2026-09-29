@@ -597,12 +597,16 @@ describe("signatureRenderer — mise en page réglable", () => {
     const top = render({ photoPosition: "top" });
     const photo = "cdn.example.com/photo.jpg";
     expect(indexOf(left, photo)).toBeLessThan(indexOf(left, "Camille"));
-    expect(indexOf(right, photo)).toBeGreaterThan(indexOf(right, "camille@atelier-nord.fr"));
+    expect(indexOf(right, photo)).toBeGreaterThan(
+      indexOf(right, "camille@atelier-nord.fr"),
+    );
     expect(indexOf(top, photo)).toBeLessThan(indexOf(top, "Camille"));
   });
 
   it("alignement vertical de la photo", () => {
-    expect(render({ photoValign: "top" })).toMatch(/<td valign="top"[^>]*>(<!--\[if mso\]>)?/);
+    expect(render({ photoValign: "top" })).toMatch(
+      /<td valign="top"[^>]*>(<!--\[if mso\]>)?/,
+    );
     expect(render({ photoValign: "bottom" })).toContain('valign="bottom"');
   });
 
@@ -613,7 +617,9 @@ describe("signatureRenderer — mise en page réglable", () => {
       expect(html).toContain(li);
     }
     const bottom = render({ socialPosition: "bottom" });
-    expect(indexOf(bottom, li)).toBeGreaterThan(indexOf(bottom, "12 rue des Lilas"));
+    expect(indexOf(bottom, li)).toBeGreaterThan(
+      indexOf(bottom, "12 rue des Lilas"),
+    );
   });
 
   it("éléments sortis de l'encadré : rendus après le cadre", () => {
@@ -632,7 +638,9 @@ describe("signatureRenderer — mise en page réglable", () => {
     };
     const inside = render({ frame: "outline", outside: [] });
     const out = render({ frame: "outline", outside: ["cta", "disclaimer"] });
-    expect(indexOf(inside, "Prendre rendez-vous")).toBeLessThan(frameEnd(inside));
+    expect(indexOf(inside, "Prendre rendez-vous")).toBeLessThan(
+      frameEnd(inside),
+    );
     expect(indexOf(out, "Prendre rendez-vous")).toBeGreaterThan(frameEnd(out));
   });
 
@@ -642,7 +650,9 @@ describe("signatureRenderer — mise en page réglable", () => {
       footerStrip: true,
       socialPosition: "bottom",
     });
-    expect(html).toMatch(/bgcolor="#[0-9a-f]{6}" style="background-color:#[0-9a-f]{6};padding:12px/);
+    expect(html).toMatch(
+      /bgcolor="#[0-9a-f]{6}" style="background-color:#[0-9a-f]{6};padding:12px/,
+    );
   });
 
   it("styles de coordonnées : icônes, initiales, texte, en ligne", () => {

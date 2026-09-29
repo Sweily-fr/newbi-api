@@ -121,7 +121,12 @@ const TEMPLATES = {
       frame: "outline",
       outside: FOOTER_OUTSIDE,
     },
-    theme: { nameDelta: 6, companyColor: "primary", socialMax: 22, accentWidth: 36 },
+    theme: {
+      nameDelta: 6,
+      companyColor: "primary",
+      socialMax: 22,
+      accentWidth: 36,
+    },
   },
 
   editorial: {
