@@ -308,6 +308,15 @@ describe("EmailSignatureV2 — création", () => {
     expect(doc.style.primaryColor).toBe("#5a50ff");
   });
 
+  it("crée une signature sur le premier modèle de la galerie", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input({ templateId: undefined }) },
+      ctx(),
+    );
+    expect(doc.templateId).toBe("header");
+  });
+
   it("crée la première signature comme signature par défaut", async () => {
     const doc = await Mutation.createEmailSignatureV2(
       null,
@@ -405,6 +414,10 @@ describe("EmailSignatureV2 — lecture et isolation", () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
     expect(catalog.templates.length).toBe(11);
     expect(catalog.templates[0].id).toBe("modern");
+    // Seul le Bandeau est proposé dans la galerie pour le moment
+    expect(
+      catalog.templates.filter((t) => t.inGallery).map((t) => t.id),
+    ).toEqual(["header"]);
     expect(catalog.templates[0].preset.fontFamily).toBe("arial");
     expect(catalog.templates[0].preset.photoSize).toBe(92);
     expect(catalog.networks.find((n) => n.id === "linkedin").brandColor).toBe(

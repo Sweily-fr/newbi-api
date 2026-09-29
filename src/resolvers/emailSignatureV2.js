@@ -34,7 +34,7 @@ import {
   FONT_LABELS,
   GMAIL_MAX_CHARS,
   SOCIAL_NETWORKS,
-  DEFAULT_TEMPLATE_ID,
+  GALLERY_TEMPLATE_IDS,
 } from "../services/signatureRenderer/constants.js";
 import {
   deleteSignatureImages,
@@ -316,6 +316,7 @@ const emailSignatureV2Resolvers = {
       templates: listTemplates().map((t) => ({
         ...t,
         defaults: templateDefaults(t),
+        inGallery: GALLERY_TEMPLATE_IDS.includes(t.id),
       })),
       networks: Object.entries(SOCIAL_NETWORKS).map(([id, n]) => ({
         id,
@@ -443,12 +444,15 @@ const emailSignatureV2Resolvers = {
         // l'entreprise de l'espace ; ce que l'entrée précise l'emporte.
         const person = await resolvePerson(memberUserId, ctx);
         const { person: own, company } = person.profile;
-        // Une nouvelle signature démarre avec la typographie de son modèle
-        const preset = templatePreset(input?.templateId || DEFAULT_TEMPLATE_ID);
+        // Une nouvelle signature démarre avec la typographie de son modèle,
+        // le premier de la galerie sauf choix contraire
+        const templateId = input?.templateId || GALLERY_TEMPLATE_IDS[0];
+        const preset = templatePreset(templateId);
         const normalized = mergeInput(
           { images: { photo: null, logo: null, banner: null } },
           {
             ...(input || {}),
+            templateId,
             identity: {
               ...filled(company.identity),
               ...filled(own.identity),

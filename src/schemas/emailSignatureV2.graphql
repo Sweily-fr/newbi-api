@@ -305,6 +305,8 @@ type SignatureTemplateV2 {
   à appliquer au style quand on le choisit.
   """
   defaults: JSON!
+  "Proposé dans la galerie (les autres ne servent qu'aux signatures qui les utilisent)."
+  inGallery: Boolean!
 }
 
 type SignatureSocialNetworkV2 {
