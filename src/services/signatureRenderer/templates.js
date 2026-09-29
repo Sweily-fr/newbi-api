@@ -183,15 +183,15 @@ const TEMPLATES = {
   bold: {
     name: "Affirmé",
     description:
-      "Nom en grand dans la couleur principale, barre verticale, photo arrondie.",
+      "Nom en très grand dans la couleur principale, poste en capitales, barre épaisse.",
     preset: {
       ...BASE_PRESET,
-      photoShape: "rounded",
       photoSize: 96,
       divider: "bar",
       accent: "none",
+      titleStyle: "caps",
     },
-    theme: { nameColor: "primary", nameDelta: 8 },
+    theme: { nameColor: "primary", nameDelta: 11 },
   },
 
   centered: {

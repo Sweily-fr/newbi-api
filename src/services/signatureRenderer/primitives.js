@@ -240,23 +240,9 @@ export function iconLines(
       { gap, align },
     );
   }
-  // Centré : icône en ligne devant le texte, dans une cellule centrée ;
-  // une table par ligne alourdirait le HTML (limite Gmail de 10 000
-  // caractères). L'espace est une espace insécable : Outlook ignore les
-  // marges d'image.
-  if (align === "center") {
-    return vstack(
-      items.map((l) =>
-        wrap(
-          l,
-          l.iconHtml
-            ? `${l.iconHtml.replace("display:block;", "display:inline-block;vertical-align:middle;")}&nbsp;&nbsp;${l.contentHtml}`
-            : l.contentHtml,
-        ),
-      ),
-      { gap, align: "center" },
-    );
-  }
+  // Centré avec icônes (ou initiales) : le bloc entier est centré, les
+  // lignes restent alignées à gauche pour que les icônes forment une
+  // colonne (des lignes centrées une à une feraient un zigzag)
   const rows = items
     .map((l, i) => {
       const pad = i === items.length - 1 ? 0 : gap;

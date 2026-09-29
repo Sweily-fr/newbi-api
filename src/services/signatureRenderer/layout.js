@@ -402,9 +402,11 @@ export function renderLayout(b, ctx, theme = {}) {
       ? `0 ${topCorner}px ${bottomCorner}px 0`
       : `${topCorner}px 0 0 ${bottomCorner}px`;
     const radius = boxed ? corners : `${r}px`;
-    const visualCell = `<td valign="${st.photoValign}" align="center" bgcolor="${soft}" style="text-align:center;background-color:${soft};padding:22px 22px;border-radius:${radius};">${visualHtml}</td>`;
-    const pad = boxed ? "20px 26px" : `0 0 0 ${sp.gap + 6}px`;
-    const padRight = boxed ? "20px 26px" : `0 ${sp.gap + 6}px 0 0`;
+    const visualCell = `<td valign="${st.photoValign}" align="center" bgcolor="${soft}" style="text-align:center;background-color:${soft};padding:22px ${sp.gap + 2}px;border-radius:${radius};">${visualHtml}</td>`;
+    // Marges au plus juste : la signature doit tenir sur un téléphone
+    const boxPad = `20px ${sp.gap + 6}px`;
+    const pad = boxed ? boxPad : `0 0 0 ${sp.gap + 6}px`;
+    const padRight = boxed ? boxPad : `0 ${sp.gap + 6}px 0 0`;
     const textCell =
       textHtml || sideHtml
         ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${spread(textHtml, sideHtml)}</td>`
@@ -450,6 +452,11 @@ export function renderLayout(b, ctx, theme = {}) {
             : null;
       body = hstack(cells, { gap: sp.gap + 4, separator });
     }
+  } else if (textHtml && (st.divider === "bar" || st.divider === "accent")) {
+    // Sans colonne photo, le trait ou la barre du modèle borde le texte à
+    // gauche : le modèle garde son caractère
+    const width = st.divider === "bar" ? 4 : 1;
+    body = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:${width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${spread(textHtml, sideHtml)}</td></tr></table>`;
   } else if (sideHtml && st.divider !== "none" && textHtml) {
     body = hstack(
       [

@@ -28,15 +28,25 @@ const fallbackSlot = (item) => FALLBACK[item] || "text";
  * application du modèle). `hasPhoto` : sans photo, « sous la photo »
  * retombait sous le texte.
  */
-export function slotsFromLegacy(st, hasPhoto) {
+export function slotsFromLegacy(st, hasPhoto, hasLogo = false) {
   const s = empty();
   const zone = st.identityZone;
   const photoSide =
     hasPhoto && zone !== "band-left" && st.photoPosition !== "top";
+  // Sans photo, un logo prévu « sous la photo » en prend la place (le
+  // modèle Éditorial : « logo ou photo ») ; les réseaux, eux, reviennent
+  // sous le texte si la colonne photo n'a ni photo ni logo
+  const logoAnchors =
+    !photoSide &&
+    hasLogo &&
+    st.logoPosition === "photo" &&
+    zone === "plain" &&
+    st.photoPosition !== "top";
+  const visualSide = photoSide || logoAnchors;
   const socialPos =
-    st.socialPosition === "photo" && !photoSide ? "text" : st.socialPosition;
+    st.socialPosition === "photo" && !visualSide ? "text" : st.socialPosition;
   const logoPos =
-    st.logoPosition === "photo" && !photoSide ? "text" : st.logoPosition;
+    st.logoPosition === "photo" && !visualSide ? "text" : st.logoPosition;
   const outside = st.frame === "none" ? [] : st.outside || [];
 
   if (zone === "band-top") s.header.push("photo", ...IDENTITY_ITEMS, "accent");
@@ -96,9 +106,9 @@ export function normalizeSlots(raw) {
 }
 
 /** Réglages de mise en page dérivés des anciens réglages. */
-export function layoutFromLegacy(st, hasPhoto) {
+export function layoutFromLegacy(st, hasPhoto, hasLogo = false) {
   return {
-    slots: slotsFromLegacy(st, hasPhoto),
+    slots: slotsFromLegacy(st, hasPhoto, hasLogo),
     visualSide: st.photoPosition === "right" ? "right" : "left",
     visualFill:
       st.identityZone === "band-left"

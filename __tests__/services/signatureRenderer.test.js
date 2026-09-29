@@ -119,10 +119,8 @@ describe("signatureRenderer — compatibilité clients mail", () => {
           expect(i).toMatch(/ src="https:\/\//);
           expect(i).toMatch(/ width="\d+"/);
           expect(i).toMatch(/ alt="/);
-          // Bloc partout, sauf les icônes en ligne des mises en page centrées
-          expect(i).toMatch(
-            /display:block|display:inline-block;vertical-align:middle/,
-          );
+          // Bloc partout : chaque icône a sa cellule, même centrée
+          expect(i).toContain("display:block");
           expect(i).toContain("border:0");
         }
       });
@@ -1047,5 +1045,70 @@ describe("signatureRenderer — prénom et nom dissociés", () => {
     expect(html).toMatch(/color:#ff0000;[^"]*font-weight:bold;">Durand</);
     expect(html).toMatch(/font-size:19px;[^"]*">Camille</);
     expect(html).not.toMatch(/font-weight:bold;">Camille</);
+  });
+});
+
+describe("signatureRenderer — finition des modèles", () => {
+  const NONE = { photo: null, logo: null, banner: null };
+  const withImages = (images) => ({ ...FULL, images: { ...NONE, ...images } });
+  const render = (templateId, input = FULL) =>
+    renderSignature({ ...input, templateId, style: {} });
+
+  it("centré avec icônes : un bloc centré, icônes alignées en colonne", () => {
+    const { html } = render("centered");
+    expect(html).not.toContain("inline-block;vertical-align:middle");
+    expect(html).toMatch(
+      /<table [^>]*align="center"[^>]*><tr><td valign="middle" style="padding:0 \d+px \d+px 0;font-size:0;line-height:0;"><img /,
+    );
+    expect(html).toMatch(
+      /<td valign="middle" style="text-align:left;[^"]*"><a href="tel:/,
+    );
+  });
+
+  it("un numéro de téléphone ne se coupe jamais", () => {
+    for (const templateId of ["modern", "line"]) {
+      const { html } = render(templateId);
+      expect(html).toMatch(
+        /href="tel:\+33123456789" style="[^"]*white-space:nowrap;/,
+      );
+    }
+  });
+
+  it("sans photo, Classique et Affirmé gardent leur trait à gauche du texte", () => {
+    const noPhoto = withImages({});
+    expect(render("classic", noPhoto).html).toMatch(
+      /<td style="border-left:1px solid #5a50ff;/,
+    );
+    expect(render("bold", noPhoto).html).toMatch(
+      /<td style="border-left:4px solid #5a50ff;/,
+    );
+  });
+
+  it("sans photo, le logo prévu sous la photo en prend la place (Éditorial)", () => {
+    const slotsOf = (input) =>
+      normalizeSignature({ ...input, templateId: "editorial", style: {} }).style
+        .slots;
+    const anchored = slotsOf(withImages({ logo: FULL.images.logo }));
+    expect(anchored.visual).toContain("logo");
+    const alone = slotsOf(withImages({}));
+    expect(alone.visual).not.toContain("logo");
+    expect(alone.text).toContain("logo");
+    // Les réseaux prévus sous la photo (Colonnes) reviennent sous le texte
+    const split = normalizeSignature({
+      ...withImages({ logo: FULL.images.logo }),
+      templateId: "split",
+      style: {},
+    }).style.slots;
+    expect(split.visual).not.toContain("social");
+    expect(split.text).toContain("social");
+  });
+
+  it("Affirmé se distingue de Classique : grand nom en couleur, poste en capitales", () => {
+    const bold = render("bold").elements;
+    const classic = render("classic").elements;
+    expect(bold.name.fontSize).toBeGreaterThan(classic.name.fontSize + 4);
+    expect(bold.name.color).toBe("#5a50ff");
+    expect(bold.jobTitle.uppercase).toBe(true);
+    expect(classic.jobTitle.uppercase).toBe(false);
   });
 });

@@ -166,7 +166,11 @@ export function normalizeSignature(input = {}) {
 
   // Emplacements des éléments : ceux choisis dans l'éditeur, sinon ceux
   // déduits des réglages ci-dessus (rendu identique à avant)
-  const derived = layoutFromLegacy(style, Boolean(input.images?.photo?.url));
+  const derived = layoutFromLegacy(
+    style,
+    Boolean(input.images?.photo?.url),
+    Boolean(input.images?.logo?.url),
+  );
   style.slots = normalizeSlots(s.slots) || derived.slots;
   style.visualSide = oneOf(s.visualSide, VISUAL_SIDES, derived.visualSide);
   style.visualFill = oneOf(s.visualFill, VISUAL_FILLS, derived.visualFill);

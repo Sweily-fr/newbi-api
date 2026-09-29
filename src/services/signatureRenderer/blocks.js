@@ -141,14 +141,15 @@ export function buildBlocks(ctx) {
   const contactEntry = (field, style) => {
     const value = contact[field];
     if (!value) return null;
-    const entry = (label, href) => ({
+    const entry = (label, href, extra = "") => ({
       field,
       html: href
-        ? `<a href="${escAttr(href)}" style="${style}text-decoration:none;">${editable(field, label)}</a>`
+        ? `<a href="${escAttr(href)}" style="${style}${extra}text-decoration:none;">${editable(field, label)}</a>`
         : `<span style="${style}">${editable(field, label)}</span>`,
     });
     if (field === "phone" || field === "mobile") {
-      return entry(value, `tel:${telHref(value)}`);
+      // Un numéro ne se coupe pas entre deux groupes de chiffres
+      return entry(value, `tel:${telHref(value)}`, "white-space:nowrap;");
     }
     if (field === "email") return entry(value, `mailto:${value}`);
     if (field === "website") {
