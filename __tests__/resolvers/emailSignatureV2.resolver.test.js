@@ -125,7 +125,7 @@ describe("EmailSignatureV2 — création", () => {
       },
       ctx(),
     );
-    expect(doc.templateId).toBe("classic");
+    expect(doc.templateId).toBe("modern");
     expect(doc.style.fontFamily).toBe("arial");
     expect(doc.style.fontSize).toBe(18);
     expect(doc.style.primaryColor).toBe("#5a50ff");
@@ -173,7 +173,8 @@ describe("EmailSignatureV2 — lecture et isolation", () => {
 
   it("expose le catalogue de l'éditeur", async () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
-    expect(catalog.templates.length).toBe(8);
+    expect(catalog.templates.length).toBe(11);
+    expect(catalog.templates[0].id).toBe("modern");
     expect(catalog.networks.find((n) => n.id === "linkedin").brandColor).toBe(
       "#0a66c2",
     );

@@ -19,6 +19,7 @@ import {
   SPACING,
   SPACINGS,
   TEMPLATE_IDS,
+  DEFAULT_TEMPLATE_ID,
 } from "./constants.js";
 import {
   contactIconSpec,
@@ -111,7 +112,7 @@ export function normalizeSignature(input = {}) {
   const disclaimer = input.disclaimer || {};
 
   return {
-    templateId: oneOf(input.templateId, TEMPLATE_IDS, "classic"),
+    templateId: oneOf(input.templateId, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID),
     identity: {
       firstName: str(id.firstName, 80),
       lastName: str(id.lastName, 80),
@@ -217,8 +218,20 @@ export function renderSignature(
     iconUrl,
     markers,
   };
+  // Rien à afficher : aucun HTML (évite un filet ou un accent orphelin)
+  const hasContent =
+    Object.values(sig.identity).some(Boolean) ||
+    Object.values(sig.contact).some(Boolean) ||
+    sig.social.some((s) => s.url) ||
+    Object.values(sig.images).some((i) => i?.url) ||
+    (sig.cta.enabled && sig.cta.label) ||
+    (sig.disclaimer.enabled && sig.disclaimer.text);
+  if (!hasContent) {
+    return { html: "", text: "", chars: 0, warnings: [] };
+  }
+
   const blocks = buildBlocks(ctx);
-  const template = TEMPLATES[sig.templateId] || TEMPLATES.classic;
+  const template = TEMPLATES[sig.templateId] || TEMPLATES[DEFAULT_TEMPLATE_ID];
   const body = template.render(blocks, ctx);
 
   // Table englobante : fond transparent (mode sombre), aucune largeur fixe

@@ -6,31 +6,10 @@
  * table englobante, ajoutée par le générateur).
  */
 
+import { TEMPLATE_IDS } from "./constants.js";
 import { hstack, vstack } from "./primitives.js";
 
 const TEMPLATES = {
-  classic: {
-    name: "Classique",
-    description:
-      "Photo à gauche, coordonnées à droite, séparées par un trait vertical.",
-    supports: { photo: true, logo: true, align: false },
-    render(b, { st, sp }) {
-      const body = hstack(
-        [
-          { html: b.photo(), valign: "top" },
-          {
-            html: vstack([b.identity(), b.contact(), b.social()], {
-              gap: sp.block,
-            }),
-            valign: "top",
-          },
-        ],
-        { gap: sp.gap, separator: b.photo() ? st.separatorColor : null },
-      );
-      return vstack([body, b.logo(), b.footer()], { gap: sp.block });
-    },
-  },
-
   modern: {
     name: "Moderne",
     description:
@@ -52,6 +31,84 @@ const TEMPLATES = {
           { html: column, valign: "middle" },
         ],
         { gap: sp.gap },
+      );
+      return vstack([body, b.logo(), b.footer()], { gap: sp.block });
+    },
+  },
+
+  card: {
+    name: "Carte",
+    description:
+      "Bloc de couleur avec la photo et le nom en blanc, coordonnées à côté.",
+    supports: { photo: true, logo: true, align: false },
+    render(b, { st, sp }) {
+      const inner = vstack(
+        [
+          b.photo({ shape: "circle", size: Math.min(st.photoSize, 96) }),
+          b.identity({
+            nameColor: "#ffffff",
+            titleColor: "#ffffff",
+            companyColor: "#ffffff",
+            align: "center",
+          }),
+        ],
+        { gap: sp.line + 4, align: "center" },
+      );
+      const block = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td align="center" bgcolor="${st.primaryColor}" style="background-color:${st.primaryColor};padding:18px 20px;border-radius:10px;text-align:center;">${inner}</td></tr></table>`;
+      const body = hstack(
+        [
+          { html: block, valign: "middle" },
+          {
+            html: vstack([b.contact(), b.social()], { gap: sp.block }),
+            valign: "middle",
+          },
+        ],
+        { gap: sp.gap + 4 },
+      );
+      return vstack([body, b.logo(), b.footer()], { gap: sp.block });
+    },
+  },
+
+  elegant: {
+    name: "Élégant",
+    description:
+      "Nom en grand, poste en petites capitales, filets fins : sobre et raffiné.",
+    supports: { photo: true, logo: true, align: false },
+    render(b, { st, sp }) {
+      return vstack(
+        [
+          b.photo({ shape: "circle", size: Math.min(st.photoSize, 72) }),
+          b.name({ size: st.fontSize + 9, color: st.textColor }),
+          b.caption(),
+          b.hsep(),
+          b.contact({ icons: false, align: "center" }),
+          b.social({ size: 18, align: "center" }),
+          b.hsep(),
+          b.logo(),
+          b.footer({ align: "center" }),
+        ],
+        { gap: sp.block, align: "center" },
+      );
+    },
+  },
+
+  classic: {
+    name: "Classique",
+    description:
+      "Photo à gauche, coordonnées à droite, séparées par un trait vertical.",
+    supports: { photo: true, logo: true, align: false },
+    render(b, { st, sp }) {
+      const body = hstack(
+        [
+          { html: b.photo(), valign: "top" },
+          {
+            html: vstack([b.identity(), b.contact(), b.social()], {
+              gap: sp.block,
+            }),
+            valign: "top",
+          },
+        ],
+        { gap: sp.gap, separator: b.photo() ? st.separatorColor : null },
       );
       return vstack([body, b.logo(), b.footer()], { gap: sp.block });
     },
@@ -158,6 +215,35 @@ const TEMPLATES = {
     },
   },
 
+  line: {
+    name: "Une ligne",
+    description:
+      "Tout à l'horizontale : photo, identité, coordonnées et réseaux, séparés par des traits.",
+    supports: { photo: true, logo: false, align: false },
+    render(b, { st, sp }) {
+      const identity = vstack([b.identityInline(), b.contactInline()], {
+        gap: sp.line,
+      });
+      return vstack(
+        [
+          hstack(
+            [
+              {
+                html: b.photo({ size: Math.min(st.photoSize, 56) }),
+                valign: "middle",
+              },
+              { html: identity, valign: "middle" },
+              { html: b.social({ size: 20 }), valign: "middle" },
+            ],
+            { gap: sp.gap, valign: "middle", separator: st.separatorColor },
+          ),
+          b.footer(),
+        ],
+        { gap: sp.block },
+      );
+    },
+  },
+
   bold: {
     name: "Affirmé",
     description: "Barre verticale dans la couleur principale, nom en grand.",
@@ -189,7 +275,8 @@ const TEMPLATES = {
 export default TEMPLATES;
 
 export function listTemplates() {
-  return Object.entries(TEMPLATES).map(([id, t]) => ({
+  // Ordre de la galerie = TEMPLATE_IDS (le premier est le modèle par défaut)
+  return TEMPLATE_IDS.map((id) => [id, TEMPLATES[id]]).map(([id, t]) => ({
     id,
     name: t.name,
     description: t.description,

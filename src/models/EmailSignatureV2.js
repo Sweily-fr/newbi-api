@@ -17,6 +17,7 @@ import {
   SOCIAL_NETWORK_IDS,
   SPACINGS,
   TEMPLATE_IDS,
+  DEFAULT_TEMPLATE_ID,
 } from "../services/signatureRenderer/constants.js";
 
 const trimmed = (max) => ({
@@ -75,7 +76,11 @@ const emailSignatureV2Schema = new mongoose.Schema(
     name: { type: String, trim: true, required: true, maxlength: 120 },
     isDefault: { type: Boolean, default: false },
     schemaVersion: { type: Number, default: SCHEMA_VERSION },
-    templateId: { type: String, enum: TEMPLATE_IDS, default: "classic" },
+    templateId: {
+      type: String,
+      enum: TEMPLATE_IDS,
+      default: DEFAULT_TEMPLATE_ID,
+    },
 
     identity: {
       firstName: trimmed(80),

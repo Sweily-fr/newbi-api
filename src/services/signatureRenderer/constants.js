@@ -11,16 +11,21 @@ export const SCHEMA_VERSION = 2;
 /** Limite du champ « signature » de Gmail (caractères HTML). */
 export const GMAIL_MAX_CHARS = 10000;
 
+/** Ordre = ordre de la galerie. Le premier est le modèle par défaut. */
 export const TEMPLATE_IDS = [
-  "classic",
   "modern",
+  "card",
+  "elegant",
+  "classic",
+  "bold",
+  "centered",
+  "line",
   "compact",
   "corporate",
   "minimal",
   "banner",
-  "centered",
-  "bold",
 ];
+export const DEFAULT_TEMPLATE_ID = TEMPLATE_IDS[0];
 
 /**
  * Polices « web safe » : ce sont les seules qui s'affichent à l'identique

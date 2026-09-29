@@ -69,21 +69,25 @@ export function buildBlocks(ctx) {
 
     identity({
       nameColor = st.textColor,
+      nameSize = base + 3,
+      titleColor = st.mutedColor,
+      companyColor = st.textColor,
       align = st.align,
       withName = true,
+      withCompany = true,
     } = {}) {
       return vstack(
         [
-          withName ? blocks.name({ color: nameColor }) : "",
+          withName ? blocks.name({ color: nameColor, size: nameSize }) : "",
           titleLine
-            ? markInline("jobTitle", span(titleLine, text(base, st.mutedColor)))
+            ? markInline("jobTitle", span(titleLine, text(base, titleColor)))
             : "",
-          identity.company
+          withCompany && identity.company
             ? markInline(
                 "company",
                 span(
                   identity.company,
-                  text(base, st.textColor, { weight: "bold" }),
+                  text(base, companyColor, { weight: "bold" }),
                 ),
               )
             : "",
@@ -92,12 +96,22 @@ export function buildBlocks(ctx) {
                 "tagline",
                 span(
                   identity.tagline,
-                  text(base - 1, st.mutedColor, { italic: true }),
+                  text(base - 1, titleColor, { italic: true }),
                 ),
               )
             : "",
         ],
         { gap: sp.line, align },
+      );
+    },
+
+    /** Poste en petites capitales espacées (modèle élégant). */
+    caption({ color = st.mutedColor } = {}) {
+      const value = [titleLine, identity.company].filter(Boolean).join("  ·  ");
+      if (!value) return "";
+      return markInline(
+        "jobTitle",
+        `<span style="${text(base - 2, color)}letter-spacing:2px;text-transform:uppercase;">${esc(value)}</span>`,
       );
     },
 
