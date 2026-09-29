@@ -20,10 +20,6 @@ export const TEMPLATE_IDS = [
   "bold",
   "centered",
   "line",
-  "compact",
-  "corporate",
-  "minimal",
-  "banner",
 ];
 export const DEFAULT_TEMPLATE_ID = TEMPLATE_IDS[0];
 
