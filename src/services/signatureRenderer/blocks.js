@@ -100,12 +100,40 @@ export function buildBlocks(ctx) {
     .filter(Boolean)
     .join(" · ");
 
+  // Texte modifiable directement dans l'aperçu : chaque valeur porte le
+  // champ qu'elle alimente (data-sig-edit). Aperçu seulement, comme les
+  // autres marqueurs : le HTML copié ne contient que le texte échappé.
+  const editable = (field, value) =>
+    markers && value
+      ? `<span data-sig-edit="${field}">${esc(value)}</span>`
+      : esc(value);
+  const joinEditable = (parts, sep) =>
+    parts
+      .filter(([, v]) => v)
+      .map(([f, v]) => editable(f, v))
+      .join(esc(sep));
+  const nameHtml = joinEditable(
+    [
+      ["firstName", identity.firstName],
+      ["lastName", identity.lastName],
+    ],
+    " ",
+  );
+  const titleHtml = joinEditable(
+    [
+      ["jobTitle", identity.jobTitle],
+      ["department", identity.department],
+    ],
+    " · ",
+  );
+  const styledSpan = (html, style) => `<span style="${style}">${html}</span>`;
+
   const blocks = {
     name({ color = st.textColor, size = base + 3 } = {}) {
       return fullName
         ? markInline(
             "firstName",
-            span(fullName, styled("name", { size, color, bold: true })),
+            styledSpan(nameHtml, styled("name", { size, color, bold: true })),
           )
         : "";
     },
@@ -125,8 +153,8 @@ export function buildBlocks(ctx) {
           titleLine
             ? markInline(
                 "jobTitle",
-                span(
-                  titleLine,
+                styledSpan(
+                  titleHtml,
                   styled("jobTitle", { size: base, color: titleColor }),
                 ),
               )
@@ -134,8 +162,8 @@ export function buildBlocks(ctx) {
           withCompany && identity.company
             ? markInline(
                 "company",
-                span(
-                  identity.company,
+                styledSpan(
+                  editable("company", identity.company),
                   styled("company", {
                     size: base,
                     color: companyColor,
@@ -147,8 +175,8 @@ export function buildBlocks(ctx) {
           identity.tagline
             ? markInline(
                 "tagline",
-                span(
-                  identity.tagline,
+                styledSpan(
+                  editable("tagline", identity.tagline),
                   styled("tagline", {
                     size: base - 1,
                     color: titleColor,
@@ -166,9 +194,12 @@ export function buildBlocks(ctx) {
     caption({ color = st.mutedColor } = {}) {
       const value = [titleLine, identity.company].filter(Boolean).join("  ·  ");
       if (!value) return "";
+      const html = [titleHtml, editable("company", identity.company)]
+        .filter(Boolean)
+        .join(esc("  ·  "));
       return markInline(
         "jobTitle",
-        `<span style="${styled("jobTitle", { size: base - 2, color, uppercase: true })}letter-spacing:2px;">${esc(value)}</span>`,
+        `<span style="${styled("jobTitle", { size: base - 2, color, uppercase: true })}letter-spacing:2px;">${html}</span>`,
       );
     },
 
@@ -178,8 +209,8 @@ export function buildBlocks(ctx) {
         fullName
           ? markInline(
               "firstName",
-              span(
-                fullName,
+              styledSpan(
+                nameHtml,
                 styled("name", {
                   size: base + 1,
                   color: st.textColor,
@@ -191,8 +222,8 @@ export function buildBlocks(ctx) {
         titleLine
           ? markInline(
               "jobTitle",
-              span(
-                titleLine,
+              styledSpan(
+                titleHtml,
                 styled("jobTitle", { size: base, color: st.mutedColor }),
               ),
             )
@@ -200,8 +231,8 @@ export function buildBlocks(ctx) {
         identity.company
           ? markInline(
               "company",
-              span(
-                identity.company,
+              styledSpan(
+                editable("company", identity.company),
                 styled("company", { size: base, color: st.textColor }),
               ),
             )
@@ -224,8 +255,8 @@ export function buildBlocks(ctx) {
         items.push({
           field,
           html: href
-            ? link(href, esc(label), { color: lineColor })
-            : esc(label),
+            ? link(href, editable(field, label), { color: lineColor })
+            : editable(field, label),
           plain: label,
           style: lineStyle,
         });
@@ -381,7 +412,9 @@ export function buildBlocks(ctx) {
       return markBlock(
         "cta",
         button({
-          label: eff.uppercase ? c.label.toUpperCase() : c.label,
+          label: c.label,
+          labelHtml: editable("ctaLabel", c.label),
+          uppercase: eff.uppercase,
           href,
           background: c.backgroundColor || st.primaryColor,
           color: c.textColor || "#ffffff",
@@ -420,7 +453,7 @@ export function buildBlocks(ctx) {
       if (!d.enabled || !d.text) return "";
       return markInline(
         "disclaimer",
-        `<span style="${styled("disclaimer", { size: Math.max(10, base - 3), color: st.mutedColor })}">${esc(d.text)}</span>`,
+        `<span style="${styled("disclaimer", { size: Math.max(10, base - 3), color: st.mutedColor })}">${editable("disclaimer", d.text)}</span>`,
       );
     },
 

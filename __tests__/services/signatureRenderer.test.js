@@ -312,9 +312,32 @@ describe("signatureRenderer — marqueurs d'aperçu", () => {
       expect(html, field).toContain(`data-sig-field="${field}"`);
     }
     const clean = renderSignature(FULL).html;
-    expect(html.replace(/<\/?(span|div)( data-sig-field="[^"]*")?>/g, "")).toBe(
-      clean.replace(/<\/?(span|div)( data-sig-field="[^"]*")?>/g, ""),
-    );
+    const strip = (h) =>
+      h.replace(/<\/?(span|div)( data-sig-(field|edit)="[^"]*")?>/g, "");
+    expect(strip(html)).toBe(strip(clean));
+    expect(clean).not.toContain("data-sig-");
+  });
+
+  it("marque chaque texte modifiable dans l'aperçu", () => {
+    const { html } = renderSignature(FULL, { markers: true });
+    for (const field of [
+      "firstName",
+      "lastName",
+      "jobTitle",
+      "department",
+      "company",
+      "tagline",
+      "phone",
+      "mobile",
+      "email",
+      "website",
+      "address",
+      "ctaLabel",
+      "disclaimer",
+    ]) {
+      expect(html, field).toContain(`data-sig-edit="${field}"`);
+    }
+    expect(html).toContain('<span data-sig-edit="lastName">Durand</span>');
   });
 });
 
