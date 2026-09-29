@@ -177,6 +177,20 @@ type SignatureStyleV2 {
   seule ligne.
   """
   socialRows: [Int!]!
+  "Longueur du trait sous le nom, en px (0 : celle du modèle)."
+  accentLength: Int!
+  "Épaisseur du trait sous le nom, en px (0 : celle du modèle)."
+  accentThickness: Int!
+  "Épaisseur du séparateur photo / texte, en px (0 : 1 px, 4 px pour la barre)."
+  dividerThickness: Int!
+  "Longueur du séparateur photo / texte, en px (0 : toute la hauteur)."
+  dividerLength: Int!
+  "Épaisseur du contour ou de la barre de l'encadré, en px (0 : 1 px, 4 px pour une barre)."
+  frameThickness: Int!
+  "Largeur du cadre (contour, fond teinté), en px (0 : ajustée au contenu)."
+  frameWidth: Int!
+  "Longueur de la barre de l'encadré (à gauche, en haut), en px (0 : toute la longueur)."
+  frameBarLength: Int!
   """
   Réglages par élément (seulement ceux modifiés).
   """
@@ -228,6 +242,18 @@ type SignatureRenderV2 {
   réglages), pour les valeurs des contrôles de l'éditeur.
   """
   elements: SignatureElementStylesV2!
+  """
+  Dimensions effectives des traits et bordures (réglées, sinon celles du
+  modèle), pour les valeurs des contrôles de l'éditeur.
+  """
+  lines: SignatureLinesV2!
+}
+
+type SignatureLinesV2 {
+  accentLength: Int!
+  accentThickness: Int!
+  dividerThickness: Int!
+  frameThickness: Int!
 }
 
 type SignatureTemplateSupportsV2 {
@@ -406,6 +432,13 @@ input SignatureStyleV2Input {
   headerFill: String
   nameLayout: String
   socialRows: [Int!]
+  accentLength: Int
+  accentThickness: Int
+  dividerThickness: Int
+  dividerLength: Int
+  frameThickness: Int
+  frameWidth: Int
+  frameBarLength: Int
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

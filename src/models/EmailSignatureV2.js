@@ -109,6 +109,15 @@ const styleSchema = new mongoose.Schema(
     // Icônes de réseaux par ligne, de haut en bas (la dernière valeur vaut
     // pour les suivantes) ; sans valeur, celle du modèle
     socialRows: { type: [Number], default: undefined },
+    // Traits et bordures sur mesure, en px (0 : dimensions du modèle ou
+    // toute la longueur)
+    accentLength: { type: Number, default: undefined },
+    accentThickness: { type: Number, default: undefined },
+    dividerThickness: { type: Number, default: undefined },
+    dividerLength: { type: Number, default: undefined },
+    frameThickness: { type: Number, default: undefined },
+    frameWidth: { type: Number, default: undefined },
+    frameBarLength: { type: Number, default: undefined },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },

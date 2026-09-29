@@ -140,9 +140,27 @@ export function hsep(color, { height = 1 } = {}) {
 }
 
 /** Trait vertical, à insérer comme cellule entre deux colonnes. */
-export function vsepCell(color, { width = 1, gap = 12 } = {}) {
+/**
+ * Trait plein d'une taille donnée : une cellule colorée (horizontal ou
+ * vertical selon largeur et hauteur), seule forme fiable dans Outlook.
+ */
+export function bar({ width, height, color, align = "left" }) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${align === "center" ? ' align="center"' : ""} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td width="${width}" height="${height}" bgcolor="${color}" style="width:${width}px;height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
+}
+
+/**
+ * Séparateur vertical entre deux colonnes. `sep` : une couleur, ou
+ * { color, width, length, valign } ; sans longueur, il suit la hauteur de
+ * la rangée, sinon c'est un trait de `length` px aligné selon `valign`.
+ */
+export function vsepCell(sep, { width = 1, gap = 12 } = {}) {
+  const spec = typeof sep === "string" ? { color: sep } : sep;
+  const w = spec.width || width;
   const spacer = `<td width="${gap}" style="width:${gap}px;${filler}">&nbsp;</td>`;
-  return `${spacer}<td width="${width}" bgcolor="${color}" style="width:${width}px;background-color:${color};${filler}">&nbsp;</td>${spacer}`;
+  if (spec.length) {
+    return `${spacer}<td valign="${spec.valign || "middle"}" width="${w}" style="width:${w}px;">${bar({ width: w, height: spec.length, color: spec.color })}</td>${spacer}`;
+  }
+  return `${spacer}<td width="${w}" bgcolor="${spec.color}" style="width:${w}px;background-color:${spec.color};${filler}">&nbsp;</td>${spacer}`;
 }
 
 /**

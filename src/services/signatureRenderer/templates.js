@@ -50,6 +50,14 @@ const BASE_PRESET = {
   outside: [],
   // Icônes de réseaux par ligne (vide : toutes sur une ligne)
   socialRows: [],
+  // Traits et bordures sur mesure (0 : dimensions du modèle)
+  accentLength: 0,
+  accentThickness: 0,
+  dividerThickness: 0,
+  dividerLength: 0,
+  frameThickness: 0,
+  frameWidth: 0,
+  frameBarLength: 0,
 };
 
 /** Pied (bouton, bandeau, mention) hors du cadre, pour les modèles encadrés. */

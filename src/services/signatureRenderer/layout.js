@@ -22,7 +22,7 @@
  */
 
 import { CONTACT_ITEMS } from "./constants.js";
-import { hstack, stackRows, tint, vstack } from "./primitives.js";
+import { bar, hstack, stackRows, tint, vstack } from "./primitives.js";
 
 const WHITE = "#ffffff";
 const NAME_PARTS = ["firstName", "lastName"];
@@ -36,8 +36,15 @@ const IDENTITY = new Set([
 const INLINE_IDENTITY = [...NAME_PARTS, "title", "company"];
 
 /** Table à bordures séparées : seule façon d'arrondir une bordure de cellule. */
-const box = (rows, attrs = "") =>
-  `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${attrs} style="border-collapse:separate;mso-table-lspace:0pt;mso-table-rspace:0pt;">${rows}</table>`;
+const box = (rows, attrs = "", style = "") =>
+  `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${attrs} style="border-collapse:separate;mso-table-lspace:0pt;mso-table-rspace:0pt;${style}">${rows}</table>`;
+
+/**
+ * Largeur choisie pour le cadre : fixe pour Outlook (attribut), bornée à
+ * l'écran ailleurs (max-width), pour ne pas déborder sur un téléphone.
+ */
+const widthOf = (w) =>
+  w ? [` width="${w}"`, `width:${w}px;max-width:100%;`] : ["", ""];
 
 /** Deux contenus aux extrémités d'une ligne pleine largeur. */
 function spread(left, right, { valign = "middle" } = {}) {
@@ -115,11 +122,17 @@ export function renderLayout(b, ctx, theme = {}) {
       case "tagline":
         return b.taglineItem({ color: c.tagline });
       case "accent":
+        // Longueur et épaisseur choisies, sinon celles du modèle
         return st.accent === "thin"
-          ? b.rule({ width: 56, color: c.accent, height: 2, align: across })
+          ? b.rule({
+              width: st.accentLength || 56,
+              color: c.accent,
+              height: st.accentThickness || 2,
+              align: across,
+            })
           : b.accent({
-              width: theme.accentWidth || 40,
-              height: 3,
+              width: st.accentLength || theme.accentWidth || 40,
+              height: st.accentThickness || 3,
               align: across,
               color: c.accent,
             });
@@ -382,6 +395,18 @@ export function renderLayout(b, ctx, theme = {}) {
   let bodyFlush = false; // le corps gère ses propres marges (colonne teintée)
   const right = st.visualSide === "right";
   const textValign = st.photoValign === "middle" ? "middle" : "top";
+  // Séparateur photo / texte : gris (« line ») ou couleur principale,
+  // épaisseur choisie (sinon 1 px, 4 px pour la barre), longueur choisie
+  // (sinon toute la hauteur)
+  const divider =
+    st.divider === "none"
+      ? null
+      : {
+          color: st.divider === "line" ? st.separatorColor : P,
+          width: st.dividerThickness || (st.divider === "bar" ? 4 : 1),
+          length: st.dividerLength,
+          valign: st.photoValign,
+        };
 
   if (solid) {
     // Colonne photo sur la couleur principale, texte en blanc
@@ -411,8 +436,11 @@ export function renderLayout(b, ctx, theme = {}) {
       textHtml || sideHtml
         ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${spread(textHtml, sideHtml)}</td>`
         : "";
+    const stretch = boxed && st.frameWidth;
     body = box(
       `<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`,
+      stretch ? ' width="100%"' : "",
+      stretch ? "width:100%;" : "",
     );
     bodyFlush = boxed;
   } else if (hasVisual) {
@@ -427,7 +455,7 @@ export function renderLayout(b, ctx, theme = {}) {
       body = hstack(cells, {
         gap: sp.gap,
         valign: "middle",
-        separator: st.divider === "accent" ? P : st.separatorColor,
+        separator: divider,
       });
     } else {
       const main = spread(textHtml, sideHtml);
@@ -436,37 +464,41 @@ export function renderLayout(b, ctx, theme = {}) {
         { html: main, valign: textValign },
       ];
       if (right) cells.reverse();
-      if (st.divider === "bar" && main) {
+      const barBorder = st.divider === "bar" && main && !divider.length;
+      if (barBorder) {
         // Barre verticale : bordure de la cellule de texte, elle suit sa hauteur
         const textIndex = right ? 0 : 1;
         cells[textIndex] = {
           ...cells[textIndex],
-          html: `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-${right ? "right" : "left"}:4px solid ${P};padding:2px ${right ? sp.gap : 0}px 2px ${right ? 0 : sp.gap}px;">${main}</td></tr></table>`,
+          html: `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-${right ? "right" : "left"}:${divider.width}px solid ${P};padding:2px ${right ? sp.gap : 0}px 2px ${right ? 0 : sp.gap}px;">${main}</td></tr></table>`,
         };
       }
-      const separator =
-        st.divider === "line"
-          ? st.separatorColor
-          : st.divider === "accent"
-            ? P
-            : null;
+      // Trait fin, ou barre d'une longueur choisie : cellule entre les deux
+      const separator = divider && !barBorder ? divider : null;
       body = hstack(cells, { gap: sp.gap + 4, separator });
     }
   } else if (textHtml && (st.divider === "bar" || st.divider === "accent")) {
     // Sans colonne photo, le trait ou la barre du modèle borde le texte à
     // gauche : le modèle garde son caractère
-    const width = st.divider === "bar" ? 4 : 1;
-    body = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:${width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${spread(textHtml, sideHtml)}</td></tr></table>`;
+    body = divider.length
+      ? hstack(
+          [
+            {
+              html: bar({ ...divider, height: divider.length }),
+              valign: "middle",
+            },
+            { html: spread(textHtml, sideHtml), valign: "middle" },
+          ],
+          { gap: sp.gap },
+        )
+      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:${divider.width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${spread(textHtml, sideHtml)}</td></tr></table>`;
   } else if (sideHtml && st.divider !== "none" && textHtml) {
     body = hstack(
       [
         { html: textHtml, valign: "middle" },
         { html: sideHtml, valign: "middle" },
       ],
-      {
-        gap: sp.gap,
-        separator: st.divider === "accent" ? P : st.separatorColor,
-      },
+      { gap: sp.gap, separator: divider },
     );
   } else {
     body = spread(textHtml, sideHtml, { valign: band ? "bottom" : "middle" });
@@ -533,22 +565,30 @@ function frameContent({
       gap: sp.block,
       align: align === "center" && !band ? "center" : "left",
     });
+    // Barre à gauche ou en haut : épaisseur choisie (4 px sinon), sur toute
+    // la longueur ou sur la longueur choisie
+    const color = st.frameColor || P;
+    const t = st.frameThickness || 4;
+    const L = st.frameBarLength;
     if (st.frame === "accent-left") {
-      const color = st.frameColor || P;
       return box(
-        `<tr><td style="border-left:4px solid ${color};padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`,
+        L
+          ? `<tr><td valign="top" width="${t}" style="width:${t}px;padding:4px 0 0 0;">${bar({ width: t, height: L, color })}</td><td style="padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`
+          : `<tr><td style="border-left:${t}px solid ${color};padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`,
       );
     }
     if (st.frame === "accent-top") {
-      const color = st.frameColor || P;
       return box(
-        `<tr><td style="border-top:4px solid ${color};padding:${padY}px 0 0 0;">${content}</td></tr>`,
+        L
+          ? `<tr><td>${bar({ width: L, height: t, color, align: align === "center" ? "center" : "left" })}</td></tr><tr><td style="padding:${padY}px 0 0 0;">${content}</td></tr>`
+          : `<tr><td style="border-top:${t}px solid ${color};padding:${padY}px 0 0 0;">${content}</td></tr>`,
       );
     }
     return content;
   }
 
   const outline = st.frame === "outline";
+  const bw = st.frameThickness || 1;
   const border = st.frameColor || st.separatorColor;
   const fill = st.frameColor || tint(P, 0.07);
   const rows = [];
@@ -578,9 +618,9 @@ function frameContent({
       const padBottom =
         i === last || rows[i + 1]?.kind !== "body" ? padY : sp.block;
       const sides = outline
-        ? `border-left:1px solid ${border};border-right:1px solid ${border};${
-            i === 0 ? `border-top:1px solid ${border};` : ""
-          }${i === last ? `border-bottom:1px solid ${border};` : ""}`
+        ? `border-left:${bw}px solid ${border};border-right:${bw}px solid ${border};${
+            i === 0 ? `border-top:${bw}px solid ${border};` : ""
+          }${i === last ? `border-bottom:${bw}px solid ${border};` : ""}`
         : "";
       if (row.kind === "strip") {
         const stripFill = outline ? tint(P, 0.07) : tint(P, 0.14);
@@ -595,5 +635,6 @@ function frameContent({
       return `<tr><td${bg} style="${bgStyle}${padding}${sides}${radius}">${row.html}</td></tr>`;
     })
     .join("");
-  return box(html);
+  const [wAttr, wStyle] = widthOf(st.frameWidth);
+  return box(html, wAttr, wStyle);
 }

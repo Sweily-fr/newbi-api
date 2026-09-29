@@ -1196,3 +1196,142 @@ describe("signatureRenderer — réseaux sur plusieurs lignes", () => {
     }
   });
 });
+
+describe("signatureRenderer — traits et bordures sur mesure", () => {
+  const P = "#5a50ff";
+  const render = (templateId, style = {}, input = FULL) =>
+    renderSignature({ ...input, templateId, style }).html;
+  const noPhoto = {
+    ...FULL,
+    images: { photo: null, logo: null, banner: null },
+  };
+
+  it("valide les tailles : 0 ou absent = automatique, bornes appliquées", () => {
+    const st = (style) =>
+      normalizeSignature({ templateId: "modern", style }).style;
+    expect(st({}).accentLength).toBe(0);
+    expect(st({ accentLength: 0 }).accentLength).toBe(0);
+    expect(st({ accentLength: -5 }).accentLength).toBe(0);
+    expect(st({ accentLength: "abc" }).accentLength).toBe(0);
+    expect(st({ accentLength: 2 }).accentLength).toBe(8);
+    expect(st({ accentLength: 999 }).accentLength).toBe(240);
+    expect(st({ dividerThickness: 12 }).dividerThickness).toBe(8);
+    expect(st({ frameWidth: 100 }).frameWidth).toBe(240);
+    expect(templatePreset("modern").frameWidth).toBe(0);
+  });
+
+  it("trait sous le nom : longueur et épaisseur choisies", () => {
+    expect(render("modern")).toContain('width="44" height="3"');
+    const html = render("modern", { accentLength: 120, accentThickness: 5 });
+    expect(html).toContain('width="120" height="5"');
+    expect(html).not.toContain('width="44" height="3"');
+    // Style « fin » (pleine couleur, plus long) : mêmes réglages
+    expect(render("modern", { accent: "thin", accentLength: 90 })).toMatch(
+      /<td width="90" height="2" bgcolor="#5a50ff"/,
+    );
+  });
+
+  it("séparateur photo / texte : épaisseur, puis longueur fixe", () => {
+    // Classique : trait de couleur de toute la hauteur
+    expect(render("classic")).toContain(
+      `<td width="1" bgcolor="${P}" style="width:1px;background-color:${P};`,
+    );
+    expect(render("classic", { dividerThickness: 3 })).toContain(
+      `<td width="3" bgcolor="${P}" style="width:3px;background-color:${P};`,
+    );
+    const short = render("classic", { dividerLength: 60 });
+    expect(short).toMatch(
+      new RegExp(
+        `<td valign="middle" width="1"[^>]*><table[^>]*><tr><td width="1" height="60" bgcolor="${P}"`,
+      ),
+    );
+    expect(short).not.toContain(`<td width="1" bgcolor="${P}"`);
+    // Affirmé : barre en bordure du texte, ou barre de 80 px
+    expect(render("bold", { dividerThickness: 6 })).toContain(
+      `border-left:6px solid ${P};`,
+    );
+    const bar = render("bold", { dividerLength: 80 });
+    expect(bar).not.toMatch(/border-left:\d+px solid/);
+    expect(bar).toContain(`<td width="4" height="80" bgcolor="${P}"`);
+    // Sans photo : le trait borde le texte, ou se raccourcit
+    expect(render("bold", { dividerLength: 50 }, noPhoto)).toContain(
+      `<td width="4" height="50" bgcolor="${P}"`,
+    );
+  });
+
+  it("encadré : épaisseur du contour, largeur du cadre", () => {
+    expect(render("framed", { frameThickness: 3 })).toMatch(
+      /border-left:3px solid #[0-9a-f]{6};border-right:3px solid/,
+    );
+    const wide = render("framed", { frameWidth: 480 });
+    expect(wide).toMatch(
+      /<table [^>]*width="480" style="border-collapse:separate;[^"]*width:480px;max-width:100%;"/,
+    );
+    // Colonnes : la colonne teintée s'étire dans le cadre élargi
+    expect(render("split", { frameWidth: 520 })).toMatch(
+      /<table [^>]*width="100%" style="border-collapse:separate;[^"]*width:100%;"><tr><td valign="middle" align="center" bgcolor=/,
+    );
+  });
+
+  it("barre de l'encadré : épaisseur et longueur", () => {
+    expect(
+      render("modern", { frame: "accent-left", frameThickness: 6 }),
+    ).toContain(`border-left:6px solid ${P};`);
+    const left = render("modern", {
+      frame: "accent-left",
+      frameBarLength: 50,
+    });
+    expect(left).toContain(`<td width="4" height="50" bgcolor="${P}"`);
+    expect(left).not.toContain(`border-left:4px solid ${P}`);
+    const top = render("modern", {
+      frame: "accent-top",
+      frameBarLength: 80,
+      frameThickness: 2,
+    });
+    expect(top).toContain(`<td width="80" height="2" bgcolor="${P}"`);
+    expect(top).not.toContain("border-top:2px");
+  });
+
+  it("renvoie les dimensions effectives pour l'éditeur", () => {
+    expect(renderSignature({ ...FULL, templateId: "modern" }).lines).toEqual({
+      accentLength: 44,
+      accentThickness: 3,
+      dividerThickness: 1,
+      frameThickness: 1,
+    });
+    const bold = renderSignature({
+      ...FULL,
+      templateId: "bold",
+      style: { frame: "accent-top", accentLength: 90 },
+    }).lines;
+    expect(bold).toMatchObject({
+      accentLength: 90,
+      dividerThickness: 4,
+      frameThickness: 4,
+    });
+  });
+
+  it("toutes les options ensemble restent conformes dans chaque modèle", () => {
+    const all = {
+      accentLength: 100,
+      accentThickness: 4,
+      dividerThickness: 2,
+      dividerLength: 70,
+      frameThickness: 2,
+      frameWidth: 520,
+      frameBarLength: 90,
+    };
+    for (const t of listTemplates()) {
+      for (const frame of ["outline", "soft", "accent-left", "accent-top"]) {
+        for (const input of [FULL, noPhoto]) {
+          const html = render(t.id, { ...all, frame }, input);
+          const label = `${t.id} ${frame}`;
+          expect(html, label).not.toMatch(
+            /margin:|display:\s*flex|<div|rgba|class=/,
+          );
+          expect(html, label).not.toMatch(/<td[^>]*><\/td>/);
+        }
+      }
+    }
+  });
+});

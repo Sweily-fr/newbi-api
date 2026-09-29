@@ -44,6 +44,12 @@ const clamp = (n, min, max, fallback) => {
   if (!Number.isFinite(v)) return fallback;
   return Math.min(max, Math.max(min, Math.round(v)));
 };
+/** Réglage de taille facultatif : 0 (ou absent) = automatique. */
+const size0 = (n, min, max) => {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.min(max, Math.max(min, Math.round(v)));
+};
 const oneOf = (value, allowed, fallback) =>
   allowed.includes(value) ? value : fallback;
 const str = (v, max = 200) =>
@@ -190,6 +196,16 @@ export function normalizeSignature(input = {}) {
   style.headerFill = oneOf(s.headerFill, HEADER_FILLS, "solid");
   style.nameLayout = oneOf(s.nameLayout, NAME_LAYOUTS, "inline");
   style.socialRows = socialRowsOf(s.socialRows, tpl.socialRows);
+  // Traits et bordures : longueur et épaisseur de chacun, 0 = automatique
+  // (dimensions du modèle, ou toute la longueur)
+  const sized = (key, min, max) => size0(s[key] ?? tpl[key], min, max);
+  style.accentLength = sized("accentLength", 8, 240);
+  style.accentThickness = sized("accentThickness", 1, 8);
+  style.dividerThickness = sized("dividerThickness", 1, 8);
+  style.dividerLength = sized("dividerLength", 16, 400);
+  style.frameThickness = sized("frameThickness", 1, 8);
+  style.frameWidth = sized("frameWidth", 240, 720);
+  style.frameBarLength = sized("frameBarLength", 16, 720);
 
   const id = input.identity || {};
   const c = input.contact || {};
@@ -332,12 +348,13 @@ export function renderSignature(
     Object.values(sig.images).some((i) => i?.url) ||
     (sig.cta.enabled && sig.cta.label) ||
     (sig.disclaimer.enabled && sig.disclaimer.text);
+  const template = TEMPLATES[sig.templateId] || TEMPLATES[DEFAULT_TEMPLATE_ID];
+  const lines = effectiveLines(st, template.theme);
   if (!hasContent) {
-    return { html: "", text: "", chars: 0, warnings: [], elements: {} };
+    return { html: "", text: "", chars: 0, warnings: [], elements: {}, lines };
   }
 
   const blocks = buildBlocks(ctx);
-  const template = TEMPLATES[sig.templateId] || TEMPLATES[DEFAULT_TEMPLATE_ID];
   const body = template.render(blocks, ctx);
 
   // Table englobante : fond transparent (mode sombre), aucune largeur fixe
@@ -367,6 +384,22 @@ export function renderSignature(
     chars: html.length,
     warnings,
     elements: ctx.resolved,
+    lines,
+  };
+}
+
+/**
+ * Dimensions effectives des traits et bordures (réglées, sinon celles du
+ * modèle), renvoyées à l'éditeur pour afficher les bonnes valeurs.
+ */
+function effectiveLines(st, theme = {}) {
+  const thin = st.accent === "thin";
+  const barFrame = st.frame === "accent-left" || st.frame === "accent-top";
+  return {
+    accentLength: st.accentLength || (thin ? 56 : theme.accentWidth || 40),
+    accentThickness: st.accentThickness || (thin ? 2 : 3),
+    dividerThickness: st.dividerThickness || (st.divider === "bar" ? 4 : 1),
+    frameThickness: st.frameThickness || (barFrame ? 4 : 1),
   };
 }
 
