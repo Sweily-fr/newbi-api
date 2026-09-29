@@ -28,9 +28,9 @@ import {
   SAMPLE_PHOTO_URL,
 } from "./icons.js";
 import { displayUrl, hex, normalizeUrl } from "./primitives.js";
-import TEMPLATES, { listTemplates } from "./templates.js";
+import TEMPLATES, { listTemplates, templatePreset } from "./templates.js";
 
-export { listTemplates };
+export { listTemplates, templatePreset };
 
 const clamp = (n, min, max, fallback) => {
   const v = Number(n);
