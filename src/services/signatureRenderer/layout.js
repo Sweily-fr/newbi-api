@@ -53,6 +53,10 @@ export function renderLayout(b, ctx, theme = {}) {
   // Aperçu seulement : chaque bloc déplaçable est repéré (poignée de l'éditeur)
   const mark = (name, html) =>
     ctx.markers && html ? `<div data-sig-block="${name}">${html}</div>` : html;
+  // Aperçu seulement : zones de la mise en page (colonne de texte, corps,
+  // cadre), pour aligner les repères de dépôt de l'éditeur sur le rendu
+  const region = (name, html) =>
+    ctx.markers && html ? `<div data-sig-${name}="1">${html}</div>` : html;
   const hasPhoto = Boolean(sig.images.photo?.url);
   const L = effectiveLayout(st, hasPhoto);
   const onBand = L.zone !== "plain";
@@ -143,7 +147,10 @@ export function renderLayout(b, ctx, theme = {}) {
     logo: L.logoPosition === "text" ? logo(L.align, 40) : "",
   };
   const textItems = st.textOrder.flatMap((k) => textBlocks[k] || []);
-  const textColumn = vstack(textItems, { gap: sp.block, align: L.align });
+  const textColumn = region(
+    "column",
+    vstack(textItems, { gap: sp.block, align: L.align }),
+  );
 
   // Colonne à droite (réseaux, logo) et ligne du bas
   const side = vstack(
@@ -308,17 +315,19 @@ export function renderLayout(b, ctx, theme = {}) {
   }
 
   // ── Assemblage avec l'encadré ──────────────────────────────────────────
-  const inside = frameContent({
+  const framedContent = frameContent({
     st,
     sp,
     align: L.align,
     band,
-    body,
+    body: region("body", body),
     bodyFlush,
     bottomRow,
     strip,
     footerInside,
   });
+  const inside =
+    st.frame === "none" ? framedContent : region("frame", framedContent);
   return vstack([inside, ...footerOutside], {
     gap: sp.block,
     align: L.align === "center" ? "center" : "left",

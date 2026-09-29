@@ -313,7 +313,7 @@ describe("signatureRenderer — marqueurs d'aperçu", () => {
     }
     const clean = renderSignature(FULL).html;
     const strip = (h) =>
-      h.replace(/<\/?(span|div)( data-sig-(field|edit|block)="[^"]*")?>/g, "");
+      h.replace(/<\/?(span|div)( data-sig-[a-z]+="[^"]*")?>/g, "");
     expect(strip(html)).toBe(strip(clean));
     expect(clean).not.toContain("data-sig-");
   });
@@ -757,5 +757,20 @@ describe("signatureRenderer — ordre de la colonne de texte", () => {
       expect(preview, k).toContain(`data-sig-block="${k}"`);
     }
     expect(renderSignature(FULL).html).not.toContain("data-sig-block");
+  });
+
+  it("repère colonne de texte, corps et cadre dans l'aperçu seulement", () => {
+    const framed = { ...FULL, style: { frame: "outline" } };
+    const preview = renderSignature(framed, { markers: true }).html;
+    for (const k of ["column", "body", "frame"]) {
+      expect(preview, k).toContain(`data-sig-${k}="1"`);
+    }
+    expect(renderSignature(framed).html).not.toMatch(
+      /data-sig-(column|body|frame)/,
+    );
+    // Sans encadré : pas de repère de cadre
+    expect(renderSignature(FULL, { markers: true }).html).not.toContain(
+      "data-sig-frame",
+    );
   });
 });
