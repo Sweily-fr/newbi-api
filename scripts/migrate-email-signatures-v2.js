@@ -126,11 +126,7 @@ export function mapLegacySignature(doc) {
   const logoHidden = doc.showLogo === false || doc.logoVisible === false;
 
   const layout = str(doc.layout || doc.orientation);
-  const templateId = bannerUrl
-    ? "banner"
-    : layout === "vertical"
-      ? "centered"
-      : "classic";
+  const templateId = layout === "vertical" ? "centered" : "classic";
 
   const showContactIcons = [
     doc.showPhoneIcon,
