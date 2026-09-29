@@ -528,9 +528,9 @@ describe("signatureRenderer — encadrés et contour de photo", () => {
     }).html;
 
   it("encadre la signature par une cellule (contour, fond, barres)", () => {
-    expect(render({ frame: "outline", radius: 8 })).toMatch(
-      /border:1px solid #[0-9a-f]{6};border-radius:8px;padding:/,
-    );
+    const outline = render({ frame: "outline", radius: 8 });
+    expect(outline).toMatch(/border-left:1px solid #[0-9a-f]{6};/);
+    expect(outline).toContain("border-radius:8px 8px 8px 8px;");
     expect(render({ frame: "soft" })).toMatch(/bgcolor="#[0-9a-f]{6}"/);
     expect(render({ frame: "accent-left" })).toContain("border-left:4px solid");
     expect(render({ frame: "accent-top" })).toContain("border-top:4px solid");
@@ -545,9 +545,10 @@ describe("signatureRenderer — encadrés et contour de photo", () => {
     expect(tint("#5a50ff", 0.07)).toBe("#f3f3ff");
   });
 
-  it("les modèles à cadre propre ignorent l'encadré global", () => {
-    const html = render({ frame: "accent-left" }, "header");
-    expect(html).not.toContain("border-left:4px solid");
+  it("bandeau sans encadré : le bloc de couleur est arrondi seul", () => {
+    const html = render({ frame: "none", radius: 10 }, "header");
+    expect(html).toContain("border-radius:10px;");
+    expect(html).not.toContain("border-left:1px solid");
   });
 
   it("contour de photo : bordure de l'image et trait VML pour Outlook", () => {
@@ -561,5 +562,114 @@ describe("signatureRenderer — encadrés et contour de photo", () => {
   it("valeurs hors bornes ramenées dans la liste", () => {
     const html = render({ frame: "néon", radius: 99, photoBorder: 40 });
     expect(html).not.toContain("border:40px");
+  });
+});
+
+describe("signatureRenderer — mise en page réglable", () => {
+  const render = (style, templateId = "modern", extra = {}) =>
+    renderSignature({
+      ...FULL,
+      ...extra,
+      templateId,
+      style: { ...(extra.style || {}), ...style },
+    }).html;
+  const indexOf = (html, needle) => html.indexOf(needle);
+
+  it("sans réglage enregistré, chaque signature garde la mise en page de son modèle", () => {
+    const sig = normalizeSignature({ templateId: "elegant", style: {} });
+    expect(sig.style).toMatchObject({
+      photoPosition: "top",
+      align: "center",
+      titleStyle: "caps",
+      contactStyle: "plain",
+    });
+    const old = normalizeSignature({
+      templateId: "modern",
+      style: { showContactIcons: false },
+    });
+    expect(old.style.contactStyle).toBe("plain");
+    expect(old.style.showContactIcons).toBe(false);
+  });
+
+  it("photo à gauche, à droite ou au-dessus du texte", () => {
+    const left = render({ photoPosition: "left" });
+    const right = render({ photoPosition: "right" });
+    const top = render({ photoPosition: "top" });
+    const photo = "cdn.example.com/photo.jpg";
+    expect(indexOf(left, photo)).toBeLessThan(indexOf(left, "Camille"));
+    expect(indexOf(right, photo)).toBeGreaterThan(indexOf(right, "camille@atelier-nord.fr"));
+    expect(indexOf(top, photo)).toBeLessThan(indexOf(top, "Camille"));
+  });
+
+  it("alignement vertical de la photo", () => {
+    expect(render({ photoValign: "top" })).toMatch(/<td valign="top"[^>]*>(<!--\[if mso\]>)?/);
+    expect(render({ photoValign: "bottom" })).toContain('valign="bottom"');
+  });
+
+  it("réseaux sous le texte, sous la photo, à droite ou en bas", () => {
+    const li = "linkedin.com/in/camille";
+    for (const socialPosition of ["text", "photo", "side", "bottom"]) {
+      const html = render({ socialPosition });
+      expect(html).toContain(li);
+    }
+    const bottom = render({ socialPosition: "bottom" });
+    expect(indexOf(bottom, li)).toBeGreaterThan(indexOf(bottom, "12 rue des Lilas"));
+  });
+
+  it("éléments sortis de l'encadré : rendus après le cadre", () => {
+    // Fin de la table du cadre (première table à bordures séparées)
+    const frameEnd = (html) => {
+      let depth = 0;
+      const re = /<table\b|<\/table>/g;
+      re.lastIndex = html.indexOf("border-collapse:separate");
+      depth = 1;
+      let m;
+      while ((m = re.exec(html))) {
+        depth += m[0] === "</table>" ? -1 : 1;
+        if (depth === 0) return m.index;
+      }
+      return -1;
+    };
+    const inside = render({ frame: "outline", outside: [] });
+    const out = render({ frame: "outline", outside: ["cta", "disclaimer"] });
+    expect(indexOf(inside, "Prendre rendez-vous")).toBeLessThan(frameEnd(inside));
+    expect(indexOf(out, "Prendre rendez-vous")).toBeGreaterThan(frameEnd(out));
+  });
+
+  it("bande de pied teintée dans le cadre", () => {
+    const html = render({
+      frame: "outline",
+      footerStrip: true,
+      socialPosition: "bottom",
+    });
+    expect(html).toMatch(/bgcolor="#[0-9a-f]{6}" style="background-color:#[0-9a-f]{6};padding:12px/);
+  });
+
+  it("styles de coordonnées : icônes, initiales, texte, en ligne", () => {
+    expect(render({ contactStyle: "icons" })).toContain("/contact/");
+    expect(render({ contactStyle: "labels" })).toMatch(/>E<\/span>/);
+    expect(render({ contactStyle: "plain" })).not.toContain("/contact/");
+    expect(render({ contactStyle: "inline" })).toContain("  ·  ");
+  });
+
+  it("toutes les combinaisons restent conformes et sous la limite Gmail", () => {
+    const combos = [];
+    for (const identityZone of ["plain", "band-top", "band-left"])
+      for (const photoPosition of ["left", "right", "top"])
+        for (const frame of ["none", "outline", "soft", "accent-left"])
+          for (const socialPosition of ["text", "photo", "side", "bottom"])
+            combos.push({ identityZone, photoPosition, frame, socialPosition });
+    for (const combo of combos) {
+      const html = render({
+        ...combo,
+        photoColumn: combo.photoPosition === "top" ? "plain" : "tinted",
+        footerStrip: true,
+        outside: ["banner"],
+      });
+      expect(html).not.toMatch(/margin:|display:\s*flex|<div|rgba/);
+      expect(html).not.toMatch(/<td[^>]*><\/td>/);
+      expect(html.length).toBeLessThan(GMAIL_MAX_CHARS);
+      expect(html).toContain("Camille");
+    }
   });
 });

@@ -69,6 +69,48 @@ export const ALIGNMENTS = ["left", "center"];
  */
 export const FRAMES = ["none", "outline", "soft", "accent-left", "accent-top"];
 
+/**
+ * Mise en page, réglage par réglage. Chaque modèle fournit ses valeurs de
+ * départ ; l'utilisateur peut ensuite tout changer.
+ */
+export const LAYOUT_CHOICES = {
+  // Bloc de couleur portant l'identité : aucun, en-tête, à gauche
+  identityZone: ["plain", "band-top", "band-left"],
+  photoPosition: ["left", "right", "top"],
+  photoValign: ["top", "middle", "bottom"],
+  // Colonne de la photo : simple ou sur fond teinté
+  photoColumn: ["plain", "tinted"],
+  // Séparateur entre photo et texte : aucun, trait fin, trait de couleur, barre
+  divider: ["none", "line", "accent", "bar"],
+  // Trait sous l'identité : aucun, court et épais, long et fin
+  accent: ["none", "short", "thin"],
+  identityStyle: ["stack", "inline"],
+  titleStyle: ["normal", "caps"],
+  contactStyle: ["icons", "labels", "plain", "inline"],
+  // Réseaux / logo : sous le texte, sous la photo, à droite, en bas
+  socialPosition: ["text", "photo", "side", "bottom"],
+  logoPosition: ["text", "photo", "side", "bottom"],
+};
+
+/** Éléments qu'on peut sortir de l'encadré. */
+export const OUTSIDE_ITEMS = ["social", "logo", "cta", "banner", "disclaimer"];
+
+export const DEFAULT_LAYOUT = {
+  identityZone: "plain",
+  photoPosition: "left",
+  photoValign: "middle",
+  photoColumn: "plain",
+  divider: "none",
+  accent: "short",
+  identityStyle: "stack",
+  titleStyle: "normal",
+  contactStyle: "icons",
+  socialPosition: "text",
+  logoPosition: "bottom",
+  footerStrip: false,
+  outside: [],
+};
+
 /** Espacements en pixels : entre lignes d'un bloc, entre blocs, entre colonnes. */
 export const SPACING = {
   compact: { line: 2, block: 8, gap: 12 },

@@ -22,6 +22,8 @@ import {
   DEFAULT_TEMPLATE_ID,
   ELEMENT_FONT_SIZE,
   FRAMES,
+  LAYOUT_CHOICES,
+  OUTSIDE_ITEMS,
   TEXT_ELEMENTS,
 } from "./constants.js";
 import {
@@ -30,7 +32,7 @@ import {
   socialIconSpec,
   SAMPLE_PHOTO_URL,
 } from "./icons.js";
-import { displayUrl, hex, normalizeUrl, tint } from "./primitives.js";
+import { displayUrl, hex, normalizeUrl } from "./primitives.js";
 import TEMPLATES, { listTemplates, templatePreset } from "./templates.js";
 
 export { listTemplates, templatePreset };
@@ -88,6 +90,28 @@ function normalizeElements(input) {
  */
 export function normalizeSignature(input = {}) {
   const s = input.style || {};
+  const templateId = oneOf(input.templateId, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID);
+  // Réglage absent = valeur du modèle : une signature enregistrée avant la
+  // mise en page réglable garde exactement son rendu.
+  const tpl = templatePreset(templateId);
+  const layout = Object.fromEntries(
+    Object.entries(LAYOUT_CHOICES).map(([key, allowed]) => [
+      key,
+      oneOf(s[key], allowed, tpl[key] ?? allowed[0]),
+    ]),
+  );
+  // Ancien interrupteur « icônes de contact » : sans style de coordonnées
+  // explicite, le désactiver revient au style « texte seul »
+  if (
+    !LAYOUT_CHOICES.contactStyle.includes(s.contactStyle) &&
+    s.showContactIcons === false &&
+    layout.contactStyle === "icons"
+  ) {
+    layout.contactStyle = "plain";
+  }
+  const outside = Array.isArray(s.outside)
+    ? OUTSIDE_ITEMS.filter((k) => s.outside.includes(k))
+    : [...(tpl.outside || [])];
   const style = {
     fontFamily: oneOf(
       s.fontFamily,
@@ -112,15 +136,20 @@ export function normalizeSignature(input = {}) {
     showContactIcons: bool(s.showContactIcons, DEFAULT_STYLE.showContactIcons),
     separatorColor: hex(s.separatorColor, DEFAULT_STYLE.separatorColor),
     spacing: oneOf(s.spacing, SPACINGS, DEFAULT_STYLE.spacing),
-    align: oneOf(s.align, ALIGNMENTS, DEFAULT_STYLE.align),
-    frame: oneOf(s.frame, FRAMES, DEFAULT_STYLE.frame),
+    align: oneOf(s.align, ALIGNMENTS, tpl.align || DEFAULT_STYLE.align),
+    frame: oneOf(s.frame, FRAMES, tpl.frame || DEFAULT_STYLE.frame),
     // Couleurs facultatives : vide = déduite de la couleur principale
     frameColor: s.frameColor ? hex(s.frameColor, "") : "",
     radius: clamp(s.radius, 0, 24, DEFAULT_STYLE.radius),
     photoBorder: clamp(s.photoBorder, 0, 6, DEFAULT_STYLE.photoBorder),
     photoBorderColor: s.photoBorderColor ? hex(s.photoBorderColor, "") : "",
+    ...layout,
+    footerStrip: bool(s.footerStrip, Boolean(tpl.footerStrip)),
+    outside,
     elements: normalizeElements(s.elements),
   };
+  // Tenu à jour pour les anciens clients : icônes = style « icons »
+  style.showContactIcons = style.contactStyle === "icons";
 
   const id = input.identity || {};
   const c = input.contact || {};
@@ -156,7 +185,7 @@ export function normalizeSignature(input = {}) {
   const disclaimer = input.disclaimer || {};
 
   return {
-    templateId: oneOf(input.templateId, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID),
+    templateId,
     identity: {
       firstName: str(id.firstName, 80),
       lastName: str(id.lastName, 80),
@@ -245,48 +274,6 @@ export function plainText(sig) {
 }
 
 /**
- * Encadré autour du corps : une seule cellule, bordure ou fond. Outlook
- * bureau affiche des angles droits (il ignore border-radius), le reste est
- * identique partout.
- */
-function framed(body, { st, sp }) {
-  if (!body || st.frame === "none") return body;
-  const r = st.radius;
-  const pad = sp.block + 8;
-  const wrap = (attrs, style) =>
-    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td${attrs} style="${style}">${body}</td></tr></table>`;
-  switch (st.frame) {
-    case "outline": {
-      const color = st.frameColor || st.separatorColor;
-      return wrap(
-        "",
-        `border:1px solid ${color};border-radius:${r}px;padding:${pad}px ${pad + 4}px;`,
-      );
-    }
-    case "soft": {
-      const color = st.frameColor || tint(st.primaryColor, 0.07);
-      return wrap(
-        ` bgcolor="${color}"`,
-        `background-color:${color};border-radius:${r}px;padding:${pad}px ${pad + 4}px;`,
-      );
-    }
-    case "accent-left": {
-      const color = st.frameColor || st.primaryColor;
-      return wrap(
-        "",
-        `border-left:4px solid ${color};padding:4px 0 4px ${sp.gap}px;`,
-      );
-    }
-    case "accent-top": {
-      const color = st.frameColor || st.primaryColor;
-      return wrap("", `border-top:4px solid ${color};padding:${pad}px 0 0 0;`);
-    }
-    default:
-      return body;
-  }
-}
-
-/**
  * Rend une signature.
  * @returns {{ html: string, text: string, chars: number, warnings: string[] }}
  */
@@ -321,10 +308,7 @@ export function renderSignature(
 
   const blocks = buildBlocks(ctx);
   const template = TEMPLATES[sig.templateId] || TEMPLATES[DEFAULT_TEMPLATE_ID];
-  const rendered = template.render(blocks, ctx);
-  // Les modèles qui dessinent déjà leur propre cadre ignorent l'encadré
-  const body =
-    template.supports?.frame === false ? rendered : framed(rendered, ctx);
+  const body = template.render(blocks, ctx);
 
   // Table englobante : fond transparent (mode sombre), aucune largeur fixe
   // (le contenu dicte la largeur, la signature reste lisible sur mobile).

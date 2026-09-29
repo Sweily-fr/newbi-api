@@ -111,6 +111,25 @@ type SignatureStyleV2 {
   "Couleur du contour de la photo ; vide = couleur principale."
   photoBorderColor: String!
   """
+  Mise en page (valeurs effectives : celles du modèle quand rien n'a été
+  choisi). Valeurs possibles : voir LAYOUT_CHOICES côté générateur.
+  """
+  identityZone: String!
+  photoPosition: String!
+  photoValign: String!
+  photoColumn: String!
+  divider: String!
+  accent: String!
+  identityStyle: String!
+  titleStyle: String!
+  contactStyle: String!
+  socialPosition: String!
+  logoPosition: String!
+  "Bande teintée en bas du cadre (réseaux, logo)."
+  footerStrip: Boolean!
+  "Éléments placés en dehors de l'encadré : social, logo, cta, banner, disclaimer."
+  outside: [String!]!
+  """
   Réglages par élément (seulement ceux modifiés).
   """
   elements: SignatureElementStylesV2!
@@ -193,6 +212,11 @@ type SignatureTemplateV2 {
   description: String!
   supports: SignatureTemplateSupportsV2!
   preset: SignatureTemplatePresetV2!
+  """
+  Tous les réglages de départ du modèle (typographie, formes, mise en page),
+  à appliquer au style quand on le choisit.
+  """
+  defaults: JSON!
 }
 
 type SignatureSocialNetworkV2 {
@@ -311,6 +335,19 @@ input SignatureStyleV2Input {
   radius: Int
   photoBorder: Int
   photoBorderColor: String
+  identityZone: String
+  photoPosition: String
+  photoValign: String
+  photoColumn: String
+  divider: String
+  accent: String
+  identityStyle: String
+  titleStyle: String
+  contactStyle: String
+  socialPosition: String
+  logoPosition: String
+  footerStrip: Boolean
+  outside: [String!]
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

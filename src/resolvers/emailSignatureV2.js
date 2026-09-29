@@ -259,6 +259,9 @@ const emailSignatureV2Resolvers = {
       banner: doc.images?.banner || null,
     }),
     social: (doc) => doc.social || [],
+    // Style effectif : réglages absents = valeurs du modèle, pour que
+    // l'éditeur affiche la mise en page réellement rendue
+    style: (doc) => normalizeSignature(plain(doc)).style,
     render: async (doc) => {
       const data = plain(doc);
       await ensureIconsSoon(data);
@@ -284,7 +287,7 @@ const emailSignatureV2Resolvers = {
     }),
 
     signatureCatalogV2: requireRead("signatures")(async () => ({
-      templates: listTemplates(),
+      templates: listTemplates().map((t) => ({ ...t, defaults: t.preset })),
       networks: Object.entries(SOCIAL_NETWORKS).map(([id, n]) => ({
         id,
         label: n.label,

@@ -91,9 +91,11 @@ export function td(inner, { attrs = "", style = "" } = {}) {
 
 export function textStyle({ font, size, color, weight = "normal", italic }) {
   const lineHeight = Math.round(size * 1.4);
-  return `font-family:${font};font-size:${size}px;line-height:${lineHeight}px;color:${color};font-weight:${weight};${
-    italic ? "font-style:italic;" : ""
-  }`;
+  // font-weight:normal est la valeur par défaut : l'omettre allège le HTML
+  // (limite Gmail de 10 000 caractères)
+  return `font-family:${font};font-size:${size}px;line-height:${lineHeight}px;color:${color};${
+    weight !== "normal" ? `font-weight:${weight};` : ""
+  }${italic ? "font-style:italic;" : ""}`;
 }
 
 export const span = (text, style) =>

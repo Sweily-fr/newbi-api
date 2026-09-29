@@ -11,6 +11,8 @@ import {
   ALIGNMENTS,
   FONT_FAMILIES,
   FRAMES,
+  LAYOUT_CHOICES,
+  OUTSIDE_ITEMS,
   ICON_COLOR_MODES,
   ICON_STYLES,
   PHOTO_SHAPES,
@@ -73,6 +75,16 @@ const styleSchema = new mongoose.Schema(
     radius: { type: Number, min: 0, max: 24, default: 12 },
     photoBorder: { type: Number, min: 0, max: 6, default: 0 },
     photoBorderColor: { type: String, default: "" },
+    // Mise en page : sans valeur, le générateur prend celle du modèle (les
+    // signatures antérieures gardent ainsi leur rendu)
+    ...Object.fromEntries(
+      Object.entries(LAYOUT_CHOICES).map(([key, values]) => [
+        key,
+        { type: String, enum: values, default: undefined },
+      ]),
+    ),
+    footerStrip: { type: Boolean, default: undefined },
+    outside: { type: [{ type: String, enum: OUTSIDE_ITEMS }], default: undefined },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },
