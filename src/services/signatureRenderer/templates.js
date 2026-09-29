@@ -15,22 +15,30 @@
 import { TEMPLATE_IDS } from "./constants.js";
 import { hstack, vstack } from "./primitives.js";
 
+/**
+ * Base typographique commune, validée par l'utilisateur (29/09/2026) sur le
+ * modèle Moderne : Arial 13, nom en 19 gras, société en gras, icônes de
+ * contact dans la couleur principale, réseaux 22 px arrondis, photo ronde
+ * 92 px. Chaque modèle ne s'en écarte que pour ce que sa disposition impose.
+ */
+const BASE_PRESET = {
+  fontFamily: "arial",
+  fontSize: 13,
+  photoShape: "circle",
+  photoSize: 92,
+  iconStyle: "rounded",
+  iconSize: 22,
+  spacing: "normal",
+  showContactIcons: true,
+};
+
 const TEMPLATES = {
   modern: {
     name: "Moderne",
     description:
       "Photo ronde, nom en couleur, trait d'accent : le choix sûr et actuel.",
     supports: { photo: true, logo: true, align: false },
-    preset: {
-      fontFamily: "helvetica",
-      fontSize: 13,
-      photoShape: "circle",
-      photoSize: 92,
-      iconStyle: "rounded",
-      iconSize: 22,
-      spacing: "normal",
-      showContactIcons: true,
-    },
+    preset: { ...BASE_PRESET },
     render(b, { st, sp }) {
       const column = vstack(
         [
@@ -57,16 +65,7 @@ const TEMPLATES = {
     description:
       "Bloc de couleur avec la photo et le nom en blanc, coordonnées à côté.",
     supports: { photo: true, logo: true, align: false },
-    preset: {
-      fontFamily: "helvetica",
-      fontSize: 13,
-      photoShape: "circle",
-      photoSize: 84,
-      iconStyle: "circle",
-      iconSize: 22,
-      spacing: "normal",
-      showContactIcons: true,
-    },
+    preset: { ...BASE_PRESET, photoSize: 84 },
     render(b, { st, sp }) {
       const inner = vstack(
         [
@@ -77,7 +76,7 @@ const TEMPLATES = {
           }),
           b.identity({
             nameColor: "#ffffff",
-            nameSize: st.fontSize + 4,
+            nameSize: st.fontSize + 5,
             titleColor: "#ffffff",
             companyColor: "#ffffff",
             align: "center",
@@ -106,12 +105,8 @@ const TEMPLATES = {
       "Nom en grand, poste en petites capitales, filets fins : sobre et raffiné.",
     supports: { photo: true, logo: true, align: false },
     preset: {
-      fontFamily: "georgia",
-      fontSize: 13,
-      photoShape: "circle",
-      photoSize: 76,
-      iconStyle: "plain",
-      iconSize: 18,
+      ...BASE_PRESET,
+      photoSize: 80,
       spacing: "airy",
       showContactIcons: false,
     },
@@ -123,7 +118,7 @@ const TEMPLATES = {
             size: Math.min(st.photoSize, 80),
             align: "center",
           }),
-          b.name({ size: st.fontSize + 10, color: st.textColor }),
+          b.name({ size: st.fontSize + 8, color: st.textColor }),
           b.caption(),
           b.rule({ width: 56, color: st.primaryColor, height: 2 }),
           b.contact({ icons: false, align: "center" }),
@@ -141,16 +136,7 @@ const TEMPLATES = {
     description:
       "Photo à gauche, coordonnées à droite, séparées par un trait de couleur.",
     supports: { photo: true, logo: true, align: false },
-    preset: {
-      fontFamily: "arial",
-      fontSize: 13,
-      photoShape: "rounded",
-      photoSize: 88,
-      iconStyle: "rounded",
-      iconSize: 22,
-      spacing: "normal",
-      showContactIcons: true,
-    },
+    preset: { ...BASE_PRESET, photoShape: "rounded" },
     render(b, { st, sp }) {
       const column = vstack(
         [
@@ -179,22 +165,13 @@ const TEMPLATES = {
     description:
       "Nom en grand dans la couleur principale, barre verticale, photo arrondie.",
     supports: { photo: true, logo: true, align: false },
-    preset: {
-      fontFamily: "helvetica",
-      fontSize: 13,
-      photoShape: "rounded",
-      photoSize: 96,
-      iconStyle: "square",
-      iconSize: 22,
-      spacing: "normal",
-      showContactIcons: true,
-    },
+    preset: { ...BASE_PRESET, photoShape: "rounded", photoSize: 96 },
     render(b, { st, sp }) {
       // La barre est une bordure de cellule : elle suit la hauteur du texte
       // dans tous les clients (une table imbriquée ne s'étirerait pas).
       const column = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:4px solid ${st.primaryColor};padding:2px 0 2px ${sp.gap}px;">${vstack(
         [
-          b.name({ color: st.primaryColor, size: st.fontSize + 9 }),
+          b.name({ color: st.primaryColor, size: st.fontSize + 8 }),
           b.identity({ withName: false }),
           b.contact(),
           b.social(),
@@ -217,16 +194,7 @@ const TEMPLATES = {
     description:
       "Photo puis texte, le tout centré, avec un trait d'accent sous le nom.",
     supports: { photo: true, logo: true, align: false },
-    preset: {
-      fontFamily: "helvetica",
-      fontSize: 13,
-      photoShape: "circle",
-      photoSize: 92,
-      iconStyle: "circle",
-      iconSize: 22,
-      spacing: "normal",
-      showContactIcons: true,
-    },
+    preset: { ...BASE_PRESET },
     render(b, { st, sp }) {
       return vstack(
         [
@@ -253,12 +221,8 @@ const TEMPLATES = {
       "Tout à l'horizontale : photo, identité, coordonnées et réseaux, séparés par des traits.",
     supports: { photo: true, logo: false, align: false },
     preset: {
-      fontFamily: "helvetica",
-      fontSize: 12,
-      photoShape: "circle",
+      ...BASE_PRESET,
       photoSize: 56,
-      iconStyle: "circle",
-      iconSize: 20,
       spacing: "compact",
       showContactIcons: false,
     },
@@ -293,14 +257,7 @@ const TEMPLATES = {
     name: "Compact",
     description: "Tout sur deux lignes, sans photo : idéal pour les réponses.",
     supports: { photo: false, logo: false, align: false },
-    preset: {
-      fontFamily: "arial",
-      fontSize: 12,
-      iconStyle: "plain",
-      iconSize: 18,
-      spacing: "compact",
-      showContactIcons: false,
-    },
+    preset: { ...BASE_PRESET, spacing: "compact", showContactIcons: false },
     render(b, { st, sp }) {
       return vstack(
         [
@@ -319,21 +276,13 @@ const TEMPLATES = {
     description:
       "Logo en tête, trait de couleur, identité et coordonnées en deux colonnes.",
     supports: { photo: false, logo: true, align: false },
-    preset: {
-      fontFamily: "calibri",
-      fontSize: 13,
-      logoWidth: 140,
-      iconStyle: "square",
-      iconSize: 20,
-      spacing: "normal",
-      showContactIcons: true,
-    },
+    preset: { ...BASE_PRESET, logoWidth: 140 },
     render(b, { st, sp }) {
       const columns = hstack(
         [
           {
             html: b.identity({
-              nameSize: st.fontSize + 5,
+              nameSize: st.fontSize + 6,
               companyColor: st.primaryColor,
             }),
             valign: "top",
@@ -362,18 +311,11 @@ const TEMPLATES = {
     description:
       "Texte seul, sans icônes : deux lignes et un filet, rien de plus.",
     supports: { photo: false, logo: false, align: true },
-    preset: {
-      fontFamily: "georgia",
-      fontSize: 13,
-      iconStyle: "plain",
-      iconSize: 16,
-      spacing: "airy",
-      showContactIcons: false,
-    },
+    preset: { ...BASE_PRESET, spacing: "airy", showContactIcons: false },
     render(b, { st, sp }) {
       return vstack(
         [
-          b.identity({ nameSize: st.fontSize + 4, align: st.align }),
+          b.identity({ nameSize: st.fontSize + 6, align: st.align }),
           b.rule({
             width: 40,
             color: st.separatorColor,
@@ -393,16 +335,7 @@ const TEMPLATES = {
     name: "Bandeau",
     description: "Signature classique surmontant un bandeau pleine largeur.",
     supports: { photo: true, logo: true, align: false },
-    preset: {
-      fontFamily: "helvetica",
-      fontSize: 13,
-      photoShape: "circle",
-      photoSize: 84,
-      iconStyle: "rounded",
-      iconSize: 22,
-      spacing: "normal",
-      showContactIcons: true,
-    },
+    preset: { ...BASE_PRESET },
     render(b, { st, sp }) {
       const column = vstack(
         [

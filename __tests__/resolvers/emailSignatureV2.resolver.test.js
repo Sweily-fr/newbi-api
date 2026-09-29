@@ -84,7 +84,8 @@ describe("EmailSignatureV2 — création", () => {
       { input: { name: "Élégante", templateId: "elegant" } },
       ctx(),
     );
-    expect(doc.style.fontFamily).toBe("georgia");
+    expect(doc.style.fontFamily).toBe("arial");
+    expect(doc.style.spacing).toBe("airy");
     expect(doc.style.showContactIcons).toBe(false);
     // la couleur reste celle par défaut, jamais imposée par le modèle
     expect(doc.style.primaryColor).toBe("#5a50ff");
@@ -187,7 +188,8 @@ describe("EmailSignatureV2 — lecture et isolation", () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
     expect(catalog.templates.length).toBe(11);
     expect(catalog.templates[0].id).toBe("modern");
-    expect(catalog.templates[0].preset.fontFamily).toBe("helvetica");
+    expect(catalog.templates[0].preset.fontFamily).toBe("arial");
+    expect(catalog.templates[0].preset.photoSize).toBe(92);
     expect(catalog.networks.find((n) => n.id === "linkedin").brandColor).toBe(
       "#0a66c2",
     );
