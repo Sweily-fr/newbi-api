@@ -245,6 +245,26 @@ async function readUpload(file) {
   return { buffer: Buffer.concat(chunks), filename };
 }
 
+/**
+ * Réglages de départ complets d'un modèle, emplacements compris : choisir
+ * un modèle remet chaque élément à sa place dans ce modèle.
+ */
+function templateDefaults(t) {
+  const st = normalizeSignature({
+    templateId: t.id,
+    style: t.preset,
+    images: { photo: { url: "https://exemple.invalid/photo.jpg" } },
+  }).style;
+  return {
+    ...t.preset,
+    slots: st.slots,
+    visualSide: st.visualSide,
+    visualFill: st.visualFill,
+    headerPhoto: st.headerPhoto,
+    headerFill: st.headerFill,
+  };
+}
+
 const emailSignatureV2Resolvers = {
   // Mongoose retire les objets vides : on garantit la présence du champ
   SignatureStyleV2: {
@@ -287,7 +307,10 @@ const emailSignatureV2Resolvers = {
     }),
 
     signatureCatalogV2: requireRead("signatures")(async () => ({
-      templates: listTemplates().map((t) => ({ ...t, defaults: t.preset })),
+      templates: listTemplates().map((t) => ({
+        ...t,
+        defaults: templateDefaults(t),
+      })),
       networks: Object.entries(SOCIAL_NETWORKS).map(([id, n]) => ({
         id,
         label: n.label,

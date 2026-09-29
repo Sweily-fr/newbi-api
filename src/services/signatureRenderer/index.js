@@ -22,19 +22,19 @@ import {
   DEFAULT_TEMPLATE_ID,
   ELEMENT_FONT_SIZE,
   FRAMES,
+  HEADER_FILLS,
+  HEADER_PHOTOS,
+  VISUAL_FILLS,
+  VISUAL_SIDES,
   LAYOUT_CHOICES,
   OUTSIDE_ITEMS,
   TEXT_BLOCKS,
   TEXT_ELEMENTS,
 } from "./constants.js";
-import {
-  contactIconSpec,
-  iconUrl as defaultIconUrl,
-  socialIconSpec,
-  SAMPLE_PHOTO_URL,
-} from "./icons.js";
+import { iconUrl as defaultIconUrl, SAMPLE_PHOTO_URL } from "./icons.js";
 import { displayUrl, hex, normalizeUrl } from "./primitives.js";
 import TEMPLATES, { listTemplates, templatePreset } from "./templates.js";
+import { layoutFromLegacy, normalizeSlots } from "./slots.js";
 
 export { listTemplates, templatePreset };
 
@@ -163,6 +163,15 @@ export function normalizeSignature(input = {}) {
   // Tenu à jour pour les anciens clients : icônes = style « icons »
   style.showContactIcons = style.contactStyle === "icons";
 
+  // Emplacements des éléments : ceux choisis dans l'éditeur, sinon ceux
+  // déduits des réglages ci-dessus (rendu identique à avant)
+  const derived = layoutFromLegacy(style, Boolean(input.images?.photo?.url));
+  style.slots = normalizeSlots(s.slots) || derived.slots;
+  style.visualSide = oneOf(s.visualSide, VISUAL_SIDES, derived.visualSide);
+  style.visualFill = oneOf(s.visualFill, VISUAL_FILLS, derived.visualFill);
+  style.headerPhoto = oneOf(s.headerPhoto, HEADER_PHOTOS, derived.headerPhoto);
+  style.headerFill = oneOf(s.headerFill, HEADER_FILLS, "solid");
+
   const id = input.identity || {};
   const c = input.contact || {};
   const im = input.images || {};
@@ -241,26 +250,16 @@ export function normalizeSignature(input = {}) {
 
 /** Icônes référencées par le HTML d'une signature (à garantir sur R2). */
 export function requiredIcons(input) {
-  const sig = normalizeSignature(input);
-  const st = sig.style;
-  const specs = [];
-  if (st.showContactIcons) {
-    const color =
-      st.iconColorMode === "custom" ? st.iconColor : st.primaryColor;
-    for (const field of ["phone", "mobile", "email", "website", "address"]) {
-      if (sig.contact[field]) specs.push(contactIconSpec(field, color));
-    }
-  }
-  for (const s of sig.social) {
-    const color =
-      st.iconColorMode === "brand"
-        ? SOCIAL_NETWORKS[s.network].hex
-        : st.iconColorMode === "custom"
-          ? st.iconColor
-          : st.primaryColor;
-    specs.push(socialIconSpec(s.network, st.iconStyle, color));
-  }
-  return specs;
+  // Les icônes réellement utilisées par le rendu (couleurs comprises : une
+  // icône posée sur un fond de couleur passe en blanc)
+  const specs = new Map();
+  renderSignature(input, {
+    iconUrl: (spec) => {
+      specs.set(JSON.stringify(spec), spec);
+      return defaultIconUrl(spec);
+    },
+  });
+  return [...specs.values()];
 }
 
 /** Version texte brut, pour les clients en mode texte. */

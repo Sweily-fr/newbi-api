@@ -60,6 +60,29 @@ type SignatureDisclaimerV2 {
 }
 
 """
+Emplacements des éléments (photo, name, title, company, tagline, accent,
+phone, mobile, email, website, address, social, logo, cta, banner,
+disclaimer), dans l'ordre d'affichage.
+"""
+type SignatureSlotsV2 {
+  header: [String!]!
+  visual: [String!]!
+  text: [String!]!
+  side: [String!]!
+  footer: [String!]!
+  outside: [String!]!
+}
+
+input SignatureSlotsV2Input {
+  header: [String!]
+  visual: [String!]
+  text: [String!]
+  side: [String!]
+  footer: [String!]
+  outside: [String!]
+}
+
+"""
 Mise en forme propre à un élément de texte. Un champ vide = comme le modèle.
 """
 type SignatureTextStyleV2 {
@@ -131,6 +154,16 @@ type SignatureStyleV2 {
   outside: [String!]!
   "Ordre de la colonne de texte : identity, contact, social, logo."
   textOrder: [String!]!
+  "Emplacement de chaque élément (effectif : déduit du modèle sinon)."
+  slots: SignatureSlotsV2!
+  "Côté de la colonne photo : left, right."
+  visualSide: String!
+  "Fond de la colonne photo : none, tint, solid (texte blanc)."
+  visualFill: String!
+  "Place de la photo dans le bandeau : left, right, top."
+  headerPhoto: String!
+  "Fond du bandeau : solid (texte blanc), tint."
+  headerFill: String!
   """
   Réglages par élément (seulement ceux modifiés).
   """
@@ -351,6 +384,11 @@ input SignatureStyleV2Input {
   footerStrip: Boolean
   outside: [String!]
   textOrder: [String!]
+  slots: SignatureSlotsV2Input
+  visualSide: String
+  visualFill: String
+  headerPhoto: String
+  headerFill: String
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

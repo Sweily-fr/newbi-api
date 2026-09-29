@@ -14,6 +14,10 @@ import {
   LAYOUT_CHOICES,
   OUTSIDE_ITEMS,
   TEXT_BLOCKS,
+  VISUAL_SIDES,
+  VISUAL_FILLS,
+  HEADER_PHOTOS,
+  HEADER_FILLS,
   ICON_COLOR_MODES,
   ICON_STYLES,
   PHOTO_SHAPES,
@@ -93,6 +97,13 @@ const styleSchema = new mongoose.Schema(
       type: [{ type: String, enum: TEXT_BLOCKS }],
       default: undefined,
     },
+    // Emplacements de chaque élément (validés par le générateur) ; sans
+    // valeur, déduits des réglages ci-dessus
+    slots: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    visualSide: { type: String, enum: VISUAL_SIDES, default: undefined },
+    visualFill: { type: String, enum: VISUAL_FILLS, default: undefined },
+    headerPhoto: { type: String, enum: HEADER_PHOTOS, default: undefined },
+    headerFill: { type: String, enum: HEADER_FILLS, default: undefined },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },

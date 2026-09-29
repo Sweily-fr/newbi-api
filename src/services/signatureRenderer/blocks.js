@@ -14,7 +14,7 @@ import {
   button,
   displayUrl,
   esc,
-  hsep,
+  escAttr,
   iconLines,
   iconRow,
   img,
@@ -24,7 +24,6 @@ import {
   span,
   telHref,
   textStyle,
-  vstack,
 } from "./primitives.js";
 
 export function buildBlocks(ctx) {
@@ -128,6 +127,29 @@ export function buildBlocks(ctx) {
   );
   const styledSpan = (html, style) => `<span style="${style}">${html}</span>`;
 
+  /**
+   * Une ligne de coordonnées : lien cliquable (tel:, mailto:, site) portant
+   * lui-même le style du texte, ou texte dans un span stylé.
+   */
+  const contactEntry = (field, style) => {
+    const value = contact[field];
+    if (!value) return null;
+    const entry = (label, href) => ({
+      field,
+      html: href
+        ? `<a href="${escAttr(href)}" style="${style}text-decoration:none;">${editable(field, label)}</a>`
+        : `<span style="${style}">${editable(field, label)}</span>`,
+    });
+    if (field === "phone" || field === "mobile") {
+      return entry(value, `tel:${telHref(value)}`);
+    }
+    if (field === "email") return entry(value, `mailto:${value}`);
+    if (field === "website") {
+      return entry(displayUrl(value), normalizeUrl(value));
+    }
+    return entry(value, "");
+  };
+
   const blocks = {
     name({ color = st.textColor, size = base + 3 } = {}) {
       return fullName
@@ -138,198 +160,19 @@ export function buildBlocks(ctx) {
         : "";
     },
 
-    identity({
-      nameColor = st.textColor,
-      nameSize = base + 3,
-      titleColor = st.mutedColor,
-      companyColor = st.textColor,
-      align = st.align,
-      withName = true,
-      withCompany = true,
-    } = {}) {
-      return vstack(
-        [
-          withName ? blocks.name({ color: nameColor, size: nameSize }) : "",
-          titleLine
-            ? markInline(
-                "jobTitle",
-                styledSpan(
-                  titleHtml,
-                  styled("jobTitle", { size: base, color: titleColor }),
-                ),
-              )
-            : "",
-          withCompany && identity.company
-            ? markInline(
-                "company",
-                styledSpan(
-                  editable("company", identity.company),
-                  styled("company", {
-                    size: base,
-                    color: companyColor,
-                    bold: true,
-                  }),
-                ),
-              )
-            : "",
-          identity.tagline
-            ? markInline(
-                "tagline",
-                styledSpan(
-                  editable("tagline", identity.tagline),
-                  styled("tagline", {
-                    size: base - 1,
-                    color: titleColor,
-                    italic: true,
-                  }),
-                ),
-              )
-            : "",
-        ],
-        { gap: sp.line, align },
-      );
-    },
-
-    /** Poste en petites capitales espacées (modèle élégant). */
-    caption({ color = st.mutedColor } = {}) {
-      const value = [titleLine, identity.company].filter(Boolean).join("  ·  ");
-      if (!value) return "";
-      const html = [titleHtml, editable("company", identity.company)]
-        .filter(Boolean)
-        .join(esc("  ·  "));
-      return markInline(
-        "jobTitle",
-        `<span style="${styled("jobTitle", { size: base - 2, color, uppercase: true })}letter-spacing:2px;">${html}</span>`,
-      );
-    },
-
-    /** « Prénom Nom · Poste · Entreprise » sur une ligne (modèle compact). */
-    identityInline() {
-      const parts = [
-        fullName
-          ? markInline(
-              "firstName",
-              styledSpan(
-                nameHtml,
-                styled("name", {
-                  size: base + 1,
-                  color: st.textColor,
-                  bold: true,
-                }),
-              ),
-            )
-          : "",
-        titleLine
-          ? markInline(
-              "jobTitle",
-              styledSpan(
-                titleHtml,
-                styled("jobTitle", { size: base, color: st.mutedColor }),
-              ),
-            )
-          : "",
-        identity.company
-          ? markInline(
-              "company",
-              styledSpan(
-                editable("company", identity.company),
-                styled("company", { size: base, color: st.textColor }),
-              ),
-            )
-          : "",
-      ].filter(Boolean);
-      if (parts.length === 0) return "";
-      const sep = span("  ·  ", text(base, st.mutedColor));
-      return parts.join(sep);
-    },
-
-    contactItems() {
-      const items = [];
-      const c = contact;
-      const lineStyle = styled("contact", { size: base, color: st.mutedColor });
-      const lineColor = resolve("contact", {
-        size: base,
-        color: st.mutedColor,
-      }).color;
-      const push = (field, label, href) =>
-        items.push({
-          field,
-          html: href
-            ? link(href, editable(field, label), { color: lineColor })
-            : editable(field, label),
-          plain: label,
-          style: lineStyle,
-        });
-      if (c.phone) push("phone", c.phone, `tel:${telHref(c.phone)}`);
-      if (c.mobile) push("mobile", c.mobile, `tel:${telHref(c.mobile)}`);
-      if (c.email) push("email", c.email, `mailto:${c.email}`);
-      if (c.website)
-        push("website", displayUrl(c.website), normalizeUrl(c.website));
-      if (c.address) push("address", c.address, "");
-      return items;
-    },
-
-    contact({
-      icons = st.showContactIcons,
-      align = st.align,
-      labels = false,
-    } = {}) {
-      const items = blocks.contactItems();
-      if (items.length === 0) return "";
-      // Initiales à la place des icônes (T, M, E, W, A) : du texte seul,
-      // donc aucune image à charger, net dans tous les clients.
-      const LABELS = {
-        phone: "T",
-        mobile: "M",
-        email: "E",
-        website: "W",
-        address: "A",
-      };
-      const labelStyle = text(Math.max(10, base - 2), st.primaryColor, {
-        weight: "bold",
-      });
-      const lines = items.map((item) => {
-        const contentHtml = markInline(
-          item.field,
-          `<span style="${item.style}">${item.html}</span>`,
-        );
-        if (labels) {
-          return {
-            iconHtml: `<span style="${labelStyle}">${LABELS[item.field]}</span>`,
-            contentHtml,
-          };
-        }
-        if (!icons) return { contentHtml };
-        const spec = contactIconSpec(item.field, contactIconColor);
-        const iconHtml = img({
-          src: iconUrl(spec),
-          width: 16,
-          height: 16,
-          alt: "",
-        });
-        return { iconHtml, contentHtml };
-      });
-      return iconLines(lines, { gap: sp.line, align });
-    },
-
-    /** Contact sur une seule ligne, séparé par des points médians. */
-    contactInline() {
-      const items = blocks.contactItems();
-      if (items.length === 0) return "";
-      const sep = span("  ·  ", text(base, st.mutedColor));
-      return items
-        .map((i) =>
-          markInline(i.field, `<span style="${i.style}">${i.html}</span>`),
-        )
-        .join(sep);
-    },
-
-    social({ align = st.align, size = st.iconSize } = {}) {
+    social({ align = st.align, size = st.iconSize, onFill = false } = {}) {
+      // Sur un fond de la couleur principale, les icônes « principale » ou
+      // « personnalisée » passent en blanc (sinon invisibles) ; les couleurs
+      // de marque restent.
+      const colorFor = (network) =>
+        onFill && st.iconColorMode !== "brand"
+          ? "#ffffff"
+          : socialColorFor(network);
       const items = sig.social
         .filter((s) => s.url && SOCIAL_NETWORKS[s.network])
         .map((s) => ({
           src: iconUrl(
-            socialIconSpec(s.network, st.iconStyle, socialColorFor(s.network)),
+            socialIconSpec(s.network, st.iconStyle, colorFor(s.network)),
           ),
           href: normalizeUrl(s.url),
           alt: SOCIAL_NETWORKS[s.network].label,
@@ -457,10 +300,6 @@ export function buildBlocks(ctx) {
       );
     },
 
-    hsep() {
-      return hsep(st.separatorColor);
-    },
-
     /** Trait horizontal paramétrable : largeur (px ou pleine), couleur, hauteur. */
     rule({
       width = null,
@@ -474,16 +313,231 @@ export function buildBlocks(ctx) {
     },
 
     /** Trait fin dans la couleur principale, plus court (accent). */
-    accent({ width = 40, height = 3, align = "left" } = {}) {
-      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${align === "center" ? ' align="center"' : ""} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td width="${width}" height="${height}" bgcolor="${st.primaryColor}" style="width:${width}px;height:${height}px;background-color:${st.primaryColor};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
+    accent({
+      width = 40,
+      height = 3,
+      align = "left",
+      color = st.primaryColor,
+    } = {}) {
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${align === "center" ? ' align="center"' : ""} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td width="${width}" height="${height}" bgcolor="${color}" style="width:${width}px;height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
     },
 
-    /** Pied commun : bandeau, bouton, mention, empilés sous le corps. */
-    footer({ align = st.align } = {}) {
-      return vstack([blocks.cta(), blocks.banner(), blocks.disclaimer()], {
-        gap: sp.block,
-        align,
+    // ── Rendu élément par élément (mise en page par emplacements) ──────────
+
+    /** Poste (et service) seul. */
+    titleItem({ color = st.mutedColor } = {}) {
+      return titleLine
+        ? markInline(
+            "jobTitle",
+            styledSpan(titleHtml, styled("jobTitle", { size: base, color })),
+          )
+        : "";
+    },
+
+    companyItem({ color = st.textColor, bold = true } = {}) {
+      return identity.company
+        ? markInline(
+            "company",
+            styledSpan(
+              editable("company", identity.company),
+              styled("company", { size: base, color, bold }),
+            ),
+          )
+        : "";
+    },
+
+    taglineItem({ color = st.mutedColor } = {}) {
+      return identity.tagline
+        ? markInline(
+            "tagline",
+            styledSpan(
+              editable("tagline", identity.tagline),
+              styled("tagline", { size: base - 1, color, italic: true }),
+            ),
+          )
+        : "";
+    },
+
+    /**
+     * Poste et/ou société en petites capitales espacées, sur une ligne.
+     * `parts` : les éléments à réunir (title, company).
+     */
+    captionOf(parts, { color = st.mutedColor, mark = (k, h) => h } = {}) {
+      const html = [
+        parts.includes("title") && titleLine ? mark("title", titleHtml) : "",
+        parts.includes("company") && identity.company
+          ? mark("company", editable("company", identity.company))
+          : "",
+      ]
+        .filter(Boolean)
+        .join(esc("  ·  "));
+      if (!html) return "";
+      return markInline(
+        "jobTitle",
+        `<span style="${styled("jobTitle", { size: base - 2, color, uppercase: true })}letter-spacing:2px;">${html}</span>`,
+      );
+    },
+
+    /** Nom, poste, société sur une ligne, séparés par des points médians. */
+    identityInlineOf(parts, { inverse = false, mark = (k, h) => h } = {}) {
+      const white = "#ffffff";
+      const render = {
+        name: () =>
+          fullName
+            ? markInline(
+                "firstName",
+                styledSpan(
+                  nameHtml,
+                  styled("name", {
+                    size: base + 1,
+                    color: inverse ? white : st.textColor,
+                    bold: true,
+                  }),
+                ),
+              )
+            : "",
+        title: () =>
+          titleLine
+            ? markInline(
+                "jobTitle",
+                styledSpan(
+                  titleHtml,
+                  styled("jobTitle", {
+                    size: base,
+                    color: inverse ? white : st.mutedColor,
+                  }),
+                ),
+              )
+            : "",
+        company: () =>
+          identity.company
+            ? markInline(
+                "company",
+                styledSpan(
+                  editable("company", identity.company),
+                  styled("company", {
+                    size: base,
+                    color: inverse ? white : st.textColor,
+                  }),
+                ),
+              )
+            : "",
+      };
+      const html = parts
+        .map((k) => [k, render[k]?.() || ""])
+        .filter(([, h]) => h)
+        .map(([k, h]) => mark(k, h));
+      if (html.length === 0) return "";
+      const sep = span("  ·  ", text(base, inverse ? white : st.mutedColor));
+      return html.join(sep);
+    },
+
+    /**
+     * Lignes de coordonnées choisies (dans l'ordre donné), avec icônes,
+     * initiales ou texte seul. `mark(field)` : repère d'aperçu par ligne.
+     */
+    contactGroup(
+      fields,
+      {
+        style = "icons",
+        align = "left",
+        inverse = false,
+        attrsFor = () => "",
+      } = {},
+    ) {
+      const white = "#ffffff";
+      const lineStyle = styled("contact", {
+        size: base,
+        color: inverse ? white : st.mutedColor,
       });
+      const iconColor = inverse ? white : contactIconColor;
+      const LABELS = {
+        phone: "T",
+        mobile: "M",
+        email: "E",
+        website: "W",
+        address: "A",
+      };
+      const labelStyle = text(
+        Math.max(10, base - 2),
+        inverse ? white : st.primaryColor,
+        { weight: "bold" },
+      );
+      const lines = fields
+        .map((field) => contactEntry(field, lineStyle))
+        .filter(Boolean)
+        .map((item) => {
+          const contentHtml = markInline(item.field, item.html);
+          const attrs = attrsFor(item.field);
+          if (style === "labels") {
+            return {
+              attrs,
+              iconHtml: `<span style="${labelStyle}">${LABELS[item.field]}</span>`,
+              contentHtml,
+            };
+          }
+          if (style !== "icons") return { attrs, contentHtml };
+          const spec = contactIconSpec(item.field, iconColor);
+          return {
+            attrs,
+            iconHtml: img({
+              src: iconUrl(spec),
+              width: 16,
+              height: 16,
+              alt: "",
+            }),
+            contentHtml,
+          };
+        });
+      return iconLines(lines, { gap: sp.line, align });
+    },
+
+    /** Coordonnées choisies sur une ligne, séparées par des points médians. */
+    contactInlineOf(fields, { inverse = false, mark = (k, h) => h } = {}) {
+      const white = "#ffffff";
+      const lineStyle = styled("contact", {
+        size: base,
+        color: inverse ? white : st.mutedColor,
+      });
+      const html = fields
+        .map((field) => contactEntry(field, lineStyle))
+        .filter(Boolean)
+        .map((i) => mark(i.field, markInline(i.field, i.html)));
+      if (html.length === 0) return "";
+      const sep = span("  ·  ", text(base, inverse ? white : st.mutedColor));
+      return html.join(sep);
+    },
+
+    /** Vrai si l'élément a quelque chose à afficher. */
+    has(item) {
+      switch (item) {
+        case "photo":
+          return Boolean(images.photo?.url);
+        case "name":
+          return Boolean(fullName);
+        case "title":
+          return Boolean(titleLine);
+        case "company":
+          return Boolean(identity.company);
+        case "tagline":
+          return Boolean(identity.tagline);
+        case "accent":
+          return st.accent === "short" || st.accent === "thin";
+        case "social":
+          return sig.social.some((s) => s.url && SOCIAL_NETWORKS[s.network]);
+        case "logo":
+          return Boolean(images.logo?.url);
+        case "cta":
+          return Boolean(
+            sig.cta.enabled && sig.cta.label && normalizeUrl(sig.cta.url),
+          );
+        case "banner":
+          return Boolean(sig.banner.enabled && images.banner?.url);
+        case "disclaimer":
+          return Boolean(sig.disclaimer.enabled && sig.disclaimer.text);
+        default:
+          return Boolean(contact[item]);
+      }
     },
   };
 

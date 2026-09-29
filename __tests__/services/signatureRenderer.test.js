@@ -312,8 +312,11 @@ describe("signatureRenderer — marqueurs d'aperçu", () => {
       expect(html, field).toContain(`data-sig-field="${field}"`);
     }
     const clean = renderSignature(FULL).html;
+    // Repères retirés (attributs data-sig-*, puis balises devenues nues)
     const strip = (h) =>
-      h.replace(/<\/?(span|div)( data-sig-[a-z]+="[^"]*")?>/g, "");
+      h
+        .replace(/ data-sig-[a-z]+="[^"]*"/g, "")
+        .replace(/<\/?(span|div)>/g, "");
     expect(strip(html)).toBe(strip(clean));
     expect(clean).not.toContain("data-sig-");
   });
@@ -745,8 +748,15 @@ describe("signatureRenderer — ordre de la colonne de texte", () => {
   it("repère chaque bloc déplaçable dans l'aperçu seulement", () => {
     const preview = renderSignature(FULL, { markers: true }).html;
     for (const k of [
-      "identity",
-      "contact",
+      "name",
+      "title",
+      "company",
+      "tagline",
+      "phone",
+      "mobile",
+      "email",
+      "website",
+      "address",
       "photo",
       "social",
       "logo",
@@ -759,18 +769,184 @@ describe("signatureRenderer — ordre de la colonne de texte", () => {
     expect(renderSignature(FULL).html).not.toContain("data-sig-block");
   });
 
-  it("repère colonne de texte, corps et cadre dans l'aperçu seulement", () => {
+  it("repère emplacements, corps et cadre dans l'aperçu seulement", () => {
     const framed = { ...FULL, style: { frame: "outline" } };
     const preview = renderSignature(framed, { markers: true }).html;
-    for (const k of ["column", "body", "frame"]) {
-      expect(preview, k).toContain(`data-sig-${k}="1"`);
+    for (const k of [
+      'data-sig-slot="text"',
+      'data-sig-slot="visual"',
+      'data-sig-slot="footer"',
+      'data-sig-body="1"',
+      'data-sig-frame="1"',
+    ]) {
+      expect(preview, k).toContain(k);
     }
     expect(renderSignature(framed).html).not.toMatch(
-      /data-sig-(column|body|frame)/,
+      /data-sig-(slot|body|frame)/,
     );
     // Sans encadré : pas de repère de cadre
     expect(renderSignature(FULL, { markers: true }).html).not.toContain(
       "data-sig-frame",
     );
+  });
+});
+
+describe("signatureRenderer — emplacements libres", () => {
+  const render = (style, extra = {}) =>
+    renderSignature({ ...FULL, templateId: "modern", ...extra, style }).html;
+  const slotsOf = (style) =>
+    normalizeSignature({ ...FULL, templateId: "modern", style }).style.slots;
+
+  it("déduit des anciens réglages les emplacements de chaque modèle", () => {
+    const modern = slotsOf({});
+    expect(modern.visual).toEqual(["photo"]);
+    expect(modern.text.slice(0, 6)).toEqual([
+      "name",
+      "title",
+      "company",
+      "tagline",
+      "accent",
+      "phone",
+    ]);
+    expect(modern.footer).toEqual(["logo", "cta", "banner", "disclaimer"]);
+    const header = normalizeSignature({ ...FULL, templateId: "header" }).style;
+    expect(header.slots.header).toEqual([
+      "photo",
+      "name",
+      "title",
+      "company",
+      "tagline",
+      "accent",
+    ]);
+    expect(header.slots.outside).toEqual(["cta", "banner", "disclaimer"]);
+    const card = normalizeSignature({ ...FULL, templateId: "card" }).style;
+    expect(card.visualFill).toBe("solid");
+    expect(card.slots.visual.slice(0, 2)).toEqual(["photo", "name"]);
+  });
+
+  it("met le nom au-dessus de la photo et le téléphone sous la photo", () => {
+    const slots = slotsOf({});
+    const html = render({
+      slots: {
+        ...slots,
+        visual: ["name", "photo", "phone"],
+        text: slots.text.filter((k) => k !== "name" && k !== "phone"),
+      },
+    });
+    const name = html.indexOf(">Camille Durand<");
+    const photo = html.indexOf("cdn.example.com/photo.jpg");
+    const phone = html.indexOf("+33 1 23 45 67 89");
+    const title = html.indexOf("Directrice artistique");
+    expect(name).toBeGreaterThan(-1);
+    expect(name).toBeLessThan(photo);
+    expect(phone).toBeGreaterThan(photo);
+    // Le poste reste dans la colonne de texte, après la colonne photo
+    expect(title).toBeGreaterThan(phone);
+  });
+
+  it("valide les emplacements : doublons retirés, oubliés remis à leur place", () => {
+    const sig = normalizeSignature({
+      ...FULL,
+      style: { slots: { text: ["name", "name", "inconnu"], side: ["phone"] } },
+    });
+    const all = Object.values(sig.style.slots).flat();
+    expect(all.filter((k) => k === "name")).toHaveLength(1);
+    expect(all).not.toContain("inconnu");
+    expect(sig.style.slots.side).toEqual(["phone"]);
+    expect(all).toContain("email");
+    expect(all).toHaveLength(16);
+  });
+
+  it("sur un fond de couleur, textes et icônes passent en blanc", () => {
+    const slots = slotsOf({});
+    const style = {
+      visualFill: "solid",
+      slots: {
+        ...slots,
+        visual: ["photo", "email", "social"],
+        text: slots.text.filter((k) => k !== "email" && k !== "social"),
+      },
+    };
+    const html = render(style);
+    expect(html).toMatch(/contact\/mail\/plain-ffffff\.png/);
+    expect(html).toMatch(/social\/linkedin\/[a-z]+-ffffff\.png/);
+    const icons = requiredIcons({ ...FULL, templateId: "modern", style });
+    expect(JSON.stringify(icons)).toContain("ffffff");
+  });
+
+  it("toute combinaison d'emplacements reste conforme ; une signature riche reste sous la limite Gmail", () => {
+    const ITEMS = [
+      "photo",
+      "name",
+      "title",
+      "company",
+      "tagline",
+      "accent",
+      "phone",
+      "mobile",
+      "email",
+      "website",
+      "address",
+      "social",
+      "logo",
+      "cta",
+      "banner",
+      "disclaimer",
+    ];
+    const SLOTS = ["header", "visual", "text", "side", "footer", "outside"];
+    // Signature riche et réaliste : photo, logo, deux réseaux, bouton,
+    // accroche, adresses d'images de la taille des vraies URL R2
+    const r2 =
+      "https://pub-882cca85c9de481c8f8cc6c1ff0ab56e.r2.dev/68dda81e814240de4cc86e75";
+    const RICH = {
+      ...FULL,
+      identity: { ...FULL.identity, department: "" },
+      social: FULL.social.slice(0, 2),
+      images: {
+        photo: {
+          url: `${r2}/imgProfil/photo-1780869164116.jpg`,
+          width: 200,
+          height: 200,
+        },
+        logo: {
+          url: `${r2}/logoReseau/logo-1780869164116.png`,
+          width: 300,
+          height: 100,
+        },
+        banner: null,
+      },
+      banner: { enabled: false },
+      disclaimer: { enabled: false },
+    };
+    let seed = 7;
+    const rand = (n) => {
+      seed = (seed * 16807) % 2147483647;
+      return seed % n;
+    };
+    for (let run = 0; run < 80; run += 1) {
+      const slots = Object.fromEntries(SLOTS.map((k) => [k, []]));
+      for (const item of ITEMS) slots[SLOTS[rand(SLOTS.length)]].push(item);
+      const style = {
+        slots,
+        frame: ["none", "outline", "soft", "accent-left"][rand(4)],
+        visualFill: ["none", "tint", "solid"][rand(3)],
+        visualSide: ["left", "right"][rand(2)],
+        headerPhoto: ["left", "right", "top"][rand(3)],
+        footerStrip: rand(2) === 1,
+      };
+      const rich = renderSignature({
+        ...RICH,
+        templateId: "modern",
+        style,
+      }).html;
+      expect(rich).not.toMatch(/margin:|display:\s*flex|<div|rgba|class=/);
+      expect(rich).not.toMatch(/<td[^>]*><\/td>/);
+      expect(rich.length).toBeLessThan(GMAIL_MAX_CHARS);
+      expect(rich).toContain("Camille");
+      // Signature maximale : au-delà de la limite, l'éditeur est prévenu
+      const full = renderSignature({ ...FULL, templateId: "modern", style });
+      const warned = full.warnings.some((w) => w.includes("Gmail"));
+      expect(warned).toBe(full.html.length > GMAIL_MAX_CHARS);
+    }
   });
 });

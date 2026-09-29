@@ -106,11 +106,13 @@ export const span = (text, style) =>
  * inconnu) : on garde alors une hauteur automatique.
  */
 export function img({ src, width, height, alt = "", style = "" }) {
+  // Dimensions par attributs width / height, compris par tous les clients ;
+  // pas de doublon en CSS (limite Gmail de 10 000 caractères)
   const h = height ? ` height="${height}"` : "";
-  const hs = height ? `height:${height}px;` : "height:auto;";
+  const hs = height ? "" : "height:auto;";
   return `<img src="${escAttr(src)}" width="${width}"${h} alt="${escAttr(
     alt,
-  )}" style="display:block;border:0;width:${width}px;${hs}${style}" />`;
+  )}" style="display:block;border:0;${hs}${style}" />`;
 }
 
 export function link(href, inner, { color } = {}) {
@@ -147,6 +149,29 @@ export function vsepCell(color, { width = 1, gap = 12 } = {}) {
  * Empile des lignes de contenu. Chaque ligne est du HTML déjà rendu.
  * `gap` : espace entre lignes. `align` : alignement du texte.
  */
+/**
+ * Comme vstack, avec un espace propre à chaque ligne : `rows` =
+ * [{ html, after }], `after` = espace sous la ligne.
+ */
+export function stackRows(rows, { align = "left" } = {}) {
+  const items = rows.filter((r) => r && r.html);
+  if (items.length === 0) return "";
+  if (items.length === 1 && align === "left") return items[0].html;
+  const alignAttr = align === "center" ? ' align="center"' : "";
+  const alignStyle = align === "center" ? "text-align:center;" : "";
+  const rowsHtml = items
+    .map((row, i) => {
+      const last = i === items.length - 1;
+      const pad = last || !row.after ? "" : `padding:0 0 ${row.after}px 0;`;
+      const style = `${alignStyle}${pad}`;
+      return `<tr><td${alignAttr}${style ? ` style="${style}"` : ""}>${row.html}</td></tr>`;
+    })
+    .join("");
+  return table(rowsHtml, {
+    attrs: align === "center" ? 'align="center"' : "",
+  });
+}
+
 export function vstack(rows, { gap = 0, align = "left" } = {}) {
   const items = rows.filter(Boolean);
   if (items.length === 0) return "";
@@ -156,7 +181,9 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
   const rowsHtml = items
     .map((row, i) => {
       const last = i === items.length - 1;
-      return `<tr><td${alignAttr} style="${alignStyle}padding:0 0 ${last ? 0 : gap}px 0;">${row}</td></tr>`;
+      const pad = last || !gap ? "" : `padding:0 0 ${gap}px 0;`;
+      const style = `${alignStyle}${pad}`;
+      return `<tr><td${alignAttr}${style ? ` style="${style}"` : ""}>${row}</td></tr>`;
     })
     .join("");
   // La table elle-même est centrée par attribut : text-align ne centre pas
@@ -184,7 +211,8 @@ export function hstack(
       const width = cell.width ? ` width="${cell.width}"` : "";
       const widthStyle = cell.width ? `width:${cell.width}px;` : "";
       const pad = last || separator ? 0 : gap;
-      const cellHtml = `<td valign="${v}"${width} style="vertical-align:${v};${widthStyle}padding:0 ${pad}px 0 0;">${cell.html}</td>`;
+      const cellStyle = `${widthStyle}${pad ? `padding:0 ${pad}px 0 0;` : ""}`;
+      const cellHtml = `<td valign="${v}"${width}${cellStyle ? ` style="${cellStyle}"` : ""}>${cell.html}</td>`;
       return last || !separator
         ? cellHtml
         : cellHtml + vsepCell(separator, { gap });
@@ -203,10 +231,12 @@ export function iconLines(
 ) {
   const items = lines.filter((l) => l && l.contentHtml);
   if (items.length === 0) return "";
+  // `attrs` : repère d'aperçu d'une ligne (glisser-déposer), jamais copié
+  const wrap = (l, html) => (l.attrs ? `<div${l.attrs}>${html}</div>` : html);
   const withIcons = items.some((l) => l.iconHtml);
   if (!withIcons) {
     return vstack(
-      items.map((l) => l.contentHtml),
+      items.map((l) => wrap(l, l.contentHtml)),
       { gap, align },
     );
   }
@@ -217,9 +247,12 @@ export function iconLines(
   if (align === "center") {
     return vstack(
       items.map((l) =>
-        l.iconHtml
-          ? `${l.iconHtml.replace("display:block;", "display:inline-block;vertical-align:middle;")}&nbsp;&nbsp;${l.contentHtml}`
-          : l.contentHtml,
+        wrap(
+          l,
+          l.iconHtml
+            ? `${l.iconHtml.replace("display:block;", "display:inline-block;vertical-align:middle;")}&nbsp;&nbsp;${l.contentHtml}`
+            : l.contentHtml,
+        ),
       ),
       { gap, align: "center" },
     );
@@ -227,9 +260,9 @@ export function iconLines(
   const rows = items
     .map((l, i) => {
       const pad = i === items.length - 1 ? 0 : gap;
-      return `<tr><td valign="middle" style="vertical-align:middle;padding:0 ${iconGap}px ${pad}px 0;font-size:0;line-height:0;">${
+      return `<tr${l.attrs || ""}><td valign="middle" style="padding:0 ${iconGap}px ${pad}px 0;font-size:0;line-height:0;">${
         l.iconHtml || ""
-      }</td><td valign="middle" style="vertical-align:middle;text-align:left;padding:0 0 ${pad}px 0;">${l.contentHtml}</td></tr>`;
+      }</td><td valign="middle" style="text-align:left;${pad ? `padding:0 0 ${pad}px 0;` : ""}">${l.contentHtml}</td></tr>`;
     })
     .join("");
   return table(rows, { attrs: align === "center" ? 'align="center"' : "" });
@@ -253,7 +286,7 @@ export function iconRow(items, { size, gap = 8, align = "left" } = {}) {
       const inner = item.href
         ? link(item.href, image, { color: "#000000" })
         : image;
-      return `<td valign="middle" style="vertical-align:middle;padding:0 ${last ? 0 : gap}px 0 0;">${inner}</td>`;
+      return `<td valign="middle"${last ? "" : ` style="padding:0 ${gap}px 0 0;"`}>${inner}</td>`;
     })
     .join("");
   if (!cells) return "";

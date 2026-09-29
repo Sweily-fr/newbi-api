@@ -99,6 +99,38 @@ export const LAYOUT_CHOICES = {
  */
 export const TEXT_BLOCKS = ["identity", "contact", "social", "logo"];
 
+/**
+ * Mise en page par emplacements : chaque élément de la signature se place
+ * dans un emplacement, dans l'ordre voulu. Les emplacements sont une
+ * structure fixe en tables (compatible Gmail / Outlook) :
+ *   header  : bandeau en tête (photo à côté du reste)
+ *   visual  : colonne de la photo (à gauche ou à droite)
+ *   text    : colonne principale
+ *   side    : colonne de droite
+ *   footer  : bas du cadre, pleine largeur
+ *   outside : sous le cadre
+ */
+export const SLOTS = ["header", "visual", "text", "side", "footer", "outside"];
+export const IDENTITY_ITEMS = ["name", "title", "company", "tagline"];
+export const CONTACT_ITEMS = ["phone", "mobile", "email", "website", "address"];
+export const ITEMS = [
+  "photo",
+  ...IDENTITY_ITEMS,
+  "accent",
+  ...CONTACT_ITEMS,
+  "social",
+  "logo",
+  "cta",
+  "banner",
+  "disclaimer",
+];
+export const VISUAL_SIDES = ["left", "right"];
+// Fond de la colonne photo : aucun, teinté, couleur principale (texte blanc)
+export const VISUAL_FILLS = ["none", "tint", "solid"];
+// Place de la photo dans le bandeau
+export const HEADER_PHOTOS = ["left", "right", "top"];
+export const HEADER_FILLS = ["solid", "tint"];
+
 /** Éléments qu'on peut sortir de l'encadré. */
 export const OUTSIDE_ITEMS = ["social", "logo", "cta", "banner", "disclaimer"];
 

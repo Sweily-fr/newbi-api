@@ -1,11 +1,19 @@
 /**
- * Moteur de mise en page des signatures.
+ * Moteur de mise en page des signatures, par emplacements.
  *
- * Toute signature est composée des mêmes zones : l'identité (éventuellement
- * sur un bloc de couleur), la photo, une colonne de texte, une colonne à
- * droite, une ligne du bas et le pied (bouton, bandeau, mention). Les
- * réglages de mise en page (st.photoPosition, st.socialPosition…) décident
- * où va chaque élément ; le thème du modèle ne fixe que quelques couleurs et
+ * Chaque élément (photo, nom, poste, société, accroche, trait, chaque ligne
+ * de coordonnées, réseaux, logo, bouton, bandeau, mention) est placé dans
+ * un emplacement (style.slots), dans l'ordre voulu :
+ *
+ *   ┌──────────── header : bandeau (photo à côté du reste) ────────────┐
+ *   │ visual (colonne photo) │ text (colonne principale) │ side (droite) │
+ *   ├──────────── footer : bas du cadre, pleine largeur ────────────────┤
+ *   └────────────────────────────────────────────────────────────────────┘
+ *     outside : sous le cadre
+ *
+ * La structure est toujours la même (des tables), seuls les contenus
+ * changent : le rendu reste compatible Gmail, Outlook et Apple Mail quel
+ * que soit le placement. Le thème du modèle fixe quelques couleurs et
  * tailles par défaut.
  *
  * Contraintes clients mail : tables uniquement, espacements en padding de
@@ -13,9 +21,12 @@
  * separate), jamais de marge ni de transparence.
  */
 
-import { hstack, tint, vstack } from "./primitives.js";
+import { CONTACT_ITEMS } from "./constants.js";
+import { hstack, stackRows, tint, vstack } from "./primitives.js";
 
 const WHITE = "#ffffff";
+const IDENTITY = new Set(["name", "title", "company", "tagline"]);
+const INLINE_IDENTITY = ["name", "title", "company"];
 
 /** Table à bordures séparées : seule façon d'arrondir une bordure de cellule. */
 const box = (rows, attrs = "") =>
@@ -24,259 +35,381 @@ const box = (rows, attrs = "") =>
 /** Deux contenus aux extrémités d'une ligne pleine largeur. */
 function spread(left, right, { valign = "middle" } = {}) {
   if (!left || !right) return left || right;
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;"><tr><td valign="${valign}" style="vertical-align:${valign};padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right" style="vertical-align:${valign};text-align:right;">${right}</td></tr></table>`;
-}
-
-/** Réglages effectifs : certains n'ont de sens que combinés à d'autres. */
-export function effectiveLayout(st, hasPhoto) {
-  const zone = st.identityZone;
-  const photoSide =
-    hasPhoto && zone !== "band-left" && st.photoPosition !== "top";
-  return {
-    zone,
-    photoSide,
-    // Sans photo à côté, « sous la photo » retombe sous le texte
-    socialPosition:
-      st.socialPosition === "photo" && !photoSide ? "text" : st.socialPosition,
-    logoPosition:
-      st.logoPosition === "photo" && !photoSide ? "text" : st.logoPosition,
-    // Centrer n'a de sens que si rien n'est à côté du texte
-    align: photoSide || zone === "band-left" ? "left" : st.align,
-    boxed: st.frame === "outline" || st.frame === "soft",
-  };
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;"><tr><td valign="${valign}" style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right" style="text-align:right;">${right}</td></tr></table>`;
 }
 
 export function renderLayout(b, ctx, theme = {}) {
-  const { st, sp, sig } = ctx;
+  const { st, sp } = ctx;
   const P = st.primaryColor;
   const r = st.radius;
-  // Aperçu seulement : chaque bloc déplaçable est repéré (poignée de l'éditeur)
-  const mark = (name, html) =>
-    ctx.markers && html ? `<div data-sig-block="${name}">${html}</div>` : html;
-  // Aperçu seulement : zones de la mise en page (colonne de texte, corps,
-  // cadre), pour aligner les repères de dépôt de l'éditeur sur le rendu
-  const region = (name, html) =>
-    ctx.markers && html ? `<div data-sig-${name}="1">${html}</div>` : html;
-  const hasPhoto = Boolean(sig.images.photo?.url);
-  const L = effectiveLayout(st, hasPhoto);
-  const onBand = L.zone !== "plain";
-  const outside = new Set(st.frame === "none" ? [] : st.outside);
+  const slots = st.slots;
 
-  // ── Identité ──────────────────────────────────────────────────────────
+  // Repères d'aperçu (jamais dans le HTML copié) : chaque élément et chaque
+  // emplacement, pour la poignée et les lignes de dépôt de l'éditeur
+  const markBlock = (item, html) =>
+    ctx.markers && html ? `<div data-sig-block="${item}">${html}</div>` : html;
+  const markSpan = (item, html) =>
+    ctx.markers && html
+      ? `<span data-sig-block="${item}">${html}</span>`
+      : html;
+  const region = (name, value, html) =>
+    ctx.markers && html
+      ? `<div data-sig-${name}="${value}">${html}</div>`
+      : html;
+
+  const visible = (slot) => slots[slot].filter((k) => b.has(k));
+  const hasVisual = visible("visual").length > 0;
+  const hasHeader = visible("header").length > 0;
+  const solid = hasVisual && st.visualFill === "solid";
+  const tinted = hasVisual && st.visualFill === "tint";
+  const boxed = st.frame === "outline" || st.frame === "soft";
+  // Centrer n'a de sens que si rien n'est à côté du texte
+  const align = hasVisual ? "left" : st.align;
+  const headerInverse = st.headerFill !== "tint";
+
   const nameSize = st.fontSize + (theme.nameDelta ?? 6);
-  const nameColor = onBand
-    ? WHITE
-    : theme.nameColor === "primary"
-      ? P
-      : st.textColor;
-  const identityAlign =
-    L.zone === "band-left" ||
-    (L.zone === "band-top" && st.photoPosition === "top")
-      ? "center"
-      : L.align;
-  let identity;
-  if (st.identityStyle === "inline" && !onBand) {
-    identity = b.identityInline();
-  } else if (st.titleStyle === "caps") {
-    identity = vstack(
-      [
-        b.name({ size: nameSize, color: nameColor }),
-        b.caption({
-          color: onBand
-            ? WHITE
-            : theme.captionColor === "primary"
-              ? P
-              : st.mutedColor,
-        }),
-      ],
-      { gap: sp.block, align: identityAlign },
-    );
-  } else {
-    identity = b.identity({
-      nameColor,
-      nameSize,
-      titleColor: onBand ? WHITE : st.mutedColor,
-      companyColor: onBand
-        ? WHITE
-        : theme.companyColor === "primary"
-          ? P
-          : st.textColor,
-      align: identityAlign,
-    });
-  }
-
-  let accent = "";
-  if (!onBand && st.accent === "short") {
-    accent = b.accent({
-      width: theme.accentWidth || 40,
-      height: 3,
-      align: L.align,
-    });
-  } else if (!onBand && st.accent === "thin") {
-    accent = b.rule({ width: 56, color: P, height: 2, align: L.align });
-  }
-
-  // ── Coordonnées, réseaux, logo ────────────────────────────────────────
-  const contact = mark(
-    "contact",
-    st.contactStyle === "inline"
-      ? b.contactInline()
-      : b.contact({
-          icons: st.contactStyle === "icons",
-          labels: st.contactStyle === "labels",
-          align: L.align,
-        }),
-  );
-  const socialSize = Math.min(st.iconSize, theme.socialMax || 40);
-  const social = (align = "left") =>
-    mark("social", b.social({ align, size: socialSize }));
-  const logo = (align = "left", maxHeight) =>
-    mark("logo", b.logo({ align, maxHeight }));
-
-  // ── Photo ─────────────────────────────────────────────────────────────
   const photoSize = Math.min(st.photoSize, theme.photoMax || 160);
-  const photo = (extra = {}) =>
-    mark("photo", b.photo({ size: photoSize, ...extra }));
+  const socialSize = Math.min(st.iconSize, theme.socialMax || 40);
+  const colors = (inverse) => ({
+    name: inverse ? WHITE : theme.nameColor === "primary" ? P : st.textColor,
+    title: inverse ? WHITE : st.mutedColor,
+    company: inverse
+      ? WHITE
+      : theme.companyColor === "primary"
+        ? P
+        : st.textColor,
+    tagline: inverse ? WHITE : st.mutedColor,
+    caption: inverse
+      ? WHITE
+      : theme.captionColor === "primary"
+        ? P
+        : st.mutedColor,
+    accent: inverse ? WHITE : P,
+  });
 
-  // Colonne de texte : ce qui accompagne l'identité
-  const identityBlock = mark("identity", identity);
-  const textBlocks = {
-    identity: onBand ? "" : [identityBlock, accent],
-    contact,
-    social: L.socialPosition === "text" ? social(L.align) : "",
-    logo: L.logoPosition === "text" ? logo(L.align, 40) : "",
-  };
-  const textItems = st.textOrder.flatMap((k) => textBlocks[k] || []);
-  const textColumn = region(
-    "column",
-    vstack(textItems, { gap: sp.block, align: L.align }),
+  /** Rendu d'un élément seul, selon son emplacement. */
+  function renderItem(k, slot, { inverse, itemAlign }) {
+    const c = colors(inverse);
+    const across =
+      slot === "visual" ? "center" : slot === "side" ? "right" : itemAlign;
+    switch (k) {
+      case "photo":
+        return b.photo({
+          size: photoSize,
+          // Colonne photo : centrée par sa cellule, comme avant
+          align: slot === "visual" || across === "right" ? "left" : across,
+          ...(slot === "header" && inverse
+            ? {
+                border: st.photoBorder || 3,
+                borderColor: st.photoBorderColor || WHITE,
+              }
+            : {}),
+        });
+      case "name":
+        return b.name({ size: nameSize, color: c.name });
+      case "title":
+        return b.titleItem({ color: c.title });
+      case "company":
+        return b.companyItem({ color: c.company });
+      case "tagline":
+        return b.taglineItem({ color: c.tagline });
+      case "accent":
+        return st.accent === "thin"
+          ? b.rule({ width: 56, color: c.accent, height: 2, align: across })
+          : b.accent({
+              width: theme.accentWidth || 40,
+              height: 3,
+              align: across,
+              color: c.accent,
+            });
+      case "social":
+        return b.social({
+          align: slot === "footer" || slot === "outside" ? "left" : across,
+          size: socialSize,
+          onFill: inverse,
+        });
+      case "logo": {
+        const maxHeight =
+          slot === "visual"
+            ? 64
+            : slot === "text" || slot === "side" || slot === "header"
+              ? 40
+              : slot === "footer" && boxed && st.footerStrip
+                ? 32
+                : undefined;
+        return b.logo({
+          align:
+            slot === "footer" || slot === "outside"
+              ? "left"
+              : across === "right"
+                ? "left"
+                : across,
+          maxHeight,
+        });
+      }
+      default:
+        return b[k]();
+    }
+  }
+
+  /** Espace entre deux lignes d'un emplacement. */
+  function gapBetween(prev, next, slot) {
+    if (IDENTITY.has(prev) && IDENTITY.has(next)) return sp.line;
+    if (prev === "caption" && next === "tagline") return sp.line;
+    if (prev === "name" && next === "caption") return sp.block;
+    if (slot === "visual") return solid ? sp.line + 6 : sp.block + 2;
+    return sp.block;
+  }
+
+  /**
+   * Lignes d'une liste d'éléments : les coordonnées consécutives forment un
+   * seul bloc (icônes alignées), le nom / poste / société en ligne et le
+   * poste suivi de la société en capitales sont réunis sur une ligne.
+   */
+  function rowsOf(items, slot, { inverse = false, itemAlign = "left" } = {}) {
+    const rows = [];
+    let i = 0;
+    while (i < items.length) {
+      const k = items[i];
+      if (st.identityStyle === "inline" && INLINE_IDENTITY.includes(k)) {
+        const group = [];
+        while (i < items.length && INLINE_IDENTITY.includes(items[i])) {
+          group.push(items[i]);
+          i += 1;
+        }
+        rows.push({
+          kind: "identity",
+          html: b.identityInlineOf(group, { inverse, mark: markSpan }),
+        });
+        continue;
+      }
+      if (st.titleStyle === "caps" && k === "title") {
+        const group = ["title"];
+        i += 1;
+        if (items[i] === "company") {
+          group.push("company");
+          i += 1;
+        }
+        rows.push({
+          kind: "caption",
+          html: b.captionOf(group, {
+            color: colors(inverse).caption,
+            mark: markSpan,
+          }),
+        });
+        continue;
+      }
+      if (CONTACT_ITEMS.includes(k)) {
+        const group = [];
+        while (i < items.length && CONTACT_ITEMS.includes(items[i])) {
+          group.push(items[i]);
+          i += 1;
+        }
+        rows.push({
+          kind: "contact",
+          html:
+            st.contactStyle === "inline"
+              ? b.contactInlineOf(group, { inverse, mark: markSpan })
+              : b.contactGroup(group, {
+                  style: st.contactStyle,
+                  align:
+                    slot === "visual" || itemAlign === "center"
+                      ? "center"
+                      : "left",
+                  inverse,
+                  attrsFor: (f) =>
+                    ctx.markers ? ` data-sig-block="${f}"` : "",
+                }),
+        });
+        continue;
+      }
+      // Bas du cadre : réseaux et logo côte à côte, aux deux extrémités
+      const pair = items[i + 1];
+      if (
+        slot === "footer" &&
+        (k === "social" || k === "logo") &&
+        (pair === "social" || pair === "logo") &&
+        pair !== k
+      ) {
+        rows.push({
+          kind: "pair",
+          html: spread(
+            markBlock(k, renderItem(k, slot, { inverse, itemAlign })),
+            markBlock(pair, renderItem(pair, slot, { inverse, itemAlign })),
+          ),
+        });
+        i += 2;
+        continue;
+      }
+      rows.push({
+        kind: k,
+        html: markBlock(k, renderItem(k, slot, { inverse, itemAlign })),
+      });
+      i += 1;
+    }
+    return rows.filter((row) => row.html);
+  }
+
+  const stack = (rows, slot, stackAlign) =>
+    stackRows(
+      rows.map((row, i) => ({
+        html: row.html,
+        after:
+          i < rows.length - 1
+            ? gapBetween(row.kind, rows[i + 1].kind, slot)
+            : 0,
+      })),
+      { align: stackAlign },
+    );
+
+  // ── Colonnes ──────────────────────────────────────────────────────────
+  const textHtml = region(
+    "slot",
+    "text",
+    stack(rowsOf(visible("text"), "text", { itemAlign: align }), "text", align),
+  );
+  const sideHtml = region(
+    "slot",
+    "side",
+    stack(rowsOf(visible("side"), "side"), "side", "left"),
+  );
+  const visualHtml = region(
+    "slot",
+    "visual",
+    stack(
+      rowsOf(visible("visual"), "visual", {
+        inverse: solid,
+        itemAlign: "center",
+      }),
+      "visual",
+      "center",
+    ),
   );
 
-  // Colonne à droite (réseaux, logo) et ligne du bas
-  const side = vstack(
-    [
-      L.socialPosition === "side" ? social("right") : "",
-      L.logoPosition === "side" ? logo("right", 40) : "",
-    ],
-    { gap: sp.block },
+  // ── Bas du cadre ──────────────────────────────────────────────────────
+  const footerItems = visible("footer");
+  const strip = boxed && st.footerStrip;
+  const stripItems = strip
+    ? footerItems.filter((k) => k === "social" || k === "logo")
+    : [];
+  const restItems = strip
+    ? footerItems.filter((k) => k !== "social" && k !== "logo")
+    : footerItems;
+  const restHtml = region(
+    "slot",
+    "footer",
+    stack(rowsOf(restItems, "footer", { itemAlign: align }), "footer", align),
   );
-  const bottomSocial =
-    L.socialPosition === "bottom" && !outside.has("social") ? social() : "";
-  const bottomLogo =
-    L.logoPosition === "bottom" && !outside.has("logo")
-      ? logo("left", st.footerStrip ? 32 : undefined)
+  const stripHtml = region(
+    "slot",
+    "footer",
+    stack(rowsOf(stripItems, "footer"), "footer", "left"),
+  );
+  const hasRowsAfterBody = Boolean(restHtml || stripHtml);
+
+  // ── Bandeau en tête ───────────────────────────────────────────────────
+  let band = "";
+  if (hasHeader) {
+    const items = visible("header");
+    const vertical = st.headerPhoto === "top";
+    const withPhoto = items.includes("photo");
+    const rest = items.filter((k) => k !== "photo");
+    const restAlign = vertical && withPhoto ? "center" : "left";
+    const restStack = stack(
+      rowsOf(rest, "header", {
+        inverse: headerInverse,
+        itemAlign: restAlign,
+      }),
+      "header",
+      restAlign,
+    );
+    const photoHtml = withPhoto
+      ? markBlock(
+          "photo",
+          renderItem("photo", "header", {
+            inverse: headerInverse,
+            itemAlign: vertical ? "center" : "left",
+          }),
+        )
       : "";
-  const bottomRow = spread(bottomSocial, bottomLogo);
+    let content = restStack || photoHtml;
+    if (photoHtml && restStack) {
+      content = vertical
+        ? vstack([photoHtml, restStack], { gap: sp.block, align: "center" })
+        : hstack(
+            st.headerPhoto === "right"
+              ? [
+                  { html: restStack, valign: "middle" },
+                  { html: photoHtml, valign: st.photoValign },
+                ]
+              : [
+                  { html: photoHtml, valign: st.photoValign },
+                  { html: restStack, valign: "middle" },
+                ],
+            { gap: sp.gap + 2 },
+          );
+    }
+    band = region("slot", "header", content);
+  }
 
-  const footerInside = ["cta", "banner", "disclaimer"]
-    .filter((k) => !outside.has(k))
-    .map((k) => mark(k, b[k]()))
-    .filter(Boolean);
-  const footerOutside = [
-    L.socialPosition === "bottom" && outside.has("social") ? social() : "",
-    L.logoPosition === "bottom" && outside.has("logo") ? logo() : "",
-    ...["cta", "banner", "disclaimer"]
-      .filter((k) => outside.has(k))
-      .map((k) => mark(k, b[k]())),
-  ].filter(Boolean);
-
-  const strip = L.boxed && st.footerStrip && bottomRow;
-  const hasRowsAfterBody =
-    Boolean(strip) || Boolean(bottomRow) || footerInside.length > 0;
-
-  // ── Corps ─────────────────────────────────────────────────────────────
+  // ── Corps : colonne photo, colonne principale, colonne de droite ─────
   let body;
   let bodyFlush = false; // le corps gère ses propres marges (colonne teintée)
-  let band = ""; // bloc de couleur en tête (identityZone band-top)
+  const right = st.visualSide === "right";
+  const textValign = st.photoValign === "middle" ? "middle" : "top";
 
-  if (L.zone === "band-top") {
-    const ring = {
-      border: st.photoBorder || 3,
-      borderColor: st.photoBorderColor || WHITE,
-    };
-    const bandPhoto = photo({ shape: st.photoShape, ...ring });
-    const vertical = st.photoPosition === "top";
-    const bandContent = vertical
-      ? vstack([photo({ ...ring, align: "center" }), identityBlock], {
-          gap: sp.block,
-          align: "center",
-        })
-      : hstack(
-          st.photoPosition === "right"
-            ? [
-                { html: identityBlock, valign: "middle" },
-                { html: bandPhoto, valign: st.photoValign },
-              ]
-            : [
-                { html: bandPhoto, valign: st.photoValign },
-                { html: identityBlock, valign: "middle" },
-              ],
-          { gap: sp.gap + 2 },
-        );
-    band = bandContent;
-    body = spread(textColumn, side, { valign: "bottom" });
-  } else if (L.zone === "band-left") {
-    const inner = vstack([photo({ align: "center" }), identityBlock], {
-      gap: sp.line + 6,
-      align: "center",
-    });
-    const block = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td align="center" bgcolor="${P}" style="background-color:${P};padding:20px 22px;border-radius:${r}px;text-align:center;">${inner}</td></tr></table>`;
-    body = hstack(
-      [
-        { html: block, valign: "middle" },
-        { html: textColumn, valign: "middle" },
-        side ? { html: side, valign: "middle" } : null,
-      ],
-      { gap: sp.gap + 6 },
+  if (solid) {
+    // Colonne photo sur la couleur principale, texte en blanc
+    const block = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td align="center" bgcolor="${P}" style="background-color:${P};padding:20px 22px;border-radius:${r}px;text-align:center;">${visualHtml}</td></tr></table>`;
+    const cells = [
+      { html: block, valign: "middle" },
+      { html: textHtml, valign: "middle" },
+    ];
+    if (right) cells.reverse();
+    if (sideHtml) cells.push({ html: sideHtml, valign: "middle" });
+    body = hstack(cells, { gap: sp.gap + 6 });
+  } else if (tinted) {
+    // Colonne teintée : cellule de couleur collée au cadre
+    const soft = tint(P, 0.08);
+    const bottomCorner = boxed && hasRowsAfterBody ? 0 : r;
+    const topCorner = boxed && band ? 0 : r;
+    const corners = right
+      ? `0 ${topCorner}px ${bottomCorner}px 0`
+      : `${topCorner}px 0 0 ${bottomCorner}px`;
+    const radius = boxed ? corners : `${r}px`;
+    const visualCell = `<td valign="${st.photoValign}" align="center" bgcolor="${soft}" style="text-align:center;background-color:${soft};padding:22px 22px;border-radius:${radius};">${visualHtml}</td>`;
+    const pad = boxed ? "20px 26px" : `0 0 0 ${sp.gap + 6}px`;
+    const padRight = boxed ? "20px 26px" : `0 ${sp.gap + 6}px 0 0`;
+    const textCell =
+      textHtml || sideHtml
+        ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${spread(textHtml, sideHtml)}</td>`
+        : "";
+    body = box(
+      `<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`,
     );
-  } else if (L.photoSide) {
-    const visual = vstack(
-      [
-        photo(),
-        L.logoPosition === "photo" ? logo("center", 64) : "",
-        L.socialPosition === "photo" ? social("center") : "",
-      ],
-      { gap: sp.block + 2, align: "center" },
-    );
-    const right = st.photoPosition === "right";
-    const textValign = st.photoValign === "middle" ? "middle" : "top";
-    if (st.photoColumn === "tinted") {
-      // Colonne teintée : cellule de couleur collée au cadre
-      const soft = tint(P, 0.08);
-      const bottomCorner = L.boxed && hasRowsAfterBody ? 0 : r;
-      const corners = right
-        ? `0 ${r}px ${bottomCorner}px 0`
-        : `${r}px 0 0 ${bottomCorner}px`;
-      const radius = L.boxed ? corners : `${r}px`;
-      const visualCell = `<td valign="${st.photoValign}" align="center" bgcolor="${soft}" style="vertical-align:${st.photoValign};text-align:center;background-color:${soft};padding:22px 22px;border-radius:${radius};">${visual}</td>`;
-      const pad = L.boxed ? "20px 26px" : `0 0 0 ${sp.gap + 6}px`;
-      const padRight = L.boxed ? "20px 26px" : `0 ${sp.gap + 6}px 0 0`;
-      const textCell = `<td valign="${textValign}" style="vertical-align:${textValign};padding:${right ? padRight : pad};">${spread(textColumn, side)}</td>`;
-      body = box(
-        `<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`,
-      );
-      bodyFlush = L.boxed;
-    } else if (side && (st.divider === "line" || st.divider === "accent")) {
+    bodyFlush = boxed;
+  } else if (hasVisual) {
+    if (sideHtml && (st.divider === "line" || st.divider === "accent")) {
       // Photo, texte et colonne de droite séparés par le même trait
       const cells = [
-        { html: visual, valign: st.photoValign },
-        { html: textColumn, valign: "middle" },
-        { html: side, valign: "middle" },
+        { html: visualHtml, valign: st.photoValign },
+        { html: textHtml, valign: "middle" },
       ];
-      if (right) [cells[0], cells[1]] = [cells[1], cells[0]];
+      if (right) cells.reverse();
+      cells.push({ html: sideHtml, valign: "middle" });
       body = hstack(cells, {
         gap: sp.gap,
         valign: "middle",
         separator: st.divider === "accent" ? P : st.separatorColor,
       });
     } else {
-      const main = spread(textColumn, side);
+      const main = spread(textHtml, sideHtml);
       const cells = [
-        { html: visual, valign: st.photoValign },
+        { html: visualHtml, valign: st.photoValign },
         { html: main, valign: textValign },
       ];
       if (right) cells.reverse();
-      if (st.divider === "bar") {
+      if (st.divider === "bar" && main) {
         // Barre verticale : bordure de la cellule de texte, elle suit sa hauteur
         const textIndex = right ? 0 : 1;
         cells[textIndex] = {
@@ -292,63 +425,65 @@ export function renderLayout(b, ctx, theme = {}) {
             : null;
       body = hstack(cells, { gap: sp.gap + 4, separator });
     }
+  } else if (sideHtml && st.divider !== "none" && textHtml) {
+    body = hstack(
+      [
+        { html: textHtml, valign: "middle" },
+        { html: sideHtml, valign: "middle" },
+      ],
+      {
+        gap: sp.gap,
+        separator: st.divider === "accent" ? P : st.separatorColor,
+      },
+    );
   } else {
-    // Photo au-dessus (ou pas de photo)
-    const main = vstack([photo({ align: L.align }), textColumn], {
-      gap: sp.block,
-      align: L.align,
-    });
-    if (side && st.divider !== "none") {
-      body = hstack(
-        [
-          { html: main, valign: "middle" },
-          { html: side, valign: "middle" },
-        ],
-        {
-          gap: sp.gap,
-          separator: st.divider === "accent" ? P : st.separatorColor,
-        },
-      );
-    } else {
-      body = spread(main, side);
-    }
+    body = spread(textHtml, sideHtml, { valign: band ? "bottom" : "middle" });
   }
 
-  // ── Assemblage avec l'encadré ──────────────────────────────────────────
+  // ── Assemblage avec l'encadré, puis ce qui est sous le cadre ──────────
   const framedContent = frameContent({
     st,
     sp,
-    align: L.align,
+    align,
     band,
-    body: region("body", body),
+    bandFill: headerInverse ? P : tint(P, 0.1),
+    body: region("body", "1", body),
     bodyFlush,
-    bottomRow,
-    strip,
-    footerInside,
+    restHtml,
+    stripHtml,
   });
   const inside =
-    st.frame === "none" ? framedContent : region("frame", framedContent);
-  return vstack([inside, ...footerOutside], {
+    st.frame === "none" ? framedContent : region("frame", "1", framedContent);
+  const outsideHtml = region(
+    "slot",
+    "outside",
+    stack(
+      rowsOf(visible("outside"), "outside", { itemAlign: align }),
+      "outside",
+      align,
+    ),
+  );
+  return vstack([inside, outsideHtml], {
     gap: sp.block,
-    align: L.align === "center" ? "center" : "left",
+    align: align === "center" ? "center" : "left",
   });
 }
 
 /**
  * Pose le contenu dans l'encadré choisi. Contour et fond teinté : une
- * rangée par zone (bloc de couleur, corps, ligne du bas, pied), chacune avec
- * ses marges, les arrondis sur la première et la dernière.
+ * rangée par zone (bandeau, corps, bas du cadre, bande teintée), chacune
+ * avec ses marges, les arrondis sur la première et la dernière.
  */
 function frameContent({
   st,
   sp,
   align,
   band,
+  bandFill,
   body,
   bodyFlush,
-  bottomRow,
-  strip,
-  footerInside,
+  restHtml,
+  stripHtml,
 }) {
   const P = st.primaryColor;
   const r = st.radius;
@@ -356,13 +491,13 @@ function frameContent({
   const padX = sp.block + 12;
 
   if (st.frame !== "outline" && st.frame !== "soft") {
-    // Pas de cadre fermé : le bloc de couleur est arrondi seul
+    // Pas de cadre fermé : le bandeau est arrondi seul
     const bandHtml = band
       ? box(
-          `<tr><td bgcolor="${P}" style="background-color:${P};padding:18px 24px;border-radius:${r}px;">${band}</td></tr>`,
+          `<tr><td bgcolor="${bandFill}" style="background-color:${bandFill};padding:18px 24px;border-radius:${r}px;">${band}</td></tr>`,
         )
       : "";
-    const content = vstack([bandHtml, body, bottomRow, ...footerInside], {
+    const content = vstack([bandHtml, body, restHtml, stripHtml], {
       gap: sp.block,
       align: align === "center" && !band ? "center" : "left",
     });
@@ -386,14 +521,10 @@ function frameContent({
   const fill = st.frameColor || tint(P, 0.07);
   const rows = [];
   if (band) rows.push({ kind: "band", html: band });
-  rows.push({ kind: bodyFlush ? "flush" : "body", html: body });
-  const rest = [bottomRow && !strip ? bottomRow : "", ...footerInside].filter(
-    Boolean,
-  );
-  if (rest.length) {
-    rows.push({ kind: "body", html: vstack(rest, { gap: sp.block, align }) });
-  }
-  if (strip) rows.push({ kind: "strip", html: bottomRow });
+  if (body) rows.push({ kind: bodyFlush ? "flush" : "body", html: body });
+  if (restHtml) rows.push({ kind: "body", html: restHtml });
+  if (stripHtml) rows.push({ kind: "strip", html: stripHtml });
+  if (rows.length === 0) return "";
 
   const last = rows.length - 1;
   const html = rows
@@ -402,7 +533,7 @@ function frameContent({
       const bottom = i === last ? `${r}px ${r}px` : "0 0";
       const radius = `border-radius:${top.split(" ")[0]} ${top.split(" ")[1]} ${bottom.split(" ")[0]} ${bottom.split(" ")[1]};`;
       if (row.kind === "band") {
-        return `<tr><td bgcolor="${P}" style="background-color:${P};padding:18px 24px;${radius}">${row.html}</td></tr>`;
+        return `<tr><td bgcolor="${bandFill}" style="background-color:${bandFill};padding:18px 24px;${radius}">${row.html}</td></tr>`;
       }
       const prev = rows[i - 1];
       const padTop =

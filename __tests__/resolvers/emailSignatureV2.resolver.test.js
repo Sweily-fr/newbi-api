@@ -768,3 +768,42 @@ describe("EmailSignatureV2 — mise en page", () => {
     });
   });
 });
+
+describe("EmailSignatureV2 — emplacements", () => {
+  it("enregistre des emplacements libres et les renvoie validés", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    const { EmailSignatureV2: T } = resolvers;
+    const base = T.style(await EmailSignatureV2.findById(doc._id)).slots;
+    const slots = {
+      ...base,
+      visual: ["name", "photo", "mobile"],
+      text: base.text.filter((k) => k !== "name" && k !== "mobile"),
+    };
+    await Mutation.updateEmailSignatureV2(
+      null,
+      { id: String(doc._id), input: { style: { slots } } },
+      ctx(),
+    );
+    const saved = T.style(await EmailSignatureV2.findById(doc._id));
+    expect(saved.slots.visual).toEqual(["name", "photo", "mobile"]);
+    const render = await Query.renderEmailSignatureV2(
+      null,
+      { id: String(doc._id), input: {} },
+      ctx(),
+    );
+    expect(render.html.indexOf("Camille")).toBeLessThan(
+      render.html.indexOf("+33 6 12 34 56 78"),
+    );
+  });
+
+  it("les réglages de départ d'un modèle comprennent ses emplacements", async () => {
+    const catalog = await Query.signatureCatalogV2(null, {}, ctx());
+    const card = catalog.templates.find((t) => t.id === "card");
+    expect(card.defaults.visualFill).toBe("solid");
+    expect(card.defaults.slots.visual.slice(0, 2)).toEqual(["photo", "name"]);
+  });
+});
