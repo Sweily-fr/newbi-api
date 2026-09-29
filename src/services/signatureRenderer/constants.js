@@ -190,6 +190,23 @@ export const DEFAULT_STYLE = {
 
 export const IMAGE_KINDS = ["PHOTO", "LOGO", "BANNER"];
 
+/**
+ * Éléments de texte dont la mise en forme se règle individuellement (clic
+ * sur l'élément dans l'aperçu). Sans réglage, l'élément suit le modèle.
+ */
+export const TEXT_ELEMENTS = [
+  "name",
+  "jobTitle",
+  "company",
+  "tagline",
+  "contact",
+  "cta",
+  "disclaimer",
+];
+
+/** Bornes de taille d'un élément de texte réglé à la main. */
+export const ELEMENT_FONT_SIZE = { min: 9, max: 36 };
+
 /** Hauteur maximale d'un logo dans la signature (la largeur suit le ratio). */
 export const LOGO_MAX_HEIGHT = 48;
 

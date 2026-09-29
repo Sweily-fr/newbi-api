@@ -67,6 +67,8 @@ const styleSchema = new mongoose.Schema(
     separatorColor: { type: String, default: "#e0e0e0" },
     spacing: { type: String, enum: SPACINGS, default: "normal" },
     align: { type: String, enum: ALIGNMENTS, default: "left" },
+    // Réglages par élément de texte (nom, poste…), validés par le générateur
+    elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },
   { _id: false },
 );

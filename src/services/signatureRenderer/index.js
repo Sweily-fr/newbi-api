@@ -20,6 +20,8 @@ import {
   SPACINGS,
   TEMPLATE_IDS,
   DEFAULT_TEMPLATE_ID,
+  ELEMENT_FONT_SIZE,
+  TEXT_ELEMENTS,
 } from "./constants.js";
 import {
   contactIconSpec,
@@ -44,6 +46,40 @@ const str = (v, max = 200) =>
     ? ""
     : String(v).replace(/\s+/g, " ").trim().slice(0, max);
 const bool = (v, fallback = false) => (typeof v === "boolean" ? v : fallback);
+
+const optBool = (v) => (typeof v === "boolean" ? v : undefined);
+
+/**
+ * Réglages par élément : seules les valeurs valides sont gardées, une valeur
+ * absente signifie « comme le modèle ».
+ */
+function normalizeElements(input) {
+  const out = {};
+  for (const key of TEXT_ELEMENTS) {
+    const e = input?.[key];
+    if (!e || typeof e !== "object") continue;
+    const size =
+      e.fontSize === null || e.fontSize === undefined || e.fontSize === ""
+        ? NaN
+        : Number(e.fontSize);
+    const color = e.color ? hex(e.color, null) : null;
+    const clean = {
+      fontFamily: FONT_FAMILIES[e.fontFamily] ? e.fontFamily : undefined,
+      fontSize: Number.isFinite(size)
+        ? clamp(size, ELEMENT_FONT_SIZE.min, ELEMENT_FONT_SIZE.max)
+        : undefined,
+      color: color || undefined,
+      bold: optBool(e.bold),
+      italic: optBool(e.italic),
+      uppercase: optBool(e.uppercase),
+    };
+    const kept = Object.fromEntries(
+      Object.entries(clean).filter(([, v]) => v !== undefined),
+    );
+    if (Object.keys(kept).length > 0) out[key] = kept;
+  }
+  return out;
+}
 
 /**
  * Applique les valeurs par défaut et borne chaque champ. Le rendu ne voit
@@ -76,6 +112,7 @@ export function normalizeSignature(input = {}) {
     separatorColor: hex(s.separatorColor, DEFAULT_STYLE.separatorColor),
     spacing: oneOf(s.spacing, SPACINGS, DEFAULT_STYLE.spacing),
     align: oneOf(s.align, ALIGNMENTS, DEFAULT_STYLE.align),
+    elements: normalizeElements(s.elements),
   };
 
   const id = input.identity || {};
@@ -217,6 +254,9 @@ export function renderSignature(
     sp: SPACING[st.spacing],
     iconUrl,
     markers,
+    // Style effectivement appliqué à chaque élément de texte (modèle +
+    // réglages), renvoyé à l'éditeur pour afficher les bonnes valeurs.
+    resolved: {},
   };
   // Rien à afficher : aucun HTML (évite un filet ou un accent orphelin)
   const hasContent =
@@ -227,7 +267,7 @@ export function renderSignature(
     (sig.cta.enabled && sig.cta.label) ||
     (sig.disclaimer.enabled && sig.disclaimer.text);
   if (!hasContent) {
-    return { html: "", text: "", chars: 0, warnings: [] };
+    return { html: "", text: "", chars: 0, warnings: [], elements: {} };
   }
 
   const blocks = buildBlocks(ctx);
@@ -255,7 +295,13 @@ export function renderSignature(
     );
   }
 
-  return { html, text: plainText(sig), chars: html.length, warnings };
+  return {
+    html,
+    text: plainText(sig),
+    chars: html.length,
+    warnings,
+    elements: ctx.resolved,
+  };
 }
 
 /** Données d'exemple, pour les vignettes de modèles et les tests. */

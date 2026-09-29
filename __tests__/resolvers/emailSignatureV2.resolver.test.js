@@ -689,3 +689,40 @@ describe("EmailSignatureV2 — images", () => {
     expect(cleared.images.banner).toBeNull();
   });
 });
+
+describe("EmailSignatureV2 — réglages par élément", () => {
+  it("enregistre et renvoie la mise en forme d'un élément", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    await Mutation.updateEmailSignatureV2(
+      null,
+      {
+        id: String(doc._id),
+        input: {
+          style: {
+            elements: {
+              name: { fontSize: 24, color: "#ff0000", italic: null },
+            },
+          },
+        },
+      },
+      ctx(),
+    );
+    const saved = await EmailSignatureV2.findById(doc._id).lean();
+    expect(saved.style.elements).toEqual({
+      name: { fontSize: 24, color: "#ff0000" },
+    });
+    expect(saved.style.primaryColor).toBe("#123456");
+
+    const render = await Query.renderEmailSignatureV2(
+      null,
+      { id: String(doc._id), input: {} },
+      ctx(),
+    );
+    expect(render.elements.name).toMatchObject({ fontSize: 24 });
+    expect(render.html).toContain("font-size:24px");
+  });
+});

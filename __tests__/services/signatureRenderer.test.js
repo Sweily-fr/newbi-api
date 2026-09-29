@@ -437,3 +437,80 @@ describe("signatureRenderer — icônes", () => {
     expect(specs).toEqual([]);
   });
 });
+
+describe("signatureRenderer — réglages par élément", () => {
+  const withElements = (elements, templateId = "modern") =>
+    renderSignature({
+      ...SAMPLE_SIGNATURE,
+      templateId,
+      style: { ...SAMPLE_SIGNATURE.style, elements },
+    });
+
+  it("sans réglage, renvoie le style du modèle pour chaque élément", () => {
+    const { elements } = withElements({});
+    expect(elements.name).toMatchObject({ bold: true, fontFamily: "arial" });
+    expect(elements.name.fontSize).toBeGreaterThan(elements.jobTitle.fontSize);
+    expect(elements.company.bold).toBe(true);
+  });
+
+  it("applique police, taille, couleur et casse au seul élément réglé", () => {
+    const { html, elements } = withElements({
+      name: {
+        fontFamily: "georgia",
+        fontSize: 26,
+        color: "#FF0000",
+        uppercase: true,
+      },
+    });
+    expect(elements.name).toMatchObject({
+      fontFamily: "georgia",
+      fontSize: 26,
+      color: "#ff0000",
+      uppercase: true,
+    });
+    expect(html).toMatch(
+      /font-family:Georgia[^"]*font-size:26px;[^"]*color:#ff0000;[^"]*text-transform:uppercase;/,
+    );
+    // Le poste garde sa taille de modèle
+    expect(elements.jobTitle.fontSize).toBe(
+      SAMPLE_SIGNATURE.style.fontSize ?? 13,
+    );
+  });
+
+  it("ignore les valeurs invalides", () => {
+    const { elements } = withElements({
+      name: { fontFamily: "comic", fontSize: 400, color: "rouge", bold: "oui" },
+      inconnu: { fontSize: 20 },
+    });
+    expect(elements.name.fontFamily).toBe("arial");
+    expect(elements.name.fontSize).toBe(36);
+    expect(elements.name.bold).toBe(true);
+    expect(elements.inconnu).toBeUndefined();
+  });
+
+  it("taille du bouton : marges proportionnelles, gras réglable", () => {
+    const { html } = renderSignature({
+      ...SAMPLE_SIGNATURE,
+      cta: { enabled: true, label: "RDV", url: "https://cal.com/x" },
+      style: { elements: { cta: { fontSize: 11, bold: false } } },
+    });
+    expect(html).toMatch(
+      /font-size:11px;[^"]*font-weight:normal;[^"]*padding:7px 15px;/,
+    );
+  });
+
+  it("reste conforme dans tous les modèles avec des réglages", () => {
+    for (const t of listTemplates()) {
+      const { html } = withElements(
+        {
+          name: { fontSize: 22, color: "#123456" },
+          contact: { fontSize: 12, italic: true },
+          company: { uppercase: true },
+        },
+        t.id,
+      );
+      expect(html).not.toMatch(/margin|display:flex|class=/);
+      expect(html).toContain("font-size:22px");
+    }
+  });
+});

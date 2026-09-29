@@ -263,13 +263,18 @@ export function button({
   font,
   size = 13,
   radius = 6,
+  bold = true,
+  italic = false,
 }) {
+  // Marges proportionnelles à la taille du texte : 8×18 px à 13 px
+  const py = Math.max(4, Math.round(size * 0.6));
+  const px = Math.max(10, Math.round(size * 1.4));
   const inner = `<a href="${escAttr(href)}" style="display:inline-block;font-family:${font};font-size:${size}px;line-height:${Math.round(
     size * 1.4,
-  )}px;font-weight:bold;color:${color};text-decoration:none;padding:8px 18px;">${esc(label)}</a>`;
+  )}px;font-weight:${bold ? "bold" : "normal"};${italic ? "font-style:italic;" : ""}color:${color};text-decoration:none;padding:${py}px ${px}px;">${esc(label)}</a>`;
   return table(
     tr(
-      `<td align="center" bgcolor="${background}" style="background-color:${background};border-radius:${radius}px;mso-padding-alt:8px 18px;">${inner}</td>`,
+      `<td align="center" bgcolor="${background}" style="background-color:${background};border-radius:${radius}px;mso-padding-alt:${py}px ${px}px;">${inner}</td>`,
     ),
   );
 }

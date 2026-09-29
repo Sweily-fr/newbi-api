@@ -4,7 +4,11 @@
  * contentent de les agencer.
  */
 
-import { LOGO_MAX_HEIGHT, SOCIAL_NETWORKS } from "./constants.js";
+import {
+  FONT_FAMILIES,
+  LOGO_MAX_HEIGHT,
+  SOCIAL_NETWORKS,
+} from "./constants.js";
 import { contactIconSpec, socialIconSpec } from "./icons.js";
 import {
   button,
@@ -46,6 +50,38 @@ export function buildBlocks(ctx) {
     textStyle({ font, size, color, ...extra });
   const base = st.fontSize;
 
+  // Style d'un élément de texte : valeurs du modèle, remplacées par les
+  // réglages propres à l'élément quand il y en a.
+  const elements = st.elements || {};
+  const resolve = (
+    key,
+    { size, color, bold = false, italic = false, uppercase = false },
+  ) => {
+    const o = elements[key] || {};
+    const eff = {
+      fontFamily: o.fontFamily || st.fontFamily,
+      fontSize: o.fontSize ?? size,
+      color: o.color || color,
+      bold: o.bold ?? bold,
+      italic: o.italic ?? italic,
+      uppercase: o.uppercase ?? uppercase,
+    };
+    if (ctx.resolved && !ctx.resolved[key]) ctx.resolved[key] = eff;
+    return eff;
+  };
+  const styled = (key, defaults) => {
+    const eff = resolve(key, defaults);
+    return (
+      textStyle({
+        font: FONT_FAMILIES[eff.fontFamily] || font,
+        size: eff.fontSize,
+        color: eff.color,
+        weight: eff.bold ? "bold" : "normal",
+        italic: eff.italic,
+      }) + (eff.uppercase ? "text-transform:uppercase;" : "")
+    );
+  };
+
   const contactIconColor =
     st.iconColorMode === "custom" ? st.iconColor : st.primaryColor;
 
@@ -69,7 +105,7 @@ export function buildBlocks(ctx) {
       return fullName
         ? markInline(
             "firstName",
-            span(fullName, text(size, color, { weight: "bold" })),
+            span(fullName, styled("name", { size, color, bold: true })),
           )
         : "";
     },
@@ -87,14 +123,24 @@ export function buildBlocks(ctx) {
         [
           withName ? blocks.name({ color: nameColor, size: nameSize }) : "",
           titleLine
-            ? markInline("jobTitle", span(titleLine, text(base, titleColor)))
+            ? markInline(
+                "jobTitle",
+                span(
+                  titleLine,
+                  styled("jobTitle", { size: base, color: titleColor }),
+                ),
+              )
             : "",
           withCompany && identity.company
             ? markInline(
                 "company",
                 span(
                   identity.company,
-                  text(base, companyColor, { weight: "bold" }),
+                  styled("company", {
+                    size: base,
+                    color: companyColor,
+                    bold: true,
+                  }),
                 ),
               )
             : "",
@@ -103,7 +149,11 @@ export function buildBlocks(ctx) {
                 "tagline",
                 span(
                   identity.tagline,
-                  text(base - 1, titleColor, { italic: true }),
+                  styled("tagline", {
+                    size: base - 1,
+                    color: titleColor,
+                    italic: true,
+                  }),
                 ),
               )
             : "",
@@ -118,7 +168,7 @@ export function buildBlocks(ctx) {
       if (!value) return "";
       return markInline(
         "jobTitle",
-        `<span style="${text(base - 2, color)}letter-spacing:2px;text-transform:uppercase;">${esc(value)}</span>`,
+        `<span style="${styled("jobTitle", { size: base - 2, color, uppercase: true })}letter-spacing:2px;">${esc(value)}</span>`,
       );
     },
 
@@ -128,16 +178,32 @@ export function buildBlocks(ctx) {
         fullName
           ? markInline(
               "firstName",
-              span(fullName, text(base + 1, st.textColor, { weight: "bold" })),
+              span(
+                fullName,
+                styled("name", {
+                  size: base + 1,
+                  color: st.textColor,
+                  bold: true,
+                }),
+              ),
             )
           : "",
         titleLine
-          ? markInline("jobTitle", span(titleLine, text(base, st.mutedColor)))
+          ? markInline(
+              "jobTitle",
+              span(
+                titleLine,
+                styled("jobTitle", { size: base, color: st.mutedColor }),
+              ),
+            )
           : "",
         identity.company
           ? markInline(
               "company",
-              span(identity.company, text(base, st.textColor)),
+              span(
+                identity.company,
+                styled("company", { size: base, color: st.textColor }),
+              ),
             )
           : "",
       ].filter(Boolean);
@@ -149,12 +215,16 @@ export function buildBlocks(ctx) {
     contactItems() {
       const items = [];
       const c = contact;
-      const lineStyle = text(base, st.mutedColor);
+      const lineStyle = styled("contact", { size: base, color: st.mutedColor });
+      const lineColor = resolve("contact", {
+        size: base,
+        color: st.mutedColor,
+      }).color;
       const push = (field, label, href) =>
         items.push({
           field,
           html: href
-            ? link(href, esc(label), { color: st.mutedColor })
+            ? link(href, esc(label), { color: lineColor })
             : esc(label),
           plain: label,
           style: lineStyle,
@@ -269,15 +339,22 @@ export function buildBlocks(ctx) {
       if (!c.enabled || !c.label) return "";
       const href = normalizeUrl(c.url);
       if (!href) return "";
+      const eff = resolve("cta", {
+        size: base,
+        color: c.textColor || "#ffffff",
+        bold: true,
+      });
       return markBlock(
         "cta",
         button({
-          label: c.label,
+          label: eff.uppercase ? c.label.toUpperCase() : c.label,
           href,
           background: c.backgroundColor || st.primaryColor,
           color: c.textColor || "#ffffff",
-          font,
-          size: base,
+          font: FONT_FAMILIES[eff.fontFamily] || font,
+          size: eff.fontSize,
+          bold: eff.bold,
+          italic: eff.italic,
         }),
       );
     },
@@ -309,7 +386,7 @@ export function buildBlocks(ctx) {
       if (!d.enabled || !d.text) return "";
       return markInline(
         "disclaimer",
-        `<span style="${text(Math.max(10, base - 3), st.mutedColor)}">${esc(d.text)}</span>`,
+        `<span style="${styled("disclaimer", { size: Math.max(10, base - 3), color: st.mutedColor })}">${esc(d.text)}</span>`,
       );
     },
 

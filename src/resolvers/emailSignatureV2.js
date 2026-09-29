@@ -246,6 +246,11 @@ async function readUpload(file) {
 }
 
 const emailSignatureV2Resolvers = {
+  // Mongoose retire les objets vides : on garantit la présence du champ
+  SignatureStyleV2: {
+    elements: (st) => st?.elements || {},
+  },
+
   EmailSignatureV2: {
     id: (doc) => String(doc._id ?? doc.id),
     images: (doc) => ({

@@ -59,6 +59,28 @@ type SignatureDisclaimerV2 {
   text: String!
 }
 
+"""
+Mise en forme propre à un élément de texte. Un champ vide = comme le modèle.
+"""
+type SignatureTextStyleV2 {
+  fontFamily: String
+  fontSize: Int
+  color: String
+  bold: Boolean
+  italic: Boolean
+  uppercase: Boolean
+}
+
+type SignatureElementStylesV2 {
+  name: SignatureTextStyleV2
+  jobTitle: SignatureTextStyleV2
+  company: SignatureTextStyleV2
+  tagline: SignatureTextStyleV2
+  contact: SignatureTextStyleV2
+  cta: SignatureTextStyleV2
+  disclaimer: SignatureTextStyleV2
+}
+
 type SignatureStyleV2 {
   fontFamily: String!
   fontSize: Int!
@@ -76,6 +98,10 @@ type SignatureStyleV2 {
   separatorColor: String!
   spacing: String!
   align: String!
+  """
+  Réglages par élément (seulement ceux modifiés).
+  """
+  elements: SignatureElementStylesV2!
 }
 
 type EmailSignatureV2 {
@@ -118,6 +144,11 @@ type SignatureRenderV2 {
   text: String!
   chars: Int!
   warnings: [String!]!
+  """
+  Style effectivement appliqué à chaque élément de texte affiché (modèle +
+  réglages), pour les valeurs des contrôles de l'éditeur.
+  """
+  elements: SignatureElementStylesV2!
 }
 
 type SignatureTemplateSupportsV2 {
@@ -225,6 +256,25 @@ input SignatureDisclaimerV2Input {
   text: String
 }
 
+input SignatureTextStyleV2Input {
+  fontFamily: String
+  fontSize: Int
+  color: String
+  bold: Boolean
+  italic: Boolean
+  uppercase: Boolean
+}
+
+input SignatureElementStylesV2Input {
+  name: SignatureTextStyleV2Input
+  jobTitle: SignatureTextStyleV2Input
+  company: SignatureTextStyleV2Input
+  tagline: SignatureTextStyleV2Input
+  contact: SignatureTextStyleV2Input
+  cta: SignatureTextStyleV2Input
+  disclaimer: SignatureTextStyleV2Input
+}
+
 input SignatureStyleV2Input {
   fontFamily: String
   fontSize: Int
@@ -242,6 +292,10 @@ input SignatureStyleV2Input {
   separatorColor: String
   spacing: String
   align: String
+  """
+  Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
+  """
+  elements: SignatureElementStylesV2Input
 }
 
 """
