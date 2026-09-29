@@ -749,7 +749,8 @@ describe("signatureRenderer — ordre de la colonne de texte", () => {
   it("repère chaque bloc déplaçable dans l'aperçu seulement", () => {
     const preview = renderSignature(FULL, { markers: true }).html;
     for (const k of [
-      "name",
+      "firstName",
+      "lastName",
       "title",
       "company",
       "tagline",
@@ -801,8 +802,9 @@ describe("signatureRenderer — emplacements libres", () => {
   it("déduit des anciens réglages les emplacements de chaque modèle", () => {
     const modern = slotsOf({});
     expect(modern.visual).toEqual(["photo"]);
-    expect(modern.text.slice(0, 6)).toEqual([
-      "name",
+    expect(modern.text.slice(0, 7)).toEqual([
+      "firstName",
+      "lastName",
       "title",
       "company",
       "tagline",
@@ -813,7 +815,8 @@ describe("signatureRenderer — emplacements libres", () => {
     const header = normalizeSignature({ ...FULL, templateId: "header" }).style;
     expect(header.slots.header).toEqual([
       "photo",
-      "name",
+      "firstName",
+      "lastName",
       "title",
       "company",
       "tagline",
@@ -822,7 +825,11 @@ describe("signatureRenderer — emplacements libres", () => {
     expect(header.slots.outside).toEqual(["cta", "banner", "disclaimer"]);
     const card = normalizeSignature({ ...FULL, templateId: "card" }).style;
     expect(card.visualFill).toBe("solid");
-    expect(card.slots.visual.slice(0, 2)).toEqual(["photo", "name"]);
+    expect(card.slots.visual.slice(0, 3)).toEqual([
+      "photo",
+      "firstName",
+      "lastName",
+    ]);
   });
 
   it("met le nom au-dessus de la photo et le téléphone sous la photo", () => {
@@ -885,11 +892,14 @@ describe("signatureRenderer — emplacements libres", () => {
       style: { slots: { text: ["name", "name", "inconnu"], side: ["phone"] } },
     });
     const all = Object.values(sig.style.slots).flat();
-    expect(all.filter((k) => k === "name")).toHaveLength(1);
+    // L'ancien « name » devient prénom + nom, chacun une seule fois
+    expect(all.filter((k) => k === "firstName")).toHaveLength(1);
+    expect(sig.style.slots.text.slice(0, 2)).toEqual(["firstName", "lastName"]);
+    expect(all).not.toContain("name");
     expect(all).not.toContain("inconnu");
     expect(sig.style.slots.side).toEqual(["phone"]);
     expect(all).toContain("email");
-    expect(all).toHaveLength(16);
+    expect(all).toHaveLength(17);
   });
 
   it("sur un fond de couleur, textes et icônes passent en blanc", () => {
@@ -983,5 +993,59 @@ describe("signatureRenderer — emplacements libres", () => {
       const warned = full.warnings.some((w) => w.includes("Gmail"));
       expect(warned).toBe(full.html.length > GMAIL_MAX_CHARS);
     }
+  });
+});
+
+describe("signatureRenderer — prénom et nom dissociés", () => {
+  const slotsOf = () =>
+    normalizeSignature({ ...FULL, templateId: "modern", style: {} }).style
+      .slots;
+  const render = (style) =>
+    renderSignature({ ...FULL, templateId: "modern", style }).html;
+
+  it("côte à côte : une seule ligne « Prénom Nom », comme avant", () => {
+    expect(render({})).toContain(">Camille Durand<");
+  });
+
+  it("nom déplacé ailleurs : prénom et nom chacun sur sa ligne", () => {
+    const slots = slotsOf();
+    const html = render({
+      slots: {
+        ...slots,
+        side: ["lastName"],
+        text: slots.text.filter((k) => k !== "lastName"),
+      },
+    });
+    expect(html).not.toContain(">Camille Durand<");
+    expect(html).toContain(">Camille<");
+    expect(html).toContain(">Durand<");
+    expect(html.indexOf(">Durand<")).toBeGreaterThan(
+      html.indexOf("Directrice"),
+    );
+  });
+
+  it("ordre inversé : « Nom Prénom »", () => {
+    const slots = slotsOf();
+    const text = slots.text.filter((k) => k !== "firstName");
+    text.splice(text.indexOf("lastName") + 1, 0, "firstName");
+    expect(render({ slots: { ...slots, text } })).toContain(">Durand Camille<");
+  });
+
+  it("l'un sous l'autre : deux lignes", () => {
+    const html = render({ nameLayout: "stacked" });
+    expect(html).not.toContain(">Camille Durand<");
+    expect(html.indexOf(">Camille<")).toBeLessThan(html.indexOf(">Durand<"));
+  });
+
+  it("styles propres : nom en gras de couleur, prénom fin", () => {
+    const html = render({
+      elements: {
+        firstName: { bold: false },
+        lastName: { color: "#ff0000" },
+      },
+    });
+    expect(html).toMatch(/color:#ff0000;[^"]*font-weight:bold;">Durand</);
+    expect(html).toMatch(/font-size:19px;[^"]*">Camille</);
+    expect(html).not.toMatch(/font-weight:bold;">Camille</);
   });
 });

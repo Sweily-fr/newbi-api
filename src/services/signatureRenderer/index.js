@@ -24,6 +24,7 @@ import {
   FRAMES,
   HEADER_FILLS,
   HEADER_PHOTOS,
+  NAME_LAYOUTS,
   VISUAL_FILLS,
   VISUAL_SIDES,
   LAYOUT_CHOICES,
@@ -171,6 +172,7 @@ export function normalizeSignature(input = {}) {
   style.visualFill = oneOf(s.visualFill, VISUAL_FILLS, derived.visualFill);
   style.headerPhoto = oneOf(s.headerPhoto, HEADER_PHOTOS, derived.headerPhoto);
   style.headerFill = oneOf(s.headerFill, HEADER_FILLS, "solid");
+  style.nameLayout = oneOf(s.nameLayout, NAME_LAYOUTS, "inline");
 
   const id = input.identity || {};
   const c = input.contact || {};

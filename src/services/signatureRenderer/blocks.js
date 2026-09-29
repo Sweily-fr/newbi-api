@@ -68,18 +68,32 @@ export function buildBlocks(ctx) {
     if (ctx.resolved && !ctx.resolved[key]) ctx.resolved[key] = eff;
     return eff;
   };
-  const styled = (key, defaults) => {
-    const eff = resolve(key, defaults);
-    return (
-      textStyle({
-        font: FONT_FAMILIES[eff.fontFamily] || font,
-        size: eff.fontSize,
-        color: eff.color,
-        weight: eff.bold ? "bold" : "normal",
-        italic: eff.italic,
-      }) + (eff.uppercase ? "text-transform:uppercase;" : "")
-    );
+  const styleOf = (eff) =>
+    textStyle({
+      font: FONT_FAMILIES[eff.fontFamily] || font,
+      size: eff.fontSize,
+      color: eff.color,
+      weight: eff.bold ? "bold" : "normal",
+      italic: eff.italic,
+    }) + (eff.uppercase ? "text-transform:uppercase;" : "");
+  const styled = (key, defaults) => styleOf(resolve(key, defaults));
+
+  // Prénom / nom : réglages du nom complet, puis ceux propres à la partie
+  const partResolve = (part, { size, color, bold = true }) => {
+    const merged = { ...(elements.name || {}), ...(elements[part] || {}) };
+    const eff = {
+      fontFamily: merged.fontFamily || st.fontFamily,
+      fontSize: merged.fontSize ?? size,
+      color: merged.color || color,
+      bold: merged.bold ?? bold,
+      italic: merged.italic ?? false,
+      uppercase: merged.uppercase ?? false,
+    };
+    if (ctx.resolved && !ctx.resolved[part]) ctx.resolved[part] = eff;
+    return eff;
   };
+  const hasOwnStyle = (part) =>
+    Boolean(elements[part] && Object.keys(elements[part]).length > 0);
 
   const contactIconColor =
     st.iconColorMode === "custom" ? st.iconColor : st.primaryColor;
@@ -111,13 +125,6 @@ export function buildBlocks(ctx) {
       .filter(([, v]) => v)
       .map(([f, v]) => editable(f, v))
       .join(esc(sep));
-  const nameHtml = joinEditable(
-    [
-      ["firstName", identity.firstName],
-      ["lastName", identity.lastName],
-    ],
-    " ",
-  );
   const titleHtml = joinEditable(
     [
       ["jobTitle", identity.jobTitle],
@@ -151,13 +158,30 @@ export function buildBlocks(ctx) {
   };
 
   const blocks = {
-    name({ color = st.textColor, size = base + 3 } = {}) {
-      return fullName
-        ? markInline(
-            "firstName",
-            styledSpan(nameHtml, styled("name", { size, color, bold: true })),
-          )
-        : "";
+    /**
+     * Prénom et/ou nom, dans l'ordre donné. Réunis, ils forment une ligne
+     * « Prénom Nom » ; un réglage propre au prénom ou au nom lui donne son
+     * propre style. `mark` : repère d'aperçu de chaque partie.
+     */
+    nameOf(
+      parts,
+      { size = base + 3, color = st.textColor, mark = (k, h) => h } = {},
+    ) {
+      const present = parts.filter((p) => identity[p]);
+      if (present.length === 0) return "";
+      const defaults = { size, color, bold: true };
+      const own = present.some(hasOwnStyle);
+      const inner = present
+        .map((p) => {
+          const eff = partResolve(p, defaults);
+          const value = editable(p, identity[p]);
+          return mark(p, own ? styledSpan(value, styleOf(eff)) : value);
+        })
+        .join(" ");
+      return markInline(
+        present[0],
+        styledSpan(inner, styled("name", defaults)),
+      );
     },
 
     social({ align = st.align, size = st.iconSize, onFill = false } = {}) {
@@ -378,24 +402,13 @@ export function buildBlocks(ctx) {
       );
     },
 
-    /** Nom, poste, société sur une ligne, séparés par des points médians. */
+    /**
+     * Prénom, nom, poste, société sur une ligne, séparés par des points
+     * médians (prénom et nom qui se suivent restent ensemble).
+     */
     identityInlineOf(parts, { inverse = false, mark = (k, h) => h } = {}) {
       const white = "#ffffff";
       const render = {
-        name: () =>
-          fullName
-            ? markInline(
-                "firstName",
-                styledSpan(
-                  nameHtml,
-                  styled("name", {
-                    size: base + 1,
-                    color: inverse ? white : st.textColor,
-                    bold: true,
-                  }),
-                ),
-              )
-            : "",
         title: () =>
           titleLine
             ? markInline(
@@ -423,13 +436,33 @@ export function buildBlocks(ctx) {
               )
             : "",
       };
-      const html = parts
-        .map((k) => [k, render[k]?.() || ""])
-        .filter(([, h]) => h)
-        .map(([k, h]) => mark(k, h));
-      if (html.length === 0) return "";
+      const isName = (k) => k === "firstName" || k === "lastName";
+      const html = [];
+      for (let i = 0; i < parts.length; ) {
+        if (isName(parts[i])) {
+          const group = [];
+          while (i < parts.length && isName(parts[i])) {
+            group.push(parts[i]);
+            i += 1;
+          }
+          html.push(
+            blocks.nameOf(group, {
+              size: base + 1,
+              color: inverse ? white : st.textColor,
+              mark,
+            }),
+          );
+        } else {
+          const k = parts[i];
+          i += 1;
+          const h = render[k]?.();
+          if (h) html.push(mark(k, h));
+        }
+      }
+      const chunks = html.filter(Boolean);
+      if (chunks.length === 0) return "";
       const sep = span("  ·  ", text(base, inverse ? white : st.mutedColor));
-      return html.join(sep);
+      return chunks.join(sep);
     },
 
     /**
@@ -515,6 +548,10 @@ export function buildBlocks(ctx) {
           return Boolean(images.photo?.url);
         case "name":
           return Boolean(fullName);
+        case "firstName":
+          return Boolean(identity.firstName);
+        case "lastName":
+          return Boolean(identity.lastName);
         case "title":
           return Boolean(titleLine);
         case "company":

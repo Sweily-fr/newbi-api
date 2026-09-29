@@ -18,6 +18,7 @@ import {
   VISUAL_FILLS,
   HEADER_PHOTOS,
   HEADER_FILLS,
+  NAME_LAYOUTS,
   ICON_COLOR_MODES,
   ICON_STYLES,
   PHOTO_SHAPES,
@@ -104,6 +105,7 @@ const styleSchema = new mongoose.Schema(
     visualFill: { type: String, enum: VISUAL_FILLS, default: undefined },
     headerPhoto: { type: String, enum: HEADER_PHOTOS, default: undefined },
     headerFill: { type: String, enum: HEADER_FILLS, default: undefined },
+    nameLayout: { type: String, enum: NAME_LAYOUTS, default: undefined },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },

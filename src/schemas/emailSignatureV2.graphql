@@ -60,9 +60,10 @@ type SignatureDisclaimerV2 {
 }
 
 """
-Emplacements des éléments (photo, name, title, company, tagline, accent,
-phone, mobile, email, website, address, social, logo, cta, banner,
-disclaimer), dans l'ordre d'affichage.
+Emplacements des éléments (photo, firstName, lastName, title, company,
+tagline, accent, phone, mobile, email, website, address, social, logo, cta,
+banner, disclaimer), dans l'ordre d'affichage. L'ancien « name » reçu est
+converti en firstName + lastName.
 """
 type SignatureSlotsV2 {
   header: [String!]!
@@ -96,6 +97,10 @@ type SignatureTextStyleV2 {
 
 type SignatureElementStylesV2 {
   name: SignatureTextStyleV2
+  "Réglages propres au prénom, par-dessus ceux du nom complet."
+  firstName: SignatureTextStyleV2
+  "Réglages propres au nom de famille, par-dessus ceux du nom complet."
+  lastName: SignatureTextStyleV2
   jobTitle: SignatureTextStyleV2
   company: SignatureTextStyleV2
   tagline: SignatureTextStyleV2
@@ -164,6 +169,8 @@ type SignatureStyleV2 {
   headerPhoto: String!
   "Fond du bandeau : solid (texte blanc), tint."
   headerFill: String!
+  "Prénom et nom côte à côte : inline (une ligne) ou stacked (deux lignes)."
+  nameLayout: String!
   """
   Réglages par élément (seulement ceux modifiés).
   """
@@ -340,6 +347,8 @@ input SignatureTextStyleV2Input {
 
 input SignatureElementStylesV2Input {
   name: SignatureTextStyleV2Input
+  firstName: SignatureTextStyleV2Input
+  lastName: SignatureTextStyleV2Input
   jobTitle: SignatureTextStyleV2Input
   company: SignatureTextStyleV2Input
   tagline: SignatureTextStyleV2Input
@@ -389,6 +398,7 @@ input SignatureStyleV2Input {
   visualFill: String
   headerPhoto: String
   headerFill: String
+  nameLayout: String
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

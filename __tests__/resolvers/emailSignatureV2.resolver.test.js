@@ -789,7 +789,13 @@ describe("EmailSignatureV2 — emplacements", () => {
       ctx(),
     );
     const saved = T.style(await EmailSignatureV2.findById(doc._id));
-    expect(saved.slots.visual).toEqual(["name", "photo", "mobile"]);
+    // L'ancien « name » envoyé par un client devient prénom + nom
+    expect(saved.slots.visual).toEqual([
+      "firstName",
+      "lastName",
+      "photo",
+      "mobile",
+    ]);
     const render = await Query.renderEmailSignatureV2(
       null,
       { id: String(doc._id), input: {} },
@@ -804,6 +810,10 @@ describe("EmailSignatureV2 — emplacements", () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
     const card = catalog.templates.find((t) => t.id === "card");
     expect(card.defaults.visualFill).toBe("solid");
-    expect(card.defaults.slots.visual.slice(0, 2)).toEqual(["photo", "name"]);
+    expect(card.defaults.slots.visual.slice(0, 3)).toEqual([
+      "photo",
+      "firstName",
+      "lastName",
+    ]);
   });
 });

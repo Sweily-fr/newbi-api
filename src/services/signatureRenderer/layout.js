@@ -25,8 +25,15 @@ import { CONTACT_ITEMS } from "./constants.js";
 import { hstack, stackRows, tint, vstack } from "./primitives.js";
 
 const WHITE = "#ffffff";
-const IDENTITY = new Set(["name", "title", "company", "tagline"]);
-const INLINE_IDENTITY = ["name", "title", "company"];
+const NAME_PARTS = ["firstName", "lastName"];
+const IDENTITY = new Set([
+  "name",
+  ...NAME_PARTS,
+  "title",
+  "company",
+  "tagline",
+]);
+const INLINE_IDENTITY = [...NAME_PARTS, "title", "company"];
 
 /** Table à bordures séparées : seule façon d'arrondir une bordure de cellule. */
 const box = (rows, attrs = "") =>
@@ -101,8 +108,6 @@ export function renderLayout(b, ctx, theme = {}) {
           // Sur un fond de couleur, contour blanc par défaut
           ...(inverse ? { borderColor: st.photoBorderColor || WHITE } : {}),
         });
-      case "name":
-        return b.name({ size: nameSize, color: c.name });
       case "title":
         return b.titleItem({ color: c.title });
       case "company":
@@ -152,7 +157,9 @@ export function renderLayout(b, ctx, theme = {}) {
   function gapBetween(prev, next, slot) {
     if (IDENTITY.has(prev) && IDENTITY.has(next)) return sp.line;
     if (prev === "caption" && next === "tagline") return sp.line;
-    if (prev === "name" && next === "caption") return sp.block;
+    if ((prev === "name" || NAME_PARTS.includes(prev)) && next === "caption") {
+      return sp.block;
+    }
     if (slot === "visual") return solid ? sp.line + 6 : sp.block + 2;
     return sp.block;
   }
@@ -181,6 +188,26 @@ export function renderLayout(b, ctx, theme = {}) {
       }
       // Poste en capitales (suivi de la société s'ils se touchent) ; une
       // société placée ailleurs reste en capitales, comme le poste
+      // Prénom et nom : une ligne s'ils se suivent (sauf « l'un sous
+      // l'autre »), sinon chacun la sienne
+      if (NAME_PARTS.includes(k)) {
+        const other = k === "firstName" ? "lastName" : "firstName";
+        const group = [k];
+        i += 1;
+        if (st.nameLayout !== "stacked" && items[i] === other) {
+          group.push(other);
+          i += 1;
+        }
+        rows.push({
+          kind: group.length > 1 ? "name" : k,
+          html: b.nameOf(group, {
+            size: nameSize,
+            color: colors(inverse).name,
+            mark: markSpan,
+          }),
+        });
+        continue;
+      }
       if (st.titleStyle === "caps" && (k === "title" || k === "company")) {
         const group = [k];
         i += 1;

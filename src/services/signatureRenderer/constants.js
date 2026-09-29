@@ -111,7 +111,16 @@ export const TEXT_BLOCKS = ["identity", "contact", "social", "logo"];
  *   outside : sous le cadre
  */
 export const SLOTS = ["header", "visual", "text", "side", "footer", "outside"];
-export const IDENTITY_ITEMS = ["name", "title", "company", "tagline"];
+// Prénom et nom sont deux éléments : côte à côte, ils forment une ligne
+export const IDENTITY_ITEMS = [
+  "firstName",
+  "lastName",
+  "title",
+  "company",
+  "tagline",
+];
+// Prénom et nom côte à côte : sur une ligne ou l'un sous l'autre
+export const NAME_LAYOUTS = ["inline", "stacked"];
 export const CONTACT_ITEMS = ["phone", "mobile", "email", "website", "address"];
 export const ITEMS = [
   "photo",
@@ -293,6 +302,9 @@ export const IMAGE_KINDS = ["PHOTO", "LOGO", "BANNER"];
  */
 export const TEXT_ELEMENTS = [
   "name",
+  // Réglages propres au prénom / au nom, par-dessus ceux du nom complet
+  "firstName",
+  "lastName",
   "jobTitle",
   "company",
   "tagline",

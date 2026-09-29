@@ -78,7 +78,10 @@ export function normalizeSlots(raw) {
   const out = empty();
   const seen = new Set();
   for (const slot of SLOTS) {
-    const list = Array.isArray(raw[slot]) ? raw[slot] : [];
+    // Ancien élément « name » (prénom et nom réunis) : les deux, à sa place
+    const list = (Array.isArray(raw[slot]) ? raw[slot] : []).flatMap((item) =>
+      item === "name" ? ["firstName", "lastName"] : [item],
+    );
     for (const item of list) {
       if (ITEMS.includes(item) && !seen.has(item)) {
         seen.add(item);
