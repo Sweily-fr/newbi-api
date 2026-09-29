@@ -1335,3 +1335,182 @@ describe("signatureRenderer — traits et bordures sur mesure", () => {
     }
   });
 });
+
+describe("signatureRenderer — blocs et colonnes sur mesure", () => {
+  const render = (templateId, style = {}, input = FULL) =>
+    renderSignature({ ...input, templateId, style }).html;
+  const count = (html, text) => html.split(text).length - 1;
+
+  it("valide les réglages de blocs et de colonnes", () => {
+    const st = normalizeSignature({
+      templateId: "modern",
+      style: {
+        blocks: {
+          contact: {
+            width: 9999,
+            spaceBefore: 200,
+            spaceAfter: -50,
+            align: "center",
+          },
+          tagline: { width: "abc", align: "diagonale" },
+          inconnu: { width: 300 },
+          logo: {},
+        },
+        columns: { text: 20, side: 5000, visual: "x" },
+      },
+    }).style;
+    expect(st.blocks).toEqual({
+      contact: {
+        width: 640,
+        spaceBefore: 64,
+        spaceAfter: -24,
+        align: "center",
+      },
+    });
+    expect(st.columns).toEqual({ visual: 0, text: 80, side: 400 });
+    expect(
+      normalizeSignature({ templateId: "modern", style: {} }).style.blocks,
+    ).toEqual({});
+  });
+
+  it("espace ajouté ou retiré entre deux blocs", () => {
+    const base = render("modern");
+    const more = render("modern", { blocks: { contact: { spaceBefore: 20 } } });
+    expect(count(more, "padding:0 0 32px 0;")).toBe(
+      count(base, "padding:0 0 32px 0;") + 1,
+    );
+    // Espace retiré : jamais négatif
+    const less = render("modern", {
+      blocks: { contact: { spaceBefore: -24 } },
+    });
+    expect(count(less, "padding:0 0 12px 0;")).toBe(
+      count(base, "padding:0 0 12px 0;") - 1,
+    );
+  });
+
+  it("espace ajouté au bord d'une colonne", () => {
+    const html = render("modern", { blocks: { name: { spaceBefore: 10 } } });
+    expect(html).toContain('<td style="padding:10px 0 0 0;">');
+  });
+
+  it("largeur d'un bloc de texte, d'une colonne, du bouton et du bandeau", () => {
+    const html = render("modern", {
+      blocks: {
+        tagline: { width: 200 },
+        cta: { width: 220, align: "center" },
+        banner: { width: 300 },
+      },
+      columns: { text: 360 },
+    });
+    expect(html).toContain(
+      'width="200" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:200px;max-width:100%;"',
+    );
+    expect(html).toContain('width="360" style="border-collapse:collapse;');
+    // Bouton centré : sa ligne porte l'alignement
+    expect(html).toMatch(
+      /<td align="center"(?: style="[^"]*")?><table [^>]*><tr><td align="center" width="220" bgcolor=/,
+    );
+    expect(html).toMatch(/<img src="[^"]*banner[^"]*" width="300"/);
+  });
+
+  it("alignement d'un bloc : attribut sur sa ligne et sur ses tableaux", () => {
+    const html = render("modern", {
+      blocks: { tagline: { width: 200, align: "center" } },
+    });
+    // Attribut seul sur la ligne : un text-align en style l'emporterait et
+    // laisserait les tableaux imbriqués à gauche dans les navigateurs
+    expect(html).toContain(
+      '<tr><td align="center" style="padding:0 0 12px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="200"',
+    );
+    expect(html).toContain(
+      'width:200px;max-width:100%;"><tr><td align="center"><span',
+    );
+    // Sans alignement choisi : rien d'ajouté
+    expect(render("modern", { blocks: { tagline: { width: 200 } } })).toContain(
+      'width:200px;max-width:100%;"><tr><td><span',
+    );
+  });
+
+  it("un bloc qui se centre seul suit l'alignement choisi", () => {
+    const contactTable =
+      /align="center" style="[^"]*"><tr><td valign="middle" style="padding:0 8px/;
+    expect(render("modern")).not.toMatch(contactTable);
+    expect(
+      render("modern", { blocks: { contact: { align: "center" } } }),
+    ).toMatch(contactTable);
+  });
+
+  it("réseaux et logo côte à côte séparés par un alignement choisi", () => {
+    const input = {
+      ...FULL,
+      images: {
+        ...FULL.images,
+        logo: {
+          url: "https://cdn.example.com/logo.png",
+          width: 300,
+          height: 100,
+        },
+      },
+    };
+    const spread = 'align="right" style="text-align:right;"';
+    expect(render("framed", {}, input)).toContain(spread);
+    const split = render(
+      "framed",
+      { blocks: { logo: { align: "center" } } },
+      input,
+    );
+    expect(split).not.toContain(spread);
+    expect(split).toMatch(
+      /<td align="center"[^>]*>(?:<table [^>]*><tr><td[^>]*>)?<a [^>]*><img src="https:\/\/cdn\.example\.com\/logo\.png"/,
+    );
+  });
+
+  it("colonne de largeur fixe : ses blocs s'y alignent", () => {
+    const html = render("modern", {
+      columns: { text: 400 },
+      blocks: { tagline: { align: "right" } },
+    });
+    expect(html).toMatch(
+      /width="400" style="[^"]*width:400px;max-width:100%;"><tr><td><table [^>]*width="100%" style="[^"]*width:100%;">/,
+    );
+    expect(html).toContain('<tr><td align="right"');
+  });
+
+  it("reste conforme dans chaque modèle avec tous les réglages", () => {
+    const blocks = Object.fromEntries(
+      [
+        "name",
+        "jobTitle",
+        "company",
+        "tagline",
+        "contact",
+        "social",
+        "photo",
+        "logo",
+        "accent",
+        "cta",
+        "banner",
+        "disclaimer",
+      ].map((k, i) => [
+        k,
+        {
+          width: 180 + i * 10,
+          spaceBefore: (i % 3) * 6 - 6,
+          spaceAfter: 8,
+          align: ["left", "center", "right"][i % 3],
+        },
+      ]),
+    );
+    const columns = { visual: 140, text: 320, side: 120 };
+    for (const t of listTemplates()) {
+      const html = render(t.id, { blocks, columns });
+      expect(html, t.id).not.toMatch(
+        /margin:|display:\s*flex|<div|rgba|class=/,
+      );
+      expect(html, t.id).not.toMatch(/<td[^>]*><\/td>/);
+      for (const table of html.match(/<table[^>]*>/g)) {
+        expect(table, t.id).not.toMatch(/style="[^"]*padding:/);
+      }
+    }
+  });
+});

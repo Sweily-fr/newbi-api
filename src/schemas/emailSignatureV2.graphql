@@ -192,6 +192,14 @@ type SignatureStyleV2 {
   "Longueur de la barre de l'encadré (à gauche, en haut), en px (0 : toute la longueur)."
   frameBarLength: Int!
   """
+  Réglages par bloc (name, jobTitle, company, tagline, contact, social,
+  photo, logo, accent, cta, banner, disclaimer) : { width, spaceBefore,
+  spaceAfter, align }, en px ; seuls les réglages choisis sont présents.
+  """
+  blocks: JSON!
+  "Largeur des colonnes { visual, text, side }, en px (0 : ajustée au contenu)."
+  columns: JSON!
+  """
   Réglages par élément (seulement ceux modifiés).
   """
   elements: SignatureElementStylesV2!
@@ -439,6 +447,9 @@ input SignatureStyleV2Input {
   frameThickness: Int
   frameWidth: Int
   frameBarLength: Int
+  "Remplace l'ensemble des réglages par bloc (envoyer l'objet complet)."
+  blocks: JSON
+  columns: JSON
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

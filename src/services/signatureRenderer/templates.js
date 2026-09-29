@@ -58,6 +58,9 @@ const BASE_PRESET = {
   frameThickness: 0,
   frameWidth: 0,
   frameBarLength: 0,
+  // Blocs et colonnes sur mesure (vides : dimensions du modèle)
+  blocks: {},
+  columns: {},
 };
 
 /** Pied (bouton, bandeau, mention) hors du cadre, pour les modèles encadrés. */

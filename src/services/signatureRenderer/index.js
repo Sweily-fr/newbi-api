@@ -9,6 +9,8 @@
 import { buildBlocks } from "./blocks.js";
 import {
   ALIGNMENTS,
+  BLOCK_ALIGNS,
+  BLOCK_KEYS,
   DEFAULT_STYLE,
   FONT_FAMILIES,
   GMAIL_MAX_CHARS,
@@ -50,6 +52,42 @@ const size0 = (n, min, max) => {
   if (!Number.isFinite(v) || v <= 0) return 0;
   return Math.min(max, Math.max(min, Math.round(v)));
 };
+/** Espace ajouté (ou retiré) autour d'un bloc, en px. */
+const offset = (n) => {
+  const v = Math.round(Number(n));
+  return Number.isFinite(v) ? Math.min(64, Math.max(-24, v)) : 0;
+};
+
+/** Réglages par bloc : seuls les réglages valides et non nuls sont gardés. */
+function normalizeBlocks(raw) {
+  const out = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const key of BLOCK_KEYS) {
+    const b = raw[key];
+    if (!b || typeof b !== "object") continue;
+    const v = {};
+    const width = size0(b.width, 40, 640);
+    if (width) v.width = width;
+    const before = offset(b.spaceBefore);
+    if (before) v.spaceBefore = before;
+    const after = offset(b.spaceAfter);
+    if (after) v.spaceAfter = after;
+    if (BLOCK_ALIGNS.includes(b.align)) v.align = b.align;
+    if (Object.keys(v).length > 0) out[key] = v;
+  }
+  return out;
+}
+
+/** Largeur de chaque colonne, en px (0 = ajustée au contenu). */
+function normalizeColumns(raw) {
+  const c = raw && typeof raw === "object" ? raw : {};
+  return {
+    visual: size0(c.visual, 40, 600),
+    text: size0(c.text, 80, 640),
+    side: size0(c.side, 40, 400),
+  };
+}
+
 const oneOf = (value, allowed, fallback) =>
   allowed.includes(value) ? value : fallback;
 const str = (v, max = 200) =>
@@ -206,6 +244,9 @@ export function normalizeSignature(input = {}) {
   style.frameThickness = sized("frameThickness", 1, 8);
   style.frameWidth = sized("frameWidth", 240, 720);
   style.frameBarLength = sized("frameBarLength", 16, 720);
+  // Blocs et colonnes sur mesure (vides : dimensions du modèle)
+  style.blocks = normalizeBlocks(s.blocks ?? tpl.blocks);
+  style.columns = normalizeColumns(s.columns ?? tpl.columns);
 
   const id = input.identity || {};
   const c = input.contact || {};

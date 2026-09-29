@@ -300,6 +300,27 @@ export const IMAGE_KINDS = ["PHOTO", "LOGO", "BANNER"];
  * Éléments de texte dont la mise en forme se règle individuellement (clic
  * sur l'élément dans l'aperçu). Sans réglage, l'élément suit le modèle.
  */
+/**
+ * Blocs réglables un à un (largeur, espace au-dessus et en dessous,
+ * alignement) : un par panneau d'élément de l'éditeur. Le nom couvre le
+ * prénom et le nom, « contact » toutes les coordonnées.
+ */
+export const BLOCK_KEYS = [
+  "name",
+  "jobTitle",
+  "company",
+  "tagline",
+  "contact",
+  "social",
+  "photo",
+  "logo",
+  "accent",
+  "cta",
+  "banner",
+  "disclaimer",
+];
+export const BLOCK_ALIGNS = ["left", "center", "right"];
+
 export const TEXT_ELEMENTS = [
   "name",
   // Réglages propres au prénom / au nom, par-dessus ceux du nom complet

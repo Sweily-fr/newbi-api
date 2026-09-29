@@ -169,24 +169,42 @@ export function vsepCell(sep, { width = 1, gap = 12 } = {}) {
  */
 /**
  * Comme vstack, avec un espace propre à chaque ligne : `rows` =
- * [{ html, after }], `after` = espace sous la ligne.
+ * [{ html, after, align }], `after` = espace sous la ligne, `align` =
+ * alignement propre à la ligne (sinon celui de la pile). `full` : la pile
+ * occupe toute la largeur de son conteneur.
  */
-export function stackRows(rows, { align = "left" } = {}) {
+export function stackRows(rows, { align = "left", full = false } = {}) {
   const items = rows.filter((r) => r && r.html);
   if (items.length === 0) return "";
-  if (items.length === 1 && align === "left") return items[0].html;
+  if (
+    items.length === 1 &&
+    align === "left" &&
+    !full &&
+    (items[0].align || "left") === "left"
+  ) {
+    return items[0].html;
+  }
   const alignAttr = align === "left" ? "" : ` align="${align}"`;
   const alignStyle = align === "left" ? "" : `text-align:${align};`;
   const rowsHtml = items
     .map((row, i) => {
       const last = i === items.length - 1;
       const pad = last || !row.after ? "" : `padding:0 0 ${row.after}px 0;`;
-      const style = `${alignStyle}${pad}`;
-      return `<tr><td${alignAttr}${style ? ` style="${style}"` : ""}>${row.html}</td></tr>`;
+      // Alignement propre : l'attribut seul, qui place aussi les tableaux
+      // de la ligne (un text-align en style l'emporterait sur lui)
+      const attr = row.align ? ` align="${row.align}"` : alignAttr;
+      const style = `${row.align ? "" : alignStyle}${pad}`;
+      return `<tr><td${attr}${style ? ` style="${style}"` : ""}>${row.html}</td></tr>`;
     })
     .join("");
   return table(rowsHtml, {
-    attrs: align === "left" ? "" : `align="${align}"`,
+    attrs: [
+      align === "left" ? "" : `align="${align}"`,
+      full ? 'width="100%"' : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    style: full ? "width:100%;" : "",
   });
 }
 
@@ -211,8 +229,9 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
   const items = rows.filter(Boolean);
   if (items.length === 0) return "";
   if (items.length === 1 && align === "left") return items[0];
-  const alignAttr = align === "center" ? ' align="center"' : "";
-  const alignStyle = align === "center" ? "text-align:center;" : "";
+  const aligned = align === "center" || align === "right";
+  const alignAttr = aligned ? ` align="${align}"` : "";
+  const alignStyle = aligned ? `text-align:${align};` : "";
   const rowsHtml = items
     .map((row, i) => {
       const last = i === items.length - 1;
@@ -221,10 +240,10 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
       return `<tr><td${alignAttr}${style ? ` style="${style}"` : ""}>${row}</td></tr>`;
     })
     .join("");
-  // La table elle-même est centrée par attribut : text-align ne centre pas
+  // La table elle-même est alignée par attribut : text-align ne place pas
   // une table imbriquée, et Outlook ignore margin:auto.
   return table(rowsHtml, {
-    attrs: align === "center" ? 'align="center"' : "",
+    attrs: aligned ? `align="${align}"` : "",
   });
 }
 
@@ -286,7 +305,7 @@ export function iconLines(
       }</td><td valign="middle" style="text-align:left;${pad ? `padding:0 0 ${pad}px 0;` : ""}">${l.contentHtml}</td></tr>`;
     })
     .join("");
-  return table(rows, { attrs: align === "center" ? 'align="center"' : "" });
+  return table(rows, { attrs: align === "left" ? "" : `align="${align}"` });
 }
 
 /**
@@ -368,6 +387,7 @@ export function button({
   italic = false,
   uppercase = false,
   labelHtml,
+  width = 0,
 }) {
   // Marges proportionnelles à la taille du texte : 8×18 px à 13 px
   const py = Math.max(4, Math.round(size * 0.6));
@@ -377,7 +397,7 @@ export function button({
   )}px;font-weight:${bold ? "bold" : "normal"};${italic ? "font-style:italic;" : ""}${uppercase ? "text-transform:uppercase;" : ""}color:${color};text-decoration:none;padding:${py}px ${px}px;">${labelHtml ?? esc(label)}</a>`;
   return table(
     tr(
-      `<td align="center" bgcolor="${background}" style="background-color:${background};border-radius:${radius}px;mso-padding-alt:${py}px ${px}px;">${inner}</td>`,
+      `<td align="center"${width ? ` width="${width}"` : ""} bgcolor="${background}" style="${width ? `width:${width}px;` : ""}background-color:${background};border-radius:${radius}px;mso-padding-alt:${py}px ${px}px;">${inner}</td>`,
     ),
   );
 }

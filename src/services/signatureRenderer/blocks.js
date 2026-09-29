@@ -300,6 +300,8 @@ export function buildBlocks(ctx) {
           size: eff.fontSize,
           bold: eff.bold,
           italic: eff.italic,
+          // Largeur choisie dans l'éditeur (sinon celle du texte)
+          width: st.blocks?.cta?.width || 0,
         }),
       );
     },
@@ -307,7 +309,9 @@ export function buildBlocks(ctx) {
     banner() {
       const b = images.banner;
       if (!sig.banner.enabled || !b?.url) return "";
-      const width = Math.min(b.width ? Math.round(b.width / 2) : 480, 600);
+      const width =
+        st.blocks?.banner?.width ||
+        Math.min(b.width ? Math.round(b.width / 2) : 480, 600);
       const height =
         b.width && b.height
           ? Math.round((width * b.height) / b.width)

@@ -34,6 +34,9 @@ const IDENTITY = new Set([
   "tagline",
 ]);
 const INLINE_IDENTITY = [...NAME_PARTS, "title", "company"];
+/** Bloc réglable dans l'éditeur auquel appartient un élément. */
+const blockKey = (k) =>
+  NAME_PARTS.includes(k) ? "name" : k === "title" ? "jobTitle" : k;
 
 /** Table à bordures séparées : seule façon d'arrondir une bordure de cellule. */
 const box = (rows, attrs = "", style = "") =>
@@ -51,6 +54,41 @@ function spread(left, right, { valign = "middle" } = {}) {
   if (!left || !right) return left || right;
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;"><tr><td valign="${valign}" style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right" style="text-align:right;">${right}</td></tr></table>`;
 }
+
+const TABLE_ATTRS =
+  'role="presentation" cellpadding="0" cellspacing="0" border="0"';
+const TABLE_CSS =
+  "border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;";
+
+/**
+ * Alignement d'un tableau ajouté autour d'un bloc : en attribut, sur le
+ * tableau lui-même (compris par Outlook, et qu'aucun text-align hérité ne
+ * contredit) et sur sa cellule, pour son contenu.
+ */
+const alignAttr = (align) =>
+  align && align !== "left" ? ` align="${align}"` : "";
+
+/**
+ * Largeur fixe d'un bloc ou d'une colonne : le texte revient à la ligne.
+ * Attribut pour Outlook, max-width pour ne pas déborder sur un téléphone.
+ */
+const fixedWidth = (html, w, align = "left") =>
+  `<table ${TABLE_ATTRS}${alignAttr(align)} width="${w}" style="${TABLE_CSS}width:${w}px;max-width:100%;"><tr><td${alignAttr(align)}>${html}</td></tr></table>`;
+
+/** Espace ajouté au bord d'un emplacement (au-dessus du premier bloc…). */
+const px = (n) => (n ? `${n}px` : "0");
+const paddedBlock = (html, top, bottom, align = "left") =>
+  `<table ${TABLE_ATTRS}${alignAttr(align)} style="${TABLE_CSS}"><tr><td${alignAttr(align)} style="padding:${px(top)} 0 ${px(bottom)} 0;">${html}</td></tr></table>`;
+
+/** Blocs de texte dont la largeur choisie fait revenir le texte à la ligne. */
+const WRAP_WIDTH = new Set([
+  "name",
+  "jobTitle",
+  "company",
+  "tagline",
+  "contact",
+  "disclaimer",
+]);
 
 export function renderLayout(b, ctx, theme = {}) {
   const { st, sp } = ctx;
@@ -72,6 +110,9 @@ export function renderLayout(b, ctx, theme = {}) {
       : html;
 
   const visible = (slot) => slots[slot].filter((k) => b.has(k));
+  // Réglages de chaque bloc choisis dans l'éditeur : largeur (retour à la
+  // ligne), alignement, espace ajouté ou retiré au-dessus et en dessous
+  const blockOf = (key) => st.blocks?.[key] || {};
   const hasVisual = visible("visual").length > 0;
   const hasHeader = visible("header").length > 0;
   const solid = hasVisual && st.visualFill === "solid";
@@ -101,17 +142,27 @@ export function renderLayout(b, ctx, theme = {}) {
     accent: inverse ? WHITE : P,
   });
 
-  /** Rendu d'un élément seul, selon son emplacement. */
-  function renderItem(k, slot, { inverse, itemAlign }) {
+  /**
+   * Rendu d'un élément seul, selon son emplacement. `own` : alignement
+   * choisi pour ce bloc, qui remplace celui de l'emplacement (à droite,
+   * c'est sa ligne qui le place).
+   */
+  function renderItem(k, slot, { inverse, itemAlign, own }) {
     const c = colors(inverse);
     const across =
-      slot === "visual" ? "center" : slot === "side" ? "right" : itemAlign;
+      own ||
+      (slot === "visual" ? "center" : slot === "side" ? "right" : itemAlign);
+    const selfAlign = own === "center" ? "center" : "left";
     switch (k) {
       case "photo":
         return b.photo({
           size: photoSize,
           // Colonne photo : centrée par sa cellule, comme avant
-          align: slot === "visual" || across === "right" ? "left" : across,
+          align: own
+            ? selfAlign
+            : slot === "visual" || across === "right"
+              ? "left"
+              : across,
           // Sur un fond de couleur, contour blanc par défaut
           ...(inverse ? { borderColor: st.photoBorderColor || WHITE } : {}),
         });
@@ -138,7 +189,8 @@ export function renderLayout(b, ctx, theme = {}) {
             });
       case "social":
         return b.social({
-          align: slot === "footer" || slot === "outside" ? "left" : across,
+          align:
+            own || (slot === "footer" || slot === "outside" ? "left" : across),
           size: socialSize,
           onFill: inverse,
         });
@@ -152,8 +204,9 @@ export function renderLayout(b, ctx, theme = {}) {
                 ? 32
                 : undefined;
         return b.logo({
-          align:
-            slot === "footer" || slot === "outside"
+          align: own
+            ? selfAlign
+            : slot === "footer" || slot === "outside"
               ? "left"
               : across === "right"
                 ? "left"
@@ -195,6 +248,8 @@ export function renderLayout(b, ctx, theme = {}) {
         }
         rows.push({
           kind: "identity",
+          key: "name",
+          keys: [...new Set(group.map(blockKey))],
           html: b.identityInlineOf(group, { inverse, mark: markSpan }),
         });
         continue;
@@ -213,6 +268,7 @@ export function renderLayout(b, ctx, theme = {}) {
         }
         rows.push({
           kind: group.length > 1 ? "name" : k,
+          key: "name",
           html: b.nameOf(group, {
             size: nameSize,
             color: colors(inverse).name,
@@ -230,6 +286,8 @@ export function renderLayout(b, ctx, theme = {}) {
         }
         rows.push({
           kind: "caption",
+          key: group.includes("title") ? "jobTitle" : "company",
+          keys: group.map(blockKey),
           html: b.captionOf(group, {
             color: colors(inverse).caption,
             mark: markSpan,
@@ -245,15 +303,17 @@ export function renderLayout(b, ctx, theme = {}) {
         }
         rows.push({
           kind: "contact",
+          key: "contact",
           html:
             st.contactStyle === "inline"
               ? b.contactInlineOf(group, { inverse, mark: markSpan })
               : b.contactGroup(group, {
                   style: st.contactStyle,
                   align:
-                    slot === "visual" || itemAlign === "center"
+                    blockOf("contact").align ||
+                    (slot === "visual" || itemAlign === "center"
                       ? "center"
-                      : "left",
+                      : "left"),
                   inverse,
                   attrsFor: (f) =>
                     ctx.markers ? ` data-sig-block="${f}"` : "",
@@ -261,16 +321,21 @@ export function renderLayout(b, ctx, theme = {}) {
         });
         continue;
       }
-      // Bas du cadre : réseaux et logo côte à côte, aux deux extrémités
+      // Bas du cadre : réseaux et logo côte à côte, aux deux extrémités (un
+      // alignement choisi pour l'un des deux les remet l'un sous l'autre)
       const pair = items[i + 1];
       if (
         slot === "footer" &&
         (k === "social" || k === "logo") &&
         (pair === "social" || pair === "logo") &&
-        pair !== k
+        pair !== k &&
+        !blockOf(k).align &&
+        !blockOf(pair).align
       ) {
         rows.push({
           kind: "pair",
+          key: k,
+          keys: [k, pair],
           html: spread(
             markBlock(k, renderItem(k, slot, { inverse, itemAlign })),
             markBlock(pair, renderItem(pair, slot, { inverse, itemAlign })),
@@ -279,48 +344,105 @@ export function renderLayout(b, ctx, theme = {}) {
         i += 2;
         continue;
       }
+      const key = blockKey(k);
       rows.push({
         kind: k,
-        html: markBlock(k, renderItem(k, slot, { inverse, itemAlign })),
+        key,
+        html: markBlock(
+          k,
+          renderItem(k, slot, { inverse, itemAlign, own: blockOf(key).align }),
+        ),
       });
       i += 1;
     }
     return rows.filter((row) => row.html);
   }
 
-  const stack = (rows, slot, stackAlign) =>
+  // Éléments réunis sur une ligne (légende, identité en ligne, réseaux et
+  // logo) : pour chaque réglage, celui du premier qui en a un
+  const settingsOf = (row) => {
+    if (!row.keys) return blockOf(row.key);
+    const pick = (f) => row.keys.map((k) => blockOf(k)[f]).find(Boolean);
+    return {
+      width: pick("width"),
+      spaceBefore: pick("spaceBefore"),
+      spaceAfter: pick("spaceAfter"),
+      align: pick("align"),
+    };
+  };
+  // Pile d'un emplacement : chaque bloc garde son alignement propre (porté
+  // par sa ligne), sa largeur et ses espaces. `full` : la pile occupe toute
+  // sa colonne de largeur fixe, pour y aligner les blocs.
+  const stack = (rows, slot, stackAlign, full = false) =>
     stackRows(
-      rows.map((row, i) => ({
-        html: row.html,
-        after:
-          i < rows.length - 1
-            ? gapBetween(row.kind, rows[i + 1].kind, slot)
-            : 0,
-      })),
-      { align: stackAlign },
+      rows.map((row, i) => {
+        const bs = settingsOf(row);
+        const next = rows[i + 1];
+        let html = row.html;
+        const rowAlign = bs.align || stackAlign;
+        if (bs.width && WRAP_WIDTH.has(row.key)) {
+          html = fixedWidth(html, bs.width, rowAlign);
+        }
+        // Au bord de l'emplacement, l'espace ne peut qu'être ajouté
+        const top = i === 0 ? Math.max(0, bs.spaceBefore || 0) : 0;
+        const bottom = next ? 0 : Math.max(0, bs.spaceAfter || 0);
+        if (top || bottom) html = paddedBlock(html, top, bottom, rowAlign);
+        const after = next
+          ? Math.max(
+              0,
+              gapBetween(row.kind, next.kind, slot) +
+                (bs.spaceAfter || 0) +
+                (settingsOf(next).spaceBefore || 0),
+            )
+          : 0;
+        return { html, after, align: bs.align };
+      }),
+      { align: stackAlign, full },
     );
+  // Largeur choisie pour une colonne (photo, texte, droite)
+  const column = (html, w) => (w && html ? fixedWidth(html, w) : html);
 
   // ── Colonnes ──────────────────────────────────────────────────────────
   const textHtml = region(
     "slot",
     "text",
-    stack(rowsOf(visible("text"), "text", { itemAlign: align }), "text", align),
+    column(
+      stack(
+        rowsOf(visible("text"), "text", { itemAlign: align }),
+        "text",
+        align,
+        Boolean(st.columns?.text),
+      ),
+      st.columns?.text,
+    ),
   );
   const sideHtml = region(
     "slot",
     "side",
-    stack(rowsOf(visible("side"), "side"), "side", "left"),
+    column(
+      stack(
+        rowsOf(visible("side"), "side"),
+        "side",
+        "left",
+        Boolean(st.columns?.side),
+      ),
+      st.columns?.side,
+    ),
   );
   const visualHtml = region(
     "slot",
     "visual",
-    stack(
-      rowsOf(visible("visual"), "visual", {
-        inverse: solid,
-        itemAlign: "center",
-      }),
-      "visual",
-      "center",
+    column(
+      stack(
+        rowsOf(visible("visual"), "visual", {
+          inverse: solid,
+          itemAlign: "center",
+        }),
+        "visual",
+        "center",
+        Boolean(st.columns?.visual),
+      ),
+      st.columns?.visual,
     ),
   );
 

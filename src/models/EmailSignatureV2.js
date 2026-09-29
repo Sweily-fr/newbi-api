@@ -118,6 +118,10 @@ const styleSchema = new mongoose.Schema(
     frameThickness: { type: Number, default: undefined },
     frameWidth: { type: Number, default: undefined },
     frameBarLength: { type: Number, default: undefined },
+    // Réglages par bloc (largeur, espaces, alignement) et largeur des
+    // colonnes, validés par le générateur
+    blocks: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    columns: { type: mongoose.Schema.Types.Mixed, default: undefined },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },
