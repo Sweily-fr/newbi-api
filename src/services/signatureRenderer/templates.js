@@ -48,6 +48,8 @@ const BASE_PRESET = {
   logoPosition: "bottom",
   footerStrip: false,
   outside: [],
+  // Icônes de réseaux par ligne (vide : toutes sur une ligne)
+  socialRows: [],
 };
 
 /** Pied (bouton, bandeau, mention) hors du cadre, pour les modèles encadrés. */
@@ -122,6 +124,9 @@ const TEMPLATES = {
       logoPosition: "text",
       frame: "outline",
       outside: FOOTER_OUTSIDE,
+      // Au-delà de 3 réseaux, la colonne photo s'élargirait : on passe à la
+      // ligne
+      socialRows: [3],
     },
     theme: {
       nameDelta: 6,

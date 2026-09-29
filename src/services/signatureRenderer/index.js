@@ -90,6 +90,18 @@ function normalizeElements(input) {
  * Applique les valeurs par défaut et borne chaque champ. Le rendu ne voit
  * jamais une valeur hors des listes autorisées.
  */
+/**
+ * Icônes de réseaux par ligne, de haut en bas (1 à 12 par ligne, 12 lignes
+ * au plus). Absent : valeur du modèle ; vide : une seule ligne.
+ */
+function socialRowsOf(value, fallback = []) {
+  if (!Array.isArray(value)) return [...fallback];
+  return value
+    .slice(0, 12)
+    .map((n) => Math.round(Number(n)))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 12);
+}
+
 export function normalizeSignature(input = {}) {
   const s = input.style || {};
   const templateId = oneOf(input.templateId, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID);
@@ -177,6 +189,7 @@ export function normalizeSignature(input = {}) {
   style.headerPhoto = oneOf(s.headerPhoto, HEADER_PHOTOS, derived.headerPhoto);
   style.headerFill = oneOf(s.headerFill, HEADER_FILLS, "solid");
   style.nameLayout = oneOf(s.nameLayout, NAME_LAYOUTS, "inline");
+  style.socialRows = socialRowsOf(s.socialRows, tpl.socialRows);
 
   const id = input.identity || {};
   const c = input.contact || {};

@@ -157,8 +157,8 @@ export function stackRows(rows, { align = "left" } = {}) {
   const items = rows.filter((r) => r && r.html);
   if (items.length === 0) return "";
   if (items.length === 1 && align === "left") return items[0].html;
-  const alignAttr = align === "center" ? ' align="center"' : "";
-  const alignStyle = align === "center" ? "text-align:center;" : "";
+  const alignAttr = align === "left" ? "" : ` align="${align}"`;
+  const alignStyle = align === "left" ? "" : `text-align:${align};`;
   const rowsHtml = items
     .map((row, i) => {
       const last = i === items.length - 1;
@@ -168,8 +168,25 @@ export function stackRows(rows, { align = "left" } = {}) {
     })
     .join("");
   return table(rowsHtml, {
-    attrs: align === "center" ? 'align="center"' : "",
+    attrs: align === "left" ? "" : `align="${align}"`,
   });
+}
+
+/**
+ * Répartit des éléments en lignes : `plan` donne le nombre d'éléments de
+ * chaque ligne, de haut en bas, et sa dernière valeur vaut pour les lignes
+ * suivantes ([2, 3] : 2 puis 3 par ligne ; [1] : une colonne). Plan vide :
+ * une seule ligne.
+ */
+export function splitRows(items, plan = []) {
+  if (!plan?.length) return [items];
+  const rows = [];
+  for (let i = 0, r = 0; i < items.length; r += 1) {
+    const n = plan[Math.min(r, plan.length - 1)];
+    rows.push(items.slice(i, i + n));
+    i += n;
+  }
+  return rows;
 }
 
 export function vstack(rows, { gap = 0, align = "left" } = {}) {

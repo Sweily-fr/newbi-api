@@ -106,6 +106,9 @@ const styleSchema = new mongoose.Schema(
     headerPhoto: { type: String, enum: HEADER_PHOTOS, default: undefined },
     headerFill: { type: String, enum: HEADER_FILLS, default: undefined },
     nameLayout: { type: String, enum: NAME_LAYOUTS, default: undefined },
+    // Icônes de réseaux par ligne, de haut en bas (la dernière valeur vaut
+    // pour les suivantes) ; sans valeur, celle du modèle
+    socialRows: { type: [Number], default: undefined },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },

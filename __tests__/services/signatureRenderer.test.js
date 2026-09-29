@@ -14,7 +14,10 @@ import {
   SOCIAL_NETWORKS,
   TEMPLATE_IDS,
 } from "../../src/services/signatureRenderer/constants.js";
-import { tint } from "../../src/services/signatureRenderer/primitives.js";
+import {
+  splitRows,
+  tint,
+} from "../../src/services/signatureRenderer/primitives.js";
 import {
   glyphFor,
   iconKey,
@@ -1110,5 +1113,86 @@ describe("signatureRenderer — finition des modèles", () => {
     expect(bold.name.color).toBe("#5a50ff");
     expect(bold.jobTitle.uppercase).toBe(true);
     expect(classic.jobTitle.uppercase).toBe(false);
+  });
+});
+
+describe("signatureRenderer — réseaux sur plusieurs lignes", () => {
+  const FIVE = {
+    ...FULL,
+    social: [
+      ...FULL.social,
+      { network: "facebook", url: "https://facebook.com/atelier" },
+      { network: "youtube", url: "https://youtube.com/@atelier" },
+    ],
+  };
+  // Rangées d'icônes de réseaux : alignement et nombre d'icônes
+  const rowsOf = (html) =>
+    [
+      ...html.matchAll(
+        /<table [^>]*align="(left|center|right)"[^>]*><tr>((?:<td valign="middle"[^>]*><a [^>]*><img [^>]*><\/a><\/td>)+)<\/tr><\/table>/g,
+      ),
+    ].map((m) => `${m[1]}:${m[2].match(/<a /g).length}`);
+  const render = (templateId, socialRows) =>
+    renderSignature({
+      ...FIVE,
+      templateId,
+      style: socialRows ? { socialRows } : {},
+    }).html;
+
+  it("répartit selon le plan, la dernière valeur valant pour la suite", () => {
+    const items = [1, 2, 3, 4, 5];
+    expect(splitRows(items, [])).toEqual([items]);
+    expect(splitRows(items, [2, 3])).toEqual([
+      [1, 2],
+      [3, 4, 5],
+    ]);
+    expect(splitRows(items, [2])).toEqual([[1, 2], [3, 4], [5]]);
+    expect(splitRows(items, [1]).length).toBe(5);
+    expect(splitRows([...items, 6], [2, 3])).toEqual([[1, 2], [3, 4, 5], [6]]);
+  });
+
+  it("une ligne par défaut ; 2 en haut et 3 en bas au choix", () => {
+    expect(rowsOf(render("modern"))).toEqual(["left:5"]);
+    expect(rowsOf(render("modern", [2, 3]))).toEqual(["left:2", "left:3"]);
+    expect(rowsOf(render("modern", [1]))).toEqual(Array(5).fill("left:1"));
+  });
+
+  it("les lignes suivent l'alignement du bloc : centrées, ou à droite", () => {
+    expect(rowsOf(render("centered", [2, 3]))).toEqual([
+      "center:2",
+      "center:3",
+    ]);
+    // Bandeau : réseaux dans la colonne de droite
+    expect(rowsOf(render("header", [2, 3]))).toEqual(["right:2", "right:3"]);
+  });
+
+  it("Colonnes passe à la ligne après 3 réseaux (colonne photo étroite)", () => {
+    expect(rowsOf(render("split"))).toEqual(["center:3", "center:2"]);
+    expect(rowsOf(render("split", []))).toEqual(["center:5"]);
+  });
+
+  it("valide le réglage : entiers de 1 à 12, sinon valeur du modèle", () => {
+    const rows = (templateId, socialRows) =>
+      normalizeSignature({ templateId, style: { socialRows } }).style
+        .socialRows;
+    expect(rows("modern", undefined)).toEqual([]);
+    expect(rows("split", undefined)).toEqual([3]);
+    expect(rows("modern", [0, "a", 3, 99, 2.4])).toEqual([3, 2]);
+    expect(rows("modern", "2,3")).toEqual([]);
+  });
+
+  it("reste conforme dans tous les modèles, sur plusieurs lignes", () => {
+    for (const t of listTemplates()) {
+      for (const plan of [[2, 3], [1]]) {
+        const html = render(t.id, plan);
+        expect(html, `${t.id} ${plan}`).not.toMatch(
+          /margin:|display:\s*flex|<div|rgba|class=/,
+        );
+        expect(html, `${t.id} ${plan}`).not.toMatch(/<td[^>]*><\/td>/);
+        expect(rowsOf(html).length, `${t.id} ${plan}`).toBe(
+          plan[0] === 1 ? 5 : 2,
+        );
+      }
+    }
   });
 });

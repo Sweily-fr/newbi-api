@@ -172,6 +172,12 @@ type SignatureStyleV2 {
   "Prénom et nom côte à côte : inline (une ligne) ou stacked (deux lignes)."
   nameLayout: String!
   """
+  Icônes de réseaux par ligne, de haut en bas ; la dernière valeur vaut pour
+  les lignes suivantes ([2, 3] : 2 puis 3 ; [1] : en colonne). Vide : une
+  seule ligne.
+  """
+  socialRows: [Int!]!
+  """
   Réglages par élément (seulement ceux modifiés).
   """
   elements: SignatureElementStylesV2!
@@ -399,6 +405,7 @@ input SignatureStyleV2Input {
   headerPhoto: String
   headerFill: String
   nameLayout: String
+  socialRows: [Int!]
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

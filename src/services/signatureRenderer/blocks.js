@@ -22,6 +22,8 @@ import {
   normalizeUrl,
   photo,
   span,
+  splitRows,
+  stackRows,
   telHref,
   textStyle,
 } from "./primitives.js";
@@ -202,14 +204,22 @@ export function buildBlocks(ctx) {
           href: normalizeUrl(s.url),
           alt: SOCIAL_NETWORKS[s.network].label,
         }));
-      return markBlock(
-        "social",
-        iconRow(items, {
-          size,
-          gap: Math.max(6, Math.round(size / 3)),
-          align,
-        }),
-      );
+      // Plusieurs lignes au choix (« 2 en haut, 3 en bas ») : une rangée
+      // d'icônes par ligne, alignées comme le bloc, même écart qu'entre deux
+      // icônes
+      const gap = Math.max(6, Math.round(size / 3));
+      const rows = splitRows(items, st.socialRows);
+      const html =
+        rows.length > 1
+          ? stackRows(
+              rows.map((list) => ({
+                html: iconRow(list, { size, gap, align }),
+                after: gap,
+              })),
+              { align },
+            )
+          : iconRow(items, { size, gap, align });
+      return markBlock("social", html);
     },
 
     photo({
