@@ -195,7 +195,7 @@ export function iconLines(
       const pad = i === items.length - 1 ? 0 : gap;
       return `<tr><td valign="middle" style="vertical-align:middle;padding:0 ${iconGap}px ${pad}px 0;font-size:0;line-height:0;">${
         l.iconHtml || ""
-      }</td><td valign="middle" style="vertical-align:middle;padding:0 0 ${pad}px 0;">${l.contentHtml}</td></tr>`;
+      }</td><td valign="middle" style="vertical-align:middle;text-align:left;padding:0 0 ${pad}px 0;">${l.contentHtml}</td></tr>`;
     })
     .join("");
   return table(rows, { attrs: align === "center" ? 'align="center"' : "" });
