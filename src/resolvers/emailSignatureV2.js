@@ -7,7 +7,6 @@
  * données, garantir les icônes sur R2 et traiter les images.
  */
 
-import mongoose from "mongoose";
 import EmailSignatureV2 from "../models/EmailSignatureV2.js";
 import {
   requireDelete,
@@ -43,6 +42,11 @@ import {
   storeSignatureImage,
 } from "../services/signatureAssets.js";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  isWorkspaceMember,
+  listWorkspaceMembers,
+  memberSignatureProfile,
+} from "../services/signatureProfile.js";
 
 const scope = (ctx) => ({
   createdBy: ctx.user.id,
@@ -57,27 +61,30 @@ const plain = (value) =>
       : {};
 
 /**
- * Photo de profil de l'utilisateur, même règle que les avatars du kanban.
- * Lecture de la collection brute : le modèle Mongoose `User` ne déclare pas
- * les champs Better Auth (`image` à la racine).
+ * Photo de la personne de la signature : importée et recadrée comme un
+ * envoi, ou retirée si la personne n'en a pas. Un échec d'import ne bloque
+ * jamais l'enregistrement (la signature reste utilisable sans photo).
  */
-async function profilePhotoUrl(ctx) {
-  const user = await mongoose.connection.db
-    .collection("user")
-    .findOne(
-      { _id: new mongoose.Types.ObjectId(String(ctx.user.id)) },
-      { projection: { image: 1, avatar: 1, "profile.profilePictureUrl": 1 } },
-    );
-  const url =
-    user?.image || user?.avatar || user?.profile?.profilePictureUrl || "";
-  return /^https?:\/\//i.test(url) ? url : null;
-}
-
-/** Une nouvelle signature démarre avec la photo de profil, si elle existe. */
-async function attachProfilePhoto(doc, ctx) {
+async function setPersonPhoto(doc, url, ctx) {
+  if (!url) {
+    if (!doc.images?.photo) return;
+    try {
+      await cloudflareService.deleteSignatureFolder(
+        String(ctx.user.id),
+        String(doc._id),
+        "imgProfil",
+      );
+    } catch (error) {
+      logger.warn(
+        `[signatures v2] suppression photo ignorée : ${error.message}`,
+      );
+    }
+    doc.images.photo = null;
+    doc.markModified("images");
+    await doc.save();
+    return;
+  }
   try {
-    const url = await profilePhotoUrl(ctx);
-    if (!url) return;
     doc.images.photo = await importSignatureImage({
       url,
       kind: "PHOTO",
@@ -88,12 +95,36 @@ async function attachProfilePhoto(doc, ctx) {
     doc.markModified("images");
     await doc.save();
   } catch (error) {
-    // Sans photo, la signature reste utilisable : on n'échoue pas la création
     logger.warn(
-      `[Signature v2] Photo de profil non importée : ${error.message}`,
+      `[signatures v2] photo de profil non importée : ${error.message}`,
     );
   }
 }
+
+/** Personne choisie : soi-même par défaut, sinon un membre de l'espace. */
+async function resolvePerson(memberUserId, ctx) {
+  const userId = memberUserId ? String(memberUserId) : String(ctx.user.id);
+  if (
+    userId !== String(ctx.user.id) &&
+    !(await isWorkspaceMember(userId, ctx.workspaceId))
+  ) {
+    throw createValidationError(
+      "Cette personne ne fait pas partie de l'espace",
+    );
+  }
+  return {
+    userId,
+    profile: await memberSignatureProfile(userId, ctx.workspaceId),
+  };
+}
+
+/** Garde les valeurs renseignées d'un groupe (identity, contact…). */
+const filled = (obj) =>
+  Object.fromEntries(
+    Object.entries(obj || {}).filter(
+      ([, v]) => v !== undefined && v !== null && v !== "",
+    ),
+  );
 
 async function findOwned(id, ctx) {
   const doc = await EmailSignatureV2.findOne({ _id: id, ...scope(ctx) });
@@ -239,6 +270,14 @@ const emailSignatureV2Resolvers = {
       EmailSignatureV2.findOne({ _id: id, ...scope(ctx) }),
     ),
 
+    signatureMembersV2: requireRead("signatures")(async (_, __, ctx) => {
+      const members = await listWorkspaceMembers(ctx.workspaceId);
+      return members.map((m) => ({
+        ...m,
+        isMe: m.userId === String(ctx.user.id),
+      }));
+    }),
+
     signatureCatalogV2: requireRead("signatures")(async () => ({
       templates: listTemplates(),
       networks: Object.entries(SOCIAL_NETWORKS).map(([id, n]) => ({
@@ -298,23 +337,70 @@ const emailSignatureV2Resolvers = {
 
   Mutation: {
     createEmailSignatureV2: requireWrite("signatures")(
-      async (_, { input }, ctx) => {
+      async (_, { input, memberUserId }, ctx) => {
         const name = await availableName(input?.name, ctx);
         const isFirst = !(await EmailSignatureV2.exists(scope(ctx)));
+        // Pré-remplie avec le profil de la personne (soi-même par défaut) et
+        // l'entreprise de l'espace ; ce que l'entrée précise l'emporte.
+        const person = await resolvePerson(memberUserId, ctx);
+        const { person: own, company } = person.profile;
         // Une nouvelle signature démarre avec la typographie de son modèle
         const preset = templatePreset(input?.templateId || DEFAULT_TEMPLATE_ID);
         const normalized = mergeInput(
           { images: { photo: null, logo: null, banner: null } },
-          { ...(input || {}), style: { ...preset, ...(input?.style || {}) } },
+          {
+            ...(input || {}),
+            identity: {
+              ...filled(company.identity),
+              ...filled(own.identity),
+              ...filled(input?.identity),
+            },
+            contact: {
+              ...filled(company.contact),
+              ...filled(own.contact),
+              ...filled(input?.contact),
+            },
+            style: { ...preset, ...(input?.style || {}) },
+          },
         );
         const doc = new EmailSignatureV2({
           name,
           isDefault: isFirst,
+          memberUserId: person.userId,
           ...scope(ctx),
         });
         applyNormalized(doc, normalized);
         await doc.save();
-        await attachProfilePhoto(doc, ctx);
+        await setPersonPhoto(doc, person.profile.photoUrl, ctx);
+        return doc;
+      },
+    ),
+
+    applyMemberToEmailSignatureV2: requireWrite("signatures")(
+      async (_, { id, memberUserId }, ctx) => {
+        const doc = await findOwned(id, ctx);
+        const person = await resolvePerson(memberUserId, ctx);
+        const { person: own, company } = person.profile;
+        const current = plain(doc);
+        // Ce qui est propre à la personne est remplacé (même vide, pour ne
+        // pas garder le portable de la précédente) ; l'entreprise ne
+        // complète que les champs vides.
+        const normalized = mergeInput(current, {
+          identity: {
+            ...filled(company.identity),
+            ...filled(current.identity),
+            ...own.identity,
+          },
+          contact: {
+            ...filled(company.contact),
+            ...filled(current.contact),
+            ...own.contact,
+          },
+        });
+        applyNormalized(doc, normalized);
+        doc.memberUserId = person.userId;
+        await doc.save();
+        await setPersonPhoto(doc, person.profile.photoUrl, ctx);
         return doc;
       },
     ),

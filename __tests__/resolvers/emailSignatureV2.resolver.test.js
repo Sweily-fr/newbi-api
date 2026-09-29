@@ -137,6 +137,159 @@ describe("EmailSignatureV2 — photo de profil par défaut", () => {
   });
 });
 
+describe("EmailSignatureV2 — informations de la personne", () => {
+  const db = () => mongoose.connection.db;
+  const oid = (id) => new mongoose.Types.ObjectId(String(id));
+  const colleagueId = buildUserId();
+
+  beforeEach(async () => {
+    await db()
+      .collection("user")
+      .insertMany([
+        {
+          _id: oid(userId),
+          name: "Camille Durand",
+          lastName: "Durand",
+          email: "camille@atelier.fr",
+          phoneNumber: "06 12 34 56 78",
+        },
+        {
+          _id: oid(colleagueId),
+          name: "Léo Martin",
+          email: "leo@atelier.fr",
+          image: "https://cdn.test/leo.png",
+        },
+      ]);
+    await db()
+      .collection("organization")
+      .updateOne(
+        { _id: oid(organizationId) },
+        {
+          $set: {
+            companyName: "Atelier Nord",
+            companyPhone: "01 23 45 67 89",
+            website: "https://atelier.fr",
+            addressStreet: "12 rue des Lilas",
+            addressZipCode: "75011",
+            addressCity: "Paris",
+          },
+        },
+      );
+    await seedOrgMembership({
+      userId: colleagueId,
+      organizationId,
+      role: "member",
+    });
+  });
+
+  it("pré-remplit avec le profil du créateur et l'entreprise", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: { name: "Pro" } },
+      ctx(),
+    );
+    expect(doc.identity).toMatchObject({
+      firstName: "Camille",
+      lastName: "Durand",
+      company: "Atelier Nord",
+    });
+    expect(doc.contact).toMatchObject({
+      email: "camille@atelier.fr",
+      mobile: "06 12 34 56 78",
+      phone: "01 23 45 67 89",
+      website: "https://atelier.fr",
+      address: "12 rue des Lilas, 75011 Paris",
+    });
+    expect(doc.memberUserId).toBe(String(userId));
+  });
+
+  it("ce que précise l'entrée l'emporte sur le profil", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: { identity: { firstName: "Cam", company: "" } } },
+      ctx(),
+    );
+    expect(doc.identity.firstName).toBe("Cam");
+    expect(doc.identity.company).toBe("Atelier Nord");
+  });
+
+  it("crée la signature d'un autre membre de l'espace", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: {}, memberUserId: String(colleagueId) },
+      ctx(),
+    );
+    expect(doc.identity).toMatchObject({
+      firstName: "Léo",
+      lastName: "Martin",
+    });
+    expect(doc.contact.email).toBe("leo@atelier.fr");
+    expect(doc.createdBy.toString()).toBe(String(userId));
+    expect(importSignatureImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: "https://cdn.test/leo.png" }),
+    );
+  });
+
+  it("refuse une personne extérieure à l'espace", async () => {
+    await expect(
+      Mutation.createEmailSignatureV2(
+        null,
+        { input: {}, memberUserId: String(otherUserId) },
+        ctx(),
+      ),
+    ).rejects.toThrow(/ne fait pas partie/);
+  });
+
+  it("changer de personne remplace ses informations et garde le reste", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      {
+        input: {
+          identity: { jobTitle: "Graphiste" },
+          contact: { website: "https://studio.fr" },
+        },
+      },
+      ctx(),
+    );
+    const switched = await Mutation.applyMemberToEmailSignatureV2(
+      null,
+      { id: String(doc._id), memberUserId: String(colleagueId) },
+      ctx(),
+    );
+    expect(switched.identity).toMatchObject({
+      firstName: "Léo",
+      lastName: "Martin",
+      jobTitle: "Graphiste",
+      company: "Atelier Nord",
+    });
+    // Léo n'a pas de portable : celui de Camille ne doit pas rester
+    expect(switched.contact.mobile).toBe("");
+    expect(switched.contact.email).toBe("leo@atelier.fr");
+    expect(switched.contact.website).toBe("https://studio.fr");
+    expect(switched.memberUserId).toBe(String(colleagueId));
+    expect(switched.images.photo.url).toBe("https://cdn.test/profil.jpg");
+  });
+
+  it("liste les membres de l'espace", async () => {
+    const members = await Query.signatureMembersV2(null, {}, ctx());
+    expect(members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          userId: String(userId),
+          name: "Camille Durand",
+          isMe: true,
+        }),
+        expect.objectContaining({
+          userId: String(colleagueId),
+          name: "Léo Martin",
+          image: "https://cdn.test/leo.png",
+          isMe: false,
+        }),
+      ]),
+    );
+  });
+});
+
 describe("EmailSignatureV2 — création", () => {
   it("applique la typographie du modèle à une nouvelle signature", async () => {
     const doc = await Mutation.createEmailSignatureV2(

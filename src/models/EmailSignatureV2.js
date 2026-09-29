@@ -121,6 +121,9 @@ const emailSignatureV2Schema = new mongoose.Schema(
     },
     style: { type: styleSchema, default: () => ({}) },
 
+    /** Membre de l'espace dont la signature reprend les informations. */
+    memberUserId: { type: String, default: null },
+
     /** Identifiant de la signature v1 dont ce document est la migration. */
     migratedFrom: {
       type: mongoose.Schema.Types.ObjectId,

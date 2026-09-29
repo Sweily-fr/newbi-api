@@ -92,6 +92,11 @@ type EmailSignatureV2 {
   disclaimer: SignatureDisclaimerV2!
   style: SignatureStyleV2!
   """
+  Membre de l'espace dont la signature reprend les informations (profil et
+  photo). Vide pour les signatures migrées de la v1.
+  """
+  memberUserId: ID
+  """
   Rendu à jour de la signature (HTML, texte, taille, avertissements).
   """
   render: SignatureRenderV2!
@@ -150,6 +155,17 @@ type SignatureSocialNetworkV2 {
   label: String!
   brandColor: String!
   host: String!
+}
+
+"""
+Membre de l'espace proposé comme personne de la signature.
+"""
+type SignatureMemberV2 {
+  userId: ID!
+  name: String!
+  email: String!
+  image: String
+  isMe: Boolean!
 }
 
 type SignatureFontV2 {
@@ -254,6 +270,7 @@ extend type Query {
   emailSignaturesV2: [EmailSignatureV2!]!
   emailSignatureV2(id: ID!): EmailSignatureV2
   signatureCatalogV2: SignatureCatalogV2!
+  signatureMembersV2: [SignatureMemberV2!]!
 
   """
   Rendu d'une signature non enregistrée (aperçu en direct). Sans `id`, les
@@ -268,7 +285,21 @@ extend type Query {
 }
 
 extend type Mutation {
-  createEmailSignatureV2(input: EmailSignatureV2Input!): EmailSignatureV2!
+  """
+  Crée une signature pré-remplie avec le profil de `memberUserId` (soi-même
+  par défaut) et l'entreprise de l'espace ; `input` l'emporte.
+  """
+  createEmailSignatureV2(
+    input: EmailSignatureV2Input!
+    memberUserId: ID
+  ): EmailSignatureV2!
+
+  """
+  Reprend les informations d'un membre de l'espace : nom, e-mail, portable
+  et photo remplacés ; société, standard, site et adresse complétés s'ils
+  sont vides.
+  """
+  applyMemberToEmailSignatureV2(id: ID!, memberUserId: ID!): EmailSignatureV2!
   updateEmailSignatureV2(id: ID!, input: EmailSignatureV2Input!): EmailSignatureV2!
   deleteEmailSignatureV2(id: ID!): Boolean!
   duplicateEmailSignatureV2(id: ID!): EmailSignatureV2!
