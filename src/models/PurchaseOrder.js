@@ -115,7 +115,7 @@ const purchaseOrderSchema = new mongoose.Schema(
       validate: {
         validator: isValidFooterNotes,
         message:
-          "Les notes de bas de page ne doivent pas dépasser 2000 caractères ou contiennent des caractères non autorisés",
+          "Les notes de bas de page contiennent des caractères non autorisés",
       },
     },
     termsAndConditions: {
