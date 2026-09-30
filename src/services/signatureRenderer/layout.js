@@ -22,7 +22,15 @@
  */
 
 import { CONTACT_ITEMS } from "./constants.js";
-import { bar, hstack, stackRows, tint, vstack, wrapAt } from "./primitives.js";
+import {
+  bar,
+  hstack,
+  naturalWidth,
+  stackRows,
+  tint,
+  vstack,
+  wrapAt,
+} from "./primitives.js";
 
 const WHITE = "#ffffff";
 const NAME_PARTS = ["firstName", "lastName"];
@@ -54,17 +62,17 @@ const widthOf = (w) =>
 
 /**
  * Deux contenus côte à côte, 24 px d'écart. `full` : aux extrémités d'une
- * ligne pleine largeur, seulement dans un cadre de largeur fixe (ailleurs,
- * un tableau à 100 % étirerait la signature sur toute la largeur du
- * message) ; la cellule de gauche prend alors toute la place libre, celle
- * de droite reste à la taille de son contenu, collée au bord. Cellule de
- * droite alignée par l'attribut seul : un text-align en style ne placerait
- * pas ses tableaux.
+ * ligne pleine largeur, seulement dans une signature de largeur choisie
+ * (ailleurs, un tableau à 100 % étirerait la signature sur toute la largeur
+ * du message). Aucune largeur sur les cellules (une cellule à 100 %
+ * écraserait l'autre à son minimum, mot par mot) ; le contenu de droite
+ * est collé au bord par l'attribut align seul (un text-align en style ne
+ * placerait pas ses tableaux).
  */
 function spread(left, right, { valign = "middle", full = false } = {}) {
   if (!left || !right) return left || right;
   const width = full ? ' width="100%"' : "";
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${width} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${full ? "width:100%;" : ""}"><tr><td valign="${valign}"${width} style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right">${right}</td></tr></table>`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${width} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${full ? "width:100%;" : ""}"><tr><td valign="${valign}" style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right">${right}</td></tr></table>`;
 }
 
 const TABLE_ATTRS =
@@ -137,12 +145,25 @@ export function renderLayout(b, ctx, theme = {}) {
   // réglages valent pour son morceau principal, celui qui réunit le plus
   // de parties (à égalité, le premier) ; les autres restent automatiques.
   // Même règle dans l'éditeur (mainPieces, _v2/slots.js).
+  // Listes dont les lignes sont réellement faites : l'en-tête sans sa photo
+  // (placée à part), le bas coupé en deux avec une bande de pied teintée
+  const stripOn =
+    (st.frame === "outline" || st.frame === "soft") && st.footerStrip;
+  const inStrip = (k) => k === "social" || k === "logo";
+  const rowLists = (slot) => {
+    const list = visible(slot);
+    if (slot === "header") return [list.filter((k) => k !== "photo")];
+    if (slot === "footer" && stripOn) {
+      return [list.filter((k) => !inStrip(k)), list.filter(inStrip)];
+    }
+    return [list];
+  };
   const mainPiece = {};
   for (const [key, parts] of Object.entries(SPLITTABLE)) {
     let best = null;
-    for (const slot of SLOT_ORDER) {
+    for (const list of SLOT_ORDER.flatMap(rowLists)) {
       let run = [];
-      for (const k of [...visible(slot), null]) {
+      for (const k of [...list, null]) {
         if (k && parts.includes(k)) {
           run.push(k);
           continue;
@@ -376,6 +397,9 @@ export function renderLayout(b, ctx, theme = {}) {
               ? b.contactInlineOf(group, { inverse, mark: markSpan })
               : b.contactGroup(group, {
                   style: st.contactStyle,
+                  // Largeur propre à une ligne : jamais plus que sa colonne
+                  // ou la signature de largeur choisie
+                  lineMax: st.columns?.[slot] || st.frameWidth || 0,
                   align:
                     own ||
                     (slot === "visual" || itemAlign === "center"
@@ -448,7 +472,7 @@ export function renderLayout(b, ctx, theme = {}) {
         ? ctx.sig.disclaimer?.text
         : ctx.sig.identity?.tagline;
     if (!text || st.columns?.[slot]) return 0;
-    if (slot === "footer" && wide) return 0;
+    if (wide && slot !== "outside") return 0;
     const size =
       st.elements?.[key]?.fontSize ||
       (key === "disclaimer" ? Math.max(10, st.fontSize - 3) : st.fontSize - 1);
@@ -461,10 +485,9 @@ export function renderLayout(b, ctx, theme = {}) {
     return text.length * size * 0.55 > cap ? cap : 0;
   };
   // Éléments réunis sur une ligne (légende, identité en ligne, réseaux et
-  // logo) : la largeur de l'élément qui porte la ligne (celle d'un autre,
-  // réglée quand il était seul, la ferait revenir à la ligne), l'espace
-  // au-dessus du premier, en dessous du dernier, l'alignement du premier
-  // qui en a un
+  // logo) : la ligne se règle sur son premier élément (largeur, espaces,
+  // alignement), comme dans l'éditeur (mergedRow) ; les réglages des autres
+  // ne s'y appliquent pas
   const settingsOf = (row) => {
     if (!row.keys) {
       const main = inMain(row.key, row.items);
@@ -484,11 +507,12 @@ export function renderLayout(b, ctx, theme = {}) {
         align: main ? whole.align : lead.align,
       };
     }
+    const lead = blockOf(row.keys[0]);
     return {
-      width: blockOf(row.key).width,
-      spaceBefore: blockOf(row.keys[0]).spaceBefore,
-      spaceAfter: blockOf(row.keys[row.keys.length - 1]).spaceAfter,
-      align: row.keys.map((k) => blockOf(k).align).find(Boolean),
+      width: lead.width,
+      spaceBefore: lead.spaceBefore,
+      spaceAfter: lead.spaceAfter,
+      align: lead.align,
     };
   };
   // Pile d'un emplacement : chaque bloc garde son alignement propre (porté
@@ -501,12 +525,13 @@ export function renderLayout(b, ctx, theme = {}) {
         const next = rows[i + 1];
         let html = row.html;
         const rowAlign = bs.align || stackAlign;
-        // Jamais plus large que sa colonne de largeur choisie
-        const col = st.columns?.[slot] || 0;
+        // Jamais plus large que sa colonne, ni que la signature, de
+        // largeur choisie
+        const limit = st.columns?.[slot] || st.frameWidth || 0;
         const wanted = bs.width || autoWrap(row.key, slot);
-        const wrap = col && wanted > col ? col : wanted;
+        const wrap = limit && wanted > limit ? limit : wanted;
         if (wrap && WRAP_WIDTH.has(row.key)) {
-          html = wrapAt(html, wrap, rowAlign);
+          html = wrapAt(html, wrap, rowAlign, ctx.markers);
         }
         // Au bord de l'emplacement, l'espace ne peut qu'être ajouté
         const top = i === 0 ? Math.max(0, bs.spaceBefore || 0) : 0;
@@ -649,6 +674,14 @@ export function renderLayout(b, ctx, theme = {}) {
     band = region("slot", "header", content);
   }
 
+  // Largeur de signature choisie : les tableaux du corps occupent toute
+  // sa largeur (un tableau sans largeur ne s'étire pas dans WebKit) ; la
+  // colonne photo garde la sienne, le texte prend le reste
+  const fullAttr = wide ? ' width="100%"' : "";
+  const fullStyle = wide ? "width:100%;" : "";
+  const visualWidth =
+    st.columns?.visual || Math.min(naturalWidth(visualHtml || ""), 300);
+
   // ── Corps : colonne photo, colonne principale, colonne de droite ─────
   let body;
   let bodyFlush = false; // le corps gère ses propres marges (colonne teintée)
@@ -661,12 +694,7 @@ export function renderLayout(b, ctx, theme = {}) {
     st.divider === "none"
       ? null
       : {
-          color:
-            st.divider !== "line"
-              ? P
-              : theme.dividerColor === "text"
-                ? st.textColor
-                : st.separatorColor,
+          color: st.divider !== "line" ? P : st.separatorColor,
           width: st.dividerThickness || (st.divider === "bar" ? 4 : 1),
           length: st.dividerLength,
           valign: st.photoValign,
@@ -691,17 +719,18 @@ export function renderLayout(b, ctx, theme = {}) {
       ? `0 ${topCorner}px ${bottomCorner}px 0`
       : `${topCorner}px 0 0 ${bottomCorner}px`;
     const radius = boxed ? corners : `${r}px`;
-    const visualCell = `<td valign="${st.photoValign}" align="center" bgcolor="${soft}" style="background-color:${soft};padding:22px ${sp.gap + 2}px;border-radius:${radius};">${visualHtml}</td>`;
+    const visualCell = `<td valign="${st.photoValign}" align="center"${wide ? ` width="${visualWidth}"` : ""} bgcolor="${soft}" style="background-color:${soft};padding:22px ${sp.gap + 2}px;border-radius:${radius};">${visualHtml}</td>`;
     // Marges au plus juste : la signature doit tenir sur un téléphone
     const boxPad = `20px ${sp.gap + 6}px`;
     const pad = boxed ? boxPad : `0 0 0 ${sp.gap + 6}px`;
     const padRight = boxed ? boxPad : `0 ${sp.gap + 6}px 0 0`;
-    // Cadre de largeur fixe : la place libre va au texte, pas à la
-    // colonne teintée
-    const stretch = boxed && wide;
+    // Largeur choisie : la place libre va au texte ; la colonne teintée
+    // garde la sienne (largeur donnée à sa cellule, jamais 100 % au texte,
+    // qui écraserait la colonne à son minimum)
+    const stretch = wide;
     const textCell =
       textHtml || sideHtml
-        ? `<td valign="${textValign}"${stretch ? ' width="100%"' : ""} style="padding:${right ? padRight : pad};">${sideBySide(textHtml, sideHtml)}</td>`
+        ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${sideBySide(textHtml, sideHtml)}</td>`
         : "";
     body = box(
       `<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`,
@@ -718,10 +747,12 @@ export function renderLayout(b, ctx, theme = {}) {
       ];
       if (right) cells.reverse();
       cells.push({ html: sideHtml, valign: "middle" });
+      if (wide) cells[right ? 1 : 0].width = visualWidth;
       body = hstack(cells, {
         gap: sp.gap,
         valign: "middle",
         separator: divider,
+        full: wide,
       });
     } else {
       const main = sideBySide(textHtml, sideHtml);
@@ -736,12 +767,13 @@ export function renderLayout(b, ctx, theme = {}) {
         const textIndex = right ? 0 : 1;
         cells[textIndex] = {
           ...cells[textIndex],
-          html: `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-${right ? "right" : "left"}:${divider.width}px solid ${P};padding:2px ${right ? sp.gap : 0}px 2px ${right ? 0 : sp.gap}px;">${main}</td></tr></table>`,
+          html: `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${fullAttr} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${fullStyle}"><tr><td style="border-${right ? "right" : "left"}:${divider.width}px solid ${P};padding:2px ${right ? sp.gap : 0}px 2px ${right ? 0 : sp.gap}px;">${main}</td></tr></table>`,
         };
       }
       // Trait fin, ou barre d'une longueur choisie : cellule entre les deux
       const separator = divider && !barBorder ? divider : null;
-      body = hstack(cells, { gap: sp.gap + 4, separator });
+      if (wide) cells[right ? 1 : 0].width = visualWidth;
+      body = hstack(cells, { gap: sp.gap + 4, separator, full: wide });
     }
   } else if (textHtml && (st.divider === "bar" || st.divider === "accent")) {
     // Sans colonne photo, le trait ou la barre du modèle borde le texte à
@@ -755,16 +787,16 @@ export function renderLayout(b, ctx, theme = {}) {
             },
             { html: sideBySide(textHtml, sideHtml), valign: "middle" },
           ],
-          { gap: sp.gap },
+          { gap: sp.gap, full: wide },
         )
-      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:${divider.width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${sideBySide(textHtml, sideHtml)}</td></tr></table>`;
+      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${fullAttr} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${fullStyle}"><tr><td style="border-left:${divider.width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${sideBySide(textHtml, sideHtml)}</td></tr></table>`;
   } else if (sideHtml && st.divider !== "none" && textHtml) {
     body = hstack(
       [
         { html: textHtml, valign: "middle" },
         { html: sideHtml, valign: "middle" },
       ],
-      { gap: sp.gap, separator: divider },
+      { gap: sp.gap, separator: divider, full: wide },
     );
   } else {
     body = sideBySide(textHtml, sideHtml, {
@@ -837,12 +869,16 @@ function frameContent({
     const content = vstack([bandHtml, body, restHtml, stripHtml], {
       gap: sp.block,
       align: align === "center" && !band ? "center" : "left",
+      // Largeur choisie : chaque zone occupe toute la signature
+      full: Boolean(st.frameWidth),
     });
     // Barre à gauche ou en haut : épaisseur choisie (4 px sinon), sur toute
     // la longueur ou sur la longueur choisie
     const color = st.frameColor || P;
     const t = st.frameThickness || 4;
-    const L = st.frameBarLength;
+    const L = st.frameWidth
+      ? Math.min(st.frameBarLength, st.frameWidth)
+      : st.frameBarLength;
     if (st.frame === "accent-left") {
       return box(
         L

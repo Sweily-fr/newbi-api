@@ -404,11 +404,11 @@ export function renderSignature(
 
   // Table englobante : fond transparent (mode sombre), aucune largeur fixe
   // (le contenu dicte la largeur, la signature reste lisible sur mobile).
-  // Taille et interligne de la signature sur la cellule : sans eux, chaque
-  // ligne de texte prenait la hauteur du texte par défaut du client mail
-  // (16 px), plus haute que celle d'un petit texte.
+  // Taille de la signature et interligne serré sur la cellule : sans eux,
+  // chaque ligne de texte prenait au moins la hauteur du texte par défaut
+  // du client mail (16 px) ; l'interligne de chaque texte est le sien.
   const html = body
-    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;background-color:transparent;"><tr><td style="font-family:${ctx.font};font-size:${st.fontSize}px;line-height:${Math.round(st.fontSize * 1.4)}px;">${body}</td></tr></table>`
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;background-color:transparent;"><tr><td style="font-family:${ctx.font};font-size:${st.fontSize}px;line-height:${st.fontSize}px;">${body}</td></tr></table>`
     : "";
 
   const warnings = [];
@@ -416,11 +416,8 @@ export function renderSignature(
     // Gmail en retire une partie au collage (code pour Outlook) : le
     // dépassement est possible, pas certain
     warnings.push(
-      "La signature peut dépasser la limite de 10 000 caractères de Gmail. Si Gmail la refuse, retirez un élément (réseaux, bandeau…) ou raccourcissez les textes.",
+      "La signature peut dépasser la limite de 10 000 caractères de Gmail. Si Gmail la refuse, retirez un élément (réseaux, bannière…) ou raccourcissez les textes.",
     );
-  }
-  if (sig.contact.website && !/^https?:\/\//i.test(sig.contact.website)) {
-    // Information seulement : l'URL est complétée automatiquement.
   }
   if (sig.images.logo?.url && /\.jpe?g($|\?)/i.test(sig.images.logo.url)) {
     warnings.push(

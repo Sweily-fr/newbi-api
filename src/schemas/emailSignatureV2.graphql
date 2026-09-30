@@ -195,7 +195,7 @@ type SignatureStyleV2 {
   dividerLength: Int!
   "Épaisseur du contour ou de la barre de l'encadré, en px (0 : 1 px, 4 px pour une barre)."
   frameThickness: Int!
-  "Largeur du cadre (contour, fond teinté), en px (0 : ajustée au contenu)."
+  "Largeur de la signature (le cadre s'il y en a un), en px (0 : ajustée au contenu)."
   frameWidth: Int!
   "Longueur de la barre de l'encadré (à gauche, en haut), en px (0 : toute la longueur)."
   frameBarLength: Int!
@@ -203,8 +203,12 @@ type SignatureStyleV2 {
   contactIconSize: Int!
   """
   Réglages par bloc (name, jobTitle, company, tagline, contact, social,
-  photo, logo, accent, cta, banner, disclaimer) : { width, spaceBefore,
+  photo, logo, accent, cta, banner, disclaimer) et par partie (firstName,
+  lastName, phone, mobile, email, website, address) : { width, spaceBefore,
   spaceAfter, align }, en px ; seuls les réglages choisis sont présents.
+  Largeur d'un texte = largeur de retour à la ligne ; un élément coupé en
+  morceaux applique les siens à son morceau principal, une ligne réunie
+  (légende, identité en ligne) ceux de son premier élément.
   """
   blocks: JSON!
   "Largeur des colonnes { visual, text, side }, en px (0 : ajustée au contenu)."

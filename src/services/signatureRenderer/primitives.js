@@ -108,8 +108,13 @@ export function naturalWidth(html) {
     Math.max(0, ...[...html.matchAll(re)].map((m) => Number(m[1]) || 0));
   const size = max(/font-size:(\d+)px/g) || 13;
   const tracking = max(/letter-spacing:([\d.]+)px/g);
+  // Capitales, gras, polices larges (Verdana, Tahoma) : plus larges
   const perChar =
-    size * (/text-transform:uppercase/.test(html) ? 0.7 : 0.6) + tracking;
+    size *
+      (/text-transform:uppercase/.test(html) ? 0.7 : 0.6) *
+      (/font-weight:bold/.test(html) ? 1.1 : 1) *
+      (/Verdana|Tahoma/.test(html) ? 1.1 : 1) +
+    tracking;
   const chars = Math.max(
     0,
     ...html.split(/<\/tr>|<\/div>|<br\s*\/?>/i).map(
@@ -120,24 +125,34 @@ export function naturalWidth(html) {
           .trim().length,
     ),
   );
-  const icon = /<img/i.test(html) ? 32 : 0;
-  return Math.ceil(chars * perChar + icon);
+  // Images : une icône (≤ 40 px) précède son texte, une grande image
+  // (photo, logo) compte pour sa largeur
+  const images = [...html.matchAll(/<img[^>]*?\swidth="(\d+)"/g)].map(
+    (m) => Number(m[1]) || 0,
+  );
+  const icon = Math.max(0, ...images.filter((w) => w <= 40));
+  const text = Math.ceil(chars * perChar + (icon ? icon + 8 : 0));
+  return Math.max(text, ...images.filter((w) => w > 40));
 }
 
 /**
  * Largeur choisie pour un texte : il revient à la ligne à cette largeur
- * sans jamais occuper plus que son contenu (un texte court garde sa
- * taille). Boîte ajustée au texte et bornée (inline-block + max-width,
- * compris par Gmail, Apple Mail et Outlook web), placée par l'alignement
- * de sa ligne ; pour Outlook sur Windows, qui l'ignore, un tableau de
- * cette largeur quand le texte la dépasse, en commentaire conditionnel
- * (invisible partout ailleurs).
+ * sans jamais occuper plus que son contenu.
+ * - Texte plus long que la largeur (estimation) : tableau de cette largeur,
+ *   compris partout, Outlook compris, et qui survit à Gmail (qui retire
+ *   les commentaires conditionnels) ; le texte le remplit de toute façon.
+ * - Texte plus court : boîte ajustée au texte et bornée (inline-block +
+ *   max-width), placée par l'alignement de sa ligne ; il tient déjà.
+ * `mark` : repère d'aperçu (data-sig-wrap), pour régler la largeur à la
+ * souris sur la même boîte.
  */
-export function wrapAt(html, width, align = "left") {
-  const div = `<div style="display:inline-block;max-width:${width}px;vertical-align:top;">${html}</div>`;
-  if (naturalWidth(html) <= width) return div;
+export function wrapAt(html, width, align = "left", mark = false) {
+  const m = mark ? ` data-sig-wrap="${width}"` : "";
+  if (naturalWidth(html) <= width) {
+    return `<div${m} style="display:inline-block;max-width:${width}px;vertical-align:top;">${html}</div>`;
+  }
   const a = align && align !== "left" ? ` align="${align}"` : "";
-  return `<!--[if mso]><table role="presentation" cellpadding="0" cellspacing="0" border="0"${a} width="${width}"><tr><td${a}><![endif]-->${div}<!--[if mso]></td></tr></table><![endif]-->`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${m}${a} width="${width}" style="${TABLE_STYLE}width:${width}px;max-width:100%;"><tr><td${a}>${html}</td></tr></table>`;
 }
 
 export const span = (text, style) =>
@@ -266,10 +281,10 @@ export function splitRows(items, plan = []) {
   return rows;
 }
 
-export function vstack(rows, { gap = 0, align = "left" } = {}) {
+export function vstack(rows, { gap = 0, align = "left", full = false } = {}) {
   const items = rows.filter(Boolean);
   if (items.length === 0) return "";
-  if (items.length === 1 && align === "left") return items[0];
+  if (items.length === 1 && align === "left" && !full) return items[0];
   const aligned = align === "center" || align === "right";
   // Attribut seul : il place aussi les tableaux et images de la ligne
   const alignAttr = aligned ? ` align="${align}"` : "";
@@ -284,7 +299,10 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
   // La table elle-même est alignée par attribut : text-align ne place pas
   // une table imbriquée, et Outlook ignore margin:auto.
   return table(rowsHtml, {
-    attrs: aligned ? `align="${align}"` : "",
+    attrs: [aligned ? `align="${align}"` : "", full ? 'width="100%"' : ""]
+      .filter(Boolean)
+      .join(" "),
+    style: full ? "width:100%;" : "",
   });
 }
 
@@ -295,7 +313,7 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
  */
 export function hstack(
   cells,
-  { gap = 16, valign = "top", separator = null } = {},
+  { gap = 16, valign = "top", separator = null, full = false } = {},
 ) {
   const items = cells.filter((c) => c && c.html);
   if (items.length === 0) return "";
@@ -313,7 +331,12 @@ export function hstack(
         : cellHtml + vsepCell(separator, { gap });
     })
     .join("");
-  return table(tr(cellsHtml));
+  // `full` : toute la largeur de son conteneur (largeur de signature
+  // choisie) ; une cellule de largeur donnée garde la sienne
+  return table(
+    tr(cellsHtml),
+    full ? { attrs: 'width="100%"', style: "width:100%;" } : {},
+  );
 }
 
 /**
@@ -341,7 +364,8 @@ export function iconLines(
   const rows = items
     .map((l, i) => {
       const pad = i === items.length - 1 ? 0 : gap;
-      return `<tr${l.attrs || ""}><td valign="middle" style="padding:0 ${iconGap}px ${pad}px 0;font-size:0;line-height:0;">${
+      // Ligne qui revient à la ligne (largeur propre) : icône en haut
+      return `<tr${l.attrs || ""}><td valign="${l.valign || "middle"}" style="padding:0 ${iconGap}px ${pad}px 0;font-size:0;line-height:0;">${
         l.iconHtml || ""
       }</td><td valign="middle" style="text-align:left;${pad ? `padding:0 0 ${pad}px 0;` : ""}">${l.contentHtml}</td></tr>`;
     })

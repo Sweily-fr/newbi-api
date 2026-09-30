@@ -114,6 +114,14 @@ export function buildBlocks(ctx) {
     if (ctx.resolved && !ctx.resolved[part]) ctx.resolved[part] = eff;
     return eff;
   };
+  // Partie dans un parent stylé (prénom ou nom dans le nom, entreprise
+  // dans la légende) : ses réglages l'emportent, y compris pour retirer un
+  // gras, un italique ou des capitales hérités du parent
+  const partStyleOf = (eff) =>
+    styleOf(eff) +
+    (eff.bold ? "" : "font-weight:normal;") +
+    (eff.italic ? "" : "font-style:normal;") +
+    (eff.uppercase ? "" : "text-transform:none;");
   const hasOwnStyle = (part) =>
     Boolean(elements[part] && Object.keys(elements[part]).length > 0);
 
@@ -214,7 +222,7 @@ export function buildBlocks(ctx) {
         .map((p) => {
           const eff = partResolve(p, defaults);
           const value = editable(p, identity[p]);
-          return mark(p, own ? styledSpan(value, styleOf(eff)) : value);
+          return mark(p, own ? styledSpan(value, partStyleOf(eff)) : value);
         })
         .join(" ");
       return markInline(
@@ -460,7 +468,7 @@ export function buildBlocks(ctx) {
         key === "jobTitle" && hasOwnStyle("company")
           ? styledSpan(
               companyHtml,
-              styleOf(
+              partStyleOf(
                 partResolve(
                   "company",
                   { ...defaults, bold: false, tracking: 2 },
@@ -560,6 +568,7 @@ export function buildBlocks(ctx) {
         attrsFor = () => "",
         tracking = 0,
         iconColor: iconColorOf = null,
+        lineMax = 0,
       } = {},
     ) {
       const white = "#ffffff";
@@ -586,13 +595,24 @@ export function buildBlocks(ctx) {
         .filter(Boolean)
         .map((item) => {
           // Largeur propre à la ligne : le texte y revient à la ligne
-          const lineWidth = st.blocks?.[item.field]?.width;
+          // Largeur propre à la ligne (bornée par sa colonne ou la
+          // signature) : le texte y revient à la ligne ; lignes à icônes ou
+          // initiales alignées à gauche, les autres comme le bloc
+          const own = st.blocks?.[item.field]?.width || 0;
+          const lineWidth = lineMax && own > lineMax ? lineMax : own;
+          const lineAlign =
+            style === "icons" || style === "labels" ? "left" : align;
           const text = markInline(item.field, item.html);
-          const contentHtml = lineWidth ? wrapAt(text, lineWidth) : text;
+          const contentHtml = lineWidth
+            ? wrapAt(text, lineWidth, lineAlign, markers)
+            : text;
           const attrs = attrsFor(item.field);
+          // Ligne qui revient à la ligne : son icône reste en haut
+          const valign = lineWidth ? "top" : undefined;
           if (style === "labels") {
             return {
               attrs,
+              valign,
               iconHtml: `<span style="${labelStyle}">${LABELS[item.field]}</span>`,
               contentHtml,
             };
@@ -601,6 +621,7 @@ export function buildBlocks(ctx) {
           const spec = contactIconSpec(item.field, iconColor);
           return {
             attrs,
+            valign,
             iconHtml: img({
               src: iconUrl(spec),
               width: st.contactIconSize || CONTACT_ICON_SIZE,

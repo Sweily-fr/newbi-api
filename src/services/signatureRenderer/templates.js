@@ -47,6 +47,10 @@ const BASE_PRESET = {
   socialPosition: "text",
   logoPosition: "bottom",
   footerStrip: false,
+  // Réseaux et logo qui se suivent en bas : côte à côte
+  footerPair: true,
+  // Couleur des traits (séparateur « Couleur des traits », contour)
+  separatorColor: "#e0e0e0",
   outside: [],
   // Icônes de réseaux par ligne (vide : toutes sur une ligne)
   socialRows: [],
@@ -240,6 +244,8 @@ const TEMPLATES = {
       photoSize: 112,
       iconStyle: "plain",
       divider: "line",
+      // Trait fin noir : la couleur des traits du modèle
+      separatorColor: "#1f1f1f",
       accent: "none",
     },
     theme: {
@@ -250,7 +256,6 @@ const TEMPLATES = {
       titleTracking: 1,
       contactTracking: 0.5,
       contactIconColor: "text",
-      dividerColor: "text",
     },
   },
   line: {
