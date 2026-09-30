@@ -161,6 +161,8 @@ type SignatureStyleV2 {
   logoPosition: String!
   "Bande teintée en bas du cadre (réseaux, logo)."
   footerStrip: Boolean!
+  "Réseaux et logo qui se suivent en bas : côte à côte (sinon l'un sous l'autre)."
+  footerPair: Boolean!
   "Éléments placés en dehors de l'encadré : social, logo, cta, banner, disclaimer."
   outside: [String!]!
   "Ordre de la colonne de texte : identity, contact, social, logo."
@@ -450,6 +452,7 @@ input SignatureStyleV2Input {
   socialPosition: String
   logoPosition: String
   footerStrip: Boolean
+  footerPair: Boolean
   outside: [String!]
   textOrder: [String!]
   slots: SignatureSlotsV2Input

@@ -396,11 +396,13 @@ export function renderLayout(b, ctx, theme = {}) {
         });
         continue;
       }
-      // Bas du cadre : réseaux et logo côte à côte, aux deux extrémités (un
-      // alignement choisi pour l'un des deux les remet l'un sous l'autre)
+      // Bas du cadre : réseaux et logo côte à côte, aux deux extrémités,
+      // sauf s'ils ont été mis l'un sous l'autre (footerPair) ou qu'un
+      // alignement est choisi pour l'un des deux
       const pair = items[i + 1];
       if (
         slot === "footer" &&
+        st.footerPair !== false &&
         (k === "social" || k === "logo") &&
         (pair === "social" || pair === "logo") &&
         pair !== k &&

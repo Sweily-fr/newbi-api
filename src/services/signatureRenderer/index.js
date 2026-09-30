@@ -213,6 +213,9 @@ export function normalizeSignature(input = {}) {
     photoBorderColor: s.photoBorderColor ? hex(s.photoBorderColor, "") : "",
     ...layout,
     footerStrip: bool(s.footerStrip, Boolean(tpl.footerStrip)),
+    // Réseaux et logo qui se suivent en bas : côte à côte, sauf choix
+    // contraire dans l'éditeur (déposés l'un au-dessus de l'autre)
+    footerPair: bool(s.footerPair, true),
     outside,
     textOrder,
     elements: normalizeElements(s.elements),

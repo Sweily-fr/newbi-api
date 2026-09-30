@@ -90,6 +90,7 @@ const styleSchema = new mongoose.Schema(
       ]),
     ),
     footerStrip: { type: Boolean, default: undefined },
+    footerPair: { type: Boolean, default: undefined },
     outside: {
       type: [{ type: String, enum: OUTSIDE_ITEMS }],
       default: undefined,
