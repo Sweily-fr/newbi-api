@@ -1346,6 +1346,74 @@ describe("signatureRenderer — traits et bordures sur mesure", () => {
   });
 });
 
+describe("signatureRenderer — un élément déplacé ne gonfle pas la signature", () => {
+  const slotsOf = (templateId) =>
+    normalizeSignature({ ...FULL, templateId }).style.slots;
+  const moved = (templateId, item, to) => {
+    const base = slotsOf(templateId);
+    const slots = Object.fromEntries(
+      Object.entries(base).map(([k, list]) => [
+        k,
+        list.filter((i) => i !== item),
+      ]),
+    );
+    slots[to] = [...slots[to], item];
+    return slots;
+  };
+
+  it("deux contenus côte à côte sans tableau à 100 %", () => {
+    // Bandeau : réseaux dans la colonne de droite
+    expect(
+      renderSignature({ ...FULL, templateId: "header" }).html,
+    ).not.toContain('width="100%"');
+    // Dans un cadre de largeur fixe, aux extrémités
+    expect(
+      renderSignature({
+        ...FULL,
+        templateId: "header",
+        style: { frameWidth: 560 },
+      }).html,
+    ).toContain('width="100%"');
+  });
+
+  it("bandeau limité à 300 px dans une colonne", () => {
+    const html = renderSignature({
+      ...FULL,
+      templateId: "modern",
+      style: { slots: moved("modern", "banner", "text") },
+    }).html;
+    expect(html).toMatch(/banner[^"]*" width="300"/);
+  });
+
+  it("mention longue plafonnée à 480 px en bas", () => {
+    const html = renderSignature({
+      ...FULL,
+      templateId: "modern",
+      disclaimer: {
+        enabled: true,
+        text: "Mention légale assez longue. ".repeat(8),
+      },
+    }).html;
+    expect(html).toContain('width="480" style="border-collapse:collapse;');
+  });
+
+  it("réseaux dans la colonne photo : 4 par ligne au plus", () => {
+    const social = Object.keys(SOCIAL_NETWORKS)
+      .slice(0, 6)
+      .map((network) => ({ network, url: `https://${network}.com/x` }));
+    const html = renderSignature({
+      ...FULL,
+      social,
+      templateId: "modern",
+      style: { slots: moved("modern", "social", "visual") },
+    }).html;
+    // Chaque rangée d'icônes est un tableau centré qui commence par un lien
+    const rows =
+      html.match(/align="center"[^>]*><tr><td valign="middle"[^>]*><a /g) || [];
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("signatureRenderer — modèle Épuré", () => {
   const html = () =>
     renderSignature({

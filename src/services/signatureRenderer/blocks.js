@@ -210,7 +210,12 @@ export function buildBlocks(ctx) {
       );
     },
 
-    social({ align = st.align, size = st.iconSize, onFill = false } = {}) {
+    social({
+      align = st.align,
+      size = st.iconSize,
+      onFill = false,
+      rows: plan = st.socialRows,
+    } = {}) {
       // Sur un fond de la couleur principale, les icônes « principale » ou
       // « personnalisée » passent en blanc (sinon invisibles) ; les couleurs
       // de marque restent.
@@ -231,7 +236,7 @@ export function buildBlocks(ctx) {
       // d'icônes par ligne, alignées comme le bloc, même écart qu'entre deux
       // icônes
       const gap = Math.max(6, Math.round(size / 3));
-      const rows = splitRows(items, st.socialRows);
+      const rows = splitRows(items, plan);
       const html =
         rows.length > 1
           ? stackRows(
@@ -331,12 +336,12 @@ export function buildBlocks(ctx) {
       );
     },
 
-    banner() {
+    banner({ maxWidth = 600 } = {}) {
       const b = images.banner;
       if (!sig.banner.enabled || !b?.url) return "";
       const width =
         st.blocks?.banner?.width ||
-        Math.min(b.width ? Math.round(b.width / 2) : 480, 600);
+        Math.min(b.width ? Math.round(b.width / 2) : 480, maxWidth);
       const height =
         b.width && b.height
           ? Math.round((width * b.height) / b.width)

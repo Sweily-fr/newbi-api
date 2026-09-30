@@ -49,10 +49,16 @@ const box = (rows, attrs = "", style = "") =>
 const widthOf = (w) =>
   w ? [` width="${w}"`, `width:${w}px;max-width:100%;`] : ["", ""];
 
-/** Deux contenus aux extrémités d'une ligne pleine largeur. */
-function spread(left, right, { valign = "middle" } = {}) {
+/**
+ * Deux contenus côte à côte, 24 px d'écart. `full` : aux extrémités d'une
+ * ligne pleine largeur, seulement dans un cadre de largeur fixe (ailleurs,
+ * un tableau à 100 % étirerait la signature sur toute la largeur du
+ * message).
+ */
+function spread(left, right, { valign = "middle", full = false } = {}) {
   if (!left || !right) return left || right;
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:100%;"><tr><td valign="${valign}" style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right" style="text-align:right;">${right}</td></tr></table>`;
+  const width = full ? ' width="100%"' : "";
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${width} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${full ? "width:100%;" : ""}"><tr><td valign="${valign}" style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right" style="text-align:right;">${right}</td></tr></table>`;
 }
 
 const TABLE_ATTRS =
@@ -110,6 +116,14 @@ export function renderLayout(b, ctx, theme = {}) {
       : html;
 
   const visible = (slot) => slots[slot].filter((k) => b.has(k));
+  // Côte à côte : pleine largeur seulement dans un cadre de largeur fixe
+  const sideBySide = (left, right, opts = {}) =>
+    spread(left, right, {
+      ...opts,
+      full: Boolean(
+        (st.frame === "outline" || st.frame === "soft") && st.frameWidth,
+      ),
+    });
   // Réglages de chaque bloc choisis dans l'éditeur : largeur (retour à la
   // ligne), alignement, espace ajouté ou retiré au-dessus et en dessous
   const blockOf = (key) => st.blocks?.[key] || {};
@@ -197,6 +211,12 @@ export function renderLayout(b, ctx, theme = {}) {
             own || (slot === "footer" || slot === "outside" ? "left" : across),
           size: socialSize,
           onFill: inverse,
+          // Colonne photo : 4 icônes par ligne au plus, sauf disposition
+          // choisie (une rangée entière élargissait la colonne)
+          rows:
+            slot === "visual" && !(st.socialRows || []).length
+              ? [4]
+              : st.socialRows,
         });
       case "logo": {
         const maxHeight =
@@ -218,6 +238,11 @@ export function renderLayout(b, ctx, theme = {}) {
           maxHeight,
         });
       }
+      case "banner":
+        // Dans une colonne, une image large l'élargirait toute entière
+        return b.banner({
+          maxWidth: slot === "footer" || slot === "outside" ? 600 : 300,
+        });
       default:
         return b[k]();
     }
@@ -350,7 +375,7 @@ export function renderLayout(b, ctx, theme = {}) {
           kind: "pair",
           key: k,
           keys: [k, pair],
-          html: spread(
+          html: sideBySide(
             markBlock(k, renderItem(k, slot, { inverse, itemAlign })),
             markBlock(pair, renderItem(pair, slot, { inverse, itemAlign })),
           ),
@@ -372,6 +397,20 @@ export function renderLayout(b, ctx, theme = {}) {
     return rows.filter((row) => row.html);
   }
 
+  // Texte long (mention, accroche) sans largeur choisie : il s'étalerait sur
+  // toute la largeur du message avant de revenir à la ligne ; plafonné
+  // d'office (480 px en bas de la signature, 300 px dans une colonne)
+  const LONG_TEXT = { disclaimer: 90, tagline: 45 };
+  const autoWrap = (key, slot) => {
+    const text =
+      key === "disclaimer"
+        ? ctx.sig.disclaimer?.text
+        : key === "tagline"
+          ? ctx.sig.identity?.tagline
+          : "";
+    if (!text || text.length <= LONG_TEXT[key]) return 0;
+    return slot === "footer" || slot === "outside" ? 480 : 300;
+  };
   // Éléments réunis sur une ligne (légende, identité en ligne, réseaux et
   // logo) : pour chaque réglage, celui du premier qui en a un
   const settingsOf = (row) => {
@@ -394,8 +433,9 @@ export function renderLayout(b, ctx, theme = {}) {
         const next = rows[i + 1];
         let html = row.html;
         const rowAlign = bs.align || stackAlign;
-        if (bs.width && WRAP_WIDTH.has(row.key)) {
-          html = fixedWidth(html, bs.width, rowAlign);
+        const wrap = bs.width || autoWrap(row.key, slot);
+        if (wrap && WRAP_WIDTH.has(row.key)) {
+          html = fixedWidth(html, wrap, rowAlign);
         }
         // Au bord de l'emplacement, l'espace ne peut qu'être ajouté
         const top = i === 0 ? Math.max(0, bs.spaceBefore || 0) : 0;
@@ -575,7 +615,7 @@ export function renderLayout(b, ctx, theme = {}) {
     const padRight = boxed ? boxPad : `0 ${sp.gap + 6}px 0 0`;
     const textCell =
       textHtml || sideHtml
-        ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${spread(textHtml, sideHtml)}</td>`
+        ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${sideBySide(textHtml, sideHtml)}</td>`
         : "";
     const stretch = boxed && st.frameWidth;
     body = box(
@@ -599,7 +639,7 @@ export function renderLayout(b, ctx, theme = {}) {
         separator: divider,
       });
     } else {
-      const main = spread(textHtml, sideHtml);
+      const main = sideBySide(textHtml, sideHtml);
       const cells = [
         { html: visualHtml, valign: st.photoValign },
         { html: main, valign: textValign },
@@ -628,11 +668,11 @@ export function renderLayout(b, ctx, theme = {}) {
               html: bar({ ...divider, height: divider.length }),
               valign: "middle",
             },
-            { html: spread(textHtml, sideHtml), valign: "middle" },
+            { html: sideBySide(textHtml, sideHtml), valign: "middle" },
           ],
           { gap: sp.gap },
         )
-      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:${divider.width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${spread(textHtml, sideHtml)}</td></tr></table>`;
+      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td style="border-left:${divider.width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${sideBySide(textHtml, sideHtml)}</td></tr></table>`;
   } else if (sideHtml && st.divider !== "none" && textHtml) {
     body = hstack(
       [
@@ -642,7 +682,9 @@ export function renderLayout(b, ctx, theme = {}) {
       { gap: sp.gap, separator: divider },
     );
   } else {
-    body = spread(textHtml, sideHtml, { valign: band ? "bottom" : "middle" });
+    body = sideBySide(textHtml, sideHtml, {
+      valign: band ? "bottom" : "middle",
+    });
   }
 
   // ── Assemblage avec l'encadré, puis ce qui est sous le cadre ──────────
