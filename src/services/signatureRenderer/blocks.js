@@ -93,12 +93,14 @@ export function buildBlocks(ctx) {
     (eff.tracking ? `letter-spacing:${eff.tracking}px;` : "");
   const styled = (key, defaults) => styleOf(resolve(key, defaults));
 
-  // Prénom / nom : réglages du nom complet, puis ceux propres à la partie
+  // Prénom / nom (ou une ligne de coordonnées) : réglages de l'ensemble
+  // (`whole`), puis ceux propres à la partie
   const partResolve = (
     part,
     { size, color, bold = true, uppercase = false, tracking = 0 },
+    whole = "name",
   ) => {
-    const merged = { ...(elements.name || {}), ...(elements[part] || {}) };
+    const merged = { ...(elements[whole] || {}), ...(elements[part] || {}) };
     const eff = {
       fontFamily: merged.fontFamily || st.fontFamily,
       fontSize: merged.fontSize ?? size,
@@ -116,6 +118,16 @@ export function buildBlocks(ctx) {
 
   const contactIconColor =
     st.iconColorMode === "custom" ? st.iconColor : st.primaryColor;
+
+  // Style de chaque ligne de coordonnées : celui des coordonnées, sauf
+  // réglages propres à la ligne (téléphone, e-mail…)
+  const lineStyleOf = (defaults) => {
+    const all = styled("contact", defaults);
+    return (field) => {
+      const eff = partResolve(field, { bold: false, ...defaults }, "contact");
+      return hasOwnStyle(field) ? styleOf(eff) : all;
+    };
+  };
 
   const socialColorFor = (network) => {
     if (st.iconColorMode === "brand")
@@ -531,7 +543,7 @@ export function buildBlocks(ctx) {
       } = {},
     ) {
       const white = "#ffffff";
-      const lineStyle = styled("contact", {
+      const lineStyle = lineStyleOf({
         size: base,
         color: inverse ? white : st.mutedColor,
         tracking,
@@ -550,7 +562,7 @@ export function buildBlocks(ctx) {
         { weight: "bold" },
       );
       const lines = fields
-        .map((field) => contactEntry(field, lineStyle))
+        .map((field) => contactEntry(field, lineStyle(field)))
         .filter(Boolean)
         .map((item) => {
           const contentHtml = markInline(item.field, item.html);
@@ -581,12 +593,12 @@ export function buildBlocks(ctx) {
     /** Coordonnées choisies sur une ligne, séparées par des points médians. */
     contactInlineOf(fields, { inverse = false, mark = (k, h) => h } = {}) {
       const white = "#ffffff";
-      const lineStyle = styled("contact", {
+      const lineStyle = lineStyleOf({
         size: base,
         color: inverse ? white : st.mutedColor,
       });
       const html = fields
-        .map((field) => contactEntry(field, lineStyle))
+        .map((field) => contactEntry(field, lineStyle(field)))
         .filter(Boolean)
         .map((i) => mark(i.field, markInline(i.field, i.html)));
       if (html.length === 0) return "";

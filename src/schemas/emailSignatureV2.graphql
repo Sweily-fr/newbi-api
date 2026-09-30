@@ -105,6 +105,12 @@ type SignatureElementStylesV2 {
   company: SignatureTextStyleV2
   tagline: SignatureTextStyleV2
   contact: SignatureTextStyleV2
+  "Réglages propres à une ligne de coordonnées, par-dessus ceux des coordonnées."
+  phone: SignatureTextStyleV2
+  mobile: SignatureTextStyleV2
+  email: SignatureTextStyleV2
+  website: SignatureTextStyleV2
+  address: SignatureTextStyleV2
   cta: SignatureTextStyleV2
   disclaimer: SignatureTextStyleV2
 }
@@ -401,6 +407,11 @@ input SignatureElementStylesV2Input {
   company: SignatureTextStyleV2Input
   tagline: SignatureTextStyleV2Input
   contact: SignatureTextStyleV2Input
+  phone: SignatureTextStyleV2Input
+  mobile: SignatureTextStyleV2Input
+  email: SignatureTextStyleV2Input
+  website: SignatureTextStyleV2Input
+  address: SignatureTextStyleV2Input
   cta: SignatureTextStyleV2Input
   disclaimer: SignatureTextStyleV2Input
 }
