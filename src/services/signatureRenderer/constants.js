@@ -327,6 +327,16 @@ export const BLOCK_KEYS = [
   "cta",
   "banner",
   "disclaimer",
+  // Parties réglables seules : largeur d'une ligne de coordonnées, du
+  // prénom ou du nom seul sur sa ligne ; espaces et alignement d'une
+  // partie placée à part du reste de son élément
+  "firstName",
+  "lastName",
+  "phone",
+  "mobile",
+  "email",
+  "website",
+  "address",
 ];
 export const BLOCK_ALIGNS = ["left", "center", "right"];
 

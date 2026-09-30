@@ -122,14 +122,12 @@ export function renderLayout(b, ctx, theme = {}) {
       : html;
 
   const visible = (slot) => slots[slot].filter((k) => b.has(k));
-  // Côte à côte : pleine largeur seulement dans un cadre de largeur fixe
+  // Largeur choisie pour la signature (le cadre s'il y en a un)
+  const wide = Boolean(st.frameWidth);
+  // Côte à côte : pleine largeur seulement dans une signature de largeur
+  // choisie
   const sideBySide = (left, right, opts = {}) =>
-    spread(left, right, {
-      ...opts,
-      full: Boolean(
-        (st.frame === "outline" || st.frame === "soft") && st.frameWidth,
-      ),
-    });
+    spread(left, right, { ...opts, full: wide });
   // Réglages de chaque bloc choisis dans l'éditeur : largeur (retour à la
   // ligne), alignement, espace ajouté ou retiré au-dessus et en dessous
   const blockOf = (key) => st.blocks?.[key] || {};
@@ -365,7 +363,9 @@ export function renderLayout(b, ctx, theme = {}) {
           group.push(items[i]);
           i += 1;
         }
-        const own = inMain("contact", group) ? blockOf("contact").align : null;
+        const own = inMain("contact", group)
+          ? blockOf("contact").align
+          : blockOf(group[0]).align;
         rows.push({
           kind: "contact",
           key: "contact",
@@ -445,7 +445,7 @@ export function renderLayout(b, ctx, theme = {}) {
         ? ctx.sig.disclaimer?.text
         : ctx.sig.identity?.tagline;
     if (!text || st.columns?.[slot]) return 0;
-    if (slot === "footer" && boxed && st.frameWidth) return 0;
+    if (slot === "footer" && wide) return 0;
     const size =
       st.elements?.[key]?.fontSize ||
       (key === "disclaimer" ? Math.max(10, st.fontSize - 3) : st.fontSize - 1);
@@ -463,7 +463,24 @@ export function renderLayout(b, ctx, theme = {}) {
   // au-dessus du premier, en dessous du dernier, l'alignement du premier
   // qui en a un
   const settingsOf = (row) => {
-    if (!row.keys) return inMain(row.key, row.items) ? blockOf(row.key) : {};
+    if (!row.keys) {
+      const main = inMain(row.key, row.items);
+      const whole = main ? blockOf(row.key) : {};
+      // Morceau placé à part : espaces et alignement de sa première partie
+      const lead = main || !row.items ? {} : blockOf(row.items[0]);
+      // Prénom ou nom seul sur sa ligne : sa propre largeur (celle d'une
+      // ligne de coordonnées est posée dans le bloc des coordonnées)
+      const part =
+        row.kind !== "contact" && row.items?.length === 1
+          ? blockOf(row.items[0]).width
+          : 0;
+      return {
+        width: part || whole.width,
+        spaceBefore: main ? whole.spaceBefore : lead.spaceBefore,
+        spaceAfter: main ? whole.spaceAfter : lead.spaceAfter,
+        align: main ? whole.align : lead.align,
+      };
+    }
     return {
       width: blockOf(row.key).width,
       spaceBefore: blockOf(row.keys[0]).spaceBefore,
@@ -572,19 +589,15 @@ export function renderLayout(b, ctx, theme = {}) {
       rowsOf(restItems, "footer", { itemAlign: align }),
       "footer",
       align,
-      // Cadre de largeur fixe : un bloc centré ou à droite l'est dans le cadre
-      Boolean(boxed && st.frameWidth),
+      // Largeur choisie : un bloc centré ou à droite l'est sur toute la
+      // largeur de la signature
+      wide,
     ),
   );
   const stripHtml = region(
     "slot",
     "footer",
-    stack(
-      rowsOf(stripItems, "footer"),
-      "footer",
-      "left",
-      Boolean(boxed && st.frameWidth),
-    ),
+    stack(rowsOf(stripItems, "footer"), "footer", "left", wide),
   );
   const hasRowsAfterBody = Boolean(restHtml || stripHtml);
 
@@ -682,7 +695,7 @@ export function renderLayout(b, ctx, theme = {}) {
     const padRight = boxed ? boxPad : `0 ${sp.gap + 6}px 0 0`;
     // Cadre de largeur fixe : la place libre va au texte, pas à la
     // colonne teintée
-    const stretch = boxed && st.frameWidth;
+    const stretch = boxed && wide;
     const textCell =
       textHtml || sideHtml
         ? `<td valign="${textValign}"${stretch ? ' width="100%"' : ""} style="padding:${right ? padRight : pad};">${sideBySide(textHtml, sideHtml)}</td>`
@@ -768,8 +781,12 @@ export function renderLayout(b, ctx, theme = {}) {
     restHtml,
     stripHtml,
   });
+  // Repère d'aperçu du conteneur dont la largeur se règle (le cadre s'il y
+  // en a un)
   const inside =
-    st.frame === "none" ? framedContent : region("frame", "1", framedContent);
+    st.frame === "none"
+      ? region("sized", "1", framedContent)
+      : region("frame", "1", framedContent);
   const outsideHtml = region(
     "slot",
     "outside",
@@ -806,6 +823,7 @@ function frameContent({
   const padY = sp.block + 8;
   const padX = sp.block + 12;
 
+  const [wAttr, wStyle] = widthOf(st.frameWidth);
   if (st.frame !== "outline" && st.frame !== "soft") {
     // Pas de cadre fermé : le bandeau est arrondi seul
     const bandHtml = band
@@ -827,6 +845,8 @@ function frameContent({
         L
           ? `<tr><td valign="top" width="${t}" style="width:${t}px;padding:4px 0 0 0;">${bar({ width: t, height: L, color })}</td><td style="padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`
           : `<tr><td style="border-left:${t}px solid ${color};padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`,
+        wAttr,
+        wStyle,
       );
     }
     if (st.frame === "accent-top") {
@@ -834,9 +854,14 @@ function frameContent({
         L
           ? `<tr><td>${bar({ width: L, height: t, color, align: align === "center" ? "center" : "left" })}</td></tr><tr><td style="padding:${padY}px 0 0 0;">${content}</td></tr>`
           : `<tr><td style="border-top:${t}px solid ${color};padding:${padY}px 0 0 0;">${content}</td></tr>`,
+        wAttr,
+        wStyle,
       );
     }
-    return content;
+    // Sans cadre : largeur choisie portée par un tableau autour du contenu
+    return st.frameWidth && content
+      ? box(`<tr><td>${content}</td></tr>`, wAttr, wStyle)
+      : content;
   }
 
   const outline = st.frame === "outline";
@@ -887,6 +912,5 @@ function frameContent({
       return `<tr><td${bg} style="${bgStyle}${padding}${sides}${radius}">${row.html}</td></tr>`;
     })
     .join("");
-  const [wAttr, wStyle] = widthOf(st.frameWidth);
   return box(html, wAttr, wStyle);
 }
