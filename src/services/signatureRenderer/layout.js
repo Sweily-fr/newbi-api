@@ -34,6 +34,9 @@ const IDENTITY = new Set([
   "tagline",
 ]);
 const INLINE_IDENTITY = [...NAME_PARTS, "title", "company"];
+/** Éléments faits de plusieurs parties, qui peuvent être séparées. */
+const SPLITTABLE = { name: NAME_PARTS, contact: CONTACT_ITEMS };
+const SLOT_ORDER = ["header", "visual", "text", "side", "footer", "outside"];
 /** Bloc réglable dans l'éditeur auquel appartient un élément. */
 const blockKey = (k) =>
   NAME_PARTS.includes(k) ? "name" : k === "title" ? "jobTitle" : k;
@@ -127,6 +130,30 @@ export function renderLayout(b, ctx, theme = {}) {
   // Réglages de chaque bloc choisis dans l'éditeur : largeur (retour à la
   // ligne), alignement, espace ajouté ou retiré au-dessus et en dessous
   const blockOf = (key) => st.blocks?.[key] || {};
+  // Élément réparti en plusieurs morceaux (coordonnées séparées par un
+  // autre élément ou sur deux colonnes, prénom et nom séparés) : ses
+  // réglages valent pour son morceau principal, celui qui réunit le plus
+  // de parties (à égalité, le premier) ; les autres restent automatiques.
+  // Même règle dans l'éditeur (mainPieces, _v2/slots.js).
+  const mainPiece = {};
+  for (const [key, parts] of Object.entries(SPLITTABLE)) {
+    let best = null;
+    for (const slot of SLOT_ORDER) {
+      let run = [];
+      for (const k of [...visible(slot), null]) {
+        if (k && parts.includes(k)) {
+          run.push(k);
+          continue;
+        }
+        if (run.length > 0 && (!best || run.length > best.length)) best = run;
+        run = [];
+      }
+    }
+    if (best) mainPiece[key] = new Set(best);
+  }
+  // Une ligne (ses parties `items`) fait-elle partie du morceau principal ?
+  const inMain = (key, items) =>
+    !mainPiece[key] || !items || items.every((k) => mainPiece[key].has(k));
   const hasVisual = visible("visual").length > 0;
   const hasHeader = visible("header").length > 0;
   const solid = hasVisual && st.visualFill === "solid";
@@ -298,6 +325,7 @@ export function renderLayout(b, ctx, theme = {}) {
         rows.push({
           kind: group.length > 1 ? "name" : k,
           key: "name",
+          items: group,
           html: b.nameOf(group, {
             size: nameSize,
             color: colors(inverse).name,
@@ -332,16 +360,18 @@ export function renderLayout(b, ctx, theme = {}) {
           group.push(items[i]);
           i += 1;
         }
+        const own = inMain("contact", group) ? blockOf("contact").align : null;
         rows.push({
           kind: "contact",
           key: "contact",
+          items: group,
           html:
             st.contactStyle === "inline"
               ? b.contactInlineOf(group, { inverse, mark: markSpan })
               : b.contactGroup(group, {
                   style: st.contactStyle,
                   align:
-                    blockOf("contact").align ||
+                    own ||
                     (slot === "visual" || itemAlign === "center"
                       ? "center"
                       : "left"),
@@ -414,7 +444,7 @@ export function renderLayout(b, ctx, theme = {}) {
   // Éléments réunis sur une ligne (légende, identité en ligne, réseaux et
   // logo) : pour chaque réglage, celui du premier qui en a un
   const settingsOf = (row) => {
-    if (!row.keys) return blockOf(row.key);
+    if (!row.keys) return inMain(row.key, row.items) ? blockOf(row.key) : {};
     const pick = (f) => row.keys.map((k) => blockOf(k)[f]).find(Boolean);
     return {
       width: pick("width"),
@@ -441,12 +471,17 @@ export function renderLayout(b, ctx, theme = {}) {
         const top = i === 0 ? Math.max(0, bs.spaceBefore || 0) : 0;
         const bottom = next ? 0 : Math.max(0, bs.spaceAfter || 0);
         if (top || bottom) html = paddedBlock(html, top, bottom, rowAlign);
+        // Entre deux lignes du même élément (prénom et nom l'un sous
+        // l'autre), ses espaces ne s'ajoutent pas
+        const sameBlock =
+          next && next.key === row.key && !row.keys && !next.keys;
         const after = next
           ? Math.max(
               0,
               gapBetween(row.kind, next.kind, slot) +
-                (bs.spaceAfter || 0) +
-                (settingsOf(next).spaceBefore || 0),
+                (sameBlock
+                  ? 0
+                  : (bs.spaceAfter || 0) + (settingsOf(next).spaceBefore || 0)),
             )
           : 0;
         return { html, after, align: bs.align };
