@@ -33,7 +33,7 @@ const deliveryNoteItemSchema = new mongoose.Schema({
     validate: {
       validator: isValidItemDescription,
       message:
-        "La description de l'article contient des caractères non autorisés ou dépasse 2000 caractères",
+        "La description de l'article contient des caractères non autorisés",
     },
   },
   details: {
@@ -187,10 +187,6 @@ const deliveryNoteSchema = new mongoose.Schema(
     notes: {
       type: String,
       trim: true,
-      validate: {
-        validator: (v) => !v || v.length <= 2000,
-        message: "Les notes ne doivent pas dépasser 2000 caractères",
-      },
     },
 
     // === Réception ===
@@ -231,7 +227,7 @@ const deliveryNoteSchema = new mongoose.Schema(
       validate: {
         validator: isValidFooterNotes,
         message:
-          "Les notes de bas de page ne doivent pas dépasser 2000 caractères ou contiennent des caractères non autorisés",
+          "Les notes de bas de page contiennent des caractères non autorisés",
       },
     },
     termsAndConditions: {

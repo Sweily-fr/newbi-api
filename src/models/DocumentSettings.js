@@ -30,7 +30,7 @@ const documentSettingsSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: isValidFooterNotes,
-      message: 'Les notes de bas de page ne doivent pas dépasser 2000 caractères ou contiennent des caractères non autorisés'
+      message: 'Les notes de bas de page contiennent des caractères non autorisés'
     }
   },
   
@@ -38,12 +38,6 @@ const documentSettingsSchema = new mongoose.Schema({
   defaultTermsAndConditions: {
     type: String,
     trim: true,
-    validate: {
-      validator: function(value) {
-        return !value || value.length <= 2000;
-      },
-      message: 'Les conditions générales ne doivent pas dépasser 2000 caractères'
-    }
   },
   
   // Titre du lien des conditions générales par défaut
