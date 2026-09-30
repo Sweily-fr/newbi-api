@@ -352,7 +352,8 @@ export const LOGO_MAX_HEIGHT = 48;
 /**
  * Largeur de logo au-delà de laquelle ce plafond grandit d'autant : il ne
  * bride que les tailles courantes (120 px = largeur des signatures migrées),
- * un logo agrandi dans l'éditeur grandit vraiment.
+ * un logo agrandi dans l'éditeur grandit vraiment. Même valeur dans
+ * l'aperçu de l'éditeur (NewbiV2, HtmlFrame : logoFit).
  */
 export const LOGO_CAP_WIDTH = 120;
 

@@ -285,11 +285,15 @@ export function buildBlocks(ctx) {
       // LOGO_MAX_HEIGHT : un logo carré ou vertical reste discret. Agrandi
       // au-delà de LOGO_CAP_WIDTH, le plafond grandit d'autant.
       let height;
+      // Aperçu : plafond et proportions, pour que le redimensionnement à la
+      // souris affiche la taille que le rendu donnera
+      let fit = "";
       if (l.width && l.height) {
         const ratio = l.width / l.height;
         const cap = Math.round(maxHeight * Math.max(1, width / LOGO_CAP_WIDTH));
         width = Math.min(width, Math.round(cap * ratio));
         height = Math.round(width / ratio);
+        fit = ` data-sig-cap="${maxHeight}" data-sig-ratio="${ratio}"`;
       }
       const image = img({
         src: l.url,
@@ -298,13 +302,11 @@ export function buildBlocks(ctx) {
         alt: identity.company || "Logo",
       });
       const href = normalizeUrl(contact.website);
-      return markBlock(
-        "logo",
-        centered(
-          href ? link(href, image, { color: st.textColor }) : image,
-          align,
-        ),
+      const html = centered(
+        href ? link(href, image, { color: st.textColor }) : image,
+        align,
       );
+      return markers ? `<div data-sig-field="logo"${fit}>${html}</div>` : html;
     },
 
     cta() {
