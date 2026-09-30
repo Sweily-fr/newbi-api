@@ -28,6 +28,7 @@ import {
   stackRows,
   telHref,
   textStyle,
+  wrapAt,
 } from "./primitives.js";
 
 export function buildBlocks(ctx) {
@@ -587,9 +588,7 @@ export function buildBlocks(ctx) {
           // Largeur propre à la ligne : le texte y revient à la ligne
           const lineWidth = st.blocks?.[item.field]?.width;
           const text = markInline(item.field, item.html);
-          const contentHtml = lineWidth
-            ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${lineWidth}" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:${lineWidth}px;max-width:100%;"><tr><td>${text}</td></tr></table>`
-            : text;
+          const contentHtml = lineWidth ? wrapAt(text, lineWidth) : text;
           const attrs = attrsFor(item.field);
           if (style === "labels") {
             return {

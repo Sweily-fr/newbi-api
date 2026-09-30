@@ -98,6 +98,47 @@ export function textStyle({ font, size, color, weight = "normal", italic }) {
   }${italic ? "font-style:italic;" : ""}`;
 }
 
+/**
+ * Largeur naturelle estimée d'un contenu (sa plus longue ligne), d'après
+ * la taille, l'espacement et la casse de son texte. Sert seulement à
+ * Outlook sur Windows, qui ignore max-width.
+ */
+export function naturalWidth(html) {
+  const max = (re) =>
+    Math.max(0, ...[...html.matchAll(re)].map((m) => Number(m[1]) || 0));
+  const size = max(/font-size:(\d+)px/g) || 13;
+  const tracking = max(/letter-spacing:([\d.]+)px/g);
+  const perChar =
+    size * (/text-transform:uppercase/.test(html) ? 0.7 : 0.6) + tracking;
+  const chars = Math.max(
+    0,
+    ...html.split(/<\/tr>|<\/div>|<br\s*\/?>/i).map(
+      (line) =>
+        line
+          .replace(/<[^>]+>/g, "")
+          .replace(/&[a-z0-9#]+;/gi, "x")
+          .trim().length,
+    ),
+  );
+  const icon = /<img/i.test(html) ? 32 : 0;
+  return Math.ceil(chars * perChar + icon);
+}
+
+/**
+ * Largeur choisie pour un texte : il revient à la ligne à cette largeur
+ * sans jamais occuper plus que son contenu (un texte court garde sa
+ * taille). Bloc à largeur maximale, compris par Gmail, Apple Mail et
+ * Outlook web ; pour Outlook sur Windows, qui l'ignore, un tableau de
+ * cette largeur quand le texte la dépasse, en commentaire conditionnel
+ * (invisible partout ailleurs).
+ */
+export function wrapAt(html, width, align = "left") {
+  const div = `<div style="max-width:${width}px;">${html}</div>`;
+  if (naturalWidth(html) <= width) return div;
+  const a = align && align !== "left" ? ` align="${align}"` : "";
+  return `<!--[if mso]><table role="presentation" cellpadding="0" cellspacing="0" border="0"${a} width="${width}"><tr><td${a}><![endif]-->${div}<!--[if mso]></td></tr></table><![endif]-->`;
+}
+
 export const span = (text, style) =>
   `<span style="${style}">${esc(text)}</span>`;
 

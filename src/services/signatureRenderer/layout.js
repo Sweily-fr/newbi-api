@@ -22,7 +22,7 @@
  */
 
 import { CONTACT_ITEMS } from "./constants.js";
-import { bar, hstack, stackRows, tint, vstack } from "./primitives.js";
+import { bar, hstack, stackRows, tint, vstack, wrapAt } from "./primitives.js";
 
 const WHITE = "#ffffff";
 const NAME_PARTS = ["firstName", "lastName"];
@@ -81,8 +81,9 @@ const alignAttr = (align) =>
   align && align !== "left" ? ` align="${align}"` : "";
 
 /**
- * Largeur fixe d'un bloc ou d'une colonne : le texte revient à la ligne.
- * Attribut pour Outlook, max-width pour ne pas déborder sur un téléphone.
+ * Largeur fixe d'une colonne. Attribut pour Outlook, max-width pour ne pas
+ * déborder sur un téléphone. (Un texte, lui, revient à la ligne sans
+ * jamais occuper plus que son contenu : wrapAt.)
  */
 const fixedWidth = (html, w, align = "left") =>
   `<table ${TABLE_ATTRS}${alignAttr(align)} width="${w}" style="${TABLE_CSS}width:${w}px;max-width:100%;"><tr><td${alignAttr(align)}>${html}</td></tr></table>`;
@@ -503,7 +504,7 @@ export function renderLayout(b, ctx, theme = {}) {
         const wanted = bs.width || autoWrap(row.key, slot);
         const wrap = col && wanted > col ? col : wanted;
         if (wrap && WRAP_WIDTH.has(row.key)) {
-          html = fixedWidth(html, wrap, rowAlign);
+          html = wrapAt(html, wrap, rowAlign);
         }
         // Au bord de l'emplacement, l'espace ne peut qu'être ajouté
         const top = i === 0 ? Math.max(0, bs.spaceBefore || 0) : 0;
