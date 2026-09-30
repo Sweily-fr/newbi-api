@@ -185,15 +185,14 @@ export function stackRows(rows, { align = "left", full = false } = {}) {
     return items[0].html;
   }
   const alignAttr = align === "left" ? "" : ` align="${align}"`;
-  const alignStyle = align === "left" ? "" : `text-align:${align};`;
   const rowsHtml = items
     .map((row, i) => {
       const last = i === items.length - 1;
       const pad = last || !row.after ? "" : `padding:0 0 ${row.after}px 0;`;
-      // Alignement propre : l'attribut seul, qui place aussi les tableaux
-      // de la ligne (un text-align en style l'emporterait sur lui)
+      // Alignement par l'attribut seul, qui place aussi les tableaux et les
+      // images de la ligne (un text-align en style l'emporterait sur lui)
       const attr = row.align ? ` align="${row.align}"` : alignAttr;
-      const style = `${row.align ? "" : alignStyle}${pad}`;
+      const style = pad;
       return `<tr><td${attr}${style ? ` style="${style}"` : ""}>${row.html}</td></tr>`;
     })
     .join("");
@@ -230,13 +229,13 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
   if (items.length === 0) return "";
   if (items.length === 1 && align === "left") return items[0];
   const aligned = align === "center" || align === "right";
+  // Attribut seul : il place aussi les tableaux et images de la ligne
   const alignAttr = aligned ? ` align="${align}"` : "";
-  const alignStyle = aligned ? `text-align:${align};` : "";
   const rowsHtml = items
     .map((row, i) => {
       const last = i === items.length - 1;
       const pad = last || !gap ? "" : `padding:0 0 ${gap}px 0;`;
-      const style = `${alignStyle}${pad}`;
+      const style = pad;
       return `<tr><td${alignAttr}${style ? ` style="${style}"` : ""}>${row}</td></tr>`;
     })
     .join("");

@@ -56,12 +56,15 @@ const widthOf = (w) =>
  * Deux contenus côte à côte, 24 px d'écart. `full` : aux extrémités d'une
  * ligne pleine largeur, seulement dans un cadre de largeur fixe (ailleurs,
  * un tableau à 100 % étirerait la signature sur toute la largeur du
- * message).
+ * message) ; la cellule de gauche prend alors toute la place libre, celle
+ * de droite reste à la taille de son contenu, collée au bord. Cellule de
+ * droite alignée par l'attribut seul : un text-align en style ne placerait
+ * pas ses tableaux.
  */
 function spread(left, right, { valign = "middle", full = false } = {}) {
   if (!left || !right) return left || right;
   const width = full ? ' width="100%"' : "";
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${width} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${full ? "width:100%;" : ""}"><tr><td valign="${valign}" style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right" style="text-align:right;">${right}</td></tr></table>`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${width} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${full ? "width:100%;" : ""}"><tr><td valign="${valign}"${width} style="padding:0 24px 0 0;">${left}</td><td valign="${valign}" align="right">${right}</td></tr></table>`;
 }
 
 const TABLE_ATTRS =
@@ -277,11 +280,13 @@ export function renderLayout(b, ctx, theme = {}) {
 
   /** Espace entre deux lignes d'un emplacement. */
   function gapBetween(prev, next, slot) {
-    if (IDENTITY.has(prev) && IDENTITY.has(next)) return sp.line;
-    if (prev === "caption" && next === "tagline") return sp.line;
+    // Ligne d'identité et légendes en capitales comptent comme l'identité
+    const identity = (k) =>
+      IDENTITY.has(k) || k === "identity" || k === "caption";
     if ((prev === "name" || NAME_PARTS.includes(prev)) && next === "caption") {
       return sp.block;
     }
+    if (identity(prev) && identity(next)) return sp.line;
     if (slot === "visual") return solid ? sp.line + 6 : sp.block + 2;
     return sp.block;
   }
@@ -428,29 +433,42 @@ export function renderLayout(b, ctx, theme = {}) {
   }
 
   // Texte long (mention, accroche) sans largeur choisie : il s'étalerait sur
-  // toute la largeur du message avant de revenir à la ligne ; plafonné
-  // d'office (480 px en bas de la signature, 300 px dans une colonne)
-  const LONG_TEXT = { disclaimer: 90, tagline: 45 };
+  // toute la largeur du message avant de revenir à la ligne. Plafonné
+  // d'office (480 px en bas de la signature, 300 px dans une colonne, 200
+  // dans la colonne photo) seulement si sa longueur estimée le dépasse, et
+  // jamais dans une colonne ou un cadre de largeur choisie, qui le bornent
+  // déjà
   const autoWrap = (key, slot) => {
+    if (key !== "disclaimer" && key !== "tagline") return 0;
     const text =
       key === "disclaimer"
         ? ctx.sig.disclaimer?.text
-        : key === "tagline"
-          ? ctx.sig.identity?.tagline
-          : "";
-    if (!text || text.length <= LONG_TEXT[key]) return 0;
-    return slot === "footer" || slot === "outside" ? 480 : 300;
+        : ctx.sig.identity?.tagline;
+    if (!text || st.columns?.[slot]) return 0;
+    if (slot === "footer" && boxed && st.frameWidth) return 0;
+    const size =
+      st.elements?.[key]?.fontSize ||
+      (key === "disclaimer" ? Math.max(10, st.fontSize - 3) : st.fontSize - 1);
+    const cap =
+      slot === "footer" || slot === "outside"
+        ? 480
+        : slot === "visual"
+          ? 200
+          : 300;
+    return text.length * size * 0.55 > cap ? cap : 0;
   };
   // Éléments réunis sur une ligne (légende, identité en ligne, réseaux et
-  // logo) : pour chaque réglage, celui du premier qui en a un
+  // logo) : la largeur de l'élément qui porte la ligne (celle d'un autre,
+  // réglée quand il était seul, la ferait revenir à la ligne), l'espace
+  // au-dessus du premier, en dessous du dernier, l'alignement du premier
+  // qui en a un
   const settingsOf = (row) => {
     if (!row.keys) return inMain(row.key, row.items) ? blockOf(row.key) : {};
-    const pick = (f) => row.keys.map((k) => blockOf(k)[f]).find(Boolean);
     return {
-      width: pick("width"),
-      spaceBefore: pick("spaceBefore"),
-      spaceAfter: pick("spaceAfter"),
-      align: pick("align"),
+      width: blockOf(row.key).width,
+      spaceBefore: blockOf(row.keys[0]).spaceBefore,
+      spaceAfter: blockOf(row.keys[row.keys.length - 1]).spaceAfter,
+      align: row.keys.map((k) => blockOf(k).align).find(Boolean),
     };
   };
   // Pile d'un emplacement : chaque bloc garde son alignement propre (porté
@@ -463,7 +481,10 @@ export function renderLayout(b, ctx, theme = {}) {
         const next = rows[i + 1];
         let html = row.html;
         const rowAlign = bs.align || stackAlign;
-        const wrap = bs.width || autoWrap(row.key, slot);
+        // Jamais plus large que sa colonne de largeur choisie
+        const col = st.columns?.[slot] || 0;
+        const wanted = bs.width || autoWrap(row.key, slot);
+        const wrap = col && wanted > col ? col : wanted;
         if (wrap && WRAP_WIDTH.has(row.key)) {
           html = fixedWidth(html, wrap, rowAlign);
         }
@@ -547,12 +568,23 @@ export function renderLayout(b, ctx, theme = {}) {
   const restHtml = region(
     "slot",
     "footer",
-    stack(rowsOf(restItems, "footer", { itemAlign: align }), "footer", align),
+    stack(
+      rowsOf(restItems, "footer", { itemAlign: align }),
+      "footer",
+      align,
+      // Cadre de largeur fixe : un bloc centré ou à droite l'est dans le cadre
+      Boolean(boxed && st.frameWidth),
+    ),
   );
   const stripHtml = region(
     "slot",
     "footer",
-    stack(rowsOf(stripItems, "footer"), "footer", "left"),
+    stack(
+      rowsOf(stripItems, "footer"),
+      "footer",
+      "left",
+      Boolean(boxed && st.frameWidth),
+    ),
   );
   const hasRowsAfterBody = Boolean(restHtml || stripHtml);
 
@@ -643,16 +675,18 @@ export function renderLayout(b, ctx, theme = {}) {
       ? `0 ${topCorner}px ${bottomCorner}px 0`
       : `${topCorner}px 0 0 ${bottomCorner}px`;
     const radius = boxed ? corners : `${r}px`;
-    const visualCell = `<td valign="${st.photoValign}" align="center" bgcolor="${soft}" style="text-align:center;background-color:${soft};padding:22px ${sp.gap + 2}px;border-radius:${radius};">${visualHtml}</td>`;
+    const visualCell = `<td valign="${st.photoValign}" align="center" bgcolor="${soft}" style="background-color:${soft};padding:22px ${sp.gap + 2}px;border-radius:${radius};">${visualHtml}</td>`;
     // Marges au plus juste : la signature doit tenir sur un téléphone
     const boxPad = `20px ${sp.gap + 6}px`;
     const pad = boxed ? boxPad : `0 0 0 ${sp.gap + 6}px`;
     const padRight = boxed ? boxPad : `0 ${sp.gap + 6}px 0 0`;
+    // Cadre de largeur fixe : la place libre va au texte, pas à la
+    // colonne teintée
+    const stretch = boxed && st.frameWidth;
     const textCell =
       textHtml || sideHtml
-        ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${sideBySide(textHtml, sideHtml)}</td>`
+        ? `<td valign="${textValign}"${stretch ? ' width="100%"' : ""} style="padding:${right ? padRight : pad};">${sideBySide(textHtml, sideHtml)}</td>`
         : "";
-    const stretch = boxed && st.frameWidth;
     body = box(
       `<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`,
       stretch ? ' width="100%"' : "",

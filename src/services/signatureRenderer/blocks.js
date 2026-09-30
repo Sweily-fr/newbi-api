@@ -365,7 +365,8 @@ export function buildBlocks(ctx) {
         width,
         height,
         alt: sig.banner.alt || "",
-        style: "max-width:100%;",
+        // Réduit (téléphone, colonne étroite) : la hauteur suit
+        style: "max-width:100%;height:auto;",
       });
       const href = normalizeUrl(sig.banner.url);
       return markBlock(
@@ -449,18 +450,36 @@ export function buildBlocks(ctx) {
      * `parts` : les éléments à réunir (title, company).
      */
     captionOf(parts, { color = st.mutedColor, mark = (k, h) => h } = {}) {
+      // Légende de la société seule : son propre style ; à la suite du
+      // poste, ses réglages propres par-dessus ceux du poste
+      const key = parts.includes("title") && titleLine ? "jobTitle" : "company";
+      const defaults = { size: base - 2, color, uppercase: true };
+      const companyHtml = editable("company", identity.company);
+      const company =
+        key === "jobTitle" && hasOwnStyle("company")
+          ? styledSpan(
+              companyHtml,
+              styleOf(
+                partResolve(
+                  "company",
+                  { ...defaults, bold: false, tracking: 2 },
+                  "jobTitle",
+                ),
+              ),
+            )
+          : companyHtml;
       const html = [
-        parts.includes("title") && titleLine ? mark("title", titleHtml) : "",
+        key === "jobTitle" ? mark("title", titleHtml) : "",
         parts.includes("company") && identity.company
-          ? mark("company", editable("company", identity.company))
+          ? mark("company", company)
           : "",
       ]
         .filter(Boolean)
         .join(esc("  ·  "));
       if (!html) return "";
       return markInline(
-        "jobTitle",
-        `<span style="${styled("jobTitle", { size: base - 2, color, uppercase: true })}letter-spacing:2px;">${html}</span>`,
+        key,
+        `<span style="${styled(key, defaults)}letter-spacing:2px;">${html}</span>`,
       );
     },
 

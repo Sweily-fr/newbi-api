@@ -401,8 +401,11 @@ export function renderSignature(
 
   // Table englobante : fond transparent (mode sombre), aucune largeur fixe
   // (le contenu dicte la largeur, la signature reste lisible sur mobile).
+  // Taille et interligne de la signature sur la cellule : sans eux, chaque
+  // ligne de texte prenait la hauteur du texte par défaut du client mail
+  // (16 px), plus haute que celle d'un petit texte.
   const html = body
-    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;background-color:transparent;"><tr><td style="font-family:${ctx.font};">${body}</td></tr></table>`
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;background-color:transparent;"><tr><td style="font-family:${ctx.font};font-size:${st.fontSize}px;line-height:${Math.round(st.fontSize * 1.4)}px;">${body}</td></tr></table>`
     : "";
 
   const warnings = [];
