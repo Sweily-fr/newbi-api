@@ -682,4 +682,56 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
     expect(result.number).toBe("0001");
     expect(result.headerNotes).toBe("Note ajoutée");
   });
+
+  // Cas réel du 30/09/2026 : des CGV de ~3000 caractères collées en bas de
+  // page étaient refusées (limite de 2000 remise par erreur), et l'éditeur
+  // n'affichait rien.
+  const longFooter = Array.from(
+    { length: 12 },
+    (_, i) =>
+      `${i + 1}. PAIEMENT — CONDITIONS GÉNÉRALES\n` +
+      "Un acompte de 30% est exigible à la signature. Tout retard entraîne " +
+      "des pénalités de 3 fois le taux d’intérêt légal et une indemnité de 40 €.\n",
+  ).join("\n");
+
+  it("enregistre un brouillon avec des notes de bas de page longues", async () => {
+    expect(longFooter.length).toBeGreaterThan(2000);
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({ number: "DRAFT-1751400000001" }),
+    );
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { status: "DRAFT", footerNotes: longFooter },
+      },
+      ctx(),
+    );
+
+    expect(result.footerNotes).toBe(longFooter.trim());
+  });
+
+  it("modifie un devis en attente qui porte déjà des notes de bas de page longues", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0004",
+        prefix: "D-092026",
+        footerNotes: longFooter,
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { status: "PENDING", headerNotes: "Note ajoutée" },
+      },
+      ctx(),
+    );
+
+    expect(result.headerNotes).toBe("Note ajoutée");
+    expect(result.footerNotes).toBe(longFooter);
+  });
 });

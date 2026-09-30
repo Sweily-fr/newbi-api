@@ -299,8 +299,17 @@ describe("Footer notes validation", () => {
     expect(isValidFooterNotes("")).toBe(true);
   });
 
-  it("should reject notes exceeding 2000 chars", () => {
-    expect(isValidFooterNotes("a".repeat(2001))).toBe(false);
+  // Pas de limite de longueur (décision du 12/03/2026, remise par erreur le
+  // 17/03) : des CGV complètes doivent pouvoir aller en bas de page.
+  it("should accept long notes (no length limit)", () => {
+    const longNotes =
+      "CONDITIONS GÉNÉRALES — 1. PRESTATIONS\nL'acompte de 30% est dû (40 €).\n".repeat(60);
+    expect(longNotes.length).toBeGreaterThan(2000);
+    expect(isValidFooterNotes(longNotes)).toBe(true);
+  });
+
+  it("should reject control characters", () => {
+    expect(isValidFooterNotes("Notes\u0007")).toBe(false);
   });
 });
 
