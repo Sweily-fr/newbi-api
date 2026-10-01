@@ -235,7 +235,7 @@ export function normalizeSignature(input = {}) {
       ICON_COLOR_MODES,
       tpl.iconColorMode || DEFAULT_STYLE.iconColorMode,
     ),
-    iconColor: hex(s.iconColor, DEFAULT_STYLE.iconColor),
+    iconColor: hex(s.iconColor, tpl.iconColor || DEFAULT_STYLE.iconColor),
     iconSize: clamp(s.iconSize, 16, 40, DEFAULT_STYLE.iconSize),
     showContactIcons: bool(s.showContactIcons, DEFAULT_STYLE.showContactIcons),
     separatorColor: hex(
@@ -257,7 +257,7 @@ export function normalizeSignature(input = {}) {
     footerPair: bool(s.footerPair, true),
     outside,
     textOrder,
-    elements: normalizeElements(s.elements),
+    elements: normalizeElements(s.elements ?? tpl.elements),
   };
   // Tenu à jour pour les anciens clients : icônes = style « icons »
   style.showContactIcons = style.contactStyle === "icons";
@@ -313,7 +313,8 @@ export function normalizeSignature(input = {}) {
   );
   style.contactIconColor = hex(
     s.contactIconColor,
-    style.iconColorMode === "custom" ? style.iconColor : style.primaryColor,
+    tpl.contactIconColor ||
+      (style.iconColorMode === "custom" ? style.iconColor : style.primaryColor),
   );
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   style.blocks = normalizeBlocks(s.blocks ?? tpl.blocks);

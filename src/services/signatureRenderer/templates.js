@@ -264,25 +264,27 @@ const TEMPLATES = {
       contactTracking: 0.5,
     },
   },
-  // Composition de l'utilisateur (01/10/2026), seul modèle proposé : photo
-  // dans une carte teintée, trait fin, nom en capitales espacées, poste en
-  // italique, trait d'accent, coordonnées à icônes, puis logo et réseaux
-  // sous un trait sur toute la largeur. Couleurs harmonisées : la carte,
-  // l'accent et toutes les icônes découlent de la couleur principale, les
-  // traits sont gris clair.
+  // Modèle enregistré par l'utilisateur (« Signature Newbi », 01/10/2026),
+  // repris tel quel comme seul modèle proposé : photo ronde dans une carte
+  // teintée, trait noir, nom en capitales espacées, trait d'accent,
+  // coordonnées à icônes bleues (adresse en orange), puis un trait noir
+  // au-dessus du logo et des réseaux (verts), côte à côte.
   newbi: {
     name: "Newbi",
     description:
-      "Photo dans une carte teintée, nom en capitales espacées, logo et réseaux sous un trait fin.",
+      "Photo dans une carte teintée, nom en capitales espacées, coordonnées à icônes, logo et réseaux sous un trait.",
     preset: {
       ...BASE_PRESET,
       fontSize: 12,
       photoSize: 108,
-      iconSize: 24,
+      iconSize: 28,
+      iconColorMode: "custom",
+      iconColor: "#4cd963",
       divider: "line",
-      separatorColor: "#e4e4e7",
-      iconColorMode: "primary",
-      contactIconMode: "primary",
+      dividerThickness: 2,
+      separatorColor: "#1f1f1f",
+      contactIconMode: "custom",
+      contactIconColor: "#007bff",
       visualFill: "tint",
       visualSide: "left",
       nameLayout: "inline",
@@ -301,19 +303,17 @@ const TEMPLATES = {
           "email",
           "website",
           "address",
+          "rule2",
+          "rule3",
         ],
         side: [],
-        footer: ["rule1", "logo", "social", "cta", "banner", "disclaimer"],
+        footer: ["cta", "banner", "disclaimer", "rule1", "logo", "social"],
         outside: [],
       },
-      // Largeur fixe : le trait du bas et la ligne logo / réseaux occupent
-      // toute la signature (en e-mail, une largeur à 100 % n'est sûre que
-      // sous une largeur connue)
-      frameWidth: 460,
-      rules: { rule1: { length: 640, thickness: 1, color: "separator" } },
+      rules: { rule1: { length: 352, thickness: 2, color: "separator" } },
       // Un peu d'air entre la carte et le trait
-      dividerSpace: { left: 10 },
-      elements: {},
+      dividerSpace: { left: 8 },
+      elements: { address: { color: "#ff9500" } },
     },
     theme: {
       nameDelta: 4,
