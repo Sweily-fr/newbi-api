@@ -43,10 +43,11 @@ export function buildBlocks(ctx) {
     markers && html ? `<div data-sig-field="${field}">${html}</div>` : html;
 
   // Une image en display:block ne se centre pas par text-align : on la pose
-  // dans une table alignée (l'attribut align est compris partout).
+  // dans une table alignée (l'attribut align est compris partout). À
+  // droite de même (bout d'une ligne pleine largeur).
   const centered = (html, align) =>
-    align === "center" && html
-      ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td>${html}</td></tr></table>`
+    (align === "center" || align === "right") && html
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td>${html}</td></tr></table>`
       : html;
   const { identity, contact, images } = sig;
 

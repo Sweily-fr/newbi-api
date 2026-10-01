@@ -3,9 +3,11 @@
  * un point de départ, appliqué au style quand l'utilisateur le choisit.
  *
  * - `preset` : typographie, formes et mise en page de départ (position de
- *   la photo, des réseaux, du logo, séparateur, encadré…). Tout reste
- *   modifiable ensuite, réglage par réglage. Les couleurs ne sont jamais
- *   imposées : elles restent celles de l'utilisateur.
+ *   la photo, des réseaux, du logo, séparateur, encadré…) et finitions
+ *   (couleur des traits et des icônes). Tout reste modifiable ensuite,
+ *   réglage par réglage. Les couleurs principales (principale, texte,
+ *   secondaire) ne sont jamais imposées : elles restent celles de
+ *   l'utilisateur.
  * - `theme` : les quelques valeurs propres au caractère du modèle (nom en
  *   couleur principale, écart de taille du nom, tailles maximales), que
  *   l'utilisateur ajuste élément par élément s'il le souhaite.
@@ -262,6 +264,67 @@ const TEMPLATES = {
       contactTracking: 0.5,
     },
   },
+  // Composition de l'utilisateur (01/10/2026), seul modèle proposé : photo
+  // dans une carte teintée, trait fin, nom en capitales espacées, poste en
+  // italique, trait d'accent, coordonnées à icônes, puis logo et réseaux
+  // sous un trait sur toute la largeur. Couleurs harmonisées : la carte,
+  // l'accent et toutes les icônes découlent de la couleur principale, les
+  // traits sont gris clair.
+  newbi: {
+    name: "Newbi",
+    description:
+      "Photo dans une carte teintée, nom en capitales espacées, logo et réseaux sous un trait fin.",
+    preset: {
+      ...BASE_PRESET,
+      fontSize: 12,
+      photoSize: 108,
+      iconSize: 24,
+      divider: "line",
+      separatorColor: "#e4e4e7",
+      iconColorMode: "primary",
+      contactIconMode: "primary",
+      visualFill: "tint",
+      visualSide: "left",
+      nameLayout: "inline",
+      slots: {
+        header: [],
+        visual: ["photo"],
+        text: [
+          "firstName",
+          "lastName",
+          "title",
+          "company",
+          "tagline",
+          "accent",
+          "phone",
+          "mobile",
+          "email",
+          "website",
+          "address",
+        ],
+        side: [],
+        footer: ["rule1", "logo", "social", "cta", "banner", "disclaimer"],
+        outside: [],
+      },
+      // Largeur fixe : le trait du bas et la ligne logo / réseaux occupent
+      // toute la signature (en e-mail, une largeur à 100 % n'est sûre que
+      // sous une largeur connue)
+      frameWidth: 460,
+      rules: { rule1: { length: 640, thickness: 1, color: "separator" } },
+      // Un peu d'air entre la carte et le trait
+      dividerSpace: { left: 10 },
+      elements: {},
+    },
+    theme: {
+      nameDelta: 4,
+      nameCaps: true,
+      nameTracking: 3,
+      titleItalic: true,
+      titleTracking: 1,
+      contactTracking: 0.5,
+    },
+  },
+
   line: {
     name: "Une ligne",
     description:

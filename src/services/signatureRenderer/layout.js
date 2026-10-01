@@ -210,9 +210,10 @@ export function renderLayout(b, ctx, theme = {}) {
   /**
    * Rendu d'un élément seul, selon son emplacement. `own` : alignement
    * choisi pour ce bloc, qui remplace celui de l'emplacement (à droite,
-   * c'est sa ligne qui le place).
+   * c'est sa ligne qui le place). `toRight` : au bout droit d'une ligne
+   * pleine largeur (réseaux et logo réunis), il s'y colle lui-même.
    */
-  function renderItem(k, slot, { inverse, itemAlign, own }) {
+  function renderItem(k, slot, { inverse, itemAlign, own, toRight }) {
     const c = colors(inverse);
     const across =
       own ||
@@ -258,8 +259,10 @@ export function renderLayout(b, ctx, theme = {}) {
             });
       case "social":
         return b.social({
-          align:
-            own || (slot === "footer" || slot === "outside" ? "left" : across),
+          align: toRight
+            ? "right"
+            : own ||
+              (slot === "footer" || slot === "outside" ? "left" : across),
           size: socialSize,
           onFill: inverse,
           // Colonne photo : 4 icônes par ligne au plus, sauf disposition
@@ -279,13 +282,15 @@ export function renderLayout(b, ctx, theme = {}) {
                 ? 32
                 : undefined;
         return b.logo({
-          align: own
-            ? selfAlign
-            : slot === "footer" || slot === "outside"
-              ? "left"
-              : across === "right"
+          align: toRight
+            ? "right"
+            : own
+              ? selfAlign
+              : slot === "footer" || slot === "outside"
                 ? "left"
-                : across,
+                : across === "right"
+                  ? "left"
+                  : across,
           maxHeight,
         });
       }
@@ -453,9 +458,14 @@ export function renderLayout(b, ctx, theme = {}) {
           kind: "pair",
           key: k,
           keys: [k, pair],
+          // Largeur choisie : la ligne occupe toute la signature, le second
+          // va au bout droit (aligné à gauche, il restait au milieu)
           html: sideBySide(
             markBlock(k, renderItem(k, slot, { inverse, itemAlign })),
-            markBlock(pair, renderItem(pair, slot, { inverse, itemAlign })),
+            markBlock(
+              pair,
+              renderItem(pair, slot, { inverse, itemAlign, toRight: wide }),
+            ),
           ),
         });
         i += 2;

@@ -517,6 +517,27 @@ enum SignatureImageKindV2 {
   BANNER
 }
 
+"""
+Modèle enregistré par un membre de l'espace (« Enregistrer comme modèle ») :
+tout le style d'une signature (disposition, typographie, couleurs), jamais
+ses textes ni ses images. Proposé à tout l'espace.
+"""
+type SignatureSavedTemplateV2 {
+  id: ID!
+  name: String!
+  "Modèle de base, dont le caractère (nom en capitales, tailles…) s'applique."
+  templateId: String!
+  style: SignatureStyleV2!
+  "Enregistré par l'utilisateur connecté : lui seul peut le supprimer."
+  mine: Boolean!
+}
+
+input SignatureSavedTemplateV2Input {
+  name: String!
+  templateId: String!
+  style: SignatureStyleV2Input!
+}
+
 extend type Query {
   emailSignaturesV2: [EmailSignatureV2!]!
   emailSignatureV2(id: ID!): EmailSignatureV2
@@ -538,6 +559,9 @@ extend type Query {
     style: SignatureStyleV2Input
     id: ID
   ): SignatureRenderV2!
+
+  "Modèles enregistrés par les membres de l'espace, les plus récents d'abord."
+  emailSignatureTemplatesV2: [SignatureSavedTemplateV2!]!
 }
 
 extend type Mutation {
@@ -578,4 +602,15 @@ extend type Mutation {
   ): EmailSignatureV2!
 
   removeEmailSignatureV2Image(id: ID!, kind: SignatureImageKindV2!): EmailSignatureV2!
+
+  """
+  Enregistre un style comme modèle de l'espace. Un de vos modèles du même
+  nom est remplacé.
+  """
+  saveEmailSignatureTemplateV2(
+    input: SignatureSavedTemplateV2Input!
+  ): SignatureSavedTemplateV2!
+
+  "Supprime un de vos modèles enregistrés."
+  deleteEmailSignatureTemplateV2(id: ID!): Boolean!
 }

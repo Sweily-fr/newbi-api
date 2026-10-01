@@ -233,12 +233,15 @@ export function normalizeSignature(input = {}) {
     iconColorMode: oneOf(
       s.iconColorMode,
       ICON_COLOR_MODES,
-      DEFAULT_STYLE.iconColorMode,
+      tpl.iconColorMode || DEFAULT_STYLE.iconColorMode,
     ),
     iconColor: hex(s.iconColor, DEFAULT_STYLE.iconColor),
     iconSize: clamp(s.iconSize, 16, 40, DEFAULT_STYLE.iconSize),
     showContactIcons: bool(s.showContactIcons, DEFAULT_STYLE.showContactIcons),
-    separatorColor: hex(s.separatorColor, DEFAULT_STYLE.separatorColor),
+    separatorColor: hex(
+      s.separatorColor,
+      tpl.separatorColor || DEFAULT_STYLE.separatorColor,
+    ),
     spacing: oneOf(s.spacing, SPACINGS, DEFAULT_STYLE.spacing),
     align: oneOf(s.align, ALIGNMENTS, tpl.align || DEFAULT_STYLE.align),
     frame: oneOf(s.frame, FRAMES, tpl.frame || DEFAULT_STYLE.frame),
@@ -266,12 +269,26 @@ export function normalizeSignature(input = {}) {
     Boolean(input.images?.photo?.url),
     Boolean(input.images?.logo?.url),
   );
-  style.slots = normalizeSlots(s.slots) || derived.slots;
-  style.visualSide = oneOf(s.visualSide, VISUAL_SIDES, derived.visualSide);
-  style.visualFill = oneOf(s.visualFill, VISUAL_FILLS, derived.visualFill);
+  // (un modèle peut fixer ses emplacements lui-même)
+  style.slots =
+    normalizeSlots(s.slots) || normalizeSlots(tpl.slots) || derived.slots;
+  style.visualSide = oneOf(
+    s.visualSide,
+    VISUAL_SIDES,
+    tpl.visualSide || derived.visualSide,
+  );
+  style.visualFill = oneOf(
+    s.visualFill,
+    VISUAL_FILLS,
+    tpl.visualFill || derived.visualFill,
+  );
   style.headerPhoto = oneOf(s.headerPhoto, HEADER_PHOTOS, derived.headerPhoto);
   style.headerFill = oneOf(s.headerFill, HEADER_FILLS, "solid");
-  style.nameLayout = oneOf(s.nameLayout, NAME_LAYOUTS, "inline");
+  style.nameLayout = oneOf(
+    s.nameLayout,
+    NAME_LAYOUTS,
+    tpl.nameLayout || "inline",
+  );
   style.socialRows = socialRowsOf(s.socialRows, tpl.socialRows);
   // Traits et bordures : longueur et épaisseur de chacun, 0 = automatique
   // (dimensions du modèle, ou toute la longueur)
@@ -301,7 +318,7 @@ export function normalizeSignature(input = {}) {
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   style.blocks = normalizeBlocks(s.blocks ?? tpl.blocks);
   style.columns = normalizeColumns(s.columns ?? tpl.columns);
-  style.rules = normalizeRules(s.rules);
+  style.rules = normalizeRules(s.rules ?? tpl.rules);
   style.dividerSpace = normalizeDividerSpace(
     s.dividerSpace ?? tpl.dividerSpace,
   );

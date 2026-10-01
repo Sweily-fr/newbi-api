@@ -8,6 +8,7 @@
  */
 
 import EmailSignatureV2 from "../models/EmailSignatureV2.js";
+import EmailSignatureTemplateV2 from "../models/EmailSignatureTemplateV2.js";
 import {
   requireDelete,
   requireRead,
@@ -58,6 +59,9 @@ const scope = (ctx) => ({
   createdBy: ctx.user.id,
   workspaceId: ctx.workspaceId,
 });
+
+/** Modèles enregistrés : visibles de tout l'espace. */
+const templateScope = (ctx) => ({ workspaceId: ctx.workspaceId });
 
 const plain = (value) =>
   value && typeof value.toObject === "function"
@@ -279,6 +283,15 @@ const emailSignatureV2Resolvers = {
     dividerSpace: (st) => st?.dividerSpace || {},
   },
 
+  SignatureSavedTemplateV2: {
+    id: (t) => String(t._id ?? t.id),
+    // Style tel que le générateur le comprend aujourd'hui (réglage apparu
+    // depuis l'enregistrement : valeur du modèle de base)
+    style: (t) =>
+      normalizeSignature({ templateId: t.templateId, style: t.style }).style,
+    mine: (t, _, ctx) => String(t.createdBy) === String(ctx.user?.id),
+  },
+
   EmailSignatureV2: {
     id: (doc) => String(doc._id ?? doc.id),
     images: (doc) => ({
@@ -304,6 +317,12 @@ const emailSignatureV2Resolvers = {
 
     emailSignatureV2: requireRead("signatures")(async (_, { id }, ctx) =>
       EmailSignatureV2.findOne({ _id: id, ...scope(ctx) }),
+    ),
+
+    emailSignatureTemplatesV2: requireRead("signatures")(async (_, __, ctx) =>
+      EmailSignatureTemplateV2.find(templateScope(ctx))
+        .sort({ updatedAt: -1 })
+        .lean(),
     ),
 
     signatureMembersV2: requireRead("signatures")(async (_, __, ctx) => {
@@ -347,27 +366,17 @@ const emailSignatureV2Resolvers = {
     renderSignatureTemplateV2: requireRead("signatures")(
       async (_, { templateId, style, id }, ctx) => {
         await ensureSamplePhoto();
-        // Vignette = typographie du modèle + couleurs de l'utilisateur
+        // Vignette = le modèle tel qu'il s'appliquera : sa mise en page et
+        // ses finitions (traits, icônes), avec les couleurs principales de
+        // l'utilisateur
         const colors = Object.fromEntries(
           Object.entries(style || {}).filter(
             ([k, v]) =>
-              [
-                "primaryColor",
-                "textColor",
-                "mutedColor",
-                "iconColorMode",
-                "iconColor",
-                "separatorColor",
-                "contactIconColor",
-              ].includes(k) &&
+              ["primaryColor", "textColor", "mutedColor"].includes(k) &&
               v !== null &&
               v !== undefined,
           ),
         );
-        // Icônes des coordonnées : une couleur au choix les suit d'un modèle
-        // à l'autre, sinon chaque modèle montre la sienne
-        if (style?.contactIconMode === "custom")
-          colors.contactIconMode = "custom";
         // Vos propres informations dès que la signature a un nom : on
         // choisit un modèle en voyant ce qu'il donne pour soi. Le bandeau et
         // la mention, identiques d'un modèle à l'autre, sont laissés de côté.
@@ -548,6 +557,39 @@ const emailSignatureV2Resolvers = {
             await next.save();
           }
         }
+        return true;
+      },
+    ),
+
+    saveEmailSignatureTemplateV2: requireWrite("signatures")(
+      async (_, { input }, ctx) => {
+        const name = String(input?.name ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 60);
+        if (!name) throw createValidationError("Donnez un nom au modèle.");
+        // Style validé par le générateur, comme celui d'une signature
+        const { templateId, style } = normalizeSignature({
+          templateId: input.templateId,
+          style: input.style,
+        });
+        // Un de vos modèles du même nom est remplacé
+        return EmailSignatureTemplateV2.findOneAndUpdate(
+          { ...templateScope(ctx), createdBy: ctx.user.id, name },
+          { $set: { templateId, style } },
+          { upsert: true, new: true, setDefaultsOnInsert: true, lean: true },
+        );
+      },
+    ),
+
+    deleteEmailSignatureTemplateV2: requireDelete("signatures")(
+      async (_, { id }, ctx) => {
+        const { deletedCount } = await EmailSignatureTemplateV2.deleteOne({
+          _id: id,
+          ...templateScope(ctx),
+          createdBy: ctx.user.id,
+        });
+        if (!deletedCount) throw createNotFoundError("Modèle");
         return true;
       },
     ),
