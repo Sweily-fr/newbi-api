@@ -62,8 +62,9 @@ const BASE_PRESET = {
   frameThickness: 0,
   frameWidth: 0,
   frameBarLength: 0,
-  // Icônes des coordonnées (0 : 16 px)
+  // Icônes des coordonnées (0 : 16 px), dans la couleur principale
   contactIconSize: 0,
+  contactIconMode: "primary",
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   blocks: {},
   columns: {},
@@ -248,6 +249,8 @@ const TEMPLATES = {
       divider: "line",
       // Trait fin noir : la couleur des traits du modèle
       separatorColor: "#1f1f1f",
+      // Icônes des coordonnées dans la couleur du texte
+      contactIconMode: "text",
       accent: "none",
     },
     theme: {
@@ -257,7 +260,6 @@ const TEMPLATES = {
       titleItalic: true,
       titleTracking: 1,
       contactTracking: 0.5,
-      contactIconColor: "text",
     },
   },
   line: {

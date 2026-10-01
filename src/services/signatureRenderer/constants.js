@@ -68,6 +68,8 @@ export const FONT_LABELS = {
 export const PHOTO_SHAPES = ["circle", "rounded", "square"];
 export const ICON_STYLES = ["circle", "rounded", "square", "plain"];
 export const ICON_COLOR_MODES = ["brand", "primary", "custom"];
+/** Couleur des icônes des coordonnées, indépendante de celle des réseaux. */
+export const CONTACT_ICON_MODES = ["primary", "text", "custom"];
 export const SPACINGS = ["compact", "normal", "airy"];
 export const ALIGNMENTS = ["left", "center"];
 

@@ -11,6 +11,7 @@ import {
   ALIGNMENTS,
   BLOCK_ALIGNS,
   BLOCK_KEYS,
+  CONTACT_ICON_MODES,
   DEFAULT_STYLE,
   FONT_FAMILIES,
   GMAIL_MAX_CHARS,
@@ -283,6 +284,20 @@ export function normalizeSignature(input = {}) {
   style.frameWidth = sized("frameWidth", 240, 720);
   style.frameBarLength = sized("frameBarLength", 16, 720);
   style.contactIconSize = sized("contactIconSize", 12, 32);
+  // Couleur des icônes des coordonnées, propre à elles (changer celle des
+  // réseaux ne la touche pas). Une signature d'avant, dont les réseaux
+  // étaient « au choix », garde ses icônes dans cette couleur.
+  style.contactIconMode = oneOf(
+    s.contactIconMode,
+    CONTACT_ICON_MODES,
+    style.iconColorMode === "custom"
+      ? "custom"
+      : tpl.contactIconMode || "primary",
+  );
+  style.contactIconColor = hex(
+    s.contactIconColor,
+    style.iconColorMode === "custom" ? style.iconColor : style.primaryColor,
+  );
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   style.blocks = normalizeBlocks(s.blocks ?? tpl.blocks);
   style.columns = normalizeColumns(s.columns ?? tpl.columns);

@@ -358,11 +358,16 @@ const emailSignatureV2Resolvers = {
                 "iconColorMode",
                 "iconColor",
                 "separatorColor",
+                "contactIconColor",
               ].includes(k) &&
               v !== null &&
               v !== undefined,
           ),
         );
+        // Icônes des coordonnées : une couleur au choix les suit d'un modèle
+        // à l'autre, sinon chaque modèle montre la sienne
+        if (style?.contactIconMode === "custom")
+          colors.contactIconMode = "custom";
         // Vos propres informations dès que la signature a un nom : on
         // choisit un modèle en voyant ce qu'il donne pour soi. Le bandeau et
         // la mention, identiques d'un modèle à l'autre, sont laissés de côté.

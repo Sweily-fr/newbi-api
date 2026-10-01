@@ -432,13 +432,6 @@ export function renderLayout(b, ctx, theme = {}) {
                   attrsFor: (f) =>
                     ctx.markers ? ` data-sig-block="${f}"` : "",
                   tracking: theme.contactTracking || 0,
-                  // Icônes dans la couleur du texte si le modèle le veut
-                  // (une couleur choisie par l'utilisateur l'emporte)
-                  iconColor:
-                    theme.contactIconColor === "text" &&
-                    st.iconColorMode !== "custom"
-                      ? st.textColor
-                      : null,
                 }),
         });
         continue;

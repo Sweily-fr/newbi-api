@@ -125,8 +125,14 @@ export function buildBlocks(ctx) {
   const hasOwnStyle = (part) =>
     Boolean(elements[part] && Object.keys(elements[part]).length > 0);
 
+  // Icônes des coordonnées : leur propre couleur (principale, du texte, ou
+  // au choix), indépendante de celle des réseaux
   const contactIconColor =
-    st.iconColorMode === "custom" ? st.iconColor : st.primaryColor;
+    st.contactIconMode === "custom"
+      ? st.contactIconColor
+      : st.contactIconMode === "text"
+        ? st.textColor
+        : st.primaryColor;
 
   // Style de chaque ligne de coordonnées : celui des coordonnées, sauf
   // réglages propres à la ligne (téléphone, e-mail…)

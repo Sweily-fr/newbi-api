@@ -201,6 +201,9 @@ type SignatureStyleV2 {
   frameBarLength: Int!
   "Taille des icônes des coordonnées, en px (0 : 16 px)."
   contactIconSize: Int!
+  "Couleur des icônes des coordonnées : primary, text ou custom (contactIconColor), indépendante de celle des réseaux."
+  contactIconMode: String!
+  contactIconColor: String!
   """
   Réglages par bloc (name, jobTitle, company, tagline, contact, social,
   photo, logo, accent, cta, banner, disclaimer) et par partie (firstName,
@@ -478,6 +481,8 @@ input SignatureStyleV2Input {
   frameWidth: Int
   frameBarLength: Int
   contactIconSize: Int
+  contactIconMode: String
+  contactIconColor: String
   "Remplace l'ensemble des réglages par bloc (envoyer l'objet complet)."
   blocks: JSON
   columns: JSON
