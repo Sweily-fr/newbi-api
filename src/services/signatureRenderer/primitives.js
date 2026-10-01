@@ -60,6 +60,20 @@ export function hex(value, fallback) {
   return fallback;
 }
 
+/**
+ * Mélange une couleur avec du blanc (`amount` = part de la couleur). Donne
+ * des fonds teintés clairs, calculés une fois : aucun rgba ni transparence,
+ * que Outlook ne comprend pas.
+ */
+export function tint(color, amount) {
+  const c = hex(color, "#000000").slice(1);
+  const mix = (i) =>
+    Math.round(parseInt(c.slice(i, i + 2), 16) * amount + 255 * (1 - amount))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${mix(0)}${mix(2)}${mix(4)}`;
+}
+
 export const TABLE_STYLE =
   "border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;";
 
@@ -77,9 +91,68 @@ export function td(inner, { attrs = "", style = "" } = {}) {
 
 export function textStyle({ font, size, color, weight = "normal", italic }) {
   const lineHeight = Math.round(size * 1.4);
-  return `font-family:${font};font-size:${size}px;line-height:${lineHeight}px;color:${color};font-weight:${weight};${
-    italic ? "font-style:italic;" : ""
-  }`;
+  // font-weight:normal est la valeur par défaut : l'omettre allège le HTML
+  // (limite Gmail de 10 000 caractères)
+  return `font-family:${font};font-size:${size}px;line-height:${lineHeight}px;color:${color};${
+    weight !== "normal" ? `font-weight:${weight};` : ""
+  }${italic ? "font-style:italic;" : ""}`;
+}
+
+/**
+ * Largeur naturelle estimée d'un contenu (sa plus longue ligne), d'après
+ * la taille, l'espacement et la casse de son texte. Sert seulement à
+ * Outlook sur Windows, qui ignore max-width.
+ */
+export function naturalWidth(html) {
+  const max = (re) =>
+    Math.max(0, ...[...html.matchAll(re)].map((m) => Number(m[1]) || 0));
+  const size = max(/font-size:(\d+)px/g) || 13;
+  const tracking = max(/letter-spacing:([\d.]+)px/g);
+  // Capitales, gras, polices larges (Verdana, Tahoma) : plus larges
+  const perChar =
+    size *
+      (/text-transform:uppercase/.test(html) ? 0.7 : 0.6) *
+      (/font-weight:bold/.test(html) ? 1.1 : 1) *
+      (/Verdana|Tahoma/.test(html) ? 1.1 : 1) +
+    tracking;
+  const chars = Math.max(
+    0,
+    ...html.split(/<\/tr>|<\/div>|<br\s*\/?>/i).map(
+      (line) =>
+        line
+          .replace(/<[^>]+>/g, "")
+          .replace(/&[a-z0-9#]+;/gi, "x")
+          .trim().length,
+    ),
+  );
+  // Images : une icône (≤ 40 px) précède son texte, une grande image
+  // (photo, logo) compte pour sa largeur
+  const images = [...html.matchAll(/<img[^>]*?\swidth="(\d+)"/g)].map(
+    (m) => Number(m[1]) || 0,
+  );
+  const icon = Math.max(0, ...images.filter((w) => w <= 40));
+  const text = Math.ceil(chars * perChar + (icon ? icon + 8 : 0));
+  return Math.max(text, ...images.filter((w) => w > 40));
+}
+
+/**
+ * Largeur choisie pour un texte : il revient à la ligne à cette largeur
+ * sans jamais occuper plus que son contenu.
+ * - Texte plus long que la largeur (estimation) : tableau de cette largeur,
+ *   compris partout, Outlook compris, et qui survit à Gmail (qui retire
+ *   les commentaires conditionnels) ; le texte le remplit de toute façon.
+ * - Texte plus court : boîte ajustée au texte et bornée (inline-block +
+ *   max-width), placée par l'alignement de sa ligne ; il tient déjà.
+ * `mark` : repère d'aperçu (data-sig-wrap), pour régler la largeur à la
+ * souris sur la même boîte.
+ */
+export function wrapAt(html, width, align = "left", mark = false) {
+  const m = mark ? ` data-sig-wrap="${width}"` : "";
+  if (naturalWidth(html) <= width) {
+    return `<div${m} style="display:inline-block;max-width:${width}px;vertical-align:top;">${html}</div>`;
+  }
+  const a = align && align !== "left" ? ` align="${align}"` : "";
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${m}${a} width="${width}" style="${TABLE_STYLE}width:${width}px;max-width:100%;"><tr><td${a}>${html}</td></tr></table>`;
 }
 
 export const span = (text, style) =>
@@ -90,11 +163,13 @@ export const span = (text, style) =>
  * inconnu) : on garde alors une hauteur automatique.
  */
 export function img({ src, width, height, alt = "", style = "" }) {
+  // Dimensions par attributs width / height, compris par tous les clients ;
+  // pas de doublon en CSS (limite Gmail de 10 000 caractères)
   const h = height ? ` height="${height}"` : "";
-  const hs = height ? `height:${height}px;` : "height:auto;";
+  const hs = height ? "" : "height:auto;";
   return `<img src="${escAttr(src)}" width="${width}"${h} alt="${escAttr(
     alt,
-  )}" style="display:block;border:0;width:${width}px;${hs}${style}" />`;
+  )}" style="display:block;border:0;${hs}${style}" />`;
 }
 
 export function link(href, inner, { color } = {}) {
@@ -104,46 +179,120 @@ export function link(href, inner, { color } = {}) {
 /** Cellule « pleine » de 1px : garde une hauteur/largeur dans Outlook et Gmail. */
 const filler = "font-size:1px;line-height:1px;";
 
-export function spacerRow(height) {
-  return `<tr><td height="${height}" style="height:${height}px;${filler}">&nbsp;</td></tr>`;
+/**
+ * Trait plein d'une taille donnée : une cellule colorée (horizontal ou
+ * vertical selon largeur et hauteur), seule forme fiable dans Outlook.
+ */
+export function bar({ width, height, color, align = "left" }) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${align === "center" ? ' align="center"' : ""} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;"><tr><td width="${width}" height="${height}" bgcolor="${color}" style="width:${width}px;height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
 }
 
-/** Trait horizontal sur toute la largeur du conteneur. */
-export function hsep(color, { height = 1 } = {}) {
-  return table(
-    tr(
-      td("&nbsp;", {
-        attrs: `height="${height}" bgcolor="${color}"`,
-        style: `height:${height}px;background-color:${color};${filler}`,
-      }),
-    ),
-    { attrs: 'width="100%"', style: "width:100%;" },
-  );
-}
-
-/** Trait vertical, à insérer comme cellule entre deux colonnes. */
-export function vsepCell(color, { width = 1, gap = 12 } = {}) {
-  const spacer = `<td width="${gap}" style="width:${gap}px;${filler}">&nbsp;</td>`;
-  return `${spacer}<td width="${width}" bgcolor="${color}" style="width:${width}px;background-color:${color};${filler}">&nbsp;</td>${spacer}`;
+/**
+ * Séparateur vertical entre deux colonnes. `sep` : une couleur, ou
+ * { color, width, length, valign } ; sans longueur, il suit la hauteur de
+ * la rangée, sinon c'est un trait de `length` px aligné selon `valign`.
+ */
+export function vsepCell(sep, { width = 1, gap = 12 } = {}) {
+  const spec = typeof sep === "string" ? { color: sep } : sep;
+  const w = spec.width || width;
+  // Marges choisies de chaque côté (écart ajouté ou retiré) ; écart nul :
+  // le trait seul, collé à son voisin (colonne teintée)
+  const spacer = (g) =>
+    g > 0 ? `<td width="${g}" style="width:${g}px;${filler}">&nbsp;</td>` : "";
+  const left = spacer(Math.max(0, gap + (spec.offsetLeft || 0)));
+  const right = spacer(Math.max(0, gap + (spec.offsetRight || 0)));
+  // Repère d'aperçu : le trait se sélectionne comme un élément
+  const mark = spec.mark ? ' data-sig-block="divider"' : "";
+  if (spec.length) {
+    return `${left}<td${mark} valign="${spec.valign || "middle"}" width="${w}" style="width:${w}px;">${bar({ width: w, height: spec.length, color: spec.color })}</td>${right}`;
+  }
+  return `${left}<td${mark} width="${w}" bgcolor="${spec.color}" style="width:${w}px;background-color:${spec.color};${filler}">&nbsp;</td>${right}`;
 }
 
 /**
  * Empile des lignes de contenu. Chaque ligne est du HTML déjà rendu.
  * `gap` : espace entre lignes. `align` : alignement du texte.
  */
-export function vstack(rows, { gap = 0, align = "left" } = {}) {
-  const items = rows.filter(Boolean);
+/**
+ * Comme vstack, avec un espace propre à chaque ligne : `rows` =
+ * [{ html, after, align }], `after` = espace sous la ligne, `align` =
+ * alignement propre à la ligne (sinon celui de la pile). `full` : la pile
+ * occupe toute la largeur de son conteneur.
+ */
+export function stackRows(rows, { align = "left", full = false } = {}) {
+  const items = rows.filter((r) => r && r.html);
   if (items.length === 0) return "";
-  if (items.length === 1 && align === "left") return items[0];
-  const alignAttr = align === "center" ? ' align="center"' : "";
-  const alignStyle = align === "center" ? "text-align:center;" : "";
+  if (
+    items.length === 1 &&
+    align === "left" &&
+    !full &&
+    (items[0].align || "left") === "left"
+  ) {
+    return items[0].html;
+  }
+  const alignAttr = align === "left" ? "" : ` align="${align}"`;
   const rowsHtml = items
     .map((row, i) => {
       const last = i === items.length - 1;
-      return `<tr><td${alignAttr} style="${alignStyle}padding:0 0 ${last ? 0 : gap}px 0;">${row}</td></tr>`;
+      const pad = last || !row.after ? "" : `padding:0 0 ${row.after}px 0;`;
+      // Alignement par l'attribut seul, qui place aussi les tableaux et les
+      // images de la ligne (un text-align en style l'emporterait sur lui)
+      const attr = row.align ? ` align="${row.align}"` : alignAttr;
+      const style = pad;
+      return `<tr><td${attr}${style ? ` style="${style}"` : ""}>${row.html}</td></tr>`;
     })
     .join("");
-  return table(rowsHtml);
+  return table(rowsHtml, {
+    attrs: [
+      align === "left" ? "" : `align="${align}"`,
+      full ? 'width="100%"' : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    style: full ? "width:100%;" : "",
+  });
+}
+
+/**
+ * Répartit des éléments en lignes : `plan` donne le nombre d'éléments de
+ * chaque ligne, de haut en bas, et sa dernière valeur vaut pour les lignes
+ * suivantes ([2, 3] : 2 puis 3 par ligne ; [1] : une colonne). Plan vide :
+ * une seule ligne.
+ */
+export function splitRows(items, plan = []) {
+  if (!plan?.length) return [items];
+  const rows = [];
+  for (let i = 0, r = 0; i < items.length; r += 1) {
+    const n = plan[Math.min(r, plan.length - 1)];
+    rows.push(items.slice(i, i + n));
+    i += n;
+  }
+  return rows;
+}
+
+export function vstack(rows, { gap = 0, align = "left", full = false } = {}) {
+  const items = rows.filter(Boolean);
+  if (items.length === 0) return "";
+  if (items.length === 1 && align === "left" && !full) return items[0];
+  const aligned = align === "center" || align === "right";
+  // Attribut seul : il place aussi les tableaux et images de la ligne
+  const alignAttr = aligned ? ` align="${align}"` : "";
+  const rowsHtml = items
+    .map((row, i) => {
+      const last = i === items.length - 1;
+      const pad = last || !gap ? "" : `padding:0 0 ${gap}px 0;`;
+      const style = pad;
+      return `<tr><td${alignAttr}${style ? ` style="${style}"` : ""}>${row}</td></tr>`;
+    })
+    .join("");
+  // La table elle-même est alignée par attribut : text-align ne place pas
+  // une table imbriquée, et Outlook ignore margin:auto.
+  return table(rowsHtml, {
+    attrs: [aligned ? `align="${align}"` : "", full ? 'width="100%"' : ""]
+      .filter(Boolean)
+      .join(" "),
+    style: full ? "width:100%;" : "",
+  });
 }
 
 /**
@@ -153,7 +302,7 @@ export function vstack(rows, { gap = 0, align = "left" } = {}) {
  */
 export function hstack(
   cells,
-  { gap = 16, valign = "top", separator = null } = {},
+  { gap = 16, valign = "top", separator = null, full = false } = {},
 ) {
   const items = cells.filter((c) => c && c.html);
   if (items.length === 0) return "";
@@ -164,13 +313,19 @@ export function hstack(
       const width = cell.width ? ` width="${cell.width}"` : "";
       const widthStyle = cell.width ? `width:${cell.width}px;` : "";
       const pad = last || separator ? 0 : gap;
-      const cellHtml = `<td valign="${v}"${width} style="vertical-align:${v};${widthStyle}padding:0 ${pad}px 0 0;">${cell.html}</td>`;
+      const cellStyle = `${widthStyle}${pad ? `padding:0 ${pad}px 0 0;` : ""}`;
+      const cellHtml = `<td${cell.attrs || ""} valign="${v}"${width}${cellStyle ? ` style="${cellStyle}"` : ""}>${cell.html}</td>`;
       return last || !separator
         ? cellHtml
         : cellHtml + vsepCell(separator, { gap });
     })
     .join("");
-  return table(tr(cellsHtml));
+  // `full` : toute la largeur de son conteneur (largeur de signature
+  // choisie) ; une cellule de largeur donnée garde la sienne
+  return table(
+    tr(cellsHtml),
+    full ? { attrs: 'width="100%"', style: "width:100%;" } : {},
+  );
 }
 
 /**
@@ -183,22 +338,28 @@ export function iconLines(
 ) {
   const items = lines.filter((l) => l && l.contentHtml);
   if (items.length === 0) return "";
+  // `attrs` : repère d'aperçu d'une ligne (glisser-déposer), jamais copié
+  const wrap = (l, html) => (l.attrs ? `<div${l.attrs}>${html}</div>` : html);
   const withIcons = items.some((l) => l.iconHtml);
   if (!withIcons) {
     return vstack(
-      items.map((l) => l.contentHtml),
+      items.map((l) => wrap(l, l.contentHtml)),
       { gap, align },
     );
   }
+  // Centré avec icônes (ou initiales) : le bloc entier est centré, les
+  // lignes restent alignées à gauche pour que les icônes forment une
+  // colonne (des lignes centrées une à une feraient un zigzag)
   const rows = items
     .map((l, i) => {
       const pad = i === items.length - 1 ? 0 : gap;
-      return `<tr><td valign="middle" style="vertical-align:middle;padding:0 ${iconGap}px ${pad}px 0;font-size:0;line-height:0;">${
+      // Ligne qui revient à la ligne (largeur propre) : icône en haut
+      return `<tr${l.attrs || ""}><td valign="${l.valign || "middle"}" style="padding:0 ${iconGap}px ${pad}px 0;font-size:0;line-height:0;">${
         l.iconHtml || ""
-      }</td><td valign="middle" style="vertical-align:middle;text-align:left;padding:0 0 ${pad}px 0;">${l.contentHtml}</td></tr>`;
+      }</td><td valign="middle" style="text-align:left;${pad ? `padding:0 0 ${pad}px 0;` : ""}">${l.contentHtml}</td></tr>`;
     })
     .join("");
-  return table(rows, { attrs: align === "center" ? 'align="center"' : "" });
+  return table(rows, { attrs: align === "left" ? "" : `align="${align}"` });
 }
 
 /**
@@ -219,7 +380,7 @@ export function iconRow(items, { size, gap = 8, align = "left" } = {}) {
       const inner = item.href
         ? link(item.href, image, { color: "#000000" })
         : image;
-      return `<td valign="middle" style="vertical-align:middle;padding:0 ${last ? 0 : gap}px 0 0;">${inner}</td>`;
+      return `<td valign="middle"${last ? "" : ` style="padding:0 ${gap}px 0 0;"`}>${inner}</td>`;
     })
     .join("");
   if (!cells) return "";
@@ -230,24 +391,37 @@ export function iconRow(items, { size, gap = 8, align = "left" } = {}) {
  * Photo : VML pour Outlook bureau (qui ignore border-radius), <img> arrondie
  * partout ailleurs. La photo est servie déjà recadrée en carré.
  */
-export function photo({ src, size, shape = "circle", alt = "Photo" }) {
+export function photo({
+  src,
+  size,
+  shape = "circle",
+  alt = "Photo",
+  border = 0,
+  borderColor = "#ffffff",
+}) {
   const radius =
     shape === "circle"
       ? "50%"
       : shape === "rounded"
         ? `${Math.round(size * 0.15)}px`
         : "0";
+  // Contour : bordure de l'image (arrondie avec elle), trait VML pour Outlook
+  const ring = border > 0 ? `border:${border}px solid ${borderColor};` : "";
   const image = img({
     src,
     width: size,
     height: size,
     alt,
-    style: shape === "square" ? "" : `border-radius:${radius};`,
+    style: `${shape === "square" ? "" : `border-radius:${radius};`}${ring}`,
   });
   if (shape === "square") return image;
   const arcsize = shape === "circle" ? "50%" : "15%";
+  const stroke =
+    border > 0
+      ? `stroked="t" strokecolor="${borderColor}" strokeweight="${border}px"`
+      : 'stroked="f"';
   return (
-    `<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="width:${size}px;height:${size}px;" arcsize="${arcsize}" stroked="f"><v:fill type="frame" src="${escAttr(
+    `<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="width:${size}px;height:${size}px;" arcsize="${arcsize}" ${stroke}><v:fill type="frame" src="${escAttr(
       src,
     )}" /><w:anchorlock/></v:roundrect><![endif]-->` +
     `<!--[if !mso]><!-->${image}<!--<![endif]-->`
@@ -263,13 +437,21 @@ export function button({
   font,
   size = 13,
   radius = 6,
+  bold = true,
+  italic = false,
+  uppercase = false,
+  labelHtml,
+  width = 0,
 }) {
+  // Marges proportionnelles à la taille du texte : 8×18 px à 13 px
+  const py = Math.max(4, Math.round(size * 0.6));
+  const px = Math.max(10, Math.round(size * 1.4));
   const inner = `<a href="${escAttr(href)}" style="display:inline-block;font-family:${font};font-size:${size}px;line-height:${Math.round(
     size * 1.4,
-  )}px;font-weight:bold;color:${color};text-decoration:none;padding:8px 18px;">${esc(label)}</a>`;
+  )}px;font-weight:${bold ? "bold" : "normal"};${italic ? "font-style:italic;" : ""}${uppercase ? "text-transform:uppercase;" : ""}color:${color};text-decoration:none;padding:${py}px ${px}px;">${labelHtml ?? esc(label)}</a>`;
   return table(
     tr(
-      `<td align="center" bgcolor="${background}" style="background-color:${background};border-radius:${radius}px;mso-padding-alt:8px 18px;">${inner}</td>`,
+      `<td align="center"${width ? ` width="${width}"` : ""} bgcolor="${background}" style="${width ? `width:${width}px;` : ""}background-color:${background};border-radius:${radius}px;mso-padding-alt:${py}px ${px}px;">${inner}</td>`,
     ),
   );
 }

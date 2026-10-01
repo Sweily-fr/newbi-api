@@ -11,17 +11,35 @@ export const SCHEMA_VERSION = 2;
 /** Limite du champ « signature » de Gmail (caractères HTML). */
 export const GMAIL_MAX_CHARS = 10000;
 
-/** Ordre = ordre de la galerie. Le premier est le modèle par défaut. */
+/**
+ * Tous les modèles connus du générateur. Le premier est le modèle par
+ * défaut (signature sans modèle valide) ; la galerie est GALLERY_TEMPLATE_IDS.
+ */
 export const TEMPLATE_IDS = [
   "modern",
+  "header",
+  "framed",
   "card",
+  "split",
+  "editorial",
   "elegant",
   "classic",
   "bold",
   "centered",
   "line",
+  "epure",
+  "newbi",
 ];
 export const DEFAULT_TEMPLATE_ID = TEMPLATE_IDS[0];
+
+/**
+ * Modèles proposés dans la galerie de l'éditeur (le premier est celui des
+ * nouvelles signatures). Les autres restent rendus tels quels pour les
+ * signatures qui les utilisent : le 01/10/2026, l'utilisateur a fait de sa
+ * propre composition (« Newbi ») le seul modèle proposé « pour le moment ».
+ * Les modèles enregistrés par l'espace s'y ajoutent.
+ */
+export const GALLERY_TEMPLATE_IDS = ["newbi"];
 
 /**
  * Polices « web safe » : ce sont les seules qui s'affichent à l'identique
@@ -55,8 +73,114 @@ export const FONT_LABELS = {
 export const PHOTO_SHAPES = ["circle", "rounded", "square"];
 export const ICON_STYLES = ["circle", "rounded", "square", "plain"];
 export const ICON_COLOR_MODES = ["brand", "primary", "custom"];
+/** Couleur des icônes des coordonnées, indépendante de celle des réseaux. */
+export const CONTACT_ICON_MODES = ["primary", "text", "custom"];
 export const SPACINGS = ["compact", "normal", "airy"];
 export const ALIGNMENTS = ["left", "center"];
+
+/**
+ * Encadré de la signature entière : aucun, contour fin, fond teinté, barre
+ * d'accent à gauche ou en haut. Uniquement des bordures et fonds de
+ * cellule : compris par Gmail, Outlook et Apple Mail.
+ */
+export const FRAMES = ["none", "outline", "soft", "accent-left", "accent-top"];
+
+/**
+ * Mise en page, réglage par réglage. Chaque modèle fournit ses valeurs de
+ * départ ; l'utilisateur peut ensuite tout changer.
+ */
+export const LAYOUT_CHOICES = {
+  // Bloc de couleur portant l'identité : aucun, en-tête, à gauche
+  identityZone: ["plain", "band-top", "band-left"],
+  photoPosition: ["left", "right", "top"],
+  photoValign: ["top", "middle", "bottom"],
+  // Colonne de la photo : simple ou sur fond teinté
+  photoColumn: ["plain", "tinted"],
+  // Séparateur entre photo et texte : aucun, trait fin, trait de couleur, barre
+  divider: ["none", "line", "accent", "bar"],
+  // Trait sous l'identité : aucun, court et épais, long et fin
+  accent: ["none", "short", "thin"],
+  identityStyle: ["stack", "inline"],
+  titleStyle: ["normal", "caps"],
+  contactStyle: ["icons", "labels", "plain", "inline"],
+  // Réseaux / logo : sous le texte, sous la photo, à droite, en bas
+  socialPosition: ["text", "photo", "side", "bottom"],
+  logoPosition: ["text", "photo", "side", "bottom"],
+};
+
+/**
+ * Ordre de la colonne de texte (de haut en bas). Le trait d'accent suit
+ * toujours l'identité ; réseaux et logo n'y figurent que placés « sous le
+ * texte ».
+ */
+export const TEXT_BLOCKS = ["identity", "contact", "social", "logo"];
+
+/**
+ * Mise en page par emplacements : chaque élément de la signature se place
+ * dans un emplacement, dans l'ordre voulu. Les emplacements sont une
+ * structure fixe en tables (compatible Gmail / Outlook) :
+ *   header  : bandeau en tête (photo à côté du reste)
+ *   visual  : colonne de la photo (à gauche ou à droite)
+ *   text    : colonne principale
+ *   side    : colonne de droite
+ *   footer  : bas du cadre, pleine largeur
+ *   outside : sous le cadre
+ */
+export const SLOTS = ["header", "visual", "text", "side", "footer", "outside"];
+// Prénom et nom sont deux éléments : côte à côte, ils forment une ligne
+export const IDENTITY_ITEMS = [
+  "firstName",
+  "lastName",
+  "title",
+  "company",
+  "tagline",
+];
+// Prénom et nom côte à côte : sur une ligne ou l'un sous l'autre
+export const NAME_LAYOUTS = ["inline", "stacked"];
+export const CONTACT_ITEMS = ["phone", "mobile", "email", "website", "address"];
+export const ITEMS = [
+  "photo",
+  ...IDENTITY_ITEMS,
+  "accent",
+  ...CONTACT_ITEMS,
+  "social",
+  "logo",
+  "cta",
+  "banner",
+  "disclaimer",
+  // Traits libres, placés où l'on veut (présents s'ils sont réglés)
+  "rule1",
+  "rule2",
+  "rule3",
+];
+/** Traits libres : jusqu'à trois, chacun sa longueur, son épaisseur, sa couleur. */
+export const RULE_ITEMS = ["rule1", "rule2", "rule3"];
+export const RULE_COLORS = ["separator", "primary", "text"];
+export const VISUAL_SIDES = ["left", "right"];
+// Fond de la colonne photo : aucun, teinté, couleur principale (texte blanc)
+export const VISUAL_FILLS = ["none", "tint", "solid"];
+// Place de la photo dans le bandeau
+export const HEADER_PHOTOS = ["left", "right", "top"];
+export const HEADER_FILLS = ["solid", "tint"];
+
+/** Éléments qu'on peut sortir de l'encadré. */
+export const OUTSIDE_ITEMS = ["social", "logo", "cta", "banner", "disclaimer"];
+
+export const DEFAULT_LAYOUT = {
+  identityZone: "plain",
+  photoPosition: "left",
+  photoValign: "middle",
+  photoColumn: "plain",
+  divider: "none",
+  accent: "short",
+  identityStyle: "stack",
+  titleStyle: "normal",
+  contactStyle: "icons",
+  socialPosition: "text",
+  logoPosition: "bottom",
+  footerStrip: false,
+  outside: [],
+};
 
 /** Espacements en pixels : entre lignes d'un bloc, entre blocs, entre colonnes. */
 export const SPACING = {
@@ -177,7 +301,7 @@ export const DEFAULT_STYLE = {
   mutedColor: "#5f6368",
   photoShape: "circle",
   photoSize: 84,
-  logoWidth: 120,
+  logoWidth: 100,
   iconStyle: "rounded",
   iconColorMode: "primary",
   iconColor: "#5a50ff",
@@ -186,9 +310,89 @@ export const DEFAULT_STYLE = {
   separatorColor: "#e0e0e0",
   spacing: "normal",
   align: "left",
+  frame: "none",
+  frameColor: "",
+  radius: 12,
+  photoBorder: 0,
+  photoBorderColor: "",
 };
 
 export const IMAGE_KINDS = ["PHOTO", "LOGO", "BANNER"];
+
+/**
+ * Éléments de texte dont la mise en forme se règle individuellement (clic
+ * sur l'élément dans l'aperçu). Sans réglage, l'élément suit le modèle.
+ */
+/**
+ * Blocs réglables un à un (largeur, espace au-dessus et en dessous,
+ * alignement) : un par panneau d'élément de l'éditeur. Le nom couvre le
+ * prénom et le nom, « contact » toutes les coordonnées.
+ */
+export const BLOCK_KEYS = [
+  "name",
+  "jobTitle",
+  "company",
+  "tagline",
+  "contact",
+  "social",
+  "photo",
+  "logo",
+  "accent",
+  "cta",
+  "banner",
+  "disclaimer",
+  // Parties réglables seules : largeur d'une ligne de coordonnées, du
+  // prénom ou du nom seul sur sa ligne ; espaces et alignement d'une
+  // partie placée à part du reste de son élément
+  "firstName",
+  "lastName",
+  "phone",
+  "mobile",
+  "email",
+  "website",
+  "address",
+  // Traits libres : espaces et alignement
+  "rule1",
+  "rule2",
+  "rule3",
+];
+export const BLOCK_ALIGNS = ["left", "center", "right"];
+
+export const TEXT_ELEMENTS = [
+  "name",
+  // Réglages propres au prénom / au nom, par-dessus ceux du nom complet
+  "firstName",
+  "lastName",
+  "jobTitle",
+  "company",
+  "tagline",
+  "contact",
+  // Réglages propres à une ligne de coordonnées, par-dessus ceux de toutes
+  "phone",
+  "mobile",
+  "email",
+  "website",
+  "address",
+  "cta",
+  "disclaimer",
+];
+
+/** Bornes de taille d'un élément de texte réglé à la main. */
+export const ELEMENT_FONT_SIZE = { min: 9, max: 36 };
+
+/** Hauteur maximale d'un logo dans la signature (la largeur suit le ratio). */
+export const LOGO_MAX_HEIGHT = 48;
+
+/**
+ * Largeur de logo au-delà de laquelle ce plafond grandit d'autant : il ne
+ * bride que les tailles courantes (120 px = largeur des signatures migrées),
+ * un logo agrandi dans l'éditeur grandit vraiment. Même valeur dans
+ * l'aperçu de l'éditeur (NewbiV2, HtmlFrame : logoFit).
+ */
+export const LOGO_CAP_WIDTH = 120;
+
+/** Taille des icônes des coordonnées, sauf réglage. */
+export const CONTACT_ICON_SIZE = 16;
 
 /** Taille des icônes générées sur R2 (affichées jusqu'à 64px en retina). */
 export const ICON_PNG_SIZE = 128;

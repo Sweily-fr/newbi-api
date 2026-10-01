@@ -8,6 +8,7 @@
  */
 
 import EmailSignatureV2 from "../models/EmailSignatureV2.js";
+import EmailSignatureTemplateV2 from "../models/EmailSignatureTemplateV2.js";
 import {
   requireDelete,
   requireRead,
@@ -15,10 +16,12 @@ import {
 } from "../middlewares/rbac.js";
 import {
   createAlreadyExistsError,
+  createInternalServerError,
   createNotFoundError,
   createValidationError,
 } from "../utils/errors.js";
 import logger from "../utils/logger.js";
+import { sendSignatureTestEmail } from "../utils/mailer.js";
 import {
   listTemplates,
   normalizeSignature,
@@ -32,20 +35,33 @@ import {
   FONT_LABELS,
   GMAIL_MAX_CHARS,
   SOCIAL_NETWORKS,
-  DEFAULT_TEMPLATE_ID,
+  GALLERY_TEMPLATE_IDS,
 } from "../services/signatureRenderer/constants.js";
 import {
   deleteSignatureImages,
   ensureIcons,
   ensureSamplePhoto,
+  importSignatureImage,
   storeSignatureImage,
 } from "../services/signatureAssets.js";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  isWorkspaceMember,
+  listWorkspaceMembers,
+  memberSignatureProfile,
+} from "../services/signatureProfile.js";
+
+/** Un e-mail de test au plus toutes les 20 secondes par utilisateur. */
+const TEST_COOLDOWN_MS = 20_000;
+const lastTestSent = new Map();
 
 const scope = (ctx) => ({
   createdBy: ctx.user.id,
   workspaceId: ctx.workspaceId,
 });
+
+/** Modèles enregistrés : visibles de tout l'espace. */
+const templateScope = (ctx) => ({ workspaceId: ctx.workspaceId });
 
 const plain = (value) =>
   value && typeof value.toObject === "function"
@@ -53,6 +69,72 @@ const plain = (value) =>
     : value
       ? JSON.parse(JSON.stringify(value))
       : {};
+
+/**
+ * Photo de la personne de la signature : importée et recadrée comme un
+ * envoi, ou retirée si la personne n'en a pas. Un échec d'import ne bloque
+ * jamais l'enregistrement (la signature reste utilisable sans photo).
+ */
+async function setPersonPhoto(doc, url, ctx) {
+  if (!url) {
+    if (!doc.images?.photo) return;
+    try {
+      await cloudflareService.deleteSignatureFolder(
+        String(ctx.user.id),
+        String(doc._id),
+        "imgProfil",
+      );
+    } catch (error) {
+      logger.warn(
+        `[signatures v2] suppression photo ignorée : ${error.message}`,
+      );
+    }
+    doc.images.photo = null;
+    doc.markModified("images");
+    await doc.save();
+    return;
+  }
+  try {
+    doc.images.photo = await importSignatureImage({
+      url,
+      kind: "PHOTO",
+      userId: ctx.user.id,
+      signatureId: doc._id,
+      options: { size: doc.style?.photoSize || 84 },
+    });
+    doc.markModified("images");
+    await doc.save();
+  } catch (error) {
+    logger.warn(
+      `[signatures v2] photo de profil non importée : ${error.message}`,
+    );
+  }
+}
+
+/** Personne choisie : soi-même par défaut, sinon un membre de l'espace. */
+async function resolvePerson(memberUserId, ctx) {
+  const userId = memberUserId ? String(memberUserId) : String(ctx.user.id);
+  if (
+    userId !== String(ctx.user.id) &&
+    !(await isWorkspaceMember(userId, ctx.workspaceId))
+  ) {
+    throw createValidationError(
+      "Cette personne ne fait pas partie de l'espace",
+    );
+  }
+  return {
+    userId,
+    profile: await memberSignatureProfile(userId, ctx.workspaceId),
+  };
+}
+
+/** Garde les valeurs renseignées d'un groupe (identity, contact…). */
+const filled = (obj) =>
+  Object.fromEntries(
+    Object.entries(obj || {}).filter(
+      ([, v]) => v !== undefined && v !== null && v !== "",
+    ),
+  );
 
 async function findOwned(id, ctx) {
   const doc = await EmailSignatureV2.findOne({ _id: id, ...scope(ctx) });
@@ -173,7 +255,43 @@ async function readUpload(file) {
   return { buffer: Buffer.concat(chunks), filename };
 }
 
+/**
+ * Réglages de départ complets d'un modèle, emplacements compris : choisir
+ * un modèle remet chaque élément à sa place dans ce modèle.
+ */
+function templateDefaults(t) {
+  const st = normalizeSignature({
+    templateId: t.id,
+    style: t.preset,
+    images: { photo: { url: "https://exemple.invalid/photo.jpg" } },
+  }).style;
+  return {
+    ...t.preset,
+    slots: st.slots,
+    visualSide: st.visualSide,
+    visualFill: st.visualFill,
+    headerPhoto: st.headerPhoto,
+    headerFill: st.headerFill,
+  };
+}
+
 const emailSignatureV2Resolvers = {
+  // Mongoose retire les objets vides : on garantit la présence du champ
+  SignatureStyleV2: {
+    elements: (st) => st?.elements || {},
+    rules: (st) => st?.rules || {},
+    dividerSpace: (st) => st?.dividerSpace || {},
+  },
+
+  SignatureSavedTemplateV2: {
+    id: (t) => String(t._id ?? t.id),
+    // Style tel que le générateur le comprend aujourd'hui (réglage apparu
+    // depuis l'enregistrement : valeur du modèle de base)
+    style: (t) =>
+      normalizeSignature({ templateId: t.templateId, style: t.style }).style,
+    mine: (t, _, ctx) => String(t.createdBy) === String(ctx.user?.id),
+  },
+
   EmailSignatureV2: {
     id: (doc) => String(doc._id ?? doc.id),
     images: (doc) => ({
@@ -182,6 +300,9 @@ const emailSignatureV2Resolvers = {
       banner: doc.images?.banner || null,
     }),
     social: (doc) => doc.social || [],
+    // Style effectif : réglages absents = valeurs du modèle, pour que
+    // l'éditeur affiche la mise en page réellement rendue
+    style: (doc) => normalizeSignature(plain(doc)).style,
     render: async (doc) => {
       const data = plain(doc);
       await ensureIconsSoon(data);
@@ -198,8 +319,26 @@ const emailSignatureV2Resolvers = {
       EmailSignatureV2.findOne({ _id: id, ...scope(ctx) }),
     ),
 
+    emailSignatureTemplatesV2: requireRead("signatures")(async (_, __, ctx) =>
+      EmailSignatureTemplateV2.find(templateScope(ctx))
+        .sort({ updatedAt: -1 })
+        .lean(),
+    ),
+
+    signatureMembersV2: requireRead("signatures")(async (_, __, ctx) => {
+      const members = await listWorkspaceMembers(ctx.workspaceId);
+      return members.map((m) => ({
+        ...m,
+        isMe: m.userId === String(ctx.user.id),
+      }));
+    }),
+
     signatureCatalogV2: requireRead("signatures")(async () => ({
-      templates: listTemplates(),
+      templates: listTemplates().map((t) => ({
+        ...t,
+        defaults: templateDefaults(t),
+        inGallery: GALLERY_TEMPLATE_IDS.includes(t.id),
+      })),
       networks: Object.entries(SOCIAL_NETWORKS).map(([id, n]) => ({
         id,
         label: n.label,
@@ -225,28 +364,41 @@ const emailSignatureV2Resolvers = {
     ),
 
     renderSignatureTemplateV2: requireRead("signatures")(
-      async (_, { templateId, style }) => {
+      async (_, { templateId, style, id }, ctx) => {
         await ensureSamplePhoto();
-        // Vignette = typographie du modèle + couleurs de l'utilisateur
+        // Vignette = le modèle tel qu'il s'appliquera : sa mise en page, ses
+        // finitions et sa palette s'il en a une (Newbi), sinon les couleurs
+        // principales de l'utilisateur
         const colors = Object.fromEntries(
           Object.entries(style || {}).filter(
             ([k, v]) =>
-              [
-                "primaryColor",
-                "textColor",
-                "mutedColor",
-                "iconColorMode",
-                "iconColor",
-                "separatorColor",
-              ].includes(k) &&
+              ["primaryColor", "textColor", "mutedColor"].includes(k) &&
               v !== null &&
               v !== undefined,
           ),
         );
+        // Vos propres informations dès que la signature a un nom : on
+        // choisit un modèle en voyant ce qu'il donne pour soi. Le bandeau et
+        // la mention, identiques d'un modèle à l'autre, sont laissés de côté.
+        let content = SAMPLE_SIGNATURE;
+        if (id) {
+          const own = plain(await findOwned(id, ctx));
+          if (own.identity?.firstName || own.identity?.lastName) {
+            content = {
+              identity: own.identity,
+              contact: own.contact,
+              social: own.social,
+              images: own.images,
+              cta: own.cta,
+              banner: { enabled: false },
+              disclaimer: { enabled: false },
+            };
+          }
+        }
         const data = {
-          ...SAMPLE_SIGNATURE,
+          ...content,
           templateId,
-          style: { ...templatePreset(templateId), ...colors },
+          style: { ...colors, ...templatePreset(templateId) },
         };
         await ensureIconsSoon(data);
         const result = renderSignature(data);
@@ -256,23 +408,118 @@ const emailSignatureV2Resolvers = {
   },
 
   Mutation: {
+    sendEmailSignatureV2Test: requireRead("signatures")(
+      async (_, { id }, ctx) => {
+        const email = ctx.user?.email;
+        if (!email) {
+          throw createValidationError(
+            "Aucune adresse e-mail n'est associée à votre compte.",
+          );
+        }
+        const userId = String(ctx.user.id);
+        if (Date.now() - (lastTestSent.get(userId) || 0) < TEST_COOLDOWN_MS) {
+          throw createValidationError(
+            "Un e-mail de test vient d'être envoyé : patientez quelques secondes.",
+          );
+        }
+        const data = plain(await findOwned(id, ctx));
+        // Les icônes doivent exister avant l'envoi (générées à la demande)
+        const specs = requiredIcons(data);
+        if (specs.length > 0) {
+          await ensureIcons(specs).catch((error) =>
+            logger.warn(`[signatures v2] ensureIcons : ${error.message}`),
+          );
+        }
+        const { html, text } = renderSignature(data);
+        if (!html) {
+          throw createValidationError(
+            "La signature est vide : ajoutez au moins votre nom.",
+          );
+        }
+        lastTestSent.set(userId, Date.now());
+        const sent = await sendSignatureTestEmail(email, {
+          signatureHtml: html,
+          signatureText: text,
+          signatureName: data.name || "Ma signature",
+        });
+        if (!sent) {
+          lastTestSent.delete(userId);
+          throw createInternalServerError(
+            "L'e-mail de test n'a pas pu être envoyé. Réessayez dans un instant.",
+          );
+        }
+        return email;
+      },
+    ),
+
     createEmailSignatureV2: requireWrite("signatures")(
-      async (_, { input }, ctx) => {
+      async (_, { input, memberUserId }, ctx) => {
         const name = await availableName(input?.name, ctx);
         const isFirst = !(await EmailSignatureV2.exists(scope(ctx)));
-        // Une nouvelle signature démarre avec la typographie de son modèle
-        const preset = templatePreset(input?.templateId || DEFAULT_TEMPLATE_ID);
+        // Pré-remplie avec le profil de la personne (soi-même par défaut) et
+        // l'entreprise de l'espace ; ce que l'entrée précise l'emporte.
+        const person = await resolvePerson(memberUserId, ctx);
+        const { person: own, company } = person.profile;
+        // Une nouvelle signature démarre avec la typographie de son modèle,
+        // le premier de la galerie sauf choix contraire
+        const templateId = input?.templateId || GALLERY_TEMPLATE_IDS[0];
+        const preset = templatePreset(templateId);
         const normalized = mergeInput(
           { images: { photo: null, logo: null, banner: null } },
-          { ...(input || {}), style: { ...preset, ...(input?.style || {}) } },
+          {
+            ...(input || {}),
+            templateId,
+            identity: {
+              ...filled(company.identity),
+              ...filled(own.identity),
+              ...filled(input?.identity),
+            },
+            contact: {
+              ...filled(company.contact),
+              ...filled(own.contact),
+              ...filled(input?.contact),
+            },
+            style: { ...preset, ...(input?.style || {}) },
+          },
         );
         const doc = new EmailSignatureV2({
           name,
           isDefault: isFirst,
+          memberUserId: person.userId,
           ...scope(ctx),
         });
         applyNormalized(doc, normalized);
         await doc.save();
+        await setPersonPhoto(doc, person.profile.photoUrl, ctx);
+        return doc;
+      },
+    ),
+
+    applyMemberToEmailSignatureV2: requireWrite("signatures")(
+      async (_, { id, memberUserId }, ctx) => {
+        const doc = await findOwned(id, ctx);
+        const person = await resolvePerson(memberUserId, ctx);
+        const { person: own, company } = person.profile;
+        const current = plain(doc);
+        // Ce qui est propre à la personne est remplacé (même vide, pour ne
+        // pas garder le portable de la précédente) ; l'entreprise ne
+        // complète que les champs vides.
+        const normalized = mergeInput(current, {
+          identity: {
+            ...filled(company.identity),
+            ...filled(current.identity),
+            ...own.identity,
+          },
+          contact: {
+            ...filled(company.contact),
+            ...filled(current.contact),
+            ...own.contact,
+          },
+        });
+        applyNormalized(doc, normalized);
+        doc.memberUserId = person.userId;
+        await doc.save();
+        await setPersonPhoto(doc, person.profile.photoUrl, ctx);
         return doc;
       },
     ),
@@ -310,6 +557,39 @@ const emailSignatureV2Resolvers = {
             await next.save();
           }
         }
+        return true;
+      },
+    ),
+
+    saveEmailSignatureTemplateV2: requireWrite("signatures")(
+      async (_, { input }, ctx) => {
+        const name = String(input?.name ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 60);
+        if (!name) throw createValidationError("Donnez un nom au modèle.");
+        // Style validé par le générateur, comme celui d'une signature
+        const { templateId, style } = normalizeSignature({
+          templateId: input.templateId,
+          style: input.style,
+        });
+        // Un de vos modèles du même nom est remplacé
+        return EmailSignatureTemplateV2.findOneAndUpdate(
+          { ...templateScope(ctx), createdBy: ctx.user.id, name },
+          { $set: { templateId, style } },
+          { upsert: true, new: true, setDefaultsOnInsert: true, lean: true },
+        );
+      },
+    ),
+
+    deleteEmailSignatureTemplateV2: requireDelete("signatures")(
+      async (_, { id }, ctx) => {
+        const { deletedCount } = await EmailSignatureTemplateV2.deleteOne({
+          _id: id,
+          ...templateScope(ctx),
+          createdBy: ctx.user.id,
+        });
+        if (!deletedCount) throw createNotFoundError("Modèle");
         return true;
       },
     ),

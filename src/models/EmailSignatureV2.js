@@ -10,6 +10,15 @@ import mongoose from "mongoose";
 import {
   ALIGNMENTS,
   FONT_FAMILIES,
+  FRAMES,
+  LAYOUT_CHOICES,
+  OUTSIDE_ITEMS,
+  TEXT_BLOCKS,
+  VISUAL_SIDES,
+  VISUAL_FILLS,
+  HEADER_PHOTOS,
+  HEADER_FILLS,
+  NAME_LAYOUTS,
   ICON_COLOR_MODES,
   ICON_STYLES,
   PHOTO_SHAPES,
@@ -67,6 +76,61 @@ const styleSchema = new mongoose.Schema(
     separatorColor: { type: String, default: "#e0e0e0" },
     spacing: { type: String, enum: SPACINGS, default: "normal" },
     align: { type: String, enum: ALIGNMENTS, default: "left" },
+    frame: { type: String, enum: FRAMES, default: "none" },
+    frameColor: { type: String, default: "" },
+    radius: { type: Number, min: 0, max: 24, default: 12 },
+    photoBorder: { type: Number, min: 0, max: 6, default: 0 },
+    photoBorderColor: { type: String, default: "" },
+    // Mise en page : sans valeur, le générateur prend celle du modèle (les
+    // signatures antérieures gardent ainsi leur rendu)
+    ...Object.fromEntries(
+      Object.entries(LAYOUT_CHOICES).map(([key, values]) => [
+        key,
+        { type: String, enum: values, default: undefined },
+      ]),
+    ),
+    footerStrip: { type: Boolean, default: undefined },
+    footerPair: { type: Boolean, default: undefined },
+    outside: {
+      type: [{ type: String, enum: OUTSIDE_ITEMS }],
+      default: undefined,
+    },
+    textOrder: {
+      type: [{ type: String, enum: TEXT_BLOCKS }],
+      default: undefined,
+    },
+    // Emplacements de chaque élément (validés par le générateur) ; sans
+    // valeur, déduits des réglages ci-dessus
+    slots: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    visualSide: { type: String, enum: VISUAL_SIDES, default: undefined },
+    visualFill: { type: String, enum: VISUAL_FILLS, default: undefined },
+    headerPhoto: { type: String, enum: HEADER_PHOTOS, default: undefined },
+    headerFill: { type: String, enum: HEADER_FILLS, default: undefined },
+    nameLayout: { type: String, enum: NAME_LAYOUTS, default: undefined },
+    // Icônes de réseaux par ligne, de haut en bas (la dernière valeur vaut
+    // pour les suivantes) ; sans valeur, celle du modèle
+    socialRows: { type: [Number], default: undefined },
+    // Traits et bordures sur mesure, en px (0 : dimensions du modèle ou
+    // toute la longueur)
+    accentLength: { type: Number, default: undefined },
+    accentThickness: { type: Number, default: undefined },
+    dividerThickness: { type: Number, default: undefined },
+    dividerLength: { type: Number, default: undefined },
+    frameThickness: { type: Number, default: undefined },
+    frameWidth: { type: Number, default: undefined },
+    frameBarLength: { type: Number, default: undefined },
+    // Icônes des coordonnées, en px (0 : 16 px)
+    contactIconSize: { type: Number, default: undefined },
+    contactIconMode: { type: String, default: undefined },
+    contactIconColor: { type: String, default: undefined },
+    // Réglages par bloc (largeur, espaces, alignement) et largeur des
+    // colonnes, validés par le générateur
+    blocks: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    columns: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    rules: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    dividerSpace: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    // Réglages par élément de texte (nom, poste…), validés par le générateur
+    elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },
   { _id: false },
 );
@@ -120,6 +184,9 @@ const emailSignatureV2Schema = new mongoose.Schema(
       text: trimmed(1000),
     },
     style: { type: styleSchema, default: () => ({}) },
+
+    /** Membre de l'espace dont la signature reprend les informations. */
+    memberUserId: { type: String, default: null },
 
     /** Identifiant de la signature v1 dont ce document est la migration. */
     migratedFrom: {

@@ -23,7 +23,16 @@ vi.mock("../../src/services/signatureAssets.js", () => ({
     width: 168,
     height: 168,
   }),
+  importSignatureImage: vi.fn().mockResolvedValue({
+    url: "https://cdn.test/profil.jpg",
+    key: "u/s/ImgProfil/profil.jpg",
+    width: 168,
+    height: 168,
+  }),
   deleteSignatureImages: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../src/utils/mailer.js", () => ({
+  sendSignatureTestEmail: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: {
@@ -36,7 +45,12 @@ vi.mock("../../src/services/cloudflareService.js", () => ({
 
 import EmailSignatureV2 from "../../src/models/EmailSignatureV2.js";
 import resolvers from "../../src/resolvers/emailSignatureV2.js";
-import { storeSignatureImage } from "../../src/services/signatureAssets.js";
+import mongoose from "mongoose";
+import {
+  importSignatureImage,
+  storeSignatureImage,
+} from "../../src/services/signatureAssets.js";
+import { sendSignatureTestEmail } from "../../src/utils/mailer.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -77,6 +91,209 @@ const input = (overrides = {}) => ({
   ...overrides,
 });
 
+describe("EmailSignatureV2 — photo de profil par défaut", () => {
+  const users = () => mongoose.connection.db.collection("user");
+
+  it("reprend la photo de profil de l'utilisateur à la création", async () => {
+    await users().insertOne({
+      _id: new mongoose.Types.ObjectId(String(userId)),
+      avatar: "https://cdn.test/avatar.jpeg",
+    });
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    expect(importSignatureImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://cdn.test/avatar.jpeg",
+        kind: "PHOTO",
+      }),
+    );
+    const saved = await EmailSignatureV2.findById(doc._id).lean();
+    expect(saved.images.photo.url).toBe("https://cdn.test/profil.jpg");
+  });
+
+  it("crée la signature sans photo si l'utilisateur n'en a pas", async () => {
+    importSignatureImage.mockClear();
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    expect(importSignatureImage).not.toHaveBeenCalled();
+    expect(doc.images.photo).toBeFalsy();
+  });
+
+  it("ne fait pas échouer la création si l'import échoue", async () => {
+    await users().insertOne({
+      _id: new mongoose.Types.ObjectId(String(userId)),
+      image: "https://cdn.test/cassee.png",
+    });
+    importSignatureImage.mockRejectedValueOnce(new Error("HTTP 404"));
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    expect(doc.id).toBeTruthy();
+    expect(doc.images.photo).toBeFalsy();
+  });
+});
+
+describe("EmailSignatureV2 — informations de la personne", () => {
+  const db = () => mongoose.connection.db;
+  const oid = (id) => new mongoose.Types.ObjectId(String(id));
+  const colleagueId = buildUserId();
+
+  beforeEach(async () => {
+    await db()
+      .collection("user")
+      .insertMany([
+        {
+          _id: oid(userId),
+          name: "Camille Durand",
+          lastName: "Durand",
+          email: "camille@atelier.fr",
+          phoneNumber: "06 12 34 56 78",
+        },
+        {
+          _id: oid(colleagueId),
+          name: "Léo Martin",
+          email: "leo@atelier.fr",
+          image: "https://cdn.test/leo.png",
+        },
+      ]);
+    await db()
+      .collection("organization")
+      .updateOne(
+        { _id: oid(organizationId) },
+        {
+          $set: {
+            companyName: "Atelier Nord",
+            companyPhone: "01 23 45 67 89",
+            website: "https://atelier.fr",
+            addressStreet: "12 rue des Lilas",
+            addressZipCode: "75011",
+            addressCity: "Paris",
+          },
+        },
+      );
+    await seedOrgMembership({
+      userId: colleagueId,
+      organizationId,
+      role: "member",
+    });
+  });
+
+  it("pré-remplit avec le profil du créateur et l'entreprise", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: { name: "Pro" } },
+      ctx(),
+    );
+    expect(doc.identity).toMatchObject({
+      firstName: "Camille",
+      lastName: "Durand",
+      company: "Atelier Nord",
+    });
+    expect(doc.contact).toMatchObject({
+      email: "camille@atelier.fr",
+      mobile: "06 12 34 56 78",
+      phone: "01 23 45 67 89",
+      website: "https://atelier.fr",
+      address: "12 rue des Lilas, 75011 Paris",
+    });
+    expect(doc.memberUserId).toBe(String(userId));
+  });
+
+  it("ce que précise l'entrée l'emporte sur le profil", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: { identity: { firstName: "Cam", company: "" } } },
+      ctx(),
+    );
+    expect(doc.identity.firstName).toBe("Cam");
+    expect(doc.identity.company).toBe("Atelier Nord");
+  });
+
+  it("crée la signature d'un autre membre de l'espace", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: {}, memberUserId: String(colleagueId) },
+      ctx(),
+    );
+    expect(doc.identity).toMatchObject({
+      firstName: "Léo",
+      lastName: "Martin",
+    });
+    expect(doc.contact.email).toBe("leo@atelier.fr");
+    expect(doc.createdBy.toString()).toBe(String(userId));
+    expect(importSignatureImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: "https://cdn.test/leo.png" }),
+    );
+  });
+
+  it("refuse une personne extérieure à l'espace", async () => {
+    await expect(
+      Mutation.createEmailSignatureV2(
+        null,
+        { input: {}, memberUserId: String(otherUserId) },
+        ctx(),
+      ),
+    ).rejects.toThrow(/ne fait pas partie/);
+  });
+
+  it("changer de personne remplace ses informations et garde le reste", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      {
+        input: {
+          identity: { jobTitle: "Graphiste" },
+          contact: { website: "https://studio.fr" },
+        },
+      },
+      ctx(),
+    );
+    const switched = await Mutation.applyMemberToEmailSignatureV2(
+      null,
+      { id: String(doc._id), memberUserId: String(colleagueId) },
+      ctx(),
+    );
+    expect(switched.identity).toMatchObject({
+      firstName: "Léo",
+      lastName: "Martin",
+      jobTitle: "Graphiste",
+      company: "Atelier Nord",
+    });
+    // Léo n'a pas de portable : celui de Camille ne doit pas rester
+    expect(switched.contact.mobile).toBe("");
+    expect(switched.contact.email).toBe("leo@atelier.fr");
+    expect(switched.contact.website).toBe("https://studio.fr");
+    expect(switched.memberUserId).toBe(String(colleagueId));
+    expect(switched.images.photo.url).toBe("https://cdn.test/profil.jpg");
+  });
+
+  it("liste les membres de l'espace", async () => {
+    const members = await Query.signatureMembersV2(null, {}, ctx());
+    expect(members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          userId: String(userId),
+          name: "Camille Durand",
+          isMe: true,
+        }),
+        expect.objectContaining({
+          userId: String(colleagueId),
+          name: "Léo Martin",
+          image: "https://cdn.test/leo.png",
+          isMe: false,
+        }),
+      ]),
+    );
+  });
+});
+
 describe("EmailSignatureV2 — création", () => {
   it("applique la typographie du modèle à une nouvelle signature", async () => {
     const doc = await Mutation.createEmailSignatureV2(
@@ -89,6 +306,15 @@ describe("EmailSignatureV2 — création", () => {
     expect(doc.style.showContactIcons).toBe(false);
     // la couleur reste celle par défaut, jamais imposée par le modèle
     expect(doc.style.primaryColor).toBe("#5a50ff");
+  });
+
+  it("crée une signature sur le premier modèle de la galerie", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input({ templateId: undefined }) },
+      ctx(),
+    );
+    expect(doc.templateId).toBe("header");
   });
 
   it("crée la première signature comme signature par défaut", async () => {
@@ -186,8 +412,12 @@ describe("EmailSignatureV2 — lecture et isolation", () => {
 
   it("expose le catalogue de l'éditeur", async () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
-    expect(catalog.templates.length).toBe(7);
+    expect(catalog.templates.length).toBe(12);
     expect(catalog.templates[0].id).toBe("modern");
+    // Seuls le Bandeau et Épuré sont proposés dans la galerie pour le moment
+    expect(
+      catalog.templates.filter((t) => t.inGallery).map((t) => t.id),
+    ).toEqual(["header", "epure"]);
     expect(catalog.templates[0].preset.fontFamily).toBe("arial");
     expect(catalog.templates[0].preset.photoSize).toBe(92);
     expect(catalog.networks.find((n) => n.id === "linkedin").brandColor).toBe(
@@ -474,5 +704,227 @@ describe("EmailSignatureV2 — images", () => {
       ctx(),
     );
     expect(cleared.images.banner).toBeNull();
+  });
+});
+
+describe("EmailSignatureV2 — réglages par élément", () => {
+  it("enregistre et renvoie la mise en forme d'un élément", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    await Mutation.updateEmailSignatureV2(
+      null,
+      {
+        id: String(doc._id),
+        input: {
+          style: {
+            elements: {
+              name: { fontSize: 24, color: "#ff0000", italic: null },
+            },
+          },
+        },
+      },
+      ctx(),
+    );
+    const saved = await EmailSignatureV2.findById(doc._id).lean();
+    expect(saved.style.elements).toEqual({
+      name: { fontSize: 24, color: "#ff0000" },
+    });
+    expect(saved.style.primaryColor).toBe("#123456");
+
+    const render = await Query.renderEmailSignatureV2(
+      null,
+      { id: String(doc._id), input: {} },
+      ctx(),
+    );
+    expect(render.elements.name).toMatchObject({ fontSize: 24 });
+    expect(render.html).toContain("font-size:24px");
+  });
+});
+
+describe("EmailSignatureV2 — mise en page", () => {
+  it("renvoie la mise en page du modèle tant que rien n'est choisi, puis celle choisie", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input({ templateId: "elegant" }) },
+      ctx(),
+    );
+    const { EmailSignatureV2: T } = resolvers;
+    const legacy = await EmailSignatureV2.findById(doc._id);
+    legacy.style.photoPosition = undefined;
+    expect(T.style(legacy)).toMatchObject({
+      photoPosition: "top",
+      align: "center",
+    });
+
+    await Mutation.updateEmailSignatureV2(
+      null,
+      {
+        id: String(doc._id),
+        input: {
+          style: { photoPosition: "right", outside: ["cta", "inconnu"] },
+        },
+      },
+      ctx(),
+    );
+    const saved = await EmailSignatureV2.findById(doc._id);
+    expect(T.style(saved)).toMatchObject({
+      photoPosition: "right",
+      outside: ["cta"],
+    });
+  });
+
+  it("expose les réglages de départ complets de chaque modèle", async () => {
+    const catalog = await Query.signatureCatalogV2(null, {}, ctx());
+    const header = catalog.templates.find((t) => t.id === "header");
+    expect(header.defaults).toMatchObject({
+      identityZone: "band-top",
+      frame: "outline",
+    });
+  });
+});
+
+describe("EmailSignatureV2 — emplacements", () => {
+  it("enregistre des emplacements libres et les renvoie validés", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    const { EmailSignatureV2: T } = resolvers;
+    const base = T.style(await EmailSignatureV2.findById(doc._id)).slots;
+    const slots = {
+      ...base,
+      visual: ["name", "photo", "mobile"],
+      text: base.text.filter((k) => k !== "name" && k !== "mobile"),
+    };
+    await Mutation.updateEmailSignatureV2(
+      null,
+      { id: String(doc._id), input: { style: { slots } } },
+      ctx(),
+    );
+    const saved = T.style(await EmailSignatureV2.findById(doc._id));
+    // L'ancien « name » envoyé par un client devient prénom + nom
+    expect(saved.slots.visual).toEqual([
+      "firstName",
+      "lastName",
+      "photo",
+      "mobile",
+    ]);
+    const render = await Query.renderEmailSignatureV2(
+      null,
+      { id: String(doc._id), input: {} },
+      ctx(),
+    );
+    expect(render.html.indexOf("Camille")).toBeLessThan(
+      render.html.indexOf("+33 6 12 34 56 78"),
+    );
+  });
+
+  it("les réglages de départ d'un modèle comprennent ses emplacements", async () => {
+    const catalog = await Query.signatureCatalogV2(null, {}, ctx());
+    const card = catalog.templates.find((t) => t.id === "card");
+    expect(card.defaults.visualFill).toBe("solid");
+    expect(card.defaults.slots.visual.slice(0, 3)).toEqual([
+      "photo",
+      "firstName",
+      "lastName",
+    ]);
+  });
+});
+
+describe("EmailSignatureV2 — vignettes avec ses informations", () => {
+  it("montre les modèles avec le nom de la signature, sinon l'exemple", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input({ identity: { firstName: "Léa", lastName: "Martin" } }) },
+      ctx(),
+    );
+    const own = await Query.renderSignatureTemplateV2(
+      null,
+      { templateId: "classic", id: doc.id },
+      ctx(),
+    );
+    expect(own.html).toContain("Léa Martin");
+    expect(own.html).not.toContain("Camille Durand");
+
+    const empty = await Mutation.createEmailSignatureV2(
+      null,
+      {
+        input: input({
+          name: "Vide",
+          identity: { firstName: "", lastName: "" },
+        }),
+      },
+      ctx(),
+    );
+    const sample = await Query.renderSignatureTemplateV2(
+      null,
+      { templateId: "classic", id: empty.id },
+      ctx(),
+    );
+    expect(sample.html).toContain("Camille Durand");
+  });
+
+  it("refuse la signature d'un autre utilisateur", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    await expect(
+      Query.renderSignatureTemplateV2(
+        null,
+        { templateId: "classic", id: doc.id },
+        otherCtx(),
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe("EmailSignatureV2 — e-mail de test", () => {
+  beforeEach(() => {
+    sendSignatureTestEmail.mockClear();
+    sendSignatureTestEmail.mockResolvedValue(true);
+  });
+
+  it("envoie la signature à l'adresse de l'utilisateur, puis impose un délai", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      ctx(),
+    );
+    const email = await Mutation.sendEmailSignatureV2Test(
+      null,
+      { id: doc.id },
+      ctx(),
+    );
+    expect(email).toBe("test@test.com");
+    expect(sendSignatureTestEmail).toHaveBeenCalledTimes(1);
+    const [to, payload] = sendSignatureTestEmail.mock.calls[0];
+    expect(to).toBe("test@test.com");
+    expect(payload.signatureHtml).toContain("Camille Durand");
+    expect(payload.signatureName).toBe("Pro");
+    // Deuxième envoi immédiat : refusé
+    await expect(
+      Mutation.sendEmailSignatureV2Test(null, { id: doc.id }, ctx()),
+    ).rejects.toThrow(/patientez/);
+  });
+
+  it("signale un échec d'envoi sans bloquer le suivant", async () => {
+    const doc = await Mutation.createEmailSignatureV2(
+      null,
+      { input: input() },
+      otherCtx(),
+    );
+    sendSignatureTestEmail.mockResolvedValueOnce(false);
+    await expect(
+      Mutation.sendEmailSignatureV2Test(null, { id: doc.id }, otherCtx()),
+    ).rejects.toThrow(/n'a pas pu être envoyé/);
+    await expect(
+      Mutation.sendEmailSignatureV2Test(null, { id: doc.id }, otherCtx()),
+    ).resolves.toBe("test@test.com");
   });
 });
