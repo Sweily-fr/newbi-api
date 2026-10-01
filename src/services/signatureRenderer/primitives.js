@@ -179,24 +179,6 @@ export function link(href, inner, { color } = {}) {
 /** Cellule « pleine » de 1px : garde une hauteur/largeur dans Outlook et Gmail. */
 const filler = "font-size:1px;line-height:1px;";
 
-export function spacerRow(height) {
-  return `<tr><td height="${height}" style="height:${height}px;${filler}">&nbsp;</td></tr>`;
-}
-
-/** Trait horizontal sur toute la largeur du conteneur. */
-export function hsep(color, { height = 1 } = {}) {
-  return table(
-    tr(
-      td("&nbsp;", {
-        attrs: `height="${height}" bgcolor="${color}"`,
-        style: `height:${height}px;background-color:${color};${filler}`,
-      }),
-    ),
-    { attrs: 'width="100%"', style: "width:100%;" },
-  );
-}
-
-/** Trait vertical, à insérer comme cellule entre deux colonnes. */
 /**
  * Trait plein d'une taille donnée : une cellule colorée (horizontal ou
  * vertical selon largeur et hauteur), seule forme fiable dans Outlook.

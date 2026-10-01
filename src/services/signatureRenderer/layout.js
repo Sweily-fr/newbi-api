@@ -93,8 +93,8 @@ const alignAttr = (align) =>
  * déborder sur un téléphone. (Un texte, lui, revient à la ligne sans
  * jamais occuper plus que son contenu : wrapAt.)
  */
-const fixedWidth = (html, w, align = "left") =>
-  `<table ${TABLE_ATTRS}${alignAttr(align)} width="${w}" style="${TABLE_CSS}width:${w}px;max-width:100%;"><tr><td${alignAttr(align)}>${html}</td></tr></table>`;
+const fixedWidth = (html, w) =>
+  `<table ${TABLE_ATTRS} width="${w}" style="${TABLE_CSS}width:${w}px;max-width:100%;"><tr><td>${html}</td></tr></table>`;
 
 /** Espace ajouté au bord d'un emplacement (au-dessus du premier bloc…). */
 const px = (n) => (n ? `${n}px` : "0");
