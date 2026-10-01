@@ -543,6 +543,59 @@ const bankingResolvers = {
       },
     ),
 
+    // Décision de l'utilisateur sur la facture d'achat proposée pour un
+    // justificatif : rien n'est créé par l'analyse tant qu'il n'a pas
+    // confirmé les valeurs lues.
+    confirmTransactionReceiptInvoice: withWorkspace(
+      async (
+        parent,
+        { transactionId, workspaceId, fileId, action, values, purchaseInvoiceId },
+        { user },
+      ) => {
+        try {
+          const { invoice } =
+            await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+              transactionId,
+              workspaceId,
+              userId: user._id || user.id,
+              fileId,
+              action,
+              values: values || null,
+              purchaseInvoiceId: purchaseInvoiceId || null,
+            });
+
+          const transaction = await Transaction.findOne({
+            _id: transactionId,
+            workspaceId,
+          });
+
+          const message =
+            action === "SKIP"
+              ? "Aucune facture d'achat créée"
+              : action === "ATTACH"
+                ? "Justificatif rattaché à la facture d'achat"
+                : "Facture d'achat créée";
+
+          return {
+            success: true,
+            message,
+            transaction,
+            purchaseInvoiceId: invoice ? invoice._id.toString() : null,
+          };
+        } catch (error) {
+          console.error("❌ [CONFIRM RECEIPT INVOICE] Error:", error);
+          return {
+            success: false,
+            message:
+              error.message ||
+              "Erreur lors de la confirmation de la facture d'achat",
+            transaction: null,
+            purchaseInvoiceId: null,
+          };
+        }
+      },
+    ),
+
     // Suppression d'un justificatif spécifique d'une transaction
     removeTransactionReceiptFile: withWorkspace(
       async (parent, { transactionId, workspaceId, fileId }) => {
@@ -993,6 +1046,68 @@ const bankingResolvers = {
         // Justificatif sans _id (données anciennes) : identifiant attribué et
         // persisté à la lecture, pour que suppression et aperçu le retrouvent.
         await ensureReceiptFileIds(parent);
+
+        // Facture d'achat qui ressemble à celle proposée : résumé chargé en
+        // une requête pour tous les justificatifs, l'interface l'affiche dans
+        // la demande de confirmation (« Rattacher » / « Créer quand même »).
+        const duplicateIds = [
+          ...new Set(
+            parent.receiptFiles
+              .map((r) => r.ocrProposal?.duplicateInvoiceId)
+              .filter(Boolean)
+              .map(String),
+          ),
+        ];
+        const duplicatesById = new Map();
+        if (duplicateIds.length > 0) {
+          const duplicates = await PurchaseInvoice.find({
+            _id: { $in: duplicateIds },
+          }).select("invoiceNumber supplierName amountTTC currency issueDate");
+          for (const inv of duplicates) {
+            duplicatesById.set(inv._id.toString(), inv);
+          }
+        }
+
+        const buildProposal = (r) => {
+          const p = r.ocrProposal;
+          if (!p) return null;
+          const v = p.values || {};
+          const meta = p.meta?.ocrMetadata || {};
+          const dup = p.duplicateInvoiceId
+            ? duplicatesById.get(p.duplicateInvoiceId.toString())
+            : null;
+          return {
+            supplierName: v.supplierName || null,
+            invoiceNumber: v.invoiceNumber || null,
+            issueDate: v.issueDate || null,
+            dueDate: v.dueDate || null,
+            amountHT: v.amountHT ?? null,
+            amountTVA: v.amountTVA ?? null,
+            vatRate: v.vatRate ?? null,
+            amountTTC: v.amountTTC ?? null,
+            currency: v.currency || null,
+            category: v.category || null,
+            subcategory: v.subcategory || null,
+            paymentMethod: v.paymentMethod || null,
+            extractionQuality: meta.extractionQuality || null,
+            provider: meta.provider || null,
+            confidenceScore: meta.confidenceScore ?? null,
+            proposedAt: p.proposedAt || null,
+            duplicate: dup
+              ? {
+                  id: dup._id.toString(),
+                  invoiceNumber: dup.invoiceNumber || null,
+                  supplierName: dup.supplierName || null,
+                  amountTTC: dup.amountTTC ?? null,
+                  currency: dup.currency || null,
+                  issueDate: dup.issueDate || null,
+                  reason: p.duplicateReason || null,
+                  linkTransaction: p.duplicateLinkTransaction !== false,
+                }
+              : null,
+          };
+        };
+
         return parent.receiptFiles.map((r, idx) => ({
           id: r._id?.toString() || r.id || syntheticReceiptFileId(txId, idx),
           // Facture d'achat issue de ce justificatif : le front s'en sert pour
@@ -1003,6 +1118,7 @@ const bankingResolvers = {
             ? r.purchaseInvoiceId.toString()
             : null,
           ocrError: r.ocrError || null,
+          proposal: buildProposal(r),
           url: r.url,
           key: r.key,
           filename: r.filename,
