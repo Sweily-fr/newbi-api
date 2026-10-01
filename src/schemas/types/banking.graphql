@@ -185,8 +185,53 @@ enum ExpenseCategory {
   OTHER
 }
 
+# Facture d'achat existante qui ressemble à celle lue sur le justificatif.
+# Proposée au choix de l'utilisateur, jamais appliquée seule : une détection
+# trop large faisait disparaître la facture sans qu'il le sache.
+type ReceiptInvoiceDuplicate {
+  id: ID!
+  invoiceNumber: String
+  supplierName: String
+  amountTTC: Float
+  currency: String
+  issueDate: DateTime
+  # NUMBER : même numéro de facture lu
+  # SUPPLIER_AMOUNT : même fournisseur, même montant, dates proches
+  # LINKED : analyse en échec, facture déjà liée à la transaction
+  reason: String
+  # Faux quand la facture est déjà couverte par d'autres débits : le
+  # justificatif peut y être déposé, mais la dépense reste à rapprocher
+  linkTransaction: Boolean
+}
+
+# Facture d'achat proposée à partir d'un justificatif, EN ATTENTE de
+# confirmation : tant qu'elle existe, aucune facture n'a été créée. Les
+# valeurs sont exactement celles qui seront enregistrées.
+type ReceiptInvoiceProposal {
+  supplierName: String
+  invoiceNumber: String
+  issueDate: DateTime
+  dueDate: DateTime
+  amountHT: Float
+  amountTVA: Float
+  vatRate: Float
+  amountTTC: Float
+  currency: String
+  category: String
+  subcategory: String
+  paymentMethod: String
+  # full | partial | none (cf. ocrMetadata.extractionQuality)
+  extractionQuality: String
+  provider: String
+  confidenceScore: Float
+  duplicate: ReceiptInvoiceDuplicate
+  proposedAt: DateTime
+}
+
 type ReceiptFile {
   id: ID!
+  # Facture d'achat proposée par l'analyse, à confirmer avant création
+  proposal: ReceiptInvoiceProposal
   # Facture d'achat créée ou reconnue à partir de ce fichier (OCR) : le
   # front n'affiche alors pas le fichier en double avec la facture liée
   purchaseInvoiceId: ID
@@ -700,6 +745,36 @@ type PCGAccountEntry {
 
 # Mutations
 
+enum ReceiptInvoiceProposalAction {
+  CREATE
+  ATTACH
+  SKIP
+}
+
+# Valeurs confirmées (ou corrigées) par l'utilisateur. Les champs absents
+# gardent la valeur lue par l'analyse.
+input ReceiptInvoiceValuesInput {
+  supplierName: String
+  invoiceNumber: String
+  issueDate: DateTime
+  dueDate: DateTime
+  amountHT: Float
+  amountTVA: Float
+  vatRate: Float
+  amountTTC: Float
+  currency: String
+  category: String
+  subcategory: String
+  paymentMethod: String
+}
+
+type ConfirmTransactionReceiptInvoiceResult {
+  success: Boolean!
+  message: String
+  transaction: Transaction
+  purchaseInvoiceId: ID
+}
+
 type UploadTransactionReceiptResult {
   success: Boolean!
   message: String
@@ -718,6 +793,18 @@ extend type Mutation {
     workspaceId: ID!
     files: [Upload!]!
   ): UploadTransactionReceiptResult!
+
+  # Décision de l'utilisateur sur la facture d'achat proposée pour un
+  # justificatif : CREATE (créer avec les valeurs confirmées), ATTACH
+  # (rattacher à une facture existante) ou SKIP (ne rien créer).
+  confirmTransactionReceiptInvoice(
+    transactionId: ID!
+    workspaceId: ID!
+    fileId: ID!
+    action: ReceiptInvoiceProposalAction!
+    values: ReceiptInvoiceValuesInput
+    purchaseInvoiceId: ID
+  ): ConfirmTransactionReceiptInvoiceResult!
 
   # Suppression d'un justificatif spécifique
   removeTransactionReceiptFile(

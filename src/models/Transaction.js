@@ -314,6 +314,33 @@ const transactionSchema = new mongoose.Schema(
           ref: "PurchaseInvoice",
           default: null,
         },
+        // Facture d'achat proposée par l'analyse, en attente de confirmation
+        // par l'utilisateur. Tant que cette proposition existe, AUCUNE facture
+        // n'a été créée : l'utilisateur confirme (ou corrige) les valeurs lues,
+        // choisit de rattacher à une facture existante, ou renonce.
+        // `values` est exactement ce qui sera enregistré, pour que ce qui est
+        // affiché soit ce qui est créé ; `meta` porte les données d'extraction
+        // (ocrMetadata, réponse brute du moteur) reprises telles quelles.
+        ocrProposal: {
+          type: {
+            values: { type: mongoose.Schema.Types.Mixed },
+            meta: { type: mongoose.Schema.Types.Mixed },
+            // Facture existante qui ressemble à celle lue : proposée au choix
+            // (« Rattacher » / « Créer quand même »), jamais appliquée seule.
+            duplicateInvoiceId: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: "PurchaseInvoice",
+              default: null,
+            },
+            // Ce que la détection aurait fait de la transaction : false quand
+            // la facture trouvée est déjà couverte par d'autres débits.
+            duplicateLinkTransaction: { type: Boolean, default: true },
+            // NUMBER | SUPPLIER_AMOUNT | LINKED : pourquoi elle se ressemblent
+            duplicateReason: { type: String, default: null },
+            proposedAt: { type: Date },
+          },
+          default: null,
+        },
       },
     ],
 
