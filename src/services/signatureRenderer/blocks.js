@@ -681,6 +681,10 @@ export function buildBlocks(ctx) {
           return Boolean(sig.banner.enabled && images.banner?.url);
         case "disclaimer":
           return Boolean(sig.disclaimer.enabled && sig.disclaimer.text);
+        case "rule1":
+        case "rule2":
+        case "rule3":
+          return Boolean(st.rules?.[item]);
         default:
           return Boolean(contact[item]);
       }

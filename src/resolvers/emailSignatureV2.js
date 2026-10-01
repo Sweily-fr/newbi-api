@@ -275,6 +275,7 @@ const emailSignatureV2Resolvers = {
   // Mongoose retire les objets vides : on garantit la présence du champ
   SignatureStyleV2: {
     elements: (st) => st?.elements || {},
+    rules: (st) => st?.rules || {},
   },
 
   EmailSignatureV2: {

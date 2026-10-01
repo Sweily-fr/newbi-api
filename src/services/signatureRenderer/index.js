@@ -31,6 +31,8 @@ import {
   VISUAL_SIDES,
   LAYOUT_CHOICES,
   OUTSIDE_ITEMS,
+  RULE_COLORS,
+  RULE_ITEMS,
   TEXT_BLOCKS,
   TEXT_ELEMENTS,
 } from "./constants.js";
@@ -90,6 +92,25 @@ function normalizeColumns(raw) {
 
 const oneOf = (value, allowed, fallback) =>
   allowed.includes(value) ? value : fallback;
+
+/**
+ * Traits libres : un trait existe s'il a ses réglages (longueur en px,
+ * épaisseur, couleur : celle des traits, principale ou du texte).
+ */
+function normalizeRules(raw) {
+  const out = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const key of RULE_ITEMS) {
+    const r = raw[key];
+    if (!r || typeof r !== "object") continue;
+    out[key] = {
+      length: clamp(r.length, 16, 640, 120),
+      thickness: clamp(r.thickness, 1, 8, 1),
+      color: oneOf(r.color, RULE_COLORS, "separator"),
+    };
+  }
+  return out;
+}
 const str = (v, max = 200) =>
   v === null || v === undefined
     ? ""
@@ -251,6 +272,7 @@ export function normalizeSignature(input = {}) {
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   style.blocks = normalizeBlocks(s.blocks ?? tpl.blocks);
   style.columns = normalizeColumns(s.columns ?? tpl.columns);
+  style.rules = normalizeRules(s.rules);
 
   const id = input.identity || {};
   const c = input.contact || {};

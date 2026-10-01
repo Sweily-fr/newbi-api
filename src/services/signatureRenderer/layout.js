@@ -26,6 +26,7 @@ import {
   bar,
   hstack,
   naturalWidth,
+  vsepCell,
   stackRows,
   tint,
   vstack,
@@ -286,6 +287,28 @@ export function renderLayout(b, ctx, theme = {}) {
                 ? "left"
                 : across,
           maxHeight,
+        });
+      }
+      case "rule1":
+      case "rule2":
+      case "rule3": {
+        // Trait libre : sa longueur (jamais plus que sa colonne ou la
+        // signature de largeur choisie), son épaisseur, sa couleur
+        const rule = st.rules?.[k];
+        if (!rule) return "";
+        const limit = st.columns?.[slot] || st.frameWidth || 0;
+        const color = inverse
+          ? WHITE
+          : rule.color === "primary"
+            ? P
+            : rule.color === "text"
+              ? st.textColor
+              : st.separatorColor;
+        return bar({
+          width: limit ? Math.min(rule.length, limit) : rule.length,
+          height: rule.thickness,
+          color,
+          align: across === "center" ? "center" : "left",
         });
       }
       case "banner":
@@ -709,7 +732,14 @@ export function renderLayout(b, ctx, theme = {}) {
     ];
     if (right) cells.reverse();
     if (sideHtml) cells.push({ html: sideHtml, valign: "middle" });
-    body = hstack(cells, { gap: sp.gap + 6 });
+    // Largeur choisie : la colonne de couleur garde la sienne ; séparateur
+    // entre les colonnes s'il est choisi
+    if (wide) cells[right ? 1 : 0].width = visualWidth + 44;
+    body = hstack(cells, {
+      gap: sp.gap + 6,
+      separator: divider,
+      full: wide,
+    });
   } else if (tinted) {
     // Colonne teintée : cellule de couleur collée au cadre
     const soft = tint(P, 0.08);
@@ -732,8 +762,10 @@ export function renderLayout(b, ctx, theme = {}) {
       textHtml || sideHtml
         ? `<td valign="${textValign}" style="padding:${right ? padRight : pad};">${sideBySide(textHtml, sideHtml)}</td>`
         : "";
+    // Séparateur choisi : un trait au bord de la colonne teintée
+    const sepCells = divider && textCell ? vsepCell(divider, { gap: 0 }) : "";
     body = box(
-      `<tr>${right ? textCell + visualCell : visualCell + textCell}</tr>`,
+      `<tr>${right ? textCell + sepCells + visualCell : visualCell + sepCells + textCell}</tr>`,
       stretch ? ' width="100%"' : "",
       stretch ? "width:100%;" : "",
     );

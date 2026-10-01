@@ -213,6 +213,8 @@ type SignatureStyleV2 {
   blocks: JSON!
   "Largeur des colonnes { visual, text, side }, en px (0 : ajustée au contenu)."
   columns: JSON!
+  "Traits libres { rule1, rule2, rule3 } : { length, thickness, color (separator, primary, text) } ; présents s'ils sont réglés."
+  rules: JSON!
   """
   Réglages par élément (seulement ceux modifiés).
   """
@@ -477,6 +479,8 @@ input SignatureStyleV2Input {
   "Remplace l'ensemble des réglages par bloc (envoyer l'objet complet)."
   blocks: JSON
   columns: JSON
+  "Remplace l'ensemble des traits libres (envoyer l'objet complet)."
+  rules: JSON
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

@@ -195,7 +195,10 @@ export function bar({ width, height, color, align = "left" }) {
 export function vsepCell(sep, { width = 1, gap = 12 } = {}) {
   const spec = typeof sep === "string" ? { color: sep } : sep;
   const w = spec.width || width;
-  const spacer = `<td width="${gap}" style="width:${gap}px;${filler}">&nbsp;</td>`;
+  // Écart nul : le trait seul, collé à ses voisins (colonne teintée)
+  const spacer = gap
+    ? `<td width="${gap}" style="width:${gap}px;${filler}">&nbsp;</td>`
+    : "";
   if (spec.length) {
     return `${spacer}<td valign="${spec.valign || "middle"}" width="${w}" style="width:${w}px;">${bar({ width: w, height: spec.length, color: spec.color })}</td>${spacer}`;
   }

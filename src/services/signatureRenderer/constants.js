@@ -141,7 +141,14 @@ export const ITEMS = [
   "cta",
   "banner",
   "disclaimer",
+  // Traits libres, placés où l'on veut (présents s'ils sont réglés)
+  "rule1",
+  "rule2",
+  "rule3",
 ];
+/** Traits libres : jusqu'à trois, chacun sa longueur, son épaisseur, sa couleur. */
+export const RULE_ITEMS = ["rule1", "rule2", "rule3"];
+export const RULE_COLORS = ["separator", "primary", "text"];
 export const VISUAL_SIDES = ["left", "right"];
 // Fond de la colonne photo : aucun, teinté, couleur principale (texte blanc)
 export const VISUAL_FILLS = ["none", "tint", "solid"];
@@ -337,6 +344,10 @@ export const BLOCK_KEYS = [
   "email",
   "website",
   "address",
+  // Traits libres : espaces et alignement
+  "rule1",
+  "rule2",
+  "rule3",
 ];
 export const BLOCK_ALIGNS = ["left", "center", "right"];
 
