@@ -366,9 +366,9 @@ const emailSignatureV2Resolvers = {
     renderSignatureTemplateV2: requireRead("signatures")(
       async (_, { templateId, style, id }, ctx) => {
         await ensureSamplePhoto();
-        // Vignette = le modèle tel qu'il s'appliquera : sa mise en page et
-        // ses finitions (traits, icônes), avec les couleurs principales de
-        // l'utilisateur
+        // Vignette = le modèle tel qu'il s'appliquera : sa mise en page, ses
+        // finitions et sa palette s'il en a une (Newbi), sinon les couleurs
+        // principales de l'utilisateur
         const colors = Object.fromEntries(
           Object.entries(style || {}).filter(
             ([k, v]) =>
@@ -398,7 +398,7 @@ const emailSignatureV2Resolvers = {
         const data = {
           ...content,
           templateId,
-          style: { ...templatePreset(templateId), ...colors },
+          style: { ...colors, ...templatePreset(templateId) },
         };
         await ensureIconsSoon(data);
         const result = renderSignature(data);

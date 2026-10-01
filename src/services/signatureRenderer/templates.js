@@ -5,9 +5,9 @@
  * - `preset` : typographie, formes et mise en page de départ (position de
  *   la photo, des réseaux, du logo, séparateur, encadré…) et finitions
  *   (couleur des traits et des icônes). Tout reste modifiable ensuite,
- *   réglage par réglage. Les couleurs principales (principale, texte,
- *   secondaire) ne sont jamais imposées : elles restent celles de
- *   l'utilisateur.
+ *   réglage par réglage. Un modèle peut aussi porter sa palette (couleur
+ *   principale, texte, secondaire : Newbi, neutre) ; sinon les couleurs
+ *   restent celles de l'utilisateur.
  * - `theme` : les quelques valeurs propres au caractère du modèle (nom en
  *   couleur principale, écart de taille du nom, tailles maximales), que
  *   l'utilisateur ajuste élément par élément s'il le souhaite.
@@ -265,26 +265,30 @@ const TEMPLATES = {
     },
   },
   // Modèle enregistré par l'utilisateur (« Signature Newbi », 01/10/2026),
-  // repris tel quel comme seul modèle proposé : photo ronde dans une carte
-  // teintée, trait noir, nom en capitales espacées, trait d'accent,
-  // coordonnées à icônes bleues (adresse en orange), puis un trait noir
-  // au-dessus du logo et des réseaux (verts), côte à côte.
+  // seul modèle proposé : photo ronde dans une carte teintée, trait,
+  // nom en capitales espacées, trait d'accent, coordonnées à icônes, puis
+  // un trait au-dessus du logo et des réseaux, côte à côte. Rendu neutre à
+  // sa demande : noir et gris. La couleur principale (noire au départ)
+  // colore l'accent, la carte (gris clair) et toutes les icônes : la
+  // changer recolore tout le modèle d'un coup.
   newbi: {
     name: "Newbi",
     description:
-      "Photo dans une carte teintée, nom en capitales espacées, coordonnées à icônes, logo et réseaux sous un trait.",
+      "Photo dans une carte, nom en capitales espacées, logo et réseaux sous un trait. Neutre : la couleur principale colore l'accent, la carte et les icônes.",
     preset: {
       ...BASE_PRESET,
+      // Palette neutre
+      primaryColor: "#1f1f1f",
+      textColor: "#1f1f1f",
+      mutedColor: "#5f6368",
       fontSize: 12,
       photoSize: 108,
       iconSize: 28,
-      iconColorMode: "custom",
-      iconColor: "#4cd963",
+      iconColorMode: "primary",
       divider: "line",
       dividerThickness: 2,
       separatorColor: "#1f1f1f",
-      contactIconMode: "custom",
-      contactIconColor: "#007bff",
+      contactIconMode: "primary",
       visualFill: "tint",
       visualSide: "left",
       nameLayout: "inline",
@@ -313,7 +317,7 @@ const TEMPLATES = {
       rules: { rule1: { length: 352, thickness: 2, color: "separator" } },
       // Un peu d'air entre la carte et le trait
       dividerSpace: { left: 8 },
-      elements: { address: { color: "#ff9500" } },
+      elements: {},
     },
     theme: {
       nameDelta: 4,
