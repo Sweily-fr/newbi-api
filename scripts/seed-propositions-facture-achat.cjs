@@ -16,6 +16,9 @@ const { MongoClient, ObjectId } = require(
 );
 
 const WORKSPACE_ID = process.env.SEED_WORKSPACE_ID || "68dda81e814240de4cc86e75";
+// createdBy est obligatoire sur PurchaseInvoice : sans lui, le document
+// inséré au driver brut échappe à la validation mais devient invalide.
+const USER_ID = process.env.SEED_USER_ID || "68777df3c13b90dd2991ed77";
 const TAG = "SEED-PROPOSITION";
 
 (async () => {
@@ -48,6 +51,7 @@ const TAG = "SEED-PROPOSITION";
     subcategory: "subscriptions",
     source: "OCR",
     workspaceId: new ObjectId(WORKSPACE_ID),
+    createdBy: new ObjectId(USER_ID),
     linkedTransactionIds: [],
     files: [],
     createdAt: new Date(),
@@ -92,7 +96,7 @@ const TAG = "SEED-PROPOSITION";
     currency: "EUR",
     workspaceId: WORKSPACE_ID,
     date: new Date("2026-09-20"),
-    reconciliationStatus: "pending",
+    reconciliationStatus: "unmatched",
     createdAt: new Date(),
     updatedAt: new Date(),
   };
