@@ -1165,13 +1165,15 @@ async function confirmReceiptInvoiceProposal({
   }
 
   if (action === "SKIP") {
+    // La proposition est mise de côté, pas supprimée : l'utilisateur peut
+    // toujours créer la facture plus tard depuis le justificatif.
     await Transaction.updateOne(
       { _id: transaction._id, workspaceId },
-      { $set: { "receiptFiles.$[elem].ocrProposal": null } },
+      { $set: { "receiptFiles.$[elem].ocrProposal.dismissedAt": new Date() } },
       { arrayFilters: [{ "elem._id": receiptFile._id }] },
     );
     logger.info(
-      `ℹ️ [RECEIPT OCR] Aucune facture d'achat créée pour ${receiptFile.filename} (choix de l'utilisateur, transaction ${transaction._id})`,
+      `ℹ️ [RECEIPT OCR] Aucune facture d'achat créée pour ${receiptFile.filename} (mise de côté par l'utilisateur, transaction ${transaction._id})`,
     );
     return { action, invoice: null };
   }

@@ -226,6 +226,9 @@ type ReceiptInvoiceProposal {
   confidenceScore: Float
   duplicate: ReceiptInvoiceDuplicate
   proposedAt: DateTime
+  # Mise de côté (« Ne pas créer de facture ») : la proposition ne réclame
+  # plus d'action mais reste disponible pour créer la facture plus tard
+  dismissedAt: DateTime
 }
 
 type ReceiptFile {

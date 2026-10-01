@@ -338,6 +338,10 @@ const transactionSchema = new mongoose.Schema(
             // NUMBER | SUPPLIER_AMOUNT | LINKED : pourquoi elle se ressemblent
             duplicateReason: { type: String, default: null },
             proposedAt: { type: Date },
+            // Mise de côté par l'utilisateur (« Ne pas créer de facture ») :
+            // la proposition est conservée pour qu'il puisse créer la facture
+            // plus tard, mais ne réclame plus d'action.
+            dismissedAt: { type: Date, default: null },
           },
           default: null,
         },
