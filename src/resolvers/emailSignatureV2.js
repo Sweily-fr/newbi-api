@@ -276,6 +276,7 @@ const emailSignatureV2Resolvers = {
   SignatureStyleV2: {
     elements: (st) => st?.elements || {},
     rules: (st) => st?.rules || {},
+    dividerSpace: (st) => st?.dividerSpace || {},
   },
 
   EmailSignatureV2: {

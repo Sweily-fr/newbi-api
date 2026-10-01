@@ -94,6 +94,20 @@ const oneOf = (value, allowed, fallback) =>
   allowed.includes(value) ? value : fallback;
 
 /**
+ * Marges du séparateur vertical { left, right } : écart ajouté (ou retiré)
+ * de chaque côté du trait, en px ; absent = celui du modèle.
+ */
+function normalizeDividerSpace(raw) {
+  const out = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const side of ["left", "right"]) {
+    const v = offset(raw[side]);
+    if (v) out[side] = v;
+  }
+  return out;
+}
+
+/**
  * Traits libres : un trait existe s'il a ses réglages (longueur en px,
  * épaisseur, couleur : celle des traits, principale ou du texte).
  */
@@ -273,6 +287,9 @@ export function normalizeSignature(input = {}) {
   style.blocks = normalizeBlocks(s.blocks ?? tpl.blocks);
   style.columns = normalizeColumns(s.columns ?? tpl.columns);
   style.rules = normalizeRules(s.rules);
+  style.dividerSpace = normalizeDividerSpace(
+    s.dividerSpace ?? tpl.dividerSpace,
+  );
 
   const id = input.identity || {};
   const c = input.contact || {};

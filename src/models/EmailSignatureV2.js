@@ -126,6 +126,7 @@ const styleSchema = new mongoose.Schema(
     blocks: { type: mongoose.Schema.Types.Mixed, default: undefined },
     columns: { type: mongoose.Schema.Types.Mixed, default: undefined },
     rules: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    dividerSpace: { type: mongoose.Schema.Types.Mixed, default: undefined },
     // Réglages par élément de texte (nom, poste…), validés par le générateur
     elements: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },

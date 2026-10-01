@@ -215,6 +215,8 @@ type SignatureStyleV2 {
   columns: JSON!
   "Traits libres { rule1, rule2, rule3 } : { length, thickness, color (separator, primary, text) } ; présents s'ils sont réglés."
   rules: JSON!
+  "Marges du séparateur vertical { left, right } : px ajoutés (ou retirés) de chaque côté."
+  dividerSpace: JSON!
   """
   Réglages par élément (seulement ceux modifiés).
   """
@@ -481,6 +483,7 @@ input SignatureStyleV2Input {
   columns: JSON
   "Remplace l'ensemble des traits libres (envoyer l'objet complet)."
   rules: JSON
+  dividerSpace: JSON
   """
   Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
   """

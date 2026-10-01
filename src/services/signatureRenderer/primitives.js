@@ -195,14 +195,18 @@ export function bar({ width, height, color, align = "left" }) {
 export function vsepCell(sep, { width = 1, gap = 12 } = {}) {
   const spec = typeof sep === "string" ? { color: sep } : sep;
   const w = spec.width || width;
-  // Écart nul : le trait seul, collé à ses voisins (colonne teintée)
-  const spacer = gap
-    ? `<td width="${gap}" style="width:${gap}px;${filler}">&nbsp;</td>`
-    : "";
+  // Marges choisies de chaque côté (écart ajouté ou retiré) ; écart nul :
+  // le trait seul, collé à son voisin (colonne teintée)
+  const spacer = (g) =>
+    g > 0 ? `<td width="${g}" style="width:${g}px;${filler}">&nbsp;</td>` : "";
+  const left = spacer(Math.max(0, gap + (spec.offsetLeft || 0)));
+  const right = spacer(Math.max(0, gap + (spec.offsetRight || 0)));
+  // Repère d'aperçu : le trait se sélectionne comme un élément
+  const mark = spec.mark ? ' data-sig-block="divider"' : "";
   if (spec.length) {
-    return `${spacer}<td valign="${spec.valign || "middle"}" width="${w}" style="width:${w}px;">${bar({ width: w, height: spec.length, color: spec.color })}</td>${spacer}`;
+    return `${left}<td${mark} valign="${spec.valign || "middle"}" width="${w}" style="width:${w}px;">${bar({ width: w, height: spec.length, color: spec.color })}</td>${right}`;
   }
-  return `${spacer}<td width="${w}" bgcolor="${spec.color}" style="width:${w}px;background-color:${spec.color};${filler}">&nbsp;</td>${spacer}`;
+  return `${left}<td${mark} width="${w}" bgcolor="${spec.color}" style="width:${w}px;background-color:${spec.color};${filler}">&nbsp;</td>${right}`;
 }
 
 /**
@@ -310,7 +314,7 @@ export function hstack(
       const widthStyle = cell.width ? `width:${cell.width}px;` : "";
       const pad = last || separator ? 0 : gap;
       const cellStyle = `${widthStyle}${pad ? `padding:0 ${pad}px 0 0;` : ""}`;
-      const cellHtml = `<td valign="${v}"${width}${cellStyle ? ` style="${cellStyle}"` : ""}>${cell.html}</td>`;
+      const cellHtml = `<td${cell.attrs || ""} valign="${v}"${width}${cellStyle ? ` style="${cellStyle}"` : ""}>${cell.html}</td>`;
       return last || !separator
         ? cellHtml
         : cellHtml + vsepCell(separator, { gap });

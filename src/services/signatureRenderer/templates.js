@@ -67,6 +67,8 @@ const BASE_PRESET = {
   // Blocs et colonnes sur mesure (vides : dimensions du modèle)
   blocks: {},
   columns: {},
+  // Marges du séparateur vertical (vides : celles du modèle)
+  dividerSpace: {},
 };
 
 /** Pied (bouton, bandeau, mention) hors du cadre, pour les modèles encadrés. */

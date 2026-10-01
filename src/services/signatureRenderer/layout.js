@@ -713,6 +713,9 @@ export function renderLayout(b, ctx, theme = {}) {
   // Séparateur photo / texte : gris (« line ») ou couleur principale,
   // épaisseur choisie (sinon 1 px, 4 px pour la barre), longueur choisie
   // (sinon toute la hauteur)
+  // Marges choisies de chaque côté du trait (ajoutées à celles du modèle)
+  const dl = st.dividerSpace?.left || 0;
+  const dr = st.dividerSpace?.right || 0;
   const divider =
     st.divider === "none"
       ? null
@@ -721,7 +724,18 @@ export function renderLayout(b, ctx, theme = {}) {
           width: st.dividerThickness || (st.divider === "bar" ? 4 : 1),
           length: st.dividerLength,
           valign: st.photoValign,
+          offsetLeft: dl,
+          offsetRight: dr,
+          mark: Boolean(ctx.markers),
         };
+  // Repère d'aperçu d'un séparateur dessiné en bordure : le bord porte le trait
+  const edgeMark = (edge) =>
+    ctx.markers ? ` data-sig-block="divider" data-sig-edge="${edge}"` : "";
+  // Un peu d'air avant un trait au bord gauche de la signature
+  const indent = (html) =>
+    dl > 0 && html
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${fullAttr} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${fullStyle}"><tr><td style="padding-left:${dl}px;">${html}</td></tr></table>`
+      : html;
 
   if (solid) {
     // Colonne photo sur la couleur principale, texte en blanc
@@ -799,29 +813,38 @@ export function renderLayout(b, ctx, theme = {}) {
         const textIndex = right ? 0 : 1;
         cells[textIndex] = {
           ...cells[textIndex],
-          html: `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${fullAttr} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${fullStyle}"><tr><td style="border-${right ? "right" : "left"}:${divider.width}px solid ${P};padding:2px ${right ? sp.gap : 0}px 2px ${right ? 0 : sp.gap}px;">${main}</td></tr></table>`,
+          // Côté texte du trait : sa marge (droite si le trait est à gauche
+          // du texte, gauche sinon)
+          html: `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${fullAttr} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${fullStyle}"><tr><td${edgeMark(right ? "right" : "left")} style="border-${right ? "right" : "left"}:${divider.width}px solid ${P};padding:2px ${right ? Math.max(0, sp.gap + dl) : 0}px 2px ${right ? 0 : Math.max(0, sp.gap + dr)}px;">${main}</td></tr></table>`,
         };
       }
       // Trait fin, ou barre d'une longueur choisie : cellule entre les deux
       const separator = divider && !barBorder ? divider : null;
       if (wide) cells[right ? 1 : 0].width = visualWidth;
-      body = hstack(cells, { gap: sp.gap + 4, separator, full: wide });
+      // Barre en bordure : l'écart entre les colonnes est la marge côté photo
+      const gap = barBorder
+        ? Math.max(0, sp.gap + 4 + (right ? dr : dl))
+        : sp.gap + 4;
+      body = hstack(cells, { gap, separator, full: wide });
     }
   } else if (textHtml && (st.divider === "bar" || st.divider === "accent")) {
     // Sans colonne photo, le trait ou la barre du modèle borde le texte à
     // gauche : le modèle garde son caractère
-    body = divider.length
-      ? hstack(
-          [
-            {
-              html: bar({ ...divider, height: divider.length }),
-              valign: "middle",
-            },
-            { html: sideBySide(textHtml, sideHtml), valign: "middle" },
-          ],
-          { gap: sp.gap, full: wide },
-        )
-      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${fullAttr} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${fullStyle}"><tr><td style="border-left:${divider.width}px solid ${P};padding:2px 0 2px ${sp.gap}px;">${sideBySide(textHtml, sideHtml)}</td></tr></table>`;
+    body = indent(
+      divider.length
+        ? hstack(
+            [
+              {
+                html: bar({ ...divider, height: divider.length }),
+                valign: "middle",
+                attrs: ctx.markers ? ' data-sig-block="divider"' : "",
+              },
+              { html: sideBySide(textHtml, sideHtml), valign: "middle" },
+            ],
+            { gap: Math.max(0, sp.gap + dr), full: wide },
+          )
+        : `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${fullAttr} style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${fullStyle}"><tr><td${edgeMark("left")} style="border-left:${divider.width}px solid ${P};padding:2px 0 2px ${Math.max(0, sp.gap + dr)}px;">${sideBySide(textHtml, sideHtml)}</td></tr></table>`,
+    );
   } else if (sideHtml && st.divider !== "none" && textHtml) {
     body = hstack(
       [
