@@ -1093,6 +1093,7 @@ const bankingResolvers = {
             provider: meta.provider || null,
             confidenceScore: meta.confidenceScore ?? null,
             proposedAt: p.proposedAt || null,
+            dismissedAt: p.dismissedAt || null,
             duplicate: dup
               ? {
                   id: dup._id.toString(),

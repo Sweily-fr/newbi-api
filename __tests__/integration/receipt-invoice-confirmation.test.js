@@ -242,18 +242,50 @@ describe("confirmReceiptInvoiceProposal", () => {
 
     const fresh = await Transaction.findById(tx._id);
     expect(fresh.receiptFiles).toHaveLength(1);
-    expect(fresh.receiptFiles[0].ocrProposal).toBeFalsy();
     expect(fresh.receiptFiles[0].purchaseInvoiceId).toBeFalsy();
+    // La proposition est mise de côté, pas perdue
+    expect(fresh.receiptFiles[0].ocrProposal).toBeTruthy();
+    expect(fresh.receiptFiles[0].ocrProposal.dismissedAt).toBeInstanceOf(Date);
   });
 
-  it("refuse une confirmation sans proposition en attente", async () => {
+  it("une facture mise de côté peut encore être créée plus tard", async () => {
+    const tx = await makeTransactionWithProposal();
+    const fileId = tx.receiptFiles[0]._id;
+
+    await confirmReceiptInvoiceProposal({
+      transactionId: tx._id,
+      workspaceId: workspaceId.toString(),
+      userId,
+      fileId,
+      action: "SKIP",
+    });
+
+    const { invoice } = await confirmReceiptInvoiceProposal({
+      transactionId: tx._id,
+      workspaceId: workspaceId.toString(),
+      userId,
+      fileId,
+      action: "CREATE",
+    });
+
+    expect(invoice).toBeTruthy();
+    expect(invoice.invoiceNumber).toBe("04892-13770360");
+
+    const fresh = await Transaction.findById(tx._id);
+    expect(fresh.linkedPurchaseInvoiceIds.map(String)).toContain(
+      invoice._id.toString(),
+    );
+    expect(fresh.receiptFiles[0].ocrProposal).toBeFalsy();
+  });
+
+  it("refuse une confirmation sans proposition", async () => {
     const tx = await makeTransactionWithProposal();
     await confirmReceiptInvoiceProposal({
       transactionId: tx._id,
       workspaceId: workspaceId.toString(),
       userId,
       fileId: tx.receiptFiles[0]._id,
-      action: "SKIP",
+      action: "CREATE",
     });
 
     await expect(
