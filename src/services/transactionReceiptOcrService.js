@@ -416,16 +416,20 @@ async function runOcrForFiles(files, buffersByKey, workspaceId) {
   return results;
 }
 
-async function createPurchaseInvoiceFromReceipt({
+/**
+ * Valeurs de la facture d'achat telle qu'elle serait enregistrée pour ce
+ * justificatif, sans rien écrire. C'est ce que l'utilisateur confirme ou
+ * corrige avant création : `values` est repris tel quel par
+ * createPurchaseInvoiceFromProposal, donc ce qui est affiché est ce qui est
+ * créé. `meta` porte l'extraction (ocrMetadata + réponse du moteur).
+ */
+function buildReceiptInvoiceProposal({
   transaction,
-  receiptFile,
   financial,
   extractedText,
   ocrSucceeded,
   ocrProvider = null,
   extractionQuality = null,
-  workspaceId,
-  userId,
 }) {
   const td = financial?.transaction_data || {};
   const ef = financial?.extracted_fields || {};
@@ -458,27 +462,106 @@ async function createPurchaseInvoiceFromReceipt({
     transaction.date ||
     new Date();
 
+  return {
+    values: {
+      supplierName,
+      invoiceNumber: td.document_number || td.invoice_number || null,
+      issueDate,
+      dueDate: parseOcrDate(td.due_date) || null,
+      amountHT,
+      amountTVA,
+      vatRate,
+      amountTTC,
+      currency,
+      category,
+      subcategory,
+      paymentMethod: mapPaymentMethod(
+        td.payment_method,
+        transaction.metadata?.paymentMethod,
+      ),
+    },
+    meta: {
+      ocrSucceeded,
+      conversionNote,
+      // Identifiants du fournisseur : servent à retrouver sa fiche à la
+      // création (resolveSupplier), jamais saisis par l'utilisateur ici.
+      supplierSiret: ef.vendor_siret || null,
+      supplierVatNumber: ef.vendor_vat_number || null,
+      ocrData: financial || null,
+      ocrMetadata: ocrSucceeded
+        ? {
+            supplierName: td.vendor_name || td.supplier_name || undefined,
+            supplierAddress: ef.vendor_address || undefined,
+            supplierVatNumber: ef.vendor_vat_number || undefined,
+            supplierSiret: ef.vendor_siret || undefined,
+            invoiceNumber: td.document_number || td.invoice_number || undefined,
+            invoiceDate: parseOcrDate(td.transaction_date || td.invoice_date),
+            dueDate: parseOcrDate(td.due_date),
+            amountHT: toPositiveNumber(td.amount_ht),
+            amountTVA: toPositiveNumber(td.tax_amount),
+            vatRate: toNonNegativeNumber(td.tax_rate),
+            // Montant et devise tels que lus sur le justificatif (avant
+            // éventuelle substitution par le débit bancaire converti)
+            amountTTC: toPositiveNumber(td.amount),
+            currency: normalizeCurrency(td.currency) || undefined,
+            confidenceScore:
+              typeof financial?.document_analysis?.confidence === "number" &&
+              financial.document_analysis.confidence >= 0 &&
+              financial.document_analysis.confidence <= 1
+                ? financial.document_analysis.confidence
+                : undefined,
+            rawExtractedText: extractedText
+              ? String(extractedText).slice(0, 50000)
+              : undefined,
+            provider: ocrProvider || undefined,
+            extractionQuality: extractionQuality || "full",
+          }
+        : {
+            // Aucune donnée extraite : facture construite depuis la
+            // transaction, à compléter par l'utilisateur
+            provider: ocrProvider || undefined,
+            extractionQuality: "none",
+          },
+    },
+  };
+}
+
+/**
+ * Crée la facture d'achat d'un justificatif à partir d'une proposition
+ * confirmée (valeurs éventuellement corrigées par l'utilisateur).
+ */
+async function createPurchaseInvoiceFromProposal({
+  transaction,
+  receiptFile,
+  proposal,
+  workspaceId,
+  userId,
+}) {
+  const values = proposal?.values || {};
+  const meta = proposal?.meta || {};
+
+  if (!(Number(values.amountTTC) > 0)) {
+    throw new Error("Montant TTC manquant sur la facture d'achat à créer");
+  }
+
   const invoice = new PurchaseInvoice({
-    supplierName,
-    invoiceNumber: td.document_number || td.invoice_number || undefined,
-    issueDate,
-    dueDate: parseOcrDate(td.due_date) || undefined,
-    amountHT,
-    amountTVA,
-    vatRate,
-    amountTTC,
-    currency,
+    supplierName: values.supplierName || "Fournisseur inconnu",
+    invoiceNumber: values.invoiceNumber || undefined,
+    issueDate: values.issueDate || transaction.date || new Date(),
+    dueDate: values.dueDate || undefined,
+    amountHT: values.amountHT,
+    amountTVA: values.amountTVA,
+    vatRate: values.vatRate,
+    amountTTC: values.amountTTC,
+    currency: values.currency,
     // Le débit bancaire a déjà eu lieu : la facture est payée et rapprochée
     status: "PAID",
     paymentDate: transaction.date || new Date(),
-    paymentMethod: mapPaymentMethod(
-      td.payment_method,
-      transaction.metadata?.paymentMethod,
-    ),
-    category,
-    subcategory,
+    paymentMethod: values.paymentMethod,
+    category: values.category,
+    subcategory: values.subcategory,
     source: "OCR",
-    notes: `Créée automatiquement depuis le justificatif de la transaction "${transaction.description || transaction.externalId || transaction._id}".${conversionNote}`,
+    notes: `Créée depuis le justificatif de la transaction "${transaction.description || transaction.externalId || transaction._id}".${meta.conversionNote || ""}`,
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
     createdBy: userId,
     linkedTransactionIds: [transaction._id],
@@ -491,44 +574,11 @@ async function createPurchaseInvoiceFromReceipt({
         path: receiptFile.key,
         size: receiptFile.size,
         url: receiptFile.url,
-        ocrProcessed: ocrSucceeded,
-        ocrData: financial || null,
+        ocrProcessed: Boolean(meta.ocrSucceeded),
+        ocrData: meta.ocrData || null,
       },
     ],
-    ocrMetadata: ocrSucceeded
-      ? {
-          supplierName: td.vendor_name || td.supplier_name || undefined,
-          supplierAddress: ef.vendor_address || undefined,
-          supplierVatNumber: ef.vendor_vat_number || undefined,
-          supplierSiret: ef.vendor_siret || undefined,
-          invoiceNumber: td.document_number || td.invoice_number || undefined,
-          invoiceDate: parseOcrDate(td.transaction_date || td.invoice_date),
-          dueDate: parseOcrDate(td.due_date),
-          amountHT: toPositiveNumber(td.amount_ht),
-          amountTVA: toPositiveNumber(td.tax_amount),
-          vatRate: toNonNegativeNumber(td.tax_rate),
-          // Montant et devise tels que lus sur le justificatif (avant
-          // éventuelle substitution par le débit bancaire converti)
-          amountTTC: toPositiveNumber(td.amount),
-          currency: normalizeCurrency(td.currency) || undefined,
-          confidenceScore:
-            typeof financial?.document_analysis?.confidence === "number" &&
-            financial.document_analysis.confidence >= 0 &&
-            financial.document_analysis.confidence <= 1
-              ? financial.document_analysis.confidence
-              : undefined,
-          rawExtractedText: extractedText
-            ? String(extractedText).slice(0, 50000)
-            : undefined,
-          provider: ocrProvider || undefined,
-          extractionQuality: extractionQuality || "full",
-        }
-      : {
-          // Aucune donnée extraite : facture construite depuis la transaction,
-          // à compléter par l'utilisateur
-          provider: ocrProvider || undefined,
-          extractionQuality: "none",
-        },
+    ocrMetadata: meta.ocrMetadata,
   });
 
   try {
@@ -537,12 +587,12 @@ async function createPurchaseInvoiceFromReceipt({
     // facture : « Canva » lu sur le PDF devient « Canva Pty. Ltd. ».
     const { supplier, matchedBy } = await resolveSupplier({
       workspaceId,
-      name: supplierName,
-      siret: ef.vendor_siret || null,
-      vatNumber: ef.vendor_vat_number || null,
+      name: invoice.supplierName,
+      siret: meta.supplierSiret || null,
+      vatNumber: meta.supplierVatNumber || null,
       transaction,
       userId,
-      category,
+      category: values.category,
     });
     invoice.supplierId = supplier._id;
     if (matchedBy !== "created" && supplier.name) {
@@ -552,7 +602,7 @@ async function createPurchaseInvoiceFromReceipt({
     // Nom invalide pour le schéma Supplier (ex: < 2 ou > 100 caractères) :
     // la facture est créée sans fournisseur lié
     logger.warn(
-      `⚠️ [RECEIPT OCR] Fournisseur non créé ("${supplierName}"): ${supplierError.message}`,
+      `⚠️ [RECEIPT OCR] Fournisseur non créé ("${invoice.supplierName}"): ${supplierError.message}`,
     );
   }
 
@@ -623,11 +673,19 @@ async function findExistingPurchaseInvoiceForReceipt({
 
   if (!candidate) return null;
 
+  // Pourquoi cette facture ressemble à celle du justificatif : repris tel
+  // quel dans la demande de confirmation côté interface.
+  const reason = !ocrSucceeded
+    ? "LINKED"
+    : sameInvoiceNumber(ocrNumber, candidate.invoiceNumber)
+      ? "NUMBER"
+      : "SUPPLIER_AMOUNT";
+
   const canAbsorb = await purchaseInvoiceCanAbsorbTransaction(
     candidate,
     transaction,
   );
-  if (canAbsorb) return { invoice: candidate, linkTransaction: true };
+  if (canAbsorb) return { invoice: candidate, linkTransaction: true, reason };
 
   // Facture déjà couverte par d'autres débits. Deux issues selon la raison
   // pour laquelle on est tombé dessus :
@@ -639,7 +697,7 @@ async function findExistingPurchaseInvoiceForReceipt({
     logger.info(
       `ℹ️ [RECEIPT OCR] Facture ${candidate._id} (${candidate.amountTTC} ${candidate.currency || "EUR"}) déjà couverte : justificatif rattaché au document, mais transaction ${transaction._id} (${transaction.amount}) laissée à rapprocher`,
     );
-    return { invoice: candidate, linkTransaction: false };
+    return { invoice: candidate, linkTransaction: false, reason };
   }
   // Simple ressemblance (fournisseur + montant + dates proches) : ce n'est
   // pas le même document, on crée la facture manquante.
@@ -777,6 +835,77 @@ async function attachReceiptToExistingPurchaseInvoice({
 }
 
 /**
+ * Rattache le justificatif et (selon le cas) la transaction à la facture
+ * d'achat retenue, puis efface la proposition en attente.
+ *
+ * `linkTransaction` est faux quand la facture est déjà couverte par d'autres
+ * débits : le fichier y est déposé, mais la dépense reste à rapprocher.
+ */
+async function finalizeReceiptInvoiceLink({
+  transaction,
+  receiptFile,
+  invoice,
+  linkTransaction,
+  workspaceId,
+  userId,
+}) {
+  if (linkTransaction) {
+    // Origine du lien : justificatif déposé (étiquette côté UI).
+    const receiptLink = buildReconciliationLinkEntry({
+      documentType: "PURCHASE_INVOICE",
+      documentId: invoice._id,
+      origin: "RECEIPT",
+      userId,
+    });
+    await forgetReconciliationLink(
+      { _id: transaction._id, workspaceId },
+      "PURCHASE_INVOICE",
+      [invoice._id],
+    );
+    await Transaction.updateOne(
+      { _id: transaction._id, workspaceId },
+      {
+        $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
+        $push: { reconciliationLinks: receiptLink },
+        $set: {
+          reconciliationStatus: "matched",
+          reconciliationDate: new Date(),
+          "receiptFiles.$[elem].purchaseInvoiceId": invoice._id,
+          "receiptFiles.$[elem].ocrProposal": null,
+        },
+      },
+      { arrayFilters: [{ "elem._id": receiptFile._id }] },
+    );
+
+    // La facture fait foi : la transaction rapprochée prend la catégorie de
+    // la facture créée, pour un affichage identique sur les deux pages.
+    // Exception : catégorie choisie à la main sur la transaction, c'est
+    // alors la facture qui vient d'en hériter (cf. resolveReceiptInvoiceCategory).
+    if (!(transaction.categoryIsManual && transaction.category)) {
+      await syncLinkedTransactionCategories({
+        category: invoice.category,
+        subcategory: invoice.subcategory,
+        workspaceId,
+        transactionIds: [transaction._id],
+      });
+    }
+  } else {
+    // Facture déjà couverte : on note seulement d'où vient le fichier, la
+    // dépense reste à rapprocher et n'hérite pas de la catégorie.
+    await Transaction.updateOne(
+      { _id: transaction._id, workspaceId },
+      {
+        $set: {
+          "receiptFiles.$[elem].purchaseInvoiceId": invoice._id,
+          "receiptFiles.$[elem].ocrProposal": null,
+        },
+      },
+      { arrayFilters: [{ "elem._id": receiptFile._id }] },
+    );
+  }
+}
+
+/**
  * Point d'entrée : traite les justificatifs non encore traités d'une
  * transaction dépense et crée les factures d'achat correspondantes.
  *
@@ -827,7 +956,7 @@ async function processReceiptsForTransaction({
     return [];
   }
 
-  const createdInvoices = [];
+  const proposals = [];
   const startedAt = Date.now();
 
   // 1) Claim atomique de chaque justificatif (rapide) pour éviter un double
@@ -912,111 +1041,56 @@ async function processReceiptsForTransaction({
       }
       transaction.linkedPurchaseInvoiceIds = fresh.linkedPurchaseInvoiceIds;
 
-      // Déduplication : facture existante (même numéro / fournisseur +
-      // montant, ou facture déjà liée si l'OCR a échoué) → on y rattache le
-      // justificatif et la transaction au lieu de créer un doublon.
+      // Facture existante qui ressemble au justificatif : proposée comme
+      // choix (« Rattacher » / « Créer quand même »), jamais appliquée seule.
+      // Une détection trop large (même numéro mal lu, même montant à quelques
+      // jours d'écart) faisait disparaître la facture sans que l'utilisateur
+      // le sache.
       const existing = await findExistingPurchaseInvoiceForReceipt({
         transaction,
         financial,
         ocrSucceeded,
         workspaceId,
       });
-      // La facture peut être retrouvée sans que la transaction doive y être
-      // liée : même document, mais facture déjà couverte par d'autres débits.
-      const linkTransaction = existing ? existing.linkTransaction : true;
 
-      let invoice;
-      if (existing) {
-        invoice = await attachReceiptToExistingPurchaseInvoice({
-          invoice: existing.invoice,
-          transaction,
-          receiptFile,
-          financial,
-          ocrSucceeded,
-          workspaceId,
-          linkTransaction,
-        });
-        logger.info(
-          `ℹ️ [RECEIPT OCR] Justificatif ${receiptFile.filename} rattaché à la facture d'achat existante ${existing.invoice._id}${linkTransaction ? "" : " (transaction non liée : facture déjà couverte)"} (transaction ${transaction._id})`,
-        );
-      } else {
-        invoice = await createPurchaseInvoiceFromReceipt({
-          transaction,
-          receiptFile,
-          financial,
-          extractedText,
-          ocrSucceeded,
-          ocrProvider,
-          extractionQuality,
-          workspaceId,
-          userId,
-        });
-      }
+      // Rien n'est créé ici : on enregistre ce qui SERAIT enregistré, pour
+      // que l'utilisateur confirme ou corrige les valeurs lues (mutation
+      // confirmTransactionReceiptInvoice).
+      const proposal = buildReceiptInvoiceProposal({
+        transaction,
+        financial,
+        extractedText,
+        ocrSucceeded,
+        ocrProvider,
+        extractionQuality,
+      });
 
-      if (linkTransaction) {
-        // Origine du lien : justificatif déposé (étiquette côté UI).
-        const receiptLink = buildReconciliationLinkEntry({
-          documentType: "PURCHASE_INVOICE",
-          documentId: invoice._id,
-          origin: "RECEIPT",
-          userId,
-        });
-        await forgetReconciliationLink(
-          { _id: transaction._id, workspaceId },
-          "PURCHASE_INVOICE",
-          [invoice._id],
-        );
-        await Transaction.updateOne(
-          { _id: transaction._id, workspaceId },
-          {
-            $addToSet: { linkedPurchaseInvoiceIds: invoice._id },
-            $push: { reconciliationLinks: receiptLink },
-            $set: {
-              reconciliationStatus: "matched",
-              reconciliationDate: new Date(),
-              "receiptFiles.$[elem].purchaseInvoiceId": invoice._id,
+      await Transaction.updateOne(
+        { _id: transaction._id, workspaceId },
+        {
+          $set: {
+            "receiptFiles.$[elem].ocrProposal": {
+              values: proposal.values,
+              meta: proposal.meta,
+              duplicateInvoiceId: existing?.invoice?._id || null,
+              duplicateLinkTransaction: existing ? existing.linkTransaction : true,
+              duplicateReason: existing?.reason || null,
+              proposedAt: new Date(),
             },
           },
-          { arrayFilters: [{ "elem._id": receiptFile._id }] },
-        );
+        },
+        { arrayFilters: [{ "elem._id": receiptFile._id }] },
+      );
 
-        // La facture fait foi : la transaction rapprochée prend la catégorie de
-        // la facture créée, pour un affichage identique sur les deux pages.
-        // Exception : catégorie choisie à la main sur la transaction, c'est
-        // alors la facture qui vient d'en hériter (cf. resolveReceiptInvoiceCategory).
-        if (!(transaction.categoryIsManual && transaction.category)) {
-          await syncLinkedTransactionCategories({
-            category: invoice.category,
-            subcategory: invoice.subcategory,
-            workspaceId,
-            transactionIds: [transaction._id],
-          });
-        }
-      } else {
-        // Facture déjà couverte : on note seulement d'où vient le fichier, la
-        // dépense reste à rapprocher et n'hérite pas de la catégorie.
-        await Transaction.updateOne(
-          { _id: transaction._id, workspaceId },
-          {
-            $set: {
-              "receiptFiles.$[elem].purchaseInvoiceId": invoice._id,
-            },
-          },
-          { arrayFilters: [{ "elem._id": receiptFile._id }] },
-        );
-      }
-
-      createdInvoices.push(invoice);
-      if (!existing) {
-        logger.info(
-          `✅ [RECEIPT OCR] Facture d'achat ${invoice._id} créée depuis le justificatif ${receiptFile.filename} (transaction ${transaction._id})`,
-        );
-      }
+      proposals.push({ receiptFile, proposal, existing });
+      logger.info(
+        `✅ [RECEIPT OCR] Facture d'achat proposée depuis le justificatif ${receiptFile.filename}${existing ? ` (ressemble à la facture ${existing.invoice._id}, motif ${existing.reason})` : ""}, en attente de confirmation (transaction ${transaction._id})`,
+      );
     } catch (error) {
       // Libérer le claim pour permettre un retraitement ultérieur, et garder
       // la raison pour que l'utilisateur soit averti au lieu d'attendre.
       console.error(
-        `❌ [RECEIPT OCR] Échec création facture d'achat pour ${receiptFile.filename}:`,
+        `❌ [RECEIPT OCR] Échec de l'analyse de ${receiptFile.filename}:`,
         error.message,
       );
       await Transaction.updateOne(
@@ -1038,7 +1112,7 @@ async function processReceiptsForTransaction({
   logger.info(
     `⏱️ [RECEIPT OCR] ${claimedFiles.length} justificatif(s) traité(s) en ${((Date.now() - startedAt) / 1000).toFixed(1)}s dont ${ocrElapsed}s d'OCR (transaction ${transaction._id})`,
   );
-  return createdInvoices;
+  return proposals;
 }
 
 /**
@@ -1050,6 +1124,139 @@ async function processReceiptsForTransaction({
  *  - HT et TVA connus sans TTC → TTC = HT + TVA.
  * Le taux explicite est gardé, sinon dérivé de TVA / HT.
  */
+/**
+ * Applique la décision de l'utilisateur sur une facture d'achat proposée.
+ *
+ * - CREATE : crée la facture avec les valeurs confirmées (corrections
+ *   comprises), même si une facture existante lui ressemble ;
+ * - ATTACH : rattache le justificatif à une facture existante (celle
+ *   proposée par défaut, ou une autre choisie à la main) ;
+ * - SKIP   : ne crée rien, le justificatif reste attaché à la transaction.
+ *
+ * @returns {Promise<{action: string, invoice: ?Object}>}
+ */
+async function confirmReceiptInvoiceProposal({
+  transactionId,
+  workspaceId,
+  userId,
+  fileId,
+  action,
+  values = null,
+  purchaseInvoiceId = null,
+}) {
+  const transaction = await Transaction.findOne({
+    _id: transactionId,
+    workspaceId,
+  });
+  if (!transaction) {
+    throw new Error("Transaction non trouvée");
+  }
+
+  const receiptFile = (transaction.receiptFiles || []).find(
+    (f) => String(f._id) === String(fileId),
+  );
+  if (!receiptFile) {
+    throw new Error("Justificatif introuvable");
+  }
+
+  const proposal = receiptFile.ocrProposal;
+  if (!proposal) {
+    throw new Error("Aucune facture d'achat en attente pour ce justificatif");
+  }
+
+  if (action === "SKIP") {
+    // La proposition est mise de côté, pas supprimée : l'utilisateur peut
+    // toujours créer la facture plus tard depuis le justificatif.
+    await Transaction.updateOne(
+      { _id: transaction._id, workspaceId },
+      { $set: { "receiptFiles.$[elem].ocrProposal.dismissedAt": new Date() } },
+      { arrayFilters: [{ "elem._id": receiptFile._id }] },
+    );
+    logger.info(
+      `ℹ️ [RECEIPT OCR] Aucune facture d'achat créée pour ${receiptFile.filename} (mise de côté par l'utilisateur, transaction ${transaction._id})`,
+    );
+    return { action, invoice: null };
+  }
+
+  if (action === "ATTACH") {
+    const targetId = purchaseInvoiceId || proposal.duplicateInvoiceId;
+    if (!targetId) {
+      throw new Error("Aucune facture d'achat à laquelle rattacher");
+    }
+    const invoice = await PurchaseInvoice.findOne({
+      _id: targetId,
+      workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    });
+    if (!invoice) {
+      throw new Error("Facture d'achat introuvable");
+    }
+    // Une facture choisie à la main est rattachée pour de bon ; seule la
+    // facture proposée peut porter l'avertissement « déjà couverte ».
+    const linkTransaction = purchaseInvoiceId
+      ? await purchaseInvoiceCanAbsorbTransaction(invoice, transaction)
+      : proposal.duplicateLinkTransaction !== false;
+
+    const updated = await attachReceiptToExistingPurchaseInvoice({
+      invoice,
+      transaction,
+      receiptFile,
+      financial: proposal.meta?.ocrData || null,
+      ocrSucceeded: Boolean(proposal.meta?.ocrSucceeded),
+      workspaceId,
+      linkTransaction,
+    });
+    await finalizeReceiptInvoiceLink({
+      transaction,
+      receiptFile,
+      invoice: updated,
+      linkTransaction,
+      workspaceId,
+      userId,
+    });
+    logger.info(
+      `ℹ️ [RECEIPT OCR] Justificatif ${receiptFile.filename} rattaché à la facture d'achat ${updated._id}${linkTransaction ? "" : " (transaction non liée : facture déjà couverte)"} (transaction ${transaction._id})`,
+    );
+    return { action, invoice: updated };
+  }
+
+  // CREATE : les valeurs confirmées par l'utilisateur priment sur celles lues.
+  const confirmed = {
+    ...proposal.values,
+    ...Object.fromEntries(
+      Object.entries(values || {}).filter(([, v]) => v !== undefined),
+    ),
+  };
+  // Catégorie changée à la main : sous-catégorie fine → catégorie large
+  // dérivée, comme à l'enregistrement d'une facture d'achat.
+  if (values?.subcategory !== undefined || values?.category !== undefined) {
+    const resolved = resolvePurchaseInvoiceCategoryInput({
+      subcategory: values.subcategory,
+      category: values.category,
+    });
+    confirmed.category = resolved.category;
+    confirmed.subcategory = resolved.subcategory;
+  }
+  const invoice = await createPurchaseInvoiceFromProposal({
+    transaction,
+    receiptFile,
+    proposal: { values: confirmed, meta: proposal.meta },
+    workspaceId,
+    userId,
+  });
+  await finalizeReceiptInvoiceLink({
+    transaction,
+    receiptFile,
+    invoice,
+    linkTransaction: true,
+    workspaceId,
+    userId,
+  });
+  logger.info(
+    `✅ [RECEIPT OCR] Facture d'achat ${invoice._id} créée après confirmation depuis ${receiptFile.filename} (transaction ${transaction._id})`,
+  );
+  return { action, invoice };
+}
+
 function reconcileAmounts({ amountHT, amountTVA, amountTTC, vatRate }) {
   let ht = amountHT;
   let tva = amountTVA;
@@ -1436,11 +1643,14 @@ async function analyzePurchaseInvoiceFiles({
 export {
   findExistingPurchaseInvoiceForReceipt,
   purchaseInvoiceCanAbsorbTransaction,
+  buildReceiptInvoiceProposal,
+  confirmReceiptInvoiceProposal,
 };
 
 export default {
   resolveReceiptAmounts,
   processReceiptsForTransaction,
+  confirmReceiptInvoiceProposal,
   isExpenseTransaction,
   analyzePurchaseInvoiceFile,
   analyzePurchaseInvoiceFiles,
