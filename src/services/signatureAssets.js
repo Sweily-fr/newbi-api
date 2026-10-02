@@ -211,9 +211,10 @@ export async function processImage(buffer, kind, options = {}) {
 
   image = await OUTPUT[kind](image, options);
 
-  // La transparence est conservée (PNG) quand la source en a : c'est ce qui
-  // permet aux clients mail en mode sombre d'adapter le logo. Sinon JPEG,
-  // plus léger, et une photo opaque n'est jamais inversée.
+  // La transparence est conservée (PNG) quand la source en a : le logo
+  // n'a pas de cadre blanc en mode sombre (un logo très foncé y devient en
+  // revanche peu lisible). Sinon JPEG, plus léger, et une photo opaque
+  // n'est jamais inversée.
   const keepAlpha = Boolean(meta.hasAlpha) && kind !== "PHOTO";
   const output = keepAlpha
     ? image.png({ compressionLevel: 9, palette: false })

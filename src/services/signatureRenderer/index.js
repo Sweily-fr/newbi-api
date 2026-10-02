@@ -494,9 +494,11 @@ export function renderSignature(
       "La signature peut dépasser la limite de 10 000 caractères de Gmail. Si Gmail la refuse, retirez un élément (réseaux, bannière…) ou raccourcissez les textes.",
     );
   }
+  // Un PNG transparent n'est pas toujours mieux : un logo noir ou très
+  // foncé y devient presque invisible en mode sombre
   if (sig.images.logo?.url && /\.jpe?g($|\?)/i.test(sig.images.logo.url)) {
     warnings.push(
-      "Le logo est un JPEG : il aura un fond blanc en mode sombre. Préférez un PNG à fond transparent.",
+      "Le logo est un JPEG : son fond blanc reste visible en mode sombre. Un PNG à fond transparent l'évite, sauf pour un logo noir ou très foncé, plus lisible sur fond blanc.",
     );
   }
 
