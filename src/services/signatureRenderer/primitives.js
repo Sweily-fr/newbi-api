@@ -390,6 +390,9 @@ export function iconRow(items, { size, gap = 8, align = "left" } = {}) {
 /**
  * Photo : VML pour Outlook bureau (qui ignore border-radius), <img> arrondie
  * partout ailleurs. La photo est servie déjà recadrée en carré.
+ * `roundSrc` : la même photo déjà détourée (coins transparents, contour
+ * compris) ; une simple image suffit alors, ronde partout, même collée
+ * depuis Gmail qui retire le VML.
  */
 export function photo({
   src,
@@ -398,7 +401,12 @@ export function photo({
   alt = "Photo",
   border = 0,
   borderColor = "#ffffff",
+  roundSrc = null,
 }) {
+  if (roundSrc && shape !== "square") {
+    const total = size + 2 * border;
+    return img({ src: roundSrc, width: total, height: total, alt });
+  }
   const radius =
     shape === "circle"
       ? "50%"

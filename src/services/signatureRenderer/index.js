@@ -441,11 +441,15 @@ export function plainText(sig) {
 
 /**
  * Rend une signature.
+ * `roundPhoto({ shape, size, border, borderColor })` : URL de la photo déjà
+ * détourée pour ce rendu, ou null (arrondi CSS et VML). Rendu propre
+ * seulement : l'aperçu garde l'arrondi CSS, qui suit les réglages sans
+ * attendre.
  * @returns {{ html: string, text: string, chars: number, warnings: string[] }}
  */
 export function renderSignature(
   input,
-  { iconUrl = defaultIconUrl, markers = false } = {},
+  { iconUrl = defaultIconUrl, markers = false, roundPhoto = null } = {},
 ) {
   const sig = normalizeSignature(input);
   const st = sig.style;
@@ -456,6 +460,7 @@ export function renderSignature(
     sp: SPACING[st.spacing],
     iconUrl,
     markers,
+    roundPhoto: markers ? null : roundPhoto,
     // Style effectivement appliqué à chaque élément de texte (modèle +
     // réglages), renvoyé à l'éditeur pour afficher les bonnes valeurs.
     resolved: {},

@@ -4,10 +4,16 @@
  *
  * Les icônes sont immuables : (kind, name, style, couleur) → un fichier PNG,
  * généré une fois puis servi depuis R2 pour toujours. C'est ce qui permet
- * une couleur libre sans manipulation manuelle du bucket.
+ * une couleur libre sans manipulation manuelle du bucket. Les photos
+ * détourées (rondes pour Outlook bureau) suivent le même principe.
  */
 
-import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { createHash } from "node:crypto";
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+} from "@aws-sdk/client-s3";
 import heicDecode from "heic-decode";
 import sharp from "sharp";
 import cloudflareService from "./cloudflareService.js";
@@ -24,10 +30,11 @@ import {
 /** Clés dont l'existence sur R2 a déjà été vérifiée dans ce processus. */
 const knownKeys = new Set();
 
-async function objectExists(key) {
+async function objectExists(key, bucket = ICONS_BUCKET) {
   try {
     await cloudflareService.client.send(
-      new HeadObjectCommand({ Bucket: ICONS_BUCKET, Key: key }),
+      new HeadObjectCommand({ Bucket: bucket, Key: key }),
+      { abortSignal: AbortSignal.timeout(5000) },
     );
     return true;
   } catch (error) {
@@ -117,6 +124,161 @@ export async function ensureSamplePhoto() {
 export async function ensureIcons(specs) {
   const unique = new Map(specs.map((s) => [iconKey(s), s]));
   await Promise.all([...unique.values()].map(ensureIcon));
+}
+
+// ── Photo détourée ────────────────────────────────────────────────────────
+// Outlook bureau ignore border-radius, et Gmail retire au collage le VML qui
+// arrondit la photo pour lui : une photo ronde y arrivait carrée. La photo
+// est donc aussi servie déjà détourée (PNG à coins transparents, contour
+// compris), sous une clé déterministe dans le dossier de la photo. Une
+// variante n'est jamais supprimée : les e-mails déjà envoyés y renvoient.
+
+/** Version du dessin : la changer régénère toutes les variantes. */
+const ROUND_PHOTO_VERSION = "v1";
+/** Variantes dont l'existence sur R2 est connue : clé → URL. */
+const roundPhotos = new Map();
+/** Générations en cours (une seule par variante) et échecs récents. */
+const roundPending = new Map();
+const roundFailed = new Map();
+const ROUND_RETRY_MS = 10 * 60 * 1000;
+
+/**
+ * Clé et URL de la photo détourée pour un rendu donné (forme, taille,
+ * contour), ou null si ce rendu n'en a pas besoin (photo carrée) ou si la
+ * photo n'est pas une image de signature connue (sans clé, adresse
+ * inattendue).
+ */
+function roundPhotoTarget(photo, { shape, size, border = 0, borderColor = "" }) {
+  if (shape !== "circle" && shape !== "rounded") return null;
+  const key = photo?.key;
+  if (!key || !photo.url?.endsWith(`/${key}`)) return null;
+  if (!(size > 0) || border < 0) return null;
+  const color = border > 0 ? String(borderColor).toLowerCase() : "";
+  if (border > 0 && !/^#[0-9a-f]{3,8}$/.test(color)) return null;
+  const hash = createHash("sha1")
+    .update([key, shape, size, border, color, ROUND_PHOTO_VERSION].join("|"))
+    .digest("hex")
+    .slice(0, 16);
+  const target = `${key.slice(0, key.lastIndexOf("/") + 1)}round-${hash}.png`;
+  return {
+    key: target,
+    url: `${photo.url.slice(0, photo.url.length - key.length)}${target}`,
+  };
+}
+
+/**
+ * Dessine la photo détourée en 2x : photo masquée (cercle, ou carré aux
+ * coins arrondis à 15 % comme le CSS) et contour par-dessus, mesurés comme
+ * une bordure CSS (taille + 2 x contour au total). PNG en palette : 15 à
+ * 25 Ko, visuellement identique au PNG 24 bits.
+ */
+export async function renderRoundPhoto(source, { shape, size, border = 0, borderColor }) {
+  const P = Math.round(size * 2);
+  const B = Math.round(border * 2);
+  const W = P + 2 * B;
+  const outer = shape === "circle" ? W / 2 : Math.round(size * 0.15) * 2;
+  const inner = Math.max(0, outer - B);
+  // Sous le contour, la photo déborde d'un pixel : pas de liseré clair
+  const bleed = B > 0 ? 1 : 0;
+  const svg = (w, body) =>
+    Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${w}">${body}</svg>`,
+    );
+  const mask =
+    shape === "circle"
+      ? `<circle cx="${P / 2}" cy="${P / 2}" r="${P / 2 + bleed}" fill="#fff"/>`
+      : `<rect x="${-bleed}" y="${-bleed}" width="${P + 2 * bleed}" height="${P + 2 * bleed}" rx="${inner + bleed}" fill="#fff"/>`;
+  const face = await sharp(source, { failOn: "none" })
+    .resize(P, P, { fit: "cover" })
+    .ensureAlpha()
+    .composite([{ input: svg(P, mask), blend: "dest-in" }])
+    .png()
+    .toBuffer();
+  const layers = [{ input: face, left: B, top: B }];
+  if (B > 0) {
+    const ring =
+      shape === "circle"
+        ? `<circle cx="${W / 2}" cy="${W / 2}" r="${W / 2 - B / 2}" fill="none" stroke="${borderColor}" stroke-width="${B}"/>`
+        : `<rect x="${B / 2}" y="${B / 2}" width="${W - B}" height="${W - B}" rx="${Math.max(0, outer - B / 2)}" fill="none" stroke="${borderColor}" stroke-width="${B}"/>`;
+    layers.push({ input: svg(W, ring) });
+  }
+  return sharp({
+    create: {
+      width: W,
+      height: W,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite(layers)
+    .png({ palette: true, quality: 90, compressionLevel: 9, effort: 10 })
+    .toBuffer();
+}
+
+async function createRoundPhoto(photo, spec, target) {
+  const Bucket = cloudflareService.signatureBucketName;
+  try {
+    if (!(await objectExists(target.key, Bucket))) {
+      const source = await cloudflareService.client.send(
+        new GetObjectCommand({ Bucket, Key: photo.key }),
+        { abortSignal: AbortSignal.timeout(5000) },
+      );
+      const png = await renderRoundPhoto(
+        Buffer.from(await source.Body.transformToByteArray()),
+        spec,
+      );
+      await cloudflareService.client.send(
+        new PutObjectCommand({
+          Bucket,
+          Key: target.key,
+          Body: png,
+          ContentType: "image/png",
+          CacheControl: "public, max-age=31536000, immutable",
+        }),
+        { abortSignal: AbortSignal.timeout(10000) },
+      );
+      logger.info(`[signatureAssets] Photo détourée générée : ${target.key}`);
+    }
+    if (roundPhotos.size > 5000) roundPhotos.clear();
+    roundPhotos.set(target.key, target.url);
+    return target.url;
+  } catch (error) {
+    roundFailed.set(target.key, Date.now() + ROUND_RETRY_MS);
+    logger.warn(
+      `[signatureAssets] Photo détourée impossible (${target.key}) : ${error.message}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Garantit la photo détourée d'un rendu sur R2 et renvoie son URL, ou null
+ * (photo carrée, échec) : le rendu garde alors l'arrondi CSS et le VML.
+ * Ne lève jamais.
+ */
+export async function ensureRoundPhoto(photo, spec) {
+  const target = roundPhotoTarget(photo, spec);
+  if (!target) return null;
+  if (roundPhotos.has(target.key)) return target.url;
+  if ((roundFailed.get(target.key) || 0) > Date.now()) return null;
+  if (!roundPending.has(target.key)) {
+    roundPending.set(
+      target.key,
+      createRoundPhoto(photo, spec, target).finally(() =>
+        roundPending.delete(target.key),
+      ),
+    );
+  }
+  return roundPending.get(target.key);
+}
+
+/**
+ * URL de la photo détourée si elle existe déjà sur R2, sinon null : le HTML
+ * copié ne renvoie jamais vers un fichier pas encore créé.
+ */
+export function roundPhotoUrl(photo, spec) {
+  const target = roundPhotoTarget(photo, spec);
+  return target && roundPhotos.has(target.key) ? target.url : null;
 }
 
 /** Limites de traitement des images utilisateur. */

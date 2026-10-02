@@ -39,9 +39,11 @@ import {
 } from "../services/signatureRenderer/constants.js";
 import {
   ensureIcons,
+  ensureRoundPhoto,
   ensureSamplePhoto,
   ImageInputError,
   importSignatureImage,
+  roundPhotoUrl,
   storeSignatureImage,
 } from "../services/signatureAssets.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -229,11 +231,42 @@ async function ensureIconsSoon(data) {
 }
 
 /**
+ * Photo ronde (ou arrondie) déjà détourée pour le HTML à copier : Outlook
+ * bureau ignore border-radius, et Gmail retire au collage le VML prévu pour
+ * lui. Attente bornée comme pour les icônes (`waitMs`, Infinity pour
+ * l'e-mail de test) ; tant que la variante n'existe pas, le rendu garde
+ * l'arrondi CSS et le VML. Renvoie l'option `roundPhoto` du rendu.
+ */
+async function roundPhotoSoon(data, waitMs = 3000) {
+  const photo = data.images?.photo;
+  if (!photo?.key) return null;
+  // Forme, taille et contour réellement rendus (le modèle peut les borner)
+  const specs = new Map();
+  renderSignature(data, {
+    roundPhoto: (spec) => {
+      specs.set(JSON.stringify(spec), spec);
+      return null;
+    },
+  });
+  if (specs.size === 0) return null;
+  const work = Promise.all(
+    [...specs.values()].map((spec) => ensureRoundPhoto(photo, spec)),
+  );
+  await (Number.isFinite(waitMs)
+    ? Promise.race([
+        work,
+        new Promise((resolve) => setTimeout(resolve, waitMs)),
+      ])
+    : work);
+  return (spec) => roundPhotoUrl(photo, spec);
+}
+
+/**
  * Rendu propre (à copier) + rendu d'aperçu, dont chaque élément porte
  * l'identifiant du champ qui le pilote, pour l'éditeur.
  */
-function withPreview(data) {
-  const result = renderSignature(data);
+function withPreview(data, roundPhoto = null) {
+  const result = renderSignature(data, { roundPhoto });
   return {
     ...result,
     previewHtml: renderSignature(data, { markers: true }).html,
@@ -305,8 +338,11 @@ const emailSignatureV2Resolvers = {
     style: (doc) => normalizeSignature(plain(doc)).style,
     render: async (doc) => {
       const data = plain(doc);
-      await ensureIconsSoon(data);
-      return withPreview(data);
+      const [, roundPhoto] = await Promise.all([
+        ensureIconsSoon(data),
+        roundPhotoSoon(data),
+      ]);
+      return withPreview(data, roundPhoto);
     },
   },
 
@@ -358,8 +394,12 @@ const emailSignatureV2Resolvers = {
         let current = { images: { photo: null, logo: null, banner: null } };
         if (id) current = plain(await findOwned(id, ctx));
         const data = mergeInput(current, input || {});
-        await ensureIconsSoon(data);
-        return withPreview(data);
+        // Sert aussi au bouton Copier : la photo détourée y est attendue
+        const [, roundPhoto] = await Promise.all([
+          ensureIconsSoon(data),
+          roundPhotoSoon(data),
+        ]);
+        return withPreview(data, roundPhoto);
       },
     ),
 
@@ -423,14 +463,19 @@ const emailSignatureV2Resolvers = {
           );
         }
         const data = plain(await findOwned(id, ctx));
-        // Les icônes doivent exister avant l'envoi (générées à la demande)
+        // Les icônes et la photo détourée doivent exister avant l'envoi
+        // (générées à la demande) : l'e-mail montre ce que verront les
+        // destinataires, Outlook bureau compris
         const specs = requiredIcons(data);
-        if (specs.length > 0) {
-          await ensureIcons(specs).catch((error) =>
-            logger.warn(`[signatures v2] ensureIcons : ${error.message}`),
-          );
-        }
-        const { html, text } = renderSignature(data);
+        const [, roundPhoto] = await Promise.all([
+          specs.length > 0
+            ? ensureIcons(specs).catch((error) =>
+                logger.warn(`[signatures v2] ensureIcons : ${error.message}`),
+              )
+            : null,
+          roundPhotoSoon(data, Infinity),
+        ]);
+        const { html, text } = renderSignature(data, { roundPhoto });
         if (!html) {
           throw createValidationError(
             "La signature est vide : ajoutez au moins votre nom.",
