@@ -11,6 +11,8 @@
  * - texte utilisateur échappé, URL normalisées, couleurs en hex 6.
  */
 
+import { SOCIAL_NETWORKS } from "./constants.js";
+
 export const esc = (value) =>
   value === null || value === undefined
     ? ""
@@ -53,9 +55,177 @@ export function displayUrl(value) {
     .replace(/\/$/, "");
 }
 
-export function telHref(value) {
-  const cleaned = String(value || "").replace(/[^\d+]/g, "");
-  return cleaned.startsWith("+") ? cleaned : cleaned.replace(/^00/, "+");
+/**
+ * Numéros nationaux des pays proposés pour l'espace : indicatif et forme
+ * d'un numéro complet (chiffres seuls). Un numéro d'une autre forme n'est
+ * jamais converti.
+ * - France, Suisse : 0 + 9 chiffres ;
+ * - Belgique : 0 + 8 chiffres (fixe), 04x + 7 chiffres (portable) ;
+ * - Luxembourg (sans 0 initial) : portable 6x1 ou 6x8 + 6 chiffres, fixe
+ *   2 + 7 chiffres ; les numéros plus courts restent tels quels.
+ */
+const NATIONAL_NUMBERS = {
+  FR: { code: "33", form: /^0[1-9]\d{8}$/ },
+  BE: { code: "32", form: /^0(?:[1-9]\d{7}|4[5-9]\d{7})$/ },
+  CH: { code: "41", form: /^0[1-9]\d{8}$/ },
+  LU: { code: "352", form: /^(?:6[2-9][18]\d{6}|2\d{7})$/ },
+};
+
+/** Pays de l'espace (saisi en toutes lettres) → région des numéros, ou "". */
+export function phoneRegion(country) {
+  const key = String(country || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim()
+    .toLowerCase();
+  const REGIONS = {
+    france: "FR",
+    fr: "FR",
+    belgique: "BE",
+    belgium: "BE",
+    be: "BE",
+    suisse: "CH",
+    switzerland: "CH",
+    ch: "CH",
+    luxembourg: "LU",
+    lu: "LU",
+  };
+  return REGIONS[key] || "";
+}
+
+/** Numéro national d'une région en format international (+33…), sinon null. */
+function international(digits, region) {
+  const n = NATIONAL_NUMBERS[region];
+  if (!n || !n.form.test(digits)) return null;
+  return `+${n.code}${digits.replace(/^0/, "")}`;
+}
+
+/**
+ * Lien d'appel d'un numéro saisi librement :
+ * - ce qui précède le premier chiffre est ignoré (« Tél : 01… ») ;
+ * - le lien s'arrête au premier mot ou séparateur qui suit (« poste 12 »,
+ *   « p. 12 », « ext. 12 », « (standard) ») : il compose le numéro
+ *   principal, le texte affiché reste celui saisi ;
+ * - « (0) » après l'indicatif n'est pas composé (« +33 (0)6… ») ;
+ * - « 00 » devient « + » ;
+ * - un numéro national devient international selon le pays de l'espace
+ *   (`region` : FR, BE, CH, LU), pour être composé depuis l'étranger, et
+ *   seulement s'il a la forme d'un numéro de ce pays.
+ */
+export function telHref(value, region = "") {
+  const raw = String(value || "");
+  const start = raw.search(/[+\d]/);
+  if (start < 0) return "";
+  let v = raw.slice(start);
+  const stop = v.search(/[A-Za-zÀ-ÿ#;,]/);
+  if (stop >= 0) v = v.slice(0, stop);
+  v = v.replace(/^(\+|00)\s*(\d{1,3})\s*\(0\)/, "$1$2");
+  const digits = v.replace(/[^\d+]/g, "");
+  // Un « + » ne vaut qu'en tête
+  const cleaned = digits.charAt(0) + digits.slice(1).replace(/\+/g, "");
+  if (cleaned.startsWith("+")) return cleaned;
+  if (cleaned.startsWith("00")) return `+${cleaned.slice(2)}`;
+  return international(cleaned, region) || cleaned;
+}
+
+/**
+ * Valeur saisie qui est un numéro de téléphone : chiffres, espaces, points,
+ * tirets, parenthèses et un « + » en tête, 6 chiffres au moins (une adresse
+ * IP n'en est pas un).
+ */
+export function isPhoneNumber(value) {
+  const v = String(value || "").trim();
+  if (!/^\+?[\d\s.\-()]+$/.test(v)) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(v)) return false;
+  return v.replace(/\D/g, "").length >= 6;
+}
+
+const EMAIL_ADDRESS = /^[^\s@/:]+@[^\s@/]+\.[^\s@/]+$/;
+
+/**
+ * Lien du bouton d'action : une adresse e-mail ouvre un message (mailto:),
+ * un numéro lance un appel (tel:), sinon c'est une page web. Les formes
+ * tel:, sms: et mailto: déjà saisies sont gardées (numéro nettoyé).
+ */
+export function actionHref(value, region = "") {
+  const v = String(value || "").trim();
+  if (!v) return "";
+  const scheme = v.match(/^(tel|sms):/i);
+  if (scheme) {
+    const number = telHref(v.slice(scheme[0].length), region);
+    return number ? `${scheme[1].toLowerCase()}:${number}` : "";
+  }
+  if (EMAIL_ADDRESS.test(v)) return `mailto:${v}`;
+  if (isPhoneNumber(v)) {
+    const number = telHref(v, region);
+    return number ? `tel:${number}` : "";
+  }
+  return normalizeUrl(v);
+}
+
+/**
+ * Numéro WhatsApp au format attendu par wa.me : international, chiffres
+ * seuls. Un numéro national suit le pays de l'espace, sinon la France
+ * (wa.me n'accepte aucun numéro national).
+ */
+function whatsappNumber(value, region) {
+  let tel = telHref(value, region);
+  // Numéro resté national (portable français dans un espace belge…)
+  if (!tel.startsWith("+")) tel = telHref(value, "FR");
+  return tel.startsWith("+") ? tel.slice(1) : tel;
+}
+
+/**
+ * Lien d'un réseau social à partir de ce qui a été saisi :
+ * - « @compte » (ou un nom de compte sans point ni barre) : profil du
+ *   réseau (instagram.com/compte, tiktok.com/@compte…), sauf pour les
+ *   réseaux où un nom seul est ambigu (LinkedIn, Malt) ;
+ * - WhatsApp : un numéro, seul ou dans wa.me/…, donne wa.me/<numéro
+ *   international> (message prérempli ?text= gardé) ;
+ * - sinon, l'adresse complétée (normalizeUrl).
+ * Appliqué au rendu seulement : le champ garde ce qui a été tapé.
+ */
+export function socialHref(network, value, region = "") {
+  const v = String(value || "").trim();
+  if (!v) return "";
+  if (network === "whatsapp") {
+    const wa = v.match(
+      /^(?:https?:\/\/)?(?:www\.)?wa\.me\/(\+?[\d\s.\-()]+)(\?.*)?$/i,
+    );
+    if (wa || isPhoneNumber(v)) {
+      const number = whatsappNumber(wa ? wa[1] : v, region);
+      return number ? `https://wa.me/${number}${wa?.[2] || ""}` : "";
+    }
+  }
+  const handle =
+    v.match(/^@([A-Za-z0-9._-]+)$/) || v.match(/^([A-Za-z0-9_-]+)$/);
+  const pattern = SOCIAL_NETWORKS[network]?.handle;
+  if (handle && pattern) return pattern.replace("{h}", handle[1]);
+  return normalizeUrl(v);
+}
+
+/**
+ * Lien web inutilisable (adresse incomplète, espace, « @ » avant le
+ * domaine…) : la messagerie en ferait un lien cassé. Les autres formes
+ * (mailto:, tel:) sont acceptées.
+ */
+export function brokenWebLink(href) {
+  const v = String(href || "");
+  if (!v) return true;
+  if (!/^https?:/i.test(v)) return false;
+  if (/\s/.test(v)) return true;
+  try {
+    const url = new URL(v);
+    const host = url.hostname;
+    return (
+      Boolean(url.username || url.password) ||
+      !host.includes(".") ||
+      host.endsWith(".") ||
+      host.startsWith(".")
+    );
+  } catch {
+    return true;
+  }
 }
 
 /** Couleur hex normalisée « #rrggbb », ou la valeur de repli. */

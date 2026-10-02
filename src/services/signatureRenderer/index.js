@@ -38,11 +38,18 @@ import {
   TEXT_ELEMENTS,
 } from "./constants.js";
 import { iconUrl as defaultIconUrl, SAMPLE_PHOTO_URL } from "./icons.js";
-import { displayUrl, hex, normalizeUrl } from "./primitives.js";
+import {
+  actionHref,
+  brokenWebLink,
+  displayUrl,
+  hex,
+  phoneRegion,
+  socialHref,
+} from "./primitives.js";
 import TEMPLATES, { listTemplates, templatePreset } from "./templates.js";
 import { layoutFromLegacy, normalizeSlots } from "./slots.js";
 
-export { listTemplates, templatePreset };
+export { listTemplates, phoneRegion, templatePreset };
 
 const clamp = (n, min, max, fallback) => {
   const v = Number(n);
@@ -446,35 +453,91 @@ export function requiredIcons(input) {
   return [...specs.values()];
 }
 
-/** Version texte brut, pour les clients en mode texte. */
-export function plainText(sig) {
+/**
+ * Version texte brut, pour les clients en mode texte (signature mobile de
+ * Gmail…). Fixe et portable sont nommés, faute d'icônes pour les
+ * distinguer ; le bouton montre le numéro ou l'adresse tels que saisis.
+ */
+export function plainText(sig, region = "") {
   const { identity, contact } = sig;
+  const cta = sig.cta.enabled && sig.cta.label ? sig.cta : null;
+  const ctaHref = cta ? actionHref(cta.url, region) : "";
   const lines = [
     [identity.firstName, identity.lastName].filter(Boolean).join(" "),
     [identity.jobTitle, identity.department].filter(Boolean).join(" · "),
     identity.company,
     identity.tagline,
-    contact.phone,
-    contact.mobile,
+    contact.phone ? `Tél. : ${contact.phone}` : "",
+    contact.mobile ? `Mobile : ${contact.mobile}` : "",
     contact.email,
     contact.website ? displayUrl(contact.website) : "",
     contact.address,
-    ...sig.social.map((s) => normalizeUrl(s.url)),
-    sig.cta.enabled && sig.cta.label
-      ? `${sig.cta.label} : ${normalizeUrl(sig.cta.url)}`
+    ...sig.social.map((s) => socialHref(s.network, s.url, region)),
+    ctaHref
+      ? `${cta.label} : ${
+          /^(tel|sms|mailto):/i.test(ctaHref)
+            ? cta.url.replace(/^(tel|sms|mailto):/i, "")
+            : ctaHref
+        }`
       : "",
     sig.disclaimer.enabled ? sig.disclaimer.text : "",
   ];
   return lines.filter(Boolean).join("\n");
 }
 
+/** Profils LinkedIn : chemins d'une personne, d'une page ou d'une école. */
+const LINKEDIN_PROFILE = /^\/(in|company|school|showcase|pub)\/[^/]+/i;
+
 /**
- * Rend une signature.
+ * Liens de réseaux qui partiraient cassés dans chaque e-mail : adresse
+ * incomplète (nom de compte pour LinkedIn ou Malt, numéro mal saisi…) ou
+ * lien LinkedIn qui ne mène à aucun profil.
+ */
+function socialWarnings(sig, region) {
+  const warnings = [];
+  for (const s of sig.social) {
+    const network = SOCIAL_NETWORKS[s.network];
+    if (!s.url || !network) continue;
+    const href = socialHref(s.network, s.url, region);
+    if (brokenWebLink(href)) {
+      warnings.push(
+        s.network === "whatsapp"
+          ? "Le lien WhatsApp est incomplet : saisissez votre numéro, avec son indicatif s'il est étranger (+32…)."
+          : network.handle
+            ? `Le lien ${network.label} est incomplet : collez l'adresse de votre profil, ou votre nom de compte précédé de @.`
+            : `Le lien ${network.label} est incomplet : collez l'adresse complète de votre profil (${network.host}/…).`,
+      );
+      continue;
+    }
+    if (s.network === "linkedin") {
+      let url = null;
+      try {
+        url = new URL(href);
+      } catch {
+        url = null;
+      }
+      const host = url?.hostname.toLowerCase() || "";
+      const onLinkedin =
+        host === "linkedin.com" || host.endsWith(".linkedin.com");
+      if (onLinkedin && !LINKEDIN_PROFILE.test(url.pathname)) {
+        warnings.push(
+          "Le lien LinkedIn ne mène à aucun profil : copiez l'adresse de votre profil (linkedin.com/in/…) ou de votre page (linkedin.com/company/…).",
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Rend une signature. `region` : pays de l'espace (FR, BE, CH, LU), pour
+ * écrire les numéros nationaux en format international dans les liens
+ * d'appel et WhatsApp ; vide, ils restent tels quels.
  * @returns {{ html: string, text: string, chars: number, warnings: string[] }}
  */
 export function renderSignature(
   input,
-  { iconUrl = defaultIconUrl, markers = false } = {},
+  { iconUrl = defaultIconUrl, markers = false, region = "" } = {},
 ) {
   const sig = normalizeSignature(input);
   const st = sig.style;
@@ -485,6 +548,7 @@ export function renderSignature(
     sp: SPACING[st.spacing],
     iconUrl,
     markers,
+    region,
     // Style effectivement appliqué à chaque élément de texte (modèle +
     // réglages), renvoyé à l'éditeur pour afficher les bonnes valeurs.
     resolved: {},
@@ -528,10 +592,11 @@ export function renderSignature(
       "Le logo est un JPEG : il aura un fond blanc en mode sombre. Préférez un PNG à fond transparent.",
     );
   }
+  warnings.push(...socialWarnings(sig, region));
 
   return {
     html,
-    text: plainText(sig),
+    text: plainText(sig, region),
     chars: html.length,
     warnings,
     elements: ctx.resolved,

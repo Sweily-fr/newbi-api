@@ -13,6 +13,7 @@ import {
 } from "./constants.js";
 import { contactIconSpec, socialIconSpec } from "./icons.js";
 import {
+  actionHref,
   button,
   displayUrl,
   esc,
@@ -25,6 +26,7 @@ import {
   normalizeUrl,
   photo,
   readableOn,
+  socialHref,
   span,
   splitRows,
   stackRows,
@@ -35,6 +37,9 @@ import {
 
 export function buildBlocks(ctx) {
   const { sig, st, font, sp, iconUrl, markers } = ctx;
+  // Pays de l'espace (FR, BE, CH, LU) : numéros nationaux composables
+  // depuis l'étranger dans les liens d'appel
+  const region = ctx.region || "";
 
   // Marqueurs d'aperçu : en mode éditeur, chaque élément porte l'identifiant
   // du champ qui le pilote (data-sig-field). Jamais présents dans le HTML
@@ -200,8 +205,10 @@ export function buildBlocks(ctx) {
         : `<span style="${style}">${editable(field, label)}</span>`,
     });
     if (field === "phone" || field === "mobile") {
-      // Un numéro ne se coupe pas entre deux groupes de chiffres
-      return entry(value, `tel:${telHref(value)}`, "white-space:nowrap;");
+      // Un numéro ne se coupe pas entre deux groupes de chiffres ; le lien
+      // compose le numéro principal (sans « poste 12 »), en international
+      const tel = telHref(value, region);
+      return entry(value, tel ? `tel:${tel}` : "", "white-space:nowrap;");
     }
     if (field === "email") return entry(value, `mailto:${value}`);
     if (field === "website") {
@@ -262,7 +269,8 @@ export function buildBlocks(ctx) {
           src: iconUrl(
             socialIconSpec(s.network, st.iconStyle, colorFor(s.network)),
           ),
-          href: normalizeUrl(s.url),
+          // Nom de compte ou numéro WhatsApp : lien du profil
+          href: socialHref(s.network, s.url, region),
           alt: SOCIAL_NETWORKS[s.network].label,
         }));
       // Plusieurs lignes au choix (« 2 en haut, 3 en bas ») : une rangée
@@ -345,7 +353,8 @@ export function buildBlocks(ctx) {
     cta() {
       const c = sig.cta;
       if (!c.enabled || !c.label) return "";
-      const href = normalizeUrl(c.url);
+      // Une adresse e-mail ouvre un message, un numéro lance un appel
+      const href = actionHref(c.url, region);
       if (!href) return "";
       // Fond : couleur choisie, sinon la couleur principale (il la suit
       // quand elle change) ; texte : couleur choisie, sinon blanc ou foncé
@@ -699,7 +708,7 @@ export function buildBlocks(ctx) {
           return Boolean(images.logo?.url);
         case "cta":
           return Boolean(
-            sig.cta.enabled && sig.cta.label && normalizeUrl(sig.cta.url),
+            sig.cta.enabled && sig.cta.label && actionHref(sig.cta.url, region),
           );
         case "banner":
           return Boolean(sig.banner.enabled && images.banner?.url);

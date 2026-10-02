@@ -192,6 +192,9 @@ export const SPACING = {
 /**
  * Réseaux sociaux pris en charge. `icon` est la clé simple-icons (ou
  * `custom` pour un glyphe vendu dans icons.js), `hex` la couleur de marque.
+ * `handle` : lien d'un profil d'après son nom de compte ({h}), quand le
+ * nom seul suffit (absent pour LinkedIn et Malt, où il est ambigu, et pour
+ * WhatsApp, qui attend un numéro).
  */
 export const SOCIAL_NETWORKS = {
   linkedin: {
@@ -200,36 +203,47 @@ export const SOCIAL_NETWORKS = {
     icon: "custom",
     host: "linkedin.com",
   },
-  x: { label: "X (Twitter)", hex: "000000", icon: "siX", host: "x.com" },
+  x: {
+    label: "X (Twitter)",
+    hex: "000000",
+    icon: "siX",
+    host: "x.com",
+    handle: "https://x.com/{h}",
+  },
   instagram: {
     label: "Instagram",
     hex: "E4405F",
     icon: "siInstagram",
     host: "instagram.com",
+    handle: "https://www.instagram.com/{h}",
   },
   facebook: {
     label: "Facebook",
     hex: "0866FF",
     icon: "siFacebook",
     host: "facebook.com",
+    handle: "https://www.facebook.com/{h}",
   },
   youtube: {
     label: "YouTube",
     hex: "FF0000",
     icon: "siYoutube",
     host: "youtube.com",
+    handle: "https://www.youtube.com/@{h}",
   },
   tiktok: {
     label: "TikTok",
     hex: "000000",
     icon: "siTiktok",
     host: "tiktok.com",
+    handle: "https://www.tiktok.com/@{h}",
   },
   github: {
     label: "GitHub",
     hex: "181717",
     icon: "siGithub",
     host: "github.com",
+    handle: "https://github.com/{h}",
   },
   whatsapp: {
     label: "WhatsApp",
@@ -242,18 +256,21 @@ export const SOCIAL_NETWORKS = {
     hex: "BD081C",
     icon: "siPinterest",
     host: "pinterest.com",
+    handle: "https://www.pinterest.com/{h}",
   },
   threads: {
     label: "Threads",
     hex: "000000",
     icon: "siThreads",
     host: "threads.net",
+    handle: "https://www.threads.net/@{h}",
   },
   telegram: {
     label: "Telegram",
     hex: "26A5E4",
     icon: "siTelegram",
     host: "t.me",
+    handle: "https://t.me/{h}",
   },
   malt: { label: "Malt", hex: "FC5757", icon: "siMalt", host: "malt.fr" },
   calendly: {
@@ -261,24 +278,28 @@ export const SOCIAL_NETWORKS = {
     hex: "006BFF",
     icon: "siCalendly",
     host: "calendly.com",
+    handle: "https://calendly.com/{h}",
   },
   dribbble: {
     label: "Dribbble",
     hex: "EA4C89",
     icon: "siDribbble",
     host: "dribbble.com",
+    handle: "https://dribbble.com/{h}",
   },
   behance: {
     label: "Behance",
     hex: "1769FF",
     icon: "siBehance",
     host: "behance.net",
+    handle: "https://www.behance.net/{h}",
   },
   medium: {
     label: "Medium",
     hex: "000000",
     icon: "siMedium",
     host: "medium.com",
+    handle: "https://medium.com/@{h}",
   },
 };
 

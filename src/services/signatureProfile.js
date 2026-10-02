@@ -105,6 +105,18 @@ export async function isWorkspaceMember(userId, workspaceId) {
   );
 }
 
+/** Pays de l'adresse de l'entreprise de l'espace, tel que saisi ("" sinon). */
+export async function workspaceCountry(workspaceId) {
+  if (!workspaceId) return "";
+  const org = await db()
+    .collection("organization")
+    .findOne(
+      { _id: { $in: idForms(workspaceId) } },
+      { projection: { addressCountry: 1 } },
+    );
+  return clean(org?.addressCountry);
+}
+
 /**
  * Données de signature d'un membre : ce qui le concerne lui (`person`) et ce
  * qui vient de l'entreprise (`company`), plus l'URL de sa photo.
