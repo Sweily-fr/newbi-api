@@ -75,7 +75,7 @@ const NATIONAL_NUMBERS = {
 export function phoneRegion(country) {
   const key = String(country || "")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toLowerCase();
   const REGIONS = {

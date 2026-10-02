@@ -152,7 +152,7 @@ const multiline = (v, max = 1000) => {
   return String(v)
     .replace(/\r\n?/g, "\n")
     .split("\n")
-    .map((line) => line.replace(/[^\S\n  ]+/g, " ").trim())
+    .map((line) => line.replace(/[^\S\n\u00a0\u202f]+/g, " ").trim())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
