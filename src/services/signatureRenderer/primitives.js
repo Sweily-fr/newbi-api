@@ -138,9 +138,12 @@ export function naturalWidth(html) {
 /**
  * Largeur choisie pour un texte : il revient à la ligne à cette largeur
  * sans jamais occuper plus que son contenu.
- * - Texte plus long que la largeur (estimation) : tableau de cette largeur,
- *   compris partout, Outlook compris, et qui survit à Gmail (qui retire
- *   les commentaires conditionnels) ; le texte le remplit de toute façon.
+ * - Texte plus long que la largeur (estimation) : tableau dont la cellule a
+ *   cette largeur, compris partout (Outlook lit l'attribut width de la
+ *   cellule) et qui survit à Gmail (qui retire les commentaires
+ *   conditionnels) ; le texte la remplit de toute façon. La largeur est sur
+ *   la cellule, jamais sur le tableau : une cellule de largeur fixe se
+ *   resserre sur un téléphone, un tableau de largeur fixe déborde.
  * - Texte plus court : boîte ajustée au texte et bornée (inline-block +
  *   max-width), placée par l'alignement de sa ligne ; il tient déjà.
  * `mark` : repère d'aperçu (data-sig-wrap), pour régler la largeur à la
@@ -152,7 +155,7 @@ export function wrapAt(html, width, align = "left", mark = false) {
     return `<div${m} style="display:inline-block;max-width:${width}px;vertical-align:top;">${html}</div>`;
   }
   const a = align && align !== "left" ? ` align="${align}"` : "";
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${m}${a} width="${width}" style="${TABLE_STYLE}width:${width}px;max-width:100%;"><tr><td${a}>${html}</td></tr></table>`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${m}${a} style="${TABLE_STYLE}"><tr><td${a} width="${width}" style="width:${width}px;">${html}</td></tr></table>`;
 }
 
 export const span = (text, style) =>

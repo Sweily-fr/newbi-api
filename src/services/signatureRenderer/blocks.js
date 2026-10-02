@@ -409,7 +409,9 @@ export function buildBlocks(ctx) {
     } = {}) {
       const w = width ? `width="${width}"` : 'width="100%"';
       const ws = width ? `width:${width}px;` : "width:100%;";
-      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${ws}"><tr><td ${w} height="${height}" bgcolor="${color}" style="${ws}height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
+      // Longueur en px portée par la cellule seule (un tableau de largeur
+      // fixe ne se resserre pas sur un téléphone)
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${width ? "" : ws}"><tr><td ${w} height="${height}" bgcolor="${color}" style="${ws}height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
     },
 
     /** Trait fin dans la couleur principale, plus court (accent). */

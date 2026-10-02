@@ -55,11 +55,17 @@ const box = (rows, attrs = "", style = "") =>
   `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${attrs} style="border-collapse:separate;mso-table-lspace:0pt;mso-table-rspace:0pt;${style}">${rows}</table>`;
 
 /**
- * Largeur choisie pour le cadre : fixe pour Outlook (attribut), bornée à
- * l'écran ailleurs (max-width), pour ne pas déborder sur un téléphone.
+ * Largeur choisie pour la signature (le cadre s'il y en a un) : portée par
+ * une cellule, que le cadre remplit (tableau à 100 % sous cette largeur
+ * connue). Outlook lit l'attribut width de la cellule ; ailleurs, une
+ * cellule de largeur fixe se resserre sur un téléphone, alors qu'un tableau
+ * de largeur fixe ne descend jamais sous sa largeur et déborde de l'écran
+ * (son max-width:100% ne joue pas : la table englobante n'a pas de largeur).
  */
-const widthOf = (w) =>
-  w ? [` width="${w}"`, `width:${w}px;max-width:100%;`] : ["", ""];
+const sizedCell = (html, w) =>
+  w && html
+    ? `<table ${TABLE_ATTRS} style="${TABLE_CSS}"><tr><td width="${w}" style="width:${w}px;">${html}</td></tr></table>`
+    : html;
 
 /**
  * Deux contenus côte à côte, 24 px d'écart. `full` : aux extrémités d'une
@@ -90,12 +96,13 @@ const alignAttr = (align) =>
   align && align !== "left" ? ` align="${align}"` : "";
 
 /**
- * Largeur fixe d'une colonne. Attribut pour Outlook, max-width pour ne pas
- * déborder sur un téléphone. (Un texte, lui, revient à la ligne sans
- * jamais occuper plus que son contenu : wrapAt.)
+ * Largeur fixe d'une colonne, portée par la cellule (attribut pour
+ * Outlook) : elle se resserre sur un téléphone au lieu de déborder. (Un
+ * texte, lui, revient à la ligne sans jamais occuper plus que son contenu :
+ * wrapAt.)
  */
 const fixedWidth = (html, w) =>
-  `<table ${TABLE_ATTRS} width="${w}" style="${TABLE_CSS}width:${w}px;max-width:100%;"><tr><td>${html}</td></tr></table>`;
+  `<table ${TABLE_ATTRS} style="${TABLE_CSS}"><tr><td width="${w}" style="width:${w}px;">${html}</td></tr></table>`;
 
 /** Espace ajouté au bord d'un emplacement (au-dessus du premier bloc…). */
 const px = (n) => (n ? `${n}px` : "0");
@@ -916,7 +923,9 @@ function frameContent({
   const padY = sp.block + 8;
   const padX = sp.block + 12;
 
-  const [wAttr, wStyle] = widthOf(st.frameWidth);
+  // Largeur choisie : le cadre occupe toute la cellule qui la porte
+  const W = st.frameWidth;
+  const [wAttr, wStyle] = W ? [' width="100%"', "width:100%;"] : ["", ""];
   if (st.frame !== "outline" && st.frame !== "soft") {
     // Pas de cadre fermé : le bandeau est arrondi seul
     const bandHtml = band
@@ -938,27 +947,32 @@ function frameContent({
       ? Math.min(st.frameBarLength, st.frameWidth)
       : st.frameBarLength;
     if (st.frame === "accent-left") {
-      return box(
-        L
-          ? `<tr><td valign="top" width="${t}" style="width:${t}px;padding:4px 0 0 0;">${bar({ width: t, height: L, color })}</td><td style="padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`
-          : `<tr><td style="border-left:${t}px solid ${color};padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`,
-        wAttr,
-        wStyle,
+      return sizedCell(
+        box(
+          L
+            ? `<tr><td valign="top" width="${t}" style="width:${t}px;padding:4px 0 0 0;">${bar({ width: t, height: L, color })}</td><td style="padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`
+            : `<tr><td style="border-left:${t}px solid ${color};padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`,
+          wAttr,
+          wStyle,
+        ),
+        W,
       );
     }
     if (st.frame === "accent-top") {
-      return box(
-        L
-          ? `<tr><td>${bar({ width: L, height: t, color, align: align === "center" ? "center" : "left" })}</td></tr><tr><td style="padding:${padY}px 0 0 0;">${content}</td></tr>`
-          : `<tr><td style="border-top:${t}px solid ${color};padding:${padY}px 0 0 0;">${content}</td></tr>`,
-        wAttr,
-        wStyle,
+      return sizedCell(
+        box(
+          L
+            ? `<tr><td>${bar({ width: L, height: t, color, align: align === "center" ? "center" : "left" })}</td></tr><tr><td style="padding:${padY}px 0 0 0;">${content}</td></tr>`
+            : `<tr><td style="border-top:${t}px solid ${color};padding:${padY}px 0 0 0;">${content}</td></tr>`,
+          wAttr,
+          wStyle,
+        ),
+        W,
       );
     }
-    // Sans cadre : largeur choisie portée par un tableau autour du contenu
-    return st.frameWidth && content
-      ? box(`<tr><td>${content}</td></tr>`, wAttr, wStyle)
-      : content;
+    // Sans cadre : largeur choisie portée par une cellule autour du contenu
+    // (qui l'occupe déjà toute : pile à 100 %)
+    return sizedCell(content, W);
   }
 
   const outline = st.frame === "outline";
@@ -1009,5 +1023,5 @@ function frameContent({
       return `<tr><td${bg} style="${bgStyle}${padding}${sides}${radius}">${row.html}</td></tr>`;
     })
     .join("");
-  return box(html, wAttr, wStyle);
+  return sizedCell(box(html, wAttr, wStyle), W);
 }
