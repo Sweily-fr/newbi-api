@@ -300,6 +300,22 @@ const OUTPUT = {
 };
 
 /**
+ * Densité de rendu d'un SVG : celle qui atteint la taille finale du type
+ * d'image (à 72 dpi, un petit SVG donnait une image minuscule, floue une
+ * fois affichée). `meta` : dimensions lues à 72 dpi.
+ */
+function svgDensity(meta, kind) {
+  const { width: w, height: h } = meta;
+  const scale =
+    kind === "PHOTO"
+      ? 320 / Math.min(w, h)
+      : kind === "LOGO"
+        ? Math.min(600 / w, 300 / h)
+        : 1200 / w;
+  return Math.min(2400, Math.max(72, Math.ceil(72 * scale)));
+}
+
+/**
  * Refus dû à l'image elle-même (format, taille, fichier abîmé) : son message
  * s'adresse à l'utilisateur, le détail technique reste dans `cause`.
  */
@@ -367,12 +383,14 @@ export async function processImage(buffer, kind) {
   } catch (cause) {
     throw new ImageInputError(UNSUPPORTED_IMAGE, { cause });
   }
+  if (!meta.width || !meta.height) throw new ImageInputError("Image illisible");
   if (meta.format === "heif" && meta.compression === "hevc") {
     ({ image, meta } = await openHeic(buffer));
+  } else if (meta.format === "svg") {
+    image = sharp(buffer, { failOn: "none", density: svgDensity(meta, kind) });
   } else {
     image = image.rotate();
   }
-  if (!meta.width || !meta.height) throw new ImageInputError("Image illisible");
 
   image = await OUTPUT[kind](image);
 
@@ -459,6 +477,58 @@ export async function importSignatureImage({
   if (length > MAX_IMAGE_BYTES) throw new Error("Image trop lourde");
   const buffer = Buffer.from(await response.arrayBuffer());
   return storeSignatureImage({ buffer, kind, userId, signatureId });
+}
+
+/**
+ * Clé du logo de l'entreprise dans le stockage des logos de Newbi, ou null
+ * si l'adresse n'en vient pas : le champ logo de l'organisation est
+ * modifiable par le client, le serveur ne va jamais chercher une adresse
+ * quelconque.
+ */
+export function companyLogoKey(url) {
+  const base = cloudflareService.companyImagesPublicUrl;
+  if (!url || !base) return null;
+  try {
+    const u = new URL(url);
+    const b = new URL(base);
+    const prefix = `${b.pathname.replace(/\/+$/, "")}/`;
+    if (u.origin !== b.origin || !u.pathname.startsWith(prefix)) return null;
+    const key = decodeURIComponent(u.pathname.slice(prefix.length));
+    if (!key || key.split("/").some((part) => !part || part === "..")) {
+      return null;
+    }
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reprend le logo de l'entreprise (celui des factures) dans une signature :
+ * lu directement dans le stockage des logos (5 s au plus), puis traité comme
+ * un envoi (un SVG est rasterisé net). Lève une erreur si le logo ne vient
+ * pas de Newbi ou ne peut pas être lu.
+ */
+export async function importCompanyLogo({
+  url,
+  userId,
+  signatureId,
+  timeoutMs = 5000,
+}) {
+  const key = companyLogoKey(url);
+  if (!key) throw new Error("logo hors du stockage des logos de Newbi");
+  const object = await cloudflareService.client.send(
+    new GetObjectCommand({
+      Bucket: cloudflareService.companyImagesBucketName,
+      Key: key,
+    }),
+    { abortSignal: AbortSignal.timeout(timeoutMs) },
+  );
+  if (Number(object.ContentLength || 0) > MAX_IMAGE_BYTES) {
+    throw new ImageInputError("Image trop volumineuse (10 Mo maximum)");
+  }
+  const buffer = Buffer.from(await object.Body.transformToByteArray());
+  return storeSignatureImage({ buffer, kind: "LOGO", userId, signatureId });
 }
 
 /**

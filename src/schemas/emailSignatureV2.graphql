@@ -567,7 +567,8 @@ extend type Query {
 extend type Mutation {
   """
   Crée une signature pré-remplie avec le profil de `memberUserId` (soi-même
-  par défaut) et l'entreprise de l'espace ; `input` l'emporte.
+  par défaut) et l'entreprise de l'espace, logo des factures compris ;
+  `input` l'emporte.
   """
   createEmailSignatureV2(
     input: EmailSignatureV2Input!
@@ -580,6 +581,12 @@ extend type Mutation {
   sont vides.
   """
   applyMemberToEmailSignatureV2(id: ID!, memberUserId: ID!): EmailSignatureV2!
+
+  """
+  Reprend le logo de l'entreprise (celui des factures, relu côté serveur et
+  seulement depuis le stockage de Newbi) comme logo de la signature.
+  """
+  applyCompanyLogoToEmailSignatureV2(id: ID!): EmailSignatureV2!
   updateEmailSignatureV2(id: ID!, input: EmailSignatureV2Input!): EmailSignatureV2!
   deleteEmailSignatureV2(id: ID!): Boolean!
   duplicateEmailSignatureV2(id: ID!): EmailSignatureV2!

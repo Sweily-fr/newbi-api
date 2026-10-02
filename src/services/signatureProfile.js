@@ -137,7 +137,9 @@ export async function isWorkspaceMember(userId, workspaceId) {
 
 /**
  * Données de signature d'un membre : ce qui le concerne lui (`person`) et ce
- * qui vient de l'entreprise (`company`), plus l'URL de sa photo.
+ * qui vient de l'entreprise (`company`), plus l'URL de sa photo et celle du
+ * logo de l'entreprise (celui des factures, repris seulement s'il vient du
+ * stockage de Newbi : voir companyLogoKey).
  */
 export async function memberSignatureProfile(userId, workspaceId) {
   const [user, org] = await Promise.all([
@@ -168,5 +170,18 @@ export async function memberSignatureProfile(userId, workspaceId) {
       },
     },
     photoUrl: photoUrl(user),
+    logoUrl: httpUrl(org?.logo) || null,
   };
+}
+
+/** Logo de l'entreprise de l'espace (celui des factures), ou null. */
+export async function workspaceLogoUrl(workspaceId) {
+  if (!workspaceId) return null;
+  const org = await db()
+    .collection("organization")
+    .findOne(
+      { _id: { $in: idForms(workspaceId) } },
+      { projection: { logo: 1 } },
+    );
+  return httpUrl(org?.logo) || null;
 }

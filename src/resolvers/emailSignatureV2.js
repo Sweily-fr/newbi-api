@@ -38,10 +38,12 @@ import {
   GALLERY_TEMPLATE_IDS,
 } from "../services/signatureRenderer/constants.js";
 import {
+  companyLogoKey,
   ensureIcons,
   ensureRoundPhoto,
   ensureSamplePhoto,
   ImageInputError,
+  importCompanyLogo,
   importSignatureImage,
   roundPhotoUrl,
   storeSignatureImage,
@@ -52,6 +54,7 @@ import {
   listWorkspaceMembers,
   memberSignatureProfile,
   photoImportUrls,
+  workspaceLogoUrl,
 } from "../services/signatureProfile.js";
 
 /** Un e-mail de test au plus toutes les 20 secondes par utilisateur. */
@@ -94,6 +97,27 @@ async function importPersonPhoto(doc, url, ctx) {
     }
   }
   return null;
+}
+
+/**
+ * Logo de l'entreprise (celui des factures) repris dans une nouvelle
+ * signature. null si l'entreprise n'en a pas ou s'il ne peut pas être
+ * repris : la case reste vide, comme avant.
+ */
+async function importWorkspaceLogo(doc, url, ctx) {
+  if (!url) return null;
+  try {
+    return await importCompanyLogo({
+      url,
+      userId: ctx.user.id,
+      signatureId: doc._id,
+    });
+  } catch (error) {
+    logger.warn(
+      `[signatures v2] logo de l'entreprise non repris : ${error.message}`,
+    );
+    return null;
+  }
 }
 
 /**
@@ -535,7 +559,67 @@ const emailSignatureV2Resolvers = {
         });
         applyNormalized(doc, normalized);
         await doc.save();
-        await setPersonPhoto(doc, person.profile.photoUrl, ctx);
+        // Photo de la personne et logo de l'entreprise (celui des factures),
+        // importés en parallèle (5 s au plus chacun) puis enregistrés en une
+        // fois ; un échec laisse simplement la case vide
+        const [photo, logo] = await Promise.all([
+          person.profile.photoUrl
+            ? importPersonPhoto(doc, person.profile.photoUrl, ctx)
+            : null,
+          importWorkspaceLogo(doc, person.profile.logoUrl, ctx),
+        ]);
+        if (photo || logo) {
+          if (photo) doc.images.photo = photo;
+          if (logo) doc.images.logo = logo;
+          doc.markModified("images");
+          await doc.save();
+        }
+        return doc;
+      },
+    ),
+
+    // « Utiliser le logo de l'entreprise » : relu côté serveur dans
+    // l'espace, jamais une adresse envoyée par le navigateur
+    applyCompanyLogoToEmailSignatureV2: requireWrite("signatures")(
+      async (_, { id }, ctx) => {
+        const doc = await findOwned(id, ctx);
+        const url = await workspaceLogoUrl(ctx.workspaceId);
+        if (!url) {
+          throw createValidationError(
+            "Aucun logo d'entreprise : ajoutez-le dans Paramètres, Générale.",
+          );
+        }
+        if (!companyLogoKey(url)) {
+          throw createValidationError(
+            "Le logo de l'entreprise ne peut pas être repris : envoyez-le depuis votre ordinateur.",
+          );
+        }
+        let logo;
+        try {
+          logo = await importCompanyLogo({
+            url,
+            userId: ctx.user.id,
+            signatureId: doc._id,
+          });
+        } catch (error) {
+          if (error instanceof ImageInputError) {
+            logger.warn(
+              `[signatures v2] logo de l'entreprise refusé : ${error.message}${
+                error.cause?.message ? ` [${error.cause.message}]` : ""
+              }`,
+            );
+            throw createValidationError(error.message);
+          }
+          logger.error(
+            `[signatures v2] logo de l'entreprise non repris : ${error.message}`,
+          );
+          throw createInternalServerError(
+            "Le logo de l'entreprise n'a pas pu être repris. Réessayez dans un instant.",
+          );
+        }
+        doc.images.logo = logo;
+        doc.markModified("images");
+        await doc.save();
         return doc;
       },
     ),
