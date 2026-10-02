@@ -31,6 +31,20 @@ export function normalizeUrl(value) {
   return `https://${url}`;
 }
 
+/**
+ * Domaine d'un lien normalisé, sans « www. » (l'adresse pour un mailto:) ;
+ * vide s'il est illisible.
+ */
+export function hostOf(href) {
+  const v = String(href || "").trim();
+  if (/^mailto:/i.test(v)) return v.slice(7).split("?")[0];
+  try {
+    return new URL(v).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
 /** Texte affiché pour un site : sans protocole ni barre finale. */
 export function displayUrl(value) {
   return String(value || "")

@@ -17,6 +17,7 @@ import {
   displayUrl,
   esc,
   escAttr,
+  hostOf,
   iconLines,
   iconRow,
   img,
@@ -378,15 +379,24 @@ export function buildBlocks(ctx) {
         b.width && b.height
           ? Math.round((width * b.height) / b.width)
           : undefined;
+      const href = normalizeUrl(sig.banner.url);
+      // Texte de remplacement : la description saisie, sinon, pour une
+      // bannière cliquable, « Bannière : » et le domaine du lien (un lien
+      // sans nom fait épeler son adresse aux lecteurs d'écran, et rien ne
+      // s'affiche quand la messagerie bloque les images). Sans lien ni
+      // description, elle reste décorative.
+      const domain = href ? hostOf(href) : "";
+      const alt =
+        sig.banner.alt ||
+        (href ? (domain ? `Bannière : ${domain}` : "Bannière") : "");
       const image = img({
         src: b.url,
         width,
         height,
-        alt: sig.banner.alt || "",
+        alt,
         // Réduit (téléphone, colonne étroite) : la hauteur suit
         style: "max-width:100%;height:auto;",
       });
-      const href = normalizeUrl(sig.banner.url);
       return markBlock(
         "banner",
         href ? link(href, image, { color: st.textColor }) : image,
