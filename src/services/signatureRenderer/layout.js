@@ -928,17 +928,25 @@ function frameContent({
   const [wAttr, wStyle] = W ? [' width="100%"', "width:100%;"] : ["", ""];
   if (st.frame !== "outline" && st.frame !== "soft") {
     // Pas de cadre fermé : le bandeau est arrondi seul
-    const bandHtml = band
-      ? box(
-          `<tr><td bgcolor="${bandFill}" style="background-color:${bandFill};padding:18px 24px;border-radius:${r}px;">${band}</td></tr>`,
-        )
-      : "";
-    const content = vstack([bandHtml, body, restHtml, stripHtml], {
+    const rest = vstack([body, restHtml, stripHtml], {
       gap: sp.block,
       align: align === "center" && !band ? "center" : "left",
       // Largeur choisie : chaque zone occupe toute la signature
       full: Boolean(st.frameWidth),
     });
+    // Bandeau : première rangée (cellule colorée) du même tableau que le
+    // reste. Il prend ainsi la largeur de la zone la plus large (le trait
+    // du bas, la rangée logo et réseaux), ou toute la largeur choisie, sans
+    // jamais s'étirer sur tout le message (100 % sous une largeur connue)
+    const content = band
+      ? box(
+          `<tr><td bgcolor="${bandFill}" style="background-color:${bandFill};padding:18px 24px;border-radius:${r}px;">${band}</td></tr>${
+            rest ? `<tr><td style="padding:${sp.block}px 0 0 0;">${rest}</td></tr>` : ""
+          }`,
+          wAttr,
+          wStyle,
+        )
+      : rest;
     // Barre à gauche ou en haut : épaisseur choisie (4 px sinon), sur toute
     // la longueur ou sur la longueur choisie
     const color = st.frameColor || P;
