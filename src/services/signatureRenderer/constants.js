@@ -397,7 +397,39 @@ export const CONTACT_ICON_SIZE = 16;
 /** Taille des icônes générées sur R2 (affichées jusqu'à 64px en retina). */
 export const ICON_PNG_SIZE = 128;
 
+/** Adresse publique d'un bucket, sans espace ni barre finale. */
+const publicBase = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/\/+$/, "");
+const isHttpUrl = (value) => /^https?:\/\/[^/]/i.test(value);
+
 export const ICONS_PUBLIC_URL =
-  process.env.ICONS_URL ||
+  publicBase(process.env.ICONS_URL) ||
   "https://pub-f5ac1d55852142ab931dc75bdc939d68.r2.dev";
 export const ICONS_BUCKET = process.env.ICONS_BUCKET || "icons";
+
+/**
+ * Images des signatures (photo, logo, bannière) : adresse publique actuelle
+ * du bucket (SIGNATURE_URL, celle des nouveaux envois, comme dans
+ * cloudflareService) et ses anciennes adresses (SIGNATURE_LEGACY_URLS,
+ * séparées par des virgules), par exemple l'adresse r2.dev d'avant un
+ * domaine personnalisé. Une image enregistrée sous une ancienne adresse est
+ * rendue sous l'actuelle : même fichier, et la signature passe au nouveau
+ * domaine à sa prochaine copie, sans migration des données. Sans ces deux
+ * variables, aucune adresse n'est réécrite.
+ */
+const signatureBase = publicBase(process.env.SIGNATURE_URL);
+export const SIGNATURE_PUBLIC_URL = isHttpUrl(signatureBase)
+  ? signatureBase
+  : "";
+export const SIGNATURE_LEGACY_URLS = SIGNATURE_PUBLIC_URL
+  ? String(process.env.SIGNATURE_LEGACY_URLS || "")
+      .split(",")
+      .map(publicBase)
+      .filter(
+        (url) =>
+          isHttpUrl(url) &&
+          url.toLowerCase() !== SIGNATURE_PUBLIC_URL.toLowerCase(),
+      )
+  : [];
