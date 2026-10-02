@@ -26,7 +26,10 @@ import { normalizeSignature } from "../src/services/signatureRenderer/index.js";
 
 const APPLY = process.argv.includes("--apply");
 
-const lower = (v) => String(v || "").trim().toLowerCase();
+const lower = (v) =>
+  String(v || "")
+    .trim()
+    .toLowerCase();
 
 /** Champs à vider pour une signature (vide : rien à faire). */
 export function ctaColorReset(doc) {

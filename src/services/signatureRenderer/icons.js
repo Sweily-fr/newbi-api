@@ -70,7 +70,9 @@ export function needsHalo(spec) {
   const plain =
     spec.kind === "contact" ||
     (spec.kind === "social" && spec.style === "plain");
-  return plain && /^[0-9a-f]{6}$/.test(spec.color) && luminance(spec.color) < 0.2;
+  return (
+    plain && /^[0-9a-f]{6}$/.test(spec.color) && luminance(spec.color) < 0.2
+  );
 }
 
 export function iconKey(spec) {

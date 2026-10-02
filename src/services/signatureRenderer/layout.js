@@ -955,7 +955,9 @@ function frameContent({
     const content = band
       ? box(
           `<tr><td bgcolor="${bandFill}" style="background-color:${bandFill};padding:18px 24px;border-radius:${r}px;">${band}</td></tr>${
-            rest ? `<tr><td style="padding:${sp.block}px 0 0 0;">${rest}</td></tr>` : ""
+            rest
+              ? `<tr><td style="padding:${sp.block}px 0 0 0;">${rest}</td></tr>`
+              : ""
           }`,
           wAttr,
           wStyle,
