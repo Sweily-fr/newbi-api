@@ -508,8 +508,10 @@ export const withRBAC = (resolver, options = {}) => {
             `Accès refusé: ${userId} (${userRole}) n'a pas la permission ${requiredPermission} sur ${options.resource}`,
           );
 
+          // Permission et ressource restent dans le journal ci-dessus : le
+          // message est affiché tel quel par l'application
           throw new AppError(
-            `Vous n'avez pas la permission d'effectuer cette action (${requiredPermission} sur ${options.resource})`,
+            "Vous n'avez pas la permission d'effectuer cette action.",
             ERROR_CODES.FORBIDDEN,
           );
         }
