@@ -38,7 +38,6 @@ import {
   GALLERY_TEMPLATE_IDS,
 } from "../services/signatureRenderer/constants.js";
 import {
-  deleteSignatureImages,
   ensureIcons,
   ensureSamplePhoto,
   importSignatureImage,
@@ -532,12 +531,14 @@ const emailSignatureV2Resolvers = {
       },
     ),
 
+    // Les images restent en ligne : la signature, si elle est installée dans
+    // une messagerie, continue de s'afficher (comme les e-mails envoyés).
+    // Elles partent avec le compte.
     deleteEmailSignatureV2: requireDelete("signatures")(
       async (_, { id }, ctx) => {
         const doc = await findOwned(id, ctx);
         const wasDefault = doc.isDefault;
         await doc.deleteOne();
-        await deleteSignatureImages(ctx.user.id, doc._id);
         if (wasDefault) {
           const next = await EmailSignatureV2.findOne(scope(ctx)).sort({
             updatedAt: -1,

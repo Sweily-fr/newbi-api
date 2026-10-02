@@ -228,6 +228,11 @@ export async function importSignatureImage({
   return storeSignatureImage({ buffer, kind, userId, signatureId, options });
 }
 
+/**
+ * Supprime les images d'une signature. Réservé à la suppression du compte :
+ * supprimer une signature ou en retirer une image garde les fichiers, que
+ * les e-mails déjà envoyés affichent encore.
+ */
 export async function deleteSignatureImages(userId, signatureId) {
   for (const type of Object.values(R2_IMAGE_TYPE)) {
     try {
