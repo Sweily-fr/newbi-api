@@ -40,6 +40,7 @@ import {
 import {
   ensureIcons,
   ensureSamplePhoto,
+  ImageInputError,
   importSignatureImage,
   storeSignatureImage,
 } from "../services/signatureAssets.js";
@@ -234,14 +235,17 @@ function withPreview(data) {
 
 async function readUpload(file) {
   const { createReadStream, filename, mimetype } = await file;
-  if (!mimetype || !mimetype.startsWith("image/")) {
+  // Photo HEIC sans type reconnu par le système (navigateur sous Windows) :
+  // envoyée en application/octet-stream, c'est son contenu qui décide
+  const heic = /\.hei[cf]$/i.test(filename || "");
+  if (!heic && (!mimetype || !mimetype.startsWith("image/"))) {
     throw createValidationError(
       "Le fichier doit être une image (JPG, PNG ou WebP)",
     );
   }
   const chunks = [];
   for await (const chunk of createReadStream()) chunks.push(chunk);
-  return { buffer: Buffer.concat(chunks), filename };
+  return { buffer: Buffer.concat(chunks), filename, mimetype };
 }
 
 /**
@@ -643,7 +647,7 @@ const emailSignatureV2Resolvers = {
     uploadEmailSignatureV2Image: requireWrite("signatures")(
       async (_, { id, kind, file }, ctx) => {
         const doc = await findOwned(id, ctx);
-        const { buffer } = await readUpload(file);
+        const { buffer, filename, mimetype } = await readUpload(file);
         let stored;
         try {
           stored = await storeSignatureImage({
@@ -655,7 +659,23 @@ const emailSignatureV2Resolvers = {
               kind === "PHOTO" ? { size: doc.style?.photoSize || 84 } : {},
           });
         } catch (error) {
-          throw createValidationError(error.message || "Image illisible");
+          const upload = `${kind}, ${mimetype || "type inconnu"}, « ${filename || "sans nom"} », ${buffer.length} octets`;
+          // Image refusée : message pour l'utilisateur, détail en journal
+          if (error instanceof ImageInputError) {
+            logger.warn(
+              `[signatures v2] image refusée (${upload}) : ${error.message}${
+                error.cause?.message ? ` [${error.cause.message}]` : ""
+              }`,
+            );
+            throw createValidationError(error.message);
+          }
+          // Panne de stockage (R2, réseau) : un incident, pas un refus
+          logger.error(
+            `[signatures v2] image non enregistrée (${upload}) : ${error.message}`,
+          );
+          throw createInternalServerError(
+            "L'image n'a pas pu être enregistrée. Réessayez dans un instant.",
+          );
         }
         doc.images[kind.toLowerCase()] = stored;
         doc.markModified("images");

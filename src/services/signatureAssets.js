@@ -8,6 +8,7 @@
  */
 
 import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import heicDecode from "heic-decode";
 import sharp from "sharp";
 import cloudflareService from "./cloudflareService.js";
 import logger from "../utils/logger.js";
@@ -134,19 +135,79 @@ const OUTPUT = {
 };
 
 /**
- * Traite une image envoyée par l'utilisateur.
+ * Refus dû à l'image elle-même (format, taille, fichier abîmé) : son message
+ * s'adresse à l'utilisateur, le détail technique reste dans `cause`.
+ */
+export class ImageInputError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "ImageInputError";
+  }
+}
+
+const UNSUPPORTED_IMAGE =
+  "Ce format d'image n'est pas pris en charge. Envoyez une image JPG, PNG ou WebP.";
+
+/**
+ * Une photo HEIC décodée à la fois par processus : le décodage occupe
+ * jusqu'à ~270 Mo pour une photo de 24 Mpx.
+ */
+let heicQueue = Promise.resolve();
+function decodeHeic(buffer) {
+  const run = heicQueue.then(() => heicDecode({ buffer }));
+  heicQueue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Photo HEIC (iPhone, AirDrop vers un Mac) : sharp ne lit que l'AVIF parmi
+ * les HEIF. Décodée en pixels bruts (libheif applique la rotation), puis
+ * traitée comme les autres images.
+ */
+async function openHeic(buffer) {
+  let decoded;
+  try {
+    decoded = await decodeHeic(buffer);
+  } catch (cause) {
+    throw new ImageInputError(
+      "Impossible de lire cette photo HEIC. Enregistrez-la en JPG ou en PNG, puis réessayez.",
+      { cause },
+    );
+  }
+  const { width, height, data } = decoded;
+  return {
+    image: sharp(Buffer.from(data.buffer, data.byteOffset, data.byteLength), {
+      raw: { width, height, channels: 4 },
+    }).removeAlpha(),
+    meta: { width, height, hasAlpha: false },
+  };
+}
+
+/**
+ * Traite une image envoyée par l'utilisateur. Une image refusée lève une
+ * ImageInputError, au message prêt à afficher.
  * @returns {{ buffer: Buffer, ext: string, contentType: string, width: number, height: number }}
  */
 export async function processImage(buffer, kind, options = {}) {
   if (!OUTPUT[kind]) throw new Error(`Type d'image inconnu : ${kind}`);
-  if (!buffer || buffer.length === 0) throw new Error("Fichier vide");
+  if (!buffer || buffer.length === 0) throw new ImageInputError("Fichier vide");
   if (buffer.length > MAX_IMAGE_BYTES) {
-    throw new Error("Image trop volumineuse (10 Mo maximum)");
+    throw new ImageInputError("Image trop volumineuse (10 Mo maximum)");
   }
 
-  let image = sharp(buffer, { failOn: "none" }).rotate();
-  const meta = await image.metadata();
-  if (!meta.width || !meta.height) throw new Error("Image illisible");
+  let image = sharp(buffer, { failOn: "none" });
+  let meta;
+  try {
+    meta = await image.metadata();
+  } catch (cause) {
+    throw new ImageInputError(UNSUPPORTED_IMAGE, { cause });
+  }
+  if (meta.format === "heif" && meta.compression === "hevc") {
+    ({ image, meta } = await openHeic(buffer));
+  } else {
+    image = image.rotate();
+  }
+  if (!meta.width || !meta.height) throw new ImageInputError("Image illisible");
 
   image = await OUTPUT[kind](image, options);
 
@@ -158,7 +219,15 @@ export async function processImage(buffer, kind, options = {}) {
     ? image.png({ compressionLevel: 9, palette: false })
     : image.jpeg({ quality: 86, mozjpeg: true });
 
-  const { data, info } = await output.toBuffer({ resolveWithObject: true });
+  // Les métadonnées passent, le décodage peut encore échouer (format lu
+  // à moitié, fichier tronqué)
+  let data;
+  let info;
+  try {
+    ({ data, info } = await output.toBuffer({ resolveWithObject: true }));
+  } catch (cause) {
+    throw new ImageInputError(UNSUPPORTED_IMAGE, { cause });
+  }
   return {
     buffer: data,
     ext: keepAlpha ? "png" : "jpg",
