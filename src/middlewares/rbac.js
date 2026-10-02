@@ -232,7 +232,9 @@ const ROLE_PERMISSIONS = {
     fileTransfers: ["view", "create", "download"],
     sharedDocuments: ["view", "create", "edit", "download"],
     kanban: ["view", "create", "edit", "assign"],
-    signatures: ["view", "create", "edit", "set-default"],
+    // Signatures de mail : documents personnels, chacun supprime les siennes
+    // (toutes les suppressions filtrent sur l'auteur)
+    signatures: ["view", "create", "edit", "delete", "set-default"],
     calendar: ["view", "create", "edit"],
     reports: ["view", "export"],
     analytics: ["view", "export"],
