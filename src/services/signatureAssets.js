@@ -175,8 +175,10 @@ const R2_IMAGE_TYPE = {
 };
 
 /**
- * Traite puis envoie une image de signature sur R2. Supprime l'ancienne
- * image du même type (comportement de uploadSignatureImage).
+ * Traite puis envoie une image de signature sur R2. L'ancienne image du même
+ * type est gardée : son URL figure dans la signature déjà installée et dans
+ * les e-mails déjà envoyés, qui la perdraient sinon. Les fichiers partent
+ * avec le compte.
  */
 export async function storeSignatureImage({
   buffer,
@@ -193,6 +195,7 @@ export async function storeSignatureImage({
     String(userId),
     String(signatureId),
     R2_IMAGE_TYPE[kind],
+    { keepPrevious: true },
   );
   return {
     url: result.url,

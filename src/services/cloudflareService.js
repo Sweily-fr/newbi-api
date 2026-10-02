@@ -1222,6 +1222,10 @@ class CloudflareService {
    * @param {string} userId - L'ID de l'utilisateur
    * @param {string} signatureId - L'ID de la signature
    * @param {string} imageType - Le type d'image ('imgProfil' ou 'logoReseau')
+   * @param {Object} [options]
+   * @param {boolean} [options.keepPrevious=false] - Garder les anciennes images
+   *   du même type (signatures v2) : leur URL reste dans la signature déjà
+   *   installée et dans les e-mails déjà envoyés.
    * @returns {Promise<Object>} - Les informations sur l'image téléchargée
    */
   async uploadSignatureImage(
@@ -1230,6 +1234,7 @@ class CloudflareService {
     userId,
     signatureId,
     imageType,
+    { keepPrevious = false } = {},
   ) {
     try {
       logger.debug(
@@ -1249,9 +1254,11 @@ class CloudflareService {
         );
       }
 
-      // Supprimer les anciennes images du même type
-      logger.debug(`🗑️ Suppression des anciennes images pour ${imageType}`);
-      await this.deleteSignatureFolder(userId, signatureId, imageType);
+      // Supprimer les anciennes images du même type (sauf keepPrevious)
+      if (!keepPrevious) {
+        logger.debug(`🗑️ Suppression des anciennes images pour ${imageType}`);
+        await this.deleteSignatureFolder(userId, signatureId, imageType);
+      }
 
       // Cloudflare R2 créera automatiquement la structure de dossiers basée sur la clé du fichier
       logger.debug(

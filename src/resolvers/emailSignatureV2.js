@@ -74,21 +74,11 @@ const plain = (value) =>
  * Photo de la personne de la signature : importée et recadrée comme un
  * envoi, ou retirée si la personne n'en a pas. Un échec d'import ne bloque
  * jamais l'enregistrement (la signature reste utilisable sans photo).
+ * Retirée, la photo reste en ligne pour les e-mails déjà envoyés.
  */
 async function setPersonPhoto(doc, url, ctx) {
   if (!url) {
     if (!doc.images?.photo) return;
-    try {
-      await cloudflareService.deleteSignatureFolder(
-        String(ctx.user.id),
-        String(doc._id),
-        "imgProfil",
-      );
-    } catch (error) {
-      logger.warn(
-        `[signatures v2] suppression photo ignorée : ${error.message}`,
-      );
-    }
     doc.images.photo = null;
     doc.markModified("images");
     await doc.save();
@@ -673,27 +663,13 @@ const emailSignatureV2Resolvers = {
       },
     ),
 
+    // Image détachée de la signature, fichier gardé : la signature déjà
+    // installée et les e-mails déjà envoyés continuent de l'afficher
     removeEmailSignatureV2Image: requireWrite("signatures")(
       async (_, { id, kind }, ctx) => {
         const doc = await findOwned(id, ctx);
         const field = kind.toLowerCase();
         if (doc.images?.[field]) {
-          const type = {
-            PHOTO: "imgProfil",
-            LOGO: "logoReseau",
-            BANNER: "banner",
-          }[kind];
-          try {
-            await cloudflareService.deleteSignatureFolder(
-              String(ctx.user.id),
-              String(doc._id),
-              type,
-            );
-          } catch (error) {
-            logger.warn(
-              `[signatures v2] suppression ${kind} ignorée : ${error.message}`,
-            );
-          }
           doc.images[field] = null;
           doc.markModified("images");
           await doc.save();
