@@ -90,7 +90,8 @@ async function setPersonPhoto(doc, url, ctx) {
       );
     }
     doc.images.photo = null;
-    doc.markModified("images");
+    // La photo seule : une autre image envoyée entre-temps reste en base
+    doc.markModified("images.photo");
     await doc.save();
     return;
   }
@@ -102,7 +103,7 @@ async function setPersonPhoto(doc, url, ctx) {
       signatureId: doc._id,
       options: { size: doc.style?.photoSize || 84 },
     });
-    doc.markModified("images");
+    doc.markModified("images.photo");
     await doc.save();
   } catch (error) {
     logger.warn(
@@ -667,7 +668,10 @@ const emailSignatureV2Resolvers = {
           throw createValidationError(error.message || "Image illisible");
         }
         doc.images[kind.toLowerCase()] = stored;
-        doc.markModified("images");
+        // Cette image seule : le document a été lu avant l'envoi (plusieurs
+        // secondes), une autre image envoyée entre-temps ne doit pas être
+        // remise à son ancienne valeur
+        doc.markModified(`images.${kind.toLowerCase()}`);
         await doc.save();
         return doc;
       },
@@ -695,7 +699,7 @@ const emailSignatureV2Resolvers = {
             );
           }
           doc.images[field] = null;
-          doc.markModified("images");
+          doc.markModified(`images.${field}`);
           await doc.save();
         }
         return doc;
