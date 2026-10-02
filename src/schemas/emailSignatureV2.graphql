@@ -536,8 +536,14 @@ type SignatureSavedTemplateV2 {
   "Modèle de base, dont le caractère (nom en capitales, tailles…) s'applique."
   templateId: String!
   style: SignatureStyleV2!
-  "Enregistré par l'utilisateur connecté : lui seul peut le supprimer."
+  "Enregistré par l'utilisateur connecté : lui seul peut le remplacer."
   mine: Boolean!
+  """
+  L'utilisateur connecté peut le supprimer : son auteur, ou le propriétaire
+  et les administrateurs de l'espace (si leur rôle permet de supprimer des
+  signatures).
+  """
+  canDelete: Boolean!
 }
 
 input SignatureSavedTemplateV2Input {
@@ -619,6 +625,9 @@ extend type Mutation {
     input: SignatureSavedTemplateV2Input!
   ): SignatureSavedTemplateV2!
 
-  "Supprime un de vos modèles enregistrés."
+  """
+  Supprime un modèle enregistré : un des vôtres, ou n'importe lequel de
+  l'espace pour le propriétaire et les administrateurs.
+  """
   deleteEmailSignatureTemplateV2(id: ID!): Boolean!
 }
