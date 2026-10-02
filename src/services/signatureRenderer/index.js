@@ -532,7 +532,8 @@ function socialWarnings(sig, region) {
 /**
  * Rend une signature. `region` : pays de l'espace (FR, BE, CH, LU), pour
  * écrire les numéros nationaux en format international dans les liens
- * d'appel et WhatsApp ; vide, ils restent tels quels.
+ * d'appel et WhatsApp. Vide, un lien d'appel garde le numéro tel quel ;
+ * WhatsApp, qui n'accepte qu'un numéro international, suppose la France.
  * @returns {{ html: string, text: string, chars: number, warnings: string[] }}
  */
 export function renderSignature(
