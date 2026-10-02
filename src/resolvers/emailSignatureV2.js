@@ -244,6 +244,31 @@ function withPreview(data) {
   };
 }
 
+/**
+ * Rendu de secours d'une signature dont le rendu a échoué : vide, avec un
+ * avertissement, et les dimensions par défaut des traits.
+ */
+function failedRender() {
+  return {
+    html: "",
+    previewHtml: "",
+    text: "",
+    chars: 0,
+    warnings: [
+      "L'aperçu de cette signature n'a pas pu être affiché. Réessayez dans un instant.",
+    ],
+    elements: {},
+    lines: {
+      accentLength: 40,
+      accentThickness: 3,
+      dividerThickness: 1,
+      frameThickness: 1,
+      photoMax: 160,
+      iconMax: 40,
+    },
+  };
+}
+
 async function readUpload(file) {
   const { createReadStream, filename, mimetype } = await file;
   if (!mimetype || !mimetype.startsWith("image/")) {
@@ -304,10 +329,19 @@ const emailSignatureV2Resolvers = {
     // Style effectif : réglages absents = valeurs du modèle, pour que
     // l'éditeur affiche la mise en page réellement rendue
     style: (doc) => normalizeSignature(plain(doc)).style,
+    // Champ non nul : une exception remonterait jusqu'à la liste entière,
+    // qui s'afficherait vide. Une signature en échec garde un rendu vide.
     render: async (doc) => {
-      const data = plain(doc);
-      await ensureIconsSoon(data);
-      return withPreview(data);
+      try {
+        const data = plain(doc);
+        await ensureIconsSoon(data);
+        return withPreview(data);
+      } catch (error) {
+        logger.error(
+          `[signatures v2] rendu impossible (${String(doc._id ?? doc.id)}) : ${error.message}`,
+        );
+        return failedRender();
+      }
     },
   },
 
