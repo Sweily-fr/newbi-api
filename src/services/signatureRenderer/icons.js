@@ -58,8 +58,34 @@ export function iconSpec({ kind, name, style = "rounded", color }) {
   };
 }
 
+/** Luminance relative (WCAG) d'une couleur « rrggbb », de 0 (noir) à 1 (blanc). */
+function luminance(color) {
+  const channel = (i) => {
+    const c = parseInt(color.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+}
+
+/**
+ * Icône tracée sans fond dans une couleur sombre (coordonnées, réseaux en
+ * style « plain ») : en mode sombre, aucune messagerie n'inverse les
+ * images, elle disparaîtrait sur le fond noir. Elle reçoit un liseré blanc,
+ * invisible sur fond clair. Seuil 0,2 : contraste sous 3:1 même sur le fond
+ * #333 d'Outlook. Les formes pleines gardent leur glyphe blanc, déjà lisible.
+ */
+export function needsHalo(spec) {
+  const plain =
+    spec.kind === "contact" ||
+    (spec.kind === "social" && spec.style === "plain");
+  return plain && /^[0-9a-f]{6}$/.test(spec.color) && luminance(spec.color) < 0.2;
+}
+
 export function iconKey(spec) {
-  return `v2/${spec.kind}/${spec.name}/${spec.style}-${spec.color}.png`;
+  // Les PNG sont immuables (mis en cache un an) : une icône à liseré a sa
+  // propre clé, les autres gardent leur adresse
+  const version = needsHalo(spec) ? "v3" : "v2";
+  return `${version}/${spec.kind}/${spec.name}/${spec.style}-${spec.color}.png`;
 }
 
 export function iconUrl(spec) {
@@ -91,18 +117,30 @@ export function glyphFor(spec) {
  * - social « plain » : glyphe dans la couleur, fond transparent ;
  * - social rond / arrondi / carré : fond coloré, glyphe blanc ;
  * - contact : contour dans la couleur, fond transparent.
+ * Couleur sombre sans fond (needsHalo) : le même glyphe en blanc, plus
+ * épais, est tracé dessous ; même viewBox, rien n'est rogné, et le rendu
+ * sur fond clair ne change pas.
  */
 export function iconSvg(spec, size = 128) {
   const glyph = glyphFor(spec);
   if (!glyph) return null;
   const color = `#${spec.color}`;
+  const halo = needsHalo(spec);
 
   if (glyph.stroke) {
+    if (halo) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="${glyph.viewBox}" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#ffffff" stroke-width="4">${glyph.inner}</g><g stroke="${color}" stroke-width="2">${glyph.inner}</g></svg>`;
+    }
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="${glyph.viewBox}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${glyph.inner}</svg>`;
   }
 
   const [, , vbW, vbH] = glyph.viewBox.split(" ").map(Number);
   if (spec.style === "plain") {
+    if (halo) {
+      // Liseré de 2 unités sur 24, quelle que soit la taille du glyphe
+      const width = ((Math.max(vbW, vbH) / 24) * 2).toFixed(2);
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="${glyph.viewBox}"><g fill="#ffffff" stroke="#ffffff" stroke-width="${width}" stroke-linejoin="round">${glyph.inner}</g><g fill="${color}">${glyph.inner}</g></svg>`;
+    }
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="${glyph.viewBox}" fill="${color}">${glyph.inner}</svg>`;
   }
 

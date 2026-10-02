@@ -1429,7 +1429,8 @@ describe("signatureRenderer — modèle Épuré", () => {
 
   it("trait et icônes des coordonnées dans la couleur du texte", () => {
     expect(html()).toContain('bgcolor="#111111"');
-    expect(html()).toMatch(/v2\/contact\/phone\/[^"]*-111111\.png/);
+    // Couleur sombre : icône à liseré blanc, clé v3 (mode sombre)
+    expect(html()).toMatch(/v3\/contact\/phone\/[^"]*-111111\.png/);
   });
 
   it("n'agit pas sur les autres modèles", () => {
