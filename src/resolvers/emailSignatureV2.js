@@ -49,6 +49,7 @@ import {
   isWorkspaceMember,
   listWorkspaceMembers,
   memberSignatureProfile,
+  photoImportUrls,
 } from "../services/signatureProfile.js";
 
 /** Un e-mail de test au plus toutes les 20 secondes par utilisateur. */
@@ -71,34 +72,40 @@ const plain = (value) =>
       : {};
 
 /**
- * Photo de la personne de la signature : importée et recadrée comme un
- * envoi, ou retirée si la personne n'en a pas. Un échec d'import ne bloque
- * jamais l'enregistrement (la signature reste utilisable sans photo).
+ * Photo de profil importée et recadrée comme un envoi : en grand d'abord
+ * (photo Google en 512 px), puis à son adresse d'origine. null si aucune
+ * ne répond : la signature reste utilisable sans photo.
+ */
+async function importPersonPhoto(doc, url, ctx) {
+  for (const candidate of photoImportUrls(url)) {
+    try {
+      return await importSignatureImage({
+        url: candidate,
+        kind: "PHOTO",
+        userId: ctx.user.id,
+        signatureId: doc._id,
+      });
+    } catch (error) {
+      logger.warn(
+        `[signatures v2] photo de profil non importée : ${error.message}`,
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Photo de la personne de la signature : importée, ou retirée si la
+ * personne n'en a pas ou si l'import échoue (jamais le visage de la
+ * personne précédente). Un échec ne bloque jamais l'enregistrement.
  * Retirée, la photo reste en ligne pour les e-mails déjà envoyés.
  */
 async function setPersonPhoto(doc, url, ctx) {
-  if (!url) {
-    if (!doc.images?.photo) return;
-    doc.images.photo = null;
-    doc.markModified("images");
-    await doc.save();
-    return;
-  }
-  try {
-    doc.images.photo = await importSignatureImage({
-      url,
-      kind: "PHOTO",
-      userId: ctx.user.id,
-      signatureId: doc._id,
-      options: { size: doc.style?.photoSize || 84 },
-    });
-    doc.markModified("images");
-    await doc.save();
-  } catch (error) {
-    logger.warn(
-      `[signatures v2] photo de profil non importée : ${error.message}`,
-    );
-  }
+  const photo = url ? await importPersonPhoto(doc, url, ctx) : null;
+  if (!photo && !doc.images?.photo) return;
+  doc.images.photo = photo;
+  doc.markModified("images");
+  await doc.save();
 }
 
 /** Personne choisie : soi-même par défaut, sinon un membre de l'espace. */
@@ -655,8 +662,6 @@ const emailSignatureV2Resolvers = {
             kind,
             userId: ctx.user.id,
             signatureId: doc._id,
-            options:
-              kind === "PHOTO" ? { size: doc.style?.photoSize || 84 } : {},
           });
         } catch (error) {
           const upload = `${kind}, ${mimetype || "type inconnu"}, « ${filename || "sans nom"} », ${buffer.length} octets`;

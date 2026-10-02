@@ -38,13 +38,43 @@ export function splitName(fullName, lastName) {
   return { firstName, lastName: rest.join(" ") };
 }
 
-/** Photo de profil, même règle que les avatars du kanban. */
+const httpUrl = (v) => {
+  const s = clean(v);
+  return /^https?:\/\//i.test(s) ? s : "";
+};
+
+/**
+ * Photo de profil : celle choisie dans Newbi (avatar, profil) d'abord, celle
+ * du compte Google (image, 96 px) sinon. Première adresse http(s) valide :
+ * une ancienne valeur invalide ne masque pas la suivante.
+ */
 export function photoUrl(user) {
-  const url =
-    clean(user?.image) ||
-    clean(user?.avatar) ||
-    clean(user?.profile?.profilePictureUrl);
-  return /^https?:\/\//i.test(url) ? url : null;
+  return (
+    httpUrl(user?.avatar) ||
+    httpUrl(user?.profile?.profilePictureUrl) ||
+    httpUrl(user?.image) ||
+    null
+  );
+}
+
+/**
+ * Adresses à essayer pour importer une photo dans une signature : une photo
+ * Google est demandée en 512 px (l'adresse enregistrée donne 96 px, floue
+ * une fois agrandie), puis à son adresse d'origine si la grande échoue.
+ */
+export function photoImportUrls(url) {
+  if (!url) return [];
+  let host = "";
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return [url];
+  }
+  if (!/(^|\.)googleusercontent\.com$/i.test(host)) return [url];
+  const large = url
+    .replace(/=s\d+(-c)?$/, "=s512-c")
+    .replace(/\/s\d+(-c)?\//, "/s512-c/");
+  return large === url ? [url] : [large, url];
 }
 
 function displayName(user) {

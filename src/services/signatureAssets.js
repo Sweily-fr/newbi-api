@@ -123,9 +123,12 @@ export async function ensureIcons(specs) {
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 const OUTPUT = {
-  // Photo : carré recadré sur le sujet, 2x pour les écrans retina.
-  PHOTO: async (image, { size = 160 } = {}) =>
-    image.resize(size * 2, size * 2, { fit: "cover", position: "attention" }),
+  // Photo : carré de 320 px recadré sur le sujet, 2x de la plus grande
+  // taille réglable (160 px) : nette sur écran retina quelle que soit la
+  // taille choisie ensuite. Une petite source est agrandie plutôt que
+  // laissée non carrée (withoutEnlargement la déformerait à l'affichage).
+  PHOTO: async (image) =>
+    image.resize(320, 320, { fit: "cover", position: "attention" }),
   // Logo : contenu dans 600x300 (2x), jamais agrandi.
   LOGO: async (image) =>
     image.resize(600, 300, { fit: "inside", withoutEnlargement: true }),
@@ -188,7 +191,7 @@ async function openHeic(buffer) {
  * ImageInputError, au message prêt à afficher.
  * @returns {{ buffer: Buffer, ext: string, contentType: string, width: number, height: number }}
  */
-export async function processImage(buffer, kind, options = {}) {
+export async function processImage(buffer, kind) {
   if (!OUTPUT[kind]) throw new Error(`Type d'image inconnu : ${kind}`);
   if (!buffer || buffer.length === 0) throw new ImageInputError("Fichier vide");
   if (buffer.length > MAX_IMAGE_BYTES) {
@@ -209,7 +212,7 @@ export async function processImage(buffer, kind, options = {}) {
   }
   if (!meta.width || !meta.height) throw new ImageInputError("Image illisible");
 
-  image = await OUTPUT[kind](image, options);
+  image = await OUTPUT[kind](image);
 
   // La transparence est conservée (PNG) quand la source en a : le logo
   // n'a pas de cadre blanc en mode sombre (un logo très foncé y devient en
@@ -255,9 +258,8 @@ export async function storeSignatureImage({
   kind,
   userId,
   signatureId,
-  options,
 }) {
-  const processed = await processImage(buffer, kind, options);
+  const processed = await processImage(buffer, kind);
   const fileName = `${kind.toLowerCase()}-${Date.now()}.${processed.ext}`;
   const result = await cloudflareService.uploadSignatureImage(
     processed.buffer,
@@ -285,7 +287,6 @@ export async function importSignatureImage({
   kind,
   userId,
   signatureId,
-  options,
   timeoutMs = 5000,
 }) {
   const response = await fetch(url, {
@@ -295,7 +296,7 @@ export async function importSignatureImage({
   const length = Number(response.headers.get("content-length") || 0);
   if (length > MAX_IMAGE_BYTES) throw new Error("Image trop lourde");
   const buffer = Buffer.from(await response.arrayBuffer());
-  return storeSignatureImage({ buffer, kind, userId, signatureId, options });
+  return storeSignatureImage({ buffer, kind, userId, signatureId });
 }
 
 /**

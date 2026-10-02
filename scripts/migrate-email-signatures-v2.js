@@ -194,17 +194,11 @@ export function mapLegacySignature(doc) {
  * carré pour la photo), stockée sous l'identifiant de la signature v2.
  * Retourne null si l'image n'est pas récupérable (l'URL v1 est alors gardée).
  */
-async function reprocessImage(url, kind, userId, signatureId, size) {
+async function reprocessImage(url, kind, userId, signatureId) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
-  return storeSignatureImage({
-    buffer,
-    kind,
-    userId,
-    signatureId,
-    options: kind === "PHOTO" ? { size } : {},
-  });
+  return storeSignatureImage({ buffer, kind, userId, signatureId });
 }
 
 async function reprocessDocImages(v2, log) {
@@ -221,7 +215,6 @@ async function reprocessDocImages(v2, log) {
         kind,
         v2.createdBy,
         v2._id,
-        v2.style?.photoSize || 84,
       );
       v2.images[field] = stored;
       v2.markModified("images");
