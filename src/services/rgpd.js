@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import crypto from "crypto";
+import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import logger from "../utils/logger.js";
+import cloudflareService from "./cloudflareService.js";
 
 // Models
 import User from "../models/User.js";
@@ -11,6 +13,8 @@ import Client from "../models/Client.js";
 import Product from "../models/Product.js";
 import Expense from "../models/Expense.js";
 import EmailSignature from "../models/EmailSignature.js";
+import EmailSignatureV2 from "../models/EmailSignatureV2.js";
+import EmailSignatureTemplateV2 from "../models/EmailSignatureTemplateV2.js";
 import SmtpSettings from "../models/SmtpSettings.js";
 import Integration from "../models/Integration.js";
 import FileTransfer from "../models/FileTransfer.js";
@@ -80,6 +84,85 @@ function anonymizeCompanyInfo(companyInfo) {
     // mais on anonymise les coordonnées bancaires
     bankDetails: null,
   };
+}
+
+/**
+ * Dossier R2 d'une image de signature (« userId/signature/type/ ») s'il est
+ * rangé sous le préfixe de l'utilisateur, sinon null. La clé manque sur
+ * certaines images migrées de la v1 : elle se lit alors dans l'URL.
+ */
+function signatureImageFolder(image, userId) {
+  let key = image?.key || "";
+  if (!key && image?.url) {
+    try {
+      key = decodeURIComponent(new URL(image.url).pathname.replace(/^\//, ""));
+    } catch {
+      key = "";
+    }
+  }
+  const folder = key.slice(0, key.lastIndexOf("/") + 1);
+  // Au moins « userId/signature/ » : jamais tout le préfixe de l'utilisateur
+  return folder.startsWith(`${userId}/`) && folder.split("/").length > 2
+    ? folder
+    : null;
+}
+
+/**
+ * Supprime les images de signature d'un compte supprimé. Tout est rangé
+ * sous « userId/ » dans le bucket des signatures : signatures v1 et v2,
+ * fichiers gardés après un remplacement ou la suppression d'une signature
+ * (les e-mails déjà envoyés les affichent encore), photos détourées. Seuls
+ * restent les dossiers de `keepFolders` : images des signatures préparées
+ * pour un collègue, installées dans sa messagerie avec sa propre photo.
+ * Hors transaction et sans jamais lever : un échec est journalisé.
+ *
+ * @returns {Promise<number>} Nombre de fichiers supprimés
+ */
+async function purgeSignatureImages(userId, keepFolders = []) {
+  // Un préfixe vide ou inattendu viserait tout le bucket
+  if (!/^[a-f0-9]{24}$/i.test(String(userId))) return 0;
+  const bucket = cloudflareService.signatureBucketName;
+  const kept = (key) => keepFolders.some((folder) => key.startsWith(folder));
+  let deleted = 0;
+  try {
+    let continuationToken;
+    do {
+      const listed = await cloudflareService.client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: `${userId}/`,
+          ContinuationToken: continuationToken,
+        }),
+      );
+      const keys = (listed.Contents || [])
+        .map((object) => object.Key)
+        .filter((key) => key && !kept(key));
+      if (keys.length > 0) {
+        // 1 000 clés au plus par page de liste, la limite d'une suppression
+        const result = await cloudflareService.client.send(
+          new DeleteObjectsCommand({
+            Bucket: bucket,
+            Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true },
+          }),
+        );
+        const failed = result.Errors?.length || 0;
+        if (failed > 0) {
+          logger.warn(
+            `[RGPD] ${failed} image(s) de signature non supprimée(s) pour l'utilisateur ${userId}`,
+          );
+        }
+        deleted += keys.length - failed;
+      }
+      continuationToken = listed.IsTruncated
+        ? listed.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+  } catch (error) {
+    logger.warn(
+      `[RGPD] Nettoyage des images de signature de ${userId} interrompu : ${error.message}`,
+    );
+  }
+  return deleted;
 }
 
 /**
@@ -229,11 +312,48 @@ export async function deleteUserAccount(userId, organizationId) {
     }).session(session);
     summary.expensesDeleted = expenseResult.deletedCount;
 
-    // --- Signatures email ---
+    // --- Signatures email (v1 et v2) ---
+    // Signatures v2 relevées avant suppression : les images de celles
+    // préparées pour un collègue (installées dans sa messagerie, avec sa
+    // photo) sont gardées, toutes les autres partent après le commit.
+    const signaturesV2 = await EmailSignatureV2.find({
+      createdBy: userObjectId,
+    })
+      .select("_id memberUserId images")
+      .session(session)
+      .lean();
+    const colleagueSignatures = signaturesV2.filter(
+      (sig) => sig.memberUserId && String(sig.memberUserId) !== String(userId),
+    );
+    const keptSignatureFolders = [];
+    for (const sig of colleagueSignatures) {
+      const own = `${userId}/${sig._id}/`;
+      keptSignatureFolders.push(own);
+      // Une image peut venir d'un autre dossier (logo migré de la v1)
+      for (const image of Object.values(sig.images || {})) {
+        const folder = signatureImageFolder(image, userId);
+        if (folder && !folder.startsWith(own)) {
+          keptSignatureFolders.push(folder);
+        }
+      }
+    }
+
     const sigResult = await EmailSignature.deleteMany({
       createdBy: userObjectId,
     }).session(session);
-    summary.signaturesDeleted = sigResult.deletedCount;
+    const sigV2Result = await EmailSignatureV2.deleteMany({
+      createdBy: userObjectId,
+    }).session(session);
+    // Résumé d'audit au schéma strict : v1 et v2 dans le même compteur
+    summary.signaturesDeleted =
+      sigResult.deletedCount + sigV2Result.deletedCount;
+
+    // --- Modèles de signature enregistrés ---
+    // Style seulement, proposés à l'équipe : supprimés avec le compte, comme
+    // tout ce que l'utilisateur a créé
+    const sigTemplateResult = await EmailSignatureTemplateV2.deleteMany({
+      createdBy: userObjectId,
+    }).session(session);
 
     // --- Paramètres SMTP ---
     await SmtpSettings.deleteMany({
@@ -420,6 +540,16 @@ export async function deleteUserAccount(userId, organizationId) {
       // For now, these keys are logged for manual or future automated cleanup
     }
 
+    // Images de signature (photo, logo, bannière) : supprimées maintenant,
+    // un échec n'annule pas la suppression déjà validée
+    const signatureImagesDeleted = await purgeSignatureImages(
+      userId,
+      keptSignatureFolders,
+    );
+    logger.info(
+      `[RGPD] Signatures de ${userId} : ${signatureImagesDeleted} image(s) supprimée(s), images gardées pour ${colleagueSignatures.length} signature(s) de collègues, ${sigTemplateResult.deletedCount} modèle(s) supprimé(s)`,
+    );
+
     return summary;
   } catch (error) {
     await session.abortTransaction();
@@ -558,6 +688,20 @@ export async function exportUserData(userId, organizationId) {
     .lean()
     .exec();
 
+  // --- Signatures email v2 et modèles enregistrés ---
+  const emailSignaturesV2 = await EmailSignatureV2.find({
+    createdBy: userObjectId,
+  })
+    .lean()
+    .exec();
+
+  const emailSignatureTemplatesV2 = await EmailSignatureTemplateV2.find({
+    createdBy: userObjectId,
+  })
+    .select("name templateId createdAt")
+    .lean()
+    .exec();
+
   // --- Paramètres SMTP ---
   const smtpSettings = await SmtpSettings.find({
     workspaceId: orgObjectId,
@@ -663,6 +807,32 @@ export async function exportUserData(userId, organizationId) {
       phone: sig.phone,
       companyName: sig.companyName,
       createdAt: sig.createdAt,
+    })),
+    emailSignaturesV2: emailSignaturesV2.map((sig) => ({
+      name: sig.name,
+      isDefault: sig.isDefault,
+      identity: sig.identity,
+      contact: sig.contact,
+      social: (sig.social || []).map((s) => ({
+        network: s.network,
+        url: s.url,
+      })),
+      // Adresses publiques des images (pas les fichiers eux-mêmes)
+      images: {
+        photo: sig.images?.photo?.url || null,
+        logo: sig.images?.logo?.url || null,
+        banner: sig.images?.banner?.url || null,
+      },
+      cta: { label: sig.cta?.label || "", url: sig.cta?.url || "" },
+      banner: { url: sig.banner?.url || "", alt: sig.banner?.alt || "" },
+      disclaimer: { text: sig.disclaimer?.text || "" },
+      createdAt: sig.createdAt,
+      updatedAt: sig.updatedAt,
+    })),
+    emailSignatureTemplatesV2: emailSignatureTemplatesV2.map((t) => ({
+      name: t.name,
+      templateId: t.templateId,
+      createdAt: t.createdAt,
     })),
     settings: {
       smtp: smtpSettings,
