@@ -145,6 +145,12 @@ const emailSignatureV2Schema = new mongoose.Schema(
       enum: TEMPLATE_IDS,
       default: DEFAULT_TEMPLATE_ID,
     },
+    /**
+     * Modèle d'équipe (EmailSignatureTemplateV2) appliqué en dernier, null
+     * pour le modèle intégré : l'éditeur le coche et sait y revenir. Simple
+     * référence, ignorée par le rendu (son style a été recopié).
+     */
+    savedTemplateId: { type: String, default: null },
 
     identity: {
       firstName: trimmed(80),

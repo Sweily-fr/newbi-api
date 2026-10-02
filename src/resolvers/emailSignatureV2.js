@@ -128,6 +128,14 @@ async function resolvePerson(memberUserId, ctx) {
   };
 }
 
+/**
+ * Référence au modèle d'équipe appliqué : un identifiant de modèle, sinon
+ * null (modèle intégré). Le modèle peut avoir été supprimé depuis :
+ * l'éditeur revient alors au modèle intégré.
+ */
+const savedTemplateRef = (value) =>
+  /^[0-9a-f]{24}$/i.test(String(value ?? "")) ? String(value) : null;
+
 /** Garde les valeurs renseignées d'un groupe (identity, contact…). */
 const filled = (obj) =>
   Object.fromEntries(
@@ -486,6 +494,7 @@ const emailSignatureV2Resolvers = {
           name,
           isDefault: isFirst,
           memberUserId: person.userId,
+          savedTemplateId: savedTemplateRef(input?.savedTemplateId),
           ...scope(ctx),
         });
         applyNormalized(doc, normalized);
@@ -537,6 +546,11 @@ const emailSignatureV2Resolvers = {
           }
         }
         applyNormalized(doc, mergeInput(plain(doc), input || {}));
+        // Modèle d'équipe appliqué : hors du style, que la normalisation ne
+        // connaît pas, il est recopié à part
+        if (input?.savedTemplateId !== undefined) {
+          doc.savedTemplateId = savedTemplateRef(input.savedTemplateId);
+        }
         await doc.save();
         return doc;
       },
@@ -590,6 +604,14 @@ const emailSignatureV2Resolvers = {
           createdBy: ctx.user.id,
         });
         if (!deletedCount) throw createNotFoundError("Modèle");
+        // Les signatures qui l'avaient appliqué gardent leur mise en forme ;
+        // seule leur référence revient au modèle intégré (sans les faire
+        // remonter dans les listes triées par date de modification)
+        await EmailSignatureV2.updateMany(
+          { workspaceId: ctx.workspaceId, savedTemplateId: String(id) },
+          { $set: { savedTemplateId: null } },
+          { timestamps: false },
+        );
         return true;
       },
     ),

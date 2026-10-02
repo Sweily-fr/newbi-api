@@ -231,6 +231,12 @@ type EmailSignatureV2 {
   name: String!
   isDefault: Boolean!
   templateId: String!
+  """
+  Modèle d'équipe (« Vos modèles ») appliqué en dernier, null pour le modèle
+  intégré. Simple référence : son style a été recopié dans la signature, le
+  modifier ensuite ne la change pas.
+  """
+  savedTemplateId: ID
   identity: SignatureIdentityV2!
   contact: SignatureContactV2!
   social: [SignatureSocialV2!]!
@@ -502,6 +508,8 @@ envoyées par `uploadEmailSignatureV2Image` et rattachées au document.
 input EmailSignatureV2Input {
   name: String
   templateId: String
+  "Modèle d'équipe appliqué (null : le modèle intégré)."
+  savedTemplateId: ID
   identity: SignatureIdentityV2Input
   contact: SignatureContactV2Input
   social: [SignatureSocialV2Input!]
