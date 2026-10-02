@@ -60,6 +60,28 @@ export function hex(value, fallback) {
   return fallback;
 }
 
+/** Luminance relative (WCAG) d'une couleur hex, de 0 (noir) à 1 (blanc). */
+export function luminance(color) {
+  const c = hex(color, "#000000").slice(1);
+  const channel = (i) => {
+    const v = parseInt(c.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+}
+
+/**
+ * Texte lisible sur un fond : blanc ou #1f1f1f, celui qui contraste le plus
+ * (formule WCAG ; bascule vers une luminance de 0,21). Un bouton jaune ou
+ * orange reçoit ainsi un texte foncé, un bouton noir ou bleu un texte blanc.
+ */
+export function readableOn(background) {
+  const l = luminance(background);
+  const onWhite = 1.05 / (l + 0.05);
+  const onDark = (l + 0.05) / (luminance("#1f1f1f") + 0.05);
+  return onDark > onWhite ? "#1f1f1f" : "#ffffff";
+}
+
 /**
  * Mélange une couleur avec du blanc (`amount` = part de la couleur). Donne
  * des fonds teintés clairs, calculés une fois : aucun rgba ni transparence,

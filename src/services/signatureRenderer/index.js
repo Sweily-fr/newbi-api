@@ -387,8 +387,11 @@ export function normalizeSignature(input = {}) {
       enabled: bool(cta.enabled),
       label: str(cta.label, 60),
       url: str(cta.url, 500),
-      backgroundColor: hex(cta.backgroundColor, style.primaryColor),
-      textColor: hex(cta.textColor, "#ffffff"),
+      // Couleurs facultatives, comme frameColor : vide = automatique (fond
+      // de la couleur principale, texte blanc ou foncé selon ce fond). Figer
+      // la couleur principale du jour empêchait le bouton de la suivre.
+      backgroundColor: cta.backgroundColor ? hex(cta.backgroundColor, "") : "",
+      textColor: cta.textColor ? hex(cta.textColor, "") : "",
     },
     banner: {
       enabled: bool(banner.enabled),

@@ -23,6 +23,7 @@ import {
   link,
   normalizeUrl,
   photo,
+  readableOn,
   span,
   splitRows,
   stackRows,
@@ -342,11 +343,12 @@ export function buildBlocks(ctx) {
       if (!c.enabled || !c.label) return "";
       const href = normalizeUrl(c.url);
       if (!href) return "";
-      const eff = resolve("cta", {
-        size: base,
-        color: c.textColor || "#ffffff",
-        bold: true,
-      });
+      // Fond : couleur choisie, sinon la couleur principale (il la suit
+      // quand elle change) ; texte : couleur choisie, sinon blanc ou foncé
+      // selon ce fond (du blanc serait illisible sur du jaune)
+      const background = c.backgroundColor || st.primaryColor;
+      const color = c.textColor || readableOn(background);
+      const eff = resolve("cta", { size: base, color, bold: true });
       return markBlock(
         "cta",
         button({
@@ -354,8 +356,8 @@ export function buildBlocks(ctx) {
           labelHtml: editable("ctaLabel", c.label),
           uppercase: eff.uppercase,
           href,
-          background: c.backgroundColor || st.primaryColor,
-          color: c.textColor || "#ffffff",
+          background,
+          color,
           font: FONT_FAMILIES[eff.fontFamily] || font,
           size: eff.fontSize,
           bold: eff.bold,

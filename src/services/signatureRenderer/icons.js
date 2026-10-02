@@ -14,6 +14,7 @@ import {
   ICON_STYLES,
   SOCIAL_NETWORKS,
 } from "./constants.js";
+import { luminance } from "./primitives.js";
 
 /**
  * Glyphes non fournis par simple-icons.
@@ -56,15 +57,6 @@ export function iconSpec({ kind, name, style = "rounded", color }) {
     style: kind === "contact" ? "plain" : safeStyle,
     color: cleanHex(color),
   };
-}
-
-/** Luminance relative (WCAG) d'une couleur « rrggbb », de 0 (noir) à 1 (blanc). */
-function luminance(color) {
-  const channel = (i) => {
-    const c = parseInt(color.slice(i, i + 2), 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
 }
 
 /**
