@@ -527,7 +527,9 @@ export function renderLayout(b, ctx, theme = {}) {
         : slot === "visual"
           ? 200
           : 300;
-    return text.length * size * 0.55 > cap ? cap : 0;
+    // Mention en paragraphes : c'est sa plus longue ligne qui compte
+    const longest = Math.max(...text.split("\n").map((line) => line.length));
+    return longest * size * 0.55 > cap ? cap : 0;
   };
   // Éléments réunis sur une ligne (légende, identité en ligne, réseaux et
   // logo) : la ligne se règle sur son premier élément (largeur, espaces,

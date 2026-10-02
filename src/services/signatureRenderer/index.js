@@ -130,6 +130,31 @@ const str = (v, max = 200) =>
   v === null || v === undefined
     ? ""
     : String(v).replace(/\s+/g, " ").trim().slice(0, max);
+
+/** Lignes d'un texte sur plusieurs lignes, au plus. */
+const MAX_LINES = 8;
+
+/**
+ * Texte sur plusieurs lignes (la mention) : ses retours à la ligne sont
+ * gardés, avec une ligne vide au plus entre deux paragraphes et 8 lignes au
+ * plus. Dans chaque ligne, les blancs se resserrent, sauf les espaces
+ * insécables (« capital de 5 000 € » ne se coupe pas).
+ */
+const multiline = (v, max = 1000) => {
+  if (v === null || v === undefined) return "";
+  return String(v)
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[^\S\n  ]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .split("\n")
+    .slice(0, MAX_LINES)
+    .join("\n")
+    .slice(0, max)
+    .trim();
+};
 const bool = (v, fallback = false) => (typeof v === "boolean" ? v : fallback);
 
 const optBool = (v) => (typeof v === "boolean" ? v : undefined);
@@ -400,7 +425,8 @@ export function normalizeSignature(input = {}) {
     },
     disclaimer: {
       enabled: bool(disclaimer.enabled),
-      text: str(disclaimer.text, 1000),
+      // Seul texte à garder ses paragraphes (rendus en sauts de ligne)
+      text: multiline(disclaimer.text, 1000),
     },
     style,
   };

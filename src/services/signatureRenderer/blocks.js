@@ -165,10 +165,13 @@ export function buildBlocks(ctx) {
   // Texte modifiable directement dans l'aperçu : chaque valeur porte le
   // champ qu'elle alimente (data-sig-edit). Aperçu seulement, comme les
   // autres marqueurs : le HTML copié ne contient que le texte échappé.
+  // Retours à la ligne (la mention seule en garde) : sauts de ligne dans
+  // le même span, qui garde taille, interligne et couleur.
+  const withBreaks = (value) => esc(value).replace(/\n/g, "<br>");
   const editable = (field, value) =>
     markers && value
-      ? `<span data-sig-edit="${field}">${esc(value)}</span>`
-      : esc(value);
+      ? `<span data-sig-edit="${field}">${withBreaks(value)}</span>`
+      : withBreaks(value);
   const joinEditable = (parts, sep) =>
     parts
       .filter(([, v]) => v)
