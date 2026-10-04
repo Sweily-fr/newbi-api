@@ -653,7 +653,9 @@ const emailSignatureV2Resolvers = {
           );
         }
         doc.images.logo = logo;
-        doc.markModified("images");
+        // Le logo seul : le document a été lu avant la reprise (plusieurs
+        // secondes), une autre image envoyée entre-temps reste en base
+        doc.markModified("images.logo");
         await doc.save();
         return doc;
       },
