@@ -313,6 +313,21 @@ type SignatureTemplatePresetV2 {
   showContactIcons: Boolean
 }
 
+"""
+Couleur de départ des textes que le modèle peut sortir de la couleur du
+texte : « text » (Texte), « muted » (Texte secondaire) ou « primary »
+(couleur principale). L'éditeur en tire ce que colorent « Texte » et
+« Texte secondaire ».
+"""
+type SignatureTemplateColorRolesV2 {
+  "Prénom et nom : text ou primary."
+  name: String!
+  "Entreprise : text ou primary."
+  company: String!
+  "Poste et entreprise en petites capitales : muted ou primary."
+  caption: String!
+}
+
 type SignatureTemplateV2 {
   id: String!
   name: String!
@@ -326,6 +341,7 @@ type SignatureTemplateV2 {
   defaults: JSON!
   "Proposé dans la galerie (les autres ne servent qu'aux signatures qui les utilisent)."
   inGallery: Boolean!
+  colorRoles: SignatureTemplateColorRolesV2!
 }
 
 type SignatureSocialNetworkV2 {
