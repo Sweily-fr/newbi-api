@@ -1,4 +1,5 @@
 import ClientCustomField from "../models/ClientCustomField.js";
+import { buildDocumentFieldsForClientId } from "../utils/clientDocumentFields.js";
 import {
   withOrganization,
   resolveWorkspaceId,
@@ -53,6 +54,16 @@ export const clientCustomFieldResolvers = {
         throw new Error("Impossible de récupérer les champs personnalisés");
       }
     }),
+
+    // Champs du client à reprendre sur les documents (aperçu en direct des éditeurs)
+    clientDocumentFields: scopedQuery(
+      async (_, { workspaceId, clientId }, context) =>
+        (await buildDocumentFieldsForClientId(
+          clientId,
+          workspaceId,
+          context,
+        )) || [],
+    ),
 
     // Récupère un champ personnalisé par ID
     clientCustomField: scopedQuery(async (_, { workspaceId, id }, context) => {

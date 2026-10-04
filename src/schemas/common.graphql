@@ -120,6 +120,12 @@ type Client {
   updatedAt: String!
 }
 
+# Champ personnalisé du client affiché sur un document (valeur déjà mise en forme)
+type ClientDocumentField {
+  label: String!
+  value: String!
+}
+
 # Client embarqué dans les documents (factures, devis, avoirs)
 # L'id peut être null pour les anciens documents sans client.id
 type EmbeddedClient {
@@ -139,6 +145,8 @@ type EmbeddedClient {
   # Adresse de livraison différente
   hasDifferentShippingAddress: Boolean
   shippingAddress: Address
+  # Champs personnalisés du client à afficher sur le document
+  documentFields: [ClientDocumentField!]
 }
 
 input ClientContactInput {

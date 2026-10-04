@@ -22,6 +22,10 @@ import {
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
+import {
+  buildClientDocumentFields,
+  buildDocumentFieldsForClientId,
+} from "../utils/clientDocumentFields.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import {
   generateInvoiceNumber,
@@ -520,6 +524,7 @@ const invoiceResolvers = {
               siret: freshClient.siret,
               vatNumber: freshClient.vatNumber,
               isInternational: freshClient.isInternational,
+              documentFields: await buildClientDocumentFields(freshClient, context),
               firstName: freshClient.firstName,
               lastName: freshClient.lastName,
               hasDifferentShippingAddress:
@@ -1600,6 +1605,14 @@ const invoiceResolvers = {
                       country: input.client.shippingAddress?.country || "",
                     }
                   : undefined,
+                // Champs personnalisés figés dès la création d'un document non brouillon
+                documentFields: isDraft
+                  ? undefined
+                  : await buildDocumentFieldsForClientId(
+                      input.client.id,
+                      workspaceId,
+                      context,
+                    ),
               },
               // Lier la facture au devis source si applicable
               ...(sourceQuoteId ? { sourceQuote: sourceQuoteId } : {}),
@@ -2355,6 +2368,7 @@ const invoiceResolvers = {
                       freshClient.hasDifferentShippingAddress,
                     shippingAddress: freshClient.shippingAddress,
                     isInternational: freshClient.isInternational,
+                    documentFields: await buildClientDocumentFields(freshClient, context),
                     siret: freshClient.siret,
                     vatNumber: freshClient.vatNumber,
                   };
@@ -2447,6 +2461,7 @@ const invoiceResolvers = {
                       freshClient.hasDifferentShippingAddress,
                     shippingAddress: freshClient.shippingAddress,
                     isInternational: freshClient.isInternational,
+                    documentFields: await buildClientDocumentFields(freshClient, context),
                     siret: freshClient.siret,
                     vatNumber: freshClient.vatNumber,
                   };
@@ -2937,6 +2952,7 @@ const invoiceResolvers = {
                     freshClient.hasDifferentShippingAddress,
                   shippingAddress: freshClient.shippingAddress,
                   isInternational: freshClient.isInternational,
+                  documentFields: await buildClientDocumentFields(freshClient, context),
                   siret: freshClient.siret,
                   vatNumber: freshClient.vatNumber,
                 };
