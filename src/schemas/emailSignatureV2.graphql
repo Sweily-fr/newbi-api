@@ -231,6 +231,12 @@ type EmailSignatureV2 {
   name: String!
   isDefault: Boolean!
   templateId: String!
+  """
+  Modèle d'équipe (« Vos modèles ») appliqué en dernier, null pour le modèle
+  intégré. Simple référence : son style a été recopié dans la signature, le
+  modifier ensuite ne la change pas.
+  """
+  savedTemplateId: ID
   identity: SignatureIdentityV2!
   contact: SignatureContactV2!
   social: [SignatureSocialV2!]!
@@ -518,6 +524,8 @@ envoyées par `uploadEmailSignatureV2Image` et rattachées au document.
 input EmailSignatureV2Input {
   name: String
   templateId: String
+  "Modèle d'équipe appliqué (null : le modèle intégré)."
+  savedTemplateId: ID
   identity: SignatureIdentityV2Input
   contact: SignatureContactV2Input
   social: [SignatureSocialV2Input!]
@@ -544,8 +552,14 @@ type SignatureSavedTemplateV2 {
   "Modèle de base, dont le caractère (nom en capitales, tailles…) s'applique."
   templateId: String!
   style: SignatureStyleV2!
-  "Enregistré par l'utilisateur connecté : lui seul peut le supprimer."
+  "Enregistré par l'utilisateur connecté : lui seul peut le remplacer."
   mine: Boolean!
+  """
+  L'utilisateur connecté peut le supprimer : son auteur, ou le propriétaire
+  et les administrateurs de l'espace (si leur rôle permet de supprimer des
+  signatures).
+  """
+  canDelete: Boolean!
 }
 
 input SignatureSavedTemplateV2Input {
@@ -638,6 +652,9 @@ extend type Mutation {
     input: SignatureSavedTemplateV2Input!
   ): SignatureSavedTemplateV2!
 
-  "Supprime un de vos modèles enregistrés."
+  """
+  Supprime un modèle enregistré : un des vôtres, ou n'importe lequel de
+  l'espace pour le propriétaire et les administrateurs.
+  """
   deleteEmailSignatureTemplateV2(id: ID!): Boolean!
 }

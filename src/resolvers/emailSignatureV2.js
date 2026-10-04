@@ -71,6 +71,21 @@ const scope = (ctx) => ({
 /** Modèles enregistrés : visibles de tout l'espace. */
 const templateScope = (ctx) => ({ workspaceId: ctx.workspaceId });
 
+/** Rôles qui peuvent retirer les modèles de toute l'équipe (membre parti…). */
+const TEMPLATE_MANAGER_ROLES = ["owner", "admin"];
+
+/**
+ * Suppression d'un modèle enregistré : par son auteur, ou par le
+ * propriétaire et les administrateurs de l'espace, si leur rôle permet de
+ * supprimer des signatures. Le rôle n'est connu que des resolvers racine
+ * (contexte enrichi par withRBAC) : le droit y est calculé, puis porté par
+ * chaque modèle (canDelete).
+ */
+const canDeleteTemplate = (t, ctx) =>
+  Boolean(ctx.permissions?.canDelete("signatures")) &&
+  (String(t.createdBy) === String(ctx.user?.id) ||
+    TEMPLATE_MANAGER_ROLES.includes(ctx.userRole));
+
 const plain = (value) =>
   value && typeof value.toObject === "function"
     ? value.toObject()
@@ -153,6 +168,14 @@ async function resolvePerson(memberUserId, ctx) {
     profile: await memberSignatureProfile(userId, ctx.workspaceId),
   };
 }
+
+/**
+ * Référence au modèle d'équipe appliqué : un identifiant de modèle, sinon
+ * null (modèle intégré). Le modèle peut avoir été supprimé depuis :
+ * l'éditeur revient alors au modèle intégré.
+ */
+const savedTemplateRef = (value) =>
+  /^[0-9a-f]{24}$/i.test(String(value ?? "")) ? String(value) : null;
 
 /** Garde les valeurs renseignées d'un groupe (identity, contact…). */
 const filled = (obj) =>
@@ -401,6 +424,8 @@ const emailSignatureV2Resolvers = {
     style: (t) =>
       normalizeSignature({ templateId: t.templateId, style: t.style }).style,
     mine: (t, _, ctx) => String(t.createdBy) === String(ctx.user?.id),
+    // Calculé par la requête ou la mutation (rôle de l'utilisateur)
+    canDelete: (t) => Boolean(t.canDelete),
   },
 
   EmailSignatureV2: {
@@ -445,11 +470,15 @@ const emailSignatureV2Resolvers = {
       EmailSignatureV2.findOne({ _id: id, ...scope(ctx) }),
     ),
 
-    emailSignatureTemplatesV2: requireRead("signatures")(async (_, __, ctx) =>
-      EmailSignatureTemplateV2.find(templateScope(ctx))
+    emailSignatureTemplatesV2: requireRead("signatures")(async (_, __, ctx) => {
+      const templates = await EmailSignatureTemplateV2.find(templateScope(ctx))
         .sort({ updatedAt: -1 })
-        .lean(),
-    ),
+        .lean();
+      return templates.map((t) => ({
+        ...t,
+        canDelete: canDeleteTemplate(t, ctx),
+      }));
+    }),
 
     signatureMembersV2: requireRead("signatures")(async (_, __, ctx) => {
       const members = await listWorkspaceMembers(ctx.workspaceId);
@@ -629,6 +658,7 @@ const emailSignatureV2Resolvers = {
           name,
           isDefault: isFirst,
           memberUserId: person.userId,
+          savedTemplateId: savedTemplateRef(input?.savedTemplateId),
           ...scope(ctx),
         });
         applyNormalized(doc, normalized);
@@ -742,6 +772,11 @@ const emailSignatureV2Resolvers = {
           }
         }
         applyNormalized(doc, mergeInput(plain(doc), input || {}));
+        // Modèle d'équipe appliqué : hors du style, que la normalisation ne
+        // connaît pas, il est recopié à part
+        if (input?.savedTemplateId !== undefined) {
+          doc.savedTemplateId = savedTemplateRef(input.savedTemplateId);
+        }
         await doc.save();
         return doc;
       },
@@ -781,22 +816,34 @@ const emailSignatureV2Resolvers = {
           style: input.style,
         });
         // Un de vos modèles du même nom est remplacé
-        return EmailSignatureTemplateV2.findOneAndUpdate(
+        const saved = await EmailSignatureTemplateV2.findOneAndUpdate(
           { ...templateScope(ctx), createdBy: ctx.user.id, name },
           { $set: { templateId, style } },
           { upsert: true, new: true, setDefaultsOnInsert: true, lean: true },
         );
+        return { ...saved, canDelete: canDeleteTemplate(saved, ctx) };
       },
     ),
 
     deleteEmailSignatureTemplateV2: requireDelete("signatures")(
       async (_, { id }, ctx) => {
-        const { deletedCount } = await EmailSignatureTemplateV2.deleteOne({
-          _id: id,
-          ...templateScope(ctx),
-          createdBy: ctx.user.id,
-        });
+        // Le sien, ou n'importe lequel de l'espace pour le propriétaire et
+        // les administrateurs : mêmes règles que canDelete
+        const filter = { _id: id, ...templateScope(ctx) };
+        if (!TEMPLATE_MANAGER_ROLES.includes(ctx.userRole)) {
+          filter.createdBy = ctx.user.id;
+        }
+        const { deletedCount } =
+          await EmailSignatureTemplateV2.deleteOne(filter);
         if (!deletedCount) throw createNotFoundError("Modèle");
+        // Les signatures qui l'avaient appliqué gardent leur mise en forme ;
+        // seule leur référence revient au modèle intégré (sans les faire
+        // remonter dans les listes triées par date de modification)
+        await EmailSignatureV2.updateMany(
+          { workspaceId: ctx.workspaceId, savedTemplateId: String(id) },
+          { $set: { savedTemplateId: null } },
+          { timestamps: false },
+        );
         return true;
       },
     ),

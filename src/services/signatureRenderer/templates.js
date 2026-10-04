@@ -36,6 +36,12 @@ const BASE_PRESET = {
   align: "left",
   frame: "none",
   photoBorder: 0,
+  // Arrondi et couleurs facultatives (vides : déduites de la couleur
+  // principale), mêmes valeurs que par défaut : revenir au modèle les
+  // remet aussi
+  radius: 12,
+  frameColor: "",
+  photoBorderColor: "",
   // Mise en page de départ (celle de Moderne)
   identityZone: "plain",
   photoPosition: "left",
