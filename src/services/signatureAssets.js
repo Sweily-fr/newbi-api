@@ -532,9 +532,10 @@ export async function importCompanyLogo({
 }
 
 /**
- * Supprime les images d'une signature. Réservé à la suppression du compte :
- * supprimer une signature ou en retirer une image garde les fichiers, que
- * les e-mails déjà envoyés affichent encore.
+ * Supprime les images d'une signature. Plus appelée : supprimer une
+ * signature ou en retirer une image garde les fichiers, que les e-mails
+ * déjà envoyés affichent encore, et la suppression du compte vide tout le
+ * dossier de l'utilisateur (purgeSignatureImages, services/rgpd.js).
  */
 export async function deleteSignatureImages(userId, signatureId) {
   for (const type of Object.values(R2_IMAGE_TYPE)) {
