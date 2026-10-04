@@ -34,6 +34,8 @@ import {
   OUTSIDE_ITEMS,
   RULE_COLORS,
   RULE_ITEMS,
+  SIGNATURE_LEGACY_URLS,
+  SIGNATURE_PUBLIC_URL,
   TEXT_BLOCKS,
   TEXT_ELEMENTS,
 } from "./constants.js";
@@ -214,6 +216,25 @@ function socialRowsOf(value, fallback = []) {
     .filter((n) => Number.isFinite(n) && n >= 1 && n <= 12);
 }
 
+/**
+ * Adresse d'une image de signature telle que rendue. Enregistrée sous une
+ * ancienne adresse du bucket (SIGNATURE_LEGACY_URLS), elle est servie depuis
+ * l'adresse actuelle (SIGNATURE_URL), même fichier ; toute autre adresse
+ * reste telle quelle (aucune réécriture sans ces deux variables).
+ */
+export function signatureImageUrl(url) {
+  const value = String(url || "");
+  for (const legacy of SIGNATURE_LEGACY_URLS) {
+    if (
+      value.charAt(legacy.length) === "/" &&
+      value.slice(0, legacy.length).toLowerCase() === legacy.toLowerCase()
+    ) {
+      return `${SIGNATURE_PUBLIC_URL}${value.slice(legacy.length)}`;
+    }
+  }
+  return value;
+}
+
 export function normalizeSignature(input = {}) {
   const s = input.style || {};
   const templateId = oneOf(input.templateId, TEMPLATE_IDS, DEFAULT_TEMPLATE_ID);
@@ -362,10 +383,11 @@ export function normalizeSignature(input = {}) {
   const id = input.identity || {};
   const c = input.contact || {};
   const im = input.images || {};
+  // Adresse rendue : une ancienne adresse du bucket passe à l'actuelle
   const image = (v) =>
     v && v.url
       ? {
-          url: String(v.url),
+          url: signatureImageUrl(v.url),
           key: v.key ? String(v.key) : "",
           width: clamp(v.width, 1, 4000, 0) || undefined,
           height: clamp(v.height, 1, 4000, 0) || undefined,

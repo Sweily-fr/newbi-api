@@ -45,6 +45,14 @@ class CloudflareService {
     this.signaturePublicUrl =
       process.env.SIGNATURE_URL ||
       "https://pub-f4c5982b836541739955ba7662828aa2.r2.dev";
+    // Anciennes adresses publiques du même bucket (SIGNATURE_LEGACY_URLS,
+    // séparées par des virgules), par exemple l'adresse r2.dev d'avant un
+    // domaine personnalisé : une URL enregistrée avant le changement désigne
+    // toujours ce bucket. Même liste que signatureRenderer/constants.js.
+    this.signatureLegacyUrls = String(process.env.SIGNATURE_LEGACY_URLS || "")
+      .split(",")
+      .map((url) => url.trim().replace(/\/+$/, ""))
+      .filter((url) => /^https?:\/\/[^/]/i.test(url));
 
     // Configuration spécifique pour les images de profil
     this.profileBucketName =
@@ -936,6 +944,7 @@ class CloudflareService {
       [this.ocrPublicUrl, this.ocrBucketName],
       [this.receiptsPublicUrl, this.receiptsBucketName],
       [this.signaturePublicUrl, this.signatureBucketName],
+      ...this.signatureLegacyUrls.map((url) => [url, this.signatureBucketName]),
       [this.companyImagesPublicUrl, this.companyImagesBucketName],
       [this.profilePublicUrl, this.profileBucketName],
       [this.importedInvoicesPublicUrl, this.importedInvoicesBucketName],
