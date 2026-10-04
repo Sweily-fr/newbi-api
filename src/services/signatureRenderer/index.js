@@ -580,7 +580,16 @@ export function renderSignature(
     sp: SPACING[st.spacing],
     iconUrl,
     markers,
-    roundPhoto: markers ? null : roundPhoto,
+    // Photo détourée (rendu propre seulement) : rangée avec la photo, dans
+    // le même bucket, elle passe comme elle d'une ancienne adresse à
+    // l'actuelle
+    roundPhoto:
+      roundPhoto && !markers
+        ? (spec) => {
+            const url = roundPhoto(spec);
+            return url ? signatureImageUrl(url) : null;
+          }
+        : null,
     region,
     // Style effectivement appliqué à chaque élément de texte (modèle +
     // réglages), renvoyé à l'éditeur pour afficher les bonnes valeurs.
