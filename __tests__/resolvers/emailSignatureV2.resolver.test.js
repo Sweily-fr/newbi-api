@@ -30,6 +30,17 @@ vi.mock("../../src/services/signatureAssets.js", () => ({
     height: 168,
   }),
   deleteSignatureImages: vi.fn().mockResolvedValue(undefined),
+  // Photo détourée jamais prête : le rendu garde l'arrondi CSS et le VML
+  ensureRoundPhoto: vi.fn().mockResolvedValue(null),
+  roundPhotoUrl: vi.fn().mockReturnValue(null),
+  ImageInputError: class ImageInputError extends Error {},
+  importCompanyLogo: vi.fn().mockResolvedValue({
+    url: "https://cdn.test/logo.png",
+    key: "u/s/logoReseau/logo.png",
+    width: 600,
+    height: 200,
+  }),
+  companyLogoKey: vi.fn().mockReturnValue(null),
 }));
 vi.mock("../../src/utils/mailer.js", () => ({
   sendSignatureTestEmail: vi.fn().mockResolvedValue(true),

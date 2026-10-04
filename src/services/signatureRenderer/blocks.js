@@ -32,7 +32,7 @@ import {
 } from "./primitives.js";
 
 export function buildBlocks(ctx) {
-  const { sig, st, font, sp, iconUrl, markers } = ctx;
+  const { sig, st, font, sp, iconUrl, markers, roundPhoto } = ctx;
 
   // Marqueurs d'aperçu : en mode éditeur, chaque élément porte l'identifiant
   // du champ qui le pilote (data-sig-field). Jamais présents dans le HTML
@@ -286,6 +286,12 @@ export function buildBlocks(ctx) {
       borderColor = st.photoBorderColor || st.primaryColor,
     } = {}) {
       if (!images.photo?.url) return "";
+      // HTML à copier : photo déjà détourée quand elle existe, ronde jusque
+      // dans Outlook bureau
+      const roundSrc =
+        roundPhoto && shape !== "square"
+          ? roundPhoto({ shape, size, border, borderColor })
+          : null;
       return markBlock(
         "photo",
         centered(
@@ -296,6 +302,7 @@ export function buildBlocks(ctx) {
             alt: fullName || "Photo",
             border,
             borderColor,
+            roundSrc,
           }),
           align,
         ),

@@ -441,11 +441,15 @@ export function plainText(sig) {
 
 /**
  * Rend une signature.
+ * `roundPhoto({ shape, size, border, borderColor })` : URL de la photo déjà
+ * détourée pour ce rendu, ou null (arrondi CSS et VML). Rendu propre
+ * seulement : l'aperçu garde l'arrondi CSS, qui suit les réglages sans
+ * attendre.
  * @returns {{ html: string, text: string, chars: number, warnings: string[] }}
  */
 export function renderSignature(
   input,
-  { iconUrl = defaultIconUrl, markers = false } = {},
+  { iconUrl = defaultIconUrl, markers = false, roundPhoto = null } = {},
 ) {
   const sig = normalizeSignature(input);
   const st = sig.style;
@@ -456,6 +460,7 @@ export function renderSignature(
     sp: SPACING[st.spacing],
     iconUrl,
     markers,
+    roundPhoto: markers ? null : roundPhoto,
     // Style effectivement appliqué à chaque élément de texte (modèle +
     // réglages), renvoyé à l'éditeur pour afficher les bonnes valeurs.
     resolved: {},
@@ -494,9 +499,11 @@ export function renderSignature(
       "La signature peut dépasser la limite de 10 000 caractères de Gmail. Si Gmail la refuse, retirez un élément (réseaux, bannière…) ou raccourcissez les textes.",
     );
   }
+  // Un PNG transparent n'est pas toujours mieux : un logo noir ou très
+  // foncé y devient presque invisible en mode sombre
   if (sig.images.logo?.url && /\.jpe?g($|\?)/i.test(sig.images.logo.url)) {
     warnings.push(
-      "Le logo est un JPEG : il aura un fond blanc en mode sombre. Préférez un PNG à fond transparent.",
+      "Le logo est un JPEG : son fond blanc reste visible en mode sombre. Un PNG à fond transparent l'évite, sauf pour un logo noir ou très foncé, plus lisible sur fond blanc.",
     );
   }
 
