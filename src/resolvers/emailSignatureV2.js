@@ -90,7 +90,8 @@ async function setPersonPhoto(doc, url, ctx) {
       );
     }
     doc.images.photo = null;
-    doc.markModified("images");
+    // La photo seule : une autre image envoyée entre-temps reste en base
+    doc.markModified("images.photo");
     await doc.save();
     return;
   }
@@ -102,7 +103,7 @@ async function setPersonPhoto(doc, url, ctx) {
       signatureId: doc._id,
       options: { size: doc.style?.photoSize || 84 },
     });
-    doc.markModified("images");
+    doc.markModified("images.photo");
     await doc.save();
   } catch (error) {
     logger.warn(
@@ -243,6 +244,31 @@ function withPreview(data) {
   };
 }
 
+/**
+ * Rendu de secours d'une signature dont le rendu a échoué : vide, avec un
+ * avertissement, et les dimensions par défaut des traits.
+ */
+function failedRender() {
+  return {
+    html: "",
+    previewHtml: "",
+    text: "",
+    chars: 0,
+    warnings: [
+      "L'aperçu de cette signature n'a pas pu être affiché. Réessayez dans un instant.",
+    ],
+    elements: {},
+    lines: {
+      accentLength: 40,
+      accentThickness: 3,
+      dividerThickness: 1,
+      frameThickness: 1,
+      photoMax: 160,
+      iconMax: 40,
+    },
+  };
+}
+
 async function readUpload(file) {
   const { createReadStream, filename, mimetype } = await file;
   if (!mimetype || !mimetype.startsWith("image/")) {
@@ -303,10 +329,19 @@ const emailSignatureV2Resolvers = {
     // Style effectif : réglages absents = valeurs du modèle, pour que
     // l'éditeur affiche la mise en page réellement rendue
     style: (doc) => normalizeSignature(plain(doc)).style,
+    // Champ non nul : une exception remonterait jusqu'à la liste entière,
+    // qui s'afficherait vide. Une signature en échec garde un rendu vide.
     render: async (doc) => {
-      const data = plain(doc);
-      await ensureIconsSoon(data);
-      return withPreview(data);
+      try {
+        const data = plain(doc);
+        await ensureIconsSoon(data);
+        return withPreview(data);
+      } catch (error) {
+        logger.error(
+          `[signatures v2] rendu impossible (${String(doc._id ?? doc.id)}) : ${error.message}`,
+        );
+        return failedRender();
+      }
     },
   },
 
@@ -667,7 +702,10 @@ const emailSignatureV2Resolvers = {
           throw createValidationError(error.message || "Image illisible");
         }
         doc.images[kind.toLowerCase()] = stored;
-        doc.markModified("images");
+        // Cette image seule : le document a été lu avant l'envoi (plusieurs
+        // secondes), une autre image envoyée entre-temps ne doit pas être
+        // remise à son ancienne valeur
+        doc.markModified(`images.${kind.toLowerCase()}`);
         await doc.save();
         return doc;
       },
@@ -695,7 +733,7 @@ const emailSignatureV2Resolvers = {
             );
           }
           doc.images[field] = null;
-          doc.markModified("images");
+          doc.markModified(`images.${field}`);
           await doc.save();
         }
         return doc;
