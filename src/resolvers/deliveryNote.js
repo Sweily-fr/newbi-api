@@ -152,6 +152,7 @@ const itemsFromPricedDocument = (items = []) =>
   items.map((item) => ({
     description: item.description,
     details: item.details || "",
+    imageUrl: item.imageUrl || undefined,
     quantity: item.quantity,
     orderedQuantity: item.quantity,
     deliveredQuantity: item.quantity,
@@ -199,6 +200,7 @@ const itemsForInvoice = async (items = [], workspaceId) => {
       unit: item.unit || "",
       discount: item.discount || 0,
       discountType: item.discountType || "PERCENTAGE",
+      imageUrl: item.imageUrl || product?.imageUrl || undefined,
     };
     if (vatRate === 0) {
       line.vatExemptionText =

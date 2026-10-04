@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
@@ -8,6 +8,10 @@ import {
   buildOrganizationId,
   buildUserId,
 } from "../factories/index.js";
+
+vi.mock("../../src/services/cloudflareService.js", () => ({
+  default: { uploadImage: vi.fn() },
+}));
 
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Product from "../../src/models/Product.js";
@@ -453,5 +457,48 @@ describe("Product Resolver - produits liés", () => {
     });
 
     expect(await typeResolver(peinture)).toEqual([]);
+  });
+});
+
+describe("Product Resolver - imageUrl", () => {
+  const create = productResolvers.Mutation.createProduct;
+  const update = productResolvers.Mutation.updateProduct;
+  const imageUrl = `https://pub-test.r2.dev/${organizationId}/products/abc.webp`;
+
+  it("stores an R2 product image and clears it with null", async () => {
+    const created = await create(
+      null,
+      {
+        input: {
+          ...buildProductInput({ name: "Chaise" }),
+          workspaceId: organizationId.toString(),
+          imageUrl,
+        },
+      },
+      ctx(),
+    );
+    expect(created.imageUrl).toBe(imageUrl);
+
+    const cleared = await update(
+      null,
+      { id: created._id.toString(), input: { imageUrl: null } },
+      ctx(),
+    );
+    expect(cleared.imageUrl).toBeUndefined();
+  });
+
+  it("drops an image URL that does not point to our product images", async () => {
+    const created = await create(
+      null,
+      {
+        input: {
+          ...buildProductInput({ name: "Table" }),
+          workspaceId: organizationId.toString(),
+          imageUrl: "http://169.254.169.254/latest/meta-data/products/x",
+        },
+      },
+      ctx(),
+    );
+    expect(created.imageUrl).toBeUndefined();
   });
 });
