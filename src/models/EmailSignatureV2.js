@@ -171,8 +171,9 @@ const emailSignatureV2Schema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       label: trimmed(60),
       url: trimmed(500),
+      // Vides : automatiques (couleur principale, texte lisible sur ce fond)
       backgroundColor: { type: String, default: "" },
-      textColor: { type: String, default: "#ffffff" },
+      textColor: { type: String, default: "" },
     },
     banner: {
       enabled: { type: Boolean, default: false },

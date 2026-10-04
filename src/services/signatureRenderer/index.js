@@ -38,11 +38,18 @@ import {
   TEXT_ELEMENTS,
 } from "./constants.js";
 import { iconUrl as defaultIconUrl, SAMPLE_PHOTO_URL } from "./icons.js";
-import { displayUrl, hex, normalizeUrl } from "./primitives.js";
+import {
+  actionHref,
+  brokenWebLink,
+  displayUrl,
+  hex,
+  phoneRegion,
+  socialHref,
+} from "./primitives.js";
 import TEMPLATES, { listTemplates, templatePreset } from "./templates.js";
 import { layoutFromLegacy, normalizeSlots } from "./slots.js";
 
-export { listTemplates, templatePreset };
+export { listTemplates, phoneRegion, templatePreset };
 
 const clamp = (n, min, max, fallback) => {
   const v = Number(n);
@@ -130,6 +137,31 @@ const str = (v, max = 200) =>
   v === null || v === undefined
     ? ""
     : String(v).replace(/\s+/g, " ").trim().slice(0, max);
+
+/** Lignes d'un texte sur plusieurs lignes, au plus. */
+const MAX_LINES = 8;
+
+/**
+ * Texte sur plusieurs lignes (la mention) : ses retours à la ligne sont
+ * gardés, avec une ligne vide au plus entre deux paragraphes et 8 lignes au
+ * plus. Dans chaque ligne, les blancs se resserrent, sauf les espaces
+ * insécables (« capital de 5 000 € » ne se coupe pas).
+ */
+const multiline = (v, max = 1000) => {
+  if (v === null || v === undefined) return "";
+  return String(v)
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[^\S\n\u00a0\u202f]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .split("\n")
+    .slice(0, MAX_LINES)
+    .join("\n")
+    .slice(0, max)
+    .trim();
+};
 const bool = (v, fallback = false) => (typeof v === "boolean" ? v : fallback);
 
 const optBool = (v) => (typeof v === "boolean" ? v : undefined);
@@ -387,8 +419,11 @@ export function normalizeSignature(input = {}) {
       enabled: bool(cta.enabled),
       label: str(cta.label, 60),
       url: str(cta.url, 500),
-      backgroundColor: hex(cta.backgroundColor, style.primaryColor),
-      textColor: hex(cta.textColor, "#ffffff"),
+      // Couleurs facultatives, comme frameColor : vide = automatique (fond
+      // de la couleur principale, texte blanc ou foncé selon ce fond). Figer
+      // la couleur principale du jour empêchait le bouton de la suivre.
+      backgroundColor: cta.backgroundColor ? hex(cta.backgroundColor, "") : "",
+      textColor: cta.textColor ? hex(cta.textColor, "") : "",
     },
     banner: {
       enabled: bool(banner.enabled),
@@ -397,7 +432,8 @@ export function normalizeSignature(input = {}) {
     },
     disclaimer: {
       enabled: bool(disclaimer.enabled),
-      text: str(disclaimer.text, 1000),
+      // Seul texte à garder ses paragraphes (rendus en sauts de ligne)
+      text: multiline(disclaimer.text, 1000),
     },
     style,
   };
@@ -417,30 +453,87 @@ export function requiredIcons(input) {
   return [...specs.values()];
 }
 
-/** Version texte brut, pour les clients en mode texte. */
-export function plainText(sig) {
+/**
+ * Version texte brut, pour les clients en mode texte (signature mobile de
+ * Gmail…). Fixe et portable sont nommés, faute d'icônes pour les
+ * distinguer ; le bouton montre le numéro ou l'adresse tels que saisis.
+ */
+export function plainText(sig, region = "") {
   const { identity, contact } = sig;
+  const cta = sig.cta.enabled && sig.cta.label ? sig.cta : null;
+  const ctaHref = cta ? actionHref(cta.url, region) : "";
   const lines = [
     [identity.firstName, identity.lastName].filter(Boolean).join(" "),
     [identity.jobTitle, identity.department].filter(Boolean).join(" · "),
     identity.company,
     identity.tagline,
-    contact.phone,
-    contact.mobile,
+    contact.phone ? `Tél. : ${contact.phone}` : "",
+    contact.mobile ? `Mobile : ${contact.mobile}` : "",
     contact.email,
     contact.website ? displayUrl(contact.website) : "",
     contact.address,
-    ...sig.social.map((s) => normalizeUrl(s.url)),
-    sig.cta.enabled && sig.cta.label
-      ? `${sig.cta.label} : ${normalizeUrl(sig.cta.url)}`
+    ...sig.social.map((s) => socialHref(s.network, s.url, region)),
+    ctaHref
+      ? `${cta.label} : ${
+          /^(tel|sms|mailto):/i.test(ctaHref)
+            ? cta.url.replace(/^(tel|sms|mailto):/i, "")
+            : ctaHref
+        }`
       : "",
     sig.disclaimer.enabled ? sig.disclaimer.text : "",
   ];
   return lines.filter(Boolean).join("\n");
 }
 
+/** Profils LinkedIn : chemins d'une personne, d'une page ou d'une école. */
+const LINKEDIN_PROFILE = /^\/(in|company|school|showcase|pub)\/[^/]+/i;
+
 /**
- * Rend une signature.
+ * Liens de réseaux qui partiraient cassés dans chaque e-mail : adresse
+ * incomplète (nom de compte pour LinkedIn ou Malt, numéro mal saisi…) ou
+ * lien LinkedIn qui ne mène à aucun profil.
+ */
+function socialWarnings(sig, region) {
+  const warnings = [];
+  for (const s of sig.social) {
+    const network = SOCIAL_NETWORKS[s.network];
+    if (!s.url || !network) continue;
+    const href = socialHref(s.network, s.url, region);
+    if (brokenWebLink(href)) {
+      warnings.push(
+        s.network === "whatsapp"
+          ? "Le lien WhatsApp est incomplet : saisissez votre numéro, avec son indicatif s'il est étranger (+32…)."
+          : network.handle
+            ? `Le lien ${network.label} est incomplet : collez l'adresse de votre profil, ou votre nom de compte précédé de @.`
+            : `Le lien ${network.label} est incomplet : collez l'adresse complète de votre profil (${network.host}/…).`,
+      );
+      continue;
+    }
+    if (s.network === "linkedin") {
+      let url = null;
+      try {
+        url = new URL(href);
+      } catch {
+        url = null;
+      }
+      const host = url?.hostname.toLowerCase() || "";
+      const onLinkedin =
+        host === "linkedin.com" || host.endsWith(".linkedin.com");
+      if (onLinkedin && !LINKEDIN_PROFILE.test(url.pathname)) {
+        warnings.push(
+          "Le lien LinkedIn ne mène à aucun profil : copiez l'adresse de votre profil (linkedin.com/in/…) ou de votre page (linkedin.com/company/…).",
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Rend une signature. `region` : pays de l'espace (FR, BE, CH, LU), pour
+ * écrire les numéros nationaux en format international dans les liens
+ * d'appel et WhatsApp. Vide, un lien d'appel garde le numéro tel quel ;
+ * WhatsApp, qui n'accepte qu'un numéro international, suppose la France.
  * `roundPhoto({ shape, size, border, borderColor })` : URL de la photo déjà
  * détourée pour ce rendu, ou null (arrondi CSS et VML). Rendu propre
  * seulement : l'aperçu garde l'arrondi CSS, qui suit les réglages sans
@@ -449,7 +542,12 @@ export function plainText(sig) {
  */
 export function renderSignature(
   input,
-  { iconUrl = defaultIconUrl, markers = false, roundPhoto = null } = {},
+  {
+    iconUrl = defaultIconUrl,
+    markers = false,
+    roundPhoto = null,
+    region = "",
+  } = {},
 ) {
   const sig = normalizeSignature(input);
   const st = sig.style;
@@ -461,6 +559,7 @@ export function renderSignature(
     iconUrl,
     markers,
     roundPhoto: markers ? null : roundPhoto,
+    region,
     // Style effectivement appliqué à chaque élément de texte (modèle +
     // réglages), renvoyé à l'éditeur pour afficher les bonnes valeurs.
     resolved: {},
@@ -506,10 +605,11 @@ export function renderSignature(
       "Le logo est un JPEG : son fond blanc reste visible en mode sombre. Un PNG à fond transparent l'évite, sauf pour un logo noir ou très foncé, plus lisible sur fond blanc.",
     );
   }
+  warnings.push(...socialWarnings(sig, region));
 
   return {
     html,
-    text: plainText(sig),
+    text: plainText(sig, region),
     chars: html.length,
     warnings,
     elements: ctx.resolved,

@@ -25,6 +25,7 @@ import { sendSignatureTestEmail } from "../utils/mailer.js";
 import {
   listTemplates,
   normalizeSignature,
+  phoneRegion,
   renderSignature,
   requiredIcons,
   SAMPLE_SIGNATURE,
@@ -54,6 +55,7 @@ import {
   listWorkspaceMembers,
   memberSignatureProfile,
   photoImportUrls,
+  workspaceCountry,
   workspaceLogoUrl,
 } from "../services/signatureProfile.js";
 
@@ -287,14 +289,40 @@ async function roundPhotoSoon(data, waitMs = 3000) {
 }
 
 /**
- * Rendu propre (à copier) + rendu d'aperçu, dont chaque élément porte
- * l'identifiant du champ qui le pilote, pour l'éditeur.
+ * Région des numéros de téléphone de l'espace (pays de son adresse : FR,
+ * BE, CH ou LU, sinon aucune) : les liens d'appel des numéros nationaux
+ * sont écrits en international. Gardée quelques minutes, chaque rendu de
+ * la liste des signatures la demandant.
  */
-function withPreview(data, roundPhoto = null) {
-  const result = renderSignature(data, { roundPhoto });
+const REGION_TTL_MS = 5 * 60_000;
+const regionCache = new Map();
+async function workspaceRegion(workspaceId) {
+  if (!workspaceId) return "";
+  const key = String(workspaceId);
+  const hit = regionCache.get(key);
+  if (hit && Date.now() - hit.at < REGION_TTL_MS) return hit.region;
+  try {
+    const region = phoneRegion(await workspaceCountry(key));
+    regionCache.set(key, { region, at: Date.now() });
+    return region;
+  } catch (error) {
+    // Sans pays, les numéros restent tels que saisis
+    logger.warn(`[signatures v2] pays de l'espace : ${error.message}`);
+    return "";
+  }
+}
+
+/**
+ * Rendu propre (à copier) + rendu d'aperçu, dont chaque élément porte
+ * l'identifiant du champ qui le pilote, pour l'éditeur. Options du rendu :
+ * `roundPhoto` (photo détourée, rendu propre seulement) et `region` (pays
+ * des numéros, pour les deux).
+ */
+function withPreview(data, { roundPhoto = null, region = "" } = {}) {
+  const result = renderSignature(data, { roundPhoto, region });
   return {
     ...result,
-    previewHtml: renderSignature(data, { markers: true }).html,
+    previewHtml: renderSignature(data, { markers: true, region }).html,
   };
 }
 
@@ -395,7 +423,10 @@ const emailSignatureV2Resolvers = {
           ensureIconsSoon(data),
           roundPhotoSoon(data),
         ]);
-        return withPreview(data, roundPhoto);
+        return withPreview(data, {
+          roundPhoto,
+          region: await workspaceRegion(doc.workspaceId),
+        });
       } catch (error) {
         logger.error(
           `[signatures v2] rendu impossible (${String(doc._id ?? doc.id)}) : ${error.message}`,
@@ -458,7 +489,10 @@ const emailSignatureV2Resolvers = {
           ensureIconsSoon(data),
           roundPhotoSoon(data),
         ]);
-        return withPreview(data, roundPhoto);
+        return withPreview(data, {
+          roundPhoto,
+          region: await workspaceRegion(ctx.workspaceId),
+        });
       },
     ),
 
@@ -500,7 +534,9 @@ const emailSignatureV2Resolvers = {
           style: { ...colors, ...templatePreset(templateId) },
         };
         await ensureIconsSoon(data);
-        const result = renderSignature(data);
+        const result = renderSignature(data, {
+          region: await workspaceRegion(ctx.workspaceId),
+        });
         return { ...result, previewHtml: result.html };
       },
     ),
@@ -534,7 +570,10 @@ const emailSignatureV2Resolvers = {
             : null,
           roundPhotoSoon(data, Infinity),
         ]);
-        const { html, text } = renderSignature(data, { roundPhoto });
+        const { html, text } = renderSignature(data, {
+          roundPhoto,
+          region: await workspaceRegion(ctx.workspaceId),
+        });
         if (!html) {
           throw createValidationError(
             "La signature est vide : ajoutez au moins votre nom.",
