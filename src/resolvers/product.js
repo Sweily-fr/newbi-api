@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
 import Product from "../models/Product.js";
+import cloudflareService from "../services/cloudflareService.js";
+import {
+  PRODUCT_IMAGE_MAX_BYTES,
+  isAcceptedProductImage,
+  processProductImage,
+} from "../utils/productImage.js";
 // ✅ Import des wrappers RBAC
 import {
   requireRead,
@@ -301,6 +307,65 @@ const productResolvers = {
 
         await product.save();
         return product;
+      },
+    ),
+
+    // Image de produit : envoyée avant l'enregistrement de la fiche (création
+    // comme modification), l'URL renvoyée est ensuite passée dans imageUrl.
+    // Les anciennes images ne sont jamais supprimées de R2 : les documents
+    // déjà émis gardent une copie de l'URL sur leurs lignes.
+    uploadProductImage: requireWrite("products")(
+      async (_, { workspaceId: inputWorkspaceId, file }, context) => {
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+        if (!workspaceId) {
+          throw new AppError("workspaceId requis", ERROR_CODES.BAD_REQUEST);
+        }
+
+        const { createReadStream, filename, mimetype } = await file;
+        if (!isAcceptedProductImage(filename, mimetype)) {
+          return {
+            success: false,
+            message: "Format non pris en charge. Formats acceptés : JPEG, PNG, WebP, HEIC",
+          };
+        }
+
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of createReadStream()) {
+          size += chunk.length;
+          if (size > PRODUCT_IMAGE_MAX_BYTES) {
+            return {
+              success: false,
+              message: "Image trop volumineuse (10 Mo maximum)",
+            };
+          }
+          chunks.push(chunk);
+        }
+
+        let buffer;
+        try {
+          buffer = await processProductImage(Buffer.concat(chunks), {
+            filename,
+            mimetype,
+          });
+        } catch {
+          return {
+            success: false,
+            message: "Impossible de lire cette image. Réessayez avec un fichier JPEG ou PNG",
+          };
+        }
+
+        const { key, url, contentType } = await cloudflareService.uploadImage(
+          buffer,
+          "image.webp",
+          context.user.id,
+          "productImage",
+          String(workspaceId),
+        );
+        return { success: true, key, url, contentType };
       },
     ),
 
