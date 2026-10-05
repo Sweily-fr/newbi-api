@@ -231,6 +231,12 @@ type EmailSignatureV2 {
   name: String!
   isDefault: Boolean!
   templateId: String!
+  """
+  Modèle d'équipe (« Vos modèles ») appliqué en dernier, null pour le modèle
+  intégré. Simple référence : son style a été recopié dans la signature, le
+  modifier ensuite ne la change pas.
+  """
+  savedTemplateId: ID
   identity: SignatureIdentityV2!
   contact: SignatureContactV2!
   social: [SignatureSocialV2!]!
@@ -313,6 +319,21 @@ type SignatureTemplatePresetV2 {
   showContactIcons: Boolean
 }
 
+"""
+Couleur de départ des textes que le modèle peut sortir de la couleur du
+texte : « text » (Texte), « muted » (Texte secondaire) ou « primary »
+(couleur principale). L'éditeur en tire ce que colorent « Texte » et
+« Texte secondaire ».
+"""
+type SignatureTemplateColorRolesV2 {
+  "Prénom et nom : text ou primary."
+  name: String!
+  "Entreprise : text ou primary."
+  company: String!
+  "Poste et entreprise en petites capitales : muted ou primary."
+  caption: String!
+}
+
 type SignatureTemplateV2 {
   id: String!
   name: String!
@@ -326,6 +347,7 @@ type SignatureTemplateV2 {
   defaults: JSON!
   "Proposé dans la galerie (les autres ne servent qu'aux signatures qui les utilisent)."
   inGallery: Boolean!
+  colorRoles: SignatureTemplateColorRolesV2!
 }
 
 type SignatureSocialNetworkV2 {
@@ -502,6 +524,8 @@ envoyées par `uploadEmailSignatureV2Image` et rattachées au document.
 input EmailSignatureV2Input {
   name: String
   templateId: String
+  "Modèle d'équipe appliqué (null : le modèle intégré)."
+  savedTemplateId: ID
   identity: SignatureIdentityV2Input
   contact: SignatureContactV2Input
   social: [SignatureSocialV2Input!]
@@ -528,8 +552,14 @@ type SignatureSavedTemplateV2 {
   "Modèle de base, dont le caractère (nom en capitales, tailles…) s'applique."
   templateId: String!
   style: SignatureStyleV2!
-  "Enregistré par l'utilisateur connecté : lui seul peut le supprimer."
+  "Enregistré par l'utilisateur connecté : lui seul peut le remplacer."
   mine: Boolean!
+  """
+  L'utilisateur connecté peut le supprimer : son auteur, ou le propriétaire
+  et les administrateurs de l'espace (si leur rôle permet de supprimer des
+  signatures).
+  """
+  canDelete: Boolean!
 }
 
 input SignatureSavedTemplateV2Input {
@@ -567,7 +597,8 @@ extend type Query {
 extend type Mutation {
   """
   Crée une signature pré-remplie avec le profil de `memberUserId` (soi-même
-  par défaut) et l'entreprise de l'espace ; `input` l'emporte.
+  par défaut) et l'entreprise de l'espace, logo des factures compris ;
+  `input` l'emporte.
   """
   createEmailSignatureV2(
     input: EmailSignatureV2Input!
@@ -580,6 +611,12 @@ extend type Mutation {
   sont vides.
   """
   applyMemberToEmailSignatureV2(id: ID!, memberUserId: ID!): EmailSignatureV2!
+
+  """
+  Reprend le logo de l'entreprise (celui des factures, relu côté serveur et
+  seulement depuis le stockage de Newbi) comme logo de la signature.
+  """
+  applyCompanyLogoToEmailSignatureV2(id: ID!): EmailSignatureV2!
   updateEmailSignatureV2(id: ID!, input: EmailSignatureV2Input!): EmailSignatureV2!
   deleteEmailSignatureV2(id: ID!): Boolean!
   duplicateEmailSignatureV2(id: ID!): EmailSignatureV2!
@@ -601,6 +638,10 @@ extend type Mutation {
     file: Upload!
   ): EmailSignatureV2!
 
+  """
+  Retire une image de la signature. Le fichier reste en ligne : la signature
+  déjà installée et les e-mails déjà envoyés continuent de l'afficher.
+  """
   removeEmailSignatureV2Image(id: ID!, kind: SignatureImageKindV2!): EmailSignatureV2!
 
   """
@@ -611,6 +652,9 @@ extend type Mutation {
     input: SignatureSavedTemplateV2Input!
   ): SignatureSavedTemplateV2!
 
-  "Supprime un de vos modèles enregistrés."
+  """
+  Supprime un modèle enregistré : un des vôtres, ou n'importe lequel de
+  l'espace pour le propriétaire et les administrateurs.
+  """
   deleteEmailSignatureTemplateV2(id: ID!): Boolean!
 }

@@ -36,6 +36,12 @@ const BASE_PRESET = {
   align: "left",
   frame: "none",
   photoBorder: 0,
+  // Arrondi et couleurs facultatives (vides : déduites de la couleur
+  // principale), mêmes valeurs que par défaut : revenir au modèle les
+  // remet aussi
+  radius: 12,
+  frameColor: "",
+  photoBorderColor: "",
   // Mise en page de départ (celle de Moderne)
   identityZone: "plain",
   photoPosition: "left",
@@ -356,6 +362,19 @@ export default TEMPLATES;
 /** Capacités historiques, gardées pour les anciens clients de l'API. */
 const SUPPORTS = { photo: true, logo: true, align: true, frame: true };
 
+/**
+ * Couleur de départ des textes que le caractère du modèle peut sortir de la
+ * couleur du texte (mêmes règles que colors() dans layout.js) : nom et
+ * entreprise (« text » ou « primary »), poste et entreprise en petites
+ * capitales (« muted » ou « primary »). L'éditeur en tire l'aide de
+ * « Texte » et « Texte secondaire ».
+ */
+const colorRolesOf = (theme = {}) => ({
+  name: theme.nameColor === "primary" ? "primary" : "text",
+  company: theme.companyColor === "primary" ? "primary" : "text",
+  caption: theme.captionColor === "primary" ? "primary" : "muted",
+});
+
 export function listTemplates() {
   // Ordre de la galerie = TEMPLATE_IDS (le premier est le modèle par défaut)
   return TEMPLATE_IDS.map((id) => [id, TEMPLATES[id]]).map(([id, t]) => ({
@@ -364,6 +383,7 @@ export function listTemplates() {
     description: t.description,
     supports: SUPPORTS,
     preset: t.preset,
+    colorRoles: colorRolesOf(t.theme),
   }));
 }
 

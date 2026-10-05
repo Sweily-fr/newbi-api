@@ -45,6 +45,14 @@ class CloudflareService {
     this.signaturePublicUrl =
       process.env.SIGNATURE_URL ||
       "https://pub-f4c5982b836541739955ba7662828aa2.r2.dev";
+    // Anciennes adresses publiques du même bucket (SIGNATURE_LEGACY_URLS,
+    // séparées par des virgules), par exemple l'adresse r2.dev d'avant un
+    // domaine personnalisé : une URL enregistrée avant le changement désigne
+    // toujours ce bucket. Même liste que signatureRenderer/constants.js.
+    this.signatureLegacyUrls = String(process.env.SIGNATURE_LEGACY_URLS || "")
+      .split(",")
+      .map((url) => url.trim().replace(/\/+$/, ""))
+      .filter((url) => /^https?:\/\/[^/]/i.test(url));
 
     // Configuration spécifique pour les images de profil
     this.profileBucketName =
@@ -936,6 +944,7 @@ class CloudflareService {
       [this.ocrPublicUrl, this.ocrBucketName],
       [this.receiptsPublicUrl, this.receiptsBucketName],
       [this.signaturePublicUrl, this.signatureBucketName],
+      ...this.signatureLegacyUrls.map((url) => [url, this.signatureBucketName]),
       [this.companyImagesPublicUrl, this.companyImagesBucketName],
       [this.profilePublicUrl, this.profileBucketName],
       [this.importedInvoicesPublicUrl, this.importedInvoicesBucketName],
@@ -1222,6 +1231,10 @@ class CloudflareService {
    * @param {string} userId - L'ID de l'utilisateur
    * @param {string} signatureId - L'ID de la signature
    * @param {string} imageType - Le type d'image ('imgProfil' ou 'logoReseau')
+   * @param {Object} [options]
+   * @param {boolean} [options.keepPrevious=false] - Garder les anciennes images
+   *   du même type (signatures v2) : leur URL reste dans la signature déjà
+   *   installée et dans les e-mails déjà envoyés.
    * @returns {Promise<Object>} - Les informations sur l'image téléchargée
    */
   async uploadSignatureImage(
@@ -1230,6 +1243,7 @@ class CloudflareService {
     userId,
     signatureId,
     imageType,
+    { keepPrevious = false } = {},
   ) {
     try {
       logger.debug(
@@ -1249,9 +1263,11 @@ class CloudflareService {
         );
       }
 
-      // Supprimer les anciennes images du même type
-      logger.debug(`🗑️ Suppression des anciennes images pour ${imageType}`);
-      await this.deleteSignatureFolder(userId, signatureId, imageType);
+      // Supprimer les anciennes images du même type (sauf keepPrevious)
+      if (!keepPrevious) {
+        logger.debug(`🗑️ Suppression des anciennes images pour ${imageType}`);
+        await this.deleteSignatureFolder(userId, signatureId, imageType);
+      }
 
       // Cloudflare R2 créera automatiquement la structure de dossiers basée sur la clé du fichier
       logger.debug(

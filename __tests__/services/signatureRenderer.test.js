@@ -904,7 +904,8 @@ describe("signatureRenderer — emplacements libres", () => {
     expect(all).not.toContain("inconnu");
     expect(sig.style.slots.side).toEqual(["phone"]);
     expect(all).toContain("email");
-    expect(all).toHaveLength(17);
+    // 17 éléments et les 3 traits libres
+    expect(all).toHaveLength(20);
   });
 
   it("sur un fond de couleur, textes et icônes passent en blanc", () => {
@@ -1049,9 +1050,9 @@ describe("signatureRenderer — prénom et nom dissociés", () => {
         lastName: { color: "#ff0000" },
       },
     });
-    expect(html).toMatch(/color:#ff0000;[^"]*font-weight:bold;">Durand</);
+    expect(html).toMatch(/color:#ff0000;[^"]*font-weight:bold;[^"]*">Durand</);
     expect(html).toMatch(/font-size:19px;[^"]*">Camille</);
-    expect(html).not.toMatch(/font-weight:bold;">Camille</);
+    expect(html).not.toMatch(/font-weight:bold;[^"]*">Camille</);
   });
 });
 
@@ -1172,7 +1173,8 @@ describe("signatureRenderer — réseaux sur plusieurs lignes", () => {
 
   it("Colonnes passe à la ligne après 3 réseaux (colonne photo étroite)", () => {
     expect(rowsOf(render("split"))).toEqual(["center:3", "center:2"]);
-    expect(rowsOf(render("split", []))).toEqual(["center:5"]);
+    // Sans rangées choisies, la colonne photo plafonne à 4 icônes par ligne
+    expect(rowsOf(render("split", []))).toEqual(["center:4", "center:1"]);
   });
 
   it("valide le réglage : entiers de 1 à 12, sinon valeur du modèle", () => {
@@ -1267,13 +1269,15 @@ describe("signatureRenderer — traits et bordures sur mesure", () => {
     expect(render("framed", { frameThickness: 3 })).toMatch(
       /border-left:3px solid #[0-9a-f]{6};border-right:3px solid/,
     );
+    // Largeur portée par une cellule (elle se resserre sur un téléphone),
+    // le cadre l'occupe toute
     const wide = render("framed", { frameWidth: 480 });
     expect(wide).toMatch(
-      /<table [^>]*width="480" style="border-collapse:separate;[^"]*width:480px;max-width:100%;"/,
+      /<td width="480" style="width:480px;"><table [^>]*width="100%" style="border-collapse:separate;[^"]*width:100%;"/,
     );
     // Colonnes : la colonne teintée s'étire dans le cadre élargi
     expect(render("split", { frameWidth: 520 })).toMatch(
-      /<table [^>]*width="100%" style="border-collapse:separate;[^"]*width:100%;"><tr><td valign="middle" align="center" bgcolor=/,
+      /<table [^>]*width="100%" style="border-collapse:separate;[^"]*width:100%;"><tr><td valign="middle" align="center"[^>]* bgcolor=/,
     );
   });
 
@@ -1394,7 +1398,7 @@ describe("signatureRenderer — un élément déplacé ne gonfle pas la signatur
         text: "Mention légale assez longue. ".repeat(8),
       },
     }).html;
-    expect(html).toContain('width="480" style="border-collapse:collapse;');
+    expect(html).toContain('<td width="480" style="width:480px;">');
   });
 
   it("réseaux dans la colonne photo : 4 par ligne au plus", () => {
@@ -1427,9 +1431,10 @@ describe("signatureRenderer — modèle Épuré", () => {
     expect(html()).toMatch(/font-style:italic;[^"]*letter-spacing:1px;/);
   });
 
-  it("trait et icônes des coordonnées dans la couleur du texte", () => {
-    expect(html()).toContain('bgcolor="#111111"');
-    expect(html()).toMatch(/v2\/contact\/phone\/[^"]*-111111\.png/);
+  it("trait noir du modèle, icônes des coordonnées dans la couleur du texte", () => {
+    expect(html()).toContain('bgcolor="#1f1f1f"');
+    // Couleur sombre : icône à liseré blanc, clé v3 (mode sombre)
+    expect(html()).toMatch(/v3\/contact\/phone\/[^"]*-111111\.png/);
   });
 
   it("n'agit pas sur les autres modèles", () => {
@@ -1537,10 +1542,9 @@ describe("signatureRenderer — blocs et colonnes sur mesure", () => {
       },
       columns: { text: 360 },
     });
-    expect(html).toContain(
-      'width="200" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;width:200px;max-width:100%;"',
-    );
-    expect(html).toContain('width="360" style="border-collapse:collapse;');
+    // Largeurs portées par les cellules : elles se resserrent sur un téléphone
+    expect(html).toContain('<td width="200" style="width:200px;">');
+    expect(html).toContain('<td width="360" style="width:360px;">');
     // Bouton centré : sa ligne porte l'alignement
     expect(html).toMatch(
       /<td align="center"(?: style="[^"]*")?><table [^>]*><tr><td align="center" width="220" bgcolor=/,
@@ -1555,14 +1559,14 @@ describe("signatureRenderer — blocs et colonnes sur mesure", () => {
     // Attribut seul sur la ligne : un text-align en style l'emporterait et
     // laisserait les tableaux imbriqués à gauche dans les navigateurs
     expect(html).toContain(
-      '<tr><td align="center" style="padding:0 0 12px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="200"',
+      '<tr><td align="center" style="padding:0 0 12px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="border-collapse:collapse;',
     );
     expect(html).toContain(
-      'width:200px;max-width:100%;"><tr><td align="center"><span',
+      '<td align="center" width="200" style="width:200px;"><span',
     );
     // Sans alignement choisi : rien d'ajouté
     expect(render("modern", { blocks: { tagline: { width: 200 } } })).toContain(
-      'width:200px;max-width:100%;"><tr><td><span',
+      '<td width="200" style="width:200px;"><span',
     );
   });
 
@@ -1587,7 +1591,8 @@ describe("signatureRenderer — blocs et colonnes sur mesure", () => {
         },
       },
     };
-    const spread = 'align="right" style="text-align:right;"';
+    // Alignement par l'attribut seul (un style l'empêcherait sur les tableaux)
+    const spread = '<td valign="middle" align="right">';
     expect(render("framed", {}, input)).toContain(spread);
     const split = render(
       "framed",
@@ -1606,7 +1611,7 @@ describe("signatureRenderer — blocs et colonnes sur mesure", () => {
       blocks: { tagline: { align: "right" } },
     });
     expect(html).toMatch(
-      /width="400" style="[^"]*width:400px;max-width:100%;"><tr><td><table [^>]*width="100%" style="[^"]*width:100%;">/,
+      /<td width="400" style="width:400px;"><table [^>]*width="100%" style="[^"]*width:100%;">/,
     );
     expect(html).toContain('<tr><td align="right"');
   });
@@ -1639,8 +1644,9 @@ describe("signatureRenderer — blocs et colonnes sur mesure", () => {
     const columns = { visual: 140, text: 320, side: 120 };
     for (const t of listTemplates()) {
       const html = render(t.id, { blocks, columns });
+      // Seul bloc autorisé : le retour à la ligne d'un texte (wrapAt)
       expect(html, t.id).not.toMatch(
-        /margin:|display:\s*flex|<div|rgba|class=/,
+        /margin:|display:\s*flex|<div(?! style="display:inline-block;max-width:)|rgba|class=/,
       );
       expect(html, t.id).not.toMatch(/<td[^>]*><\/td>/);
       for (const table of html.match(/<table[^>]*>/g)) {

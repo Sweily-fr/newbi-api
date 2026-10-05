@@ -30,6 +30,17 @@ vi.mock("../../src/services/signatureAssets.js", () => ({
     height: 168,
   }),
   deleteSignatureImages: vi.fn().mockResolvedValue(undefined),
+  // Photo détourée jamais prête : le rendu garde l'arrondi CSS et le VML
+  ensureRoundPhoto: vi.fn().mockResolvedValue(null),
+  roundPhotoUrl: vi.fn().mockReturnValue(null),
+  ImageInputError: class ImageInputError extends Error {},
+  importCompanyLogo: vi.fn().mockResolvedValue({
+    url: "https://cdn.test/logo.png",
+    key: "u/s/logoReseau/logo.png",
+    width: 600,
+    height: 200,
+  }),
+  companyLogoKey: vi.fn().mockReturnValue(null),
 }));
 vi.mock("../../src/utils/mailer.js", () => ({
   sendSignatureTestEmail: vi.fn().mockResolvedValue(true),
@@ -314,7 +325,7 @@ describe("EmailSignatureV2 — création", () => {
       { input: input({ templateId: undefined }) },
       ctx(),
     );
-    expect(doc.templateId).toBe("header");
+    expect(doc.templateId).toBe("newbi");
   });
 
   it("crée la première signature comme signature par défaut", async () => {
@@ -412,12 +423,12 @@ describe("EmailSignatureV2 — lecture et isolation", () => {
 
   it("expose le catalogue de l'éditeur", async () => {
     const catalog = await Query.signatureCatalogV2(null, {}, ctx());
-    expect(catalog.templates.length).toBe(12);
+    expect(catalog.templates.length).toBe(13);
     expect(catalog.templates[0].id).toBe("modern");
-    // Seuls le Bandeau et Épuré sont proposés dans la galerie pour le moment
+    // Seul le modèle Newbi est proposé dans la galerie pour le moment
     expect(
       catalog.templates.filter((t) => t.inGallery).map((t) => t.id),
-    ).toEqual(["header", "epure"]);
+    ).toEqual(["newbi"]);
     expect(catalog.templates[0].preset.fontFamily).toBe("arial");
     expect(catalog.templates[0].preset.photoSize).toBe(92);
     expect(catalog.networks.find((n) => n.id === "linkedin").brandColor).toBe(

@@ -13,16 +13,20 @@ import {
 } from "./constants.js";
 import { contactIconSpec, socialIconSpec } from "./icons.js";
 import {
+  actionHref,
   button,
   displayUrl,
   esc,
   escAttr,
+  hostOf,
   iconLines,
   iconRow,
   img,
   link,
   normalizeUrl,
   photo,
+  readableOn,
+  socialHref,
   span,
   splitRows,
   stackRows,
@@ -32,7 +36,10 @@ import {
 } from "./primitives.js";
 
 export function buildBlocks(ctx) {
-  const { sig, st, font, sp, iconUrl, markers } = ctx;
+  const { sig, st, font, sp, iconUrl, markers, roundPhoto } = ctx;
+  // Pays de l'espace (FR, BE, CH, LU) : numéros nationaux composables
+  // depuis l'étranger dans les liens d'appel
+  const region = ctx.region || "";
 
   // Marqueurs d'aperçu : en mode éditeur, chaque élément porte l'identifiant
   // du champ qui le pilote (data-sig-field). Jamais présents dans le HTML
@@ -163,10 +170,13 @@ export function buildBlocks(ctx) {
   // Texte modifiable directement dans l'aperçu : chaque valeur porte le
   // champ qu'elle alimente (data-sig-edit). Aperçu seulement, comme les
   // autres marqueurs : le HTML copié ne contient que le texte échappé.
+  // Retours à la ligne (la mention seule en garde) : sauts de ligne dans
+  // le même span, qui garde taille, interligne et couleur.
+  const withBreaks = (value) => esc(value).replace(/\n/g, "<br>");
   const editable = (field, value) =>
     markers && value
-      ? `<span data-sig-edit="${field}">${esc(value)}</span>`
-      : esc(value);
+      ? `<span data-sig-edit="${field}">${withBreaks(value)}</span>`
+      : withBreaks(value);
   const joinEditable = (parts, sep) =>
     parts
       .filter(([, v]) => v)
@@ -195,8 +205,10 @@ export function buildBlocks(ctx) {
         : `<span style="${style}">${editable(field, label)}</span>`,
     });
     if (field === "phone" || field === "mobile") {
-      // Un numéro ne se coupe pas entre deux groupes de chiffres
-      return entry(value, `tel:${telHref(value)}`, "white-space:nowrap;");
+      // Un numéro ne se coupe pas entre deux groupes de chiffres ; le lien
+      // compose le numéro principal (sans « poste 12 »), en international
+      const tel = telHref(value, region);
+      return entry(value, tel ? `tel:${tel}` : "", "white-space:nowrap;");
     }
     if (field === "email") return entry(value, `mailto:${value}`);
     if (field === "website") {
@@ -257,7 +269,8 @@ export function buildBlocks(ctx) {
           src: iconUrl(
             socialIconSpec(s.network, st.iconStyle, colorFor(s.network)),
           ),
-          href: normalizeUrl(s.url),
+          // Nom de compte ou numéro WhatsApp : lien du profil
+          href: socialHref(s.network, s.url, region),
           alt: SOCIAL_NETWORKS[s.network].label,
         }));
       // Plusieurs lignes au choix (« 2 en haut, 3 en bas ») : une rangée
@@ -286,6 +299,12 @@ export function buildBlocks(ctx) {
       borderColor = st.photoBorderColor || st.primaryColor,
     } = {}) {
       if (!images.photo?.url) return "";
+      // HTML à copier : photo déjà détourée quand elle existe, ronde jusque
+      // dans Outlook bureau
+      const roundSrc =
+        roundPhoto && shape !== "square"
+          ? roundPhoto({ shape, size, border, borderColor })
+          : null;
       return markBlock(
         "photo",
         centered(
@@ -296,6 +315,7 @@ export function buildBlocks(ctx) {
             alt: fullName || "Photo",
             border,
             borderColor,
+            roundSrc,
           }),
           align,
         ),
@@ -340,13 +360,15 @@ export function buildBlocks(ctx) {
     cta() {
       const c = sig.cta;
       if (!c.enabled || !c.label) return "";
-      const href = normalizeUrl(c.url);
+      // Une adresse e-mail ouvre un message, un numéro lance un appel
+      const href = actionHref(c.url, region);
       if (!href) return "";
-      const eff = resolve("cta", {
-        size: base,
-        color: c.textColor || "#ffffff",
-        bold: true,
-      });
+      // Fond : couleur choisie, sinon la couleur principale (il la suit
+      // quand elle change) ; texte : couleur choisie, sinon blanc ou foncé
+      // selon ce fond (du blanc serait illisible sur du jaune)
+      const background = c.backgroundColor || st.primaryColor;
+      const color = c.textColor || readableOn(background);
+      const eff = resolve("cta", { size: base, color, bold: true });
       return markBlock(
         "cta",
         button({
@@ -354,8 +376,8 @@ export function buildBlocks(ctx) {
           labelHtml: editable("ctaLabel", c.label),
           uppercase: eff.uppercase,
           href,
-          background: c.backgroundColor || st.primaryColor,
-          color: c.textColor || "#ffffff",
+          background,
+          color,
           font: FONT_FAMILIES[eff.fontFamily] || font,
           size: eff.fontSize,
           bold: eff.bold,
@@ -376,15 +398,24 @@ export function buildBlocks(ctx) {
         b.width && b.height
           ? Math.round((width * b.height) / b.width)
           : undefined;
+      const href = normalizeUrl(sig.banner.url);
+      // Texte de remplacement : la description saisie, sinon, pour une
+      // bannière cliquable, « Bannière : » et le domaine du lien (un lien
+      // sans nom fait épeler son adresse aux lecteurs d'écran, et rien ne
+      // s'affiche quand la messagerie bloque les images). Sans lien ni
+      // description, elle reste décorative.
+      const domain = href ? hostOf(href) : "";
+      const alt =
+        sig.banner.alt ||
+        (href ? (domain ? `Bannière : ${domain}` : "Bannière") : "");
       const image = img({
         src: b.url,
         width,
         height,
-        alt: sig.banner.alt || "",
+        alt,
         // Réduit (téléphone, colonne étroite) : la hauteur suit
         style: "max-width:100%;height:auto;",
       });
-      const href = normalizeUrl(sig.banner.url);
       return markBlock(
         "banner",
         href ? link(href, image, { color: st.textColor }) : image,
@@ -409,7 +440,9 @@ export function buildBlocks(ctx) {
     } = {}) {
       const w = width ? `width="${width}"` : 'width="100%"';
       const ws = width ? `width:${width}px;` : "width:100%;";
-      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${ws}"><tr><td ${w} height="${height}" bgcolor="${color}" style="${ws}height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
+      // Longueur en px portée par la cellule seule (un tableau de largeur
+      // fixe ne se resserre pas sur un téléphone)
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;${width ? "" : ws}"><tr><td ${w} height="${height}" bgcolor="${color}" style="${ws}height:${height}px;background-color:${color};font-size:1px;line-height:1px;">&nbsp;</td></tr></table>`;
     },
 
     /** Trait fin dans la couleur principale, plus court (accent). */
@@ -682,7 +715,7 @@ export function buildBlocks(ctx) {
           return Boolean(images.logo?.url);
         case "cta":
           return Boolean(
-            sig.cta.enabled && sig.cta.label && normalizeUrl(sig.cta.url),
+            sig.cta.enabled && sig.cta.label && actionHref(sig.cta.url, region),
           );
         case "banner":
           return Boolean(sig.banner.enabled && images.banner?.url);
