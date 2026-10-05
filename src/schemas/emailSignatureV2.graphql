@@ -1,0 +1,660 @@
+# Signatures de mail v2
+#
+# Le HTML n'est jamais stocké : `renderEmailSignatureV2` le régénère à partir
+# des données, pour l'aperçu comme pour la copie. Les valeurs de choix
+# (modèle, police, forme…) sont des String validées côté serveur, pour
+# pouvoir en ajouter sans casser le schéma.
+
+type SignatureImageV2 {
+  url: String!
+  key: String
+  width: Int
+  height: Int
+}
+
+type SignatureSocialV2 {
+  network: String!
+  url: String!
+}
+
+type SignatureIdentityV2 {
+  firstName: String!
+  lastName: String!
+  jobTitle: String!
+  department: String!
+  company: String!
+  tagline: String!
+}
+
+type SignatureContactV2 {
+  email: String!
+  phone: String!
+  mobile: String!
+  website: String!
+  address: String!
+}
+
+type SignatureImagesV2 {
+  photo: SignatureImageV2
+  logo: SignatureImageV2
+  banner: SignatureImageV2
+}
+
+type SignatureCtaV2 {
+  enabled: Boolean!
+  label: String!
+  url: String!
+  backgroundColor: String!
+  textColor: String!
+}
+
+type SignatureBannerV2 {
+  enabled: Boolean!
+  url: String!
+  alt: String!
+}
+
+type SignatureDisclaimerV2 {
+  enabled: Boolean!
+  text: String!
+}
+
+"""
+Emplacements des éléments (photo, firstName, lastName, title, company,
+tagline, accent, phone, mobile, email, website, address, social, logo, cta,
+banner, disclaimer), dans l'ordre d'affichage. L'ancien « name » reçu est
+converti en firstName + lastName.
+"""
+type SignatureSlotsV2 {
+  header: [String!]!
+  visual: [String!]!
+  text: [String!]!
+  side: [String!]!
+  footer: [String!]!
+  outside: [String!]!
+}
+
+input SignatureSlotsV2Input {
+  header: [String!]
+  visual: [String!]
+  text: [String!]
+  side: [String!]
+  footer: [String!]
+  outside: [String!]
+}
+
+"""
+Mise en forme propre à un élément de texte. Un champ vide = comme le modèle.
+"""
+type SignatureTextStyleV2 {
+  fontFamily: String
+  fontSize: Int
+  color: String
+  bold: Boolean
+  italic: Boolean
+  uppercase: Boolean
+}
+
+type SignatureElementStylesV2 {
+  name: SignatureTextStyleV2
+  "Réglages propres au prénom, par-dessus ceux du nom complet."
+  firstName: SignatureTextStyleV2
+  "Réglages propres au nom de famille, par-dessus ceux du nom complet."
+  lastName: SignatureTextStyleV2
+  jobTitle: SignatureTextStyleV2
+  company: SignatureTextStyleV2
+  tagline: SignatureTextStyleV2
+  contact: SignatureTextStyleV2
+  "Réglages propres à une ligne de coordonnées, par-dessus ceux des coordonnées."
+  phone: SignatureTextStyleV2
+  mobile: SignatureTextStyleV2
+  email: SignatureTextStyleV2
+  website: SignatureTextStyleV2
+  address: SignatureTextStyleV2
+  cta: SignatureTextStyleV2
+  disclaimer: SignatureTextStyleV2
+}
+
+type SignatureStyleV2 {
+  fontFamily: String!
+  fontSize: Int!
+  primaryColor: String!
+  textColor: String!
+  mutedColor: String!
+  photoShape: String!
+  photoSize: Int!
+  logoWidth: Int!
+  iconStyle: String!
+  iconColorMode: String!
+  iconColor: String!
+  iconSize: Int!
+  showContactIcons: Boolean!
+  separatorColor: String!
+  spacing: String!
+  align: String!
+  """
+  Encadré de toute la signature : none, outline, soft, accent-left, accent-top.
+  """
+  frame: String!
+  "Couleur de l'encadré ; vide = déduite de la couleur principale."
+  frameColor: String!
+  "Arrondi des encadrés et blocs de couleur, en px (0-24)."
+  radius: Int!
+  "Épaisseur du contour de la photo, en px (0-6)."
+  photoBorder: Int!
+  "Couleur du contour de la photo ; vide = couleur principale."
+  photoBorderColor: String!
+  """
+  Mise en page (valeurs effectives : celles du modèle quand rien n'a été
+  choisi). Valeurs possibles : voir LAYOUT_CHOICES côté générateur.
+  """
+  identityZone: String!
+  photoPosition: String!
+  photoValign: String!
+  photoColumn: String!
+  divider: String!
+  accent: String!
+  identityStyle: String!
+  titleStyle: String!
+  contactStyle: String!
+  socialPosition: String!
+  logoPosition: String!
+  "Bande teintée en bas du cadre (réseaux, logo)."
+  footerStrip: Boolean!
+  "Réseaux et logo qui se suivent en bas : côte à côte (sinon l'un sous l'autre)."
+  footerPair: Boolean!
+  "Éléments placés en dehors de l'encadré : social, logo, cta, banner, disclaimer."
+  outside: [String!]!
+  "Ordre de la colonne de texte : identity, contact, social, logo."
+  textOrder: [String!]!
+  "Emplacement de chaque élément (effectif : déduit du modèle sinon)."
+  slots: SignatureSlotsV2!
+  "Côté de la colonne photo : left, right."
+  visualSide: String!
+  "Fond de la colonne photo : none, tint, solid (texte blanc)."
+  visualFill: String!
+  "Place de la photo dans le bandeau : left, right, top."
+  headerPhoto: String!
+  "Fond du bandeau : solid (texte blanc), tint."
+  headerFill: String!
+  "Prénom et nom côte à côte : inline (une ligne) ou stacked (deux lignes)."
+  nameLayout: String!
+  """
+  Icônes de réseaux par ligne, de haut en bas ; la dernière valeur vaut pour
+  les lignes suivantes ([2, 3] : 2 puis 3 ; [1] : en colonne). Vide : une
+  seule ligne.
+  """
+  socialRows: [Int!]!
+  "Longueur du trait sous le nom, en px (0 : celle du modèle)."
+  accentLength: Int!
+  "Épaisseur du trait sous le nom, en px (0 : celle du modèle)."
+  accentThickness: Int!
+  "Épaisseur du séparateur photo / texte, en px (0 : 1 px, 4 px pour la barre)."
+  dividerThickness: Int!
+  "Longueur du séparateur photo / texte, en px (0 : toute la hauteur)."
+  dividerLength: Int!
+  "Épaisseur du contour ou de la barre de l'encadré, en px (0 : 1 px, 4 px pour une barre)."
+  frameThickness: Int!
+  "Largeur de la signature (le cadre s'il y en a un), en px (0 : ajustée au contenu)."
+  frameWidth: Int!
+  "Longueur de la barre de l'encadré (à gauche, en haut), en px (0 : toute la longueur)."
+  frameBarLength: Int!
+  "Taille des icônes des coordonnées, en px (0 : 16 px)."
+  contactIconSize: Int!
+  "Couleur des icônes des coordonnées : primary, text ou custom (contactIconColor), indépendante de celle des réseaux."
+  contactIconMode: String!
+  contactIconColor: String!
+  """
+  Réglages par bloc (name, jobTitle, company, tagline, contact, social,
+  photo, logo, accent, cta, banner, disclaimer) et par partie (firstName,
+  lastName, phone, mobile, email, website, address) : { width, spaceBefore,
+  spaceAfter, align }, en px ; seuls les réglages choisis sont présents.
+  Largeur d'un texte = largeur de retour à la ligne ; un élément coupé en
+  morceaux applique les siens à son morceau principal, une ligne réunie
+  (légende, identité en ligne) ceux de son premier élément.
+  """
+  blocks: JSON!
+  "Largeur des colonnes { visual, text, side }, en px (0 : ajustée au contenu)."
+  columns: JSON!
+  "Traits libres { rule1, rule2, rule3 } : { length, thickness, color (separator, primary, text) } ; présents s'ils sont réglés."
+  rules: JSON!
+  "Marges du séparateur vertical { left, right } : px ajoutés (ou retirés) de chaque côté."
+  dividerSpace: JSON!
+  """
+  Réglages par élément (seulement ceux modifiés).
+  """
+  elements: SignatureElementStylesV2!
+}
+
+type EmailSignatureV2 {
+  id: ID!
+  name: String!
+  isDefault: Boolean!
+  templateId: String!
+  """
+  Modèle d'équipe (« Vos modèles ») appliqué en dernier, null pour le modèle
+  intégré. Simple référence : son style a été recopié dans la signature, le
+  modifier ensuite ne la change pas.
+  """
+  savedTemplateId: ID
+  identity: SignatureIdentityV2!
+  contact: SignatureContactV2!
+  social: [SignatureSocialV2!]!
+  images: SignatureImagesV2!
+  cta: SignatureCtaV2!
+  banner: SignatureBannerV2!
+  disclaimer: SignatureDisclaimerV2!
+  style: SignatureStyleV2!
+  """
+  Membre de l'espace dont la signature reprend les informations (profil et
+  photo). Vide pour les signatures migrées de la v1.
+  """
+  memberUserId: ID
+  """
+  Rendu à jour de la signature (HTML, texte, taille, avertissements).
+  """
+  render: SignatureRenderV2!
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+"""
+Résultat d'un rendu : le HTML à coller, sa version texte, sa taille et les
+avertissements de compatibilité (limite Gmail, logo JPEG…).
+"""
+type SignatureRenderV2 {
+  html: String!
+  """
+  Même HTML avec, sur chaque élément, l'identifiant du champ qui le pilote
+  (data-sig-field). Réservé à l'aperçu de l'éditeur, jamais à copier.
+  """
+  previewHtml: String!
+  text: String!
+  chars: Int!
+  warnings: [String!]!
+  """
+  Style effectivement appliqué à chaque élément de texte affiché (modèle +
+  réglages), pour les valeurs des contrôles de l'éditeur.
+  """
+  elements: SignatureElementStylesV2!
+  """
+  Dimensions effectives des traits et bordures (réglées, sinon celles du
+  modèle), pour les valeurs des contrôles de l'éditeur.
+  """
+  lines: SignatureLinesV2!
+}
+
+type SignatureLinesV2 {
+  accentLength: Int!
+  accentThickness: Int!
+  dividerThickness: Int!
+  frameThickness: Int!
+  "Taille de photo maximale du modèle, en px."
+  photoMax: Int!
+  "Taille d'icône de réseau maximale du modèle, en px."
+  iconMax: Int!
+}
+
+type SignatureTemplateSupportsV2 {
+  photo: Boolean!
+  logo: Boolean!
+  align: Boolean!
+  "Faux quand le modèle dessine déjà son propre cadre."
+  frame: Boolean!
+}
+
+"""
+Typographie et formes propres à un modèle, appliquées quand on le choisit.
+Les couleurs n'en font jamais partie.
+"""
+type SignatureTemplatePresetV2 {
+  fontFamily: String
+  fontSize: Int
+  photoShape: String
+  photoSize: Int
+  logoWidth: Int
+  iconStyle: String
+  iconSize: Int
+  spacing: String
+  showContactIcons: Boolean
+}
+
+"""
+Couleur de départ des textes que le modèle peut sortir de la couleur du
+texte : « text » (Texte), « muted » (Texte secondaire) ou « primary »
+(couleur principale). L'éditeur en tire ce que colorent « Texte » et
+« Texte secondaire ».
+"""
+type SignatureTemplateColorRolesV2 {
+  "Prénom et nom : text ou primary."
+  name: String!
+  "Entreprise : text ou primary."
+  company: String!
+  "Poste et entreprise en petites capitales : muted ou primary."
+  caption: String!
+}
+
+type SignatureTemplateV2 {
+  id: String!
+  name: String!
+  description: String!
+  supports: SignatureTemplateSupportsV2!
+  preset: SignatureTemplatePresetV2!
+  """
+  Tous les réglages de départ du modèle (typographie, formes, mise en page),
+  à appliquer au style quand on le choisit.
+  """
+  defaults: JSON!
+  "Proposé dans la galerie (les autres ne servent qu'aux signatures qui les utilisent)."
+  inGallery: Boolean!
+  colorRoles: SignatureTemplateColorRolesV2!
+}
+
+type SignatureSocialNetworkV2 {
+  id: String!
+  label: String!
+  brandColor: String!
+  host: String!
+}
+
+"""
+Membre de l'espace proposé comme personne de la signature.
+"""
+type SignatureMemberV2 {
+  userId: ID!
+  name: String!
+  email: String!
+  image: String
+  isMe: Boolean!
+}
+
+type SignatureFontV2 {
+  id: String!
+  label: String!
+  stack: String!
+}
+
+"""
+Référentiel de l'éditeur : modèles, réseaux, polices et limites.
+"""
+type SignatureCatalogV2 {
+  templates: [SignatureTemplateV2!]!
+  networks: [SignatureSocialNetworkV2!]!
+  fonts: [SignatureFontV2!]!
+  gmailMaxChars: Int!
+}
+
+input SignatureSocialV2Input {
+  network: String!
+  url: String!
+}
+
+input SignatureIdentityV2Input {
+  firstName: String
+  lastName: String
+  jobTitle: String
+  department: String
+  company: String
+  tagline: String
+}
+
+input SignatureContactV2Input {
+  email: String
+  phone: String
+  mobile: String
+  website: String
+  address: String
+}
+
+input SignatureCtaV2Input {
+  enabled: Boolean
+  label: String
+  url: String
+  backgroundColor: String
+  textColor: String
+}
+
+input SignatureBannerV2Input {
+  enabled: Boolean
+  url: String
+  alt: String
+}
+
+input SignatureDisclaimerV2Input {
+  enabled: Boolean
+  text: String
+}
+
+input SignatureTextStyleV2Input {
+  fontFamily: String
+  fontSize: Int
+  color: String
+  bold: Boolean
+  italic: Boolean
+  uppercase: Boolean
+}
+
+input SignatureElementStylesV2Input {
+  name: SignatureTextStyleV2Input
+  firstName: SignatureTextStyleV2Input
+  lastName: SignatureTextStyleV2Input
+  jobTitle: SignatureTextStyleV2Input
+  company: SignatureTextStyleV2Input
+  tagline: SignatureTextStyleV2Input
+  contact: SignatureTextStyleV2Input
+  phone: SignatureTextStyleV2Input
+  mobile: SignatureTextStyleV2Input
+  email: SignatureTextStyleV2Input
+  website: SignatureTextStyleV2Input
+  address: SignatureTextStyleV2Input
+  cta: SignatureTextStyleV2Input
+  disclaimer: SignatureTextStyleV2Input
+}
+
+input SignatureStyleV2Input {
+  fontFamily: String
+  fontSize: Int
+  primaryColor: String
+  textColor: String
+  mutedColor: String
+  photoShape: String
+  photoSize: Int
+  logoWidth: Int
+  iconStyle: String
+  iconColorMode: String
+  iconColor: String
+  iconSize: Int
+  showContactIcons: Boolean
+  separatorColor: String
+  spacing: String
+  align: String
+  frame: String
+  frameColor: String
+  radius: Int
+  photoBorder: Int
+  photoBorderColor: String
+  identityZone: String
+  photoPosition: String
+  photoValign: String
+  photoColumn: String
+  divider: String
+  accent: String
+  identityStyle: String
+  titleStyle: String
+  contactStyle: String
+  socialPosition: String
+  logoPosition: String
+  footerStrip: Boolean
+  footerPair: Boolean
+  outside: [String!]
+  textOrder: [String!]
+  slots: SignatureSlotsV2Input
+  visualSide: String
+  visualFill: String
+  headerPhoto: String
+  headerFill: String
+  nameLayout: String
+  socialRows: [Int!]
+  accentLength: Int
+  accentThickness: Int
+  dividerThickness: Int
+  dividerLength: Int
+  frameThickness: Int
+  frameWidth: Int
+  frameBarLength: Int
+  contactIconSize: Int
+  contactIconMode: String
+  contactIconColor: String
+  "Remplace l'ensemble des réglages par bloc (envoyer l'objet complet)."
+  blocks: JSON
+  columns: JSON
+  "Remplace l'ensemble des traits libres (envoyer l'objet complet)."
+  rules: JSON
+  dividerSpace: JSON
+  """
+  Remplace l'ensemble des réglages par élément (envoyer l'objet complet).
+  """
+  elements: SignatureElementStylesV2Input
+}
+
+"""
+Contenu d'une signature. Les images ne se passent pas ici : elles sont
+envoyées par `uploadEmailSignatureV2Image` et rattachées au document.
+"""
+input EmailSignatureV2Input {
+  name: String
+  templateId: String
+  "Modèle d'équipe appliqué (null : le modèle intégré)."
+  savedTemplateId: ID
+  identity: SignatureIdentityV2Input
+  contact: SignatureContactV2Input
+  social: [SignatureSocialV2Input!]
+  cta: SignatureCtaV2Input
+  banner: SignatureBannerV2Input
+  disclaimer: SignatureDisclaimerV2Input
+  style: SignatureStyleV2Input
+}
+
+enum SignatureImageKindV2 {
+  PHOTO
+  LOGO
+  BANNER
+}
+
+"""
+Modèle enregistré par un membre de l'espace (« Enregistrer comme modèle ») :
+tout le style d'une signature (disposition, typographie, couleurs), jamais
+ses textes ni ses images. Proposé à tout l'espace.
+"""
+type SignatureSavedTemplateV2 {
+  id: ID!
+  name: String!
+  "Modèle de base, dont le caractère (nom en capitales, tailles…) s'applique."
+  templateId: String!
+  style: SignatureStyleV2!
+  "Enregistré par l'utilisateur connecté : lui seul peut le remplacer."
+  mine: Boolean!
+  """
+  L'utilisateur connecté peut le supprimer : son auteur, ou le propriétaire
+  et les administrateurs de l'espace (si leur rôle permet de supprimer des
+  signatures).
+  """
+  canDelete: Boolean!
+}
+
+input SignatureSavedTemplateV2Input {
+  name: String!
+  templateId: String!
+  style: SignatureStyleV2Input!
+}
+
+extend type Query {
+  emailSignaturesV2: [EmailSignatureV2!]!
+  emailSignatureV2(id: ID!): EmailSignatureV2
+  signatureCatalogV2: SignatureCatalogV2!
+  signatureMembersV2: [SignatureMemberV2!]!
+
+  """
+  Rendu d'une signature non enregistrée (aperçu en direct). Sans `id`, les
+  images du document ne sont pas connues : passer `id` pour les inclure.
+  """
+  renderEmailSignatureV2(input: EmailSignatureV2Input!, id: ID): SignatureRenderV2!
+
+  """
+  Rendu d'un modèle (vignettes de la galerie) : avec les informations de la
+  signature `id` si elle a un nom, sinon avec des données d'exemple.
+  """
+  renderSignatureTemplateV2(
+    templateId: String!
+    style: SignatureStyleV2Input
+    id: ID
+  ): SignatureRenderV2!
+
+  "Modèles enregistrés par les membres de l'espace, les plus récents d'abord."
+  emailSignatureTemplatesV2: [SignatureSavedTemplateV2!]!
+}
+
+extend type Mutation {
+  """
+  Crée une signature pré-remplie avec le profil de `memberUserId` (soi-même
+  par défaut) et l'entreprise de l'espace, logo des factures compris ;
+  `input` l'emporte.
+  """
+  createEmailSignatureV2(
+    input: EmailSignatureV2Input!
+    memberUserId: ID
+  ): EmailSignatureV2!
+
+  """
+  Reprend les informations d'un membre de l'espace : nom, e-mail, portable
+  et photo remplacés ; société, standard, site et adresse complétés s'ils
+  sont vides.
+  """
+  applyMemberToEmailSignatureV2(id: ID!, memberUserId: ID!): EmailSignatureV2!
+
+  """
+  Reprend le logo de l'entreprise (celui des factures, relu côté serveur et
+  seulement depuis le stockage de Newbi) comme logo de la signature.
+  """
+  applyCompanyLogoToEmailSignatureV2(id: ID!): EmailSignatureV2!
+  updateEmailSignatureV2(id: ID!, input: EmailSignatureV2Input!): EmailSignatureV2!
+  deleteEmailSignatureV2(id: ID!): Boolean!
+  duplicateEmailSignatureV2(id: ID!): EmailSignatureV2!
+  setDefaultEmailSignatureV2(id: ID!): EmailSignatureV2!
+
+  """
+  Envoie la signature à l'adresse e-mail de l'utilisateur connecté, pour la
+  vérifier dans sa vraie messagerie. Renvoie l'adresse utilisée.
+  """
+  sendEmailSignatureV2Test(id: ID!): String!
+
+  """
+  Envoie et traite une image (recadrage, retina, transparence conservée),
+  puis la rattache à la signature.
+  """
+  uploadEmailSignatureV2Image(
+    id: ID!
+    kind: SignatureImageKindV2!
+    file: Upload!
+  ): EmailSignatureV2!
+
+  """
+  Retire une image de la signature. Le fichier reste en ligne : la signature
+  déjà installée et les e-mails déjà envoyés continuent de l'afficher.
+  """
+  removeEmailSignatureV2Image(id: ID!, kind: SignatureImageKindV2!): EmailSignatureV2!
+
+  """
+  Enregistre un style comme modèle de l'espace. Un de vos modèles du même
+  nom est remplacé.
+  """
+  saveEmailSignatureTemplateV2(
+    input: SignatureSavedTemplateV2Input!
+  ): SignatureSavedTemplateV2!
+
+  """
+  Supprime un modèle enregistré : un des vôtres, ou n'importe lequel de
+  l'espace pour le propriétaire et les administrateurs.
+  """
+  deleteEmailSignatureTemplateV2(id: ID!): Boolean!
+}
