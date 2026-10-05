@@ -6,6 +6,7 @@ import {
   isValidUnit,
   isPositiveAmount,
 } from "../utils/validators.js";
+import { productImageUrlField } from "../utils/productImage.js";
 import clientSchema from "./schemas/client.js";
 import companyInfoSchema from "./schemas/companyInfo.js";
 import customFieldSchema from "./schemas/customField.js";
@@ -52,6 +53,8 @@ const deliveryNoteItemSchema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  // Image du produit du catalogue, affichée sur l'aperçu et le PDF
+  imageUrl: productImageUrlField,
   quantity: {
     type: Number,
     required: true,
