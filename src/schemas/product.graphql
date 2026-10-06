@@ -37,6 +37,8 @@ type Product {
   reference: String
   # Image du produit (R2), recopiée sur les lignes des documents
   imageUrl: String
+  # false : image gardée dans le catalogue, pas recopiée sur les documents
+  showImageOnDocuments: Boolean!
   customFields: [ProductCustomFieldValue]
   linkedProducts: [LinkedProduct!]!
   createdBy: User!
@@ -60,6 +62,7 @@ input CreateProductInput {
   category: String
   reference: String
   imageUrl: String
+  showImageOnDocuments: Boolean
   customFields: [ProductCustomFieldValueInput]
   linkedProducts: [LinkedProductInput!]
 }
@@ -73,6 +76,7 @@ input UpdateProductInput {
   category: String
   reference: String
   imageUrl: String
+  showImageOnDocuments: Boolean
   customFields: [ProductCustomFieldValueInput]
   linkedProducts: [LinkedProductInput!]
 }

@@ -204,6 +204,8 @@ type Item {
   linkedRounding: LinkedProductRounding
   # Image du produit du catalogue (affichée sur l'aperçu et le PDF)
   imageUrl: String
+  # false : image masquée sur ce document (absent = affichée)
+  showImage: Boolean
 }
 
 input ItemInput {
@@ -224,6 +226,8 @@ input ItemInput {
   linkedRounding: LinkedProductRounding
   # Image du produit du catalogue (affichée sur l'aperçu et le PDF)
   imageUrl: String
+  # false : image masquée sur ce document (absent = affichée)
+  showImage: Boolean
 }
 
 type Shipping {

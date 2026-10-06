@@ -502,3 +502,41 @@ describe("Product Resolver - imageUrl", () => {
     expect(created.imageUrl).toBeUndefined();
   });
 });
+
+describe("Product Resolver - showImageOnDocuments", () => {
+  const create = productResolvers.Mutation.createProduct;
+  const update = productResolvers.Mutation.updateProduct;
+  const field = productResolvers.Product.showImageOnDocuments;
+
+  it("is true by default, can be turned off and back on", async () => {
+    const created = await create(
+      null,
+      {
+        input: {
+          ...buildProductInput({ name: "Fauteuil" }),
+          workspaceId: organizationId.toString(),
+        },
+      },
+      ctx(),
+    );
+    expect(field(created)).toBe(true);
+
+    const off = await update(
+      null,
+      { id: created._id.toString(), input: { showImageOnDocuments: false } },
+      ctx(),
+    );
+    expect(field(off)).toBe(false);
+
+    const on = await update(
+      null,
+      { id: created._id.toString(), input: { showImageOnDocuments: true } },
+      ctx(),
+    );
+    expect(field(on)).toBe(true);
+  });
+
+  it("treats products saved before the option as shown", () => {
+    expect(field({})).toBe(true);
+  });
+});
