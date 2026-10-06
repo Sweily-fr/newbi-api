@@ -42,6 +42,12 @@ const productSchema = new mongoose.Schema({
   },
   // Image du produit (bucket public R2), recopiée sur les lignes des documents
   imageUrl: productImageUrlField,
+  // false : l'image reste dans le catalogue mais n'est pas recopiée sur les
+  // lignes des nouveaux documents
+  showImageOnDocuments: {
+    type: Boolean,
+    default: true
+  },
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,

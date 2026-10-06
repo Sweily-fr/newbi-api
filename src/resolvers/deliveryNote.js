@@ -200,7 +200,10 @@ const itemsForInvoice = async (items = [], workspaceId) => {
       unit: item.unit || "",
       discount: item.discount || 0,
       discountType: item.discountType || "PERCENTAGE",
-      imageUrl: item.imageUrl || product?.imageUrl || undefined,
+      imageUrl:
+        item.imageUrl ||
+        (product?.showImageOnDocuments !== false ? product?.imageUrl : undefined) ||
+        undefined,
     };
     if (vatRate === 0) {
       line.vatExemptionText =

@@ -98,6 +98,8 @@ async function normalizeLinkedProducts(linkedProducts, { workspaceId, selfId }) 
 
 const productResolvers = {
   Product: {
+    // Produits créés avant l'option : image affichée sur les documents
+    showImageOnDocuments: (product) => product.showImageOnDocuments !== false,
     // Résout les produits liés avec leur fiche produit (même workspace).
     // Les liens vers un produit supprimé entre-temps sont ignorés.
     linkedProducts: async (product) => {
