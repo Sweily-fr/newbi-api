@@ -41,7 +41,7 @@ import { makeExecutableSchema } from "@graphql-tools/schema";
 import depthLimit from "graphql-depth-limit";
 import { createDataLoaders } from "./dataloaders/index.js";
 import mongoose from "mongoose";
-import { graphqlUploadExpress } from "graphql-upload";
+import { graphqlUploadMiddleware } from "./middlewares/graphql-upload.js";
 import fs from "fs";
 import cors from "cors";
 import helmet from "helmet";
@@ -402,7 +402,7 @@ async function startServer() {
   // Routes tracking d'ouverture d'email (publique, sans auth)
   app.use("/tracking", emailTrackingRoutes);
 
-  app.use(graphqlUploadExpress({ maxFileSize: 104857600, maxFiles: 20 }));
+  app.use(graphqlUploadMiddleware({ maxFileSize: 104857600, maxFiles: 20 }));
 
   // Trace les requêtes GraphQL qui retournent 400 (requêtes malformées,
   // scanners, introspection refusée...) : faute du client, pas du serveur,

@@ -736,6 +736,38 @@ describe("importQuotes (Qonto → devis importés)", () => {
     expect(getQuoteMock).not.toHaveBeenCalled();
   });
 
+  it("un devis envoyé depuis Newbi puis supprimé côté Qonto n'est plus relu", async () => {
+    const account = await createAccount();
+    const deleted = await Quote.create(
+      quoteDoc({ number: "000012", qontoId: "qq-gone" }),
+    );
+    getQuoteMock.mockRejectedValue(
+      Object.assign(new Error("Qonto API 404: not_found"), { status: 404 }),
+    );
+    const out = await importQuotes(account, String(userId));
+    expect(out).toMatchObject({ updated: 0, errors: 0 });
+    const doc = await Quote.findById(deleted._id);
+    expect(doc.qontoId).toBeUndefined();
+    expect(doc.status).toBe("PENDING");
+
+    getQuoteMock.mockClear();
+    await importQuotes(account, String(userId));
+    expect(getQuoteMock).not.toHaveBeenCalled();
+  });
+
+  it("une autre erreur Qonto garde le lien du devis", async () => {
+    const account = await createAccount();
+    const quote = await Quote.create(
+      quoteDoc({ number: "000013", qontoId: "qq-500" }),
+    );
+    getQuoteMock.mockRejectedValue(
+      Object.assign(new Error("Qonto API 500: erreur"), { status: 500 }),
+    );
+    const out = await importQuotes(account, String(userId));
+    expect(out.errors).toBe(1);
+    expect((await Quote.findById(quote._id)).qontoId).toBe("qq-500");
+  });
+
   it("un devis annulé côté Qonto passe en REJECTED", async () => {
     const account = await createAccount();
     listQuotesMock.mockResolvedValue(pages([qontoQuote()]));
