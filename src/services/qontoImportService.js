@@ -1057,6 +1057,16 @@ export async function importQuotes(account, userId) {
         });
       }
     } catch (error) {
+      // Devis supprimé côté Qonto : on détache le lien pour ne plus le relire
+      // à chaque passage du cron. qontoSyncStatus reste SYNCED, donc syncAll
+      // ne le renvoie pas vers Qonto.
+      if (error?.status === 404) {
+        await Quote.updateOne({ _id: quote._id }, { $unset: { qontoId: 1 } });
+        logger.info(
+          `[QONTO-IMPORT] Devis ${quote.prefix || ""}${quote.number || quote._id} introuvable sur Qonto (${quote.qontoId}) : lien retiré`,
+        );
+        continue;
+      }
       result.errors++;
       logger.warn(
         `[QONTO-IMPORT] Décision devis Qonto ${quote.qontoId}: ${error.message}`,
