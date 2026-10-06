@@ -16,6 +16,17 @@ const CLIENT_TYPES = {
 };
 
 /**
+ * Champ personnalisé du client affiché sur le document (libellé + valeur lisible)
+ */
+const documentFieldSchema = new mongoose.Schema(
+  {
+    label: { type: String, required: true, trim: true },
+    value: { type: String, required: true, trim: true },
+  },
+  { _id: false },
+);
+
+/**
  * Schéma pour les informations du client
  */
 const clientSchema = new mongoose.Schema({
@@ -148,6 +159,11 @@ const clientSchema = new mongoose.Schema({
       message:
         "Veuillez fournir un numéro de TVA valide (format FR, ex: FR12345678901)",
     },
+  },
+  // Champs personnalisés du client à afficher sur le document
+  documentFields: {
+    type: [documentFieldSchema],
+    default: undefined,
   },
 });
 

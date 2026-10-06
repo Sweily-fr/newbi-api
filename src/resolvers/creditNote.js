@@ -388,6 +388,10 @@ const creditNoteResolvers = {
               // car on utilise celle de la facture originale dans le champ shipping
               hasDifferentShippingAddress: false,
               shippingAddress: undefined,
+              // Mêmes champs personnalisés client que la facture d'origine
+              documentFields: originalInvoice.client?.documentFields?.map(
+                (field) => ({ label: field.label, value: field.value }),
+              ),
             },
             // Copier les informations de livraison depuis la facture originale
             shipping: originalInvoice.shipping
