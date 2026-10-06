@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { isAnnexChange } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
@@ -1401,7 +1402,13 @@ const quoteResolvers = {
         }
 
         const statusBeforeUpdate = quote.status;
+        // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+        // envois et automatisations : elle ne contient pas la nouvelle annexe.
+        const annexChanged = isAnnexChange(quote.annex, updateData);
         Object.assign(quote, updateData);
+        if (annexChanged) {
+          quote.cachedPdf = undefined;
+        }
 
         // Devis déjà finalisé (PENDING) dont le contenu change : l'archive
         // PDF R2 (aperçu sidebar, bouton PDF, email) date de la finalisation
@@ -2051,6 +2058,7 @@ const quoteResolvers = {
             headerNotes: quote.headerNotes,
             footerNotes: quote.footerNotes,
             termsAndConditions: quote.termsAndConditions,
+            annex: quoteObj.annex || null,
             termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle,
             termsAndConditionsLink: quote.termsAndConditionsLink,
             purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis

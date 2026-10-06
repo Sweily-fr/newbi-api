@@ -17,6 +17,7 @@ import {
   PAYMENT_METHOD,
   DISCOUNT_TYPE,
 } from "./constants/enums.js";
+import { documentAnnexSchema } from "../utils/documentAnnex.js";
 
 /**
  * Schéma principal de facture
@@ -289,6 +290,11 @@ const invoiceSchema = new mongoose.Schema(
         validator: isPositiveAmount,
         message: "Le montant final TTC doit être un nombre positif",
       },
+    },
+    // Annexe PDF ajoutée à la fin du PDF du document (ex : CGV)
+    annex: {
+      type: documentAnnexSchema,
+      default: null,
     },
     // Cache PDF pour les automatisations (copie R2 serveur-à-serveur)
     cachedPdf: {
