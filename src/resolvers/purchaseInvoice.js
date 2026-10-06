@@ -25,6 +25,10 @@ import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import { resolvePurchaseInvoiceCategoryInput } from "../utils/categoryTaxonomy.js";
 import {
+  applyVatBreakdown,
+  scalarVatEditBreaksBreakdown,
+} from "../utils/purchaseInvoiceVat.js";
+import {
   findTransactionsForPurchaseInvoice,
   findPurchaseInvoicesForTransaction,
 } from "../utils/reconciliationMatching.js";
@@ -639,7 +643,7 @@ const purchaseInvoiceResolvers = {
           context.workspaceId,
         );
 
-        const { forceCreate = false, ...invoiceInput } = input;
+        const { forceCreate = false, vatBreakdown, ...invoiceInput } = input;
 
         // Filet anti-doublon côté serveur (mêmes règles que l'avertissement
         // du front : même numéro confirmé par fournisseur ou montant, sinon
@@ -678,6 +682,10 @@ const purchaseInvoiceResolvers = {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
           createdBy: context.user.id,
         });
+        // Plusieurs taux : HT / TVA / taux recalculés depuis le détail
+        if (vatBreakdown !== undefined && vatBreakdown !== null) {
+          applyVatBreakdown(invoice, vatBreakdown);
+        }
 
         // Fiche fournisseur si non liée : nom identique, sinon fiche dont le
         // nom commence pareil (cf. supplierResolution.js), sinon création.
@@ -765,11 +773,25 @@ const purchaseInvoiceResolvers = {
           );
         }
 
-        Object.keys(input).forEach((key) => {
-          if (input[key] !== undefined) {
-            invoice[key] = input[key];
+        const { vatBreakdown, ...fields } = input;
+        // HT / TVA / taux changés sans détail (app mobile) : le détail par
+        // taux ne correspondrait plus, il est effacé. Mesuré avant
+        // l'affectation, qui écrase les valeurs comparées.
+        const dropBreakdown =
+          (vatBreakdown === undefined || vatBreakdown === null) &&
+          scalarVatEditBreaksBreakdown(invoice, fields);
+
+        Object.keys(fields).forEach((key) => {
+          if (fields[key] !== undefined) {
+            invoice[key] = fields[key];
           }
         });
+
+        if (vatBreakdown !== undefined && vatBreakdown !== null) {
+          applyVatBreakdown(invoice, vatBreakdown);
+        } else if (dropBreakdown) {
+          invoice.vatBreakdown = [];
+        }
 
         // Nouveau nom de fournisseur sans fiche explicite : la fiche liée
         // suit (identifiants, récurrence bancaire, nom ; cf.
@@ -1938,6 +1960,8 @@ const purchaseInvoiceResolvers = {
     // en .lean() (défauts Mongoose non appliqués) : un doc écrit en brut sans
     // ce champ ferait tomber la liste entière du workspace (incident 24/08/2026).
     source: (parent) => parent.source || "MANUAL",
+    // Factures antérieures au détail par taux (lues en .lean()) : liste vide
+    vatBreakdown: (parent) => parent.vatBreakdown || [],
     // Même cas que source : .lean() n'applique pas le défaut Mongoose, un
     // document écrit en brut (seed, script) sans ce champ ferait tomber la liste.
     isReconciled: (parent) =>

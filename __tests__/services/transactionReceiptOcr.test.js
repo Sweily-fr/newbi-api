@@ -1041,8 +1041,94 @@ describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
       amountHT: 83.33,
       amountTVA: 16.67,
       vatRate: 20,
+      vatBreakdown: [],
       currency: "EUR",
       conversion: { originalAmountTTC: 120, originalCurrency: "USD" },
+    });
+  });
+
+  it("plusieurs taux de TVA lus : détail gardé, HT / TVA / taux en sont le résumé", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -96, currency: "EUR" },
+      financial: {
+        transaction_data: {
+          amount: 96,
+          amount_ht: 85,
+          tax_amount: 11,
+          tax_rate: 10,
+          currency: "EUR",
+        },
+        extracted_fields: {
+          tax_details: [
+            { rate: 10, base: 60, amount: 6 },
+            { rate: 20, base: 25, amount: 5 },
+          ],
+        },
+      },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 96,
+      amountHT: 85,
+      amountTVA: 11,
+      vatRate: 10,
+      vatBreakdown: [
+        { rate: 20, baseHT: 25, amountTVA: 5 },
+        { rate: 10, baseHT: 60, amountTVA: 6 },
+      ],
+    });
+  });
+
+  it("détail par taux incohérent avec le total lu : écarté, total lu conservé", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -96, currency: "EUR" },
+      financial: {
+        transaction_data: {
+          amount: 96,
+          amount_ht: 85,
+          tax_amount: 11,
+          tax_rate: 10,
+        },
+        extracted_fields: {
+          tax_details: [
+            { rate: 10, base: 60, amount: 16 },
+            { rate: 20, base: 25, amount: 5 },
+          ],
+        },
+      },
+    });
+    expect(r.vatBreakdown).toEqual([]);
+    expect(r.amountTVA).toBe(11);
+    expect(r.amountHT).toBe(85);
+  });
+
+  it("plusieurs taux en devise étrangère : chaque ligne ramenée au débit bancaire", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -48, currency: "EUR" },
+      financial: {
+        transaction_data: {
+          amount: 96,
+          amount_ht: 85,
+          tax_amount: 11,
+          currency: "USD",
+        },
+        extracted_fields: {
+          tax_details: [
+            { rate: 10, base: 60, amount: 6 },
+            { rate: 20, base: 25, amount: 5 },
+          ],
+        },
+      },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 48,
+      amountHT: 42.5,
+      amountTVA: 5.5,
+      vatRate: 10,
+      currency: "EUR",
+      vatBreakdown: [
+        { rate: 20, baseHT: 12.5, amountTVA: 2.5 },
+        { rate: 10, baseHT: 30, amountTVA: 3 },
+      ],
     });
   });
 
@@ -1145,5 +1231,65 @@ describe("analyzePurchaseInvoiceFiles : fournisseur de la proposition", () => {
     expect(result.combined.supplierId).toBe(canva._id.toString());
     // Aucune fiche créée par une simple proposition
     expect(await Supplier.countDocuments({ workspaceId })).toBe(2);
+  });
+
+  it("deux justificatifs à des taux différents : la proposition détaille la TVA par taux", async () => {
+    mockClaudeSuccess();
+    toInvoiceFormat
+      .mockReturnValueOnce({
+        transaction_data: {
+          document_number: "LIB-1",
+          vendor_name: "Librairie Centrale",
+          amount: 21.1,
+          amount_ht: 20,
+          tax_amount: 1.1,
+          tax_rate: 5.5,
+          currency: "EUR",
+        },
+        extracted_fields: {},
+        document_analysis: { confidence: 0.9 },
+      })
+      .mockReturnValueOnce({
+        transaction_data: {
+          document_number: "LIB-2",
+          vendor_name: "Librairie Centrale",
+          amount: 12,
+          amount_ht: 10,
+          tax_amount: 2,
+          tax_rate: 20,
+          currency: "EUR",
+        },
+        extracted_fields: {},
+        document_analysis: { confidence: 0.9 },
+      });
+
+    const file = (name) => ({
+      fileId: name,
+      filename: `${name}.pdf`,
+      receiptFile: {
+        url: `https://receipts.newbi.fr/${name}.pdf`,
+        filename: `${name}.pdf`,
+        mimetype: "application/pdf",
+      },
+      fileBuffer: Buffer.from(name),
+    });
+    const result =
+      await transactionReceiptOcrService.analyzePurchaseInvoiceFiles({
+        files: [file("livres"), file("papeterie")],
+        workspaceId,
+        targetCurrency: "EUR",
+      });
+
+    expect(result.distinctCount).toBe(2);
+    expect(result.combined).toMatchObject({
+      amountTTC: 33.1,
+      amountHT: 30,
+      amountTVA: 3.1,
+      vatRate: 5.5,
+      vatBreakdown: [
+        { rate: 20, baseHT: 10, amountTVA: 2 },
+        { rate: 5.5, baseHT: 20, amountTVA: 1.1 },
+      ],
+    });
   });
 });

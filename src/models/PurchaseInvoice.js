@@ -62,6 +62,18 @@ const ocrMetadataSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// Une ligne par taux de TVA (cf. utils/purchaseInvoiceVat.js) : renseignée
+// seulement quand la facture mêle au moins deux taux, amountHT / amountTVA /
+// vatRate en sont alors le résumé.
+const vatLineSchema = new mongoose.Schema(
+  {
+    rate: { type: Number, required: true, min: 0, max: 100 },
+    baseHT: { type: Number, required: true },
+    amountTVA: { type: Number, required: true },
+  },
+  { _id: false },
+);
+
 const PURCHASE_INVOICE_STATUS = {
   TO_PROCESS: "TO_PROCESS",
   TO_PAY: "TO_PAY",
@@ -136,6 +148,10 @@ const purchaseInvoiceSchema = new mongoose.Schema(
     vatRate: {
       type: Number,
       default: 20,
+    },
+    vatBreakdown: {
+      type: [vatLineSchema],
+      default: [],
     },
     amountTTC: {
       type: Number,
