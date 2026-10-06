@@ -113,6 +113,9 @@ export const clientCustomFieldResolvers = {
 
           const field = new ClientCustomField({
             ...input,
+            // Un nouveau champ s'affiche sur les documents sauf choix contraire
+            // (les champs existants gardent leur réglage)
+            showOnDocuments: input.showOnDocuments ?? true,
             order: input.order ?? nextOrder,
             workspaceId,
             createdBy: userId,
