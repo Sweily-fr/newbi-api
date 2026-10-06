@@ -55,11 +55,17 @@ const box = (rows, attrs = "", style = "") =>
   `<table role="presentation" cellpadding="0" cellspacing="0" border="0"${attrs} style="border-collapse:separate;mso-table-lspace:0pt;mso-table-rspace:0pt;${style}">${rows}</table>`;
 
 /**
- * Largeur choisie pour le cadre : fixe pour Outlook (attribut), bornée à
- * l'écran ailleurs (max-width), pour ne pas déborder sur un téléphone.
+ * Largeur choisie pour la signature (le cadre s'il y en a un) : portée par
+ * une cellule, que le cadre remplit (tableau à 100 % sous cette largeur
+ * connue). Outlook lit l'attribut width de la cellule ; ailleurs, une
+ * cellule de largeur fixe se resserre sur un téléphone, alors qu'un tableau
+ * de largeur fixe ne descend jamais sous sa largeur et déborde de l'écran
+ * (son max-width:100% ne joue pas : la table englobante n'a pas de largeur).
  */
-const widthOf = (w) =>
-  w ? [` width="${w}"`, `width:${w}px;max-width:100%;`] : ["", ""];
+const sizedCell = (html, w) =>
+  w && html
+    ? `<table ${TABLE_ATTRS} style="${TABLE_CSS}"><tr><td width="${w}" style="width:${w}px;">${html}</td></tr></table>`
+    : html;
 
 /**
  * Deux contenus côte à côte, 24 px d'écart. `full` : aux extrémités d'une
@@ -90,12 +96,13 @@ const alignAttr = (align) =>
   align && align !== "left" ? ` align="${align}"` : "";
 
 /**
- * Largeur fixe d'une colonne. Attribut pour Outlook, max-width pour ne pas
- * déborder sur un téléphone. (Un texte, lui, revient à la ligne sans
- * jamais occuper plus que son contenu : wrapAt.)
+ * Largeur fixe d'une colonne, portée par la cellule (attribut pour
+ * Outlook) : elle se resserre sur un téléphone au lieu de déborder. (Un
+ * texte, lui, revient à la ligne sans jamais occuper plus que son contenu :
+ * wrapAt.)
  */
 const fixedWidth = (html, w) =>
-  `<table ${TABLE_ATTRS} width="${w}" style="${TABLE_CSS}width:${w}px;max-width:100%;"><tr><td>${html}</td></tr></table>`;
+  `<table ${TABLE_ATTRS} style="${TABLE_CSS}"><tr><td width="${w}" style="width:${w}px;">${html}</td></tr></table>`;
 
 /** Espace ajouté au bord d'un emplacement (au-dessus du premier bloc…). */
 const px = (n) => (n ? `${n}px` : "0");
@@ -212,13 +219,17 @@ export function renderLayout(b, ctx, theme = {}) {
    * choisi pour ce bloc, qui remplace celui de l'emplacement (à droite,
    * c'est sa ligne qui le place). `toRight` : au bout droit d'une ligne
    * pleine largeur (réseaux et logo réunis), il s'y colle lui-même.
+   * `paired` : réseaux et logo côte à côte, placés par leur ligne.
    */
-  function renderItem(k, slot, { inverse, itemAlign, own, toRight }) {
+  function renderItem(k, slot, { inverse, itemAlign, own, toRight, paired }) {
     const c = colors(inverse);
     const across =
       own ||
       (slot === "visual" ? "center" : slot === "side" ? "right" : itemAlign);
     const selfAlign = own === "center" ? "center" : "left";
+    // Réseaux ou logo seuls en bas : centrés avec une signature centrée
+    // (attribut align de leur tableau, compris partout), à gauche sinon
+    const bottomAlign = itemAlign === "center" && !paired ? "center" : "left";
     switch (k) {
       case "photo":
         return b.photo({
@@ -262,7 +273,7 @@ export function renderLayout(b, ctx, theme = {}) {
           align: toRight
             ? "right"
             : own ||
-              (slot === "footer" || slot === "outside" ? "left" : across),
+              (slot === "footer" || slot === "outside" ? bottomAlign : across),
           size: socialSize,
           onFill: inverse,
           // Colonne photo : 4 icônes par ligne au plus, sauf disposition
@@ -287,7 +298,7 @@ export function renderLayout(b, ctx, theme = {}) {
             : own
               ? selfAlign
               : slot === "footer" || slot === "outside"
-                ? "left"
+                ? bottomAlign
                 : across === "right"
                   ? "left"
                   : across,
@@ -461,10 +472,18 @@ export function renderLayout(b, ctx, theme = {}) {
           // Largeur choisie : la ligne occupe toute la signature, le second
           // va au bout droit (aligné à gauche, il restait au milieu)
           html: sideBySide(
-            markBlock(k, renderItem(k, slot, { inverse, itemAlign })),
+            markBlock(
+              k,
+              renderItem(k, slot, { inverse, itemAlign, paired: true }),
+            ),
             markBlock(
               pair,
-              renderItem(pair, slot, { inverse, itemAlign, toRight: wide }),
+              renderItem(pair, slot, {
+                inverse,
+                itemAlign,
+                toRight: wide,
+                paired: true,
+              }),
             ),
           ),
         });
@@ -508,7 +527,9 @@ export function renderLayout(b, ctx, theme = {}) {
         : slot === "visual"
           ? 200
           : 300;
-    return text.length * size * 0.55 > cap ? cap : 0;
+    // Mention en paragraphes : c'est sa plus longue ligne qui compte
+    const longest = Math.max(...text.split("\n").map((line) => line.length));
+    return longest * size * 0.55 > cap ? cap : 0;
   };
   // Éléments réunis sur une ligne (légende, identité en ligne, réseaux et
   // logo) : la ligne se règle sur son premier élément (largeur, espaces,
@@ -916,20 +937,32 @@ function frameContent({
   const padY = sp.block + 8;
   const padX = sp.block + 12;
 
-  const [wAttr, wStyle] = widthOf(st.frameWidth);
+  // Largeur choisie : le cadre occupe toute la cellule qui la porte
+  const W = st.frameWidth;
+  const [wAttr, wStyle] = W ? [' width="100%"', "width:100%;"] : ["", ""];
   if (st.frame !== "outline" && st.frame !== "soft") {
     // Pas de cadre fermé : le bandeau est arrondi seul
-    const bandHtml = band
-      ? box(
-          `<tr><td bgcolor="${bandFill}" style="background-color:${bandFill};padding:18px 24px;border-radius:${r}px;">${band}</td></tr>`,
-        )
-      : "";
-    const content = vstack([bandHtml, body, restHtml, stripHtml], {
+    const rest = vstack([body, restHtml, stripHtml], {
       gap: sp.block,
       align: align === "center" && !band ? "center" : "left",
       // Largeur choisie : chaque zone occupe toute la signature
       full: Boolean(st.frameWidth),
     });
+    // Bandeau : première rangée (cellule colorée) du même tableau que le
+    // reste. Il prend ainsi la largeur de la zone la plus large (le trait
+    // du bas, la rangée logo et réseaux), ou toute la largeur choisie, sans
+    // jamais s'étirer sur tout le message (100 % sous une largeur connue)
+    const content = band
+      ? box(
+          `<tr><td bgcolor="${bandFill}" style="background-color:${bandFill};padding:18px 24px;border-radius:${r}px;">${band}</td></tr>${
+            rest
+              ? `<tr><td style="padding:${sp.block}px 0 0 0;">${rest}</td></tr>`
+              : ""
+          }`,
+          wAttr,
+          wStyle,
+        )
+      : rest;
     // Barre à gauche ou en haut : épaisseur choisie (4 px sinon), sur toute
     // la longueur ou sur la longueur choisie
     const color = st.frameColor || P;
@@ -938,27 +971,32 @@ function frameContent({
       ? Math.min(st.frameBarLength, st.frameWidth)
       : st.frameBarLength;
     if (st.frame === "accent-left") {
-      return box(
-        L
-          ? `<tr><td valign="top" width="${t}" style="width:${t}px;padding:4px 0 0 0;">${bar({ width: t, height: L, color })}</td><td style="padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`
-          : `<tr><td style="border-left:${t}px solid ${color};padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`,
-        wAttr,
-        wStyle,
+      return sizedCell(
+        box(
+          L
+            ? `<tr><td valign="top" width="${t}" style="width:${t}px;padding:4px 0 0 0;">${bar({ width: t, height: L, color })}</td><td style="padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`
+            : `<tr><td style="border-left:${t}px solid ${color};padding:4px 0 4px ${sp.gap}px;">${content}</td></tr>`,
+          wAttr,
+          wStyle,
+        ),
+        W,
       );
     }
     if (st.frame === "accent-top") {
-      return box(
-        L
-          ? `<tr><td>${bar({ width: L, height: t, color, align: align === "center" ? "center" : "left" })}</td></tr><tr><td style="padding:${padY}px 0 0 0;">${content}</td></tr>`
-          : `<tr><td style="border-top:${t}px solid ${color};padding:${padY}px 0 0 0;">${content}</td></tr>`,
-        wAttr,
-        wStyle,
+      return sizedCell(
+        box(
+          L
+            ? `<tr><td>${bar({ width: L, height: t, color, align: align === "center" ? "center" : "left" })}</td></tr><tr><td style="padding:${padY}px 0 0 0;">${content}</td></tr>`
+            : `<tr><td style="border-top:${t}px solid ${color};padding:${padY}px 0 0 0;">${content}</td></tr>`,
+          wAttr,
+          wStyle,
+        ),
+        W,
       );
     }
-    // Sans cadre : largeur choisie portée par un tableau autour du contenu
-    return st.frameWidth && content
-      ? box(`<tr><td>${content}</td></tr>`, wAttr, wStyle)
-      : content;
+    // Sans cadre : largeur choisie portée par une cellule autour du contenu
+    // (qui l'occupe déjà toute : pile à 100 %)
+    return sizedCell(content, W);
   }
 
   const outline = st.frame === "outline";
@@ -1009,5 +1047,5 @@ function frameContent({
       return `<tr><td${bg} style="${bgStyle}${padding}${sides}${radius}">${row.html}</td></tr>`;
     })
     .join("");
-  return box(html, wAttr, wStyle);
+  return sizedCell(box(html, wAttr, wStyle), W);
 }

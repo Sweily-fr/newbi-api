@@ -43,6 +43,8 @@ const invoiceTemplateResolvers = {
           discount: item.discount || 0,
           discountType: item.discountType || "PERCENTAGE",
           details: item.details || undefined,
+          imageUrl: item.imageUrl || undefined,
+          showImage: item.showImage ?? undefined,
           progressPercentage:
             item.progressPercentage != null ? item.progressPercentage : 100,
         }));

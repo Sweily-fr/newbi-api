@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { NAME_REGEX } from '../utils/validators.js';
+import { productImageUrlField } from '../utils/productImage.js';
 
 /**
  * Schéma principal du produit/service
@@ -38,6 +39,14 @@ const productSchema = new mongoose.Schema({
   reference: {
     type: String,
     trim: true
+  },
+  // Image du produit (bucket public R2), recopiée sur les lignes des documents
+  imageUrl: productImageUrlField,
+  // false : l'image reste dans le catalogue mais n'est pas recopiée sur les
+  // lignes des nouveaux documents
+  showImageOnDocuments: {
+    type: Boolean,
+    default: true
   },
   // Référence vers l'organisation/workspace (Better Auth)
   workspaceId: {
@@ -115,7 +124,8 @@ productSchema.methods.toItem = function() {
     quantity: 1,
     unitPrice: this.unitPrice,
     vatRate: this.vatRate,
-    unit: this.unit
+    unit: this.unit,
+    imageUrl: this.imageUrl
   };
 };
 

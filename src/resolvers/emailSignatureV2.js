@@ -25,6 +25,7 @@ import { sendSignatureTestEmail } from "../utils/mailer.js";
 import {
   listTemplates,
   normalizeSignature,
+  phoneRegion,
   renderSignature,
   requiredIcons,
   SAMPLE_SIGNATURE,
@@ -38,10 +39,14 @@ import {
   GALLERY_TEMPLATE_IDS,
 } from "../services/signatureRenderer/constants.js";
 import {
-  deleteSignatureImages,
+  companyLogoKey,
   ensureIcons,
+  ensureRoundPhoto,
   ensureSamplePhoto,
+  ImageInputError,
+  importCompanyLogo,
   importSignatureImage,
+  roundPhotoUrl,
   storeSignatureImage,
 } from "../services/signatureAssets.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -49,6 +54,9 @@ import {
   isWorkspaceMember,
   listWorkspaceMembers,
   memberSignatureProfile,
+  photoImportUrls,
+  workspaceCountry,
+  workspaceLogoUrl,
 } from "../services/signatureProfile.js";
 
 /** Un e-mail de test au plus toutes les 20 secondes par utilisateur. */
@@ -63,6 +71,21 @@ const scope = (ctx) => ({
 /** Modèles enregistrés : visibles de tout l'espace. */
 const templateScope = (ctx) => ({ workspaceId: ctx.workspaceId });
 
+/** Rôles qui peuvent retirer les modèles de toute l'équipe (membre parti…). */
+const TEMPLATE_MANAGER_ROLES = ["owner", "admin"];
+
+/**
+ * Suppression d'un modèle enregistré : par son auteur, ou par le
+ * propriétaire et les administrateurs de l'espace, si leur rôle permet de
+ * supprimer des signatures. Le rôle n'est connu que des resolvers racine
+ * (contexte enrichi par withRBAC) : le droit y est calculé, puis porté par
+ * chaque modèle (canDelete).
+ */
+const canDeleteTemplate = (t, ctx) =>
+  Boolean(ctx.permissions?.canDelete("signatures")) &&
+  (String(t.createdBy) === String(ctx.user?.id) ||
+    TEMPLATE_MANAGER_ROLES.includes(ctx.userRole));
+
 const plain = (value) =>
   value && typeof value.toObject === "function"
     ? value.toObject()
@@ -71,44 +94,62 @@ const plain = (value) =>
       : {};
 
 /**
- * Photo de la personne de la signature : importée et recadrée comme un
- * envoi, ou retirée si la personne n'en a pas. Un échec d'import ne bloque
- * jamais l'enregistrement (la signature reste utilisable sans photo).
+ * Photo de profil importée et recadrée comme un envoi : en grand d'abord
+ * (photo Google en 512 px), puis à son adresse d'origine. null si aucune
+ * ne répond : la signature reste utilisable sans photo.
  */
-async function setPersonPhoto(doc, url, ctx) {
-  if (!url) {
-    if (!doc.images?.photo) return;
+async function importPersonPhoto(doc, url, ctx) {
+  for (const candidate of photoImportUrls(url)) {
     try {
-      await cloudflareService.deleteSignatureFolder(
-        String(ctx.user.id),
-        String(doc._id),
-        "imgProfil",
-      );
+      return await importSignatureImage({
+        url: candidate,
+        kind: "PHOTO",
+        userId: ctx.user.id,
+        signatureId: doc._id,
+      });
     } catch (error) {
       logger.warn(
-        `[signatures v2] suppression photo ignorée : ${error.message}`,
+        `[signatures v2] photo de profil non importée : ${error.message}`,
       );
     }
-    doc.images.photo = null;
-    doc.markModified("images");
-    await doc.save();
-    return;
   }
+  return null;
+}
+
+/**
+ * Logo de l'entreprise (celui des factures) repris dans une nouvelle
+ * signature. null si l'entreprise n'en a pas ou s'il ne peut pas être
+ * repris : la case reste vide, comme avant.
+ */
+async function importWorkspaceLogo(doc, url, ctx) {
+  if (!url) return null;
   try {
-    doc.images.photo = await importSignatureImage({
+    return await importCompanyLogo({
       url,
-      kind: "PHOTO",
       userId: ctx.user.id,
       signatureId: doc._id,
-      options: { size: doc.style?.photoSize || 84 },
     });
-    doc.markModified("images");
-    await doc.save();
   } catch (error) {
     logger.warn(
-      `[signatures v2] photo de profil non importée : ${error.message}`,
+      `[signatures v2] logo de l'entreprise non repris : ${error.message}`,
     );
+    return null;
   }
+}
+
+/**
+ * Photo de la personne de la signature : importée, ou retirée si la
+ * personne n'en a pas ou si l'import échoue (jamais le visage de la
+ * personne précédente). Un échec ne bloque jamais l'enregistrement.
+ * Retirée, la photo reste en ligne pour les e-mails déjà envoyés.
+ */
+async function setPersonPhoto(doc, url, ctx) {
+  const photo = url ? await importPersonPhoto(doc, url, ctx) : null;
+  if (!photo && !doc.images?.photo) return;
+  doc.images.photo = photo;
+  // La photo seule : une autre image envoyée entre-temps reste en base
+  doc.markModified("images.photo");
+  await doc.save();
 }
 
 /** Personne choisie : soi-même par défaut, sinon un membre de l'espace. */
@@ -127,6 +168,14 @@ async function resolvePerson(memberUserId, ctx) {
     profile: await memberSignatureProfile(userId, ctx.workspaceId),
   };
 }
+
+/**
+ * Référence au modèle d'équipe appliqué : un identifiant de modèle, sinon
+ * null (modèle intégré). Le modèle peut avoir été supprimé depuis :
+ * l'éditeur revient alors au modèle intégré.
+ */
+const savedTemplateRef = (value) =>
+  /^[0-9a-f]{24}$/i.test(String(value ?? "")) ? String(value) : null;
 
 /** Garde les valeurs renseignées d'un groupe (identity, contact…). */
 const filled = (obj) =>
@@ -232,27 +281,112 @@ async function ensureIconsSoon(data) {
 }
 
 /**
- * Rendu propre (à copier) + rendu d'aperçu, dont chaque élément porte
- * l'identifiant du champ qui le pilote, pour l'éditeur.
+ * Photo ronde (ou arrondie) déjà détourée pour le HTML à copier : Outlook
+ * bureau ignore border-radius, et Gmail retire au collage le VML prévu pour
+ * lui. Attente bornée comme pour les icônes (`waitMs`, Infinity pour
+ * l'e-mail de test) ; tant que la variante n'existe pas, le rendu garde
+ * l'arrondi CSS et le VML. Renvoie l'option `roundPhoto` du rendu.
  */
-function withPreview(data) {
-  const result = renderSignature(data);
+async function roundPhotoSoon(data, waitMs = 3000) {
+  const photo = data.images?.photo;
+  if (!photo?.key) return null;
+  // Forme, taille et contour réellement rendus (le modèle peut les borner)
+  const specs = new Map();
+  renderSignature(data, {
+    roundPhoto: (spec) => {
+      specs.set(JSON.stringify(spec), spec);
+      return null;
+    },
+  });
+  if (specs.size === 0) return null;
+  const work = Promise.all(
+    [...specs.values()].map((spec) => ensureRoundPhoto(photo, spec)),
+  );
+  await (Number.isFinite(waitMs)
+    ? Promise.race([
+        work,
+        new Promise((resolve) => setTimeout(resolve, waitMs)),
+      ])
+    : work);
+  return (spec) => roundPhotoUrl(photo, spec);
+}
+
+/**
+ * Région des numéros de téléphone de l'espace (pays de son adresse : FR,
+ * BE, CH ou LU, sinon aucune) : les liens d'appel des numéros nationaux
+ * sont écrits en international. Gardée quelques minutes, chaque rendu de
+ * la liste des signatures la demandant.
+ */
+const REGION_TTL_MS = 5 * 60_000;
+const regionCache = new Map();
+async function workspaceRegion(workspaceId) {
+  if (!workspaceId) return "";
+  const key = String(workspaceId);
+  const hit = regionCache.get(key);
+  if (hit && Date.now() - hit.at < REGION_TTL_MS) return hit.region;
+  try {
+    const region = phoneRegion(await workspaceCountry(key));
+    regionCache.set(key, { region, at: Date.now() });
+    return region;
+  } catch (error) {
+    // Sans pays, les numéros restent tels que saisis
+    logger.warn(`[signatures v2] pays de l'espace : ${error.message}`);
+    return "";
+  }
+}
+
+/**
+ * Rendu propre (à copier) + rendu d'aperçu, dont chaque élément porte
+ * l'identifiant du champ qui le pilote, pour l'éditeur. Options du rendu :
+ * `roundPhoto` (photo détourée, rendu propre seulement) et `region` (pays
+ * des numéros, pour les deux).
+ */
+function withPreview(data, { roundPhoto = null, region = "" } = {}) {
+  const result = renderSignature(data, { roundPhoto, region });
   return {
     ...result,
-    previewHtml: renderSignature(data, { markers: true }).html,
+    previewHtml: renderSignature(data, { markers: true, region }).html,
+  };
+}
+
+/**
+ * Rendu de secours d'une signature dont le rendu a échoué : vide, avec un
+ * avertissement, et les dimensions par défaut des traits.
+ */
+function failedRender() {
+  return {
+    html: "",
+    previewHtml: "",
+    text: "",
+    chars: 0,
+    warnings: [
+      "L'aperçu de cette signature n'a pas pu être affiché. Réessayez dans un instant.",
+    ],
+    elements: {},
+    lines: {
+      accentLength: 40,
+      accentThickness: 3,
+      dividerThickness: 1,
+      frameThickness: 1,
+      photoMax: 160,
+      iconMax: 40,
+    },
   };
 }
 
 async function readUpload(file) {
   const { createReadStream, filename, mimetype } = await file;
-  if (!mimetype || !mimetype.startsWith("image/")) {
+  // Photo HEIC sans type reconnu par le système (navigateur sous Windows) :
+  // envoyée en application/octet-stream, c'est son contenu qui décide
+  const heic = /\.hei[cf]$/i.test(filename || "");
+  if (!heic && (!mimetype || !mimetype.startsWith("image/"))) {
     throw createValidationError(
       "Le fichier doit être une image (JPG, PNG ou WebP)",
     );
   }
   const chunks = [];
   for await (const chunk of createReadStream()) chunks.push(chunk);
-  return { buffer: Buffer.concat(chunks), filename };
+  return { buffer: Buffer.concat(chunks), filename, mimetype };
 }
 
 /**
@@ -290,6 +424,8 @@ const emailSignatureV2Resolvers = {
     style: (t) =>
       normalizeSignature({ templateId: t.templateId, style: t.style }).style,
     mine: (t, _, ctx) => String(t.createdBy) === String(ctx.user?.id),
+    // Calculé par la requête ou la mutation (rôle de l'utilisateur)
+    canDelete: (t) => Boolean(t.canDelete),
   },
 
   EmailSignatureV2: {
@@ -303,10 +439,25 @@ const emailSignatureV2Resolvers = {
     // Style effectif : réglages absents = valeurs du modèle, pour que
     // l'éditeur affiche la mise en page réellement rendue
     style: (doc) => normalizeSignature(plain(doc)).style,
+    // Champ non nul : une exception remonterait jusqu'à la liste entière,
+    // qui s'afficherait vide. Une signature en échec garde un rendu vide.
     render: async (doc) => {
-      const data = plain(doc);
-      await ensureIconsSoon(data);
-      return withPreview(data);
+      try {
+        const data = plain(doc);
+        const [, roundPhoto] = await Promise.all([
+          ensureIconsSoon(data),
+          roundPhotoSoon(data),
+        ]);
+        return withPreview(data, {
+          roundPhoto,
+          region: await workspaceRegion(doc.workspaceId),
+        });
+      } catch (error) {
+        logger.error(
+          `[signatures v2] rendu impossible (${String(doc._id ?? doc.id)}) : ${error.message}`,
+        );
+        return failedRender();
+      }
     },
   },
 
@@ -319,11 +470,15 @@ const emailSignatureV2Resolvers = {
       EmailSignatureV2.findOne({ _id: id, ...scope(ctx) }),
     ),
 
-    emailSignatureTemplatesV2: requireRead("signatures")(async (_, __, ctx) =>
-      EmailSignatureTemplateV2.find(templateScope(ctx))
+    emailSignatureTemplatesV2: requireRead("signatures")(async (_, __, ctx) => {
+      const templates = await EmailSignatureTemplateV2.find(templateScope(ctx))
         .sort({ updatedAt: -1 })
-        .lean(),
-    ),
+        .lean();
+      return templates.map((t) => ({
+        ...t,
+        canDelete: canDeleteTemplate(t, ctx),
+      }));
+    }),
 
     signatureMembersV2: requireRead("signatures")(async (_, __, ctx) => {
       const members = await listWorkspaceMembers(ctx.workspaceId);
@@ -358,8 +513,15 @@ const emailSignatureV2Resolvers = {
         let current = { images: { photo: null, logo: null, banner: null } };
         if (id) current = plain(await findOwned(id, ctx));
         const data = mergeInput(current, input || {});
-        await ensureIconsSoon(data);
-        return withPreview(data);
+        // Sert aussi au bouton Copier : la photo détourée y est attendue
+        const [, roundPhoto] = await Promise.all([
+          ensureIconsSoon(data),
+          roundPhotoSoon(data),
+        ]);
+        return withPreview(data, {
+          roundPhoto,
+          region: await workspaceRegion(ctx.workspaceId),
+        });
       },
     ),
 
@@ -401,7 +563,9 @@ const emailSignatureV2Resolvers = {
           style: { ...colors, ...templatePreset(templateId) },
         };
         await ensureIconsSoon(data);
-        const result = renderSignature(data);
+        const result = renderSignature(data, {
+          region: await workspaceRegion(ctx.workspaceId),
+        });
         return { ...result, previewHtml: result.html };
       },
     ),
@@ -423,14 +587,22 @@ const emailSignatureV2Resolvers = {
           );
         }
         const data = plain(await findOwned(id, ctx));
-        // Les icônes doivent exister avant l'envoi (générées à la demande)
+        // Les icônes et la photo détourée doivent exister avant l'envoi
+        // (générées à la demande) : l'e-mail montre ce que verront les
+        // destinataires, Outlook bureau compris
         const specs = requiredIcons(data);
-        if (specs.length > 0) {
-          await ensureIcons(specs).catch((error) =>
-            logger.warn(`[signatures v2] ensureIcons : ${error.message}`),
-          );
-        }
-        const { html, text } = renderSignature(data);
+        const [, roundPhoto] = await Promise.all([
+          specs.length > 0
+            ? ensureIcons(specs).catch((error) =>
+                logger.warn(`[signatures v2] ensureIcons : ${error.message}`),
+              )
+            : null,
+          roundPhotoSoon(data, Infinity),
+        ]);
+        const { html, text } = renderSignature(data, {
+          roundPhoto,
+          region: await workspaceRegion(ctx.workspaceId),
+        });
         if (!html) {
           throw createValidationError(
             "La signature est vide : ajoutez au moins votre nom.",
@@ -486,11 +658,74 @@ const emailSignatureV2Resolvers = {
           name,
           isDefault: isFirst,
           memberUserId: person.userId,
+          savedTemplateId: savedTemplateRef(input?.savedTemplateId),
           ...scope(ctx),
         });
         applyNormalized(doc, normalized);
         await doc.save();
-        await setPersonPhoto(doc, person.profile.photoUrl, ctx);
+        // Photo de la personne et logo de l'entreprise (celui des factures),
+        // importés en parallèle (5 s au plus chacun) puis enregistrés en une
+        // fois ; un échec laisse simplement la case vide
+        const [photo, logo] = await Promise.all([
+          person.profile.photoUrl
+            ? importPersonPhoto(doc, person.profile.photoUrl, ctx)
+            : null,
+          importWorkspaceLogo(doc, person.profile.logoUrl, ctx),
+        ]);
+        if (photo || logo) {
+          if (photo) doc.images.photo = photo;
+          if (logo) doc.images.logo = logo;
+          doc.markModified("images");
+          await doc.save();
+        }
+        return doc;
+      },
+    ),
+
+    // « Utiliser le logo de l'entreprise » : relu côté serveur dans
+    // l'espace, jamais une adresse envoyée par le navigateur
+    applyCompanyLogoToEmailSignatureV2: requireWrite("signatures")(
+      async (_, { id }, ctx) => {
+        const doc = await findOwned(id, ctx);
+        const url = await workspaceLogoUrl(ctx.workspaceId);
+        if (!url) {
+          throw createValidationError(
+            "Aucun logo d'entreprise : ajoutez-le dans Paramètres, Générale.",
+          );
+        }
+        if (!companyLogoKey(url)) {
+          throw createValidationError(
+            "Le logo de l'entreprise ne peut pas être repris : envoyez-le depuis votre ordinateur.",
+          );
+        }
+        let logo;
+        try {
+          logo = await importCompanyLogo({
+            url,
+            userId: ctx.user.id,
+            signatureId: doc._id,
+          });
+        } catch (error) {
+          if (error instanceof ImageInputError) {
+            logger.warn(
+              `[signatures v2] logo de l'entreprise refusé : ${error.message}${
+                error.cause?.message ? ` [${error.cause.message}]` : ""
+              }`,
+            );
+            throw createValidationError(error.message);
+          }
+          logger.error(
+            `[signatures v2] logo de l'entreprise non repris : ${error.message}`,
+          );
+          throw createInternalServerError(
+            "Le logo de l'entreprise n'a pas pu être repris. Réessayez dans un instant.",
+          );
+        }
+        doc.images.logo = logo;
+        // Le logo seul : le document a été lu avant la reprise (plusieurs
+        // secondes), une autre image envoyée entre-temps reste en base
+        doc.markModified("images.logo");
+        await doc.save();
         return doc;
       },
     ),
@@ -537,17 +772,24 @@ const emailSignatureV2Resolvers = {
           }
         }
         applyNormalized(doc, mergeInput(plain(doc), input || {}));
+        // Modèle d'équipe appliqué : hors du style, que la normalisation ne
+        // connaît pas, il est recopié à part
+        if (input?.savedTemplateId !== undefined) {
+          doc.savedTemplateId = savedTemplateRef(input.savedTemplateId);
+        }
         await doc.save();
         return doc;
       },
     ),
 
+    // Les images restent en ligne : la signature, si elle est installée dans
+    // une messagerie, continue de s'afficher (comme les e-mails envoyés).
+    // Elles partent avec le compte.
     deleteEmailSignatureV2: requireDelete("signatures")(
       async (_, { id }, ctx) => {
         const doc = await findOwned(id, ctx);
         const wasDefault = doc.isDefault;
         await doc.deleteOne();
-        await deleteSignatureImages(ctx.user.id, doc._id);
         if (wasDefault) {
           const next = await EmailSignatureV2.findOne(scope(ctx)).sort({
             updatedAt: -1,
@@ -574,22 +816,34 @@ const emailSignatureV2Resolvers = {
           style: input.style,
         });
         // Un de vos modèles du même nom est remplacé
-        return EmailSignatureTemplateV2.findOneAndUpdate(
+        const saved = await EmailSignatureTemplateV2.findOneAndUpdate(
           { ...templateScope(ctx), createdBy: ctx.user.id, name },
           { $set: { templateId, style } },
           { upsert: true, new: true, setDefaultsOnInsert: true, lean: true },
         );
+        return { ...saved, canDelete: canDeleteTemplate(saved, ctx) };
       },
     ),
 
     deleteEmailSignatureTemplateV2: requireDelete("signatures")(
       async (_, { id }, ctx) => {
-        const { deletedCount } = await EmailSignatureTemplateV2.deleteOne({
-          _id: id,
-          ...templateScope(ctx),
-          createdBy: ctx.user.id,
-        });
+        // Le sien, ou n'importe lequel de l'espace pour le propriétaire et
+        // les administrateurs : mêmes règles que canDelete
+        const filter = { _id: id, ...templateScope(ctx) };
+        if (!TEMPLATE_MANAGER_ROLES.includes(ctx.userRole)) {
+          filter.createdBy = ctx.user.id;
+        }
+        const { deletedCount } =
+          await EmailSignatureTemplateV2.deleteOne(filter);
         if (!deletedCount) throw createNotFoundError("Modèle");
+        // Les signatures qui l'avaient appliqué gardent leur mise en forme ;
+        // seule leur référence revient au modèle intégré (sans les faire
+        // remonter dans les listes triées par date de modification)
+        await EmailSignatureV2.updateMany(
+          { workspaceId: ctx.workspaceId, savedTemplateId: String(id) },
+          { $set: { savedTemplateId: null } },
+          { timestamps: false },
+        );
         return true;
       },
     ),
@@ -652,7 +906,7 @@ const emailSignatureV2Resolvers = {
     uploadEmailSignatureV2Image: requireWrite("signatures")(
       async (_, { id, kind, file }, ctx) => {
         const doc = await findOwned(id, ctx);
-        const { buffer } = await readUpload(file);
+        const { buffer, filename, mimetype } = await readUpload(file);
         let stored;
         try {
           stored = await storeSignatureImage({
@@ -660,42 +914,45 @@ const emailSignatureV2Resolvers = {
             kind,
             userId: ctx.user.id,
             signatureId: doc._id,
-            options:
-              kind === "PHOTO" ? { size: doc.style?.photoSize || 84 } : {},
           });
         } catch (error) {
-          throw createValidationError(error.message || "Image illisible");
+          const upload = `${kind}, ${mimetype || "type inconnu"}, « ${filename || "sans nom"} », ${buffer.length} octets`;
+          // Image refusée : message pour l'utilisateur, détail en journal
+          if (error instanceof ImageInputError) {
+            logger.warn(
+              `[signatures v2] image refusée (${upload}) : ${error.message}${
+                error.cause?.message ? ` [${error.cause.message}]` : ""
+              }`,
+            );
+            throw createValidationError(error.message);
+          }
+          // Panne de stockage (R2, réseau) : un incident, pas un refus
+          logger.error(
+            `[signatures v2] image non enregistrée (${upload}) : ${error.message}`,
+          );
+          throw createInternalServerError(
+            "L'image n'a pas pu être enregistrée. Réessayez dans un instant.",
+          );
         }
         doc.images[kind.toLowerCase()] = stored;
-        doc.markModified("images");
+        // Cette image seule : le document a été lu avant l'envoi (plusieurs
+        // secondes), une autre image envoyée entre-temps ne doit pas être
+        // remise à son ancienne valeur
+        doc.markModified(`images.${kind.toLowerCase()}`);
         await doc.save();
         return doc;
       },
     ),
 
+    // Image détachée de la signature, fichier gardé : la signature déjà
+    // installée et les e-mails déjà envoyés continuent de l'afficher
     removeEmailSignatureV2Image: requireWrite("signatures")(
       async (_, { id, kind }, ctx) => {
         const doc = await findOwned(id, ctx);
         const field = kind.toLowerCase();
         if (doc.images?.[field]) {
-          const type = {
-            PHOTO: "imgProfil",
-            LOGO: "logoReseau",
-            BANNER: "banner",
-          }[kind];
-          try {
-            await cloudflareService.deleteSignatureFolder(
-              String(ctx.user.id),
-              String(doc._id),
-              type,
-            );
-          } catch (error) {
-            logger.warn(
-              `[signatures v2] suppression ${kind} ignorée : ${error.message}`,
-            );
-          }
           doc.images[field] = null;
-          doc.markModified("images");
+          doc.markModified(`images.${field}`);
           await doc.save();
         }
         return doc;

@@ -1938,6 +1938,12 @@ const purchaseInvoiceResolvers = {
     // en .lean() (défauts Mongoose non appliqués) : un doc écrit en brut sans
     // ce champ ferait tomber la liste entière du workspace (incident 24/08/2026).
     source: (parent) => parent.source || "MANUAL",
+    // Même cas que source : .lean() n'applique pas le défaut Mongoose, un
+    // document écrit en brut (seed, script) sans ce champ ferait tomber la liste.
+    isReconciled: (parent) =>
+      Boolean(
+        parent.isReconciled || (parent.linkedTransactionIds || []).length,
+      ),
     issueDate: (parent) =>
       parent.issueDate instanceof Date
         ? parent.issueDate.toISOString()

@@ -210,6 +210,10 @@ type Item {
   linkedQuantity: Float
   linkedPer: Float
   linkedRounding: LinkedProductRounding
+  # Image du produit du catalogue (affichée sur l'aperçu et le PDF)
+  imageUrl: String
+  # false : image masquée sur ce document (absent = affichée)
+  showImage: Boolean
 }
 
 input ItemInput {
@@ -228,6 +232,10 @@ input ItemInput {
   linkedQuantity: Float
   linkedPer: Float
   linkedRounding: LinkedProductRounding
+  # Image du produit du catalogue (affichée sur l'aperçu et le PDF)
+  imageUrl: String
+  # false : image masquée sur ce document (absent = affichée)
+  showImage: Boolean
 }
 
 type Shipping {

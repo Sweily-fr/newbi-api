@@ -35,6 +35,10 @@ type Product {
   unit: String!
   category: String
   reference: String
+  # Image du produit (R2), recopiée sur les lignes des documents
+  imageUrl: String
+  # false : image gardée dans le catalogue, pas recopiée sur les documents
+  showImageOnDocuments: Boolean!
   customFields: [ProductCustomFieldValue]
   linkedProducts: [LinkedProduct!]!
   createdBy: User!
@@ -57,6 +61,8 @@ input CreateProductInput {
   unit: String!
   category: String
   reference: String
+  imageUrl: String
+  showImageOnDocuments: Boolean
   customFields: [ProductCustomFieldValueInput]
   linkedProducts: [LinkedProductInput!]
 }
@@ -69,6 +75,8 @@ input UpdateProductInput {
   unit: String
   category: String
   reference: String
+  imageUrl: String
+  showImageOnDocuments: Boolean
   customFields: [ProductCustomFieldValueInput]
   linkedProducts: [LinkedProductInput!]
 }
@@ -82,4 +90,7 @@ extend type Mutation {
   createProduct(input: CreateProductInput!): Product!
   updateProduct(id: ID!, input: UpdateProductInput!): Product!
   deleteProduct(id: ID!): Boolean!
+  # Envoie une image de produit sur R2 et renvoie son URL, à enregistrer
+  # ensuite dans imageUrl (création comme modification du produit)
+  uploadProductImage(workspaceId: ID!, file: Upload!): ImageUploadResult!
 }

@@ -2,7 +2,8 @@
  * Modèle de signature enregistré par un membre (« Enregistrer comme
  * modèle ») : tout le style d'une signature (disposition, typographie,
  * couleurs), jamais ses textes ni ses images. Proposé à tout l'espace de
- * travail ; seul son auteur peut le remplacer ou le supprimer.
+ * travail ; seul son auteur peut le remplacer, son auteur, le propriétaire
+ * ou un administrateur de l'espace peut le supprimer.
  */
 
 import mongoose from "mongoose";

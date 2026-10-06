@@ -6,6 +6,7 @@ import {
   isValidCreditAmount,
   isValidPercentage,
 } from "../../utils/validators.js";
+import { productImageUrlField } from "../../utils/productImage.js";
 
 /**
  * Schéma pour les éléments d'avoir (credit note items)
@@ -119,6 +120,11 @@ const creditNoteItemSchema = new mongoose.Schema({
     type: String,
     enum: ["UP", "DOWN", "NONE", null],
   },
+  // Image du produit du catalogue, affichée sur l'aperçu et le PDF
+  imageUrl: productImageUrlField,
+  // false : image gardée sur la ligne mais masquée sur l'aperçu et le PDF
+  // (absent = affichée, cas des documents créés avant l'option)
+  showImage: Boolean,
 });
 
 export default creditNoteItemSchema;

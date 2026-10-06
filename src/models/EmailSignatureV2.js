@@ -145,6 +145,12 @@ const emailSignatureV2Schema = new mongoose.Schema(
       enum: TEMPLATE_IDS,
       default: DEFAULT_TEMPLATE_ID,
     },
+    /**
+     * Modèle d'équipe (EmailSignatureTemplateV2) appliqué en dernier, null
+     * pour le modèle intégré : l'éditeur le coche et sait y revenir. Simple
+     * référence, ignorée par le rendu (son style a été recopié).
+     */
+    savedTemplateId: { type: String, default: null },
 
     identity: {
       firstName: trimmed(80),
@@ -171,8 +177,9 @@ const emailSignatureV2Schema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       label: trimmed(60),
       url: trimmed(500),
+      // Vides : automatiques (couleur principale, texte lisible sur ce fond)
       backgroundColor: { type: String, default: "" },
-      textColor: { type: String, default: "#ffffff" },
+      textColor: { type: String, default: "" },
     },
     banner: {
       enabled: { type: Boolean, default: false },

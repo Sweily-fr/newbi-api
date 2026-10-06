@@ -16,6 +16,9 @@ type DeliveryNoteItem {
   details: String
   reference: String
   productId: String
+  imageUrl: String
+  # false : image masquée sur ce document (absent = affichée)
+  showImage: Boolean
   quantity: Float!
   # Préparation v2 « livraison partielle » : en MVP deliveredQuantity = quantity
   orderedQuantity: Float
@@ -28,6 +31,9 @@ input DeliveryNoteItemInput {
   details: String
   reference: String
   productId: String
+  imageUrl: String
+  # false : image masquée sur ce document (absent = affichée)
+  showImage: Boolean
   quantity: Float!
   orderedQuantity: Float
   deliveredQuantity: Float
