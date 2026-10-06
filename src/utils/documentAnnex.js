@@ -47,7 +47,9 @@ export function sanitizeAnnexFileName(fileName) {
   const clean = String(fileName || "")
     // Pas de chemin ni de caractère de contrôle dans le nom affiché
     .replace(/^.*[\\/]/, "")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .split("")
+    .filter((char) => char.charCodeAt(0) > 31 && char.charCodeAt(0) !== 127)
+    .join("")
     .trim()
     .slice(0, ANNEX_FILE_NAME_MAX_LENGTH);
   return clean || "annexe.pdf";
