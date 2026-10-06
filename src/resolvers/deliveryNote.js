@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
@@ -1319,6 +1320,7 @@ const deliveryNoteResolvers = {
             "",
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
+          annex: getOrganizationDefaultAnnex(organization, "invoice"),
           // Référence du BL sur la facture (même champ que pour les BC)
           purchaseOrderNumber: `${dn.prefix}-${dn.number}`,
           sourceQuote: dn.sourceQuote || undefined,

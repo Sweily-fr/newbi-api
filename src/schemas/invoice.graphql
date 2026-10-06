@@ -25,6 +25,7 @@ type Invoice {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnex
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
@@ -168,6 +169,7 @@ input CreateInvoiceInput {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnexInput
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
@@ -207,6 +209,7 @@ input UpdateInvoiceInput {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnexInput
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
