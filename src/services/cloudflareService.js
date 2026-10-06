@@ -323,6 +323,54 @@ class CloudflareService {
     }
   }
 
+  // ============================================================
+  // ANNEXES PDF DES DOCUMENTS (devis, factures, bons de commande)
+  // ============================================================
+
+  /**
+   * Bucket privé des annexes : dédié si configuré, sinon celui des devis
+   * (les clés sont préfixées annexes/).
+   */
+  get documentAnnexesBucketName() {
+    return process.env.DOCUMENT_ANNEXES_BUCKET || this.documentBuckets.quote;
+  }
+
+  /**
+   * Enregistre une annexe PDF. La clé est construite par l'appelant
+   * (buildAnnexKey) : annexes/{workspaceId}/{uuid}.pdf.
+   * @param {string} key
+   * @param {Buffer} pdfBuffer
+   * @param {string} workspaceId
+   */
+  async uploadDocumentAnnex(key, pdfBuffer, workspaceId) {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.documentAnnexesBucketName,
+        Key: key,
+        Body: pdfBuffer,
+        ContentType: "application/pdf",
+        Metadata: {
+          workspaceId: String(workspaceId),
+          uploadedAt: new Date().toISOString(),
+        },
+      }),
+    );
+    logger.debug(`📎 Annexe de document enregistrée sur R2: ${key}`);
+    return { key, bucket: this.documentAnnexesBucketName };
+  }
+
+  /**
+   * Lit une annexe PDF depuis R2.
+   * @param {string} key
+   * @returns {Promise<Buffer>}
+   */
+  async getDocumentAnnexBuffer(key) {
+    const response = await this.client.send(
+      new GetObjectCommand({ Bucket: this.documentAnnexesBucketName, Key: key }),
+    );
+    return Buffer.from(await response.Body.transformToByteArray());
+  }
+
   /**
    * Nettoie un nom de fichier pour les headers HTTP
    * @param {string} fileName - Nom original du fichier

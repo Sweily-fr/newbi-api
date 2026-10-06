@@ -24,6 +24,7 @@ type PurchaseOrder {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnex
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
@@ -88,6 +89,7 @@ input CreatePurchaseOrderInput {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnexInput
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
@@ -119,6 +121,7 @@ input UpdatePurchaseOrderInput {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnexInput
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float

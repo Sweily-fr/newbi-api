@@ -25,6 +25,7 @@ import chunkUploadResolvers from "./chunkUpload.js";
 import chunkUploadR2Resolvers from "./chunkUploadR2.js";
 import imageUploadResolvers from "./imageUpload.js";
 import documentUploadResolvers from "./documentUpload.js";
+import documentAnnexResolvers from "./documentAnnex.js";
 import ocrResolvers from "./ocr.js";
 import eventResolvers from "./event.js";
 import emailReminderResolvers from "./emailReminder.js";
@@ -99,6 +100,7 @@ const resolvers = mergeResolvers([
   chunkUploadR2Resolvers,
   imageUploadResolvers,
   documentUploadResolvers,
+  documentAnnexResolvers,
   ocrResolvers,
   eventResolvers,
   emailReminderResolvers,

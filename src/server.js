@@ -90,6 +90,7 @@ import gmailConnectRoutes from "./routes/gmail-connect.js";
 import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
 import invoiceDocumentPdfRoutes from "./routes/invoiceDocumentPdf.js";
 import documentPdfRoutes from "./routes/documentPdf.js";
+import documentAnnexRoutes from "./routes/documentAnnex.js";
 import importedDocumentFileRoutes from "./routes/importedDocumentFile.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
@@ -353,6 +354,10 @@ async function startServer() {
   // Route de streaming des fichiers originaux importés (factures/devis/BC
   // importés, justificatifs de factures d'achat) depuis R2 (auth session)
   app.use("/documents", importedDocumentFileRoutes);
+
+  // Route de streaming des annexes PDF des devis / factures / BC (R2 privé,
+  // auth session ou secret interne pour la génération du PDF)
+  app.use("/document-annexes", documentAnnexRoutes);
 
   // Routes admin cleanup (nécessite authentification)
   app.use("/api/admin", validateJWT, cleanupAdminRoutes);

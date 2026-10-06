@@ -1,4 +1,8 @@
 import logger from "../utils/logger.js";
+import {
+  getOrganizationDefaultAnnex,
+  isAnnexChange,
+} from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
@@ -995,7 +999,12 @@ const purchaseOrderResolvers = {
           }
 
           const statusBeforeUpdate = po.status;
+          // Copie PDF des emails (cachedPdf) : sans la nouvelle annexe
+          const annexChanged = isAnnexChange(po.annex, updateData);
           Object.assign(po, updateData);
+          if (annexChanged) {
+            po.cachedPdf = undefined;
+          }
 
           // Bon de commande déjà finalisé dont le contenu change : l'archive
           // PDF R2 (aperçu sidebar, bouton PDF) date de la finalisation et ne
@@ -1312,6 +1321,7 @@ const purchaseOrderResolvers = {
             "",
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
+          annex: getOrganizationDefaultAnnex(organization, "purchaseOrder"),
           discount: quote.discount,
           discountType: quote.discountType,
           customFields: quoteObj.customFields,
@@ -1464,6 +1474,7 @@ const purchaseOrderResolvers = {
             "",
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
+          annex: getOrganizationDefaultAnnex(organization, "invoice"),
           purchaseOrderNumber: `${po.prefix}-${po.number}`,
           // Tracer le devis d'origine pour que la garde anti-doublon de
           // convertQuoteToInvoice voie cette facture (chemin devis→BC→facture)

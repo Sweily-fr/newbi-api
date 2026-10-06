@@ -11,6 +11,7 @@ import companyInfoSchema from "./schemas/companyInfo.js";
 import customFieldSchema from "./schemas/customField.js";
 import shippingSchema from "./schemas/shipping.js";
 import { QUOTE_STATUS, DISCOUNT_TYPE } from "./constants/enums.js";
+import { documentAnnexSchema } from "../utils/documentAnnex.js";
 
 /**
  * Schéma principal de devis
@@ -231,6 +232,11 @@ const quoteSchema = new mongoose.Schema(
         validator: isPositiveAmount,
         message: "Le montant de la remise doit être un nombre positif",
       },
+    },
+    // Annexe PDF ajoutée à la fin du PDF du document (ex : CGV)
+    annex: {
+      type: documentAnnexSchema,
+      default: null,
     },
     // Cache PDF pour les automatisations (copie R2 serveur-à-serveur)
     cachedPdf: {

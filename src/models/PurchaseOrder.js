@@ -11,6 +11,7 @@ import companyInfoSchema from "./schemas/companyInfo.js";
 import customFieldSchema from "./schemas/customField.js";
 import shippingSchema from "./schemas/shipping.js";
 import { PURCHASE_ORDER_STATUS, DISCOUNT_TYPE } from "./constants/enums.js";
+import { documentAnnexSchema } from "../utils/documentAnnex.js";
 
 /**
  * Schéma principal de bon de commande
@@ -232,6 +233,11 @@ const purchaseOrderSchema = new mongoose.Schema(
         ref: "Invoice",
       },
     ],
+    // Annexe PDF ajoutée à la fin du PDF du document (ex : CGV)
+    annex: {
+      type: documentAnnexSchema,
+      default: null,
+    },
     // Cache PDF pour les automatisations (copie R2 serveur-à-serveur)
     cachedPdf: {
       key: { type: String },

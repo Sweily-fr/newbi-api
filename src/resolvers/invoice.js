@@ -1,4 +1,8 @@
 import Invoice from "../models/Invoice.js";
+import {
+  getOrganizationDefaultAnnex,
+  isAnnexChange,
+} from "../utils/documentAnnex.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
@@ -2563,6 +2567,14 @@ const invoiceResolvers = {
             }
           });
 
+          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+          // envois et automatisations : elle ne contient pas la nouvelle annexe.
+          if (isAnnexChange(invoiceData.annex, updatedInput)) {
+            updateData["cachedPdf.key"] = null;
+            updateData["cachedPdf.url"] = null;
+            updateData["cachedPdf.generatedAt"] = null;
+          }
+
           try {
             // Désactiver temporairement les validations pour les coordonnées bancaires
             // car elles sont gérées manuellement dans le code ci-dessus
@@ -3459,6 +3471,7 @@ const invoiceResolvers = {
             "",
           termsAndConditionsLinkTitle: "",
           termsAndConditionsLink: "",
+          annex: getOrganizationDefaultAnnex(org, "invoice"),
 
           // Apparence par défaut de facture
           appearance: {

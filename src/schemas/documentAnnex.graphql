@@ -1,0 +1,41 @@
+"""
+Annexe PDF (ex : conditions générales de vente) ajoutée à la fin du PDF d'un
+devis, d'une facture ou d'un bon de commande.
+"""
+type DocumentAnnex {
+  key: String!
+  fileName: String
+  size: Int
+  pageCount: Int
+}
+
+input DocumentAnnexInput {
+  key: String!
+  fileName: String
+  size: Int
+  pageCount: Int
+}
+
+enum AnnexDocumentType {
+  INVOICE
+  QUOTE
+  PURCHASE_ORDER
+}
+
+type DocumentAnnexUploadResult {
+  success: Boolean!
+  message: String
+  annex: DocumentAnnex
+}
+
+extend type Mutation {
+  """
+  Enregistre une annexe PDF (2 Mo et 20 pages maximum) et renvoie sa
+  référence, à enregistrer ensuite avec le document ou comme annexe par défaut.
+  """
+  uploadDocumentAnnex(
+    workspaceId: ID!
+    documentType: AnnexDocumentType!
+    file: Upload!
+  ): DocumentAnnexUploadResult!
+}

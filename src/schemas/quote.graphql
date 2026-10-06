@@ -20,6 +20,7 @@ type Quote {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnex
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
@@ -89,6 +90,7 @@ input CreateQuoteInput {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnexInput
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
@@ -118,6 +120,7 @@ input UpdateQuoteInput {
   termsAndConditions: String
   termsAndConditionsLinkTitle: String
   termsAndConditionsLink: String
+  annex: DocumentAnnexInput
   discount: Float
   discountType: DiscountType
   retenueGarantie: Float
