@@ -75,6 +75,11 @@ const clientCustomFieldSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Reprendre ce champ sur les documents (devis, factures, bons de commande...)
+  showOnDocuments: {
+    type: Boolean,
+    default: false
+  },
   // Champ actif ou non (permet de désactiver sans supprimer)
   isActive: {
     type: Boolean,

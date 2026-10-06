@@ -1,6 +1,10 @@
 import logger from "../utils/logger.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
+import {
+  buildClientDocumentFields,
+  buildDocumentFieldsForClientId,
+} from "../utils/clientDocumentFields.js";
 import mongoose from "mongoose";
 import DeliveryNote from "../models/DeliveryNote.js";
 import {
@@ -85,7 +89,7 @@ const renameConflictingDrafts = async (
 /**
  * Snapshot client (même forme que les autres documents).
  */
-const snapshotClient = (freshClient) => ({
+const snapshotClient = async (freshClient, context) => ({
   id: freshClient._id.toString(),
   type: freshClient.type,
   name: freshClient.name,
@@ -98,6 +102,7 @@ const snapshotClient = (freshClient) => ({
   isInternational: freshClient.isInternational,
   siret: freshClient.siret,
   vatNumber: freshClient.vatNumber,
+  documentFields: await buildClientDocumentFields(freshClient, context),
 });
 
 /**
@@ -294,7 +299,7 @@ const deliveryNoteResolvers = {
             dn.client.id,
             dn.workspaceId,
           );
-          if (freshClient) return snapshotClient(freshClient);
+          if (freshClient) return await snapshotClient(freshClient, context);
         } catch (error) {
           logger.error(
             "[DeliveryNote.client] Erreur résolution dynamique:",
@@ -697,6 +702,14 @@ const deliveryNoteResolvers = {
                       country: clientData.shippingAddress?.country || "",
                     }
                   : undefined,
+                // Champs personnalisés figés dès la création d'un document non brouillon
+                documentFields: isDraft
+                  ? undefined
+                  : await buildDocumentFieldsForClientId(
+                      clientData.id,
+                      workspaceId,
+                      context,
+                    ),
               },
               deliveryAddress:
                 cleanDeliveryAddress(input.deliveryAddress) ||
@@ -902,7 +915,8 @@ const deliveryNoteResolvers = {
                 _id: dn.client.id,
                 workspaceId: dn.workspaceId,
               });
-              if (freshClient) updateData.client = snapshotClient(freshClient);
+              if (freshClient)
+                updateData.client = await snapshotClient(freshClient, context);
             } catch (error) {
               logger.error(
                 "[updateDeliveryNote] Erreur rafraîchissement client:",
@@ -1016,7 +1030,8 @@ const deliveryNoteResolvers = {
                     _id: clientId,
                     workspaceId: dn.workspaceId,
                   });
-                  if (freshClient) dn.client = snapshotClient(freshClient);
+                  if (freshClient)
+                    dn.client = await snapshotClient(freshClient, context);
                 } catch (error) {
                   logger.error(
                     "[changeDeliveryNoteStatus] Erreur snapshot client:",

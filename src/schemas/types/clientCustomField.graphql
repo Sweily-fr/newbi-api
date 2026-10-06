@@ -35,6 +35,8 @@ type ClientCustomField {
   placeholder: String
   isRequired: Boolean!
   order: Int!
+  # Reprendre ce champ sur les documents (devis, factures, bons de commande...)
+  showOnDocuments: Boolean!
   isActive: Boolean!
   workspaceId: ID!
   createdBy: ID!
@@ -63,6 +65,7 @@ input ClientCustomFieldInput {
   placeholder: String
   isRequired: Boolean
   order: Int
+  showOnDocuments: Boolean
   isActive: Boolean
 }
 
@@ -72,6 +75,10 @@ extend type Query {
   
   # Récupérer un champ personnalisé par ID
   clientCustomField(workspaceId: ID!, id: ID!): ClientCustomField
+
+  # Champs personnalisés d'un client à afficher sur les documents (valeurs mises
+  # en forme). Sert à l'aperçu en direct dans les éditeurs de documents.
+  clientDocumentFields(workspaceId: ID!, clientId: ID!): [ClientDocumentField!]!
 }
 
 extend type Mutation {

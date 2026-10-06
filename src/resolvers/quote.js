@@ -1,6 +1,10 @@
 import logger from "../utils/logger.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
+import {
+  buildClientDocumentFields,
+  buildDocumentFieldsForClientId,
+} from "../utils/clientDocumentFields.js";
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
 import {
@@ -187,6 +191,7 @@ const quoteResolvers = {
               siret: freshClient.siret,
               vatNumber: freshClient.vatNumber,
               isInternational: freshClient.isInternational,
+              documentFields: await buildClientDocumentFields(freshClient, context),
               firstName: freshClient.firstName,
               lastName: freshClient.lastName,
               hasDifferentShippingAddress:
@@ -944,6 +949,14 @@ const quoteResolvers = {
                       country: input.client.shippingAddress?.country || "",
                     }
                   : undefined,
+                // Champs personnalisés figés dès la création d'un document non brouillon
+                documentFields: isDraft
+                  ? undefined
+                  : await buildDocumentFieldsForClientId(
+                      input.client.id,
+                      workspaceId,
+                      context,
+                    ),
               },
               appearance: input.appearance || {
                 textColor: "#000000",
@@ -1219,6 +1232,7 @@ const quoteResolvers = {
                   freshClient.hasDifferentShippingAddress,
                 shippingAddress: freshClient.shippingAddress,
                 isInternational: freshClient.isInternational,
+                documentFields: await buildClientDocumentFields(freshClient, context),
                 siret: freshClient.siret,
                 vatNumber: freshClient.vatNumber,
               };
@@ -1260,6 +1274,7 @@ const quoteResolvers = {
                     freshClient.hasDifferentShippingAddress,
                   shippingAddress: freshClient.shippingAddress,
                   isInternational: freshClient.isInternational,
+                  documentFields: await buildClientDocumentFields(freshClient, context),
                   siret: freshClient.siret,
                   vatNumber: freshClient.vatNumber,
                 };
@@ -1531,6 +1546,7 @@ const quoteResolvers = {
                     freshClient.hasDifferentShippingAddress,
                   shippingAddress: freshClient.shippingAddress,
                   isInternational: freshClient.isInternational,
+                  documentFields: await buildClientDocumentFields(freshClient, context),
                   siret: freshClient.siret,
                   vatNumber: freshClient.vatNumber,
                 };
