@@ -1084,6 +1084,7 @@ const bankingResolvers = {
             amountHT: v.amountHT ?? null,
             amountTVA: v.amountTVA ?? null,
             vatRate: v.vatRate ?? null,
+            vatBreakdown: v.vatBreakdown || [],
             amountTTC: v.amountTTC ?? null,
             currency: v.currency || null,
             category: v.category || null,

@@ -1,5 +1,6 @@
 import logger from "../utils/logger.js";
 import EInvoicingSettingsService from "./eInvoicingSettingsService.js";
+import { normalizeVatBreakdown } from "../utils/purchaseInvoiceVat.js";
 
 /**
  * Service pour interagir avec l'API SuperPDP
@@ -1373,6 +1374,8 @@ class SuperPdpService {
       );
       mainVatRate = parseFloat(largest.vat_category_rate) || 20;
     }
+    // Détail par taux (BG-23) gardé dès que la facture en mêle plusieurs
+    const vatLines = normalizeVatBreakdown(vatBreakDown);
 
     // Dates
     const parseDate = (dateStr) => {
@@ -1392,6 +1395,7 @@ class SuperPdpService {
       amountHT,
       amountTVA: vatAmount,
       vatRate: mainVatRate,
+      vatBreakdown: vatLines.length >= 2 ? vatLines : [],
       amountTTC,
       currency: invoice.currency_code || "EUR",
       status: "TO_PROCESS",

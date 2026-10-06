@@ -309,6 +309,128 @@ describe("PurchaseInvoice Resolver - Mutation.updatePurchaseInvoice (OCR à comp
   });
 });
 
+describe("PurchaseInvoice Resolver - TVA à plusieurs taux", () => {
+  const create = purchaseInvoiceResolvers.Mutation.createPurchaseInvoice;
+  const update = purchaseInvoiceResolvers.Mutation.updatePurchaseInvoice;
+  // Note de restaurant : plats à 10 %, boissons alcoolisées à 20 %
+  const RESTAURANT = [
+    { rate: 10, baseHT: 80, amountTVA: 8 },
+    { rate: 20, baseHT: 35.36, amountTVA: 7.07 },
+  ];
+  const insertMultiRate = () =>
+    insertPurchaseInvoice({
+      amountHT: 115.36,
+      amountTVA: 15.07,
+      vatRate: 10,
+      amountTTC: 130.43,
+      vatBreakdown: [
+        { rate: 20, baseHT: 35.36, amountTVA: 7.07 },
+        { rate: 10, baseHT: 80, amountTVA: 8 },
+      ],
+    });
+
+  it("création : le détail par taux est gardé et résume HT / TVA / taux", async () => {
+    const invoice = await create(
+      null,
+      {
+        input: {
+          workspaceId: organizationId.toString(),
+          supplierName: "Brasserie du Port",
+          issueDate: "2026-10-01",
+          amountHT: 0,
+          amountTVA: 0,
+          vatRate: 20,
+          amountTTC: 130.43,
+          vatBreakdown: RESTAURANT,
+          forceCreate: true,
+        },
+      },
+      ctx(),
+    );
+
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved.vatBreakdown).toEqual([
+      { rate: 20, baseHT: 35.36, amountTVA: 7.07 },
+      { rate: 10, baseHT: 80, amountTVA: 8 },
+    ]);
+    expect(saved.amountHT).toBe(115.36);
+    expect(saved.amountTVA).toBe(15.07);
+    expect(saved.vatRate).toBe(10);
+  });
+
+  it("mise à jour depuis l'app mobile (montants renvoyés inchangés) : détail conservé", async () => {
+    const { insertedId } = await insertMultiRate();
+
+    await update(
+      null,
+      {
+        id: insertedId.toString(),
+        input: {
+          amountHT: 115.36,
+          amountTVA: 15.07,
+          vatRate: 10,
+          amountTTC: 130.43,
+          notes: "relu sur mobile",
+        },
+      },
+      ctx(),
+    );
+
+    const saved = await PurchaseInvoice.findById(insertedId).lean();
+    expect(saved.vatBreakdown).toHaveLength(2);
+    expect(saved.notes).toBe("relu sur mobile");
+  });
+
+  it("TVA modifiée à un seul taux sans détail : le détail périmé est effacé", async () => {
+    const { insertedId } = await insertMultiRate();
+
+    await update(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { amountHT: 108.69, amountTVA: 21.74, vatRate: 20 },
+      },
+      ctx(),
+    );
+
+    const saved = await PurchaseInvoice.findById(insertedId).lean();
+    expect(saved.vatBreakdown).toEqual([]);
+    expect(saved.vatRate).toBe(20);
+    expect(saved.amountTVA).toBe(21.74);
+  });
+
+  it("mise à jour avec un nouveau détail : HT / TVA / taux recalculés, TTC intact", async () => {
+    const { insertedId } = await insertMultiRate();
+
+    const result = await update(
+      null,
+      {
+        id: insertedId.toString(),
+        input: {
+          vatBreakdown: [
+            { rate: 20, baseHT: 35.36, amountTVA: 7.07 },
+            { rate: 10, baseHT: 70, amountTVA: 7 },
+            { rate: 5.5, baseHT: 10, amountTVA: 0.55 },
+          ],
+        },
+      },
+      ctx(),
+    );
+
+    expect(result.vatBreakdown).toHaveLength(3);
+    expect(result.amountHT).toBe(115.36);
+    expect(result.amountTVA).toBe(14.62);
+    expect(result.vatRate).toBe(10);
+    expect(result.amountTTC).toBe(130.43);
+  });
+
+  it("facture antérieure lue en .lean() : vatBreakdown vaut une liste vide", () => {
+    expect(
+      purchaseInvoiceResolvers.PurchaseInvoice.vatBreakdown({ vatRate: 20 }),
+    ).toEqual([]);
+  });
+});
+
 describe("PurchaseInvoice Resolver - Mutation.markPurchaseInvoiceAsPaid", () => {
   const resolver = purchaseInvoiceResolvers.Mutation.markPurchaseInvoiceAsPaid;
 

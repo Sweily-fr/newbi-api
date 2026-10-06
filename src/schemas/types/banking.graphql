@@ -215,6 +215,8 @@ type ReceiptInvoiceProposal {
   amountHT: Float
   amountTVA: Float
   vatRate: Float
+  # Détail par taux quand le justificatif en mêle plusieurs (vide sinon)
+  vatBreakdown: [PurchaseInvoiceVatLine!]
   amountTTC: Float
   currency: String
   category: String
@@ -764,6 +766,8 @@ input ReceiptInvoiceValuesInput {
   amountHT: Float
   amountTVA: Float
   vatRate: Float
+  # Détail par taux corrigé ; [] = un seul taux (champs ci-dessus)
+  vatBreakdown: [PurchaseInvoiceVatLineInput!]
   amountTTC: Float
   currency: String
   category: String
