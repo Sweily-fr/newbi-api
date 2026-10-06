@@ -417,6 +417,52 @@ describe("DeliveryNote Resolver — génération croisée", () => {
     expect(invoice.finalTotalHT).toBeCloseTo(2.5, 2);
   });
 
+  it("garde l'image d'une ligne masquée et reprend le réglage du catalogue", async () => {
+    const imageUrl = `https://pub-test.r2.dev/${organizationId}/products/a.webp`;
+    const product = await Product.create({
+      name: "Lampe",
+      unitPrice: 30,
+      vatRate: 20,
+      unit: "pièce",
+      imageUrl,
+      showImageOnDocuments: false,
+      workspaceId: organizationId,
+      createdBy: userId,
+    });
+
+    const dn = await Mutation.createDeliveryNote(
+      null,
+      {
+        input: buildDNInput({
+          status: "PENDING",
+          items: [
+            { description: "Lampe masquée", quantity: 1, imageUrl, showImage: false },
+            { description: "Lampe affichée", quantity: 1, imageUrl, showImage: true },
+            {
+              description: "Lampe du catalogue",
+              quantity: 1,
+              productId: product._id.toString(),
+            },
+          ],
+        }),
+      },
+      ctx(),
+    );
+    expect(dn.items[0].showImage).toBe(false);
+
+    const invoice = await Mutation.createInvoiceFromDeliveryNote(
+      null,
+      { deliveryNoteId: dn._id.toString() },
+      ctx(),
+    );
+    const [hidden, shown, fromCatalog] = invoice.items;
+    expect(hidden.imageUrl).toBe(imageUrl);
+    expect(hidden.showImage).toBe(false);
+    expect(shown.showImage).toBe(true);
+    expect(fromCatalog.imageUrl).toBe(imageUrl);
+    expect(fromCatalog.showImage).toBe(false);
+  });
+
   it("crée un BL depuis une facture et l'expose via Invoice.linkedDeliveryNotes", async () => {
     const invoiceId = new mongoose.Types.ObjectId();
     await Invoice.collection.insertOne({
