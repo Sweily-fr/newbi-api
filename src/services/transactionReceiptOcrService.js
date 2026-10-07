@@ -15,6 +15,14 @@ import {
 } from "../utils/reconciliationLinkOrigin.js";
 import crypto from "crypto";
 import exchangeRateService from "./exchangeRateService.js";
+import {
+  vatBreakdownFromOcr,
+  scaleVatBreakdown,
+  summarizeVatBreakdown,
+  mergeVatBreakdowns,
+  scalarVatEditBreaksBreakdown,
+  applyVatBreakdown,
+} from "../utils/purchaseInvoiceVat.js";
 
 /**
  * Service de création automatique de factures d'achat depuis les justificatifs
@@ -144,6 +152,9 @@ const round2 = (n) => Math.round(n * 100) / 100;
  * banque, qui fait foi. La facture est alors enregistrée dans la devise du
  * compte, HT et TVA sont ramenés au prorata, et le montant d'origine est
  * conservé dans `conversion` (repris dans ocrMetadata et les notes).
+ *
+ * Justificatif à plusieurs taux de TVA : le détail lu (`vatBreakdown`) est
+ * gardé, ramené au même prorata, et HT / TVA / taux en sont le résumé.
  */
 function resolveReceiptAmounts({ transaction, financial }) {
   const td = financial?.transaction_data || {};
@@ -177,11 +188,22 @@ function resolveReceiptAmounts({ transaction, financial }) {
     ocrTTC > 0 &&
     txAmount > 0;
 
+  const ocrBreakdown = vatBreakdownFromOcr(financial, {
+    expectedTVA: ocrTVA || null,
+  });
+
   if (foreignCurrency) {
     const ratio = txAmount / ocrTTC;
-    const amountHT = ocrHT > 0 ? round2(ocrHT * ratio) : 0;
-    const amountTVA =
-      ocrTVA > 0
+    const vatBreakdown = scaleVatBreakdown(ocrBreakdown, ratio);
+    const summary = summarizeVatBreakdown(vatBreakdown);
+    const amountHT = summary
+      ? summary.amountHT
+      : ocrHT > 0
+        ? round2(ocrHT * ratio)
+        : 0;
+    const amountTVA = summary
+      ? summary.amountTVA
+      : ocrTVA > 0
         ? amountHT > 0
           ? round2(Math.max(txAmount - amountHT, 0))
           : round2(ocrTVA * ratio)
@@ -190,17 +212,20 @@ function resolveReceiptAmounts({ transaction, financial }) {
       amountTTC: txAmount,
       amountHT,
       amountTVA,
-      vatRate,
+      vatRate: summary ? summary.vatRate : vatRate,
+      vatBreakdown,
       currency: txCurrency,
       conversion: { originalAmountTTC: ocrTTC, originalCurrency: ocrCurrency },
     };
   }
 
+  const summary = summarizeVatBreakdown(ocrBreakdown);
   return {
     amountTTC: ocrTTC || txAmount || null,
-    amountHT: ocrHT,
-    amountTVA: ocrTVA,
-    vatRate,
+    amountHT: summary ? summary.amountHT : ocrHT,
+    amountTVA: summary ? summary.amountTVA : ocrTVA,
+    vatRate: summary ? summary.vatRate : vatRate,
+    vatBreakdown: ocrBreakdown,
     currency: ocrCurrency || txCurrency,
     conversion: null,
   };
@@ -441,8 +466,15 @@ function buildReceiptInvoiceProposal({
     transaction.description ||
     "Fournisseur inconnu";
 
-  const { amountTTC, amountHT, amountTVA, vatRate, currency, conversion } =
-    resolveReceiptAmounts({ transaction, financial });
+  const {
+    amountTTC,
+    amountHT,
+    amountTVA,
+    vatRate,
+    vatBreakdown,
+    currency,
+    conversion,
+  } = resolveReceiptAmounts({ transaction, financial });
 
   if (!amountTTC) {
     throw new Error(
@@ -471,6 +503,7 @@ function buildReceiptInvoiceProposal({
       amountHT,
       amountTVA,
       vatRate,
+      vatBreakdown,
       amountTTC,
       currency,
       category,
@@ -580,6 +613,11 @@ async function createPurchaseInvoiceFromProposal({
     ],
     ocrMetadata: meta.ocrMetadata,
   });
+  // Plusieurs taux de TVA : le détail est gardé, HT / TVA / taux en sont le
+  // résumé (propositions antérieures au détail par taux : rien à faire).
+  if (Array.isArray(values.vatBreakdown)) {
+    applyVatBreakdown(invoice, values.vatBreakdown);
+  }
 
   try {
     // Fiche fournisseur : identifiants lus, récurrence bancaire, puis nom
@@ -1226,6 +1264,13 @@ async function confirmReceiptInvoiceProposal({
       Object.entries(values || {}).filter(([, v]) => v !== undefined),
     ),
   };
+  // TVA corrigée à un seul taux sans détail : le détail lu ne correspond plus
+  if (
+    (values?.vatBreakdown === undefined || values?.vatBreakdown === null) &&
+    scalarVatEditBreaksBreakdown(proposal.values || {}, values || {})
+  ) {
+    confirmed.vatBreakdown = [];
+  }
   // Catégorie changée à la main : sous-catégorie fine → catégorie large
   // dérivée, comme à l'enregistrement d'une facture d'achat.
   if (values?.subcategory !== undefined || values?.category !== undefined) {
@@ -1307,12 +1352,19 @@ async function analyzePurchaseInvoiceFile({
     financial.document_analysis.confidence <= 1
       ? financial.document_analysis.confidence
       : null;
-  const { amountHT, amountTVA, amountTTC, vatRate } = reconcileAmounts({
+  const read = reconcileAmounts({
     amountHT: toPositiveNumber(td.amount_ht),
     amountTVA: toPositiveNumber(td.tax_amount),
     amountTTC: toPositiveNumber(td.amount),
     vatRate: toNonNegativeNumber(td.tax_rate),
   });
+  // Plusieurs taux de TVA lus : HT / TVA / taux sont le résumé du détail
+  const vatBreakdown = vatBreakdownFromOcr(financial, {
+    expectedTVA: toPositiveNumber(td.tax_amount),
+  });
+  const { amountHT, amountTVA, vatRate } =
+    summarizeVatBreakdown(vatBreakdown) || read;
+  const { amountTTC } = read;
   const ocrCategory = td.category ? String(td.category).toUpperCase() : null;
   const ef = financial?.extracted_fields || {};
   return {
@@ -1326,6 +1378,7 @@ async function analyzePurchaseInvoiceFile({
     amountHT,
     amountTVA,
     vatRate,
+    vatBreakdown,
     amountTTC,
     currency: normalizeCurrency(td.currency),
     category:
@@ -1337,6 +1390,27 @@ async function analyzePurchaseInvoiceFile({
     provider: provider || null,
     extractionQuality: extractionQuality || "full",
   };
+}
+
+/**
+ * TVA d'un document lu, par taux : son détail s'il en a un, sinon une ligne
+ * unique à son taux. null quand le taux ou les montants manquent (le détail
+ * d'un ensemble de documents n'est alors pas reconstituable).
+ */
+function documentVatLines(p) {
+  if (p.vatBreakdown?.length) return p.vatBreakdown;
+  if (
+    p.vatRate === null ||
+    p.vatRate === undefined ||
+    p.amountTVA === null ||
+    p.amountTVA === undefined
+  ) {
+    return null;
+  }
+  return [
+    // HT inconnu : déduit de la TVA et du taux par normalizeVatBreakdown
+    { rate: p.vatRate, baseHT: p.amountHT, amountTVA: p.amountTVA },
+  ];
 }
 
 const normKey = (v) =>
@@ -1419,6 +1493,7 @@ async function analyzePurchaseInvoiceFiles({
         amountHT: p.amountHT,
         amountTVA: p.amountTVA,
         amountTTC: p.amountTTC,
+        vatLines: documentVatLines(p),
         rate: null,
         rateDate: null,
       };
@@ -1435,6 +1510,7 @@ async function analyzePurchaseInvoiceFiles({
         amountHT: null,
         amountTVA: null,
         amountTTC: null,
+        vatLines: null,
         rate: null,
         rateDate: null,
       };
@@ -1442,10 +1518,12 @@ async function analyzePurchaseInvoiceFiles({
     }
     const conv = (v) =>
       v === null || v === undefined ? null : round2(v * fx.rate);
+    const lines = documentVatLines(p);
     r.converted = {
       amountHT: conv(p.amountHT),
       amountTVA: conv(p.amountTVA),
       amountTTC: conv(p.amountTTC),
+      vatLines: lines ? scaleVatBreakdown(lines, fx.rate) : null,
       rate: fx.rate,
       rateDate: fx.date,
     };
@@ -1530,6 +1608,18 @@ async function analyzePurchaseInvoiceFiles({
         : rates.length > 1 && rates.every((v) => v === rates[0])
           ? rates[0]
           : summed.vatRate;
+    // Détail par taux des documents additionnés (même taux fusionnés) :
+    // seulement si chaque document dit à quel taux est sa TVA, et s'il en
+    // ressort au moins deux taux. HT / TVA / taux en sont alors le résumé.
+    let vatBreakdown =
+      usable.length > 0 && usable.every((r) => r.converted.vatLines)
+        ? mergeVatBreakdowns(usable.map((r) => r.converted.vatLines))
+        : [];
+    if (vatBreakdown.length < 2) vatBreakdown = [];
+    const breakdownSummary = summarizeVatBreakdown(vatBreakdown);
+    if (breakdownSummary) {
+      ({ amountHT, amountTVA, vatRate } = breakdownSummary);
+    }
     const dates = distinct
       .map((r) => r.proposal.invoiceDate)
       .filter((d) => d instanceof Date && !isNaN(d.getTime()));
@@ -1570,10 +1660,15 @@ async function analyzePurchaseInvoiceFiles({
       const plausible = !ref || Math.abs(txAmount - ref) / ref <= 0.15;
       if (plausible) {
         const ratio = ref ? txAmount / ref : null;
-        amountHT =
-          ratio && amountHT !== null ? round2(amountHT * ratio) : amountHT;
-        amountTVA =
-          amountHT !== null ? round2(Math.max(txAmount - amountHT, 0)) : null;
+        if (ratio && vatBreakdown.length) {
+          vatBreakdown = scaleVatBreakdown(vatBreakdown, ratio);
+          ({ amountHT, amountTVA } = summarizeVatBreakdown(vatBreakdown));
+        } else {
+          amountHT =
+            ratio && amountHT !== null ? round2(amountHT * ratio) : amountHT;
+          amountTVA =
+            amountHT !== null ? round2(Math.max(txAmount - amountHT, 0)) : null;
+        }
         amountTTC = txAmount;
         conversionMethod = "bank";
         conversionNote = `Débit bancaire retenu : ${txAmount.toFixed(2)} ${targetCurrency}, montants HT/TVA ramenés au prorata.`;
@@ -1616,6 +1711,7 @@ async function analyzePurchaseInvoiceFiles({
       amountHT,
       amountTVA,
       vatRate,
+      vatBreakdown,
       amountTTC,
       currency: targetCurrency,
       category: base.category,

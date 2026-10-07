@@ -141,6 +141,89 @@ describe("confirmReceiptInvoiceProposal", () => {
     );
   });
 
+  describe("justificatif à plusieurs taux de TVA", () => {
+    // Note de restaurant : plats à 10 %, boissons alcoolisées à 20 %
+    const multiRateValues = () =>
+      makeProposalValues({
+        supplierName: "Brasserie du Port",
+        amountHT: 115.36,
+        amountTVA: 15.07,
+        vatRate: 10,
+        amountTTC: 130.43,
+        vatBreakdown: [
+          { rate: 20, baseHT: 35.36, amountTVA: 7.07 },
+          { rate: 10, baseHT: 80, amountTVA: 8 },
+        ],
+      });
+
+    it("CREATE garde le détail par taux proposé", async () => {
+      const tx = await makeTransactionWithProposal({
+        values: multiRateValues(),
+      });
+      const { invoice } = await confirmReceiptInvoiceProposal({
+        transactionId: tx._id,
+        workspaceId: workspaceId.toString(),
+        userId,
+        fileId: tx.receiptFiles[0]._id,
+        action: "CREATE",
+      });
+
+      const saved = await PurchaseInvoice.findById(invoice._id).lean();
+      expect(saved.vatBreakdown).toEqual([
+        { rate: 20, baseHT: 35.36, amountTVA: 7.07 },
+        { rate: 10, baseHT: 80, amountTVA: 8 },
+      ]);
+      expect(saved.amountTVA).toBe(15.07);
+      expect(saved.amountHT).toBe(115.36);
+      expect(saved.vatRate).toBe(10);
+    });
+
+    it("CREATE avec un détail corrigé : HT / TVA / taux recalculés depuis les lignes", async () => {
+      const tx = await makeTransactionWithProposal({
+        values: multiRateValues(),
+      });
+      const { invoice } = await confirmReceiptInvoiceProposal({
+        transactionId: tx._id,
+        workspaceId: workspaceId.toString(),
+        userId,
+        fileId: tx.receiptFiles[0]._id,
+        action: "CREATE",
+        values: {
+          vatBreakdown: [
+            { rate: 20, baseHT: 35.36, amountTVA: 7.07 },
+            { rate: 10, baseHT: 70, amountTVA: 7 },
+            { rate: 5.5, baseHT: 10, amountTVA: 0.55 },
+          ],
+        },
+      });
+
+      const saved = await PurchaseInvoice.findById(invoice._id).lean();
+      expect(saved.vatBreakdown).toHaveLength(3);
+      expect(saved.amountTVA).toBe(14.62);
+      expect(saved.amountHT).toBe(115.36);
+      expect(saved.vatRate).toBe(10);
+    });
+
+    it("CREATE avec une TVA ramenée à un seul taux : le détail lu est abandonné", async () => {
+      const tx = await makeTransactionWithProposal({
+        values: multiRateValues(),
+      });
+      const { invoice } = await confirmReceiptInvoiceProposal({
+        transactionId: tx._id,
+        workspaceId: workspaceId.toString(),
+        userId,
+        fileId: tx.receiptFiles[0]._id,
+        action: "CREATE",
+        values: { vatRate: 20, amountTVA: 21.74, amountHT: 108.69 },
+      });
+
+      const saved = await PurchaseInvoice.findById(invoice._id).lean();
+      expect(saved.vatBreakdown).toEqual([]);
+      expect(saved.vatRate).toBe(20);
+      expect(saved.amountTVA).toBe(21.74);
+    });
+  });
+
   it("CREATE crée bien la facture même quand une existante lui ressemble", async () => {
     // Le cas qui bloquait : numéro identique lu à tort sur deux factures
     // différentes, la seconde n'était jamais créée.

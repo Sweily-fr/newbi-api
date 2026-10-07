@@ -67,6 +67,21 @@ type PurchaseInvoiceFile {
   updatedAt: String!
 }
 
+# Ligne de TVA d'une facture d'achat, une par taux. Renseignée quand la
+# facture mêle plusieurs taux : amountHT / amountTVA / vatRate en sont alors
+# le résumé (sommes, taux de la plus grosse base).
+type PurchaseInvoiceVatLine {
+  rate: Float!
+  baseHT: Float!
+  amountTVA: Float!
+}
+
+input PurchaseInvoiceVatLineInput {
+  rate: Float!
+  baseHT: Float!
+  amountTVA: Float!
+}
+
 # Métadonnées OCR spécifiques aux factures d'achat
 type PurchaseInvoiceOCRMetadata {
   supplierName: String
@@ -102,6 +117,8 @@ type PurchaseInvoiceOcrProposal {
   amountHT: Float
   amountTVA: Float
   vatRate: Float
+  # Détail par taux lu sur le document (vide s'il n'y a qu'un taux)
+  vatBreakdown: [PurchaseInvoiceVatLine!]
   amountTTC: Float
   currency: String
   category: PurchaseInvoiceCategory
@@ -179,6 +196,8 @@ type PurchaseInvoice {
   amountHT: Float!
   amountTVA: Float!
   vatRate: Float!
+  # Détail par taux quand la facture en mêle plusieurs (vide sinon)
+  vatBreakdown: [PurchaseInvoiceVatLine!]
   amountTTC: Float!
   currency: String!
   status: PurchaseInvoiceStatus!
@@ -376,6 +395,9 @@ input CreatePurchaseInvoiceInput {
   amountHT: Float
   amountTVA: Float
   vatRate: Float
+  # Détail par taux : à partir de deux taux, amountHT / amountTVA / vatRate
+  # sont recalculés depuis ces lignes ; une seule ligne les remplace.
+  vatBreakdown: [PurchaseInvoiceVatLineInput!]
   amountTTC: Float!
   currency: String = "EUR"
   status: PurchaseInvoiceStatus = TO_PROCESS
@@ -403,6 +425,9 @@ input UpdatePurchaseInvoiceInput {
   amountHT: Float
   amountTVA: Float
   vatRate: Float
+  # Détail par taux (cf. CreatePurchaseInvoiceInput) ; [] l'efface. Absent :
+  # gardé tant que HT / TVA / taux envoyés restent ceux qu'il résume.
+  vatBreakdown: [PurchaseInvoiceVatLineInput!]
   amountTTC: Float
   currency: String
   status: PurchaseInvoiceStatus
