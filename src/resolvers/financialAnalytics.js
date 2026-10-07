@@ -14,6 +14,12 @@ import { Board, Task } from "../models/kanban.js";
 // via notConvertedImportedMatch.
 const IMPORTED_REVENUE_STATUSES = ["PENDING_REVIEW", "VALIDATED", "COMPLETED"];
 
+// client.id d'une facture importée = _id d'un client Newbi. Les imports Qonto
+// d'avant le 07/09/2026 y ont stocké l'id Qonto (UUID) : un tel id est traité
+// comme « non lié », sinon Client.find plante (CastError) et toute la requête
+// financialAnalytics échoue (CA à 0 sur Vue d'ensemble, Analytiques vide).
+const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
+
 /**
  * Aggregate time tracked in Kanban tasks by client.
  * Returns a Map<clientIdString, { totalTimeSeconds, totalBillableAmount }>
@@ -2607,7 +2613,11 @@ const financialAnalyticsResolvers = {
         // Client.
         const linkedOnlyIds = new Set();
         for (const row of issuedImportedByClientMonthly || []) {
-          const linkedId = row._id.clientId ? String(row._id.clientId) : null;
+          const rawLinkedId = row._id.clientId
+            ? String(row._id.clientId)
+            : null;
+          const linkedId =
+            rawLinkedId && OBJECT_ID_RE.test(rawLinkedId) ? rawLinkedId : null;
           const name = normName(row._id.clientName);
           let entry = null;
           if (linkedId) {

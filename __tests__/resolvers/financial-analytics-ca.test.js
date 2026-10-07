@@ -179,6 +179,37 @@ describe("financialAnalytics — CA mensuel (graphique CA / Dépenses / Marge br
     expect(monthOf(result, "2026-02")?.netRevenueHT).toBe(1500);
   });
 
+  it("ne plante pas sur une importée dont client.id n'est pas un _id Newbi (ancien import Qonto)", async () => {
+    // Avant le 07/09/2026, l'import Qonto rangeait l'id client Qonto (UUID)
+    // dans client.id : Client.find levait une CastError et toute la requête
+    // échouait (CA à 0 sur Vue d'ensemble, page Analytiques vide).
+    await ImportedInvoice().collection.insertMany([
+      {
+        ...importedDoc({
+          status: "VALIDATED",
+          invoiceDate: "2026-02-12T10:00:00Z",
+          paymentDate: null,
+          ht: 700,
+          ttc: 840,
+          key: "ws/imp-qonto.pdf",
+        }),
+        client: {
+          id: "01a0641c-5105-7290-997e-dbb3b9613bae",
+          name: "Tyrell Corporation",
+        },
+      },
+    ]);
+
+    const result = await runAnalytics();
+
+    expect(result.kpi.netRevenueHT).toBe(700);
+    const tyrell = result.revenueByClient.find(
+      (c) => c.clientName === "Tyrell Corporation",
+    );
+    expect(tyrell?.totalHT).toBe(700);
+    expect(tyrell?.clientId ?? null).toBeNull();
+  });
+
   it("compte les factures de vente importées en attente de vérification (PENDING_REVIEW)", async () => {
     await ImportedInvoice().collection.insertMany([
       importedDoc({
