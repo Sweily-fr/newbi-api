@@ -113,6 +113,7 @@ import { startPurchaseInvoiceReceptionCron } from "./cron/purchaseInvoiceRecepti
 import { startQontoImportCron } from "./cron/qontoImportCron.js";
 import { startAbbyImportCron } from "./cron/abbyImportCron.js";
 import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaymentRetryCron.js";
+import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -723,6 +724,10 @@ async function startServer() {
       // Démarrer le cron de relance du signalement de paiement des factures reçues
       startPurchaseInvoicePaymentRetryCron();
       logger.info("✅ Cron de relance signalement paiement (achats) démarré");
+
+      // Démarrer le cron des factures récurrentes (génération + envoi)
+      startInvoiceRecurrenceCron();
+      logger.info("✅ Cron des factures récurrentes démarré");
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
