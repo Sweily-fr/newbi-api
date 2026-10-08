@@ -228,12 +228,10 @@ const eInvoicingResolvers = {
     enableEInvoicing: requireWrite("invoices")(
       async (_, { workspaceId, environment }, context) => {
         try {
-          const { userRole } = context;
-
-          // Seuls les admins et owners peuvent activer l'e-invoicing
-          if (userRole !== "admin" && userRole !== "owner") {
+          // Activer l'e-invoicing : module « Applications et banques »
+          if (!context.permissions?.canWrite("integrations")) {
             throw new AppError(
-              "Seuls les administrateurs peuvent activer la facturation électronique",
+              "Votre rôle ne permet pas d'activer la facturation électronique",
               ERROR_CODES.FORBIDDEN,
             );
           }
@@ -289,11 +287,9 @@ const eInvoicingResolvers = {
     disableEInvoicing: requireWrite("invoices")(
       async (_, { workspaceId }, context) => {
         try {
-          const { userRole } = context;
-
-          if (userRole !== "admin" && userRole !== "owner") {
+          if (!context.permissions?.canWrite("integrations")) {
             throw new AppError(
-              "Seuls les administrateurs peuvent désactiver la facturation électronique",
+              "Votre rôle ne permet pas de désactiver la facturation électronique",
               ERROR_CODES.FORBIDDEN,
             );
           }

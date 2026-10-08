@@ -1,10 +1,13 @@
 import Transaction from "../models/Transaction.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import { requireWorkspaceLevel } from "../middlewares/rbac.js";
 import { matchReceiptToTransactions } from "../utils/receipt-matching.js";
+
+// Suggestions de transactions : lecture du module banking
+const readBanking = requireWorkspaceLevel("banking", "read");
 
 const receiptMatchingResolvers = {
   Query: {
-    matchTransactionsForReceipt: withWorkspace(
+    matchTransactionsForReceipt: readBanking(
       async (parent, { workspaceId, amount, date, vendor }, { user }) => {
         // Récupérer les 500 dernières transactions du workspace (même borne
         // que le web), en excluant celles déjà rapprochées ou volontairement

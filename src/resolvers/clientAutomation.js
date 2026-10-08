@@ -344,9 +344,21 @@ export const automationService = {
   },
 };
 
+// Automatisations clients : module « automations ». preferArgsWorkspace :
+// les resolvers lisent args.workspaceId, le rôle est vérifié sur ce même espace
+const readAutomations = requireRead("automations", {
+  preferArgsWorkspace: true,
+});
+const writeAutomations = requireWrite("automations", {
+  preferArgsWorkspace: true,
+});
+const deleteAutomations = requireDelete("automations", {
+  preferArgsWorkspace: true,
+});
+
 const clientAutomationResolvers = {
   Query: {
-    clientAutomations: requireRead("clients")(async (_, { workspaceId }) => {
+    clientAutomations: readAutomations(async (_, { workspaceId }) => {
       const automations = await ClientAutomation.find({ workspaceId })
         .populate("createdBy")
         .populate("sourceListId")
@@ -369,7 +381,7 @@ const clientAutomationResolvers = {
         .map((a) => ({ ...a, id: a._id.toString() }));
     }),
 
-    clientAutomation: requireRead("clients")(async (_, { workspaceId, id }) => {
+    clientAutomation: readAutomations(async (_, { workspaceId, id }) => {
       const automation = await ClientAutomation.findOne({
         _id: id,
         workspaceId,
@@ -388,7 +400,7 @@ const clientAutomationResolvers = {
   },
 
   Mutation: {
-    createClientAutomation: requireWrite("clients")(
+    createClientAutomation: writeAutomations(
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
 
@@ -452,7 +464,7 @@ const clientAutomationResolvers = {
       },
     ),
 
-    updateClientAutomation: requireWrite("clients")(
+    updateClientAutomation: writeAutomations(
       async (_, { workspaceId, id, input }) => {
         const automation = await ClientAutomation.findOne({
           _id: id,
@@ -504,7 +516,7 @@ const clientAutomationResolvers = {
       },
     ),
 
-    deleteClientAutomation: requireDelete("clients")(
+    deleteClientAutomation: deleteAutomations(
       async (_, { workspaceId, id }) => {
         const automation = await ClientAutomation.findOne({
           _id: id,
@@ -521,7 +533,7 @@ const clientAutomationResolvers = {
       },
     ),
 
-    applyClientAutomationToExisting: requireWrite("clients")(
+    applyClientAutomationToExisting: writeAutomations(
       async (_, { workspaceId, id }) => {
         const automation = await ClientAutomation.findOne({
           _id: id,
@@ -541,29 +553,27 @@ const clientAutomationResolvers = {
       },
     ),
 
-    toggleClientAutomation: requireWrite("clients")(
-      async (_, { workspaceId, id }) => {
-        const automation = await ClientAutomation.findOne({
-          _id: id,
-          workspaceId,
-        });
+    toggleClientAutomation: writeAutomations(async (_, { workspaceId, id }) => {
+      const automation = await ClientAutomation.findOne({
+        _id: id,
+        workspaceId,
+      });
 
-        if (!automation) {
-          throw createNotFoundError("Automatisation");
-        }
+      if (!automation) {
+        throw createNotFoundError("Automatisation");
+      }
 
-        automation.isActive = !automation.isActive;
-        await automation.save();
+      automation.isActive = !automation.isActive;
+      await automation.save();
 
-        return await ClientAutomation.findOne({
-          _id: automation._id,
-          workspaceId,
-        })
-          .populate("createdBy")
-          .populate("sourceListId")
-          .populate("targetListId");
-      },
-    ),
+      return await ClientAutomation.findOne({
+        _id: automation._id,
+        workspaceId,
+      })
+        .populate("createdBy")
+        .populate("sourceListId")
+        .populate("targetListId");
+    }),
   },
 
   ClientAutomation: {

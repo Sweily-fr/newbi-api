@@ -1,5 +1,6 @@
 import {
-  withOrganization,
+  requireRead,
+  requireWrite,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -36,9 +37,14 @@ const importedInvoiceSummary = (inv, score) => ({
   ...(score !== undefined ? { score } : {}),
 });
 
+// Rapprochement = module Transactions (banking). L'abonnement des mutations
+// est déjà contrôlé (fail-closed) par l'enveloppe en bas de fichier, d'où
+// skipSubscriptionCheck : pas de second contrôle ici.
+const writeBanking = requireWrite("banking", { skipSubscriptionCheck: true });
+
 const reconciliationResolvers = {
   Query: {
-    reconciliationSuggestions: withOrganization(
+    reconciliationSuggestions: requireRead("banking")(
       async (
         parent,
         { workspaceId: argWorkspaceId },
@@ -106,7 +112,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    transactionsForInvoice: withOrganization(
+    transactionsForInvoice: requireRead("banking")(
       async (parent, { invoiceId, search }, { user, workspaceId }) => {
         try {
           // IDOR fix: filtre par workspaceId pour empêcher l'accès cross-tenant
@@ -148,7 +154,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    invoicesForTransaction: withOrganization(
+    invoicesForTransaction: requireRead("banking")(
       async (parent, { transactionId, search }, { user, workspaceId }) => {
         try {
           const transaction = await Transaction.findOne({
@@ -194,7 +200,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    importedInvoicesForTransaction: withOrganization(
+    importedInvoicesForTransaction: requireRead("banking")(
       async (parent, { transactionId, search }, { workspaceId }) => {
         try {
           const transaction = await Transaction.findOne({
@@ -228,7 +234,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    transactionsForImportedInvoice: withOrganization(
+    transactionsForImportedInvoice: requireRead("banking")(
       async (parent, { importedInvoiceId, search }, { workspaceId }) => {
         try {
           const invoice = await ImportedInvoice.findOne({
@@ -268,7 +274,7 @@ const reconciliationResolvers = {
   },
 
   Mutation: {
-    linkTransactionToInvoice: withOrganization(
+    linkTransactionToInvoice: writeBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId, invoiceId } = input;
@@ -389,7 +395,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    unlinkTransactionFromInvoice: withOrganization(
+    unlinkTransactionFromInvoice: writeBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId, invoiceId } = input;
@@ -468,7 +474,7 @@ const reconciliationResolvers = {
     // Facture client importée (Qonto, OCR, Gmail) ↔ transaction. Même
     // sémantique que linkTransactionToInvoice : $addToSet des deux côtés,
     // la facture est considérée encaissée (COMPLETED) à la date du virement.
-    linkTransactionToImportedInvoice: withOrganization(
+    linkTransactionToImportedInvoice: writeBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId, importedInvoiceId } = input;
@@ -565,7 +571,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    unlinkTransactionFromImportedInvoice: withOrganization(
+    unlinkTransactionFromImportedInvoice: writeBanking(
       async (parent, { input }, { workspaceId }) => {
         try {
           const { transactionId, importedInvoiceId } = input;
@@ -634,7 +640,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    ignoreTransaction: withOrganization(
+    ignoreTransaction: writeBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId } = input;
@@ -664,7 +670,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    unignoreTransaction: withOrganization(
+    unignoreTransaction: writeBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId } = input;

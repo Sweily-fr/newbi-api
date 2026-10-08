@@ -7,7 +7,10 @@ import {
   findTransactionsForInvoice,
   setReconciliationIgnored,
 } from "../utils/reconciliationMatching.js";
-import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
+import {
+  userBelongsToWorkspace,
+  userHasWorkspaceLevel,
+} from "../utils/workspace-membership.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const router = express.Router();
@@ -22,10 +25,13 @@ const router = express.Router();
  * n'importe quel utilisateur authentifié pourrait lire/écrire les données
  * d'une autre organisation).
  *
+ * Vérifie aussi le niveau du rôle sur le module « Transactions » (lecture
+ * pour les consultations, écriture pour lier / délier / ignorer).
+ *
  * Retourne { user, workspaceId } ou null (la réponse HTTP a alors déjà été
  * envoyée).
  */
-async function authenticateWorkspaceRequest(req, res) {
+async function authenticateWorkspaceRequest(req, res, level = "read") {
   const user = await betterAuthJWTMiddleware(req);
   if (!user) {
     res.status(401).json({ error: "Non authentifié" });
@@ -44,6 +50,21 @@ async function authenticateWorkspaceRequest(req, res) {
   );
   if (!isMember) {
     res.status(403).json({ error: "Accès refusé à ce workspace" });
+    return null;
+  }
+
+  // Rapprochement : module « Transactions » de la grille du rôle
+  const allowed = await userHasWorkspaceLevel(
+    String(user._id || user.id),
+    workspaceId,
+    "banking",
+    level,
+  );
+  if (!allowed) {
+    res.status(403).json({
+      error: "FORBIDDEN",
+      message: "Vous n'avez pas la permission d'effectuer cette action.",
+    });
     return null;
   }
 
@@ -152,7 +173,7 @@ router.post(
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
-      const auth = await authenticateWorkspaceRequest(req, res);
+      const auth = await authenticateWorkspaceRequest(req, res, "write");
       if (!auth) return;
       const { workspaceId } = auth;
 
@@ -262,7 +283,7 @@ router.post(
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
-      const auth = await authenticateWorkspaceRequest(req, res);
+      const auth = await authenticateWorkspaceRequest(req, res, "write");
       if (!auth) return;
       const { workspaceId } = auth;
 
@@ -338,7 +359,7 @@ router.post(
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
-      const auth = await authenticateWorkspaceRequest(req, res);
+      const auth = await authenticateWorkspaceRequest(req, res, "write");
       if (!auth) return;
       const { workspaceId } = auth;
 
@@ -378,7 +399,7 @@ router.post(
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
-      const auth = await authenticateWorkspaceRequest(req, res);
+      const auth = await authenticateWorkspaceRequest(req, res, "write");
       if (!auth) return;
       const { workspaceId } = auth;
 

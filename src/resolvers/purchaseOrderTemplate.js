@@ -1,12 +1,19 @@
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import PurchaseOrderTemplate from "../models/purchaseOrderTemplate.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
+
+// Modèles : mêmes droits que le module « purchaseOrders »
+const readTemplates = requireWorkspaceLevel("purchaseOrders", "read");
+const writeTemplates = requireWorkspaceLevel("purchaseOrders", "write");
+const deleteTemplates = requireWorkspaceLevel("purchaseOrders", "delete");
 
 const purchaseOrderTemplateResolvers = {
   Query: {
-    purchaseOrderTemplates: withWorkspace(
+    purchaseOrderTemplates: readTemplates(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         return PurchaseOrderTemplate.find({
@@ -17,7 +24,7 @@ const purchaseOrderTemplateResolvers = {
   },
 
   Mutation: {
-    savePurchaseOrderAsTemplate: withWorkspace(
+    savePurchaseOrderAsTemplate: writeTemplates(
       async (
         _,
         { input, workspaceId },
@@ -104,7 +111,7 @@ const purchaseOrderTemplateResolvers = {
       },
     ),
 
-    deletePurchaseOrderTemplate: withWorkspace(
+    deletePurchaseOrderTemplate: deleteTemplates(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const result = await PurchaseOrderTemplate.findOneAndDelete({

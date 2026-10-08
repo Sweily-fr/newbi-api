@@ -3,8 +3,10 @@ import Event from "../models/Event.js";
 import Invoice from "../models/Invoice.js";
 import Client from "../models/Client.js";
 import CalendarConnection from "../models/CalendarConnection.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import emailReminderService from "../services/emailReminderService.js";
 import {
   deleteEventFromExternalCalendars,
@@ -188,7 +190,10 @@ const eventResolvers = {
   },
 
   Query: {
-    getEvents: withWorkspace(
+    getEvents: requireWorkspaceLevel(
+      "calendar",
+      "read",
+    )(
       async (
         _,
         {
@@ -377,7 +382,10 @@ const eventResolvers = {
       },
     ),
 
-    getEvent: withWorkspace(
+    getEvent: requireWorkspaceLevel(
+      "calendar",
+      "read",
+    )(
       async (
         _,
         { id, workspaceId },
@@ -427,7 +435,10 @@ const eventResolvers = {
   },
 
   Mutation: {
-    createEvent: withWorkspace(
+    createEvent: requireWorkspaceLevel(
+      "calendar",
+      "write",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -534,7 +545,10 @@ const eventResolvers = {
       },
     ),
 
-    updateEvent: withWorkspace(
+    updateEvent: requireWorkspaceLevel(
+      "calendar",
+      "write",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -657,7 +671,10 @@ const eventResolvers = {
       },
     ),
 
-    deleteEvent: withWorkspace(
+    deleteEvent: requireWorkspaceLevel(
+      "calendar",
+      "delete",
+    )(
       async (
         _,
         { id, workspaceId },
@@ -722,77 +739,76 @@ const eventResolvers = {
       },
     ),
 
-    syncInvoiceEvents: withWorkspace(
-      async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
-        try {
-          const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    syncInvoiceEvents: requireWorkspaceLevel(
+      "calendar",
+      "write",
+    )(async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+      try {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-          // Récupérer toutes les factures du workspace
-          const invoices = await Invoice.find({
-            workspaceId: finalWorkspaceId,
-          }).limit(500);
+        // Récupérer toutes les factures du workspace
+        const invoices = await Invoice.find({
+          workspaceId: finalWorkspaceId,
+        }).limit(500);
 
-          const events = [];
+        const events = [];
 
-          for (const invoice of invoices) {
-            if (invoice.dueDate) {
-              try {
-                const event = await Event.createInvoiceDueEvent(
-                  invoice,
-                  user.id,
-                  finalWorkspaceId,
-                );
-                events.push(event);
+        for (const invoice of invoices) {
+          if (invoice.dueDate) {
+            try {
+              const event = await Event.createInvoiceDueEvent(
+                invoice,
+                user.id,
+                finalWorkspaceId,
+              );
+              events.push(event);
 
-                // Pousser vers les calendriers externes (autoSync) ou propager
-                // une mise à jour si déjà lié
-                if (event?._id) {
-                  if (event.externalCalendarLinks?.length > 0) {
-                    updateEventInExternalCalendars(event).catch((err) =>
-                      logger.error(
-                        `[syncInvoiceEvents] Erreur propagation update pour ${event._id}: ${err.message}`,
-                      ),
-                    );
-                  } else {
-                    autoPushEventToConnections(event._id, user.id).catch(
-                      (err) =>
-                        logger.error(
-                          `[syncInvoiceEvents] Erreur auto-push pour ${event._id}: ${err.message}`,
-                        ),
-                    );
-                  }
+              // Pousser vers les calendriers externes (autoSync) ou propager
+              // une mise à jour si déjà lié
+              if (event?._id) {
+                if (event.externalCalendarLinks?.length > 0) {
+                  updateEventInExternalCalendars(event).catch((err) =>
+                    logger.error(
+                      `[syncInvoiceEvents] Erreur propagation update pour ${event._id}: ${err.message}`,
+                    ),
+                  );
+                } else {
+                  autoPushEventToConnections(event._id, user.id).catch((err) =>
+                    logger.error(
+                      `[syncInvoiceEvents] Erreur auto-push pour ${event._id}: ${err.message}`,
+                    ),
+                  );
                 }
-              } catch (error) {
-                logger.error(
-                  `Erreur lors de la création de l'événement pour la facture ${invoice._id}:`,
-                  error,
-                );
               }
+            } catch (error) {
+              logger.error(
+                `Erreur lors de la création de l'événement pour la facture ${invoice._id}:`,
+                error,
+              );
             }
           }
-
-          return {
-            success: true,
-            events,
-            totalCount: events.length,
-            message: `${events.length} événement(s) de facture synchronisé(s)`,
-          };
-        } catch (error) {
-          logger.error(
-            "Erreur lors de la synchronisation des événements de factures:",
-            error,
-          );
-          return {
-            success: false,
-            events: [],
-            totalCount: 0,
-            message:
-              error.message ||
-              "Erreur lors de la synchronisation des événements",
-          };
         }
-      },
-    ),
+
+        return {
+          success: true,
+          events,
+          totalCount: events.length,
+          message: `${events.length} événement(s) de facture synchronisé(s)`,
+        };
+      } catch (error) {
+        logger.error(
+          "Erreur lors de la synchronisation des événements de factures:",
+          error,
+        );
+        return {
+          success: false,
+          events: [],
+          totalCount: 0,
+          message:
+            error.message || "Erreur lors de la synchronisation des événements",
+        };
+      }
+    }),
   },
 
   Subscription: {

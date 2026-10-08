@@ -9,7 +9,14 @@ import {
   checkSubscriptionActive,
   withOrganization,
 } from "../middlewares/rbac.js";
+import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+
+// Connecter, configurer ou synchroniser une application : module
+// « Applications et banques » (rôle prédéfini ou personnalisé)
+function canManageIntegrations(permissionLevels) {
+  return levelsAllowLevel(permissionLevels, "integrations", "write");
+}
 
 const pennylaneResolvers = {
   PennylaneAccount: {
@@ -51,7 +58,7 @@ const pennylaneResolvers = {
     testPennylaneConnection: async (
       _,
       { apiToken },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -64,12 +71,10 @@ const pennylaneResolvers = {
         return { success: false, message: "Aucune organisation active" };
       }
 
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent tester la connexion Pennylane",
+          message: "Votre rôle ne permet pas de tester la connexion Pennylane",
         };
       }
 
@@ -82,7 +87,7 @@ const pennylaneResolvers = {
     connectPennylane: async (
       _,
       { apiToken, environment },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -95,12 +100,10 @@ const pennylaneResolvers = {
         return { success: false, message: "Aucune organisation active" };
       }
 
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent connecter Pennylane",
+          message: "Votre rôle ne permet pas de connecter Pennylane",
         };
       }
 
@@ -164,7 +167,7 @@ const pennylaneResolvers = {
     disconnectPennylane: async (
       _,
       args,
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -177,12 +180,10 @@ const pennylaneResolvers = {
         return { success: false, message: "Aucune organisation active" };
       }
 
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent déconnecter Pennylane",
+          message: "Votre rôle ne permet pas de déconnecter Pennylane",
         };
       }
 
@@ -220,7 +221,7 @@ const pennylaneResolvers = {
     updatePennylaneAutoSync: async (
       _,
       { autoSync },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -233,12 +234,10 @@ const pennylaneResolvers = {
         return { success: false, message: "Aucune organisation active" };
       }
 
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent modifier ces paramètres",
+          message: "Votre rôle ne permet pas de modifier ces paramètres",
         };
       }
 
@@ -279,7 +278,7 @@ const pennylaneResolvers = {
     syncInvoiceToPennylane: async (
       _,
       { invoiceId },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -337,7 +336,7 @@ const pennylaneResolvers = {
     syncExpenseToPennylane: async (
       _,
       { expenseId },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -395,7 +394,7 @@ const pennylaneResolvers = {
     syncQuoteToPennylane: async (
       _,
       { quoteId },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -447,7 +446,11 @@ const pennylaneResolvers = {
     /**
      * Lance une synchronisation complète vers Pennylane
      */
-    syncAllToPennylane: async (_, args, { user, organizationId, userRole }) => {
+    syncAllToPennylane: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       if (!user) {
         throw new AppError(
           "Vous devez être connecté",
@@ -459,12 +462,11 @@ const pennylaneResolvers = {
         return { success: false, message: "Aucune organisation active" };
       }
 
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
           message:
-            "Seuls les propriétaires et administrateurs peuvent lancer une synchronisation complète",
+            "Votre rôle ne permet pas de lancer une synchronisation complète",
         };
       }
 

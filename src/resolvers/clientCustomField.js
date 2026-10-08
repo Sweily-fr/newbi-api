@@ -1,15 +1,18 @@
 import ClientCustomField from "../models/ClientCustomField.js";
 import { buildDocumentFieldsForClientId } from "../utils/clientDocumentFields.js";
 import {
-  withOrganization,
+  requireRead,
+  requireWrite,
+  requireDelete,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
 
-// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (withOrganization)
-// et impose le workspace validé par RBAC à la place de l'ID brut des args.
+// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (et le niveau
+// requis sur le module « clients ») et impose le workspace validé par RBAC à
+// la place de l'ID brut des args.
 const scopedQuery = (fn) =>
-  withOrganization(async (parent, args, context, info) =>
+  requireRead("clients")(async (parent, args, context, info) =>
     fn(
       parent,
       {
@@ -21,8 +24,12 @@ const scopedQuery = (fn) =>
     ),
   );
 
-const scopedMutation = (fn) =>
-  withOrganization(async (parent, args, context, info) => {
+// level : « write » (créer, modifier, réordonner) ou « delete » (supprimer).
+// Le contrôle d'abonnement reste ici.
+const makeScopedMutation = (level) => (fn) =>
+  (level === "delete" ? requireDelete : requireWrite)("clients", {
+    skipSubscriptionCheck: true,
+  })(async (parent, args, context, info) => {
     await checkSubscriptionActive(context);
     return fn(
       parent,
@@ -34,6 +41,9 @@ const scopedMutation = (fn) =>
       info,
     );
   });
+
+const scopedMutation = makeScopedMutation("write");
+const scopedDeleteMutation = makeScopedMutation("delete");
 
 export const clientCustomFieldResolvers = {
   Query: {
@@ -173,7 +183,7 @@ export const clientCustomFieldResolvers = {
     ),
 
     // Supprimer un champ personnalisé
-    deleteClientCustomField: scopedMutation(
+    deleteClientCustomField: scopedDeleteMutation(
       async (_, { workspaceId, id }, context) => {
         try {
           const result = await ClientCustomField.findOneAndDelete({

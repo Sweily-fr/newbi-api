@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
+import { requireWorkspaceLevel } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
 import Invoice from "../models/Invoice.js";
@@ -242,12 +243,19 @@ function roundBillingSide(side) {
   };
 }
 
+// Droits : les cartes et la courbe de trésorerie ne lisent que les
+// transactions et les soldes bancaires (module banking, lecture). Le cadre
+// Facturation (factures, importées, achats) et les camemberts par catégorie
+// (transactions + CA des factures) mêlent plusieurs modules : ils restent
+// sur withWorkspace (appartenance seule), l'accueil devant rester lisible.
+const readBanking = requireWorkspaceLevel("banking", "read");
+
 const dashboardAggregationResolvers = {
   Query: {
     /**
      * Stats résumées pour les cartes du dashboard
      */
-    dashboardSummary: withWorkspace(
+    dashboardSummary: readBanking(
       async (parent, { workspaceId, accountId, excludeManual }) => {
         const matchFilter = { workspaceId, deletedAt: null };
         if (accountId) matchFilter.fromAccount = accountId;
@@ -324,7 +332,7 @@ const dashboardAggregationResolvers = {
     /**
      * Données pour le graphique de trésorerie (un point par jour)
      */
-    dashboardTreasuryChart: withWorkspace(
+    dashboardTreasuryChart: readBanking(
       async (parent, { workspaceId, period, accountId, excludeManual }) => {
         const { startDate, endDate } = resolvePeriodDates(period);
 

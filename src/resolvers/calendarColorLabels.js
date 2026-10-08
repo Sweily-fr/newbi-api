@@ -1,6 +1,8 @@
 import CalendarColorLabel from "../models/CalendarColorLabel.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 
 const NAMED_TO_HEX = {
   sky: "#38BDF8",
@@ -30,31 +32,35 @@ const DEFAULT_LABELS = [
 
 const calendarColorLabelsResolvers = {
   Query: {
-    getCalendarColorLabels: withWorkspace(
-      async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    getCalendarColorLabels: requireWorkspaceLevel(
+      "calendar",
+      "read",
+    )(async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const doc = await CalendarColorLabel.findOne({
-          workspaceId: finalWorkspaceId,
-        });
+      const doc = await CalendarColorLabel.findOne({
+        workspaceId: finalWorkspaceId,
+      });
 
-        const rawLabels = doc ? doc.labels : DEFAULT_LABELS;
-        const labels = rawLabels.map((l) => ({
-          color: normalizeColor(l.color),
-          label: l.label,
-        }));
+      const rawLabels = doc ? doc.labels : DEFAULT_LABELS;
+      const labels = rawLabels.map((l) => ({
+        color: normalizeColor(l.color),
+        label: l.label,
+      }));
 
-        return {
-          success: true,
-          message: "Étiquettes récupérées avec succès",
-          labels,
-        };
-      },
-    ),
+      return {
+        success: true,
+        message: "Étiquettes récupérées avec succès",
+        labels,
+      };
+    }),
   },
 
   Mutation: {
-    updateCalendarColorLabels: withWorkspace(
+    updateCalendarColorLabels: requireWorkspaceLevel(
+      "calendar",
+      "write",
+    )(
       async (
         _,
         { labels, workspaceId },

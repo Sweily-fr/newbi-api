@@ -5,6 +5,13 @@ import { isAuthenticated } from "./better-auth-jwt.js";
 import { getActiveOrganization } from "./org-resolver.js";
 import { isAppTrialEnabled } from "../utils/featureFlags.js";
 import { isTrialAppActive } from "../utils/trialApp.js";
+import {
+  PREDEFINED_ROLES,
+  getEffectiveLevels,
+  levelsAllowAction,
+  levelsAllowLevel,
+} from "../config/rolePermissions.js";
+import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 
 /**
  * ========================================
@@ -12,7 +19,9 @@ import { isTrialAppActive } from "../utils/trialApp.js";
  * ========================================
  *
  * Intégration complète avec Better Auth pour la gestion des permissions
- * basées sur les rôles d'organisation (owner, admin, member, accountant)
+ * basées sur les rôles d'organisation : rôles prédéfinis (owner, admin,
+ * member, viewer, accountant), éventuellement ajustés par le super admin,
+ * et rôles personnalisés (role_xxx) de la collection organizationRole
  */
 
 // ✅ Cache LRU pour org+member — évite 2-3 queries DB par resolver protégé
@@ -50,261 +59,12 @@ export function invalidateOrgCache(userId) {
 }
 
 /**
- * Définition des permissions par rôle
- * Aligné avec /newbiv2/src/lib/permissions.js
+ * Droits par rôle : voir src/config/rolePermissions.js (catalogue unique,
+ * grilles par défaut des rôles prédéfinis, rôles personnalisés en base).
  */
-const ROLE_PERMISSIONS = {
-  owner: {
-    // Owner a tous les droits
-    quotes: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "convert",
-      "send",
-      "export",
-    ],
-    importedQuotes: ["view", "create", "edit", "delete", "approve", "import"],
-    importedInvoices: ["view", "create", "edit", "delete", "approve", "import"],
-    importedPurchaseOrders: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "import",
-    ],
-    purchaseOrders: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "convert",
-      "send",
-      "export",
-    ],
-    deliveryNotes: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "convert",
-      "send",
-      "export",
-    ],
-    invoices: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "send",
-      "export",
-      "mark-paid",
-      "import",
-    ],
-    creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
-    expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
-    payments: ["view", "create", "edit", "delete", "export"],
-    clients: ["view", "create", "edit", "delete", "export"],
-    products: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "export",
-      "manage-categories",
-    ],
-    suppliers: ["view", "create", "edit", "delete"],
-    fileTransfers: ["view", "create", "delete", "download"],
-    sharedDocuments: ["view", "create", "edit", "delete", "download"],
-    kanban: ["view", "create", "edit", "delete", "assign"],
-    signatures: ["view", "create", "edit", "delete", "set-default"],
-    calendar: ["view", "create", "edit", "delete"],
-    reports: ["view", "export"],
-    analytics: ["view", "export"],
-    team: ["view", "invite", "remove", "change-role"],
-    orgSettings: ["view", "manage"],
-    integrations: ["view", "manage"],
-    billing: ["view", "manage"],
-    auditLog: ["view", "export"],
-  },
-
-  admin: {
-    // Admin a presque tous les droits sauf la gestion de la facturation
-    quotes: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "convert",
-      "send",
-      "export",
-    ],
-    importedQuotes: ["view", "create", "edit", "delete", "approve", "import"],
-    importedInvoices: ["view", "create", "edit", "delete", "approve", "import"],
-    importedPurchaseOrders: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "import",
-    ],
-    purchaseOrders: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "convert",
-      "send",
-      "export",
-    ],
-    deliveryNotes: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "convert",
-      "send",
-      "export",
-    ],
-    invoices: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "approve",
-      "send",
-      "export",
-      "mark-paid",
-      "import",
-    ],
-    creditNotes: ["view", "create", "edit", "delete", "approve", "send"],
-    expenses: ["view", "create", "edit", "delete", "approve", "export", "ocr"],
-    payments: ["view", "create", "edit", "delete", "export"],
-    clients: ["view", "create", "edit", "delete", "export"],
-    products: [
-      "view",
-      "create",
-      "edit",
-      "delete",
-      "export",
-      "manage-categories",
-    ],
-    suppliers: ["view", "create", "edit", "delete"],
-    fileTransfers: ["view", "create", "delete", "download"],
-    sharedDocuments: ["view", "create", "edit", "delete", "download"],
-    kanban: ["view", "create", "edit", "delete", "assign"],
-    signatures: ["view", "create", "edit", "delete", "set-default"],
-    calendar: ["view", "create", "edit", "delete"],
-    reports: ["view", "export"],
-    analytics: ["view", "export"],
-    team: ["view", "invite", "remove", "change-role"],
-    orgSettings: ["view", "manage"],
-    integrations: ["view", "manage"],
-    billing: ["view"], // ⚠️ Lecture seule
-    auditLog: ["view", "export"],
-  },
-
-  member: {
-    // Member peut créer et gérer ses propres documents + export
-    quotes: ["view", "create", "send", "export"],
-    importedQuotes: ["view", "create", "edit", "import"],
-    importedInvoices: ["view", "create", "edit", "import"],
-    importedPurchaseOrders: ["view", "create", "edit", "import"],
-    purchaseOrders: ["view", "create", "send", "export"],
-    deliveryNotes: ["view", "create", "send", "export"],
-    invoices: ["view", "create", "send", "export", "import"],
-    creditNotes: ["view", "create", "export"],
-    expenses: ["view", "create", "ocr", "export"],
-    payments: ["view", "create", "export"],
-    clients: ["view", "create", "export"],
-    products: ["view", "create", "export"],
-    suppliers: ["view", "create"],
-    fileTransfers: ["view", "create", "download"],
-    sharedDocuments: ["view", "create", "edit", "download"],
-    kanban: ["view", "create", "edit", "assign"],
-    // Signatures de mail : documents personnels, chacun supprime les siennes
-    // (toutes les suppressions filtrent sur l'auteur)
-    signatures: ["view", "create", "edit", "delete", "set-default"],
-    calendar: ["view", "create", "edit"],
-    reports: ["view", "export"],
-    analytics: ["view", "export"],
-    team: ["view"],
-  },
-
-  accountant: {
-    // Accountant a accès aux documents financiers + validation + export
-    quotes: ["view", "export"],
-    importedQuotes: ["view", "create", "edit", "approve", "import", "export"],
-    importedInvoices: ["view", "create", "edit", "approve", "import", "export"],
-    importedPurchaseOrders: [
-      "view",
-      "create",
-      "edit",
-      "approve",
-      "import",
-      "export",
-    ],
-    purchaseOrders: ["view", "export"],
-    deliveryNotes: ["view", "export"],
-    invoices: ["view", "export", "mark-paid", "import"],
-    creditNotes: ["view", "export"],
-    expenses: ["view", "approve", "export"],
-    payments: ["view", "export"],
-    clients: ["view", "export"],
-    products: ["view", "export"],
-    suppliers: ["view"],
-    sharedDocuments: ["view", "create", "edit", "delete", "download"],
-    reports: ["view", "export"],
-    analytics: ["view", "export"],
-    team: ["view"],
-    auditLog: ["view"],
-  },
-
-  viewer: {
-    // Viewer a un accès en lecture seule à toutes les ressources
-    // Idéal pour les consultants, auditeurs, ou parties prenantes externes
-    quotes: ["view"],
-    importedQuotes: ["view"],
-    importedInvoices: ["view"],
-    importedPurchaseOrders: ["view"],
-    purchaseOrders: ["view"],
-    deliveryNotes: ["view"],
-    invoices: ["view"],
-    creditNotes: ["view"],
-    expenses: ["view"],
-    payments: ["view"],
-    clients: ["view"],
-    products: ["view"],
-    suppliers: ["view"],
-    fileTransfers: ["view", "download"],
-    kanban: ["view"],
-    signatures: ["view"],
-    calendar: ["view"],
-    reports: ["view"],
-    analytics: ["view"],
-    team: ["view"],
-  },
-};
-
-/**
- * Mapping des permissions simplifiées pour les resolvers
- */
-const PERMISSION_MAPPING = {
-  read: ["view"],
-  write: ["create", "edit"],
-  delete: ["delete"],
-  admin: ["manage", "approve", "change-role", "invite", "remove"],
-};
+const ROLE_PERMISSIONS = Object.fromEntries(
+  Object.entries(PREDEFINED_ROLES).map(([key, role]) => [key, role.levels]),
+);
 
 // getActiveOrganization is imported from ./org-resolver.js (extracted to break circular dep)
 
@@ -358,36 +118,17 @@ async function getMemberRole(organizationId, userId) {
 
 /**
  * Vérifie si un rôle a une permission spécifique sur une ressource
- * @param {string} role - Rôle de l'utilisateur (owner, admin, member, accountant)
+ * @param {string} role - Rôle de l'utilisateur (owner, admin, role_xxx…)
  * @param {string} resource - Ressource (invoices, expenses, etc.)
  * @param {string} action - Action (view, create, edit, delete, etc.)
+ * @param {object} [levels] - Grille effective (rôles ajustés ou personnalisés) ;
+ *   à défaut, grille par défaut du rôle prédéfini
  * @returns {boolean} - True si autorisé
  */
-function hasPermission(role, resource, action) {
-  // ✅ FIX: Normaliser la casse du rôle en minuscules pour éviter les erreurs
-  // La BDD peut stocker "Owner" mais ROLE_PERMISSIONS utilise "owner"
-  const normalizedRole = role?.toLowerCase();
-
-  if (!normalizedRole) {
-    logger.warn("Rôle non défini ou null");
-    return false;
-  }
-
-  const rolePermissions = ROLE_PERMISSIONS[normalizedRole];
-
-  if (!rolePermissions) {
-    logger.warn(`Rôle inconnu: ${role} (normalisé: ${normalizedRole})`);
-    return false;
-  }
-
-  const resourcePermissions = rolePermissions[resource];
-
-  if (!resourcePermissions) {
-    // Si la ressource n'est pas définie, pas d'accès
-    return false;
-  }
-
-  return resourcePermissions.includes(action);
+function hasPermission(role, resource, action, levels = null) {
+  const grid = levels || defaultLevelsFor(role);
+  if (!grid) return false;
+  return levelsAllowAction(grid, resource, action);
 }
 
 /**
@@ -395,13 +136,27 @@ function hasPermission(role, resource, action) {
  * @param {string} role - Rôle de l'utilisateur
  * @param {string} resource - Ressource
  * @param {string} level - Niveau de permission (read, write, delete, admin)
+ * @param {object} [levels] - Grille effective (voir hasPermission)
  * @returns {boolean} - True si autorisé
  */
-function hasPermissionLevel(role, resource, level) {
-  const actions = PERMISSION_MAPPING[level] || [];
+function hasPermissionLevel(role, resource, level, levels = null) {
+  const grid = levels || defaultLevelsFor(role);
+  if (!grid) return false;
+  return levelsAllowLevel(grid, resource, level);
+}
 
-  // Vérifier si au moins une action du niveau est autorisée
-  return actions.some((action) => hasPermission(role, resource, action));
+function defaultLevelsFor(role) {
+  const normalizedRole = role?.toLowerCase();
+  if (!normalizedRole) {
+    logger.warn("Rôle non défini ou null");
+    return null;
+  }
+  const keys = normalizedRole.split(",").map((r) => r.trim());
+  if (!keys.some((key) => ROLE_PERMISSIONS[key])) {
+    logger.warn(`Rôle inconnu: ${role} (normalisé: ${normalizedRole})`);
+    return null;
+  }
+  return getEffectiveLevels(normalizedRole);
 }
 
 /**
@@ -418,6 +173,7 @@ function hasPermissionLevel(role, resource, level) {
 export const withRBAC = (resolver, options = {}) => {
   // Wrapper interne qui sera appelé après l'authentification
   const rbacResolver = async (parent, args, context, info) => {
+    let enrichedContext;
     try {
       // L'authentification a déjà été vérifiée par isAuthenticated
       // context.user existe et est valide
@@ -426,15 +182,22 @@ export const withRBAC = (resolver, options = {}) => {
 
       // ✅ FIX: Récupérer l'organisation demandée depuis le header
       // Le frontend envoie x-organization-id pour indiquer quelle organisation est active
-      const requestedOrgId =
-        context.req?.headers?.["x-organization-id"] ||
-        context.req?.headers?.["x-workspace-id"] ||
-        args.workspaceId ||
-        args.organizationId;
+      // preferArgsWorkspace : même ordre que withWorkspace (argument d'abord),
+      // pour les resolvers qui en viennent et lisent l'espace de cet ordre
+      const requestedOrgId = options.preferArgsWorkspace
+        ? args.workspaceId ||
+          context.req?.headers?.["x-workspace-id"] ||
+          context.req?.headers?.["x-organization-id"]
+        : context.req?.headers?.["x-organization-id"] ||
+          context.req?.headers?.["x-workspace-id"] ||
+          args.workspaceId ||
+          args.organizationId;
 
       // DEBUG: tracer l'origine du requestedOrgId pour diagnostiquer les fuites cross-compte
       if (requestedOrgId) {
-        const source = context.req?.headers?.["x-organization-id"]
+        const source = options.preferArgsWorkspace
+          ? "preferArgsWorkspace"
+          : context.req?.headers?.["x-organization-id"]
           ? "header:x-organization-id"
           : context.req?.headers?.["x-workspace-id"]
             ? "header:x-workspace-id"
@@ -481,6 +244,11 @@ export const withRBAC = (resolver, options = {}) => {
 
       // 3. Utiliser le rôle déjà récupéré par getActiveOrganization (évite 1 query DB)
       const userRole = organization.memberRole;
+      // Grille effective : rôle prédéfini (ajusté ou non) ou personnalisé
+      const permissionLevels = await getEffectiveLevelsFor(
+        organization.id,
+        userRole,
+      );
 
       logger.debug(
         `🔐 RBAC: User ${userId} accède à org ${organization.id} avec rôle ${userRole}`,
@@ -492,13 +260,19 @@ export const withRBAC = (resolver, options = {}) => {
 
         if (options.action) {
           // Vérification par action spécifique
-          hasAccess = hasPermission(userRole, options.resource, options.action);
+          hasAccess = hasPermission(
+            userRole,
+            options.resource,
+            options.action,
+            permissionLevels,
+          );
         } else if (options.level) {
           // Vérification par niveau de permission
           hasAccess = hasPermissionLevel(
             userRole,
             options.resource,
             options.level,
+            permissionLevels,
           );
         }
 
@@ -518,7 +292,7 @@ export const withRBAC = (resolver, options = {}) => {
       }
 
       // 5. Enrichir le contexte avec les informations RBAC
-      const enrichedContext = {
+      enrichedContext = {
         ...context,
         workspaceId: organization.id,
         // Exposer l'org VALIDÉE par RBAC (et non le header client brut) pour tous
@@ -527,18 +301,20 @@ export const withRBAC = (resolver, options = {}) => {
         organizationId: organization.id,
         organization,
         userRole,
+        permissionLevels,
         permissions: {
           hasPermission: (resource, action) =>
-            hasPermission(userRole, resource, action),
+            hasPermission(userRole, resource, action, permissionLevels),
           hasPermissionLevel: (resource, level) =>
-            hasPermissionLevel(userRole, resource, level),
-          canRead: (resource) => hasPermissionLevel(userRole, resource, "read"),
+            hasPermissionLevel(userRole, resource, level, permissionLevels),
+          canRead: (resource) =>
+            hasPermissionLevel(userRole, resource, "read", permissionLevels),
           canWrite: (resource) =>
-            hasPermissionLevel(userRole, resource, "write"),
+            hasPermissionLevel(userRole, resource, "write", permissionLevels),
           canDelete: (resource) =>
-            hasPermissionLevel(userRole, resource, "delete"),
+            hasPermissionLevel(userRole, resource, "delete", permissionLevels),
           canAdmin: (resource) =>
-            hasPermissionLevel(userRole, resource, "admin"),
+            hasPermissionLevel(userRole, resource, "admin", permissionLevels),
         },
       };
 
@@ -546,8 +322,11 @@ export const withRBAC = (resolver, options = {}) => {
         `RBAC: ${context.user?.email || context.user?._id} (${userRole}) accède à ${options.resource || "ressource"} avec ${options.action || options.level || "aucune restriction"}`,
       );
 
-      // 6. Exécuter le resolver avec le contexte enrichi
-      return await resolver(parent, args, enrichedContext, info);
+      // 6. Exécuter le resolver avec le contexte enrichi (passthroughErrors :
+      // hors du try, ses erreurs remontent telles quelles, comme avec withWorkspace)
+      if (!options.passthroughErrors) {
+        return await resolver(parent, args, enrichedContext, info);
+      }
     } catch (error) {
       // Propager les erreurs d'authentification/autorisation
       if (error instanceof AppError) {
@@ -582,6 +361,7 @@ export const withRBAC = (resolver, options = {}) => {
         ERROR_CODES.INTERNAL_ERROR,
       );
     }
+    return resolver(parent, args, enrichedContext, info);
   };
 
   // Appliquer d'abord l'authentification, puis RBAC
@@ -839,17 +619,25 @@ export const requireActiveSubscriptionREST = ({ failClosed = false } = {}) => {
  */
 
 // Lecture seule (view) — PAS de check subscription
-export const requireRead = (resource) => (resolver) =>
-  withRBAC(resolver, { resource, level: "read" });
+export const requireRead =
+  (resource, options = {}) =>
+  (resolver) =>
+    withRBAC(resolver, {
+      resource,
+      level: "read",
+      preferArgsWorkspace: options.preferArgsWorkspace,
+    });
 
 // Écriture (create, edit) — AVEC check subscription
 export const requireWrite =
   (resource, options = {}) =>
   (resolver) => {
-    const rbacWrapped = withRBAC(resolver, { resource, level: "write" });
-    if (options.skipSubscriptionCheck) return rbacWrapped;
-    // Wrap pour ajouter le check subscription APRÈS RBAC (context enrichi nécessaire)
-    const original = rbacWrapped;
+    const rbacOptions = {
+      resource,
+      level: "write",
+      preferArgsWorkspace: options.preferArgsWorkspace,
+    };
+    if (options.skipSubscriptionCheck) return withRBAC(resolver, rbacOptions);
     return async (parent, args, context, info) => {
       // RBAC s'exécute d'abord (enrichit context avec workspaceId)
       // On intercale le check subscription dans le resolver wrappé
@@ -857,7 +645,7 @@ export const requireWrite =
         await checkSubscriptionActive(ctx);
         return resolver(p, a, ctx, i);
       };
-      return withRBAC(patchedResolver, { resource, level: "write" })(
+      return withRBAC(patchedResolver, rbacOptions)(
         parent,
         args,
         context,
@@ -870,15 +658,18 @@ export const requireWrite =
 export const requireDelete =
   (resource, options = {}) =>
   (resolver) => {
-    if (options.skipSubscriptionCheck) {
-      return withRBAC(resolver, { resource, level: "delete" });
-    }
+    const rbacOptions = {
+      resource,
+      level: "delete",
+      preferArgsWorkspace: options.preferArgsWorkspace,
+    };
+    if (options.skipSubscriptionCheck) return withRBAC(resolver, rbacOptions);
     return async (parent, args, context, info) => {
       const patchedResolver = async (p, a, ctx, i) => {
         await checkSubscriptionActive(ctx);
         return resolver(p, a, ctx, i);
       };
-      return withRBAC(patchedResolver, { resource, level: "delete" })(
+      return withRBAC(patchedResolver, rbacOptions)(
         parent,
         args,
         context,
@@ -894,6 +685,38 @@ export const requireAdmin = (resource) => (resolver) =>
 // Permission spécifique
 export const requirePermission = (resource, action) => (resolver) =>
   withRBAC(resolver, { resource, action });
+
+/**
+ * Remplaçant de withWorkspace (better-auth-jwt.js) avec contrôle du rôle :
+ * même choix d'espace (args.workspaceId d'abord), même contexte
+ * (context.workspaceId), erreurs du resolver non réécrites, et AUCUN
+ * contrôle d'abonnement ajouté (ceux qui en avaient un le gardent via
+ * requireActiveSubscription autour).
+ */
+export const requireWorkspaceLevel = (resource, level) => (resolver) =>
+  withRBAC(resolver, {
+    resource,
+    level,
+    preferArgsWorkspace: true,
+    passthroughErrors: true,
+  });
+
+/**
+ * Contrôle dans le corps d'un resolver déjà passé par withRBAC /
+ * withOrganization (contexte enrichi) : lève FORBIDDEN si le niveau manque.
+ */
+export function assertPermissionLevel(context, resource, level) {
+  const allowed = context?.permissions?.hasPermissionLevel?.(resource, level);
+  if (!allowed) {
+    logger.warn(
+      `Accès refusé: ${context?.user?._id} (${context?.userRole}) n'a pas la permission ${level} sur ${resource}`,
+    );
+    throw new AppError(
+      "Vous n'avez pas la permission d'effectuer cette action.",
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
+}
 
 /**
  * Middleware pour les resolvers qui nécessitent seulement l'authentification

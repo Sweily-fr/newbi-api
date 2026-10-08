@@ -154,7 +154,7 @@ describe("qonto.Mutation.testQontoConnection", () => {
       buildContext({ userId: memberUserId, organizationId }),
     );
     expect(out.success).toBe(false);
-    expect(out.message).toMatch(/propriétaires et administrateurs/i);
+    expect(out.message).toMatch(/Votre rôle ne permet pas/i);
   });
 
   it("délègue à qontoService.testConnection pour un owner (identifiants trimés)", async () => {

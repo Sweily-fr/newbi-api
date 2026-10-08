@@ -3,11 +3,11 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import User from "../models/User.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import {
-  isAuthenticated,
-  withWorkspace,
-} from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import {
   sendPasswordResetEmail,
   sendVerificationEmail,
@@ -39,6 +39,9 @@ const generateToken = (user, rememberMe = false) => {
 const generateVerificationToken = () => {
   return crypto.randomBytes(32).toString("hex");
 };
+
+// Logo de l'organisation : paramètres de l'entreprise (« orgSettings »)
+const writeOrgSettings = requireWorkspaceLevel("orgSettings", "write");
 
 const userResolvers = {
   Query: {
@@ -990,8 +993,9 @@ const userResolvers = {
 
     /**
      * Met à jour uniquement le logo de l'entreprise
+     * (organisation de l'espace : droit « orgSettings » en écriture)
      */
-    updateCompanyLogo: withWorkspace(
+    updateCompanyLogo: writeOrgSettings(
       async (_, { logoUrl }, { user, workspaceId }) => {
         try {
           // Mise à jour directe dans la collection organization
