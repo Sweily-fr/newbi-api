@@ -53,11 +53,9 @@ function validateInput(input, { startDateChanged, today }) {
     errors.emailBody = "Le message ne doit pas dépasser 10 000 caractères";
   }
 
+  // Message affiché tel quel par le front : le premier motif suffit
   if (Object.keys(errors).length > 0) {
-    throw createValidationError(
-      "La récurrence contient des erreurs de validation",
-      errors,
-    );
+    throw createValidationError(Object.values(errors)[0], errors);
   }
 
   return {
@@ -171,7 +169,7 @@ const invoiceRecurrenceResolvers = {
         );
         if (!nextRunDate) {
           throw createValidationError(
-            "Aucune facture ne serait générée avec ces dates",
+            "Aucune facture ne serait générée : la date de fin est déjà dépassée",
             { endDate: "La date de fin est déjà dépassée" },
           );
         }

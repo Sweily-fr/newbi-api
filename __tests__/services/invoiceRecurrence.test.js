@@ -524,6 +524,6 @@ describe("programmation d'une récurrence (GraphQL)", () => {
         },
         ctx(),
       ),
-    ).rejects.toThrow(/erreurs de validation/);
+    ).rejects.toThrow(/dans le passé/);
   });
 });
