@@ -23,6 +23,26 @@ import mongoose from "mongoose";
 import { isInternationalEntity } from "../utils/validators.js";
 import { automationService } from "./clientAutomation.js";
 
+// Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
+// durée de la requête. On garde la PROMESSE et non le résultat : les résolveurs
+// de champ d'une liste s'exécutent en parallèle, et un cache rempli seulement
+// après l'await laissait chaque entrée relancer son propre User.findById
+// (des centaines par page de clients). Un échec vaut null (repli « Système »).
+function getRequestUser(context, userId) {
+  if (!context._userCache) context._userCache = new Map();
+  const key = userId.toString();
+  let pending = context._userCache.get(key);
+  if (!pending) {
+    pending = User.findById(userId)
+      .select("name email avatar")
+      .lean()
+      .exec()
+      .catch(() => null);
+    context._userCache.set(key, pending);
+  }
+  return pending;
+}
+
 const clientResolvers = {
   Query: {
     // ✅ Protégé par RBAC - nécessite la permission "view" sur "clients"
@@ -960,38 +980,16 @@ const clientResolvers = {
         return parent.userName;
       }
       if (parent.userId) {
-        try {
-          // Cache per-request pour éviter N+1
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          const user = context._userCache[key];
-          if (user?.name) return user.name;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        if (user?.name) return user.name;
       }
       return parent.userName || "Système";
     },
     userImage: async (parent, _, context) => {
       if (parent.userImage) return parent.userImage;
       if (parent.userId) {
-        try {
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          return context._userCache[key]?.avatar || null;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        return user?.avatar || null;
       }
       return null;
     },
@@ -1005,37 +1003,16 @@ const clientResolvers = {
         return parent.userName;
       }
       if (parent.userId) {
-        try {
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          const user = context._userCache[key];
-          if (user?.name) return user.name;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        if (user?.name) return user.name;
       }
       return parent.userName || "Système";
     },
     userImage: async (parent, _, context) => {
       if (parent.userImage) return parent.userImage;
       if (parent.userId) {
-        try {
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          return context._userCache[key]?.avatar || null;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        return user?.avatar || null;
       }
       return null;
     },
