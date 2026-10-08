@@ -121,48 +121,64 @@ const IMPORTED_SUGGESTION_STATUSES = IMPORTED_RECONCILABLE_STATUSES.filter(
  */
 export async function findReconciliationSuggestions(workspaceId) {
   const reconcileQuery = buildReconcileTransactionQuery(workspaceId);
-
-  // Comptage complet, sans plafond (countDocuments) → le badge reflète le
-  // vrai total. La génération de suggestions reste plafonnée (perf).
-  const unmatchedCount = await Transaction.countDocuments(reconcileQuery);
-  const unmatchedTransactions = await Transaction.find(reconcileQuery)
-    .sort({ date: -1 })
-    .limit(50);
-
-  const pendingInvoices = await Invoice.find({
+  const pendingInvoiceQuery = {
     workspaceId,
     status: "PENDING",
     ...UNLINKED_INVOICE_CLAUSE,
-  })
-    .sort({ dueDate: 1 })
-    .limit(500);
+  };
 
-  // Factures marquées payées à la main : candidates par référence uniquement
-  // (cf. invoiceMatchesTransaction). Les plus récentes d'abord : ce sont
-  // elles que les transactions récentes peuvent solder.
-  const completedInvoices = await Invoice.find({
-    workspaceId,
-    status: "COMPLETED",
-    ...UNLINKED_INVOICE_CLAUSE,
-  })
-    .sort({ issueDate: -1 })
-    .limit(500);
+  // Comptage complet, sans plafond (countDocuments) → le badge reflète le
+  // vrai total. La génération de suggestions reste plafonnée (perf).
+  const [unmatchedCount, unmatchedTransactions] = await Promise.all([
+    Transaction.countDocuments(reconcileQuery),
+    Transaction.find(reconcileQuery).sort({ date: -1 }).limit(50),
+  ]);
+
+  // Rien à rapprocher (le cas courant entre deux synchros bancaires, et ce
+  // calcul est sondé toutes les quelques minutes par chaque onglet ouvert) :
+  // inutile de charger jusqu'à 1 500 factures candidates. pendingInvoicesCount
+  // garde le même plafond de 500 que la liste ci-dessous.
+  if (unmatchedTransactions.length === 0) {
+    return {
+      suggestions: [],
+      unmatchedCount,
+      pendingInvoicesCount: await Invoice.countDocuments(pendingInvoiceQuery, {
+        limit: 500,
+      }),
+    };
+  }
+
+  // Les trois listes de candidates sont indépendantes : en parallèle.
+  const [pendingInvoices, completedInvoices, importedCandidates] =
+    await Promise.all([
+      Invoice.find(pendingInvoiceQuery).sort({ dueDate: 1 }).limit(500),
+      // Factures marquées payées à la main : candidates par référence
+      // uniquement (cf. invoiceMatchesTransaction). Les plus récentes
+      // d'abord : ce sont elles que les transactions récentes peuvent solder.
+      Invoice.find({
+        workspaceId,
+        status: "COMPLETED",
+        ...UNLINKED_INVOICE_CLAUSE,
+      })
+        .sort({ issueDate: -1 })
+        .limit(500),
+      // Factures clients importées (Qonto, OCR, Gmail) validées et pas encore
+      // encaissées : mêmes règles de correspondance via la vue « facture de
+      // vente » (importedInvoiceAsInvoiceLike). Renvoyées à part
+      // (matchingImportedInvoices) pour que l'appelant sache quelle mutation
+      // de liaison appeler. Les factures encore « à vérifier » ne sont jamais
+      // proposées (toast) : l'utilisateur doit d'abord valider les données OCR.
+      ImportedInvoice.find({
+        workspaceId,
+        status: { $in: IMPORTED_SUGGESTION_STATUSES },
+        ...UNLINKED_INVOICE_CLAUSE,
+      })
+        .sort({ invoiceDate: -1 })
+        .limit(500),
+    ]);
 
   const candidateInvoices = [...pendingInvoices, ...completedInvoices];
 
-  // Factures clients importées (Qonto, OCR, Gmail) validées et pas encore
-  // encaissées : mêmes règles de correspondance via la vue « facture de vente »
-  // (importedInvoiceAsInvoiceLike). Renvoyées à part (matchingImportedInvoices)
-  // pour que l'appelant sache quelle mutation de liaison appeler. Les factures
-  // encore « à vérifier » ne sont jamais proposées (toast) : l'utilisateur
-  // doit d'abord valider les données OCR.
-  const importedCandidates = await ImportedInvoice.find({
-    workspaceId,
-    status: { $in: IMPORTED_SUGGESTION_STATUSES },
-    ...UNLINKED_INVOICE_CLAUSE,
-  })
-    .sort({ invoiceDate: -1 })
-    .limit(500);
   const importedLikes = importedCandidates.map((doc) => ({
     doc,
     like: importedInvoiceAsInvoiceLike(doc),
