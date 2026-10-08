@@ -352,6 +352,19 @@ const invoiceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Quote",
     },
+    // Facture générée automatiquement par une récurrence (InvoiceRecurrence)
+    recurrenceOrigin: {
+      recurrenceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "InvoiceRecurrence",
+      },
+      sourceInvoiceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Invoice",
+      },
+      // Échéance (AAAA-MM-JJ) qui a produit la facture
+      occurrenceDate: { type: String },
+    },
     appearance: {
       textColor: {
         type: String,
@@ -620,6 +633,18 @@ invoiceSchema.index({ issueDate: -1 });
 invoiceSchema.index({ workspaceId: 1, issueDate: -1 });
 // Index pour les factures de situation (situationInvoicedTotal dans quote resolver)
 invoiceSchema.index({ workspaceId: 1, invoiceType: 1, purchaseOrderNumber: 1 });
+// Factures générées par une récurrence (idempotence d'une échéance)
+invoiceSchema.index(
+  {
+    "recurrenceOrigin.recurrenceId": 1,
+    "recurrenceOrigin.occurrenceDate": 1,
+  },
+  {
+    partialFilterExpression: {
+      "recurrenceOrigin.recurrenceId": { $exists: true },
+    },
+  },
+);
 
 // Ajout d'un champ virtuel pour l'année d'émission
 invoiceSchema.virtual("issueYear").get(function () {
