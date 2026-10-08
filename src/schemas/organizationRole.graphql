@@ -12,6 +12,8 @@ type RoleCatalogModule {
   group: String!
   # "level" (aucun / lecture / écriture / suppression) ou "feature" (oui / non)
   kind: String!
+  # Page dont ce module est une fonctionnalité (sous-ligne de l'éditeur)
+  parent: String
   label: String!
   description: String
   # Niveaux proposés pour ce module (les modules du compte n'ont pas « delete »)

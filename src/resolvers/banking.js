@@ -32,6 +32,16 @@ import { toExpenseCategory } from "../utils/categoryTaxonomy.js";
 // changement de fournisseur : module integrations (« Applications et
 // banques », niveau write qui couvre aussi la suppression).
 const readBanking = requireWorkspaceLevel("banking", "read");
+// Comptes et transactions servent aussi aux pages de Pilotage (trésorerie,
+// graphiques) : le droit de lecture de l'une d'elles suffit
+const readBankAccounts = requireWorkspaceLevel(
+  ["banking", "overview", "forecast", "analytics"],
+  "read",
+);
+const readTransactionList = requireWorkspaceLevel(
+  ["banking", "overview", "analytics"],
+  "read",
+);
 const writeBanking = requireWorkspaceLevel("banking", "write");
 const manageBankAccounts = requireWorkspaceLevel("integrations", "write");
 
@@ -48,7 +58,7 @@ const bankingResolvers = {
 
   Query: {
     // Transactions - workspaceId passé en argument (comme les factures)
-    transactions: readBanking(
+    transactions: readTransactionList(
       async (
         parent,
         { workspaceId, filters = {}, limit = 50, offset = 0 },
@@ -147,9 +157,11 @@ const bankingResolvers = {
     ),
 
     // Comptes bancaires - workspaceId passé en argument
-    bankingAccounts: readBanking(async (parent, { workspaceId }, { user }) => {
-      return await AccountBanking.findByWorkspace(workspaceId);
-    }),
+    bankingAccounts: readBankAccounts(
+      async (parent, { workspaceId }, { user }) => {
+        return await AccountBanking.findByWorkspace(workspaceId);
+      },
+    ),
 
     bankingAccount: readBanking(
       async (parent, { id }, { user, workspaceId }) => {

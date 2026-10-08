@@ -37,16 +37,49 @@ export const ACCOUNT_LEVELS = ["none", "read", "write"];
 
 export const FEATURE_LEVELS = ["none", "write"];
 
+// Sections du menu de l'application, dans le même ordre
 export const MODULE_GROUPS = [
+  { key: "pilotage", label: "Pilotage" },
   { key: "sales", label: "Ventes" },
   { key: "clients", label: "Clients" },
-  { key: "finances", label: "Finances" },
   { key: "purchases", label: "Achats" },
-  { key: "tools", label: "Outils" },
+  { key: "organisation", label: "Organisation" },
+  { key: "documents", label: "Documents" },
+  { key: "communication", label: "Communication" },
   { key: "account", label: "Compte" },
 ];
 
+/**
+ * Une entrée par page du menu ; `parent` = fonctionnalité d'une page
+ * (sous-ligne de l'éditeur de rôles). Sans aucun droit sur une page, elle
+ * n'apparaît pas du tout pour le membre.
+ */
 export const MODULES = [
+  // Pilotage
+  {
+    key: "banking",
+    group: "pilotage",
+    label: "Transactions",
+    description: "Transactions bancaires, justificatifs et rapprochement",
+  },
+  {
+    key: "overview",
+    group: "pilotage",
+    label: "Vue d'ensemble",
+    description: "Chiffre d'affaires, dépenses et trésorerie",
+  },
+  {
+    key: "forecast",
+    group: "pilotage",
+    label: "Prévision",
+    description: "Prévision de trésorerie et scénarios",
+  },
+  {
+    key: "analytics",
+    group: "pilotage",
+    label: "Analytiques",
+    description: "Analyses des ventes, des clients et des dépenses",
+  },
   // Ventes
   {
     key: "invoices",
@@ -57,35 +90,38 @@ export const MODULES = [
   {
     key: "invoicePayments",
     group: "sales",
+    parent: "invoices",
     kind: "feature",
-    label: "Encaissement des factures",
+    label: "Encaissement",
     description: "Marquer une facture comme payée",
   },
   {
     key: "creditNotes",
     group: "sales",
+    parent: "invoices",
     label: "Avoirs",
     description: "Avoirs créés depuis une facture",
   },
   {
     key: "importedInvoices",
     group: "sales",
+    parent: "invoices",
     label: "Factures importées",
-    description: "Factures clients importées depuis un autre logiciel",
+    description: "Factures importées depuis un autre logiciel",
   },
   { key: "quotes", group: "sales", label: "Devis" },
   {
     key: "importedQuotes",
     group: "sales",
+    parent: "quotes",
     label: "Devis importés",
-    description: "Devis importés depuis un autre logiciel",
   },
   { key: "purchaseOrders", group: "sales", label: "Bons de commande" },
   {
     key: "importedPurchaseOrders",
     group: "sales",
+    parent: "purchaseOrders",
     label: "Bons de commande importés",
-    description: "Bons de commande importés depuis un autre logiciel",
   },
   { key: "deliveryNotes", group: "sales", label: "Bons de livraison" },
   {
@@ -98,34 +134,25 @@ export const MODULES = [
   {
     key: "clients",
     group: "clients",
-    label: "Clients",
-    description: "Fiches clients et segments",
+    label: "Mes clients",
+    description: "Fiches clients et clients bloqués",
   },
   {
-    key: "clientLists",
+    key: "clientCustomFields",
     group: "clients",
-    label: "Listes et champs personnalisés",
-    description: "Listes de clients et champs personnalisés des fiches",
+    parent: "clients",
+    label: "Champs personnalisés",
+    description: "Champs ajoutés aux fiches clients",
   },
+  { key: "clientLists", group: "clients", label: "Listes" },
   {
     key: "automations",
     group: "clients",
+    parent: "clientLists",
     label: "Automatisations",
-    description: "Automatisations des listes et des e-mails clients",
+    description: "Automatisations des listes et e-mails automatiques",
   },
-  // Finances
-  {
-    key: "banking",
-    group: "finances",
-    label: "Transactions",
-    description: "Transactions bancaires, justificatifs et rapprochement",
-  },
-  {
-    key: "analytics",
-    group: "finances",
-    label: "Analyses et prévisions",
-    description: "Vue d'ensemble, analytiques et prévision de trésorerie",
-  },
+  { key: "clientSegments", group: "clients", label: "Segments" },
   // Achats
   {
     key: "purchaseInvoices",
@@ -133,22 +160,24 @@ export const MODULES = [
     label: "Factures d'achat",
     description: "Factures d'achat, dépenses et fournisseurs",
   },
-  // Outils
-  { key: "calendar", group: "tools", label: "Calendrier" },
+  // Organisation
+  { key: "calendar", group: "organisation", label: "Calendrier" },
   {
     key: "kanban",
-    group: "tools",
-    label: "Projets",
-    description: "Tableaux kanban, tâches et partages publics",
+    group: "organisation",
+    label: "Kanban",
+    description: "Tableaux, tâches et partages publics",
   },
-  { key: "fileTransfers", group: "tools", label: "Transferts de fichiers" },
+  // Documents
+  { key: "fileTransfers", group: "documents", label: "Transfert de fichiers" },
   {
     key: "sharedDocuments",
-    group: "tools",
+    group: "documents",
     label: "Documents partagés",
     description: "Documents, dossiers et automatisations de classement",
   },
-  { key: "signatures", group: "tools", label: "Signatures de mail" },
+  // Communication
+  { key: "signatures", group: "communication", label: "Signature de mail" },
   // Compte
   {
     key: "team",
@@ -303,6 +332,7 @@ export const PREDEFINED_ROLES = {
       importedQuotes: "write",
       importedPurchaseOrders: "write",
       clientLists: "delete",
+      clientCustomFields: "delete",
       banking: "delete",
       calendar: "delete",
       kanban: "none",
@@ -334,6 +364,18 @@ export function resolveModule(resource) {
 }
 
 /**
+ * Pages séparées d'un module plus large dans une version précédente de la
+ * grille : une grille enregistrée avant la séparation reprend le niveau de
+ * l'ancien module.
+ */
+const LEGACY_LEVEL_KEYS = {
+  overview: "analytics",
+  forecast: "analytics",
+  clientCustomFields: "clientLists",
+  clientSegments: "clients",
+};
+
+/**
  * Normalise une grille reçue (création/modification de rôle) : modules
  * inconnus ignorés, niveaux invalides ramenés à `none`, modules absents
  * complétés par `base` (ou `none`).
@@ -341,7 +383,12 @@ export function resolveModule(resource) {
 export function normalizeLevels(input = {}, base = null) {
   const levels = {};
   for (const key of MODULE_KEYS) {
-    const raw = input?.[key] ?? base?.[key] ?? "none";
+    const legacyKey = LEGACY_LEVEL_KEYS[key];
+    const raw =
+      input?.[key] ??
+      (legacyKey ? input?.[legacyKey] : undefined) ??
+      base?.[key] ??
+      "none";
     levels[key] = clampLevel(key, raw);
   }
   return levels;

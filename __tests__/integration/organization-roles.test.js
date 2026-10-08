@@ -342,4 +342,52 @@ describe("Rôles d'un espace", () => {
       probe(requireWrite("orgSettings"))(null, {}, ctx(accountant)),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
+
+  it("ouvre aux pages de Pilotage les données qu'elles affichent", async () => {
+    const role = await Mutation.createOrganizationRole(
+      null,
+      { input: { name: "Direction", levels: { overview: "read" } } },
+      ctx(owner),
+    );
+    await mongoose.connection.db
+      .collection("member")
+      .updateOne(
+        { userId: editor, organizationId },
+        { $set: { role: role.key } },
+      );
+    invalidateOrgCache();
+
+    // Vue d'ensemble lit les comptes bancaires sans avoir la page Transactions
+    await expect(
+      probe(requireWorkspaceLevel(["banking", "overview"], "read"))(
+        null,
+        {},
+        ctx(editor),
+      ),
+    ).resolves.toBe("ok");
+    await expect(
+      probe(requireWorkspaceLevel("banking", "read"))(null, {}, ctx(editor)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      probe(requireRead("forecast"))(null, {}, ctx(editor)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("reprend l'ancien niveau d'un module séparé en plusieurs pages", async () => {
+    await mongoose.connection.db.collection("organizationRole").insertOne({
+      organizationId,
+      role: "role_ancien",
+      name: "Ancien rôle",
+      permission: "{}",
+      levels: { analytics: "write", clients: "read", clientLists: "delete" },
+      createdAt: new Date(),
+    });
+    invalidateOrganizationRoles();
+    const roles = await Query.organizationRoles(null, {}, ctx(owner));
+    const legacy = roles.find((r) => r.key === "role_ancien");
+    expect(legacy.levels.overview).toBe("write");
+    expect(legacy.levels.forecast).toBe("write");
+    expect(legacy.levels.clientSegments).toBe("read");
+    expect(legacy.levels.clientCustomFields).toBe("delete");
+  });
 });

@@ -165,7 +165,8 @@ function defaultLevelsFor(role) {
  *
  * @param {Function} resolver - Resolver GraphQL à exécuter
  * @param {Object} options - Options du middleware
- * @param {string} options.resource - Ressource concernée (invoices, expenses, etc.)
+ * @param {string|string[]} options.resource - Ressource concernée (invoices,
+ *   expenses, etc.) ; une liste = l'une des ressources suffit
  * @param {string} options.action - Action requise (view, create, edit, delete, etc.)
  * @param {string} options.level - Niveau de permission (read, write, delete, admin)
  * @returns {Function} - Resolver avec vérification RBAC
@@ -198,12 +199,12 @@ export const withRBAC = (resolver, options = {}) => {
         const source = options.preferArgsWorkspace
           ? "preferArgsWorkspace"
           : context.req?.headers?.["x-organization-id"]
-          ? "header:x-organization-id"
-          : context.req?.headers?.["x-workspace-id"]
-            ? "header:x-workspace-id"
-            : args.workspaceId
-              ? "args.workspaceId"
-              : "args.organizationId";
+            ? "header:x-organization-id"
+            : context.req?.headers?.["x-workspace-id"]
+              ? "header:x-workspace-id"
+              : args.workspaceId
+                ? "args.workspaceId"
+                : "args.organizationId";
         logger.debug(
           `🔍 RBAC requestedOrgId=${requestedOrgId} source=${source} userId=${userId} op=${info?.fieldName || "?"}`,
         );
@@ -258,21 +259,26 @@ export const withRBAC = (resolver, options = {}) => {
       if (options.resource && (options.action || options.level)) {
         let hasAccess = false;
 
+        // Plusieurs ressources : l'une d'elles suffit. Sert aux données lues
+        // par plusieurs pages (ex. les comptes bancaires, affichés par
+        // Transactions, Vue d'ensemble et Prévision).
+        const resources = Array.isArray(options.resource)
+          ? options.resource
+          : [options.resource];
         if (options.action) {
           // Vérification par action spécifique
-          hasAccess = hasPermission(
-            userRole,
-            options.resource,
-            options.action,
-            permissionLevels,
+          hasAccess = resources.some((resource) =>
+            hasPermission(userRole, resource, options.action, permissionLevels),
           );
         } else if (options.level) {
           // Vérification par niveau de permission
-          hasAccess = hasPermissionLevel(
-            userRole,
-            options.resource,
-            options.level,
-            permissionLevels,
+          hasAccess = resources.some((resource) =>
+            hasPermissionLevel(
+              userRole,
+              resource,
+              options.level,
+              permissionLevels,
+            ),
           );
         }
 

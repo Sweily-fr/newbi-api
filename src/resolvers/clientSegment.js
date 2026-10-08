@@ -98,7 +98,7 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
 
 export const clientSegmentResolvers = {
   Query: {
-    clientSegments: requireRead("clients")(
+    clientSegments: requireRead("clientSegments")(
       async (_, { workspaceId: inputWorkspaceId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -111,7 +111,7 @@ export const clientSegmentResolvers = {
       },
     ),
 
-    clientSegment: requireRead("clients")(
+    clientSegment: requireRead("clientSegments")(
       async (_, { workspaceId: inputWorkspaceId, id }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -127,7 +127,7 @@ export const clientSegmentResolvers = {
       },
     ),
 
-    clientsInSegment: requireRead("clients")(
+    clientsInSegment: requireRead("clientSegments")(
       async (
         _,
         {
@@ -186,7 +186,7 @@ export const clientSegmentResolvers = {
   },
 
   Mutation: {
-    createClientSegment: requireWrite("clients")(
+    createClientSegment: requireWrite("clientSegments")(
       async (_, { workspaceId: inputWorkspaceId, input }, context) => {
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
@@ -212,7 +212,7 @@ export const clientSegmentResolvers = {
       },
     ),
 
-    updateClientSegment: requireWrite("clients")(
+    updateClientSegment: requireWrite("clientSegments")(
       async (_, { workspaceId: inputWorkspaceId, id, input }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -241,7 +241,7 @@ export const clientSegmentResolvers = {
       },
     ),
 
-    deleteClientSegment: requireDelete("clients")(
+    deleteClientSegment: requireDelete("clientSegments")(
       async (_, { workspaceId: inputWorkspaceId, id }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
