@@ -95,9 +95,29 @@ type SignatureStatusUpdate {
   signatureType: String
 }
 
+"""
+Quota mensuel de signatures électroniques de l'espace
+"""
+type EsignatureQuota {
+  plan: String!
+  unlimited: Boolean!
+  "null si illimité"
+  monthlyQuota: Int
+  used: Int!
+  "null si illimité"
+  remaining: Int
+  "Remise à zéro du compteur (1er du mois suivant, minuit heure de Paris)"
+  resetsAt: String!
+}
+
 # === QUERIES ===
 
 extend type Query {
+  """
+  Signatures électroniques consommées ce mois-ci et reste du quota du plan
+  """
+  esignatureQuota: EsignatureQuota!
+
   """
   Récupérer une demande de signature par ID
   """
