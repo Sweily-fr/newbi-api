@@ -10,6 +10,10 @@ import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
 import { sendSignatureInvitations } from "../services/esignatureEmail.js";
 import { mapExternalStatus } from "../services/esignatureStatus.js";
+import {
+  getEsignatureQuota,
+  assertEsignatureQuotaAvailable,
+} from "../services/esignatureQuota.js";
 import { publishEmailTrackingUpdate } from "./documentEmail.js";
 import {
   publishSignatureStatus,
@@ -99,6 +103,14 @@ const esignatureResolvers = {
     },
   },
   Query: {
+    /**
+     * Signatures électroniques consommées ce mois-ci et reste du quota du plan
+     */
+    esignatureQuota: requireRead("invoices")(async (_, __, context) => {
+      const quota = await getEsignatureQuota(context.workspaceId);
+      return { ...quota, resetsAt: quota.resetsAt.toISOString() };
+    }),
+
     /**
      * Récupérer une demande de signature par ID
      */
@@ -324,6 +336,11 @@ const esignatureResolvers = {
                 ERROR_CODES.VALIDATION_ERROR,
               );
             }
+          }
+
+          // Quota mensuel du plan (le cachet entreprise n'en consomme pas)
+          if (signatureType !== "QES_automatic") {
+            await assertEsignatureQuotaAvailable(context.workspaceId);
           }
 
           // Créer l'entrée SignatureRequest en base
