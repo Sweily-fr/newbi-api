@@ -293,7 +293,13 @@ export async function runRecurrence(recurrence, today = parisDay()) {
       _id: recurrence.sourceInvoiceId,
       workspaceId: recurrence.workspaceId,
     });
-    if (!source) {
+    // Modèle supprimé ou annulé entre-temps : on arrête de facturer
+    const ineligible = !source
+      ? "La facture modèle a été supprimée"
+      : source.status === "CANCELED"
+        ? "La facture modèle a été annulée"
+        : getRecurrenceIneligibility(source);
+    if (ineligible) {
       await InvoiceRecurrence.updateOne(
         { _id: recurrence._id },
         {
@@ -301,12 +307,12 @@ export async function runRecurrence(recurrence, today = parisDay()) {
             ...update,
             status: "ENDED",
             nextRunDate: null,
-            lastError: "La facture modèle a été supprimée",
+            lastError: `Récurrence arrêtée : ${ineligible.charAt(0).toLowerCase()}${ineligible.slice(1)}`,
             lastErrorAt: new Date(),
           },
         },
       );
-      return { status: "ended", error: "source introuvable" };
+      return { status: "ended", error: ineligible };
     }
 
     const user = await mongoose

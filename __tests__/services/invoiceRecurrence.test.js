@@ -394,6 +394,21 @@ describe("génération d'une facture récurrente", () => {
     expect(sendDocumentEmail).not.toHaveBeenCalled();
   });
 
+  it("arrête la récurrence si la facture modèle a été annulée", async () => {
+    const source = await createSource();
+    const recurrence = await addRecurrence(source);
+    await Invoice.updateOne({ _id: source._id }, { status: "CANCELED" });
+
+    const result = await run(recurrence._id, "2030-01-15");
+
+    expect(result.status).toBe("ended");
+    const after = await InvoiceRecurrence.findById(recurrence._id).lean();
+    expect(after.status).toBe("ENDED");
+    expect(after.lastError).toMatch(/annulée/);
+    expect(await generated(recurrence._id)).toHaveLength(0);
+    expect(sendDocumentEmail).not.toHaveBeenCalled();
+  });
+
   it("termine la récurrence après la dernière échéance", async () => {
     const source = await createSource();
     const recurrence = await addRecurrence(source, { endDate: "2030-02-01" });
