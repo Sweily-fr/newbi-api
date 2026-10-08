@@ -11,10 +11,10 @@ import {
 } from "../middlewares/rbac.js";
 
 // 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (et le niveau
-// requis sur le module « clients ») et impose le workspace validé par RBAC à
+// requis sur le module « clientLists ») et impose le workspace validé par RBAC à
 // la place de l'ID brut fourni dans les args.
 const scopedQuery = (fn) =>
-  requireRead("clients")(async (parent, args, context, info) =>
+  requireRead("clientLists")(async (parent, args, context, info) =>
     fn(
       parent,
       {
@@ -29,7 +29,7 @@ const scopedQuery = (fn) =>
 // level : « write » (créer, modifier, ajouter/retirer des clients) ou
 // « delete » (supprimer des listes). Le contrôle d'abonnement reste ici.
 const makeScopedMutation = (level) => (fn) =>
-  (level === "delete" ? requireDelete : requireWrite)("clients", {
+  (level === "delete" ? requireDelete : requireWrite)("clientLists", {
     skipSubscriptionCheck: true,
   })(async (parent, args, context, info) => {
     await checkSubscriptionActive(context);

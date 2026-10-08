@@ -45,6 +45,7 @@ const catalog = {
   modules: MODULES.map((m) => ({
     key: m.key,
     group: m.group,
+    kind: m.kind || "level",
     label: m.label,
     description: m.description || null,
     levels: allowedLevels(m.key),

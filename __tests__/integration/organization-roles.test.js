@@ -9,6 +9,7 @@ import organizationRoleResolvers from "../../src/resolvers/organizationRole.js";
 import {
   invalidateOrgCache,
   requireDelete,
+  requirePermission,
   requireRead,
   requireWorkspaceLevel,
   requireWrite,
@@ -308,5 +309,37 @@ describe("Rôles d'un espace", () => {
         "read",
       ),
     ).toBe(false);
+  });
+
+  it("garde au Comptable ses droits d'avant les rôles personnalisés", async () => {
+    const accountant = buildUserId();
+    await seedOrgMembership({
+      userId: accountant,
+      organizationId,
+      role: "accountant",
+    });
+    await expect(
+      probe(requirePermission("invoices", "mark-paid"))(
+        null,
+        {},
+        ctx(accountant),
+      ),
+    ).resolves.toBe("ok");
+    await expect(
+      probe(requireWrite("invoices"))(null, {}, ctx(accountant)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      probe(requireWrite("importedQuotes"))(null, {}, ctx(accountant)),
+    ).resolves.toBe("ok");
+    await expect(
+      probe(requireDelete("clientLists"))(null, {}, ctx(accountant)),
+    ).resolves.toBe("ok");
+    await expect(
+      probe(requireWorkspaceLevel("kanban", "read"))(null, {}, ctx(accountant)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Visibilité des dossiers système : administrateurs seulement, comme avant
+    await expect(
+      probe(requireWrite("orgSettings"))(null, {}, ctx(accountant)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

@@ -1524,14 +1524,11 @@ const sharedDocumentResolvers = {
 
           const userId = user._id?.toString() || user.id?.toString();
           if (folder.isSystem) {
-            // Dossiers système : réservé aux rôles qui peuvent tout gérer
-            // dans les documents partagés (niveau « delete »), au lieu des
-            // seuls rôles owner/admin (rôles ajustés et personnalisés).
+            // Dossiers système : configuration de l'espace, réservée aux rôles
+            // qui gèrent les informations de l'entreprise (super admin et
+            // administrateurs par défaut, comme avant les rôles personnalisés)
             if (
-              !context.permissions?.hasPermissionLevel(
-                "sharedDocuments",
-                "delete",
-              )
+              !context.permissions?.hasPermissionLevel("orgSettings", "write")
             ) {
               return {
                 success: false,
@@ -1924,8 +1921,8 @@ const sharedDocumentResolvers = {
       if (!context.user) return false;
       const userId =
         context.user._id?.toString() || context.user.id?.toString();
-      // Les dossiers système : seul un rôle au niveau « delete » sur les
-      // documents partagés peut gérer la visibilité (même règle que
+      // Les dossiers système : seul un rôle qui gère les informations de
+      // l'entreprise peut gérer la visibilité (même règle que
       // updateFolderVisibility).
       // 🔐 Le rôle est résolu en base (pas depuis le header x-user-role, qui est
       // client-contrôlé) — ce field resolver ne passe pas par RBAC.
@@ -1944,8 +1941,8 @@ const sharedDocumentResolvers = {
             const levels = await getEffectiveLevelsFor(wsId, member.role);
             canManage = hasPermissionLevel(
               member.role,
-              "sharedDocuments",
-              "delete",
+              "orgSettings",
+              "write",
               levels,
             );
           }
