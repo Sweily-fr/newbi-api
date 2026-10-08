@@ -71,11 +71,13 @@ import esignatureResolvers from "./esignatureResolvers.js";
 import rgpdResolvers from "./rgpd.js";
 import dashboardAggregationResolvers from "./dashboardAggregation.js";
 import receiptMatchingResolvers from "./receiptMatchingResolvers.js";
+import invoiceRecurrenceResolvers from "./invoiceRecurrence.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
   subscriptionResolvers,
   invoiceResolvers,
+  invoiceRecurrenceResolvers,
   quoteResolvers,
   creditNoteResolvers,
   clientResolvers,

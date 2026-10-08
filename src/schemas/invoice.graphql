@@ -86,6 +86,8 @@ type Invoice {
   sourceDeliveryNote: DeliveryNote
   # Bons de livraison générés depuis cette facture (DeliveryNote.sourceInvoice)
   linkedDeliveryNotes: [DeliveryNote]
+  # Récurrence qui a généré cette facture (factures récurrentes)
+  recurrenceOrigin: InvoiceRecurrenceOrigin
   createdAt: String!
   updatedAt: String!
 }
