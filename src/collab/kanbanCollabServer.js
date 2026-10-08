@@ -23,6 +23,8 @@ import { Task } from "../models/kanban.js";
 import KanbanCollabDoc from "../models/KanbanCollabDoc.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
+import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
+import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { publishTaskUpdated } from "../resolvers/kanban.js";
 import { redisConfig } from "../config/redis.js";
 import logger from "../utils/logger.js";
@@ -76,9 +78,13 @@ export const ydocToHtml = (document) => {
   return normalizeHtml(generateHTML(json, collabExtensions));
 };
 
-const authenticate = async ({ token, documentName }) => {
+const authenticate = async ({ token, documentName, connectionConfig }) => {
   try {
-    return await authenticateOrThrow({ token, documentName });
+    return await authenticateOrThrow({
+      token,
+      documentName,
+      connectionConfig,
+    });
   } catch (error) {
     logger.warn(
       `[Collab] Connexion refusée sur ${documentName}: ${error.message}`,
@@ -87,7 +93,11 @@ const authenticate = async ({ token, documentName }) => {
   }
 };
 
-const authenticateOrThrow = async ({ token, documentName }) => {
+const authenticateOrThrow = async ({
+  token,
+  documentName,
+  connectionConfig,
+}) => {
   const taskId = taskIdFromDocumentName(documentName);
   if (!taskId) throw new Error("Document inconnu");
   if (!token) throw new Error("Non authentifié");
@@ -110,7 +120,22 @@ const authenticateOrThrow = async ({ token, documentName }) => {
   );
   if (!organization) throw new Error("Accès refusé");
 
-  logger.info(`[Collab] ${userId} connecté sur la tâche ${taskId}`);
+  // Droits du rôle sur le kanban : sans lecture, pas de connexion ; en
+  // lecture seule, la connexion reçoit les modifications sans pouvoir en
+  // envoyer (Hocuspocus ignore ses mises à jour)
+  const levels = await getEffectiveLevelsFor(
+    organization.id,
+    organization.memberRole,
+  );
+  if (!levelsAllowLevel(levels, "kanban", "read")) {
+    throw new Error("Accès refusé");
+  }
+  const readOnly = !levelsAllowLevel(levels, "kanban", "write");
+  if (readOnly && connectionConfig) connectionConfig.readOnly = true;
+
+  logger.info(
+    `[Collab] ${userId} connecté sur la tâche ${taskId}${readOnly ? " (lecture seule)" : ""}`,
+  );
   return {
     user: { id: userId },
     taskId,
