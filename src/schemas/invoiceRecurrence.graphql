@@ -1,0 +1,83 @@
+# Factures récurrentes : une facture de vente sert de modèle, une nouvelle
+# facture en est tirée à chaque échéance puis envoyée par email au client.
+
+enum InvoiceRecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum InvoiceRecurrenceStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+type InvoiceRecurrenceOrigin {
+  recurrenceId: ID
+  sourceInvoiceId: ID
+  # Échéance (AAAA-MM-JJ) qui a produit la facture
+  occurrenceDate: String
+}
+
+# Résumé de la facture modèle (évite de charger la facture complète)
+type InvoiceRecurrenceSource {
+  id: ID!
+  prefix: String
+  number: String
+  status: InvoiceStatus
+  clientName: String
+  clientEmail: String
+  finalTotalTTC: Float
+}
+
+type InvoiceRecurrence {
+  id: ID!
+  sourceInvoiceId: ID!
+  sourceInvoice: InvoiceRecurrenceSource
+  frequency: InvoiceRecurrenceFrequency!
+  interval: Int!
+  # Jours calendaires AAAA-MM-JJ (heure de Paris)
+  startDate: String!
+  endDate: String
+  nextRunDate: String
+  status: InvoiceRecurrenceStatus!
+  # null = modèle des paramètres email (comme l'envoi manuel)
+  emailSubject: String
+  emailBody: String
+  generatedCount: Int!
+  lastRunDate: String
+  lastInvoiceId: ID
+  lastError: String
+  lastErrorAt: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input InvoiceRecurrenceInput {
+  frequency: InvoiceRecurrenceFrequency!
+  interval: Int
+  startDate: String!
+  endDate: String
+  emailSubject: String
+  emailBody: String
+}
+
+extend type Query {
+  invoiceRecurrences(workspaceId: ID!): [InvoiceRecurrence!]!
+}
+
+extend type Mutation {
+  # Crée ou met à jour la récurrence d'une facture (la réactive si besoin)
+  saveInvoiceRecurrence(
+    workspaceId: ID!
+    invoiceId: ID!
+    input: InvoiceRecurrenceInput!
+  ): InvoiceRecurrence!
+  # Suspendre (PAUSED), reprendre (ACTIVE) ou arrêter (ENDED)
+  setInvoiceRecurrenceStatus(
+    workspaceId: ID!
+    id: ID!
+    status: InvoiceRecurrenceStatus!
+  ): InvoiceRecurrence!
+}
