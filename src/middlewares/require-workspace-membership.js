@@ -1,5 +1,8 @@
 import { betterAuthJWTMiddleware } from "./better-auth-jwt.js";
-import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
+import {
+  userBelongsToWorkspace,
+  userHasWorkspaceLevel,
+} from "../utils/workspace-membership.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -46,4 +49,27 @@ export async function requireWorkspaceMembership(req, res, next) {
     logger.error("requireWorkspaceMembership:", err.message);
     return res.status(500).json({ error: "Erreur serveur" });
   }
+}
+
+/**
+ * requireWorkspaceMembership + niveau du rôle sur un module (grille des
+ * rôles). Réponse 403 si le rôle ne le permet pas.
+ */
+export function requireWorkspacePermission(moduleKey, level) {
+  return (req, res, next) =>
+    requireWorkspaceMembership(req, res, async () => {
+      const allowed = await userHasWorkspaceLevel(
+        String(req.user._id),
+        req.workspaceId,
+        moduleKey,
+        level,
+      );
+      if (!allowed) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Vous n'avez pas la permission d'effectuer cette action.",
+        });
+      }
+      return next();
+    });
 }

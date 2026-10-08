@@ -7,11 +7,11 @@ import { escapeRegex } from "../utils/escapeRegex.js";
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireRead,
   requireWrite,
   requireDelete,
+  requireWorkspaceLevel,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -393,7 +393,10 @@ const importedPurchaseOrderResolvers = {
   Upload: GraphQLUpload,
 
   Query: {
-    importedPurchaseOrder: withWorkspace(async (_, { id }, { workspaceId }) => {
+    importedPurchaseOrder: requireWorkspaceLevel(
+      "importedPurchaseOrders",
+      "read",
+    )(async (_, { id }, { workspaceId }) => {
       const po = await checkPurchaseOrderAccess(id, workspaceId);
       return po;
     }),

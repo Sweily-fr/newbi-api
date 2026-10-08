@@ -271,7 +271,8 @@ function computePreviousPeriod(startDate, endDate) {
 
 const financialAnalyticsResolvers = {
   Query: {
-    financialAnalytics: requireRead("invoices")(
+    // Pages Analytiques et Vue d'ensemble : module analytics
+    financialAnalytics: requireRead("analytics")(
       async (
         _,
         {

@@ -1994,10 +1994,11 @@ const invoiceResolvers = {
           // ✅ Les permissions d'écriture sont déjà vérifiées par requireWrite("invoices")
 
           // Vérifier si la facture peut être modifiée (statut)
+          // Facture finalisée : modifiable seulement avec le droit de
+          // suppression sur les factures (administrateurs par défaut)
           if (
             invoiceData.status === "COMPLETED" &&
-            userRole !== "admin" &&
-            userRole !== "owner"
+            !context.permissions?.canDelete("invoices")
           ) {
             throw createResourceLockedError("Cette facture est verrouillée");
           }

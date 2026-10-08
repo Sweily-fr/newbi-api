@@ -5,6 +5,7 @@ import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
 import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
@@ -29,6 +30,21 @@ router.post(
 
       if (!workspaceId) {
         return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      // Membre de l'espace avec le droit d'écriture sur les transactions
+      if (
+        !(await userHasWorkspaceLevel(
+          String(user._id || user.id),
+          workspaceId,
+          "banking",
+          "write",
+        ))
+      ) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Vous n'avez pas la permission d'effectuer cette action.",
+        });
       }
 
       // Initialiser le service banking avec Bridge
@@ -90,6 +106,21 @@ router.post(
 
       if (!workspaceId) {
         return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      // Membre de l'espace avec le droit d'écriture sur les transactions
+      if (
+        !(await userHasWorkspaceLevel(
+          String(user._id || user.id),
+          workspaceId,
+          "banking",
+          "write",
+        ))
+      ) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Vous n'avez pas la permission d'effectuer cette action.",
+        });
       }
 
       // Validation des dates si fournies
@@ -186,6 +217,21 @@ router.post(
 
       if (!workspaceId) {
         return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      // Membre de l'espace avec le droit d'écriture sur les transactions
+      if (
+        !(await userHasWorkspaceLevel(
+          String(user._id || user.id),
+          workspaceId,
+          "banking",
+          "write",
+        ))
+      ) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Vous n'avez pas la permission d'effectuer cette action.",
+        });
       }
 
       // Validation des dates si fournies

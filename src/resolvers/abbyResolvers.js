@@ -8,6 +8,7 @@ import {
   checkSubscriptionActive,
   withOrganization,
 } from "../middlewares/rbac.js";
+import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 function requireUser(user) {
@@ -16,14 +17,15 @@ function requireUser(user) {
   }
 }
 
-function isOwnerOrAdmin(userRole) {
-  const normalized = userRole?.toLowerCase();
-  return normalized === "owner" || normalized === "admin";
+// Connecter, configurer ou synchroniser une application : module
+// « Applications et banques » (rôle prédéfini ou personnalisé)
+function canManageIntegrations(permissionLevels) {
+  return levelsAllowLevel(permissionLevels, "integrations", "write");
 }
 
 const ROLE_DENIED = (action) => ({
   success: false,
-  message: `Seuls les propriétaires et administrateurs peuvent ${action}`,
+  message: `Votre rôle ne permet pas de ${action}`,
 });
 
 /**
@@ -76,13 +78,13 @@ const abbyResolvers = {
     testAbbyConnection: async (
       _,
       { apiKey },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("tester la connexion Abby");
       }
       return abbyService.testConnection(apiKey?.trim());
@@ -91,12 +93,12 @@ const abbyResolvers = {
     /**
      * Connecte Abby à l'organisation
      */
-    connectAbby: async (_, { apiKey }, { user, organizationId, userRole }) => {
+    connectAbby: async (_, { apiKey }, { user, organizationId, permissionLevels }) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("connecter Abby");
       }
 
@@ -150,12 +152,12 @@ const abbyResolvers = {
     /**
      * Déconnecte Abby de l'organisation
      */
-    disconnectAbby: async (_, args, { user, organizationId, userRole }) => {
+    disconnectAbby: async (_, args, { user, organizationId, permissionLevels }) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("déconnecter Abby");
       }
 
@@ -187,13 +189,13 @@ const abbyResolvers = {
     updateAbbyAutoSync: async (
       _,
       { autoSync },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("modifier ces paramètres");
       }
 
@@ -232,13 +234,13 @@ const abbyResolvers = {
     updateAbbyIncomeProductType: async (
       _,
       { productType },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("modifier ces paramètres");
       }
       if (![1, 2, 3, 4, 5].includes(Number(productType))) {
@@ -335,12 +337,12 @@ const abbyResolvers = {
     /**
      * Importe maintenant les documents finalisés dans Abby vers Newbi
      */
-    importFromAbby: async (_, args, { user, organizationId, userRole }) => {
+    importFromAbby: async (_, args, { user, organizationId, permissionLevels }) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("lancer un import depuis Abby");
       }
 
@@ -373,12 +375,12 @@ const abbyResolvers = {
     /**
      * Lance une synchronisation complète vers Abby
      */
-    syncAllToAbby: async (_, args, { user, organizationId, userRole }) => {
+    syncAllToAbby: async (_, args, { user, organizationId, permissionLevels }) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("lancer une synchronisation complète");
       }
 

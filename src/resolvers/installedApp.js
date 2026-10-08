@@ -25,9 +25,10 @@ const APP_INTEGRATIONS = {
   pennylane: { label: "Pennylane", model: PennylaneAccount },
 };
 
-function isOwnerOrAdmin(userRole) {
-  const normalized = userRole?.toLowerCase();
-  return normalized === "owner" || normalized === "admin";
+// Installer ou désinstaller une application : module « Applications et
+// banques » (rôle prédéfini ou personnalisé)
+function canManageIntegrations(context) {
+  return Boolean(context.permissions?.canWrite("integrations"));
 }
 
 const installedAppResolvers = {
@@ -58,6 +59,12 @@ const installedAppResolvers = {
 
   Mutation: {
     installApp: async (_, args, context) => {
+      if (!canManageIntegrations(context)) {
+        throw new AppError(
+          "Votre rôle ne permet pas d'installer une application",
+          ERROR_CODES.FORBIDDEN,
+        );
+      }
       const organizationId = resolveWorkspaceId(
         args.organizationId,
         context.organizationId,
@@ -94,9 +101,9 @@ const installedAppResolvers = {
       );
       const { appId } = args;
 
-      if (!isOwnerOrAdmin(context.userRole)) {
+      if (!canManageIntegrations(context)) {
         throw new AppError(
-          "Seuls les propriétaires et administrateurs peuvent désinstaller une application",
+          "Votre rôle ne permet pas de désinstaller une application",
           ERROR_CODES.FORBIDDEN,
         );
       }

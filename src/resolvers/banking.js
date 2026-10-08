@@ -1,6 +1,8 @@
 import { bankingService } from "../services/banking/BankingService.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
 import ApiMetric from "../models/ApiMetric.js";
@@ -24,6 +26,15 @@ import {
 } from "../utils/pcg-mapping.js";
 import { toExpenseCategory } from "../utils/categoryTaxonomy.js";
 
+// Droits par module (mêmes choix d'espace que withWorkspace : argument
+// workspaceId d'abord). Transactions, justificatifs, paiements et synchro :
+// module banking. Ajout, suppression, réglages d'un compte bancaire et
+// changement de fournisseur : module integrations (« Applications et
+// banques », niveau write qui couvre aussi la suppression).
+const readBanking = requireWorkspaceLevel("banking", "read");
+const writeBanking = requireWorkspaceLevel("banking", "write");
+const manageBankAccounts = requireWorkspaceLevel("integrations", "write");
+
 const bankingResolvers = {
   Upload: GraphQLUpload,
 
@@ -37,7 +48,7 @@ const bankingResolvers = {
 
   Query: {
     // Transactions - workspaceId passé en argument (comme les factures)
-    transactions: withWorkspace(
+    transactions: readBanking(
       async (
         parent,
         { workspaceId, filters = {}, limit = 50, offset = 0 },
@@ -70,7 +81,7 @@ const bankingResolvers = {
     // Liste paginée serveur pour la page Transactions : la page demandée +
     // totalCount + compteurs d'onglets calculés sur toute la base (les
     // prédicats d'onglets sont dans utils/transaction-page-query.js)
-    transactionsPage: withWorkspace(
+    transactionsPage: readBanking(
       async (
         parent,
         { workspaceId, filters = {}, tab = "ALL", page = 1, limit = 20 },
@@ -108,21 +119,19 @@ const bankingResolvers = {
       },
     ),
 
-    transaction: withWorkspace(
-      async (parent, { id }, { user, workspaceId }) => {
-        const transaction = await Transaction.findOne({
-          _id: id,
-          workspaceId,
-          deletedAt: null,
-        }).populate("userId");
-        if (!transaction) {
-          throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
-        }
-        return transaction;
-      },
-    ),
+    transaction: readBanking(async (parent, { id }, { user, workspaceId }) => {
+      const transaction = await Transaction.findOne({
+        _id: id,
+        workspaceId,
+        deletedAt: null,
+      }).populate("userId");
+      if (!transaction) {
+        throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
+      }
+      return transaction;
+    }),
 
-    transactionByExternalId: withWorkspace(
+    transactionByExternalId: readBanking(
       async (parent, { provider, externalId }, { user, workspaceId }) => {
         const transaction = await Transaction.findOne({
           provider,
@@ -138,13 +147,11 @@ const bankingResolvers = {
     ),
 
     // Comptes bancaires - workspaceId passé en argument
-    bankingAccounts: withWorkspace(
-      async (parent, { workspaceId }, { user }) => {
-        return await AccountBanking.findByWorkspace(workspaceId);
-      },
-    ),
+    bankingAccounts: readBanking(async (parent, { workspaceId }, { user }) => {
+      return await AccountBanking.findByWorkspace(workspaceId);
+    }),
 
-    bankingAccount: withWorkspace(
+    bankingAccount: readBanking(
       async (parent, { id }, { user, workspaceId }) => {
         const account = await AccountBanking.findOne({ _id: id, workspaceId });
         if (!account) {
@@ -157,7 +164,7 @@ const bankingResolvers = {
       },
     ),
 
-    accountBalance: withWorkspace(
+    accountBalance: readBanking(
       async (parent, { accountId }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -172,7 +179,7 @@ const bankingResolvers = {
     ),
 
     // Métriques
-    apiMetrics: withWorkspace(
+    apiMetrics: readBanking(
       async (parent, { filters }, { user, workspaceId }) => {
         const query = { workspaceId };
 
@@ -185,7 +192,7 @@ const bankingResolvers = {
       },
     ),
 
-    providerStats: withWorkspace(
+    providerStats: readBanking(
       async (
         parent,
         { provider, startDate, endDate },
@@ -208,7 +215,7 @@ const bankingResolvers = {
       },
     ),
 
-    costComparison: withWorkspace(
+    costComparison: readBanking(
       async (parent, { startDate, endDate }, { user, workspaceId }) => {
         const comparison = await ApiMetric.getCostComparison(
           startDate,
@@ -246,7 +253,7 @@ const bankingResolvers = {
     },
 
     // Historique des transactions
-    transactionHistory: withWorkspace(
+    transactionHistory: readBanking(
       async (parent, { accountId, filters = {} }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -267,7 +274,7 @@ const bankingResolvers = {
 
   Mutation: {
     // Mettre à jour une transaction
-    updateTransaction: withWorkspace(
+    updateTransaction: writeBanking(
       async (parent, { id, input }, { user, workspaceId }) => {
         const updateData = {};
 
@@ -385,7 +392,7 @@ const bankingResolvers = {
     ),
 
     // Upload de justificatifs (multi-fichiers) pour une transaction
-    uploadTransactionReceipt: withWorkspace(
+    uploadTransactionReceipt: writeBanking(
       async (parent, { transactionId, workspaceId, files }, { user }) => {
         try {
           const transaction = await Transaction.findOne({
@@ -546,7 +553,7 @@ const bankingResolvers = {
     // Décision de l'utilisateur sur la facture d'achat proposée pour un
     // justificatif : rien n'est créé par l'analyse tant qu'il n'a pas
     // confirmé les valeurs lues.
-    confirmTransactionReceiptInvoice: withWorkspace(
+    confirmTransactionReceiptInvoice: writeBanking(
       async (
         parent,
         { transactionId, workspaceId, fileId, action, values, purchaseInvoiceId },
@@ -597,7 +604,7 @@ const bankingResolvers = {
     ),
 
     // Suppression d'un justificatif spécifique d'une transaction
-    removeTransactionReceiptFile: withWorkspace(
+    removeTransactionReceiptFile: writeBanking(
       async (parent, { transactionId, workspaceId, fileId }) => {
         try {
           const transaction = await Transaction.findOne({
@@ -710,7 +717,7 @@ const bankingResolvers = {
     ),
 
     // Traitement des paiements
-    processPayment: withWorkspace(
+    processPayment: writeBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -741,7 +748,7 @@ const bankingResolvers = {
     ),
 
     // Traitement des remboursements
-    processRefund: withWorkspace(
+    processRefund: writeBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -771,7 +778,7 @@ const bankingResolvers = {
     ),
 
     // Gestion des comptes
-    createBankingAccount: withWorkspace(
+    createBankingAccount: manageBankAccounts(
       async (parent, { input }, { user, workspaceId }) => {
         // Vérifier que l'email est vérifié
         if (!user.isEmailVerified && !user.emailVerified) {
@@ -819,7 +826,7 @@ const bankingResolvers = {
       },
     ),
 
-    updateBankingAccount: withWorkspace(
+    updateBankingAccount: manageBankAccounts(
       async (parent, { id, input }, { user, workspaceId }) => {
         const account = await AccountBanking.findOne({ _id: id, workspaceId });
         if (!account) {
@@ -845,7 +852,7 @@ const bankingResolvers = {
       },
     ),
 
-    deleteBankingAccount: withWorkspace(
+    deleteBankingAccount: manageBankAccounts(
       async (parent, { id }, { user, workspaceId }) => {
         const account = await AccountBanking.findOne({ _id: id, workspaceId });
         if (!account) {
@@ -879,7 +886,7 @@ const bankingResolvers = {
       },
     ),
 
-    syncAccountBalance: withWorkspace(
+    syncAccountBalance: writeBanking(
       async (parent, { accountId }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -894,7 +901,7 @@ const bankingResolvers = {
     ),
 
     // Administration
-    switchBankingProvider: withWorkspace(
+    switchBankingProvider: manageBankAccounts(
       async (parent, { provider }, { user, workspaceId }) => {
         try {
           await bankingService.switchProvider(provider.toLowerCase());
@@ -908,7 +915,7 @@ const bankingResolvers = {
       },
     ),
 
-    syncTransactionHistory: withWorkspace(
+    syncTransactionHistory: writeBanking(
       async (parent, { accountId }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -934,7 +941,7 @@ const bankingResolvers = {
      * @param {string} input.until - Date de fin YYYY-MM-DD (optionnel, défaut aujourd'hui)
      * @param {boolean} input.fullSync - Force sync complète sans limite de pages
      */
-    syncAllTransactions: withWorkspace(
+    syncAllTransactions: writeBanking(
       async (parent, { input = {} }, { user, workspaceId }) => {
         try {
           await bankingService.initialize("bridge");

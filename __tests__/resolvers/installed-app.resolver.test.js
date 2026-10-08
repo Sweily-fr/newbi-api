@@ -130,7 +130,7 @@ describe("installedApp.Mutation.uninstallApp", () => {
         { organizationId, appId: "abby" },
         memberCtx(),
       ),
-    ).rejects.toThrow(/propriétaires et administrateurs/);
+    ).rejects.toThrow(/Votre rôle ne permet pas/);
 
     expect(await AbbyAccount.countDocuments({ organizationId })).toBe(1);
   });

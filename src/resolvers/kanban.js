@@ -2,7 +2,11 @@
 import { Board, Column, Task } from "../models/kanban.js";
 import { AuthenticationError } from "apollo-server-express";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+  withRBAC,
+} from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getPubSub, cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import logger from "../utils/logger.js";
@@ -675,43 +679,24 @@ const loadTaskUsersInfo = async (context, userIds) => {
 
 const resolvers = {
   Query: {
-    boards: withWorkspace(
+    boards: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { workspaceId },
-        { user, workspaceId: contextWorkspaceId, db },
+        { user, workspaceId: contextWorkspaceId, permissions },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         // Si pas d'utilisateur, retourner vide (sécurité)
         if (!user?.id) return [];
 
-        // L'admin/owner du workspace voit tous les boards.
-        // Les autres membres ne voient que les boards dont ils sont :
+        // Qui a le niveau « suppression » sur les projets (super admin et
+        // administrateur par défaut, ou rôle personnalisé équivalent) voit
+        // tous les boards. Les autres membres ne voient que les boards dont
+        // ils sont :
         //   - le propriétaire (board.userId)
         //   - ou listés dans board.members
-        let isWorkspaceAdmin = false;
-        try {
-          const orgId =
-            typeof finalWorkspaceId === "string"
-              ? new mongoose.Types.ObjectId(finalWorkspaceId)
-              : finalWorkspaceId;
-          const membership = await db.collection("member").findOne({
-            organizationId: orgId,
-            userId: user.id,
-          });
-          if (
-            membership &&
-            ["owner", "admin"].includes((membership.role || "").toLowerCase())
-          ) {
-            isWorkspaceAdmin = true;
-          }
-        } catch (e) {
-          logger.warn(
-            "⚠️ [boards] Impossible de vérifier le rôle workspace:",
-            e?.message,
-          );
-        }
+        const isWorkspaceAdmin = !!permissions?.canDelete("kanban");
 
         const baseFilter = { workspaceId: finalWorkspaceId };
         // Par défaut tous les membres du workspace voient le board.
@@ -733,7 +718,7 @@ const resolvers = {
       },
     ),
 
-    organizationMembersPresence: withWorkspace(
+    organizationMembersPresence: requireWorkspaceLevel("kanban", "read")(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         try {
@@ -761,6 +746,8 @@ const resolvers = {
       },
     ),
 
+    // Annuaire des membres de l'espace, partagé avec d'autres modules (notes
+    // des clients) : pas de niveau « Projets » exigé, l'appartenance suffit.
     organizationMembers: withWorkspace(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -997,11 +984,11 @@ const resolvers = {
       }
     },
 
-    board: withWorkspace(
+    board: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { id, workspaceId },
-        { user, workspaceId: contextWorkspaceId, db },
+        { user, workspaceId: contextWorkspaceId, permissions },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const board = await Board.findOne({
@@ -1012,7 +999,8 @@ const resolvers = {
 
         // Vérifier l'accès : si aucune restriction de membres → tout le monde
         // peut voir. Sinon, l'utilisateur doit être propriétaire, listé dans
-        // board.members, ou admin/owner du workspace.
+        // board.members, ou avoir le niveau « suppression » sur les projets
+        // (super admin et administrateur par défaut).
         if (user?.id) {
           const assignedMembers = (board.members || []).map((m) =>
             m?.toString(),
@@ -1022,30 +1010,7 @@ const resolvers = {
           const isAssigned = assignedMembers.includes(user.id);
 
           if (hasRestriction && !isOwner && !isAssigned) {
-            let isWorkspaceAdmin = false;
-            try {
-              const orgId =
-                typeof finalWorkspaceId === "string"
-                  ? new mongoose.Types.ObjectId(finalWorkspaceId)
-                  : finalWorkspaceId;
-              const membership = await db.collection("member").findOne({
-                organizationId: orgId,
-                userId: user.id,
-              });
-              if (
-                membership &&
-                ["owner", "admin"].includes(
-                  (membership.role || "").toLowerCase(),
-                )
-              ) {
-                isWorkspaceAdmin = true;
-              }
-            } catch (e) {
-              logger.warn(
-                "⚠️ [board] Impossible de vérifier le rôle workspace:",
-                e?.message,
-              );
-            }
+            const isWorkspaceAdmin = !!permissions?.canDelete("kanban");
             if (!isWorkspaceAdmin) {
               throw boardNotFoundError();
             }
@@ -1056,7 +1021,7 @@ const resolvers = {
       },
     ),
 
-    columns: withWorkspace(
+    columns: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { boardId, workspaceId },
@@ -1072,14 +1037,14 @@ const resolvers = {
       },
     ),
 
-    column: withWorkspace(
+    column: requireWorkspaceLevel("kanban", "read")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         return await Column.findOne({ _id: id, workspaceId: finalWorkspaceId });
       },
     ),
 
-    tasks: withWorkspace(
+    tasks: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { boardId, columnId, workspaceId },
@@ -1093,7 +1058,7 @@ const resolvers = {
       },
     ),
 
-    task: withWorkspace(
+    task: requireWorkspaceLevel("kanban", "read")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const task = await Task.findOne({
@@ -1104,7 +1069,7 @@ const resolvers = {
       },
     ),
 
-    taskPresence: withWorkspace(
+    taskPresence: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { boardId, workspaceId },
@@ -1123,7 +1088,7 @@ const resolvers = {
       },
     ),
 
-    searchTasks: withWorkspace(
+    searchTasks: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { search, boardId, columnId, excludeTaskId, limit, workspaceId },
@@ -1141,8 +1106,16 @@ const resolvers = {
       },
     ),
 
-    activeTimers: withWorkspace(
-      async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    // Interrogée toutes les 30 s par le minuteur flottant, présent sur toutes
+    // les pages : sans accès aux projets on renvoie une liste vide plutôt
+    // qu'une erreur (qui s'afficherait en boucle), aucune donnée n'est exposée.
+    activeTimers: withRBAC(
+      async (
+        _,
+        { workspaceId },
+        { user, workspaceId: contextWorkspaceId, permissions },
+      ) => {
+        if (!permissions?.canRead("kanban")) return [];
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const db = mongoose.connection.db;
 
@@ -1255,6 +1228,8 @@ const resolvers = {
 
         return enrichedTasks;
       },
+      // Même choix d'espace et mêmes erreurs que withWorkspace
+      { preferArgsWorkspace: true, passthroughErrors: true },
     ),
   },
 
@@ -1262,7 +1237,7 @@ const resolvers = {
     // Présence : pas une écriture métier, donc hors du verrou d'abonnement
     // (voir l'exclusion dans le wrapper checkSubscriptionActive en bas de
     // fichier) - un membre en lecture seule peut aussi être « sur » une tâche.
-    setTaskPresence: withWorkspace(
+    setTaskPresence: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { boardId, taskId, clientId, workspaceId },
@@ -1283,7 +1258,7 @@ const resolvers = {
     ),
 
     // Board mutations
-    createBoard: withWorkspace(
+    createBoard: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { input, workspaceId },
@@ -1341,7 +1316,7 @@ const resolvers = {
       },
     ),
 
-    updateBoard: withWorkspace(
+    updateBoard: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { input, workspaceId },
@@ -1389,7 +1364,7 @@ const resolvers = {
       },
     ),
 
-    deleteBoard: withWorkspace(
+    deleteBoard: requireWorkspaceLevel("kanban", "delete")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -1430,7 +1405,7 @@ const resolvers = {
       },
     ),
 
-    toggleBoardFavorite: withWorkspace(
+    toggleBoardFavorite: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { boardId, workspaceId },
@@ -1456,7 +1431,7 @@ const resolvers = {
     ),
 
     // Column mutations
-    createColumn: withWorkspace(
+    createColumn: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { input, workspaceId },
@@ -1488,7 +1463,7 @@ const resolvers = {
       },
     ),
 
-    updateColumn: withWorkspace(
+    updateColumn: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { input, workspaceId },
@@ -1519,7 +1494,7 @@ const resolvers = {
       },
     ),
 
-    deleteColumn: withWorkspace(
+    deleteColumn: requireWorkspaceLevel("kanban", "delete")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -1565,7 +1540,7 @@ const resolvers = {
       },
     ),
 
-    reorderColumns: withWorkspace(
+    reorderColumns: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { columns, workspaceId },
@@ -1611,7 +1586,7 @@ const resolvers = {
     ),
 
     // Task mutations
-    createTask: withWorkspace(
+    createTask: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { input, workspaceId },
@@ -1918,7 +1893,7 @@ const resolvers = {
       },
     ),
 
-    updateTask: withWorkspace(
+    updateTask: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { input, workspaceId },
@@ -2623,7 +2598,7 @@ const resolvers = {
       },
     ),
 
-    deleteTask: withWorkspace(
+    deleteTask: requireWorkspaceLevel("kanban", "delete")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -2674,7 +2649,7 @@ const resolvers = {
       },
     ),
 
-    linkTask: withWorkspace(
+    linkTask: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, linkedTaskId, workspaceId },
@@ -2711,7 +2686,7 @@ const resolvers = {
       },
     ),
 
-    unlinkTask: withWorkspace(
+    unlinkTask: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, linkedTaskId, workspaceId },
@@ -2748,7 +2723,7 @@ const resolvers = {
       },
     ),
 
-    moveTask: withWorkspace(
+    moveTask: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { id, columnId, position, workspaceId },
@@ -2933,7 +2908,7 @@ const resolvers = {
     ),
 
     // Ajouter un commentaire
-    addComment: withWorkspace(
+    addComment: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, input, workspaceId },
@@ -3221,7 +3196,7 @@ const resolvers = {
     ),
 
     // Modifier un commentaire
-    updateComment: withWorkspace(
+    updateComment: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, commentId, content, mentionedUserIds, workspaceId },
@@ -3385,7 +3360,7 @@ const resolvers = {
     ),
 
     // Supprimer un commentaire
-    deleteComment: withWorkspace(
+    deleteComment: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, commentId, workspaceId },
@@ -3445,7 +3420,7 @@ const resolvers = {
     ),
 
     // Démarrer le timer
-    startTimer: withWorkspace(
+    startTimer: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, workspaceId },
@@ -3548,7 +3523,7 @@ const resolvers = {
     ),
 
     // Arrêter le timer
-    stopTimer: withWorkspace(
+    stopTimer: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, workspaceId },
@@ -3660,7 +3635,7 @@ const resolvers = {
     ),
 
     // Réinitialiser le timer
-    resetTimer: withWorkspace(
+    resetTimer: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, workspaceId },
@@ -3749,7 +3724,7 @@ const resolvers = {
     ),
 
     // Mettre à jour les paramètres du timer
-    updateTimerSettings: withWorkspace(
+    updateTimerSettings: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, hourlyRate, roundingOption, workspaceId },
@@ -3805,7 +3780,7 @@ const resolvers = {
     ),
 
     // Ajouter du temps manuellement
-    addManualTime: withWorkspace(
+    addManualTime: requireWorkspaceLevel("kanban", "write")(
       async (
         _,
         { taskId, seconds, description, workspaceId },
@@ -4474,7 +4449,7 @@ const resolvers = {
 
   Subscription: {
     boardUpdated: {
-      subscribe: withWorkspace(
+      subscribe: requireWorkspaceLevel("kanban", "read")(
         (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
           try {
@@ -4507,7 +4482,7 @@ const resolvers = {
     },
 
     taskUpdated: {
-      subscribe: withWorkspace(
+      subscribe: requireWorkspaceLevel("kanban", "read")(
         (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
           try {
@@ -4545,7 +4520,7 @@ const resolvers = {
     },
 
     columnUpdated: {
-      subscribe: withWorkspace(
+      subscribe: requireWorkspaceLevel("kanban", "read")(
         (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
           try {
@@ -4571,7 +4546,7 @@ const resolvers = {
     },
 
     taskPresence: {
-      subscribe: withWorkspace(
+      subscribe: requireWorkspaceLevel("kanban", "read")(
         (
           _,
           { boardId, workspaceId, clientId },

@@ -7,6 +7,7 @@ import {
   checkSubscriptionActive,
   withOrganization,
 } from "../middlewares/rbac.js";
+import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 // In-memory rate limit for payment session creation
@@ -32,6 +33,12 @@ setInterval(
   },
   5 * 60 * 1000,
 ).unref();
+
+// Connecter, configurer ou synchroniser une application : module
+// « Applications et banques » (rôle prédéfini ou personnalisé)
+function canManageIntegrations(permissionLevels) {
+  return levelsAllowLevel(permissionLevels, "integrations", "write");
+}
 
 function isRateLimited(map, key, windowMs, max) {
   const now = Date.now();
@@ -135,7 +142,7 @@ const stripeConnectResolvers = {
     createStripeConnectAccount: async (
       _,
       args,
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -152,13 +159,10 @@ const stripeConnectResolvers = {
         };
       }
 
-      // Vérifier les permissions (owner ou admin uniquement)
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent connecter Stripe Connect",
+          message: "Votre rôle ne permet pas de connecter Stripe Connect",
         };
       }
 
@@ -186,7 +190,7 @@ const stripeConnectResolvers = {
     generateStripeOnboardingLink: async (
       _,
       { accountId, returnUrl },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -202,13 +206,10 @@ const stripeConnectResolvers = {
         };
       }
 
-      // Vérifier les permissions (owner ou admin uniquement)
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent accéder à cette fonctionnalité",
+          message: "Votre rôle ne permet pas d'accéder à cette fonctionnalité",
         };
       }
 
@@ -257,7 +258,7 @@ const stripeConnectResolvers = {
     checkStripeConnectAccountStatus: async (
       _,
       { accountId },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -273,13 +274,10 @@ const stripeConnectResolvers = {
         };
       }
 
-      // Vérifier les permissions (owner ou admin uniquement)
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent vérifier le statut",
+          message: "Votre rôle ne permet pas de vérifier le statut",
         };
       }
 
@@ -332,7 +330,7 @@ const stripeConnectResolvers = {
     generateStripeDashboardLink: async (
       _,
       { accountId },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       if (!user) {
         throw new AppError(
@@ -348,13 +346,10 @@ const stripeConnectResolvers = {
         };
       }
 
-      // Vérifier les permissions (owner ou admin uniquement)
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent accéder au tableau de bord",
+          message: "Votre rôle ne permet pas d'accéder au tableau de bord",
         };
       }
 
@@ -396,7 +391,11 @@ const stripeConnectResolvers = {
      * Déconnecte le compte Stripe Connect de l'organisation
      * Réservé aux owners et admins
      */
-    disconnectStripe: async (_, args, { user, organizationId, userRole }) => {
+    disconnectStripe: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       if (!user) {
         throw new AppError(
           "Vous devez être connecté",
@@ -411,13 +410,10 @@ const stripeConnectResolvers = {
         };
       }
 
-      // Vérifier les permissions (owner ou admin uniquement)
-      const normalizedRole = userRole?.toLowerCase();
-      if (normalizedRole !== "owner" && normalizedRole !== "admin") {
+      if (!canManageIntegrations(permissionLevels)) {
         return {
           success: false,
-          message:
-            "Seuls les propriétaires et administrateurs peuvent déconnecter Stripe Connect",
+          message: "Votre rôle ne permet pas de déconnecter Stripe Connect",
         };
       }
 

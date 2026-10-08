@@ -7,11 +7,11 @@ import { escapeRegex } from "../utils/escapeRegex.js";
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireRead,
   requireWrite,
   requireDelete,
+  requireWorkspaceLevel,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -753,6 +753,8 @@ async function convertSingleImportedInvoice(
   return purchaseInvoice;
 }
 
+const readImported = requireWorkspaceLevel("importedInvoices", "read");
+
 const importedInvoiceResolvers = {
   Upload: GraphQLUpload,
 
@@ -760,7 +762,7 @@ const importedInvoiceResolvers = {
     /**
      * Récupère une facture importée par ID
      */
-    importedInvoice: withWorkspace(async (_, { id }, { workspaceId }) => {
+    importedInvoice: readImported(async (_, { id }, { workspaceId }) => {
       const invoice = await checkInvoiceAccess(id, workspaceId);
       return invoice;
     }),
@@ -768,7 +770,7 @@ const importedInvoiceResolvers = {
     /**
      * Liste les factures importées avec pagination et filtres
      */
-    importedInvoiceClientSuggestion: withWorkspace(
+    importedInvoiceClientSuggestion: readImported(
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
         const client = await suggestClientForImportedInvoice(
