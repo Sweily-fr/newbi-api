@@ -46,6 +46,7 @@ const catalog = {
     key: m.key,
     group: m.group,
     kind: m.kind || "level",
+    parent: m.parent || null,
     label: m.label,
     description: m.description || null,
     levels: allowedLevels(m.key),

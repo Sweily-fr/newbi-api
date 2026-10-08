@@ -568,7 +568,8 @@ const invoiceResolvers = {
       },
     ),
 
-    invoices: requireRead("invoices")(
+    // Lu aussi par Vue d'ensemble et Analytiques (chiffre d'affaires)
+    invoices: requireRead(["invoices", "overview", "analytics"])(
       async (
         _,
         {

@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import { requireWorkspaceLevel } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
 import AccountBanking from "../models/AccountBanking.js";
@@ -243,12 +242,22 @@ function roundBillingSide(side) {
   };
 }
 
-// Droits : les cartes et la courbe de trésorerie ne lisent que les
-// transactions et les soldes bancaires (module banking, lecture). Le cadre
-// Facturation (factures, importées, achats) et les camemberts par catégorie
-// (transactions + CA des factures) mêlent plusieurs modules : ils restent
-// sur withWorkspace (appartenance seule), l'accueil devant rester lisible.
+// Droits : les cartes de trésorerie lisent les transactions et les soldes
+// (module banking). Les données reprises par plusieurs pages acceptent le
+// droit de lecture de l'une d'elles : courbe de trésorerie (Transactions,
+// Vue d'ensemble), cadre Facturation de l'accueil (Factures clients, Vue
+// d'ensemble), camemberts par catégorie (Transactions, Vue d'ensemble,
+// Analytiques). L'accueil masque les cartes que le rôle ne peut pas lire.
 const readBanking = requireWorkspaceLevel("banking", "read");
+const readTreasury = requireWorkspaceLevel(["banking", "overview"], "read");
+const readBillingMonth = requireWorkspaceLevel(
+  ["invoices", "overview"],
+  "read",
+);
+const readCategories = requireWorkspaceLevel(
+  ["banking", "overview", "analytics"],
+  "read",
+);
 
 const dashboardAggregationResolvers = {
   Query: {
@@ -332,7 +341,7 @@ const dashboardAggregationResolvers = {
     /**
      * Données pour le graphique de trésorerie (un point par jour)
      */
-    dashboardTreasuryChart: readBanking(
+    dashboardTreasuryChart: readTreasury(
       async (parent, { workspaceId, period, accountId, excludeManual }) => {
         const { startDate, endDate } = resolvePeriodDates(period);
 
@@ -432,7 +441,7 @@ const dashboardAggregationResolvers = {
      * En retard = statut OVERDUE, ou non réglée avec échéance dépassée
      * (le passage automatique en OVERDUE n'a lieu qu'à la modification).
      */
-    dashboardBillingMonth: withWorkspace(async (parent, { workspaceId }) => {
+    dashboardBillingMonth: readBillingMonth(async (parent, { workspaceId }) => {
       const wid = new mongoose.Types.ObjectId(workspaceId);
       const { month, startDate, endDate, today } = currentParisMonth();
       const inMonth = { $gte: startDate, $lt: endDate };
@@ -517,7 +526,7 @@ const dashboardAggregationResolvers = {
     /**
      * Agrégation par catégorie pour les pie charts (income ou expense)
      */
-    dashboardCategoryAggregation: withWorkspace(
+    dashboardCategoryAggregation: readCategories(
       async (
         parent,
         { workspaceId, type, period, accountId, excludeManual },

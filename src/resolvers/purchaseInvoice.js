@@ -184,7 +184,8 @@ const purchaseInvoiceResolvers = {
       };
     }),
 
-    purchaseInvoiceStats: requireRead("expenses")(
+    // Lu aussi par Vue d'ensemble (dépenses)
+    purchaseInvoiceStats: requireRead(["expenses", "overview"])(
       async (_, { workspaceId: inputWorkspaceId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,

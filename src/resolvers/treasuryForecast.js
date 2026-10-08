@@ -349,7 +349,8 @@ const pullEntityFromScenarios = async (workspaceId, kind, entityId) => {
 const treasuryForecastResolvers = {
   // Prévision de trésorerie : module analytics (« Analyses et prévisions »)
   Query: {
-    treasuryForecastData: requireRead("analytics")(
+    // Lu par Prévision et par Analytiques
+    treasuryForecastData: requireRead(["forecast", "analytics"])(
       async (
         _,
         {
@@ -1032,7 +1033,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    treasuryForecasts: requireRead("analytics")(
+    treasuryForecasts: requireRead("forecast")(
       async (
         _,
         { workspaceId: inputWorkspaceId, startMonth, endMonth },
@@ -1053,7 +1054,7 @@ const treasuryForecastResolvers = {
 
     // Base : saisies de Base. Scénario : saisies de Base (avec leur état
     // hiddenInScenario) + saisies propres au scénario.
-    manualCashflowEntries: requireRead("analytics")(
+    manualCashflowEntries: requireRead("forecast")(
       async (_, { workspaceId: inputWorkspaceId, scenarioId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -1076,7 +1077,7 @@ const treasuryForecastResolvers = {
 
     // Dans un scénario, isMuted/isActive sont l'état effectif (surcharge du
     // scénario sinon Base) et scenarioOverride signale une surcharge.
-    detectedRecurrences: requireRead("analytics")(
+    detectedRecurrences: requireRead("forecast")(
       async (_, { workspaceId: inputWorkspaceId, scenarioId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -1093,7 +1094,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    forecastMonthDetails: requireRead("analytics")(
+    forecastMonthDetails: requireRead("forecast")(
       async (
         _,
         { workspaceId: inputWorkspaceId, month, scenarioId },
@@ -1249,7 +1250,7 @@ const treasuryForecastResolvers = {
 
     // Liste à plat des occurrences de prévision (saisies manuelles + récurrences
     // détectées) sur l'horizon — alimente l'onglet « Détails prévisions ».
-    forecastOccurrences: requireRead("analytics")(
+    forecastOccurrences: requireRead("forecast")(
       async (
         _,
         { workspaceId: inputWorkspaceId, startMonth, endMonth, scenarioId },
@@ -1289,7 +1290,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    forecastScenarios: requireRead("analytics")(
+    forecastScenarios: requireRead("forecast")(
       async (_, { workspaceId: inputWorkspaceId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -1305,7 +1306,7 @@ const treasuryForecastResolvers = {
   },
 
   Mutation: {
-    upsertForecastScenario: requireWrite("analytics")(
+    upsertForecastScenario: requireWrite("forecast")(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
           input.workspaceId,
@@ -1347,7 +1348,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    deleteForecastScenario: requireDelete("analytics")(
+    deleteForecastScenario: requireDelete("forecast")(
       async (_, { id }, context) => {
         const workspaceId = context.workspaceId;
         const result = await ForecastScenario.findOneAndDelete({
@@ -1367,7 +1368,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    upsertTreasuryForecast: requireWrite("analytics")(
+    upsertTreasuryForecast: requireWrite("forecast")(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
           input.workspaceId,
@@ -1400,7 +1401,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    deleteTreasuryForecast: requireDelete("analytics")(
+    deleteTreasuryForecast: requireDelete("forecast")(
       async (_, { id }, context) => {
         const workspaceId = context.workspaceId;
         const forecast = await TreasuryForecast.findOne({
@@ -1417,7 +1418,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    upsertManualCashflowEntry: requireWrite("analytics")(
+    upsertManualCashflowEntry: requireWrite("forecast")(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
           input.workspaceId,
@@ -1487,7 +1488,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    deleteManualCashflowEntry: requireDelete("analytics")(
+    deleteManualCashflowEntry: requireDelete("forecast")(
       async (_, { id }, context) => {
         const workspaceId = context.workspaceId;
         const entry = await ManualCashflowEntry.findOne({
@@ -1506,7 +1507,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    runRecurrenceDetection: requireWrite("analytics")(
+    runRecurrenceDetection: requireWrite("forecast")(
       async (_, { workspaceId: inputWorkspaceId }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -1523,7 +1524,7 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    muteDetectedRecurrence: requireWrite("analytics")(
+    muteDetectedRecurrence: requireWrite("forecast")(
       async (_, { id, muted, scenarioId }, context) => {
         const workspaceId = context.workspaceId;
         const wId = new mongoose.Types.ObjectId(workspaceId);
@@ -1604,7 +1605,7 @@ const treasuryForecastResolvers = {
     ),
 
     // Masque (ou réaffiche) une saisie de Base dans un scénario uniquement.
-    hideManualCashflowEntryInScenario: requireWrite("analytics")(
+    hideManualCashflowEntryInScenario: requireWrite("forecast")(
       async (_, { id, scenarioId, hidden }, context) => {
         const wId = new mongoose.Types.ObjectId(context.workspaceId);
         const entry = await ManualCashflowEntry.findOne({
@@ -1646,7 +1647,7 @@ const treasuryForecastResolvers = {
     // périodicité et libellé (null = valeur détectée). Action de Base, commune
     // à tous les scénarios : c'est une correction de données, pas une
     // hypothèse de scénario.
-    updateDetectedRecurrence: requireWrite("analytics")(
+    updateDetectedRecurrence: requireWrite("forecast")(
       async (_, { id, input }, context) => {
         const wId = new mongoose.Types.ObjectId(context.workspaceId);
         const recurrence = await DetectedRecurrence.findOne({
@@ -1732,7 +1733,7 @@ const treasuryForecastResolvers = {
 
     // Suppression d'une entité partagée : niveau delete (abonnement contrôlé
     // comme avant, requireDelete l'inclut comme requireWrite)
-    deleteDetectedRecurrence: requireDelete("analytics")(
+    deleteDetectedRecurrence: requireDelete("forecast")(
       async (_, { id }, context) => {
         const recurrence = await DetectedRecurrence.findOne({
           _id: id,
@@ -1753,7 +1754,7 @@ const treasuryForecastResolvers = {
 
     // Supprime UNE occurrence (un mois) d'une prévision récurrente sans toucher
     // aux autres mois : ajoute le mois à excludedMonths de l'entité ciblée.
-    excludeForecastOccurrence: requireWrite("analytics")(
+    excludeForecastOccurrence: requireWrite("forecast")(
       async (_, { kind, id, month, scenarioId }, context) => {
         const workspaceId = context.workspaceId;
         if (!/^\d{4}-\d{2}$/.test(month)) {
