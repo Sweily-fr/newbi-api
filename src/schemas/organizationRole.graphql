@@ -10,6 +10,8 @@ type RoleCatalogGroup {
 type RoleCatalogModule {
   key: String!
   group: String!
+  # "level" (aucun / lecture / écriture / suppression) ou "feature" (oui / non)
+  kind: String!
   label: String!
   description: String
   # Niveaux proposés pour ce module (les modules du compte n'ont pas « delete »)

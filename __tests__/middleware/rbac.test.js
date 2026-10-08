@@ -71,8 +71,9 @@ describe('hasPermission', () => {
     expect(hasPermission('accountant', 'invoices', 'view')).toBe(true);
   });
 
-  it('should NOT allow accountant to mark invoice as paid (same rights as viewer)', () => {
-    expect(hasPermission('accountant', 'invoices', 'mark-paid')).toBe(false);
+  it('should allow accountant to mark invoice as paid (droit d\'avant les rôles)', () => {
+    expect(hasPermission('accountant', 'invoices', 'mark-paid')).toBe(true);
+    expect(hasPermission('viewer', 'invoices', 'mark-paid')).toBe(false);
   });
 
   it('should NOT allow accountant to create invoices', () => {
@@ -171,8 +172,23 @@ describe('ROLE_PERMISSIONS structure', () => {
     expect(ROLE_PERMISSIONS.member.integrations).toBe('none');
   });
 
-  it('accountant should have the same default rights as viewer', () => {
-    expect(ROLE_PERMISSIONS.accountant).toEqual(ROLE_PERMISSIONS.viewer);
+  it('accountant keeps the rights it had before custom roles', () => {
+    const a = ROLE_PERMISSIONS.accountant;
+    expect(a.invoices).toBe('read');
+    expect(a.invoicePayments).toBe('write');
+    expect(a.importedInvoices).toBe('write');
+    expect(a.importedQuotes).toBe('write');
+    expect(a.quotes).toBe('read');
+    expect(a.purchaseInvoices).toBe('read');
+    expect(a.clients).toBe('read');
+    expect(a.clientLists).toBe('delete');
+    expect(a.banking).toBe('delete');
+    expect(a.calendar).toBe('delete');
+    expect(a.sharedDocuments).toBe('delete');
+    expect(a.kanban).toBe('none');
+    expect(a.signatures).toBe('none');
+    expect(a.integrations).toBe('read');
+    expect(a.orgSettings).toBe('read');
   });
 
   it('viewer should only read business modules', () => {

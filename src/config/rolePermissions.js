@@ -13,14 +13,17 @@
  *   - write  : read + créer, modifier, envoyer, importer, convertir…
  *   - delete : write + supprimer
  * Les modules du groupe « Compte » n'ont que none / read / write (« Gérer »),
- * et write y couvre aussi les suppressions.
+ * et write y couvre aussi les suppressions. Les fonctionnalités
+ * (`kind: "feature"`, ex. encaissement des factures) sont oui / non :
+ * none / write.
  *
  * Rôles prédéfinis (clés techniques inchangées pour ne migrer aucun membre) :
  *   owner      → « Super admin »     : tout, non modifiable, unique
  *   admin      → « Administrateur »  : tout sauf membres et abonnement
  *   member     → « Éditeur »         : crée et modifie, ne supprime pas
  *   viewer     → « Membre »          : lecture seule
- *   accountant → « Comptable »       : comme Membre, siège gratuit
+ *   accountant → « Comptable »       : droits d'avant les rôles
+ *                                       personnalisés, siège gratuit
  * Le super admin peut ajuster les droits des rôles prédéfinis (sauf le sien)
  * et créer des rôles personnalisés (collection `organizationRole`, partagée
  * avec le plugin organisation de Better Auth côté front).
@@ -31,6 +34,8 @@ export const LEVELS = ["none", "read", "write", "delete"];
 const LEVEL_RANK = { none: 0, read: 1, write: 2, delete: 3 };
 
 export const ACCOUNT_LEVELS = ["none", "read", "write"];
+
+export const FEATURE_LEVELS = ["none", "write"];
 
 export const MODULE_GROUPS = [
   { key: "sales", label: "Ventes" },
@@ -50,6 +55,13 @@ export const MODULES = [
     description: "Factures, relances, facturation électronique",
   },
   {
+    key: "invoicePayments",
+    group: "sales",
+    kind: "feature",
+    label: "Encaissement des factures",
+    description: "Marquer une facture comme payée",
+  },
+  {
     key: "creditNotes",
     group: "sales",
     label: "Avoirs",
@@ -62,7 +74,19 @@ export const MODULES = [
     description: "Factures clients importées depuis un autre logiciel",
   },
   { key: "quotes", group: "sales", label: "Devis" },
+  {
+    key: "importedQuotes",
+    group: "sales",
+    label: "Devis importés",
+    description: "Devis importés depuis un autre logiciel",
+  },
   { key: "purchaseOrders", group: "sales", label: "Bons de commande" },
+  {
+    key: "importedPurchaseOrders",
+    group: "sales",
+    label: "Bons de commande importés",
+    description: "Bons de commande importés depuis un autre logiciel",
+  },
   { key: "deliveryNotes", group: "sales", label: "Bons de livraison" },
   {
     key: "products",
@@ -75,13 +99,19 @@ export const MODULES = [
     key: "clients",
     group: "clients",
     label: "Clients",
-    description: "Fiches clients, listes, segments, champs personnalisés",
+    description: "Fiches clients et segments",
+  },
+  {
+    key: "clientLists",
+    group: "clients",
+    label: "Listes et champs personnalisés",
+    description: "Listes de clients et champs personnalisés des fiches",
   },
   {
     key: "automations",
     group: "clients",
     label: "Automatisations",
-    description: "Automatisations de documents et e-mails clients",
+    description: "Automatisations des listes et des e-mails clients",
   },
   // Finances
   {
@@ -112,7 +142,12 @@ export const MODULES = [
     description: "Tableaux kanban, tâches et partages publics",
   },
   { key: "fileTransfers", group: "tools", label: "Transferts de fichiers" },
-  { key: "sharedDocuments", group: "tools", label: "Documents partagés" },
+  {
+    key: "sharedDocuments",
+    group: "tools",
+    label: "Documents partagés",
+    description: "Documents, dossiers et automatisations de classement",
+  },
   { key: "signatures", group: "tools", label: "Signatures de mail" },
   // Compte
   {
@@ -149,17 +184,27 @@ const ACCOUNT_MODULES = new Set(
   MODULES.filter((m) => m.group === "account").map((m) => m.key),
 );
 
+const FEATURE_MODULES = new Set(
+  MODULES.filter((m) => m.kind === "feature").map((m) => m.key),
+);
+
 /**
  * Anciens noms de ressources encore utilisés par les resolvers
  * (`requireWrite("expenses")`…) → module du catalogue.
  */
 export const RESOURCE_ALIASES = {
-  importedQuotes: "quotes",
-  importedPurchaseOrders: "purchaseOrders",
   expenses: "purchaseInvoices",
   suppliers: "purchaseInvoices",
   payments: "banking",
   reports: "analytics",
+};
+
+/**
+ * Actions portées par une fonctionnalité plutôt que par le niveau du module
+ * (`requirePermission("invoices", "mark-paid")`).
+ */
+const ACTION_MODULES = {
+  invoices: { "mark-paid": "invoicePayments" },
 };
 
 /**
@@ -176,12 +221,17 @@ const ACTION_LEVEL = {
 };
 
 export function allowedLevels(moduleKey) {
+  if (FEATURE_MODULES.has(moduleKey)) return FEATURE_LEVELS;
   return ACCOUNT_MODULES.has(moduleKey) ? ACCOUNT_LEVELS : LEVELS;
 }
 
 /** Ramène un niveau dans ceux autorisés pour le module. */
 export function clampLevel(moduleKey, level) {
   if (!LEVEL_RANK[level] && level !== "none") return "none";
+  if (FEATURE_MODULES.has(moduleKey)) {
+    // Oui / non : la lecture seule d'une fonctionnalité n'existe pas
+    return level === "write" || level === "delete" ? "write" : "none";
+  }
   if (ACCOUNT_MODULES.has(moduleKey) && level === "delete") return "write";
   return level;
 }
@@ -240,9 +290,30 @@ export const PREDEFINED_ROLES = {
   accountant: {
     label: "Comptable",
     description:
-      "Mêmes droits qu'un membre par défaut. Siège gratuit, nombre limité selon l'offre.",
+      "Consulte les ventes, encaisse les factures, importe des documents, gère les transactions et les documents partagés. Siège gratuit, nombre limité selon l'offre.",
     editable: true,
-    levels: READ_ONLY,
+    // Droits d'avant les rôles personnalisés, à l'identique (ancienne matrice
+    // de rbac.js + ce que permettaient les resolvers sans contrôle de rôle) :
+    // banque, rapprochement, calendrier, documents partagés et listes de
+    // clients étaient ouverts à tout membre. Kanban et signatures lui étaient
+    // fermés à l'écran. Transferts : création depuis les documents partagés.
+    levels: fill("read", {
+      invoicePayments: "write",
+      importedInvoices: "write",
+      importedQuotes: "write",
+      importedPurchaseOrders: "write",
+      clientLists: "delete",
+      banking: "delete",
+      calendar: "delete",
+      kanban: "none",
+      fileTransfers: "write",
+      sharedDocuments: "delete",
+      signatures: "none",
+      team: "read",
+      billing: "read",
+      orgSettings: "read",
+      integrations: "read",
+    }),
   },
 };
 
@@ -333,6 +404,10 @@ export function requiredLevelForAction(moduleKey, action) {
  * sur une ressource à partir d'une grille effective.
  */
 export function levelsAllowAction(levels, resource, action) {
+  const featureModule = ACTION_MODULES[resource]?.[action];
+  if (featureModule) {
+    return levelAllows(levels?.[featureModule], "write");
+  }
   const moduleKey = resolveModule(resource);
   if (!moduleKey || !levels || !(moduleKey in levels)) return false;
   return levelAllows(

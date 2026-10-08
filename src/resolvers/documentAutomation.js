@@ -14,12 +14,13 @@ import documentAutomationService, {
 } from "../services/documentAutomationService.js";
 
 // Wrapper lecture : valide l'appartenance à l'organisation et le droit de
-// lecture du module « automations » (requireRead), et impose le workspace
+// lecture du module « sharedDocuments » (automatisations de classement des
+// documents partagés) (requireRead), et impose le workspace
 // validé par RBAC (jamais l'ID brut des args). Ferme
 // l'IDOR cross-org : un membre de l'org A ne peut plus cibler l'org B via
 // args.workspaceId — resolveWorkspaceId renvoie le workspace du contexte validé.
 const scopedQuery = (fn) =>
-  requireRead("automations")(async (parent, args, context, info) => {
+  requireRead("sharedDocuments")(async (parent, args, context, info) => {
     const workspaceId = resolveWorkspaceId(
       args.workspaceId,
       context.workspaceId,
@@ -31,7 +32,7 @@ const scopedQuery = (fn) =>
 // suppressions) + contrôle d'abonnement APRÈS enrichissement RBAC
 // (context.workspaceId est alors défini, ne dépend plus d'un header client).
 const makeScopedMutation = (level) => (fn) =>
-  (level === "delete" ? requireDelete : requireWrite)("automations", {
+  (level === "delete" ? requireDelete : requireWrite)("sharedDocuments", {
     skipSubscriptionCheck: true,
   })(async (parent, args, context, info) => {
     const workspaceId = resolveWorkspaceId(
