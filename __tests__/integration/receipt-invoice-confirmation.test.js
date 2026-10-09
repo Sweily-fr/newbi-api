@@ -68,7 +68,10 @@ const makeTransactionWithProposal = async ({
           meta: {
             ocrSucceeded: true,
             conversionNote: "",
-            ocrMetadata: { provider: "claude-vision", extractionQuality: "full" },
+            ocrMetadata: {
+              provider: "claude-vision",
+              extractionQuality: "full",
+            },
           },
           duplicateInvoiceId,
           duplicateReason,
@@ -380,5 +383,171 @@ describe("confirmReceiptInvoiceProposal", () => {
         action: "CREATE",
       }),
     ).rejects.toThrow(/en attente/i);
+  });
+});
+
+/**
+ * La facture ressemblante n'était cherchée qu'à l'analyse, parmi les factures
+ * déjà enregistrées : deux copies du même document (photo + PDF, ou même
+ * facture déposée sur deux transactions) analysées avant toute confirmation
+ * ne se voyaient pas, et les confirmer créait deux factures. CREATE refait la
+ * recherche ; une facture que l'utilisateur n'a pas vue suspend la création.
+ */
+describe("confirmReceiptInvoiceProposal : facture ressemblante apparue depuis l'analyse", () => {
+  const confirm = (tx, extra, fileIndex = 0) =>
+    confirmReceiptInvoiceProposal({
+      transactionId: tx._id,
+      workspaceId: workspaceId.toString(),
+      userId,
+      fileId: tx.receiptFiles[fileIndex]._id,
+      ...extra,
+    });
+
+  it("CREATE suspendu : rien n'est créé, la proposition pointe la facture apparue", async () => {
+    const tx = await makeTransactionWithProposal();
+    // Enregistrée après l'analyse (autre copie confirmée, saisie manuelle…)
+    const appeared = await makeInvoice({
+      invoiceNumber: "04892-13770360",
+      issueDate: "2026-05-25",
+    });
+
+    const result = await confirm(tx, {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+
+    expect(result.invoice).toBeNull();
+    expect(result.duplicate.invoice._id.toString()).toBe(
+      appeared._id.toString(),
+    );
+    expect(result.duplicate.reason).toBe("NUMBER");
+    expect(await PurchaseInvoice.countDocuments({})).toBe(1);
+
+    const fresh = await Transaction.findById(tx._id);
+    const proposal = fresh.receiptFiles[0].ocrProposal;
+    expect(String(proposal.duplicateInvoiceId)).toBe(appeared._id.toString());
+    expect(proposal.duplicateReason).toBe("NUMBER");
+    expect(fresh.receiptFiles[0].purchaseInvoiceId).toBeFalsy();
+    expect(fresh.linkedPurchaseInvoiceIds).toHaveLength(0);
+  });
+
+  it("« Créer quand même » après avoir vu la facture ressemblante : créée", async () => {
+    const tx = await makeTransactionWithProposal();
+    const appeared = await makeInvoice({
+      invoiceNumber: "04892-13770360",
+      issueDate: "2026-05-25",
+    });
+
+    const result = await confirm(tx, {
+      action: "CREATE",
+      acknowledgedDuplicateId: appeared._id.toString(),
+    });
+
+    expect(result.duplicate).toBeUndefined();
+    expect(result.invoice._id.toString()).not.toBe(appeared._id.toString());
+    expect(await PurchaseInvoice.countDocuments({})).toBe(2);
+  });
+
+  it("client sans acknowledgedDuplicateId : la facture enregistrée sur la proposition vaut pour vue", async () => {
+    const existing = await makeInvoice({
+      invoiceNumber: "04892-13770360",
+      issueDate: "2026-05-25",
+    });
+    const shown = await makeTransactionWithProposal({
+      duplicateInvoiceId: existing._id,
+      duplicateReason: "NUMBER",
+    });
+    const created = await confirm(shown, { action: "CREATE" });
+    expect(created.invoice).toBeTruthy();
+
+    // Proposition sans facture ressemblante enregistrée : suspendue
+    const unseen = await makeTransactionWithProposal();
+    const held = await confirm(unseen, { action: "CREATE" });
+    expect(held.invoice).toBeNull();
+    expect(held.duplicate).toBeTruthy();
+  });
+
+  it("même facture déposée sur deux transactions avant toute confirmation : la seconde est suspendue", async () => {
+    const july = await makeTransactionWithProposal();
+    const august = await makeTransactionWithProposal();
+
+    const first = await confirm(july, {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+    expect(first.invoice).toBeTruthy();
+
+    const held = await confirm(august, {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+    expect(held.invoice).toBeNull();
+    expect(held.duplicate.invoice._id.toString()).toBe(
+      first.invoice._id.toString(),
+    );
+    expect(held.duplicate.reason).toBe("NUMBER");
+    // Facture déjà soldée par le débit de juillet : rattacher y déposerait le
+    // fichier sans justifier la dépense d'août
+    expect(held.duplicate.linkTransaction).toBe(false);
+    expect(await PurchaseInvoice.countDocuments({})).toBe(1);
+  });
+
+  it("deux copies illisibles d'une même dépense : la seconde propose la facture déjà liée", async () => {
+    const unreadable = () => ({
+      values: makeProposalValues({
+        supplierName: "Canva*",
+        invoiceNumber: null,
+        category: "OTHER",
+      }),
+      meta: {
+        ocrSucceeded: false,
+        conversionNote: "",
+        ocrMetadata: { provider: "none", extractionQuality: "none" },
+      },
+      duplicateInvoiceId: null,
+      duplicateReason: null,
+      duplicateLinkTransaction: true,
+      proposedAt: new Date(),
+    });
+    const file = (name) => ({
+      url: `https://r2.example/ws/${name}`,
+      key: `ws/${name}`,
+      filename: name,
+      mimetype: "image/jpeg",
+      size: 1000,
+      ocrProcessed: true,
+      ocrProposal: unreadable(),
+    });
+    const tx = await Transaction.create({
+      externalId: `tx-${++seq}`,
+      provider: "bridge",
+      type: "debit",
+      status: "completed",
+      amount: -11.99,
+      currency: "EUR",
+      workspaceId: workspaceId.toString(),
+      userId,
+      date: new Date("2026-05-25"),
+      description: "Canva*",
+      receiptFiles: [file("photo-1.jpg"), file("photo-2.jpg")],
+    });
+
+    const first = await confirm(tx, {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+    expect(first.invoice).toBeTruthy();
+
+    const held = await confirm(
+      tx,
+      { action: "CREATE", acknowledgedDuplicateId: null },
+      1,
+    );
+    expect(held.invoice).toBeNull();
+    expect(held.duplicate.invoice._id.toString()).toBe(
+      first.invoice._id.toString(),
+    );
+    expect(held.duplicate.reason).toBe("LINKED");
+    expect(await PurchaseInvoice.countDocuments({})).toBe(1);
   });
 });

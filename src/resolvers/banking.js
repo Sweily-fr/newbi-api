@@ -589,11 +589,12 @@ const bankingResolvers = {
           action,
           values,
           purchaseInvoiceId,
+          acknowledgedDuplicateId,
         },
         { user },
       ) => {
         try {
-          const { invoice } =
+          const { invoice, duplicate } =
             await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
               transactionId,
               workspaceId,
@@ -602,12 +603,35 @@ const bankingResolvers = {
               action,
               values: values || null,
               purchaseInvoiceId: purchaseInvoiceId || null,
+              // undefined (argument absent) ≠ null (aucune facture affichée)
+              acknowledgedDuplicateId,
             });
 
           const transaction = await Transaction.findOne({
             _id: transactionId,
             workspaceId,
           });
+
+          if (duplicate) {
+            const dup = duplicate.invoice;
+            return {
+              success: false,
+              message:
+                "Une facture d'achat ressemblante a été enregistrée entre-temps. Rattachez le justificatif à cette facture ou créez-en une quand même.",
+              transaction,
+              purchaseInvoiceId: null,
+              duplicate: {
+                id: dup._id.toString(),
+                invoiceNumber: dup.invoiceNumber || null,
+                supplierName: dup.supplierName || null,
+                amountTTC: dup.amountTTC ?? null,
+                currency: dup.currency || null,
+                issueDate: dup.issueDate || null,
+                reason: duplicate.reason || null,
+                linkTransaction: duplicate.linkTransaction !== false,
+              },
+            };
+          }
 
           const message =
             action === "SKIP"

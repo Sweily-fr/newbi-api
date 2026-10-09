@@ -780,6 +780,10 @@ type ConfirmTransactionReceiptInvoiceResult {
   message: String
   transaction: Transaction
   purchaseInvoiceId: ID
+  # CREATE suspendu : facture ressemblante apparue depuis l'analyse (autre
+  # copie du même document confirmée entre-temps…), à montrer à l'utilisateur
+  # avec le choix « Rattacher » / « Créer quand même »
+  duplicate: ReceiptInvoiceDuplicate
 }
 
 type UploadTransactionReceiptResult {
@@ -811,6 +815,9 @@ extend type Mutation {
     action: ReceiptInvoiceProposalAction!
     values: ReceiptInvoiceValuesInput
     purchaseInvoiceId: ID
+    # CREATE : facture ressemblante affichée à l'utilisateur (null : aucune).
+    # Une autre facture ressemblante suspend la création (cf. duplicate).
+    acknowledgedDuplicateId: ID
   ): ConfirmTransactionReceiptInvoiceResult!
 
   # Suppression d'un justificatif spécifique
