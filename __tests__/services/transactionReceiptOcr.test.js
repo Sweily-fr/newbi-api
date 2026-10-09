@@ -116,21 +116,80 @@ beforeEach(async () => {
   analyzeDocument.mockReset();
 });
 
+/**
+ * Depuis le 01/10/2026 (1d5c9ef), l'analyse d'un justificatif ne crée plus la
+ * facture d'achat : elle dépose une proposition que l'utilisateur confirme.
+ * Rejoue le parcours complet comme l'interface, en suivant la suggestion
+ * affichée : « Rattacher » si une facture ressemblante est proposée, sinon
+ * « Créer » ; si la création est suspendue parce qu'une facture ressemblante
+ * est apparue entre-temps, « Rattacher » à celle-ci.
+ */
+async function confirmProposals(params, proposals) {
+  const invoices = [];
+  for (const { receiptFile, existing } of proposals) {
+    const base = {
+      transactionId: params.transactionId,
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      fileId: receiptFile._id,
+    };
+    const result = existing
+      ? await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+          ...base,
+          action: "ATTACH",
+          purchaseInvoiceId: existing.invoice._id,
+        })
+      : await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+          ...base,
+          action: "CREATE",
+          acknowledgedDuplicateId: null,
+        });
+    if (result.duplicate) {
+      const attached =
+        await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+          ...base,
+          action: "ATTACH",
+          purchaseInvoiceId: result.duplicate.invoice._id,
+        });
+      invoices.push(attached.invoice);
+      continue;
+    }
+    invoices.push(result.invoice);
+  }
+  return invoices;
+}
+
+async function processAndConfirm(params) {
+  const proposals =
+    await transactionReceiptOcrService.processReceiptsForTransaction(params);
+  return confirmProposals(params, proposals);
+}
+
 describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
   it("crée une facture d'achat depuis le justificatif d'une dépense (OCR Claude)", async () => {
     mockClaudeSuccess();
     const tx = await createExpenseTransaction();
+    const params = {
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: {
+        "receipts/receipt-1.pdf": Buffer.from("fake-pdf"),
+      },
+    };
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: {
-          "receipts/receipt-1.pdf": Buffer.from("fake-pdf"),
-        },
-      });
+    const proposals =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].existing).toBeFalsy();
+    expect(proposals[0].proposal.values.supplierName).toBe("Amazon EU SARL");
+    // L'analyse seule ne crée rien : la facture attend la confirmation
+    expect(await PurchaseInvoice.countDocuments()).toBe(0);
+    const pending = await Transaction.findById(tx._id);
+    expect(pending.receiptFiles[0].ocrProposal.values.amountTTC).toBe(120.5);
+    expect(pending.receiptFiles[0].purchaseInvoiceId).toBeFalsy();
 
+    const invoices = await confirmProposals(params, proposals);
     expect(invoices).toHaveLength(1);
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
 
@@ -201,13 +260,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       date: new Date("2026-08-02T00:00:00.000Z"),
     });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
 
     expect(invoices).toHaveLength(1);
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
@@ -249,7 +307,7 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       amount: -9.25,
       description: "CB MONGODB",
     });
-    await transactionReceiptOcrService.processReceiptsForTransaction({
+    await processAndConfirm({
       transactionId: tx1._id.toString(),
       workspaceId,
       userId,
@@ -272,7 +330,7 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
         },
       ],
     });
-    await transactionReceiptOcrService.processReceiptsForTransaction({
+    await processAndConfirm({
       transactionId: tx2._id.toString(),
       workspaceId,
       userId,
@@ -335,13 +393,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       description: "CB NORTHWIND DIGITAL",
     });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
+    });
 
     expect(invoices).toHaveLength(1);
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
@@ -370,13 +427,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     });
     const tx = await createExpenseTransaction({ amount: -42 });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake") },
+    });
 
     expect(invoices).toHaveLength(1);
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
@@ -388,13 +444,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
   it("OCR Claude réussi : facture marquée « full » avec le moteur", async () => {
     mockClaudeSuccess();
     const tx = await createExpenseTransaction();
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
     expect(invoice.ocrMetadata.provider).toBe("claude-vision");
     expect(invoice.ocrMetadata.extractionQuality).toBe("full");
@@ -408,13 +463,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       categoryIsManual: true,
     });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
 
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
     expect(invoice.subcategory).toBe("banque");
@@ -433,13 +487,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       categoryIsManual: true,
     });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
 
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
     expect(invoice.category).toBe("OFFICE_SUPPLIES");
@@ -450,13 +503,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     mockClaudeSuccess();
     const tx = await createExpenseTransaction({ category: "abonnement" });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
 
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
     expect(invoice.category).toBe("OFFICE_SUPPLIES");
@@ -468,12 +520,11 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
   it("ignore les transactions qui ne sont pas des dépenses", async () => {
     const tx = await createExpenseTransaction({ type: "credit", amount: 250 });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+    });
 
     expect(invoices).toHaveLength(0);
     expect(await PurchaseInvoice.countDocuments()).toBe(0);
@@ -486,12 +537,11 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       reconciliationStatus: "ignored",
     });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+    });
 
     expect(invoices).toHaveLength(0);
     expect(await PurchaseInvoice.countDocuments()).toBe(0);
@@ -515,15 +565,27 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       status: "TO_PAY",
     });
     const tx = await createExpenseTransaction();
+    const params = {
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    };
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    // L'analyse propose de rattacher à la facture existante, sans rien faire
+    const proposals =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].existing.invoice._id.toString()).toBe(
+      existing._id.toString(),
+    );
+    expect(proposals[0].existing.reason).toBe("NUMBER");
+    expect(proposals[0].existing.linkTransaction).toBe(true);
+    expect(
+      (await PurchaseInvoice.findById(existing._id)).linkedTransactionIds,
+    ).toHaveLength(0);
 
+    const invoices = await confirmProposals(params, proposals);
     expect(invoices).toHaveLength(1);
     expect(invoices[0]._id.toString()).toBe(existing._id.toString());
     expect(await PurchaseInvoice.countDocuments()).toBe(1);
@@ -566,20 +628,18 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       ],
     });
 
-    const first =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx1._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
-    const second =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx2._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-2.pdf": Buffer.from("fake-pdf") },
-      });
+    const first = await processAndConfirm({
+      transactionId: tx1._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
+    const second = await processAndConfirm({
+      transactionId: tx2._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-2.pdf": Buffer.from("fake-pdf") },
+    });
 
     expect(first).toHaveLength(1);
     expect(second).toHaveLength(1);
@@ -603,23 +663,33 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     // facture est déjà soldée par le débit de juillet.
     mockClaudeSuccess();
     const julyTx = await createExpenseTransaction({ amount: -120.5 });
-    const [invoice] =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: julyTx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
-    expect(invoice).toBeTruthy();
-
-    const augustTx = await createExpenseTransaction({ amount: -120.5 });
-
-    await transactionReceiptOcrService.processReceiptsForTransaction({
-      transactionId: augustTx._id.toString(),
+    const [invoice] = await processAndConfirm({
+      transactionId: julyTx._id.toString(),
       workspaceId,
       userId,
       buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
     });
+    expect(invoice).toBeTruthy();
+
+    const augustTx = await createExpenseTransaction({ amount: -120.5 });
+    const augustParams = {
+      transactionId: augustTx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    };
+
+    // Même numéro : rattachement proposé, mais sans lier ce débit-ci
+    const proposals =
+      await transactionReceiptOcrService.processReceiptsForTransaction(
+        augustParams,
+      );
+    expect(proposals[0].existing.invoice._id.toString()).toBe(
+      invoice._id.toString(),
+    );
+    expect(proposals[0].existing.reason).toBe("NUMBER");
+    expect(proposals[0].existing.linkTransaction).toBe(false);
+    await confirmProposals(augustParams, proposals);
 
     // Pas de facture en double : le document reste unique
     expect(await PurchaseInvoice.countDocuments()).toBe(1);
@@ -645,13 +715,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     mockClaudeSuccess();
     const tx = await createExpenseTransaction({ amount: -180 });
 
-    const first =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    const first = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
     expect(first).toHaveLength(1);
 
     // Second justificatif : autre fournisseur, autre numéro
@@ -683,13 +752,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       },
     );
 
-    const second =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-2.pdf": Buffer.from("fake-pdf") },
-      });
+    const second = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-2.pdf": Buffer.from("fake-pdf") },
+    });
 
     expect(second).toHaveLength(1);
     expect(second[0]._id.toString()).not.toBe(first[0]._id.toString());
@@ -762,16 +830,15 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       ],
     });
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: {
-          "receipts/receipt-1.pdf": Buffer.from("fake-pdf-1"),
-          "receipts/receipt-2.pdf": Buffer.from("fake-pdf-2"),
-        },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: {
+        "receipts/receipt-1.pdf": Buffer.from("fake-pdf-1"),
+        "receipts/receipt-2.pdf": Buffer.from("fake-pdf-2"),
+      },
+    });
 
     expect(invoices).toHaveLength(2);
     expect(await PurchaseInvoice.countDocuments()).toBe(2);
@@ -813,7 +880,7 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       ],
     });
 
-    await transactionReceiptOcrService.processReceiptsForTransaction({
+    const params = {
       transactionId: tx._id.toString(),
       workspaceId,
       userId,
@@ -821,6 +888,48 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
         "receipts/receipt-1.pdf": Buffer.from("fake-pdf"),
         "receipts/receipt-1-photo.jpg": Buffer.from("fake-jpg"),
       },
+    };
+    const proposals =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    // À l'analyse, aucune des deux copies ne voit l'autre (rien n'existe)
+    expect(proposals).toHaveLength(2);
+    expect(proposals.every((p) => !p.existing)).toBe(true);
+
+    const confirm = (proposal, extra) =>
+      transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+        transactionId: params.transactionId,
+        workspaceId,
+        userId,
+        fileId: proposal.receiptFile._id,
+        ...extra,
+      });
+
+    const first = await confirm(proposals[0], {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+    expect(first.invoice).toBeTruthy();
+
+    // Seconde copie confirmée sans avertissement à l'écran : création
+    // suspendue, la facture tout juste créée est proposée à la place
+    const held = await confirm(proposals[1], {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+    expect(held.invoice).toBeNull();
+    expect(held.duplicate.invoice._id.toString()).toBe(
+      first.invoice._id.toString(),
+    );
+    expect(held.duplicate.reason).toBe("NUMBER");
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+    const pendingTx = await Transaction.findById(tx._id);
+    expect(
+      String(pendingTx.receiptFiles[1].ocrProposal.duplicateInvoiceId),
+    ).toBe(first.invoice._id.toString());
+
+    await confirm(proposals[1], {
+      action: "ATTACH",
+      purchaseInvoiceId: held.duplicate.invoice._id,
     });
 
     expect(await PurchaseInvoice.countDocuments()).toBe(1);
@@ -861,15 +970,22 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       { _id: existing._id },
       { $addToSet: { linkedTransactionIds: tx._id } },
     );
+    const params = {
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    };
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    // Rien de lisible : seule la facture déjà liée est proposée
+    const proposals =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    expect(proposals[0].existing.invoice._id.toString()).toBe(
+      existing._id.toString(),
+    );
+    expect(proposals[0].existing.reason).toBe("LINKED");
 
+    const invoices = await confirmProposals(params, proposals);
     expect(invoices).toHaveLength(1);
     expect(invoices[0]._id.toString()).toBe(existing._id.toString());
     expect(await PurchaseInvoice.countDocuments()).toBe(1);
@@ -892,9 +1008,17 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       await transactionReceiptOcrService.processReceiptsForTransaction(params);
     expect(first).toHaveLength(1);
 
+    // Proposition en attente : une nouvelle analyse ne refait pas l'OCR
     const second =
       await transactionReceiptOcrService.processReceiptsForTransaction(params);
     expect(second).toHaveLength(0);
+    expect(processFromBase64).toHaveBeenCalledTimes(1);
+
+    await confirmProposals(params, first);
+    // Ni après la confirmation : le justificatif porte sa facture
+    const third =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    expect(third).toHaveLength(0);
     expect(await PurchaseInvoice.countDocuments()).toBe(1);
   });
 
@@ -906,13 +1030,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     });
     const tx = await createExpenseTransaction();
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-        buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    });
 
     expect(invoices).toHaveLength(1);
     const invoice = await PurchaseInvoice.findById(invoices[0]._id);
@@ -940,12 +1063,11 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     });
     const tx = await createExpenseTransaction();
 
-    const invoices =
-      await transactionReceiptOcrService.processReceiptsForTransaction({
-        transactionId: tx._id.toString(),
-        workspaceId,
-        userId,
-      });
+    const invoices = await processAndConfirm({
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+    });
 
     expect(processDocumentFromUrl).toHaveBeenCalledWith(
       "https://receipts.newbi.fr/receipt-1.pdf",

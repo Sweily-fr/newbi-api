@@ -678,6 +678,40 @@ async function findExistingPurchaseInvoiceForReceipt({
   ocrSucceeded,
   workspaceId,
 }) {
+  const td = financial?.transaction_data || {};
+  // Même montant que celui qui serait enregistré sur la facture : en devise
+  // étrangère, une facture déjà créée porte le débit bancaire converti.
+  const { amountTTC } = ocrSucceeded
+    ? resolveReceiptAmounts({ transaction, financial })
+    : {};
+  return findSimilarPurchaseInvoice({
+    transaction,
+    ocrSucceeded,
+    workspaceId,
+    supplierName: td.vendor_name || td.supplier_name || null,
+    invoiceNumber: td.document_number || td.invoice_number || null,
+    amountTTC: amountTTC || null,
+    issueDate:
+      parseOcrDate(td.transaction_date || td.invoice_date) ||
+      transaction.date ||
+      null,
+  });
+}
+
+/**
+ * Cœur de la recherche de facture ressemblante, à partir de valeurs déjà
+ * normalisées : celles lues par l'OCR à l'analyse, ou celles confirmées par
+ * l'utilisateur au moment de créer (cf. confirmReceiptInvoiceProposal).
+ */
+async function findSimilarPurchaseInvoice({
+  transaction,
+  ocrSucceeded,
+  workspaceId,
+  supplierName,
+  invoiceNumber,
+  amountTTC,
+  issueDate,
+}) {
   const linkedIds = transaction.linkedPurchaseInvoiceIds || [];
   let candidate = null;
   let ocrNumber = null;
@@ -689,20 +723,13 @@ async function findExistingPurchaseInvoiceForReceipt({
       workspaceId: new mongoose.Types.ObjectId(workspaceId),
     }).sort({ createdAt: -1 });
   } else {
-    const td = financial?.transaction_data || {};
-    ocrNumber = td.document_number || td.invoice_number || null;
-    // Même montant que celui qui serait enregistré sur la facture : en devise
-    // étrangère, une facture déjà créée porte le débit bancaire converti.
-    const { amountTTC } = resolveReceiptAmounts({ transaction, financial });
+    ocrNumber = invoiceNumber || null;
     const candidates = await findPurchaseInvoiceDuplicates({
       workspaceId,
-      supplierName: td.vendor_name || td.supplier_name || null,
+      supplierName: supplierName || null,
       invoiceNumber: ocrNumber,
       amountTTC: amountTTC || null,
-      issueDate:
-        parseOcrDate(td.transaction_date || td.invoice_date) ||
-        transaction.date ||
-        null,
+      issueDate: issueDate || null,
       preferIds: linkedIds,
       limit: 1,
     });
@@ -1111,7 +1138,9 @@ async function processReceiptsForTransaction({
               values: proposal.values,
               meta: proposal.meta,
               duplicateInvoiceId: existing?.invoice?._id || null,
-              duplicateLinkTransaction: existing ? existing.linkTransaction : true,
+              duplicateLinkTransaction: existing
+                ? existing.linkTransaction
+                : true,
               duplicateReason: existing?.reason || null,
               proposedAt: new Date(),
             },
@@ -1166,12 +1195,20 @@ async function processReceiptsForTransaction({
  * Applique la décision de l'utilisateur sur une facture d'achat proposée.
  *
  * - CREATE : crée la facture avec les valeurs confirmées (corrections
- *   comprises), même si une facture existante lui ressemble ;
+ *   comprises), même si une facture existante lui ressemble, à condition
+ *   que l'utilisateur l'ait vue (`acknowledgedDuplicateId`). Une facture
+ *   ressemblante apparue depuis l'analyse (autre copie du même document
+ *   confirmée juste avant, saisie manuelle…) suspend la création : rien
+ *   n'est créé, la proposition est mise à jour et `duplicate` est renvoyé
+ *   pour que l'interface redonne le choix ;
  * - ATTACH : rattache le justificatif à une facture existante (celle
  *   proposée par défaut, ou une autre choisie à la main) ;
  * - SKIP   : ne crée rien, le justificatif reste attaché à la transaction.
  *
- * @returns {Promise<{action: string, invoice: ?Object}>}
+ * @param {?string} [params.acknowledgedDuplicateId] facture ressemblante
+ *   affichée à l'utilisateur quand il a choisi CREATE (null : aucune).
+ *   Absent (anciens clients) : celle enregistrée sur la proposition.
+ * @returns {Promise<{action: string, invoice: ?Object, duplicate?: Object}>}
  */
 async function confirmReceiptInvoiceProposal({
   transactionId,
@@ -1181,6 +1218,7 @@ async function confirmReceiptInvoiceProposal({
   action,
   values = null,
   purchaseInvoiceId = null,
+  acknowledgedDuplicateId,
 }) {
   const transaction = await Transaction.findOne({
     _id: transactionId,
@@ -1281,6 +1319,46 @@ async function confirmReceiptInvoiceProposal({
     confirmed.category = resolved.category;
     confirmed.subcategory = resolved.subcategory;
   }
+
+  // La facture ressemblante n'a été cherchée qu'à l'analyse, parmi les
+  // factures déjà enregistrées. Deux copies du même document déposées
+  // ensemble (photo + PDF), ou sur deux transactions, n'y voyaient rien :
+  // confirmer les deux créait deux factures. On recherche donc à nouveau
+  // avec les valeurs confirmées ; si une facture que l'utilisateur n'a pas
+  // vue ressemble à celle-ci, on lui redonne le choix au lieu de créer.
+  const similar = await findSimilarPurchaseInvoice({
+    transaction,
+    ocrSucceeded: Boolean(proposal.meta?.ocrSucceeded),
+    workspaceId,
+    supplierName: confirmed.supplierName,
+    invoiceNumber: confirmed.invoiceNumber,
+    amountTTC: confirmed.amountTTC,
+    issueDate: confirmed.issueDate || transaction.date || null,
+  });
+  const acknowledged =
+    acknowledgedDuplicateId === undefined
+      ? proposal.duplicateInvoiceId
+      : acknowledgedDuplicateId;
+  if (similar && String(similar.invoice._id) !== String(acknowledged || "")) {
+    await Transaction.updateOne(
+      { _id: transaction._id, workspaceId },
+      {
+        $set: {
+          "receiptFiles.$[elem].ocrProposal.duplicateInvoiceId":
+            similar.invoice._id,
+          "receiptFiles.$[elem].ocrProposal.duplicateReason": similar.reason,
+          "receiptFiles.$[elem].ocrProposal.duplicateLinkTransaction":
+            similar.linkTransaction,
+        },
+      },
+      { arrayFilters: [{ "elem._id": receiptFile._id }] },
+    );
+    logger.info(
+      `ℹ️ [RECEIPT OCR] Création suspendue pour ${receiptFile.filename} : la facture ${similar.invoice._id} lui ressemble (motif ${similar.reason}), choix redonné à l'utilisateur (transaction ${transaction._id})`,
+    );
+    return { action, invoice: null, duplicate: similar };
+  }
+
   const invoice = await createPurchaseInvoiceFromProposal({
     transaction,
     receiptFile,
@@ -1738,6 +1816,7 @@ async function analyzePurchaseInvoiceFiles({
 
 export {
   findExistingPurchaseInvoiceForReceipt,
+  findSimilarPurchaseInvoice,
   purchaseInvoiceCanAbsorbTransaction,
   buildReceiptInvoiceProposal,
   confirmReceiptInvoiceProposal,
