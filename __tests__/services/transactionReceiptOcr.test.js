@@ -119,21 +119,42 @@ beforeEach(async () => {
 /**
  * Depuis le 01/10/2026 (1d5c9ef), l'analyse d'un justificatif ne crée plus la
  * facture d'achat : elle dépose une proposition que l'utilisateur confirme.
- * Rejoue le parcours complet en suivant la suggestion affichée : « Rattacher »
- * si une facture ressemblante est proposée, sinon « Créer ».
+ * Rejoue le parcours complet comme l'interface, en suivant la suggestion
+ * affichée : « Rattacher » si une facture ressemblante est proposée, sinon
+ * « Créer » ; si la création est suspendue parce qu'une facture ressemblante
+ * est apparue entre-temps, « Rattacher » à celle-ci.
  */
 async function confirmProposals(params, proposals) {
   const invoices = [];
   for (const { receiptFile, existing } of proposals) {
-    const { invoice } =
-      await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
-        transactionId: params.transactionId,
-        workspaceId: params.workspaceId,
-        userId: params.userId,
-        fileId: receiptFile._id,
-        action: existing ? "ATTACH" : "CREATE",
-      });
-    invoices.push(invoice);
+    const base = {
+      transactionId: params.transactionId,
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      fileId: receiptFile._id,
+    };
+    const result = existing
+      ? await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+          ...base,
+          action: "ATTACH",
+          purchaseInvoiceId: existing.invoice._id,
+        })
+      : await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+          ...base,
+          action: "CREATE",
+          acknowledgedDuplicateId: null,
+        });
+    if (result.duplicate) {
+      const attached =
+        await transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+          ...base,
+          action: "ATTACH",
+          purchaseInvoiceId: result.duplicate.invoice._id,
+        });
+      invoices.push(attached.invoice);
+      continue;
+    }
+    invoices.push(result.invoice);
   }
   return invoices;
 }
@@ -832,13 +853,7 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     );
   });
 
-  // BUG connu (09/10/2026), à corriger : depuis la confirmation avant création
-  // (01/10), la facture ressemblante n'est cherchée qu'à l'analyse, parmi les
-  // factures déjà enregistrées. Deux copies du même document déposées
-  // ensemble (photo + PDF) donnent deux propositions sans avertissement de
-  // doublon, et les confirmer crée deux factures. Réactiver ce test avec le
-  // correctif.
-  it.skip("deux justificatifs de la même facture déposés en une fois : une seule facture d'achat", async () => {
+  it("deux justificatifs de la même facture déposés en une fois : une seule facture d'achat", async () => {
     // Même document déposé deux fois (photo + PDF) : l'analyse est parallèle
     // mais la déduplication reste séquentielle, pas de facture en double.
     mockClaudeSuccess();
@@ -865,7 +880,7 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
       ],
     });
 
-    await processAndConfirm({
+    const params = {
       transactionId: tx._id.toString(),
       workspaceId,
       userId,
@@ -873,6 +888,48 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
         "receipts/receipt-1.pdf": Buffer.from("fake-pdf"),
         "receipts/receipt-1-photo.jpg": Buffer.from("fake-jpg"),
       },
+    };
+    const proposals =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    // À l'analyse, aucune des deux copies ne voit l'autre (rien n'existe)
+    expect(proposals).toHaveLength(2);
+    expect(proposals.every((p) => !p.existing)).toBe(true);
+
+    const confirm = (proposal, extra) =>
+      transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+        transactionId: params.transactionId,
+        workspaceId,
+        userId,
+        fileId: proposal.receiptFile._id,
+        ...extra,
+      });
+
+    const first = await confirm(proposals[0], {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+    expect(first.invoice).toBeTruthy();
+
+    // Seconde copie confirmée sans avertissement à l'écran : création
+    // suspendue, la facture tout juste créée est proposée à la place
+    const held = await confirm(proposals[1], {
+      action: "CREATE",
+      acknowledgedDuplicateId: null,
+    });
+    expect(held.invoice).toBeNull();
+    expect(held.duplicate.invoice._id.toString()).toBe(
+      first.invoice._id.toString(),
+    );
+    expect(held.duplicate.reason).toBe("NUMBER");
+    expect(await PurchaseInvoice.countDocuments()).toBe(1);
+    const pendingTx = await Transaction.findById(tx._id);
+    expect(
+      String(pendingTx.receiptFiles[1].ocrProposal.duplicateInvoiceId),
+    ).toBe(first.invoice._id.toString());
+
+    await confirm(proposals[1], {
+      action: "ATTACH",
+      purchaseInvoiceId: held.duplicate.invoice._id,
     });
 
     expect(await PurchaseInvoice.countDocuments()).toBe(1);
