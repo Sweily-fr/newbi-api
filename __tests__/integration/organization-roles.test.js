@@ -1,5 +1,22 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import mongoose from "mongoose";
+
+// Demande d'accès : e-mail au super admin capturé, pas d'envoi réel
+const sentAccessEmails = [];
+vi.mock("../../src/utils/mailer.js", () => ({
+  sendAccessRequestEmail: vi.fn(async (to, data) => {
+    sentAccessEmails.push({ to, data });
+    return true;
+  }),
+}));
 
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
@@ -445,5 +462,61 @@ describe("Rôles d'un espace", () => {
       ctx(owner),
     );
     expect(role.actions.creditNotes).toEqual([]);
+  });
+
+  it("envoie une demande d'accès au super admin, une fois par page", async () => {
+    await mongoose.connection.db.collection("user").insertMany([
+      { _id: owner, name: "Super Admin", email: "owner@test.fr" },
+      { _id: viewer, name: "Membre Test", email: "membre@test.fr" },
+    ]);
+    sentAccessEmails.length = 0;
+    const context = {
+      ...ctx(viewer),
+      user: {
+        ...ctx(viewer).user,
+        name: "Membre Test",
+        email: "membre@test.fr",
+      },
+    };
+
+    const first = await Mutation.requestModuleAccess(
+      null,
+      { module: "invoices", action: "create" },
+      context,
+    );
+    expect(first).toMatchObject({
+      success: true,
+      ownerName: "Super Admin",
+      alreadyRequested: false,
+    });
+    const notification = await mongoose.connection.db
+      .collection("notifications")
+      .findOne({ type: "ACCESS_REQUESTED" });
+    expect(String(notification.userId)).toBe(String(owner));
+    expect(notification.message).toBe(
+      "Membre Test demande le droit de créer dans « Factures clients »",
+    );
+    expect(notification.data.url).toContain("/dashboard?parametres=roles");
+    expect(sentAccessEmails).toHaveLength(1);
+    expect(sentAccessEmails[0].to).toBe("owner@test.fr");
+
+    // Même demande dans les 10 minutes : pas de doublon
+    const second = await Mutation.requestModuleAccess(
+      null,
+      { module: "invoices", action: "create" },
+      context,
+    );
+    expect(second.alreadyRequested).toBe(true);
+    expect(sentAccessEmails).toHaveLength(1);
+  });
+
+  it("refuse une demande d'accès sur une page inconnue", async () => {
+    await expect(
+      Mutation.requestModuleAccess(
+        null,
+        { module: "inconnue", action: "view" },
+        ctx(viewer),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });
