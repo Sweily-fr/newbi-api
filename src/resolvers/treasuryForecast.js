@@ -8,6 +8,8 @@ import {
 } from "../cron/recurringInvoiceDetectionCron.js";
 import mongoose from "mongoose";
 import {
+  assertPermissionAction,
+  requireAction,
   requireRead,
   requireWrite,
   requireDelete,
@@ -1306,13 +1308,25 @@ const treasuryForecastResolvers = {
   },
 
   Mutation: {
-    upsertForecastScenario: requireWrite("forecast")(
+    // Ajout ou modification : « create » si le scénario n'existe pas encore,
+    // « edit » sinon
+    upsertForecastScenario: requireAction("forecast", ["create", "edit"])(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
           input.workspaceId,
           context.workspaceId,
         );
         const wId = new mongoose.Types.ObjectId(workspaceId);
+        const scenarioExists = await ForecastScenario.exists(
+          input.id
+            ? { _id: input.id, workspaceId: wId }
+            : { workspaceId: wId, name: input.name },
+        );
+        assertPermissionAction(
+          context,
+          "forecast",
+          scenarioExists ? "edit" : "create",
+        );
 
         // Enforce 5-scenario limit for new scenarios
         if (!input.id) {
@@ -1368,11 +1382,23 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    upsertTreasuryForecast: requireWrite("forecast")(
+    // Ajout ou modification : « create » si aucune prévision n'existe pour
+    // ce mois et cette catégorie, « edit » sinon
+    upsertTreasuryForecast: requireAction("forecast", ["create", "edit"])(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
           input.workspaceId,
           context.workspaceId,
+        );
+        const forecastExists = await TreasuryForecast.exists({
+          workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          month: input.month,
+          category: input.category,
+        });
+        assertPermissionAction(
+          context,
+          "forecast",
+          forecastExists ? "edit" : "create",
         );
 
         const result = await TreasuryForecast.findOneAndUpdate(
@@ -1418,13 +1444,19 @@ const treasuryForecastResolvers = {
       },
     ),
 
-    upsertManualCashflowEntry: requireWrite("forecast")(
+    // Ajout (« create », sans id) ou modification (« edit ») d'une saisie
+    upsertManualCashflowEntry: requireAction("forecast", ["create", "edit"])(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
           input.workspaceId,
           context.workspaceId,
         );
         const wObjId = new mongoose.Types.ObjectId(workspaceId);
+        assertPermissionAction(
+          context,
+          "forecast",
+          input.id ? "edit" : "create",
+        );
 
         // Sous-catégorie fine (référentiel Transactions) → catégorie large
         // de l'enum ForecastCategory dérivée côté serveur.

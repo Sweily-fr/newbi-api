@@ -15,6 +15,7 @@ import {
 } from "../utils/mailer.js";
 import {
   checkSubscriptionActive,
+  requireWorkspaceAction,
   requireWorkspaceLevel,
 } from "../middlewares/rbac.js";
 import {
@@ -521,7 +522,7 @@ const resolvers = {
 
   Mutation: {
     // Créer un lien de partage
-    createPublicShare: requireWorkspaceLevel("kanban", "write")(
+    createPublicShare: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { input, workspaceId },
@@ -580,7 +581,7 @@ const resolvers = {
     ),
 
     // Mettre à jour un lien de partage
-    updatePublicShare: requireWorkspaceLevel("kanban", "write")(
+    updatePublicShare: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { input, workspaceId },
@@ -619,7 +620,7 @@ const resolvers = {
     ),
 
     // Supprimer un lien de partage
-    deletePublicShare: requireWorkspaceLevel("kanban", "delete")(
+    deletePublicShare: requireWorkspaceAction("kanban", "share")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -633,7 +634,7 @@ const resolvers = {
     ),
 
     // Révoquer un lien de partage (désactiver sans supprimer)
-    revokePublicShare: requireWorkspaceLevel("kanban", "write")(
+    revokePublicShare: requireWorkspaceAction("kanban", "share")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -648,7 +649,7 @@ const resolvers = {
     ),
 
     // Réactiver un lien de partage désactivé
-    reactivatePublicShare: requireWorkspaceLevel("kanban", "write")(
+    reactivatePublicShare: requireWorkspaceAction("kanban", "share")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -663,7 +664,7 @@ const resolvers = {
     ),
 
     // Révoquer l'accès d'un visiteur spécifique (le bannit)
-    revokeVisitorAccess: requireWorkspaceLevel("kanban", "delete")(
+    revokeVisitorAccess: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, visitorEmail, reason, workspaceId },
@@ -740,7 +741,7 @@ const resolvers = {
     ),
 
     // Débannir un visiteur
-    unbanVisitor: requireWorkspaceLevel("kanban", "write")(
+    unbanVisitor: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, visitorEmail, workspaceId },
@@ -878,7 +879,7 @@ const resolvers = {
     },
 
     // Approuver une demande d'accès
-    approveAccessRequest: requireWorkspaceLevel("kanban", "write")(
+    approveAccessRequest: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, requestId, workspaceId },
@@ -965,7 +966,7 @@ const resolvers = {
     ),
 
     // Rejeter une demande d'accès
-    rejectAccessRequest: requireWorkspaceLevel("kanban", "write")(
+    rejectAccessRequest: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, requestId, workspaceId },

@@ -3,12 +3,14 @@ import InvoiceTemplate from "../models/invoiceTemplate.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceLevel,
+  requireWorkspaceAction,
 } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
 
 // Modèles : mêmes droits que le module « invoices »
 const readTemplates = requireWorkspaceLevel("invoices", "read");
-const writeTemplates = requireWorkspaceLevel("invoices", "write");
+// Enregistrer un document comme modèle : action « create »
+const createTemplates = requireWorkspaceAction("invoices", "create");
 const deleteTemplates = requireWorkspaceLevel("invoices", "delete");
 
 const invoiceTemplateResolvers = {
@@ -24,7 +26,7 @@ const invoiceTemplateResolvers = {
   },
 
   Mutation: {
-    saveInvoiceAsTemplate: writeTemplates(
+    saveInvoiceAsTemplate: createTemplates(
       async (
         _,
         { input, workspaceId },

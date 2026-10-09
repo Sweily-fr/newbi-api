@@ -25,6 +25,7 @@ vi.mock('../../src/middlewares/better-auth.js', () => ({
 }));
 
 import {
+  assertStatusChangeAllowed,
   hasPermission,
   hasPermissionLevel,
   ROLE_PERMISSIONS,
@@ -215,8 +216,13 @@ describe('legacy resource names', () => {
   });
 });
 
-describe('effective levels passed explicitly (custom roles)', () => {
-  const levels = { invoices: 'read', quotes: 'delete', team: 'none' };
+describe('effective grid passed explicitly (custom roles)', () => {
+  // Grille d'actions par page (rôle personnalisé ou ajusté)
+  const levels = {
+    invoices: ['view', 'export'],
+    quotes: ['view', 'create', 'edit', 'delete'],
+    team: [],
+  };
 
   it('should use the given grid instead of the predefined role', () => {
     expect(hasPermission('role_abc', 'invoices', 'view', levels)).toBe(true);
@@ -227,5 +233,52 @@ describe('effective levels passed explicitly (custom roles)', () => {
 
   it('should deny modules missing from the grid', () => {
     expect(hasPermissionLevel('role_abc', 'banking', 'read', levels)).toBe(false);
+  });
+
+  it('should check precise actions independently', () => {
+    const grid = { invoices: ['view', 'create', 'send'] };
+    expect(hasPermission('role_abc', 'invoices', 'create', grid)).toBe(true);
+    expect(hasPermission('role_abc', 'invoices', 'send', grid)).toBe(true);
+    // Créer sans modifier : le contrôle « écriture » (modifier) refuse
+    expect(hasPermissionLevel('role_abc', 'invoices', 'write', grid)).toBe(false);
+    expect(hasPermission('role_abc', 'invoices', 'mark-paid', grid)).toBe(false);
+  });
+});
+
+describe('assertStatusChangeAllowed', () => {
+  const ctxWith = (grid) => ({
+    permissions: {
+      hasPermission: (resource, action) =>
+        hasPermission('role_abc', resource, action, grid),
+    },
+  });
+
+  it('lets a role that can create finalize its draft', () => {
+    const ctx = ctxWith({ quotes: ['view', 'create'] });
+    expect(() =>
+      assertStatusChangeAllowed(ctx, 'quotes', 'PENDING', 'PENDING'),
+    ).not.toThrow();
+    // Accepter un devis : case « status »
+    expect(() =>
+      assertStatusChangeAllowed(ctx, 'quotes', 'COMPLETED', 'PENDING'),
+    ).toThrow();
+  });
+
+  it('requires markPaid to set an invoice as paid', () => {
+    const editOnly = ctxWith({ invoices: ['view', 'edit'] });
+    expect(() =>
+      assertStatusChangeAllowed(editOnly, 'invoices', 'COMPLETED', 'PENDING'),
+    ).toThrow();
+    const payer = ctxWith({ invoices: ['view', 'markPaid'] });
+    expect(() =>
+      assertStatusChangeAllowed(payer, 'invoices', 'COMPLETED', 'PENDING'),
+    ).not.toThrow();
+  });
+
+  it('requires status to cancel', () => {
+    const ctx = ctxWith({ purchaseOrders: ['view', 'edit'] });
+    expect(() =>
+      assertStatusChangeAllowed(ctx, 'purchaseOrders', 'CANCELED', 'CONFIRMED'),
+    ).toThrow();
   });
 });

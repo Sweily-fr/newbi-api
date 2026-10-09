@@ -3,12 +3,14 @@ import PurchaseOrderTemplate from "../models/purchaseOrderTemplate.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceLevel,
+  requireWorkspaceAction,
 } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
 
 // Modèles : mêmes droits que le module « purchaseOrders »
 const readTemplates = requireWorkspaceLevel("purchaseOrders", "read");
-const writeTemplates = requireWorkspaceLevel("purchaseOrders", "write");
+// Enregistrer un document comme modèle : action « create »
+const createTemplates = requireWorkspaceAction("purchaseOrders", "create");
 const deleteTemplates = requireWorkspaceLevel("purchaseOrders", "delete");
 
 const purchaseOrderTemplateResolvers = {
@@ -24,7 +26,7 @@ const purchaseOrderTemplateResolvers = {
   },
 
   Mutation: {
-    savePurchaseOrderAsTemplate: writeTemplates(
+    savePurchaseOrderAsTemplate: createTemplates(
       async (
         _,
         { input, workspaceId },

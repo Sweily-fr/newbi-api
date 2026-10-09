@@ -16,6 +16,7 @@ import {
 import {
   requireWrite,
   requireDelete,
+  requireAction,
   requireWorkspaceLevel,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
@@ -252,7 +253,10 @@ const creditNoteResolvers = {
       },
     ),
     createCreditNote: requireCompanyInfo(
-      requireWrite("creditNotes")(async (parent, { input }, context) => {
+      requireAction(
+        "creditNotes",
+        "create",
+      )(async (parent, { input }, context) => {
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {

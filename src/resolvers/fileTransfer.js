@@ -7,6 +7,7 @@ import { createOwnerDownloadToken } from "../utils/ownerDownloadToken.js";
 import {
   assertPermissionLevel,
   checkSubscriptionActive,
+  requireWorkspaceAction,
   requireWorkspaceLevel,
 } from "../middlewares/rbac.js";
 import {
@@ -84,12 +85,15 @@ async function getMaxFileSize(userId) {
 // resolver (messages UserInputError affichés par l'application).
 const requireTransferLevel = (level) =>
   requireWorkspaceLevel("fileTransfers", level);
+// Action précise de la page (« create », « edit » = renommer)
+const requireTransferAction = (action) =>
+  requireWorkspaceAction("fileTransfers", action);
 
 // Création classique : l'espace du transfert arrive dans input.workspaceId.
 // On le présente comme args.workspaceId pour que le rôle contrôlé soit celui
 // de l'espace où le transfert est enregistré.
-const requireTransferLevelFromInput = (level) => (fn) => {
-  const guarded = requireTransferLevel(level)(fn);
+const requireTransferActionFromInput = (action) => (fn) => {
+  const guarded = requireTransferAction(action)(fn);
   return (parent, args, context, info) =>
     guarded(
       parent,
@@ -320,7 +324,7 @@ const fileTransferResolvers = {
 
   Mutation: {
     // Créer un nouveau transfert de fichiers
-    createFileTransfer: requireTransferLevelFromInput("write")(
+    createFileTransfer: requireTransferActionFromInput("create")(
       async (_, { files, input = {} }, { user }) => {
         try {
           // Vérifier que des fichiers ont été fournis
@@ -417,7 +421,7 @@ const fileTransferResolvers = {
 
     // Supprimer un transfert de fichiers
     // Renommer un transfert (titre personnalisé)
-    renameFileTransfer: requireTransferLevel("write")(
+    renameFileTransfer: requireTransferAction("edit")(
       async (_, { id, title }, { user }) => {
         try {
           const trimmed = (title || "").trim();
@@ -499,7 +503,7 @@ const fileTransferResolvers = {
     ),
 
     // Créer un nouveau transfert de fichiers avec des fichiers en base64
-    createFileTransferBase64: requireTransferLevelFromInput("write")(
+    createFileTransferBase64: requireTransferActionFromInput("create")(
       async (_, { files, input = {} }, { user }) => {
         try {
           // Vérifier que des fichiers ont été fournis
@@ -684,7 +688,7 @@ const fileTransferResolvers = {
     },
 
     // Créer un transfert de fichiers à partir de documents partagés (ZIP unique)
-    createFileTransferFromSharedDocuments: requireTransferLevel("write")(
+    createFileTransferFromSharedDocuments: requireTransferAction("create")(
       async (
         _,
         { documentIds = [], folderIds = [], workspaceId, input = {} },

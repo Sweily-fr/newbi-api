@@ -3,6 +3,7 @@ import { Board, Column, Task } from "../models/kanban.js";
 import KanbanTemplate from "../models/kanbanTemplate.js";
 import {
   checkSubscriptionActive,
+  requireWorkspaceAction,
   requireWorkspaceLevel,
 } from "../middlewares/rbac.js";
 import { getPubSub } from "../config/redis.js";
@@ -36,9 +37,9 @@ const kanbanTemplateResolvers = {
   },
 
   Mutation: {
-    saveBoardAsTemplate: requireWorkspaceLevel(
+    saveBoardAsTemplate: requireWorkspaceAction(
       "kanban",
-      "write",
+      "create",
     )(
       async (
         _,
@@ -119,9 +120,9 @@ const kanbanTemplateResolvers = {
       },
     ),
 
-    createBoardFromTemplate: requireWorkspaceLevel(
+    createBoardFromTemplate: requireWorkspaceAction(
       "kanban",
-      "write",
+      "create",
     )(
       async (
         _,

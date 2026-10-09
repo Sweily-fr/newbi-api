@@ -266,9 +266,14 @@ export const withRBAC = (resolver, options = {}) => {
           ? options.resource
           : [options.resource];
         if (options.action) {
-          // Vérification par action spécifique
+          // Vérification par action spécifique (une liste : l'une suffit)
+          const actions = Array.isArray(options.action)
+            ? options.action
+            : [options.action];
           hasAccess = resources.some((resource) =>
-            hasPermission(userRole, resource, options.action, permissionLevels),
+            actions.some((action) =>
+              hasPermission(userRole, resource, action, permissionLevels),
+            ),
           );
         } else if (options.level) {
           // Vérification par niveau de permission
@@ -692,6 +697,55 @@ export const requireAdmin = (resource) => (resolver) =>
 export const requirePermission = (resource, action) => (resolver) =>
   withRBAC(resolver, { resource, action });
 
+// Actions de simple consultation : pas de contrôle d'abonnement
+const READ_ACTIONS = new Set(["view", "export", "read", "download"]);
+
+/**
+ * Action précise d'une page (case de l'éditeur de rôles) : `create`,
+ * `edit`, `send`, `markPaid`… Une liste d'actions = l'une suffit. Les
+ * actions d'écriture vérifient aussi l'abonnement, comme requireWrite.
+ * Options : skipSubscriptionCheck, preferArgsWorkspace.
+ */
+export const requireAction =
+  (resource, action, options = {}) =>
+  (resolver) => {
+    const actions = Array.isArray(action) ? action : [action];
+    const rbacOptions = {
+      resource,
+      action: actions,
+      preferArgsWorkspace: options.preferArgsWorkspace,
+    };
+    const readOnly = actions.every((a) => READ_ACTIONS.has(a));
+    if (readOnly || options.skipSubscriptionCheck) {
+      return withRBAC(resolver, rbacOptions);
+    }
+    return async (parent, args, context, info) => {
+      const patchedResolver = async (p, a, ctx, i) => {
+        await checkSubscriptionActive(ctx);
+        return resolver(p, a, ctx, i);
+      };
+      return withRBAC(patchedResolver, rbacOptions)(
+        parent,
+        args,
+        context,
+        info,
+      );
+    };
+  };
+
+/**
+ * Comme requireWorkspaceLevel (remplaçant de withWorkspace : argument
+ * workspaceId d'abord, erreurs non réécrites, pas de contrôle d'abonnement)
+ * mais pour une action précise.
+ */
+export const requireWorkspaceAction = (resource, action) => (resolver) =>
+  withRBAC(resolver, {
+    resource,
+    action: Array.isArray(action) ? action : [action],
+    preferArgsWorkspace: true,
+    passthroughErrors: true,
+  });
+
 /**
  * Remplaçant de withWorkspace (better-auth-jwt.js) avec contrôle du rôle :
  * même choix d'espace (args.workspaceId d'abord), même contexte
@@ -706,6 +760,63 @@ export const requireWorkspaceLevel = (resource, level) => (resolver) =>
     preferArgsWorkspace: true,
     passthroughErrors: true,
   });
+
+/**
+ * Contrôle d'une action précise dans le corps d'un resolver déjà passé par
+ * withRBAC / withOrganization / require* (ex. changer le statut d'une
+ * facture : « status » pour annuler, « edit » sinon). Lève FORBIDDEN.
+ */
+export function assertPermissionAction(context, resource, action) {
+  const allowed = context?.permissions?.hasPermission?.(resource, action);
+  if (!allowed) {
+    logger.warn(
+      `Accès refusé: ${context?.user?._id} (${context?.userRole}) n'a pas l'action ${action} sur ${resource}`,
+    );
+    throw new AppError(
+      "Vous n'avez pas la permission d'effectuer cette action.",
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * Changement de statut d'un document : action exigée selon le statut visé.
+ *   - valider un brouillon (`finalStatus`) : fait partie de la création, donc
+ *     « Créer » ou « Modifier » ;
+ *   - repasser en brouillon : « Modifier » ;
+ *   - facture payée : « Marquer comme payée » ;
+ *   - tout autre statut (accepter, refuser, annuler, expédier…) : « status ».
+ */
+export function assertStatusChangeAllowed(
+  context,
+  resource,
+  status,
+  finalStatus,
+) {
+  const actions =
+    status === finalStatus
+      ? ["create", "edit"]
+      : status === "DRAFT"
+        ? ["edit"]
+        : resource === "invoices" && status === "COMPLETED"
+          ? ["markPaid"]
+          : ["status"];
+  const allowed = actions.some((action) =>
+    context?.permissions?.hasPermission?.(resource, action),
+  );
+  if (!allowed) {
+    logger.warn(
+      `Accès refusé: ${context?.user?._id} (${context?.userRole}) ne peut pas passer ${resource} au statut ${status}`,
+    );
+    throw new AppError(
+      "Vous n'avez pas la permission d'effectuer cette action.",
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
+}
+
+// Actions qui peuvent ouvrir un changement de statut (contrôle précis ensuite)
+export const STATUS_CHANGE_ACTIONS = ["create", "edit", "status", "markPaid"];
 
 /**
  * Contrôle dans le corps d'un resolver déjà passé par withRBAC /

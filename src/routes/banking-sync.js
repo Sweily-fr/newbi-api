@@ -5,7 +5,7 @@ import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
 import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
-import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
+import { userHasWorkspaceAction } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
@@ -32,13 +32,13 @@ router.post(
         return res.status(400).json({ error: "WorkspaceId requis" });
       }
 
-      // Membre de l'espace avec le droit d'écriture sur les transactions
+      // Membre de l'espace avec le droit de synchroniser les comptes
       if (
-        !(await userHasWorkspaceLevel(
+        !(await userHasWorkspaceAction(
           String(user._id || user.id),
           workspaceId,
           "banking",
-          "write",
+          "sync",
         ))
       ) {
         return res.status(403).json({
@@ -108,13 +108,13 @@ router.post(
         return res.status(400).json({ error: "WorkspaceId requis" });
       }
 
-      // Membre de l'espace avec le droit d'écriture sur les transactions
+      // Membre de l'espace avec le droit de synchroniser les comptes
       if (
-        !(await userHasWorkspaceLevel(
+        !(await userHasWorkspaceAction(
           String(user._id || user.id),
           workspaceId,
           "banking",
-          "write",
+          "sync",
         ))
       ) {
         return res.status(403).json({
@@ -219,13 +219,13 @@ router.post(
         return res.status(400).json({ error: "WorkspaceId requis" });
       }
 
-      // Membre de l'espace avec le droit d'écriture sur les transactions
+      // Membre de l'espace avec le droit de synchroniser les comptes
       if (
-        !(await userHasWorkspaceLevel(
+        !(await userHasWorkspaceAction(
           String(user._id || user.id),
           workspaceId,
           "banking",
-          "write",
+          "sync",
         ))
       ) {
         return res.status(403).json({

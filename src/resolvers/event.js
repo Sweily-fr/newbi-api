@@ -5,6 +5,7 @@ import Client from "../models/Client.js";
 import CalendarConnection from "../models/CalendarConnection.js";
 import {
   checkSubscriptionActive,
+  requireWorkspaceAction,
   requireWorkspaceLevel,
 } from "../middlewares/rbac.js";
 import emailReminderService from "../services/emailReminderService.js";
@@ -435,9 +436,9 @@ const eventResolvers = {
   },
 
   Mutation: {
-    createEvent: requireWorkspaceLevel(
+    createEvent: requireWorkspaceAction(
       "calendar",
-      "write",
+      "create",
     )(
       async (
         _,

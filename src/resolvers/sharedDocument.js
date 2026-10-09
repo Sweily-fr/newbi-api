@@ -9,9 +9,8 @@ import SharedFolder from "../models/SharedFolder.js";
 import SharedTag, { getDefaultTagColor } from "../models/SharedTag.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
+  requireAction,
   requireRead,
-  requireWrite,
-  requireDelete,
   requireWorkspaceLevel,
   resolveWorkspaceId,
   checkSubscriptionActive,
@@ -47,15 +46,16 @@ const scopedQuery = (fn) =>
 
 // checkSub : contrôle d'abonnement APRÈS RBAC (context.workspaceId validé).
 // publish : notification temps réel sur le workspace validé.
-// level : niveau requis sur le module « sharedDocuments » (write pour créer,
-// modifier, déplacer, restaurer ; delete pour la corbeille et les
-// suppressions). Le contrôle d'abonnement reste celui de checkSub.
+// action : action requise sur le module « sharedDocuments » (create pour
+// ajouter des documents et des dossiers ; edit pour modifier, déplacer,
+// classer, restaurer ; delete pour la corbeille et les suppressions). Le
+// contrôle d'abonnement reste celui de checkSub.
 // Le nettoyage corbeille (emptyTrash / permanentlyDelete*) reste accessible sans
 // abonnement actif — on le passe par scopedDeleteMutationNoSub.
 const makeScopedMutation =
-  ({ checkSub, level }) =>
+  ({ checkSub, action }) =>
   (fn) =>
-    (level === "delete" ? requireDelete : requireWrite)("sharedDocuments", {
+    requireAction("sharedDocuments", action, {
       skipSubscriptionCheck: true,
     })(async (parent, args, context, info) => {
       if (checkSub) await checkSubscriptionActive(context);
@@ -70,14 +70,18 @@ const makeScopedMutation =
       return result;
     });
 
-const scopedMutation = makeScopedMutation({ checkSub: true, level: "write" });
+const scopedCreateMutation = makeScopedMutation({
+  checkSub: true,
+  action: "create",
+});
+const scopedMutation = makeScopedMutation({ checkSub: true, action: "edit" });
 const scopedDeleteMutation = makeScopedMutation({
   checkSub: true,
-  level: "delete",
+  action: "delete",
 });
 const scopedDeleteMutationNoSub = makeScopedMutation({
   checkSub: false,
-  level: "delete",
+  action: "delete",
 });
 
 // === Subscription temps réel ===
@@ -733,7 +737,7 @@ const sharedDocumentResolvers = {
     /**
      * Upload un document partagé
      */
-    uploadSharedDocument: scopedMutation(
+    uploadSharedDocument: scopedCreateMutation(
       async (
         _,
         { workspaceId, file, folderId, name, description, tags },
@@ -1287,7 +1291,7 @@ const sharedDocumentResolvers = {
     /**
      * Crée un dossier
      */
-    createSharedFolder: scopedMutation(
+    createSharedFolder: scopedCreateMutation(
       async (_, { workspaceId, input }, { user }) => {
         try {
           // Vérifier si un dossier avec le même nom existe déjà

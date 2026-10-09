@@ -10,6 +10,7 @@
 import EmailSignatureV2 from "../models/EmailSignatureV2.js";
 import EmailSignatureTemplateV2 from "../models/EmailSignatureTemplateV2.js";
 import {
+  requireAction,
   requireDelete,
   requireRead,
   requireWrite,
@@ -409,6 +410,10 @@ function templateDefaults(t) {
   };
 }
 
+// Création, duplication et modèles enregistrés : action « create » de la
+// page Signature de mail
+const requireCreateSignatures = requireAction("signatures", "create");
+
 const emailSignatureV2Resolvers = {
   // Mongoose retire les objets vides : on garantit la présence du champ
   SignatureStyleV2: {
@@ -624,7 +629,7 @@ const emailSignatureV2Resolvers = {
       },
     ),
 
-    createEmailSignatureV2: requireWrite("signatures")(
+    createEmailSignatureV2: requireCreateSignatures(
       async (_, { input, memberUserId }, ctx) => {
         const name = await availableName(input?.name, ctx);
         const isFirst = !(await EmailSignatureV2.exists(scope(ctx)));
@@ -803,7 +808,7 @@ const emailSignatureV2Resolvers = {
       },
     ),
 
-    saveEmailSignatureTemplateV2: requireWrite("signatures")(
+    saveEmailSignatureTemplateV2: requireCreateSignatures(
       async (_, { input }, ctx) => {
         const name = String(input?.name ?? "")
           .replace(/\s+/g, " ")
@@ -848,7 +853,7 @@ const emailSignatureV2Resolvers = {
       },
     ),
 
-    duplicateEmailSignatureV2: requireWrite("signatures")(
+    duplicateEmailSignatureV2: requireCreateSignatures(
       async (_, { id }, ctx) => {
         const source = await findOwned(id, ctx);
         const data = plain(source);

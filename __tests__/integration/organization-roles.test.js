@@ -8,6 +8,7 @@ import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import organizationRoleResolvers from "../../src/resolvers/organizationRole.js";
 import {
   invalidateOrgCache,
+  requireAction,
   requireDelete,
   requirePermission,
   requireRead,
@@ -58,9 +59,18 @@ describe("Rôles d'un espace", () => {
     const catalog = await Query.roleCatalog(null, {}, ctx(viewer));
     expect(catalog.defaultInviteRole).toBe("viewer");
     const team = catalog.modules.find((m) => m.key === "team");
-    expect(team.levels).toEqual(["none", "read", "write"]);
+    expect(team.actions.map((a) => a.key)).toEqual([
+      "view",
+      "invite",
+      "changeRole",
+      "remove",
+    ]);
     const invoices = catalog.modules.find((m) => m.key === "invoices");
-    expect(invoices.levels).toEqual(["none", "read", "write", "delete"]);
+    expect(invoices.actions.map((a) => a.key)).toEqual(
+      expect.arrayContaining(["view", "create", "edit", "delete", "markPaid"]),
+    );
+    const creditNotes = catalog.modules.find((m) => m.key === "creditNotes");
+    expect(creditNotes.parent).toBe("invoices");
   });
 
   it("liste les 5 rôles prédéfinis avec leurs effectifs", async () => {
@@ -385,9 +395,55 @@ describe("Rôles d'un espace", () => {
     invalidateOrganizationRoles();
     const roles = await Query.organizationRoles(null, {}, ctx(owner));
     const legacy = roles.find((r) => r.key === "role_ancien");
-    expect(legacy.levels.overview).toBe("write");
-    expect(legacy.levels.forecast).toBe("write");
-    expect(legacy.levels.clientSegments).toBe("read");
-    expect(legacy.levels.clientCustomFields).toBe("delete");
+    // Grille par niveaux convertie en actions
+    expect(legacy.actions.overview).toEqual(["view"]);
+    expect(legacy.actions.forecast).toEqual(["view", "create", "edit"]);
+    expect(legacy.actions.clientSegments).toEqual(["view"]);
+    expect(legacy.actions.clientCustomFields).toContain("delete");
+  });
+
+  it("coche chaque action indépendamment (créer sans modifier)", async () => {
+    const role = await Mutation.createOrganizationRole(
+      null,
+      {
+        input: {
+          name: "Saisie",
+          actions: { invoices: ["create", "send"], quotes: ["view"] },
+        },
+      },
+      ctx(owner),
+    );
+    // « Voir » ajouté automatiquement avec une autre action
+    expect(role.actions.invoices).toEqual(["view", "create", "send"]);
+    expect(role.levels.invoices).toBe("read");
+    await mongoose.connection.db
+      .collection("member")
+      .updateOne(
+        { userId: editor, organizationId },
+        { $set: { role: role.key } },
+      );
+    invalidateOrgCache();
+
+    await expect(
+      probe(requireAction("invoices", "create"))(null, {}, ctx(editor)),
+    ).resolves.toBe("ok");
+    await expect(
+      probe(requireAction("invoices", "edit"))(null, {}, ctx(editor)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      probe(requireWrite("invoices"))(null, {}, ctx(editor)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const mine = await Query.myPermissions(null, {}, ctx(editor));
+    expect(mine.actions.invoices).toEqual(["view", "create", "send"]);
+  });
+
+  it("vide les parties d'une page sans « Voir »", async () => {
+    const role = await Mutation.createOrganizationRole(
+      null,
+      { input: { name: "Avoirs seuls", actions: { creditNotes: ["view"] } } },
+      ctx(owner),
+    );
+    expect(role.actions.creditNotes).toEqual([]);
   });
 });

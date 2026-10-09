@@ -7,6 +7,7 @@ import mongoose from "mongoose";
 import { getPubSub } from "../config/redis.js";
 import {
   checkSubscriptionActive,
+  requireWorkspaceAction,
   requireWorkspaceLevel,
 } from "../middlewares/rbac.js";
 
@@ -413,9 +414,9 @@ const taskImageResolvers = {
     /**
      * Upload une image pour un commentaire
      */
-    uploadCommentImage: requireWorkspaceLevel(
+    uploadCommentImage: requireWorkspaceAction(
       "kanban",
-      "write",
+      "comment",
     )(async (_, { taskId, commentId, file, workspaceId }, { user }) => {
       try {
         logger.info(
@@ -555,9 +556,9 @@ const taskImageResolvers = {
     /**
      * Supprime une image d'un commentaire
      */
-    deleteCommentImage: requireWorkspaceLevel(
+    deleteCommentImage: requireWorkspaceAction(
       "kanban",
-      "write",
+      "comment",
     )(async (_, { taskId, commentId, imageId, workspaceId }, { user }) => {
       try {
         logger.info(

@@ -5,9 +5,12 @@ import {
   CUSTOM_ROLE_PREFIX,
   PREDEFINED_ROLES,
   PREDEFINED_ROLE_KEYS,
-  getEffectiveLevels,
+  actionsFromLevels,
+  getEffectivePermissions,
+  levelsFromActions,
   isCustomRoleKey,
-  normalizeLevels,
+  normalizeActions,
+  storedRoleActions,
   toBetterAuthPermission,
 } from "../config/rolePermissions.js";
 
@@ -18,7 +21,9 @@ import {
  * l'invitation et au changement de rôle).
  *
  * Document : { organizationId, role, permission (JSON Better Auth),
- *   levels (grille Newbi), name, description, createdBy, createdAt, updatedAt }
+ *   actions (grille Newbi : module → actions permises ; les documents
+ *   antérieurs ont `levels`, converti à la lecture), name, description,
+ *   createdBy, createdAt, updatedAt }
  */
 
 const COLLECTION = "organizationRole";
@@ -80,7 +85,7 @@ export async function loadOrganizationRoles(organizationId) {
 
 export async function getEffectiveLevelsFor(organizationId, role) {
   const roles = await loadOrganizationRoles(organizationId);
-  return getEffectiveLevels(role, roles);
+  return getEffectivePermissions(role, roles);
 }
 
 /** Libellé lisible d'une clé de rôle (rôle supprimé → « Rôle supprimé »). */
@@ -119,6 +124,30 @@ async function countUsage(organizationId) {
   return usage;
 }
 
+// Actions et niveau équivalent par page (le niveau sert aux anciens écrans)
+const grids = (actions) => ({ actions, levels: levelsFromActions(actions) });
+
+/**
+ * Grille reçue du front : actions, ou niveaux (ancien format). Les pages
+ * absentes de la grille reçue gardent les droits de `base`.
+ */
+function inputActions({ actions, levels }, base = null) {
+  if (actions) return normalizeActions(actions, base);
+  if (!levels) return null;
+  const converted = actionsFromLevels(levels);
+  const partial = Object.fromEntries(
+    Object.entries(converted).filter(([key]) => key in levels),
+  );
+  if ("invoicePayments" in levels && !("invoices" in levels)) {
+    // Ancienne fonctionnalité « encaissement » seule : action markPaid
+    const current = base?.invoices || [];
+    partial.invoices = converted.invoices.includes("markPaid")
+      ? [...new Set([...current, "markPaid"])]
+      : current.filter((a) => a !== "markPaid");
+  }
+  return normalizeActions(partial, base);
+}
+
 function serializeRole(key, stored, usage) {
   const predefined = PREDEFINED_ROLES[key];
   const counts = usage.get(key) || { members: 0, invitations: 0 };
@@ -130,8 +159,10 @@ function serializeRole(key, stored, usage) {
       : stored?.description || null,
     predefined: Boolean(predefined),
     editable: predefined ? predefined.editable : true,
-    customized: Boolean(predefined && stored?.levels),
-    levels: getEffectiveLevels(key, new Map(stored ? [[key, stored]] : [])),
+    customized: Boolean(predefined && (stored?.actions || stored?.levels)),
+    ...grids(
+      getEffectivePermissions(key, new Map(stored ? [[key, stored]] : [])),
+    ),
     memberCount: counts.members,
     invitationCount: counts.invitations,
     updatedAt: stored?.updatedAt || null,
@@ -204,7 +235,7 @@ async function assertNameAvailable(organizationId, name, exceptKey = null) {
 
 export async function createOrganizationRole(
   organizationId,
-  { name, description, levels },
+  { name, description, actions, levels },
   userId,
 ) {
   const roleName = cleanName(name);
@@ -221,7 +252,7 @@ export async function createOrganizationRole(
     );
   }
 
-  const normalized = normalizeLevels(levels);
+  const normalized = inputActions({ actions, levels }) || normalizeActions({});
   const now = new Date();
   const key = `${CUSTOM_ROLE_PREFIX}${new mongoose.Types.ObjectId().toHexString()}`;
   await db()
@@ -230,7 +261,7 @@ export async function createOrganizationRole(
       organizationId: toObjectId(organizationId),
       role: key,
       permission: JSON.stringify(toBetterAuthPermission(normalized)),
-      levels: normalized,
+      actions: normalized,
       name: roleName,
       description: cleanDescription(description),
       createdBy: userId ? toObjectId(userId) : null,
@@ -245,7 +276,7 @@ export async function createOrganizationRole(
 export async function updateOrganizationRole(
   organizationId,
   key,
-  { name, description, levels },
+  { name, description, actions, levels },
 ) {
   const roleKey = String(key || "").toLowerCase();
   const predefined = PREDEFINED_ROLES[roleKey];
@@ -264,11 +295,16 @@ export async function updateOrganizationRole(
 
   const now = new Date();
   const set = { updatedAt: now };
-  if (levels) {
-    const base = predefined ? predefined.levels : existing.levels;
-    const normalized = normalizeLevels(levels, base);
-    set.levels = normalized;
+  // Le format par actions remplace l'ancien champ `levels`
+  const unset = {};
+  const base = predefined
+    ? storedRoleActions(existing, predefined) || predefined.actions
+    : storedRoleActions(existing);
+  const normalized = inputActions({ actions, levels }, base);
+  if (normalized) {
+    set.actions = normalized;
     set.permission = JSON.stringify(toBetterAuthPermission(normalized));
+    unset.levels = "";
   }
   if (!predefined) {
     if (name !== undefined) {
@@ -280,6 +316,7 @@ export async function updateOrganizationRole(
   }
 
   const update = { $set: set };
+  if (Object.keys(unset).length) update.$unset = unset;
   if (predefined && !existing) {
     // Première personnalisation d'un rôle prédéfini : le document est créé
     update.$setOnInsert = {
@@ -287,10 +324,10 @@ export async function updateOrganizationRole(
       role: roleKey,
       createdAt: now,
     };
-    if (!set.levels) {
-      set.levels = predefined.levels;
+    if (!set.actions) {
+      set.actions = predefined.actions;
       set.permission = JSON.stringify(
-        toBetterAuthPermission(predefined.levels),
+        toBetterAuthPermission(predefined.actions),
       );
     }
   }

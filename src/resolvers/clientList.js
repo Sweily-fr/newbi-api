@@ -3,9 +3,8 @@ import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import {
+  requireAction,
   requireRead,
-  requireWrite,
-  requireDelete,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
@@ -26,10 +25,11 @@ const scopedQuery = (fn) =>
     ),
   );
 
-// level : « write » (créer, modifier, ajouter/retirer des clients) ou
-// « delete » (supprimer des listes). Le contrôle d'abonnement reste ici.
-const makeScopedMutation = (level) => (fn) =>
-  (level === "delete" ? requireDelete : requireWrite)("clientLists", {
+// action : « create » (créer une liste), « edit » (modifier, ajouter/retirer
+// des clients) ou « delete » (supprimer des listes). Le contrôle
+// d'abonnement reste ici.
+const makeScopedMutation = (action) => (fn) =>
+  requireAction("clientLists", action, {
     skipSubscriptionCheck: true,
   })(async (parent, args, context, info) => {
     await checkSubscriptionActive(context);
@@ -44,7 +44,8 @@ const makeScopedMutation = (level) => (fn) =>
     );
   });
 
-const scopedMutation = makeScopedMutation("write");
+const scopedCreateMutation = makeScopedMutation("create");
+const scopedMutation = makeScopedMutation("edit");
 const scopedDeleteMutation = makeScopedMutation("delete");
 
 const buildActivityActor = (user) => ({
@@ -193,7 +194,7 @@ export const clientListResolvers = {
 
   Mutation: {
     // Crée une nouvelle liste de clients
-    createClientList: scopedMutation(
+    createClientList: scopedCreateMutation(
       async (_, { workspaceId, input }, context) => {
         try {
           const newList = new ClientList({

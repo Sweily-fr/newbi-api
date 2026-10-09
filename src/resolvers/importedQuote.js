@@ -11,6 +11,7 @@ import {
   requireRead,
   requireWrite,
   requireDelete,
+  requireAction,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -494,237 +495,225 @@ const importedQuoteResolvers = {
   },
 
   Mutation: {
-    importQuoteDirect: requireWrite("importedQuotes")(
-      async (_, { file, workspaceId: inputWorkspaceId }, context) => {
-        const { user } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
-        try {
-          const { createReadStream, filename, mimetype } = await file;
+    importQuoteDirect: requireAction(
+      "importedQuotes",
+      "import",
+    )(async (_, { file, workspaceId: inputWorkspaceId }, context) => {
+      const { user } = context;
+      const workspaceId = resolveWorkspaceId(
+        inputWorkspaceId,
+        context.workspaceId,
+      );
+      try {
+        const { createReadStream, filename, mimetype } = await file;
 
-          if (!filename) {
-            throw createValidationError("Nom de fichier requis");
-          }
+        if (!filename) {
+          throw createValidationError("Nom de fichier requis");
+        }
 
-          const stream = createReadStream();
-          const chunks = [];
-          for await (const chunk of stream) {
-            chunks.push(chunk);
-          }
-          const fileBuffer = Buffer.concat(chunks);
+        const stream = createReadStream();
+        const chunks = [];
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+        const fileBuffer = Buffer.concat(chunks);
 
-          const maxSize = 10 * 1024 * 1024;
-          if (fileBuffer.length > maxSize) {
-            throw createValidationError("Fichier trop volumineux (max 10MB)");
-          }
+        const maxSize = 10 * 1024 * 1024;
+        if (fileBuffer.length > maxSize) {
+          throw createValidationError("Fichier trop volumineux (max 10MB)");
+        }
 
-          let organizationId = null;
-          const rawOrgId =
-            user.organizationId ||
-            user.organization?.id ||
-            user.organization?._id ||
-            user.currentOrganizationId;
+        let organizationId = null;
+        const rawOrgId =
+          user.organizationId ||
+          user.organization?.id ||
+          user.organization?._id ||
+          user.currentOrganizationId;
 
-          if (rawOrgId) {
-            organizationId =
-              typeof rawOrgId === "object"
-                ? rawOrgId._id?.toString() ||
-                  rawOrgId.id?.toString() ||
-                  rawOrgId.toString()
-                : rawOrgId.toString();
-          } else {
-            try {
-              const memberRecord = await mongoose.connection.db
-                .collection("member")
-                .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
-              if (memberRecord?.organizationId) {
-                organizationId = memberRecord.organizationId.toString();
-              }
-            } catch (err) {
-              console.warn(
-                "⚠️ Impossible de récupérer organizationId:",
-                err.message,
-              );
-            }
-          }
-
-          logger.debug(
-            `☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`,
-          );
-          const uploadResult = await cloudflareService.uploadImage(
-            fileBuffer,
-            filename,
-            user.id,
-            "importedQuote",
-            organizationId,
-          );
-
-          // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
-          // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
-          let quoteData = {};
-          let ocrProvider = null;
-          let plan = null;
-          let consumedQuota = false;
+        if (rawOrgId) {
+          organizationId =
+            typeof rawOrgId === "object"
+              ? rawOrgId._id?.toString() ||
+                rawOrgId.id?.toString() ||
+                rawOrgId.toString()
+              : rawOrgId.toString();
+        } else {
           try {
-            const quotaResult = await checkUserOcrQuota(
-              user.id,
-              workspaceId,
-              1,
-            );
-            plan = quotaResult.plan;
-
-            const base64Data = fileBuffer.toString("base64");
-            const contentHash = crypto
-              .createHash("sha256")
-              .update(fileBuffer)
-              .digest("hex");
-
-            logger.debug(
-              `🔍 importQuoteDirect: Claude Vision pour ${filename}`,
-            );
-            const rawResult = await claudeVisionOcrService.processFromBase64(
-              base64Data,
-              mimetype,
-              filename,
-              contentHash,
-            );
-
-            if (!rawResult.success) {
-              throw createInternalServerError(
-                `Erreur OCR: ${rawResult.error || rawResult.message}`,
-              );
+            const memberRecord = await mongoose.connection.db
+              .collection("member")
+              .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
+            if (memberRecord?.organizationId) {
+              organizationId = memberRecord.organizationId.toString();
             }
+          } catch (err) {
+            console.warn(
+              "⚠️ Impossible de récupérer organizationId:",
+              err.message,
+            );
+          }
+        }
 
-            const structuredResult =
-              claudeVisionOcrService.toInvoiceFormat(rawResult);
+        logger.debug(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
+        const uploadResult = await cloudflareService.uploadImage(
+          fileBuffer,
+          filename,
+          user.id,
+          "importedQuote",
+          organizationId,
+        );
 
-            if (structuredResult.transaction_data) {
-              quoteData = transformOcrToQuoteData(
-                structuredResult,
+        // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
+        // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
+        let quoteData = {};
+        let ocrProvider = null;
+        let plan = null;
+        let consumedQuota = false;
+        try {
+          const quotaResult = await checkUserOcrQuota(user.id, workspaceId, 1);
+          plan = quotaResult.plan;
+
+          const base64Data = fileBuffer.toString("base64");
+          const contentHash = crypto
+            .createHash("sha256")
+            .update(fileBuffer)
+            .digest("hex");
+
+          logger.debug(`🔍 importQuoteDirect: Claude Vision pour ${filename}`);
+          const rawResult = await claudeVisionOcrService.processFromBase64(
+            base64Data,
+            mimetype,
+            filename,
+            contentHash,
+          );
+
+          if (!rawResult.success) {
+            throw createInternalServerError(
+              `Erreur OCR: ${rawResult.error || rawResult.message}`,
+            );
+          }
+
+          const structuredResult =
+            claudeVisionOcrService.toInvoiceFormat(rawResult);
+
+          if (structuredResult.transaction_data) {
+            quoteData = transformOcrToQuoteData(
+              structuredResult,
+              structuredResult,
+            );
+          } else {
+            const extractionResult =
+              await invoiceExtractionService.extractInvoiceData(
                 structuredResult,
               );
+            quoteData = transformOcrToQuoteData(
+              structuredResult,
+              extractionResult,
+            );
+          }
+          ocrProvider = rawResult.provider || "claude-vision";
+          consumedQuota = true;
+        } catch (claudeError) {
+          console.warn(
+            `⚠️ Claude Vision indisponible pour ${filename} (${claudeError.message}). Fallback OCR hybride (Mindee / Google / Mistral).`,
+          );
+          try {
+            const ocrResult = await hybridOcrService.processDocumentFromUrl(
+              uploadResult.url,
+              filename,
+              mimetype,
+              workspaceId,
+            );
+            if (ocrResult?.transaction_data) {
+              quoteData = transformOcrToQuoteData(ocrResult, ocrResult);
             } else {
               const extractionResult =
-                await invoiceExtractionService.extractInvoiceData(
-                  structuredResult,
-                );
-              quoteData = transformOcrToQuoteData(
-                structuredResult,
-                extractionResult,
-              );
+                await invoiceExtractionService.extractInvoiceData(ocrResult);
+              quoteData = transformOcrToQuoteData(ocrResult, extractionResult);
             }
-            ocrProvider = rawResult.provider || "claude-vision";
-            consumedQuota = true;
-          } catch (claudeError) {
+            ocrProvider = ocrResult?.provider || "hybrid";
+          } catch (fallbackError) {
             console.warn(
-              `⚠️ Claude Vision indisponible pour ${filename} (${claudeError.message}). Fallback OCR hybride (Mindee / Google / Mistral).`,
+              `⚠️ OCR de fallback échec pour ${filename}: ${fallbackError.message}. Champs vides, à compléter via la sidebar.`,
             );
-            try {
-              const ocrResult = await hybridOcrService.processDocumentFromUrl(
-                uploadResult.url,
-                filename,
-                mimetype,
-                workspaceId,
-              );
-              if (ocrResult?.transaction_data) {
-                quoteData = transformOcrToQuoteData(ocrResult, ocrResult);
-              } else {
-                const extractionResult =
-                  await invoiceExtractionService.extractInvoiceData(ocrResult);
-                quoteData = transformOcrToQuoteData(
-                  ocrResult,
-                  extractionResult,
-                );
-              }
-              ocrProvider = ocrResult?.provider || "hybrid";
-            } catch (fallbackError) {
-              console.warn(
-                `⚠️ OCR de fallback échec pour ${filename}: ${fallbackError.message}. Champs vides, à compléter via la sidebar.`,
-              );
-            }
           }
-
-          if (consumedQuota && plan) {
-            await recordOcrUsage(user.id, workspaceId, plan, {
-              fileName: filename,
-              provider: ocrProvider,
-              success: true,
-            });
-          }
-
-          const duplicates = quoteData.originalQuoteNumber
-            ? await ImportedQuote.findPotentialDuplicates(
-                workspaceId,
-                quoteData.originalQuoteNumber,
-                quoteData.vendor?.name,
-                quoteData.totalTTC,
-              )
-            : [];
-
-          const isDuplicate = duplicates.length > 0;
-
-          const importedQuote = new ImportedQuote({
-            workspaceId,
-            importedBy: user.id,
-            ...quoteData,
-            // À vérifier : l'utilisateur valide chaque devis importé un par un via la sidebar.
-            status: "PENDING_REVIEW",
-            file: {
-              url: uploadResult.url,
-              cloudflareKey: uploadResult.key,
-              originalFileName: filename,
-              mimeType: mimetype,
-              fileSize: fileBuffer.length,
-            },
-            isDuplicate,
-            duplicateOf: isDuplicate ? duplicates[0]._id : null,
-          });
-
-          await importedQuote.save();
-
-          documentAutomationService
-            .executeAutomationsForExpense(
-              "QUOTE_IMPORTED",
-              workspaceId,
-              {
-                documentId: importedQuote._id.toString(),
-                documentType: "importedQuote",
-                documentNumber: importedQuote.originalQuoteNumber || "",
-                clientName:
-                  importedQuote.vendor?.name ||
-                  importedQuote.client?.name ||
-                  "",
-                cloudflareUrl: uploadResult.url,
-                mimeType: mimetype,
-                fileExtension: filename?.split(".").pop() || "pdf",
-                issueDate: importedQuote.quoteDate || importedQuote.createdAt,
-                clientId: importedQuote.client?._id || null,
-              },
-              user.id,
-            )
-            .catch((err) =>
-              console.error("Erreur automatisation devis importé:", err),
-            );
-
-          return {
-            success: true,
-            quote: importedQuote,
-            error: null,
-            isDuplicate,
-          };
-        } catch (error) {
-          console.error("Erreur importQuoteDirect:", error);
-          return {
-            success: false,
-            quote: null,
-            error: error.message,
-            isDuplicate: false,
-          };
         }
-      },
-    ),
+
+        if (consumedQuota && plan) {
+          await recordOcrUsage(user.id, workspaceId, plan, {
+            fileName: filename,
+            provider: ocrProvider,
+            success: true,
+          });
+        }
+
+        const duplicates = quoteData.originalQuoteNumber
+          ? await ImportedQuote.findPotentialDuplicates(
+              workspaceId,
+              quoteData.originalQuoteNumber,
+              quoteData.vendor?.name,
+              quoteData.totalTTC,
+            )
+          : [];
+
+        const isDuplicate = duplicates.length > 0;
+
+        const importedQuote = new ImportedQuote({
+          workspaceId,
+          importedBy: user.id,
+          ...quoteData,
+          // À vérifier : l'utilisateur valide chaque devis importé un par un via la sidebar.
+          status: "PENDING_REVIEW",
+          file: {
+            url: uploadResult.url,
+            cloudflareKey: uploadResult.key,
+            originalFileName: filename,
+            mimeType: mimetype,
+            fileSize: fileBuffer.length,
+          },
+          isDuplicate,
+          duplicateOf: isDuplicate ? duplicates[0]._id : null,
+        });
+
+        await importedQuote.save();
+
+        documentAutomationService
+          .executeAutomationsForExpense(
+            "QUOTE_IMPORTED",
+            workspaceId,
+            {
+              documentId: importedQuote._id.toString(),
+              documentType: "importedQuote",
+              documentNumber: importedQuote.originalQuoteNumber || "",
+              clientName:
+                importedQuote.vendor?.name || importedQuote.client?.name || "",
+              cloudflareUrl: uploadResult.url,
+              mimeType: mimetype,
+              fileExtension: filename?.split(".").pop() || "pdf",
+              issueDate: importedQuote.quoteDate || importedQuote.createdAt,
+              clientId: importedQuote.client?._id || null,
+            },
+            user.id,
+          )
+          .catch((err) =>
+            console.error("Erreur automatisation devis importé:", err),
+          );
+
+        return {
+          success: true,
+          quote: importedQuote,
+          error: null,
+          isDuplicate,
+        };
+      } catch (error) {
+        console.error("Erreur importQuoteDirect:", error);
+        return {
+          success: false,
+          quote: null,
+          error: error.message,
+          isDuplicate: false,
+        };
+      }
+    }),
 
     updateImportedQuote: requireWrite("importedQuotes")(
       async (_, { id, input }, context) => {

@@ -7,6 +7,7 @@ import PurchaseOrder from "../models/PurchaseOrder.js";
 import User from "../models/User.js";
 // ✅ Import des wrappers RBAC
 import {
+  requireAction,
   requireRead,
   requireWrite,
   requireDelete,
@@ -42,6 +43,13 @@ function getRequestUser(context, userId) {
   }
   return pending;
 }
+
+// Actions précises de la page « Mes clients » (éditeur de rôles)
+// L'import de clients crée les fiches une à une : « Importer » suffit aussi
+const requireCreate = requireAction("clients", ["create", "import"]);
+const requireAssign = requireAction("clients", "assign");
+const requireBlock = requireAction("clients", "block");
+const requireNotes = requireAction("clients", "notes");
 
 const clientResolvers = {
   Query: {
@@ -121,7 +129,7 @@ const clientResolvers = {
 
   Mutation: {
     // ✅ Protégé par RBAC - nécessite la permission "create" sur "clients"
-    createClient: requireWrite("clients")(
+    createClient: requireCreate(
       async (_, { input, workspaceId: inputWorkspaceId }, context) => {
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
@@ -557,8 +565,8 @@ const clientResolvers = {
       },
     ),
 
-    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
-    assignClientMembers: requireWrite("clients")(
+    // ✅ Protégé par RBAC - nécessite la permission "assign" sur "clients"
+    assignClientMembers: requireAssign(
       async (_, { id, memberIds, workspaceId: inputWorkspaceId }, context) => {
         const { user } = context;
         const db = context.db || mongoose.connection.db;
@@ -649,8 +657,8 @@ const clientResolvers = {
       },
     ),
 
-    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
-    blockClient: requireWrite("clients")(
+    // ✅ Protégé par RBAC - nécessite la permission "block" sur "clients"
+    blockClient: requireBlock(
       async (_, { id, reason, workspaceId: inputWorkspaceId }, context) => {
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
@@ -704,8 +712,8 @@ const clientResolvers = {
       },
     ),
 
-    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
-    unblockClient: requireWrite("clients")(
+    // ✅ Protégé par RBAC - nécessite la permission "block" sur "clients"
+    unblockClient: requireBlock(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
@@ -756,8 +764,8 @@ const clientResolvers = {
       },
     ),
 
-    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
-    addClientNote: requireWrite("clients")(
+    // ✅ Protégé par RBAC - nécessite la permission "notes" sur "clients"
+    addClientNote: requireNotes(
       async (
         _,
         { clientId, input, workspaceId: inputWorkspaceId },
@@ -808,8 +816,8 @@ const clientResolvers = {
       },
     ),
 
-    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
-    updateClientNote: requireWrite("clients")(
+    // ✅ Protégé par RBAC - nécessite la permission "notes" sur "clients"
+    updateClientNote: requireNotes(
       async (
         _,
         { clientId, noteId, content, workspaceId: inputWorkspaceId },
@@ -859,8 +867,8 @@ const clientResolvers = {
       },
     ),
 
-    // ✅ Protégé par RBAC - nécessite la permission "delete" sur "clients"
-    deleteClientNote: requireDelete("clients")(
+    // ✅ Protégé par RBAC - nécessite la permission "notes" sur "clients"
+    deleteClientNote: requireNotes(
       async (
         _,
         { clientId, noteId, workspaceId: inputWorkspaceId },
@@ -909,8 +917,8 @@ const clientResolvers = {
       },
     ),
 
-    // ✅ Protégé par RBAC - nécessite la permission "edit" sur "clients"
-    addClientActivity: requireWrite("clients")(
+    // ✅ Protégé par RBAC - nécessite la permission "notes" sur "clients"
+    addClientActivity: requireNotes(
       async (
         _,
         { clientId, input, workspaceId: inputWorkspaceId },
