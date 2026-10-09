@@ -20,8 +20,29 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import mongoose from "mongoose";
+import { workspaceKey } from "../dataloaders/index.js";
 import { isInternationalEntity } from "../utils/validators.js";
 import { automationService } from "./clientAutomation.js";
+
+// Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
+// durée de la requête. On garde la PROMESSE et non le résultat : les résolveurs
+// de champ d'une liste s'exécutent en parallèle, et un cache rempli seulement
+// après l'await laissait chaque entrée relancer son propre User.findById
+// (des centaines par page de clients). Un échec vaut null (repli « Système »).
+function getRequestUser(context, userId) {
+  if (!context._userCache) context._userCache = new Map();
+  const key = userId.toString();
+  let pending = context._userCache.get(key);
+  if (!pending) {
+    pending = User.findById(userId)
+      .select("name email avatar")
+      .lean()
+      .exec()
+      .catch(() => null);
+    context._userCache.set(key, pending);
+  }
+  return pending;
+}
 
 const clientResolvers = {
   Query: {
@@ -77,17 +98,17 @@ const clientResolvers = {
         const currentPage = parseInt(page, 10);
         const itemsPerPage = parseInt(limit, 10);
 
-        // Calculer le nombre total de clients correspondant à la requête
-        const totalItems = await Client.countDocuments(query);
+        // Nombre total de clients et page demandée, lus en parallèle
+        const [totalItems, items] = await Promise.all([
+          Client.countDocuments(query),
+          Client.find(query)
+            .sort({ name: 1 })
+            .skip((currentPage - 1) * itemsPerPage)
+            .limit(itemsPerPage),
+        ]);
 
         // Calculer le nombre total de pages
         const totalPages = Math.ceil(totalItems / itemsPerPage);
-
-        // Récupérer les clients pour la page demandée
-        const items = await Client.find(query)
-          .sort({ name: 1 })
-          .skip((currentPage - 1) * itemsPerPage)
-          .limit(itemsPerPage);
 
         return {
           items,
@@ -936,9 +957,25 @@ const clientResolvers = {
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
     blockedAt: (parent) =>
       parent.blockedAt?.toISOString?.() || parent.blockedAt,
-    hasDocuments: async (parent) => {
+    invoiceCount: async (parent, _args, context) => {
       const clientId = parent._id?.toString() || parent.id;
       const workspaceId = parent.workspaceId;
+      if (!clientId || !mongoose.isValidObjectId(workspaceId)) return 0;
+      const loader = context?.loaders?.clientInvoiceCount;
+      if (loader) return loader.load(workspaceKey(workspaceId, clientId));
+      return Invoice.countDocuments({ "client.id": clientId, workspaceId });
+    },
+    hasDocuments: async (parent, _args, context) => {
+      const clientId = parent._id?.toString() || parent.id;
+      const workspaceId = parent.workspaceId;
+
+      // Lecture groupée pour toute la page ; un client sans espace valide
+      // (donnée ancienne) garde le calcul unitaire, pour ne pas faire échouer
+      // le lot entier.
+      const loader = context?.loaders?.clientHasDocuments;
+      if (loader && mongoose.isValidObjectId(workspaceId)) {
+        return loader.load(workspaceKey(workspaceId, clientId));
+      }
 
       const [invoiceCount, quoteCount, purchaseOrderCount] = await Promise.all([
         Invoice.countDocuments({ "client.id": clientId, workspaceId }),
@@ -960,38 +997,16 @@ const clientResolvers = {
         return parent.userName;
       }
       if (parent.userId) {
-        try {
-          // Cache per-request pour éviter N+1
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          const user = context._userCache[key];
-          if (user?.name) return user.name;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        if (user?.name) return user.name;
       }
       return parent.userName || "Système";
     },
     userImage: async (parent, _, context) => {
       if (parent.userImage) return parent.userImage;
       if (parent.userId) {
-        try {
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          return context._userCache[key]?.avatar || null;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        return user?.avatar || null;
       }
       return null;
     },
@@ -1005,37 +1020,16 @@ const clientResolvers = {
         return parent.userName;
       }
       if (parent.userId) {
-        try {
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          const user = context._userCache[key];
-          if (user?.name) return user.name;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        if (user?.name) return user.name;
       }
       return parent.userName || "Système";
     },
     userImage: async (parent, _, context) => {
       if (parent.userImage) return parent.userImage;
       if (parent.userId) {
-        try {
-          if (!context._userCache) context._userCache = {};
-          const key = parent.userId.toString();
-          if (!context._userCache[key]) {
-            context._userCache[key] = await User.findById(parent.userId)
-              .select("name email avatar")
-              .lean();
-          }
-          return context._userCache[key]?.avatar || null;
-        } catch {
-          /* ignore */
-        }
+        const user = await getRequestUser(context, parent.userId);
+        return user?.avatar || null;
       }
       return null;
     },

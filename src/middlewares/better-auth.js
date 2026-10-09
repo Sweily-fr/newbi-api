@@ -3,7 +3,7 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
 import mongoose from "mongoose";
-import { getCachedUser, setCachedUser } from "./user-cache.js";
+import { loadCachedUser } from "./user-cache.js";
 
 /**
  * Extrait le token de session depuis les cookies
@@ -134,13 +134,9 @@ const betterAuthMiddleware = async (req) => {
 
     // ✅ findById avec cache LRU (0 query si cache hit)
     const userIdStr = session.userId.toString();
-    let user = getCachedUser(userIdStr);
-    if (!user) {
-      user = await User.findById(session.userId);
-      if (user && !user.isDisabled) {
-        setCachedUser(userIdStr, user);
-      }
-    }
+    const user = await loadCachedUser(userIdStr, () =>
+      User.findById(session.userId),
+    );
 
     if (!user || user.isDisabled) {
       logger.warn(`Utilisateur ${session.userId} non trouvé ou désactivé`);

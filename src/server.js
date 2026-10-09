@@ -28,6 +28,7 @@ process.on("uncaughtException", (error) => {
 
 import express from "express";
 import { ApolloServer } from "apollo-server-express";
+import { ApolloServerPluginCacheControlDisabled } from "apollo-server-core";
 import { createServer } from "http";
 import { execute, subscribe } from "graphql";
 import { SubscriptionServer } from "subscriptions-transport-ws";
@@ -214,6 +215,11 @@ async function startServer() {
   // Trust proxy (nginx) pour obtenir la vraie IP client via X-Forwarded-For
   app.set("trust proxy", 1);
 
+  // Pas d'ETag sur les réponses générées (JSON GraphQL et REST) : un hash
+  // SHA-1 de chaque réponse, inutile pour des POST jamais revalidés.
+  // express.static garde ses propres ETag pour les fichiers.
+  app.set("etag", false);
+
   // Security headers
   app.use(
     helmet({
@@ -221,28 +227,6 @@ async function startServer() {
       crossOriginEmbedderPolicy: false, // Needed for GraphQL playground
     }),
   );
-
-  // Global rate limiter
-  const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // limit each IP to 1000 requests per windowMs
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: "Too many requests, please try again later." },
-  });
-  app.use(globalLimiter);
-
-  // Strict rate limiter for auth routes
-  const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 20, // strict limit for auth
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: {
-      error: "Too many authentication attempts, please try again later.",
-    },
-  });
-  app.use("/api/auth", authLimiter);
 
   // Configuration CORS
   const allowedOrigins = [
@@ -299,8 +283,39 @@ async function startServer() {
         "x-app-client", // Client + version ("web/9e2a5ab", "mobile/1.0.13")
       ],
       exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
+      // Durée de mise en cache de la pré-requête OPTIONS par le navigateur.
+      // Sans cette valeur, Chrome ne la garde que 5 s : chaque requête GraphQL
+      // (en-têtes authorization, x-organization-id...) repayait un aller-retour
+      // après 5 s d'inactivité, donc à presque chaque navigation. 7200 s est le
+      // plafond de Chrome (Firefox va jusqu'à 86400).
+      maxAge: 7200,
     }),
   );
+
+  // Limiteurs de débit montés APRÈS cors : les pré-requêtes OPTIONS sont
+  // terminées par cors et ne consomment plus le quota, et une réponse 429
+  // porte les en-têtes CORS (sinon le navigateur la masque en erreur réseau
+  // et l'Apollo RetryLink relance la requête).
+  const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000, // limit each IP to 1000 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many requests, please try again later." },
+  });
+  app.use(globalLimiter);
+
+  // Strict rate limiter for auth routes
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20, // strict limit for auth
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      error: "Too many authentication attempts, please try again later.",
+    },
+  });
+  app.use("/api/auth", authLimiter);
 
   // Webhook pour les transferts de fichiers (DOIT être AVANT les autres routes /webhook)
   app.post(
@@ -496,6 +511,11 @@ async function startServer() {
     formatError: formatError,
     cache: "bounded",
     persistedQueries: { ttl: 900 },
+    // Le plugin CacheControl, installé par défaut par Apollo Server 3,
+    // instrumente chaque champ résolu pour calculer une politique de cache que
+    // l'API n'émet jamais (aucun indice @cacheControl) : environ 12 ms de
+    // surcoût mesurés sur une liste de 31 000 champs.
+    plugins: [ApolloServerPluginCacheControlDisabled()],
   });
 
   await server.start();

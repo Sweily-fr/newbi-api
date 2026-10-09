@@ -3,6 +3,12 @@ import { isAnnexChange } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
+  loadQuoteDeliveryNotes,
+  loadWorkspaceInvoice,
+  loadWorkspaceInvoices,
+  quoteHasInvoicedPurchaseOrder,
+} from "../utils/workspaceDocumentLoaders.js";
+import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
 } from "../utils/clientDocumentFields.js";
@@ -16,7 +22,6 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
-import DeliveryNote from "../models/DeliveryNote.js";
 import {
   requireWrite,
   requireRead,
@@ -192,7 +197,10 @@ const quoteResolvers = {
               siret: freshClient.siret,
               vatNumber: freshClient.vatNumber,
               isInternational: freshClient.isInternational,
-              documentFields: await buildClientDocumentFields(freshClient, context),
+              documentFields: await buildClientDocumentFields(
+                freshClient,
+                context,
+              ),
               firstName: freshClient.firstName,
               lastName: freshClient.lastName,
               hasDifferentShippingAddress:
@@ -217,24 +225,29 @@ const quoteResolvers = {
       }
       return await User.findById(quote.createdBy);
     },
-    convertedToInvoice: async (quote) => {
+    // Documents liés lus via les DataLoaders de la requête : une requête
+    // pour toute la liste au lieu d'une par devis (workspaceDocumentLoaders).
+    convertedToInvoice: async (quote, _args, context) => {
       if (!quote.convertedToInvoice) return null;
-      return await Invoice.findOne({
-        _id: quote.convertedToInvoice,
-        workspaceId: quote.workspaceId,
-      });
+      return loadWorkspaceInvoice(
+        context,
+        quote.convertedToInvoice,
+        quote.workspaceId,
+      );
     },
-    linkedInvoices: async (quote) => {
+    linkedInvoices: async (quote, _args, context) => {
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
-        return await Invoice.find({
-          _id: { $in: quote.linkedInvoices },
-          workspaceId: quote.workspaceId,
-        });
+        return loadWorkspaceInvoices(
+          context,
+          quote.linkedInvoices,
+          quote.workspaceId,
+        );
       } else if (quote.convertedToInvoice) {
-        const invoice = await Invoice.findOne({
-          _id: quote.convertedToInvoice,
-          workspaceId: quote.workspaceId,
-        });
+        const invoice = await loadWorkspaceInvoice(
+          context,
+          quote.convertedToInvoice,
+          quote.workspaceId,
+        );
         return invoice ? [invoice] : [];
       }
       return [];
@@ -251,20 +264,10 @@ const quoteResolvers = {
     // Sert au front à masquer/désactiver les boutons de conversion pour éviter
     // les doublons devis→facture vs devis→BC→facture.
     // Bons de livraison créés à partir de ce devis (DeliveryNote.sourceQuote)
-    linkedDeliveryNotes: async (quote) => {
-      return await DeliveryNote.find({
-        sourceQuote: quote._id,
-        workspaceId: quote.workspaceId,
-      }).sort({ createdAt: -1 });
-    },
-    hasPurchaseOrderInvoices: async (quote) => {
-      const count = await PurchaseOrder.countDocuments({
-        sourceQuoteId: quote._id,
-        workspaceId: quote.workspaceId,
-        linkedInvoices: { $exists: true, $not: { $size: 0 } },
-      });
-      return count > 0;
-    },
+    linkedDeliveryNotes: async (quote, _args, context) =>
+      loadQuoteDeliveryNotes(context, quote),
+    hasPurchaseOrderInvoices: async (quote, _args, context) =>
+      quoteHasInvoicedPurchaseOrder(context, quote),
     // Calculer le total des factures de situation liées à ce devis
     situationInvoicedTotal: async (quote) => {
       const quoteRef = quote.prefix
@@ -1233,7 +1236,10 @@ const quoteResolvers = {
                   freshClient.hasDifferentShippingAddress,
                 shippingAddress: freshClient.shippingAddress,
                 isInternational: freshClient.isInternational,
-                documentFields: await buildClientDocumentFields(freshClient, context),
+                documentFields: await buildClientDocumentFields(
+                  freshClient,
+                  context,
+                ),
                 siret: freshClient.siret,
                 vatNumber: freshClient.vatNumber,
               };
@@ -1275,7 +1281,10 @@ const quoteResolvers = {
                     freshClient.hasDifferentShippingAddress,
                   shippingAddress: freshClient.shippingAddress,
                   isInternational: freshClient.isInternational,
-                  documentFields: await buildClientDocumentFields(freshClient, context),
+                  documentFields: await buildClientDocumentFields(
+                    freshClient,
+                    context,
+                  ),
                   siret: freshClient.siret,
                   vatNumber: freshClient.vatNumber,
                 };
@@ -1553,7 +1562,10 @@ const quoteResolvers = {
                     freshClient.hasDifferentShippingAddress,
                   shippingAddress: freshClient.shippingAddress,
                   isInternational: freshClient.isInternational,
-                  documentFields: await buildClientDocumentFields(freshClient, context),
+                  documentFields: await buildClientDocumentFields(
+                    freshClient,
+                    context,
+                  ),
                   siret: freshClient.siret,
                   vatNumber: freshClient.vatNumber,
                 };
