@@ -24,6 +24,29 @@ export function setCachedUser(userId, user) {
   _userCache.set(userId, { user, ts: Date.now() });
 }
 
+// Lecture d'un utilisateur via le cache, avec une seule lecture Mongo en vol
+// par utilisateur : les requêtes simultanées d'une page (5 à 10 au premier
+// chargement ou après 30 s d'inactivité) partagent la même lecture au lieu
+// d'en lancer chacune une. Seul un utilisateur actif est mis en cache.
+const _inFlight = new Map();
+
+export function loadCachedUser(userId, load) {
+  const cached = getCachedUser(userId);
+  if (cached) return Promise.resolve(cached);
+  let pending = _inFlight.get(userId);
+  if (!pending) {
+    pending = Promise.resolve()
+      .then(load)
+      .then((user) => {
+        if (user && !user.isDisabled) setCachedUser(userId, user);
+        return user;
+      })
+      .finally(() => _inFlight.delete(userId));
+    _inFlight.set(userId, pending);
+  }
+  return pending;
+}
+
 // Permet d'invalider le cache depuis l'extérieur (ex: après updateUser)
 export function invalidateUserCache(userId) {
   if (userId) _userCache.delete(userId);
