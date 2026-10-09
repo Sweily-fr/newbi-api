@@ -28,6 +28,7 @@ process.on("uncaughtException", (error) => {
 
 import express from "express";
 import { ApolloServer } from "apollo-server-express";
+import { ApolloServerPluginCacheControlDisabled } from "apollo-server-core";
 import { createServer } from "http";
 import { execute, subscribe } from "graphql";
 import { SubscriptionServer } from "subscriptions-transport-ws";
@@ -213,6 +214,11 @@ async function startServer() {
 
   // Trust proxy (nginx) pour obtenir la vraie IP client via X-Forwarded-For
   app.set("trust proxy", 1);
+
+  // Pas d'ETag sur les réponses générées (JSON GraphQL et REST) : un hash
+  // SHA-1 de chaque réponse, inutile pour des POST jamais revalidés.
+  // express.static garde ses propres ETag pour les fichiers.
+  app.set("etag", false);
 
   // Security headers
   app.use(
@@ -505,6 +511,11 @@ async function startServer() {
     formatError: formatError,
     cache: "bounded",
     persistedQueries: { ttl: 900 },
+    // Le plugin CacheControl, installé par défaut par Apollo Server 3,
+    // instrumente chaque champ résolu pour calculer une politique de cache que
+    // l'API n'émet jamais (aucun indice @cacheControl) : environ 12 ms de
+    // surcoût mesurés sur une liste de 31 000 champs.
+    plugins: [ApolloServerPluginCacheControlDisabled()],
   });
 
   await server.start();

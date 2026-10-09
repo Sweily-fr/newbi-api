@@ -3,13 +3,12 @@ import logger from "../utils/logger.js";
 import User from "../models/User.js";
 import { getJWKSValidator } from "../services/jwks-validator.js";
 import { betterAuthMiddleware } from "./better-auth.js";
-import { getActiveOrganization } from "./org-resolver.js";
+import { getActiveOrganizationCached } from "./org-cache.js";
 
 // Cache LRU user partagé avec le chemin cookie (voir user-cache.js) :
 // une invalidation couvre les deux chemins d'authentification.
 import {
-  getCachedUser,
-  setCachedUser,
+  loadCachedUser,
   invalidateUserCache,
 } from "./user-cache.js";
 
@@ -68,13 +67,9 @@ const betterAuthJWTMiddleware = async (req) => {
     }
 
     // Récupérer l'utilisateur (cache LRU 30s → évite 1 query DB par requête)
-    let user = getCachedUser(decoded.sub);
-    if (!user) {
-      user = await User.findById(decoded.sub);
-      if (user && !user.isDisabled) {
-        setCachedUser(decoded.sub, user);
-      }
-    }
+    const user = await loadCachedUser(decoded.sub, () =>
+      User.findById(decoded.sub),
+    );
     if (!user || user.isDisabled) {
       return null;
     }
@@ -169,7 +164,7 @@ const withWorkspace = (resolver) => {
 
     if (requestedOrgId) {
       // Explicit org request: verify membership
-      organization = await getActiveOrganization(userId, requestedOrgId);
+      organization = await getActiveOrganizationCached(userId, requestedOrgId);
 
       if (!organization) {
         logger.warn(
@@ -182,7 +177,7 @@ const withWorkspace = (resolver) => {
       }
     } else {
       // No org explicitly requested: use user's default org
-      organization = await getActiveOrganization(userId, null);
+      organization = await getActiveOrganizationCached(userId, null);
 
       if (!organization) {
         throw new AppError(

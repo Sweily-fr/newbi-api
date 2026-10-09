@@ -3,6 +3,7 @@ import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { isAuthenticated } from "./better-auth-jwt.js";
 import { getActiveOrganization } from "./org-resolver.js";
+import { getActiveOrganizationCached } from "./org-cache.js";
 import { isAppTrialEnabled } from "../utils/featureFlags.js";
 import { isTrialAppActive } from "../utils/trialApp.js";
 import {
@@ -24,39 +25,9 @@ import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
  * et rôles personnalisés (role_xxx) de la collection organizationRole
  */
 
-// ✅ Cache LRU pour org+member — évite 2-3 queries DB par resolver protégé
-const ORG_CACHE_TTL = 60_000; // 60 secondes (org/member changent rarement)
-const ORG_CACHE_MAX = 500;
-const _orgCache = new Map();
-
-function getCachedOrg(cacheKey) {
-  const entry = _orgCache.get(cacheKey);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > ORG_CACHE_TTL) {
-    _orgCache.delete(cacheKey);
-    return null;
-  }
-  return entry.org;
-}
-
-function setCachedOrg(cacheKey, org) {
-  if (_orgCache.size >= ORG_CACHE_MAX) {
-    const oldestKey = _orgCache.keys().next().value;
-    _orgCache.delete(oldestKey);
-  }
-  _orgCache.set(cacheKey, { org, ts: Date.now() });
-}
-
-// Permet d'invalider le cache org depuis l'extérieur
-export function invalidateOrgCache(userId) {
-  if (userId) {
-    for (const key of _orgCache.keys()) {
-      if (key.startsWith(`${userId}:`)) _orgCache.delete(key);
-    }
-  } else {
-    _orgCache.clear();
-  }
-}
+// Cache org+member partagé avec withWorkspace (60 s, lecture en vol unique) :
+// voir org-cache.js. invalidateOrgCache reste exporté d'ici pour les appelants.
+export { invalidateOrgCache } from "./org-cache.js";
 
 /**
  * Droits par rôle : voir src/config/rolePermissions.js (catalogue unique,
@@ -210,30 +181,25 @@ export const withRBAC = (resolver, options = {}) => {
         );
       }
 
-      // 2. Récupérer l'organisation active (avec cache LRU 60s)
-      const cacheKey = `${userId}:${requestedOrgId || "default"}`;
-      let organization = getCachedOrg(cacheKey);
+      // 2. Organisation active (cache partagé 60 s, voir org-cache.js)
+      const organization = await getActiveOrganizationCached(
+        userId,
+        requestedOrgId,
+      );
 
-      if (!organization) {
-        organization = await getActiveOrganization(userId, requestedOrgId);
-
-        // Sécurité : si une organisation précise est demandée (header/args) mais
-        // que l'utilisateur n'en est pas membre, on REFUSE. Le fallback silencieux
-        // vers l'org par défaut laissait passer des accès cross-organisation et
-        // empoisonnait le cache sous la clé de l'org non autorisée.
-        if (!organization && requestedOrgId) {
-          logger.warn(
-            `⛔ RBAC: userId=${userId} n'est pas membre de org=${requestedOrgId} — accès refusé`,
-          );
-          throw new AppError(
-            "Vous n'êtes pas membre de l'organisation demandée.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-
-        if (organization) {
-          setCachedOrg(cacheKey, organization);
-        }
+      // Sécurité : si une organisation précise est demandée (header/args) mais
+      // que l'utilisateur n'en est pas membre, on REFUSE. Le fallback silencieux
+      // vers l'org par défaut laissait passer des accès cross-organisation et
+      // empoisonnait le cache sous la clé de l'org non autorisée (null n'est
+      // jamais mis en cache).
+      if (!organization && requestedOrgId) {
+        logger.warn(
+          `⛔ RBAC: userId=${userId} n'est pas membre de org=${requestedOrgId} — accès refusé`,
+        );
+        throw new AppError(
+          "Vous n'êtes pas membre de l'organisation demandée.",
+          ERROR_CODES.FORBIDDEN,
+        );
       }
 
       if (!organization) {

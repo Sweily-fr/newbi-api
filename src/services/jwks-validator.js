@@ -115,6 +115,55 @@ class JWKSValidator {
   }
 
   /**
+   * Une seule récupération JWKS en vol à la fois : les requêtes simultanées
+   * (rafale d'une page, 4 workers) partagent le même appel au lieu d'en lancer
+   * chacune un.
+   */
+  fetchJWKSShared() {
+    if (!this.jwksFetchPromise) {
+      this.jwksFetchPromise = this.fetchJWKS().finally(() => {
+        this.jwksFetchPromise = null;
+      });
+    }
+    return this.jwksFetchPromise;
+  }
+
+  /**
+   * Rafraîchit en tâche de fond les clés en cache (au-delà de 5 min), sans
+   * faire attendre la requête en cours. Une clé absente du nouveau JWKS
+   * (rotation, révocation) est retirée du cache ; en cas de panne du JWKS,
+   * la clé connue reste servie jusqu'à 24 h, comme avant.
+   */
+  refreshCachedKeysInBackground() {
+    if (this.backgroundRefresh) return;
+    this.backgroundRefresh = this.fetchJWKSShared()
+      .then(async (jwks) => {
+        for (const [cacheKey, entry] of this.keyCache) {
+          const jwk = jwks.keys.find((key) => key.kid === entry.kid);
+          if (!jwk) {
+            this.keyCache.delete(cacheKey);
+            continue;
+          }
+          const keyLike = await importJWK(jwk, jwk.alg || "EdDSA");
+          this.keyCache.set(cacheKey, {
+            ...entry,
+            key: keyLike,
+            timestamp: Date.now(),
+            algorithm: jwk.alg || "EdDSA",
+          });
+        }
+      })
+      .catch((error) => {
+        logger.warn(
+          `Rafraîchissement JWKS en tâche de fond impossible : ${error.message}`,
+        );
+      })
+      .finally(() => {
+        this.backgroundRefresh = null;
+      });
+  }
+
+  /**
    * Récupère une clé publique par son kid (Key ID)
    */
   async getPublicKeyByKid(kid) {
@@ -129,12 +178,22 @@ class JWKSValidator {
         return cached.key;
       }
 
+      // Clé connue mais de plus de 5 min : servie tout de suite et rafraîchie
+      // en tâche de fond. Avant, la requête attendait l'appel au JWKS du front
+      // (40 à 170 ms, jusqu'à 5 s en cas de lenteur) toutes les 5 minutes, sur
+      // chacun des 4 workers.
+      if (cached && Date.now() - cached.timestamp < this.extendedCacheExpiry) {
+        this.cacheHits++;
+        this.refreshCachedKeysInBackground();
+        return cached.key;
+      }
+
       this.cacheMisses++;
 
       // Récupérer les clés JWKS
       let jwks;
       try {
-        jwks = await this.fetchJWKS();
+        jwks = await this.fetchJWKSShared();
       } catch (fetchError) {
         // JWKS endpoint unreachable — use extended cache (24h) if available
         if (
