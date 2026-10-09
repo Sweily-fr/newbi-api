@@ -9,6 +9,7 @@ import {
   checkSubscriptionActive,
   withOrganization,
 } from "../middlewares/rbac.js";
+import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 function requireUser(user) {
@@ -17,9 +18,10 @@ function requireUser(user) {
   }
 }
 
-function isOwnerOrAdmin(userRole) {
-  const normalized = userRole?.toLowerCase();
-  return normalized === "owner" || normalized === "admin";
+// Connecter, configurer ou synchroniser une application : module
+// « Applications et banques » (rôle prédéfini ou personnalisé)
+function canManageIntegrations(permissionLevels) {
+  return levelsAllowLevel(permissionLevels, "integrations", "write");
 }
 
 /**
@@ -46,7 +48,7 @@ const SANDBOX_DENIED = {
 
 const ROLE_DENIED = (action) => ({
   success: false,
-  message: `Seuls les propriétaires et administrateurs peuvent ${action}`,
+  message: `Votre rôle ne permet pas de ${action}`,
 });
 
 /**
@@ -104,13 +106,13 @@ const qontoResolvers = {
     testQontoConnection: async (
       _,
       { login, secretKey, environment },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("tester la connexion Qonto");
       }
       if (environment === "sandbox" && !sandboxAvailableFor(user)) {
@@ -130,13 +132,13 @@ const qontoResolvers = {
     connectQonto: async (
       _,
       { login, secretKey, environment, bankAccountId },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("connecter Qonto");
       }
       if (environment === "sandbox" && !sandboxAvailableFor(user)) {
@@ -222,12 +224,16 @@ const qontoResolvers = {
     /**
      * Déconnecte Qonto de l'organisation
      */
-    disconnectQonto: async (_, args, { user, organizationId, userRole }) => {
+    disconnectQonto: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("déconnecter Qonto");
       }
 
@@ -261,13 +267,13 @@ const qontoResolvers = {
     updateQontoAutoSync: async (
       _,
       { autoSync },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("modifier ces paramètres");
       }
 
@@ -308,13 +314,13 @@ const qontoResolvers = {
     updateQontoBankAccount: async (
       _,
       { bankAccountId },
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("modifier ces paramètres");
       }
 
@@ -354,13 +360,13 @@ const qontoResolvers = {
     refreshQontoBankAccounts: async (
       _,
       args,
-      { user, organizationId, userRole },
+      { user, organizationId, permissionLevels },
     ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("modifier ces paramètres");
       }
 
@@ -501,12 +507,16 @@ const qontoResolvers = {
     /**
      * Importe maintenant les documents créés dans Qonto vers Newbi
      */
-    importFromQonto: async (_, args, { user, organizationId, userRole }) => {
+    importFromQonto: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("lancer un import depuis Qonto");
       }
 
@@ -542,12 +552,16 @@ const qontoResolvers = {
     /**
      * Lance une synchronisation complète vers Qonto
      */
-    syncAllToQonto: async (_, args, { user, organizationId, userRole }) => {
+    syncAllToQonto: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
       }
-      if (!isOwnerOrAdmin(userRole)) {
+      if (!canManageIntegrations(permissionLevels)) {
         return ROLE_DENIED("lancer une synchronisation complète");
       }
 

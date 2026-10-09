@@ -1,12 +1,21 @@
 import Invoice from "../models/Invoice.js";
 import InvoiceTemplate from "../models/invoiceTemplate.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
+
+// Modèles : mêmes droits que le module « invoices »
+const readTemplates = requireWorkspaceLevel("invoices", "read");
+// Enregistrer un document comme modèle : action « create »
+const createTemplates = requireWorkspaceAction("invoices", "create");
+const deleteTemplates = requireWorkspaceLevel("invoices", "delete");
 
 const invoiceTemplateResolvers = {
   Query: {
-    invoiceTemplates: withWorkspace(
+    invoiceTemplates: readTemplates(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         return InvoiceTemplate.find({ workspaceId: finalWorkspaceId }).sort({
@@ -17,7 +26,7 @@ const invoiceTemplateResolvers = {
   },
 
   Mutation: {
-    saveInvoiceAsTemplate: withWorkspace(
+    saveInvoiceAsTemplate: createTemplates(
       async (
         _,
         { input, workspaceId },
@@ -112,7 +121,7 @@ const invoiceTemplateResolvers = {
       },
     ),
 
-    deleteInvoiceTemplate: withWorkspace(
+    deleteInvoiceTemplate: deleteTemplates(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const result = await InvoiceTemplate.findOneAndDelete({

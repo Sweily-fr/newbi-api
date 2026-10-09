@@ -3,7 +3,7 @@ import { bankingService } from "../services/banking/index.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
-import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
+import { requireWorkspacePermission } from "../middlewares/require-workspace-membership.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -100,7 +100,7 @@ router.get("/bridge/institutions", async (req, res) => {
  */
 router.get(
   "/bridge/connect",
-  requireWorkspaceMembership,
+  requireWorkspacePermission("integrations", "write"),
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
@@ -202,7 +202,7 @@ router.get(
  */
 router.get(
   "/bridge/reconnect",
-  requireWorkspaceMembership,
+  requireWorkspacePermission("integrations", "write"),
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {
@@ -303,84 +303,89 @@ router.get("/bridge/callback", async (req, res) => {
  * Statut de la connexion bancaire (multi-provider)
  * GET /banking-connect/status
  */
-router.get("/status", requireWorkspaceMembership, async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.query.workspaceId;
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
-
-    const { default: AccountBanking } =
-      await import("../models/AccountBanking.js");
-    const { default: User } = await import("../models/User.js");
-
-    // Vérifier les comptes en base de données (tous providers confondus)
-    const accounts = await AccountBanking.find({
-      workspaceId,
-      status: "active",
-    });
-
-    const accountsCount = accounts.length;
-    const isConnected = accountsCount > 0;
-
-    // Déterminer le provider actif
-    let activeProvider = null;
-    if (isConnected) {
-      // Prendre le provider du premier compte actif
-      activeProvider = accounts[0]?.provider || DEFAULT_PROVIDER;
-    }
-
-    // Récupérer les infos utilisateur pour lastSync
-    const userData = await User.findById(user._id);
-
-    // Vérifier les tokens Bridge (legacy)
-    const bridgeTokens = userData?.bridgeTokens?.[workspaceId];
-
-    // Connexions Bridge nécessitant une action utilisateur (SCA expirée,
-    // identifiants invalides...) : sans ça la sync s'arrête silencieusement.
-    // ?refresh=true force la relecture depuis Bridge (retour de reconnexion).
-    let itemsNeedingAction = [];
-    if (isConnected && activeProvider === "bridge") {
-      try {
-        itemsNeedingAction = await getItemsNeedingAction(
-          workspaceId,
-          accounts,
-          {
-            force: req.query.refresh === "true",
-          },
-        );
-      } catch (err) {
-        logger.warn(`Statut items Bridge indisponible: ${err.message}`);
+router.get(
+  "/status",
+  requireWorkspacePermission("banking", "read"),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
       }
-    }
 
-    res.json({
-      isConnected,
-      provider: activeProvider,
-      accountsCount,
-      hasAccounts: accountsCount > 0,
-      itemsNeedingAction,
-      lastSync: bridgeTokens?.lastSync || null,
-      // Infos spécifiques par provider
-      bridge: bridgeTokens
-        ? {
-            hasTokens: true,
-          }
-        : null,
-    });
-  } catch (error) {
-    logger.error("Erreur statut connexion:", error);
-    res.status(500).json({
-      error: "Erreur lors de la vérification du statut",
-      details: error.message,
-    });
-  }
-});
+      const workspaceId =
+        req.headers["x-workspace-id"] || req.query.workspaceId;
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      const { default: AccountBanking } =
+        await import("../models/AccountBanking.js");
+      const { default: User } = await import("../models/User.js");
+
+      // Vérifier les comptes en base de données (tous providers confondus)
+      const accounts = await AccountBanking.find({
+        workspaceId,
+        status: "active",
+      });
+
+      const accountsCount = accounts.length;
+      const isConnected = accountsCount > 0;
+
+      // Déterminer le provider actif
+      let activeProvider = null;
+      if (isConnected) {
+        // Prendre le provider du premier compte actif
+        activeProvider = accounts[0]?.provider || DEFAULT_PROVIDER;
+      }
+
+      // Récupérer les infos utilisateur pour lastSync
+      const userData = await User.findById(user._id);
+
+      // Vérifier les tokens Bridge (legacy)
+      const bridgeTokens = userData?.bridgeTokens?.[workspaceId];
+
+      // Connexions Bridge nécessitant une action utilisateur (SCA expirée,
+      // identifiants invalides...) : sans ça la sync s'arrête silencieusement.
+      // ?refresh=true force la relecture depuis Bridge (retour de reconnexion).
+      let itemsNeedingAction = [];
+      if (isConnected && activeProvider === "bridge") {
+        try {
+          itemsNeedingAction = await getItemsNeedingAction(
+            workspaceId,
+            accounts,
+            {
+              force: req.query.refresh === "true",
+            },
+          );
+        } catch (err) {
+          logger.warn(`Statut items Bridge indisponible: ${err.message}`);
+        }
+      }
+
+      res.json({
+        isConnected,
+        provider: activeProvider,
+        accountsCount,
+        hasAccounts: accountsCount > 0,
+        itemsNeedingAction,
+        lastSync: bridgeTokens?.lastSync || null,
+        // Infos spécifiques par provider
+        bridge: bridgeTokens
+          ? {
+              hasTokens: true,
+            }
+          : null,
+      });
+    } catch (error) {
+      logger.error("Erreur statut connexion:", error);
+      res.status(500).json({
+        error: "Erreur lors de la vérification du statut",
+        details: error.message,
+      });
+    }
+  },
+);
 
 /**
  * Déconnexion bancaire (multi-provider)
@@ -393,121 +398,178 @@ router.get("/status", requireWorkspaceMembership, async (req, res) => {
  *
  * Priorité: accountId > itemId > provider > tous
  */
-router.post("/disconnect", requireWorkspaceMembership, async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
-    }
-
-    const workspaceId = req.headers["x-workspace-id"] || req.body.workspaceId;
-    const provider = req.body.provider; // Optionnel: spécifier le provider à déconnecter
-    const itemId = req.body.itemId; // Optionnel: ID de l'item Bridge spécifique
-    const accountId = req.body.accountId; // Optionnel: ID du compte spécifique
-
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
-
-    const { default: User } = await import("../models/User.js");
-    const { default: AccountBanking } =
-      await import("../models/AccountBanking.js");
-
-    let deletedAccountIds = [];
-    let deletedItems = [];
-
-    // Helper: supprimer un item Bridge côté API (best-effort)
-    const deleteBridgeItemSafe = async (bridgeItemId) => {
-      try {
-        await bankingService.initialize("bridge");
-        const bridgeProvider = bankingService.currentProvider;
-        await bridgeProvider.deleteBridgeItem(bridgeItemId, workspaceId);
-      } catch (err) {
-        logger.warn(
-          `Impossible de supprimer l'item Bridge ${bridgeItemId}: ${err.message}`,
-        );
+router.post(
+  "/disconnect",
+  requireWorkspacePermission("integrations", "write"),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
       }
-    };
 
-    // Helper: supprimer en cascade les données issues des comptes bancaires.
-    // - supprime les transactions synchronisées,
-    // - détache (sans supprimer) les factures/dépenses/factures d'achat qui y
-    //   étaient réconciliées, pour ne pas laisser de liens orphelins.
-    // externalAccountIds = comptes (AccountBanking.externalId) ciblés ; passer
-    // `null` supprime TOUTES les transactions du provider pour ce workspace.
-    const cascadeDeleteBankData = async (
-      targetProvider,
-      externalAccountIds,
-    ) => {
-      try {
-        const { default: Transaction } =
-          await import("../models/Transaction.js");
-        const wsId = workspaceId.toString();
+      const workspaceId = req.headers["x-workspace-id"] || req.body.workspaceId;
+      const provider = req.body.provider; // Optionnel: spécifier le provider à déconnecter
+      const itemId = req.body.itemId; // Optionnel: ID de l'item Bridge spécifique
+      const accountId = req.body.accountId; // Optionnel: ID du compte spécifique
 
-        const txFilter = { workspaceId: wsId };
-        if (targetProvider) txFilter.provider = targetProvider;
-        if (Array.isArray(externalAccountIds)) {
-          // Sécurité : une liste vide ne doit jamais tout supprimer.
-          if (externalAccountIds.length === 0) return 0;
-          txFilter.fromAccount = { $in: externalAccountIds };
-        }
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
 
-        const txs = await Transaction.find(txFilter).select("_id");
-        const txIds = txs.map((t) => t._id);
-        if (txIds.length === 0) return 0;
+      const { default: User } = await import("../models/User.js");
+      const { default: AccountBanking } =
+        await import("../models/AccountBanking.js");
 
-        // 1) Supprimer les transactions (objectif principal).
-        const del = await Transaction.deleteMany({ _id: { $in: txIds } });
-        logger.info(
-          `Cascade: ${del.deletedCount} transactions supprimées pour workspace ${wsId}${
-            targetProvider ? ` (${targetProvider})` : ""
-          }`,
-        );
+      let deletedAccountIds = [];
+      let deletedItems = [];
 
-        // 2) Détacher les liens de réconciliation (best-effort, on conserve
-        //    les factures/dépenses, on retire juste le lien orphelin ;
-        //    isReconciled n'est remis à false que si plus AUCUNE transaction
-        //    liée ne subsiste).
+      // Helper: supprimer un item Bridge côté API (best-effort)
+      const deleteBridgeItemSafe = async (bridgeItemId) => {
         try {
-          const { detachTransactionsFromDocuments } =
-            await import("../utils/reconciliation-cleanup.js");
-          await detachTransactionsFromDocuments(txIds, workspaceId);
-        } catch (unlinkErr) {
+          await bankingService.initialize("bridge");
+          const bridgeProvider = bankingService.currentProvider;
+          await bridgeProvider.deleteBridgeItem(bridgeItemId, workspaceId);
+        } catch (err) {
           logger.warn(
-            `Cascade: liens de réconciliation non nettoyés: ${unlinkErr.message}`,
+            `Impossible de supprimer l'item Bridge ${bridgeItemId}: ${err.message}`,
           );
         }
+      };
 
-        return del.deletedCount;
-      } catch (err) {
-        logger.error(`Erreur cascade suppression transactions: ${err.message}`);
-        return 0;
+      // Helper: supprimer en cascade les données issues des comptes bancaires.
+      // - supprime les transactions synchronisées,
+      // - détache (sans supprimer) les factures/dépenses/factures d'achat qui y
+      //   étaient réconciliées, pour ne pas laisser de liens orphelins.
+      // externalAccountIds = comptes (AccountBanking.externalId) ciblés ; passer
+      // `null` supprime TOUTES les transactions du provider pour ce workspace.
+      const cascadeDeleteBankData = async (
+        targetProvider,
+        externalAccountIds,
+      ) => {
+        try {
+          const { default: Transaction } =
+            await import("../models/Transaction.js");
+          const wsId = workspaceId.toString();
+
+          const txFilter = { workspaceId: wsId };
+          if (targetProvider) txFilter.provider = targetProvider;
+          if (Array.isArray(externalAccountIds)) {
+            // Sécurité : une liste vide ne doit jamais tout supprimer.
+            if (externalAccountIds.length === 0) return 0;
+            txFilter.fromAccount = { $in: externalAccountIds };
+          }
+
+          const txs = await Transaction.find(txFilter).select("_id");
+          const txIds = txs.map((t) => t._id);
+          if (txIds.length === 0) return 0;
+
+          // 1) Supprimer les transactions (objectif principal).
+          const del = await Transaction.deleteMany({ _id: { $in: txIds } });
+          logger.info(
+            `Cascade: ${del.deletedCount} transactions supprimées pour workspace ${wsId}${
+              targetProvider ? ` (${targetProvider})` : ""
+            }`,
+          );
+
+          // 2) Détacher les liens de réconciliation (best-effort, on conserve
+          //    les factures/dépenses, on retire juste le lien orphelin ;
+          //    isReconciled n'est remis à false que si plus AUCUNE transaction
+          //    liée ne subsiste).
+          try {
+            const { detachTransactionsFromDocuments } =
+              await import("../utils/reconciliation-cleanup.js");
+            await detachTransactionsFromDocuments(txIds, workspaceId);
+          } catch (unlinkErr) {
+            logger.warn(
+              `Cascade: liens de réconciliation non nettoyés: ${unlinkErr.message}`,
+            );
+          }
+
+          return del.deletedCount;
+        } catch (err) {
+          logger.error(
+            `Erreur cascade suppression transactions: ${err.message}`,
+          );
+          return 0;
+        }
+      };
+
+      // Cas 1: Déconnexion d'un compte spécifique par son ID
+      if (accountId) {
+        const account = await AccountBanking.findOne({
+          _id: accountId,
+          workspaceId,
+        });
+
+        if (!account) {
+          return res.status(404).json({ error: "Compte non trouvé" });
+        }
+
+        // Récupérer l'itemId du compte pour déconnecter tous les comptes du même item
+        const accountItemId = account.raw?.item_id;
+
+        if (accountItemId) {
+          // Supprimer l'item côté Bridge API
+          await deleteBridgeItemSafe(accountItemId);
+          deletedItems.push(accountItemId);
+
+          // Récupérer les IDs + externalId avant suppression
+          const accountsToDelete = await AccountBanking.find({
+            workspaceId,
+            "raw.item_id": accountItemId,
+          }).select("_id externalId");
+          deletedAccountIds = accountsToDelete.map((a) => a._id.toString());
+          const externalIds = accountsToDelete
+            .map((a) => a.externalId)
+            .filter(Boolean);
+
+          // Supprimer les comptes de la DB
+          const result = await AccountBanking.deleteMany({
+            workspaceId,
+            "raw.item_id": accountItemId,
+          });
+
+          logger.info(
+            `Suppression de l'item ${accountItemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
+          );
+
+          // Supprimer en cascade les transactions de ces comptes + liens
+          await cascadeDeleteBankData(null, externalIds);
+        } else {
+          // Pas d'itemId, supprimer uniquement ce compte
+          deletedAccountIds.push(accountId.toString());
+          const externalIds = account.externalId ? [account.externalId] : [];
+          await AccountBanking.findByIdAndDelete(accountId);
+
+          logger.info(
+            `Suppression du compte ${accountId} pour workspace ${workspaceId}`,
+          );
+
+          // Supprimer en cascade les transactions de ce compte + liens
+          await cascadeDeleteBankData(null, externalIds);
+        }
+
+        // Invalider le cache pour que la liste des comptes reflète la suppression
+        await bankingCacheService.invalidateAll(workspaceId);
+
+        return res.json({
+          success: true,
+          deletedAccountIds,
+          deletedItems,
+          mode: "account",
+        });
       }
-    };
 
-    // Cas 1: Déconnexion d'un compte spécifique par son ID
-    if (accountId) {
-      const account = await AccountBanking.findOne({
-        _id: accountId,
-        workspaceId,
-      });
-
-      if (!account) {
-        return res.status(404).json({ error: "Compte non trouvé" });
-      }
-
-      // Récupérer l'itemId du compte pour déconnecter tous les comptes du même item
-      const accountItemId = account.raw?.item_id;
-
-      if (accountItemId) {
+      // Cas 2: Déconnexion par itemId (tous les comptes d'un même item)
+      if (itemId) {
         // Supprimer l'item côté Bridge API
-        await deleteBridgeItemSafe(accountItemId);
-        deletedItems.push(accountItemId);
+        await deleteBridgeItemSafe(itemId);
 
         // Récupérer les IDs + externalId avant suppression
         const accountsToDelete = await AccountBanking.find({
           workspaceId,
-          "raw.item_id": accountItemId,
+          "raw.item_id": itemId,
         }).select("_id externalId");
         deletedAccountIds = accountsToDelete.map((a) => a._id.toString());
         const externalIds = accountsToDelete
@@ -517,131 +579,82 @@ router.post("/disconnect", requireWorkspaceMembership, async (req, res) => {
         // Supprimer les comptes de la DB
         const result = await AccountBanking.deleteMany({
           workspaceId,
-          "raw.item_id": accountItemId,
+          "raw.item_id": itemId,
         });
 
         logger.info(
-          `Suppression de l'item ${accountItemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
+          `Suppression de l'item ${itemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
         );
 
         // Supprimer en cascade les transactions de ces comptes + liens
         await cascadeDeleteBankData(null, externalIds);
-      } else {
-        // Pas d'itemId, supprimer uniquement ce compte
-        deletedAccountIds.push(accountId.toString());
-        const externalIds = account.externalId ? [account.externalId] : [];
-        await AccountBanking.findByIdAndDelete(accountId);
 
-        logger.info(
-          `Suppression du compte ${accountId} pour workspace ${workspaceId}`,
-        );
+        // Invalider le cache pour que la liste des comptes reflète la suppression
+        await bankingCacheService.invalidateAll(workspaceId);
 
-        // Supprimer en cascade les transactions de ce compte + liens
-        await cascadeDeleteBankData(null, externalIds);
+        return res.json({
+          success: true,
+          deletedAccountIds,
+          deletedItems: [itemId],
+          mode: "item",
+        });
+      }
+
+      // Cas 3: Déconnexion par provider ou tous les providers
+      const providersToDisconnect = provider ? [provider] : ["bridge"];
+
+      for (const p of providersToDisconnect) {
+        if (p === "bridge") {
+          // Supprimer les tokens Bridge
+          await User.findByIdAndUpdate(user._id, {
+            $unset: { [`bridgeTokens.${workspaceId}`]: 1 },
+          });
+
+          // Récupérer tous les item_id distincts pour les supprimer côté Bridge
+          const bridgeAccounts = await AccountBanking.find({
+            workspaceId,
+            provider: "bridge",
+          }).select("raw.item_id");
+          const uniqueItemIds = [
+            ...new Set(
+              bridgeAccounts.map((a) => a.raw?.item_id).filter(Boolean),
+            ),
+          ];
+          for (const bridgeItemId of uniqueItemIds) {
+            await deleteBridgeItemSafe(bridgeItemId);
+            deletedItems.push(bridgeItemId);
+          }
+        }
+
+        // Supprimer les comptes de la DB
+        await AccountBanking.deleteMany({ workspaceId, provider: p });
+
+        // Supprimer en cascade toutes les transactions du provider + liens
+        await cascadeDeleteBankData(p, null);
       }
 
       // Invalider le cache pour que la liste des comptes reflète la suppression
       await bankingCacheService.invalidateAll(workspaceId);
-
-      return res.json({
-        success: true,
-        deletedAccountIds,
-        deletedItems,
-        mode: "account",
-      });
-    }
-
-    // Cas 2: Déconnexion par itemId (tous les comptes d'un même item)
-    if (itemId) {
-      // Supprimer l'item côté Bridge API
-      await deleteBridgeItemSafe(itemId);
-
-      // Récupérer les IDs + externalId avant suppression
-      const accountsToDelete = await AccountBanking.find({
-        workspaceId,
-        "raw.item_id": itemId,
-      }).select("_id externalId");
-      deletedAccountIds = accountsToDelete.map((a) => a._id.toString());
-      const externalIds = accountsToDelete
-        .map((a) => a.externalId)
-        .filter(Boolean);
-
-      // Supprimer les comptes de la DB
-      const result = await AccountBanking.deleteMany({
-        workspaceId,
-        "raw.item_id": itemId,
-      });
 
       logger.info(
-        `Suppression de l'item ${itemId} (${result.deletedCount} comptes) pour workspace ${workspaceId}`,
+        `Déconnexion bancaire complète pour user ${user._id}, workspace ${workspaceId}, providers: ${providersToDisconnect.join(", ")}`,
       );
 
-      // Supprimer en cascade les transactions de ces comptes + liens
-      await cascadeDeleteBankData(null, externalIds);
-
-      // Invalider le cache pour que la liste des comptes reflète la suppression
-      await bankingCacheService.invalidateAll(workspaceId);
-
-      return res.json({
+      res.json({
         success: true,
-        deletedAccountIds,
-        deletedItems: [itemId],
-        mode: "item",
+        disconnectedProviders: providersToDisconnect,
+        deletedItems,
+        mode: "provider",
+        all: true,
+      });
+    } catch (error) {
+      logger.error("Erreur déconnexion:", error);
+      res.status(500).json({
+        error: "Erreur lors de la déconnexion",
+        details: error.message,
       });
     }
-
-    // Cas 3: Déconnexion par provider ou tous les providers
-    const providersToDisconnect = provider ? [provider] : ["bridge"];
-
-    for (const p of providersToDisconnect) {
-      if (p === "bridge") {
-        // Supprimer les tokens Bridge
-        await User.findByIdAndUpdate(user._id, {
-          $unset: { [`bridgeTokens.${workspaceId}`]: 1 },
-        });
-
-        // Récupérer tous les item_id distincts pour les supprimer côté Bridge
-        const bridgeAccounts = await AccountBanking.find({
-          workspaceId,
-          provider: "bridge",
-        }).select("raw.item_id");
-        const uniqueItemIds = [
-          ...new Set(bridgeAccounts.map((a) => a.raw?.item_id).filter(Boolean)),
-        ];
-        for (const bridgeItemId of uniqueItemIds) {
-          await deleteBridgeItemSafe(bridgeItemId);
-          deletedItems.push(bridgeItemId);
-        }
-      }
-
-      // Supprimer les comptes de la DB
-      await AccountBanking.deleteMany({ workspaceId, provider: p });
-
-      // Supprimer en cascade toutes les transactions du provider + liens
-      await cascadeDeleteBankData(p, null);
-    }
-
-    // Invalider le cache pour que la liste des comptes reflète la suppression
-    await bankingCacheService.invalidateAll(workspaceId);
-
-    logger.info(
-      `Déconnexion bancaire complète pour user ${user._id}, workspace ${workspaceId}, providers: ${providersToDisconnect.join(", ")}`,
-    );
-
-    res.json({
-      success: true,
-      disconnectedProviders: providersToDisconnect,
-      deletedItems,
-      mode: "provider",
-      all: true,
-    });
-  } catch (error) {
-    logger.error("Erreur déconnexion:", error);
-    res.status(500).json({
-      error: "Erreur lors de la déconnexion",
-      details: error.message,
-    });
-  }
-});
+  },
+);
 
 export default router;

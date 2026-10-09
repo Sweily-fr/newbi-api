@@ -126,7 +126,7 @@ describe("abby.Mutation.testAbbyConnection", () => {
       buildContext({ userId: memberUserId, organizationId }),
     );
     expect(result.success).toBe(false);
-    expect(result.message).toMatch(/propriétaires/);
+    expect(result.message).toMatch(/Votre rôle ne permet pas/);
     expect(testConnectionMock).not.toHaveBeenCalled();
   });
 

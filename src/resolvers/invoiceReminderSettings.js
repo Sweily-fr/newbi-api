@@ -1,7 +1,7 @@
 import logger from "../utils/logger.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
 import { AuthenticationError, UserInputError } from "apollo-server-express";
-import { requireRead, requireWrite } from "../middlewares/rbac.js";
+import { requireRead, requireAction } from "../middlewares/rbac.js";
 
 const invoiceReminderSettingsResolvers = {
   Query: {
@@ -79,61 +79,62 @@ Cordialement,
     /**
      * Mettre à jour les paramètres de relance
      */
-    updateInvoiceReminderSettings: requireWrite("invoices")(
-      async (_, { input }, context) => {
-        const { user, workspaceId, organization } = context;
+    updateInvoiceReminderSettings: requireAction(
+      "invoices",
+      "reminders",
+    )(async (_, { input }, context) => {
+      const { user, workspaceId, organization } = context;
 
-        if (!user) {
-          throw new AuthenticationError("Non authentifié");
-        }
+      if (!user) {
+        throw new AuthenticationError("Non authentifié");
+      }
 
-        // Utiliser organization.id si workspaceId n'est pas disponible
-        const actualWorkspaceId =
-          workspaceId || organization?.id || user?.activeOrganizationId;
+      // Utiliser organization.id si workspaceId n'est pas disponible
+      const actualWorkspaceId =
+        workspaceId || organization?.id || user?.activeOrganizationId;
 
-        if (!actualWorkspaceId) {
-          throw new UserInputError("Workspace ID requis");
-        }
+      if (!actualWorkspaceId) {
+        throw new UserInputError("Workspace ID requis");
+      }
 
-        // Validation des données
-        if (input.firstReminderDays && input.firstReminderDays < 1) {
-          throw new UserInputError(
-            "Le délai de première relance doit être au moins 1 jour",
-          );
-        }
-
-        if (input.secondReminderDays && input.secondReminderDays < 1) {
-          throw new UserInputError(
-            "Le délai de deuxième relance doit être au moins 1 jour",
-          );
-        }
-
-        if (
-          input.firstReminderDays &&
-          input.secondReminderDays &&
-          input.secondReminderDays <= input.firstReminderDays
-        ) {
-          throw new UserInputError(
-            "Le délai de deuxième relance doit être supérieur au délai de première relance",
-          );
-        }
-
-        if (input.useCustomSender && !input.customSenderEmail) {
-          throw new UserInputError(
-            "Email personnalisé requis si useCustomSender est activé",
-          );
-        }
-
-        // Mettre à jour ou créer les paramètres
-        const settings = await InvoiceReminderSettings.findOneAndUpdate(
-          { workspaceId: actualWorkspaceId },
-          { ...input, workspaceId: actualWorkspaceId },
-          { new: true, upsert: true, runValidators: true },
+      // Validation des données
+      if (input.firstReminderDays && input.firstReminderDays < 1) {
+        throw new UserInputError(
+          "Le délai de première relance doit être au moins 1 jour",
         );
+      }
 
-        return settings;
-      },
-    ),
+      if (input.secondReminderDays && input.secondReminderDays < 1) {
+        throw new UserInputError(
+          "Le délai de deuxième relance doit être au moins 1 jour",
+        );
+      }
+
+      if (
+        input.firstReminderDays &&
+        input.secondReminderDays &&
+        input.secondReminderDays <= input.firstReminderDays
+      ) {
+        throw new UserInputError(
+          "Le délai de deuxième relance doit être supérieur au délai de première relance",
+        );
+      }
+
+      if (input.useCustomSender && !input.customSenderEmail) {
+        throw new UserInputError(
+          "Email personnalisé requis si useCustomSender est activé",
+        );
+      }
+
+      // Mettre à jour ou créer les paramètres
+      const settings = await InvoiceReminderSettings.findOneAndUpdate(
+        { workspaceId: actualWorkspaceId },
+        { ...input, workspaceId: actualWorkspaceId },
+        { new: true, upsert: true, runValidators: true },
+      );
+
+      return settings;
+    }),
   },
 };
 

@@ -30,6 +30,7 @@ const notificationSchema = new mongoose.Schema(
         "MENTION", // Mention dans un commentaire
         "PURCHASE_INVOICE_RECEIVED", // Facture d'achat reçue via e-invoicing (SuperPDP)
         "DOCUMENT_IMPORTED", // Document arrivé d'une plateforme externe (Qonto…)
+        "ACCESS_REQUESTED", // Un membre demande l'accès à une page (rôles)
       ],
       index: true,
     },
@@ -159,6 +160,28 @@ notificationSchema.statics.createMentionNotification = async function ({
       actorImage,
       url,
     },
+  });
+};
+
+// Méthode statique pour créer une demande d'accès (page refusée par le rôle),
+// envoyée au super admin de l'espace
+notificationSchema.statics.createAccessRequestedNotification = async function ({
+  userId,
+  workspaceId,
+  actorId,
+  actorName,
+  actorImage,
+  pageLabel,
+  actionLabel,
+  url,
+}) {
+  return this.create({
+    userId,
+    workspaceId,
+    type: "ACCESS_REQUESTED",
+    title: "Demande d'accès",
+    message: `${actorName} demande ${actionLabel} « ${pageLabel} »`,
+    data: { actorId, actorName, actorImage, url },
   });
 };
 

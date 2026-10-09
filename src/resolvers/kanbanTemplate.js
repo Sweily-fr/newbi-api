@@ -1,8 +1,11 @@
 // resolvers/kanbanTemplate.js
 import { Board, Column, Task } from "../models/kanban.js";
 import KanbanTemplate from "../models/kanbanTemplate.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import { getPubSub } from "../config/redis.js";
 import logger from "../utils/logger.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
@@ -22,18 +25,22 @@ const safePublish = (channel, payload, context = "") => {
 
 const kanbanTemplateResolvers = {
   Query: {
-    kanbanTemplates: withWorkspace(
-      async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        return KanbanTemplate.find({ workspaceId: finalWorkspaceId }).sort({
-          createdAt: -1,
-        });
-      },
-    ),
+    kanbanTemplates: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      return KanbanTemplate.find({ workspaceId: finalWorkspaceId }).sort({
+        createdAt: -1,
+      });
+    }),
   },
 
   Mutation: {
-    saveBoardAsTemplate: withWorkspace(
+    saveBoardAsTemplate: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -113,7 +120,10 @@ const kanbanTemplateResolvers = {
       },
     ),
 
-    createBoardFromTemplate: withWorkspace(
+    createBoardFromTemplate: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -200,18 +210,19 @@ const kanbanTemplateResolvers = {
       },
     ),
 
-    deleteKanbanTemplate: withWorkspace(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const result = await KanbanTemplate.findOneAndDelete({
-          _id: id,
-          workspaceId: finalWorkspaceId,
-        });
-        if (!result) throw new Error("Template not found");
-        logger.info(`[KanbanTemplate] Template ${id} deleted`);
-        return true;
-      },
-    ),
+    deleteKanbanTemplate: requireWorkspaceLevel(
+      "kanban",
+      "delete",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const result = await KanbanTemplate.findOneAndDelete({
+        _id: id,
+        workspaceId: finalWorkspaceId,
+      });
+      if (!result) throw new Error("Template not found");
+      logger.info(`[KanbanTemplate] Template ${id} deleted`);
+      return true;
+    }),
   },
 };
 

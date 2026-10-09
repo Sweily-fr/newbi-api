@@ -1,15 +1,17 @@
 import ClientCustomField from "../models/ClientCustomField.js";
 import { buildDocumentFieldsForClientId } from "../utils/clientDocumentFields.js";
 import {
-  withOrganization,
+  requireAction,
+  requireRead,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
 
-// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (withOrganization)
-// et impose le workspace validé par RBAC à la place de l'ID brut des args.
+// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (et le niveau
+// requis sur le module « clientCustomFields ») et impose le workspace validé par RBAC à
+// la place de l'ID brut des args.
 const scopedQuery = (fn) =>
-  withOrganization(async (parent, args, context, info) =>
+  requireRead("clientCustomFields")(async (parent, args, context, info) =>
     fn(
       parent,
       {
@@ -21,8 +23,12 @@ const scopedQuery = (fn) =>
     ),
   );
 
-const scopedMutation = (fn) =>
-  withOrganization(async (parent, args, context, info) => {
+// action : « create » (créer), « edit » (modifier, réordonner) ou
+// « delete » (supprimer). Le contrôle d'abonnement reste ici.
+const makeScopedMutation = (action) => (fn) =>
+  requireAction("clientCustomFields", action, {
+    skipSubscriptionCheck: true,
+  })(async (parent, args, context, info) => {
     await checkSubscriptionActive(context);
     return fn(
       parent,
@@ -34,6 +40,10 @@ const scopedMutation = (fn) =>
       info,
     );
   });
+
+const scopedCreateMutation = makeScopedMutation("create");
+const scopedMutation = makeScopedMutation("edit");
+const scopedDeleteMutation = makeScopedMutation("delete");
 
 export const clientCustomFieldResolvers = {
   Query: {
@@ -90,7 +100,7 @@ export const clientCustomFieldResolvers = {
 
   Mutation: {
     // Créer un nouveau champ personnalisé
-    createClientCustomField: scopedMutation(
+    createClientCustomField: scopedCreateMutation(
       async (_, { workspaceId, input }, context) => {
         try {
           const userId = context.user.id;
@@ -173,7 +183,7 @@ export const clientCustomFieldResolvers = {
     ),
 
     // Supprimer un champ personnalisé
-    deleteClientCustomField: scopedMutation(
+    deleteClientCustomField: scopedDeleteMutation(
       async (_, { workspaceId, id }, context) => {
         try {
           const result = await ClientCustomField.findOneAndDelete({

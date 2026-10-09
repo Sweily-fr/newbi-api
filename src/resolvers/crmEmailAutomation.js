@@ -3,15 +3,18 @@ import CrmEmailAutomationLog from '../models/CrmEmailAutomationLog.js';
 import ClientCustomField from '../models/ClientCustomField.js';
 import Client from '../models/Client.js';
 import {
+  requireAction,
   requireWrite,
   requireRead,
   requireDelete,
 } from '../middlewares/rbac.js';
 import emailReminderService from '../services/emailReminderService.js';
 
+// preferArgsWorkspace : les resolvers lisent args.workspaceId, le rôle est
+// vérifié sur ce même espace
 const crmEmailAutomationResolvers = {
   Query: {
-    crmEmailAutomations: requireRead('clients')(async (_, { workspaceId }) => {
+    crmEmailAutomations: requireRead('automations', { preferArgsWorkspace: true })(async (_, { workspaceId }) => {
       const automations = await CrmEmailAutomation.find({ workspaceId })
         .populate('createdBy', 'name email')
         .sort({ createdAt: -1 });
@@ -19,14 +22,14 @@ const crmEmailAutomationResolvers = {
       return automations;
     }),
 
-    crmEmailAutomation: requireRead('clients')(async (_, { workspaceId, id }) => {
+    crmEmailAutomation: requireRead('automations', { preferArgsWorkspace: true })(async (_, { workspaceId, id }) => {
       const automation = await CrmEmailAutomation.findOne({ _id: id, workspaceId })
         .populate('createdBy', 'name email');
       
       return automation;
     }),
 
-    crmEmailAutomationLogs: requireRead('clients')(async (_, { workspaceId, automationId, limit = 50 }) => {
+    crmEmailAutomationLogs: requireRead('automations', { preferArgsWorkspace: true })(async (_, { workspaceId, automationId, limit = 50 }) => {
       const query = { workspaceId };
       if (automationId) {
         query.automationId = automationId;
@@ -42,7 +45,7 @@ const crmEmailAutomationResolvers = {
   },
 
   Mutation: {
-    createCrmEmailAutomation: requireWrite('clients')(async (_, { workspaceId, input }, context) => {
+    createCrmEmailAutomation: requireAction('automations', 'create', { preferArgsWorkspace: true })(async (_, { workspaceId, input }, context) => {
       // Vérifier que le champ personnalisé existe et est de type DATE
       const customField = await ClientCustomField.findOne({ 
         _id: input.customFieldId, 
@@ -80,7 +83,7 @@ const crmEmailAutomationResolvers = {
       return automation;
     }),
 
-    updateCrmEmailAutomation: requireWrite('clients')(async (_, { workspaceId, id, input }) => {
+    updateCrmEmailAutomation: requireWrite('automations', { preferArgsWorkspace: true })(async (_, { workspaceId, id, input }) => {
       const automation = await CrmEmailAutomation.findOne({ _id: id, workspaceId });
       
       if (!automation) {
@@ -132,7 +135,7 @@ const crmEmailAutomationResolvers = {
       return automation;
     }),
 
-    deleteCrmEmailAutomation: requireDelete('clients')(async (_, { workspaceId, id }) => {
+    deleteCrmEmailAutomation: requireDelete('automations', { preferArgsWorkspace: true })(async (_, { workspaceId, id }) => {
       const automation = await CrmEmailAutomation.findOne({ _id: id, workspaceId });
       
       if (!automation) {
@@ -147,7 +150,7 @@ const crmEmailAutomationResolvers = {
       return true;
     }),
 
-    toggleCrmEmailAutomation: requireWrite('clients')(async (_, { workspaceId, id }) => {
+    toggleCrmEmailAutomation: requireWrite('automations', { preferArgsWorkspace: true })(async (_, { workspaceId, id }) => {
       const automation = await CrmEmailAutomation.findOne({ _id: id, workspaceId });
       
       if (!automation) {
@@ -160,7 +163,7 @@ const crmEmailAutomationResolvers = {
       return automation;
     }),
 
-    testCrmEmailAutomation: requireWrite('clients')(async (_, { workspaceId, id, testEmail }) => {
+    testCrmEmailAutomation: requireWrite('automations', { preferArgsWorkspace: true })(async (_, { workspaceId, id, testEmail }) => {
       const automation = await CrmEmailAutomation.findOne({ _id: id, workspaceId });
       
       if (!automation) {

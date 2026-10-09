@@ -3,15 +3,17 @@ import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import {
-  withOrganization,
+  requireAction,
+  requireRead,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
 
-// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation et impose le
-// workspace validé par RBAC à la place de l'ID brut fourni dans les args.
+// 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (et le niveau
+// requis sur le module « clientLists ») et impose le workspace validé par RBAC à
+// la place de l'ID brut fourni dans les args.
 const scopedQuery = (fn) =>
-  withOrganization(async (parent, args, context, info) =>
+  requireRead("clientLists")(async (parent, args, context, info) =>
     fn(
       parent,
       {
@@ -23,8 +25,13 @@ const scopedQuery = (fn) =>
     ),
   );
 
-const scopedMutation = (fn) =>
-  withOrganization(async (parent, args, context, info) => {
+// action : « create » (créer une liste), « edit » (modifier, ajouter/retirer
+// des clients) ou « delete » (supprimer des listes). Le contrôle
+// d'abonnement reste ici.
+const makeScopedMutation = (action) => (fn) =>
+  requireAction("clientLists", action, {
+    skipSubscriptionCheck: true,
+  })(async (parent, args, context, info) => {
     await checkSubscriptionActive(context);
     return fn(
       parent,
@@ -36,6 +43,10 @@ const scopedMutation = (fn) =>
       info,
     );
   });
+
+const scopedCreateMutation = makeScopedMutation("create");
+const scopedMutation = makeScopedMutation("edit");
+const scopedDeleteMutation = makeScopedMutation("delete");
 
 const buildActivityActor = (user) => ({
   userId: user?.id || user?._id,
@@ -183,7 +194,7 @@ export const clientListResolvers = {
 
   Mutation: {
     // Crée une nouvelle liste de clients
-    createClientList: scopedMutation(
+    createClientList: scopedCreateMutation(
       async (_, { workspaceId, input }, context) => {
         try {
           const newList = new ClientList({
@@ -237,7 +248,7 @@ export const clientListResolvers = {
     ),
 
     // Supprime une liste
-    deleteClientList: scopedMutation(
+    deleteClientList: scopedDeleteMutation(
       async (_, { workspaceId, id }, context) => {
         try {
           const list = await ClientList.findOne({ _id: id, workspaceId });
@@ -273,7 +284,7 @@ export const clientListResolvers = {
     ),
 
     // Supprime plusieurs listes en une seule opération (ignore les listes par défaut)
-    deleteClientLists: scopedMutation(
+    deleteClientLists: scopedDeleteMutation(
       async (_, { workspaceId, ids }, context) => {
         try {
           const lists = await ClientList.find({

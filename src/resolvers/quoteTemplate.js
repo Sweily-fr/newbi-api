@@ -1,12 +1,21 @@
 import Quote from "../models/Quote.js";
 import QuoteTemplate from "../models/quoteTemplate.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
+
+// Modèles : mêmes droits que le module « quotes »
+const readTemplates = requireWorkspaceLevel("quotes", "read");
+// Enregistrer un document comme modèle : action « create »
+const createTemplates = requireWorkspaceAction("quotes", "create");
+const deleteTemplates = requireWorkspaceLevel("quotes", "delete");
 
 const quoteTemplateResolvers = {
   Query: {
-    quoteTemplates: withWorkspace(
+    quoteTemplates: readTemplates(
       async (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         return QuoteTemplate.find({ workspaceId: finalWorkspaceId }).sort({
@@ -17,7 +26,7 @@ const quoteTemplateResolvers = {
   },
 
   Mutation: {
-    saveQuoteAsTemplate: withWorkspace(
+    saveQuoteAsTemplate: createTemplates(
       async (
         _,
         { input, workspaceId },
@@ -102,7 +111,7 @@ const quoteTemplateResolvers = {
       },
     ),
 
-    deleteQuoteTemplate: withWorkspace(
+    deleteQuoteTemplate: deleteTemplates(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const result = await QuoteTemplate.findOneAndDelete({

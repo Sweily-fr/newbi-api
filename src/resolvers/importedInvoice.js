@@ -7,11 +7,12 @@ import { escapeRegex } from "../utils/escapeRegex.js";
 import mongoose from "mongoose";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireRead,
   requireWrite,
   requireDelete,
+  requireAction,
+  requireWorkspaceLevel,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -753,6 +754,8 @@ async function convertSingleImportedInvoice(
   return purchaseInvoice;
 }
 
+const readImported = requireWorkspaceLevel("importedInvoices", "read");
+
 const importedInvoiceResolvers = {
   Upload: GraphQLUpload,
 
@@ -760,7 +763,7 @@ const importedInvoiceResolvers = {
     /**
      * Récupère une facture importée par ID
      */
-    importedInvoice: withWorkspace(async (_, { id }, { workspaceId }) => {
+    importedInvoice: readImported(async (_, { id }, { workspaceId }) => {
       const invoice = await checkInvoiceAccess(id, workspaceId);
       return invoice;
     }),
@@ -768,7 +771,7 @@ const importedInvoiceResolvers = {
     /**
      * Liste les factures importées avec pagination et filtres
      */
-    importedInvoiceClientSuggestion: withWorkspace(
+    importedInvoiceClientSuggestion: readImported(
       async (_, { id }, { workspaceId }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
         const client = await suggestClientForImportedInvoice(
@@ -963,7 +966,10 @@ const importedInvoiceResolvers = {
     /**
      * Importe une facture avec OCR
      */
-    importInvoice: requireWrite("importedInvoices")(
+    importInvoice: requireAction(
+      "importedInvoices",
+      "import",
+    )(
       async (
         _,
         {
@@ -1089,174 +1095,175 @@ const importedInvoiceResolvers = {
      * Le fichier est envoyé directement au backend, OCR via Claude Vision en base64,
      * puis upload serveur-à-serveur vers Cloudflare (attendu car besoin de l'URL).
      */
-    importInvoiceDirect: requireWrite("importedInvoices")(
-      async (_, { file, workspaceId: inputWorkspaceId }, context) => {
-        const { user } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
-        try {
-          const { createReadStream, filename, mimetype } = await file;
+    importInvoiceDirect: requireAction(
+      "importedInvoices",
+      "import",
+    )(async (_, { file, workspaceId: inputWorkspaceId }, context) => {
+      const { user } = context;
+      const workspaceId = resolveWorkspaceId(
+        inputWorkspaceId,
+        context.workspaceId,
+      );
+      try {
+        const { createReadStream, filename, mimetype } = await file;
 
-          if (!filename) {
-            throw createValidationError("Nom de fichier requis");
-          }
+        if (!filename) {
+          throw createValidationError("Nom de fichier requis");
+        }
 
-          // Lecture du fichier en mémoire
-          const stream = createReadStream();
-          const chunks = [];
-          for await (const chunk of stream) {
-            chunks.push(chunk);
-          }
-          const fileBuffer = Buffer.concat(chunks);
+        // Lecture du fichier en mémoire
+        const stream = createReadStream();
+        const chunks = [];
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+        const fileBuffer = Buffer.concat(chunks);
 
-          // Validation de la taille (max 10MB)
-          const maxSize = 10 * 1024 * 1024;
-          if (fileBuffer.length > maxSize) {
-            throw createValidationError("Fichier trop volumineux (max 10MB)");
-          }
+        // Validation de la taille (max 10MB)
+        const maxSize = 10 * 1024 * 1024;
+        if (fileBuffer.length > maxSize) {
+          throw createValidationError("Fichier trop volumineux (max 10MB)");
+        }
 
-          // Récupérer organizationId pour l'upload Cloudflare
-          let organizationId = null;
-          const rawOrgId =
-            user.organizationId ||
-            user.organization?.id ||
-            user.organization?._id ||
-            user.currentOrganizationId;
+        // Récupérer organizationId pour l'upload Cloudflare
+        let organizationId = null;
+        const rawOrgId =
+          user.organizationId ||
+          user.organization?.id ||
+          user.organization?._id ||
+          user.currentOrganizationId;
 
-          if (rawOrgId) {
-            organizationId =
-              typeof rawOrgId === "object"
-                ? rawOrgId._id?.toString() ||
-                  rawOrgId.id?.toString() ||
-                  rawOrgId.toString()
-                : rawOrgId.toString();
-          } else {
-            try {
-              const memberRecord = await mongoose.connection.db
-                .collection("member")
-                .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
-              if (memberRecord?.organizationId) {
-                organizationId = memberRecord.organizationId.toString();
-              }
-            } catch (err) {
-              console.warn(
-                "⚠️ Impossible de récupérer organizationId:",
-                err.message,
-              );
+        if (rawOrgId) {
+          organizationId =
+            typeof rawOrgId === "object"
+              ? rawOrgId._id?.toString() ||
+                rawOrgId.id?.toString() ||
+                rawOrgId.toString()
+              : rawOrgId.toString();
+        } else {
+          try {
+            const memberRecord = await mongoose.connection.db
+              .collection("member")
+              .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
+            if (memberRecord?.organizationId) {
+              organizationId = memberRecord.organizationId.toString();
             }
+          } catch (err) {
+            console.warn(
+              "⚠️ Impossible de récupérer organizationId:",
+              err.message,
+            );
           }
+        }
 
-          // Upload Cloudflare en premier (indispensable, même si l'OCR échoue
-          // on doit garder le PDF stocké pour saisie manuelle).
-          logger.debug(
-            `☁️ importInvoiceDirect: Upload Cloudflare pour ${filename}`,
-          );
-          const uploadResult = await cloudflareService.uploadImage(
+        // Upload Cloudflare en premier (indispensable, même si l'OCR échoue
+        // on doit garder le PDF stocké pour saisie manuelle).
+        logger.debug(
+          `☁️ importInvoiceDirect: Upload Cloudflare pour ${filename}`,
+        );
+        const uploadResult = await cloudflareService.uploadImage(
+          fileBuffer,
+          filename,
+          user.id,
+          "importedInvoice",
+          organizationId,
+        );
+
+        // Chaîne OCR : Claude Vision (quota) → OCR hybride (fallback).
+        // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
+        const { invoiceData, ocrProvider, consumedQuota, plan } =
+          await runOcrPipeline({
             fileBuffer,
+            fileUrl: uploadResult.url,
             filename,
-            user.id,
-            "importedInvoice",
-            organizationId,
-          );
-
-          // Chaîne OCR : Claude Vision (quota) → OCR hybride (fallback).
-          // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
-          const { invoiceData, ocrProvider, consumedQuota, plan } =
-            await runOcrPipeline({
-              fileBuffer,
-              fileUrl: uploadResult.url,
-              filename,
-              mimetype,
-              workspaceId,
-              userId: user.id,
-              label: "importInvoiceDirect",
-            });
-
-          await resolveImportedClient(invoiceData, workspaceId);
-
-          if (consumedQuota && plan) {
-            await recordOcrUsage(user.id, workspaceId, plan, {
-              fileName: filename,
-              provider: ocrProvider,
-              success: true,
-            });
-          }
-
-          const duplicates = invoiceData.originalInvoiceNumber
-            ? await ImportedInvoice.findPotentialDuplicates(
-                workspaceId,
-                invoiceData.originalInvoiceNumber,
-                invoiceData.vendor?.name,
-                invoiceData.totalTTC,
-              )
-            : [];
-
-          const isDuplicate = duplicates.length > 0;
-
-          const importedInvoice = new ImportedInvoice({
+            mimetype,
             workspaceId,
-            importedBy: user.id,
-            ...invoiceData,
-            // À vérifier : l'utilisateur valide chaque facture importée une par une
-            // via la sidebar (passage en VALIDATED = comptée dans le CA).
-            status: "PENDING_REVIEW",
-            file: {
-              url: uploadResult.url,
-              cloudflareKey: uploadResult.key,
-              originalFileName: filename,
-              mimeType: mimetype,
-              fileSize: fileBuffer.length,
-            },
-            isDuplicate,
-            duplicateOf: isDuplicate ? duplicates[0]._id : null,
+            userId: user.id,
+            label: "importInvoiceDirect",
           });
 
-          await importedInvoice.save();
+        await resolveImportedClient(invoiceData, workspaceId);
 
-          documentAutomationService
-            .executeAutomationsForExpense(
-              "INVOICE_IMPORTED",
-              workspaceId,
-              {
-                documentId: importedInvoice._id.toString(),
-                documentType: "importedInvoice",
-                documentNumber: importedInvoice.originalInvoiceNumber || "",
-                clientName:
-                  importedInvoice.vendor?.name ||
-                  importedInvoice.client?.name ||
-                  "",
-                cloudflareUrl: uploadResult.url,
-                mimeType: mimetype,
-                fileExtension: filename?.split(".").pop() || "pdf",
-                issueDate:
-                  importedInvoice.invoiceDate || importedInvoice.createdAt,
-                clientId: importedInvoice.client?._id || null,
-              },
-              user.id,
-            )
-            .catch((err) =>
-              console.error("Erreur automatisation facture importée:", err),
-            );
-
-          return {
+        if (consumedQuota && plan) {
+          await recordOcrUsage(user.id, workspaceId, plan, {
+            fileName: filename,
+            provider: ocrProvider,
             success: true,
-            invoice: importedInvoice,
-            error: null,
-            isDuplicate,
-          };
-        } catch (error) {
-          console.error("Erreur importInvoiceDirect:", error);
-          return {
-            success: false,
-            invoice: null,
-            error: error.message,
-            isDuplicate: false,
-          };
+          });
         }
-      },
-    ),
+
+        const duplicates = invoiceData.originalInvoiceNumber
+          ? await ImportedInvoice.findPotentialDuplicates(
+              workspaceId,
+              invoiceData.originalInvoiceNumber,
+              invoiceData.vendor?.name,
+              invoiceData.totalTTC,
+            )
+          : [];
+
+        const isDuplicate = duplicates.length > 0;
+
+        const importedInvoice = new ImportedInvoice({
+          workspaceId,
+          importedBy: user.id,
+          ...invoiceData,
+          // À vérifier : l'utilisateur valide chaque facture importée une par une
+          // via la sidebar (passage en VALIDATED = comptée dans le CA).
+          status: "PENDING_REVIEW",
+          file: {
+            url: uploadResult.url,
+            cloudflareKey: uploadResult.key,
+            originalFileName: filename,
+            mimeType: mimetype,
+            fileSize: fileBuffer.length,
+          },
+          isDuplicate,
+          duplicateOf: isDuplicate ? duplicates[0]._id : null,
+        });
+
+        await importedInvoice.save();
+
+        documentAutomationService
+          .executeAutomationsForExpense(
+            "INVOICE_IMPORTED",
+            workspaceId,
+            {
+              documentId: importedInvoice._id.toString(),
+              documentType: "importedInvoice",
+              documentNumber: importedInvoice.originalInvoiceNumber || "",
+              clientName:
+                importedInvoice.vendor?.name ||
+                importedInvoice.client?.name ||
+                "",
+              cloudflareUrl: uploadResult.url,
+              mimeType: mimetype,
+              fileExtension: filename?.split(".").pop() || "pdf",
+              issueDate:
+                importedInvoice.invoiceDate || importedInvoice.createdAt,
+              clientId: importedInvoice.client?._id || null,
+            },
+            user.id,
+          )
+          .catch((err) =>
+            console.error("Erreur automatisation facture importée:", err),
+          );
+
+        return {
+          success: true,
+          invoice: importedInvoice,
+          error: null,
+          isDuplicate,
+        };
+      } catch (error) {
+        console.error("Erreur importInvoiceDirect:", error);
+        return {
+          success: false,
+          invoice: null,
+          error: error.message,
+          isDuplicate: false,
+        };
+      }
+    }),
 
     /**
      * Import en lot de factures - VERSION ULTRA-OPTIMISÉE
@@ -1268,215 +1275,212 @@ const importedInvoiceResolvers = {
      *
      * Performances: 100 factures en 25-35s (vs 90-120s avant)
      */
-    batchImportInvoices: requireWrite("importedInvoices")(
-      async (_, { workspaceId: inputWorkspaceId, files }, context) => {
-        const { user } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
+    batchImportInvoices: requireAction(
+      "importedInvoices",
+      "import",
+    )(async (_, { workspaceId: inputWorkspaceId, files }, context) => {
+      const { user } = context;
+      const workspaceId = resolveWorkspaceId(
+        inputWorkspaceId,
+        context.workspaceId,
+      );
+      const startTime = Date.now();
+
+      if (files.length > MAX_BATCH_IMPORT) {
+        throw createValidationError(
+          `Maximum ${MAX_BATCH_IMPORT} factures par import`,
         );
-        const startTime = Date.now();
+      }
 
-        if (files.length > MAX_BATCH_IMPORT) {
-          throw createValidationError(
-            `Maximum ${MAX_BATCH_IMPORT} factures par import`,
-          );
-        }
+      // ========== PHASE 0: Vérification quota utilisateur ==========
+      const { plan, quotaInfo } = await checkUserOcrQuota(
+        user.id,
+        workspaceId,
+        files.length,
+      );
+      logger.debug(
+        `📊 Quota OCR: ${quotaInfo.remaining} imports disponibles, ${files.length} demandés`,
+      );
 
-        // ========== PHASE 0: Vérification quota utilisateur ==========
-        const { plan, quotaInfo } = await checkUserOcrQuota(
-          user.id,
-          workspaceId,
-          files.length,
-        );
-        logger.debug(
-          `📊 Quota OCR: ${quotaInfo.remaining} imports disponibles, ${files.length} demandés`,
-        );
+      const results = [];
+      const errors = [];
+      let successCount = 0;
+      let errorCount = 0;
 
-        const results = [];
-        const errors = [];
-        let successCount = 0;
-        let errorCount = 0;
+      // ========== PHASE 1: Batch OCR optimisé ==========
+      logger.debug(`🚀 Démarrage import batch de ${files.length} factures...`);
 
-        // ========== PHASE 1: Batch OCR optimisé ==========
-        logger.debug(
-          `🚀 Démarrage import batch de ${files.length} factures...`,
-        );
+      const ocrResults = await hybridOcrService.batchProcessDocuments(
+        files,
+        workspaceId,
+      );
 
-        const ocrResults = await hybridOcrService.batchProcessDocuments(
-          files,
-          workspaceId,
-        );
+      // Séparer succès et échecs
+      const successfulOcr = ocrResults.filter((r) => r.success);
+      const failedOcr = ocrResults.filter((r) => !r.success);
 
-        // Séparer succès et échecs
-        const successfulOcr = ocrResults.filter((r) => r.success);
-        const failedOcr = ocrResults.filter((r) => !r.success);
-
-        // Ajouter les erreurs OCR
-        failedOcr.forEach((r) => {
-          errors.push(`${r.fileName}: OCR échoué - ${r.error}`);
-          errorCount++;
-          results.push({
-            success: false,
-            invoice: null,
-            error: `OCR échoué: ${r.error}`,
-            isDuplicate: false,
-          });
+      // Ajouter les erreurs OCR
+      failedOcr.forEach((r) => {
+        errors.push(`${r.fileName}: OCR échoué - ${r.error}`);
+        errorCount++;
+        results.push({
+          success: false,
+          invoice: null,
+          error: `OCR échoué: ${r.error}`,
+          isDuplicate: false,
         });
+      });
 
-        logger.debug(
-          `📊 OCR: ${successfulOcr.length} réussis, ${failedOcr.length} échoués`,
+      logger.debug(
+        `📊 OCR: ${successfulOcr.length} réussis, ${failedOcr.length} échoués`,
+      );
+
+      // ========== PHASE 2: Extraction + Sauvegarde en parallèle (optimisé) ==========
+      const SAVE_BATCH_SIZE = 40; // Augmenté de 20 à 40 grâce au pool MongoDB élargi
+
+      for (let i = 0; i < successfulOcr.length; i += SAVE_BATCH_SIZE) {
+        const batch = successfulOcr.slice(i, i + SAVE_BATCH_SIZE);
+
+        const batchResults = await Promise.all(
+          batch.map(async (ocrResult, batchIndex) => {
+            const fileIndex = i + batchIndex;
+            const file =
+              files.find((f) => f.cloudflareUrl === ocrResult.url) ||
+              files[fileIndex];
+
+            try {
+              // Extraire les données avec le service d'extraction
+              let invoiceData;
+
+              if (ocrResult.result?.transaction_data) {
+                invoiceData = transformOcrToInvoiceDataV2(
+                  ocrResult.result,
+                  ocrResult.result,
+                );
+              } else {
+                const extractionResult =
+                  await invoiceExtractionService.extractInvoiceData(
+                    ocrResult.result,
+                  );
+                invoiceData = transformOcrToInvoiceDataV2(
+                  ocrResult.result,
+                  extractionResult,
+                );
+              }
+              await resolveImportedClient(invoiceData, workspaceId);
+
+              // Doublons + enregistrement OCR en parallèle
+              const [duplicates] = await Promise.all([
+                ImportedInvoice.findPotentialDuplicates(
+                  workspaceId,
+                  invoiceData.originalInvoiceNumber,
+                  invoiceData.vendor?.name,
+                  invoiceData.totalTTC,
+                ),
+                recordOcrUsage(user.id, workspaceId, plan, {
+                  documentId: null,
+                  fileName: file.fileName,
+                  provider: ocrResult.result?.provider || "claude-vision",
+                  success: true,
+                }),
+              ]);
+
+              const isDuplicate = duplicates.length > 0;
+
+              const importedInvoice = new ImportedInvoice({
+                workspaceId,
+                importedBy: user.id,
+                ...invoiceData,
+                file: {
+                  url: file.cloudflareUrl,
+                  cloudflareKey: file.cloudflareKey,
+                  originalFileName: file.fileName,
+                  mimeType: file.mimeType,
+                  fileSize: file.fileSize || 0,
+                },
+                isDuplicate,
+                duplicateOf: isDuplicate ? duplicates[0]._id : null,
+              });
+
+              await importedInvoice.save();
+
+              // Automatisations fire-and-forget
+              documentAutomationService
+                .executeAutomationsForExpense(
+                  "INVOICE_IMPORTED",
+                  workspaceId,
+                  {
+                    documentId: importedInvoice._id.toString(),
+                    documentType: "importedInvoice",
+                    documentNumber: importedInvoice.originalInvoiceNumber || "",
+                    clientName:
+                      importedInvoice.vendor?.name ||
+                      importedInvoice.client?.name ||
+                      "",
+                    cloudflareUrl: file.cloudflareUrl,
+                    mimeType: file.mimeType,
+                    fileExtension: file.fileName?.split(".").pop() || "pdf",
+                    issueDate:
+                      importedInvoice.invoiceDate || importedInvoice.createdAt,
+                    clientId: importedInvoice.client?._id || null,
+                  },
+                  user.id,
+                )
+                .catch((err) =>
+                  console.error(
+                    "Erreur automatisation facture importée (batch):",
+                    err,
+                  ),
+                );
+
+              return {
+                success: true,
+                invoice: importedInvoice,
+                error: null,
+                isDuplicate,
+                fromCache: ocrResult.fromCache,
+              };
+            } catch (error) {
+              return {
+                success: false,
+                invoice: null,
+                error: error.message,
+                isDuplicate: false,
+              };
+            }
+          }),
         );
 
-        // ========== PHASE 2: Extraction + Sauvegarde en parallèle (optimisé) ==========
-        const SAVE_BATCH_SIZE = 40; // Augmenté de 20 à 40 grâce au pool MongoDB élargi
+        // Compiler les résultats du batch
+        batchResults.forEach((result) => {
+          if (result.success) {
+            successCount++;
+          } else {
+            errorCount++;
+            errors.push(`Sauvegarde échouée: ${result.error}`);
+          }
+          results.push(result);
+        });
+      }
 
-        for (let i = 0; i < successfulOcr.length; i += SAVE_BATCH_SIZE) {
-          const batch = successfulOcr.slice(i, i + SAVE_BATCH_SIZE);
+      // ========== Résumé ==========
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const cacheHits = successfulOcr.filter((r) => r.fromCache).length;
 
-          const batchResults = await Promise.all(
-            batch.map(async (ocrResult, batchIndex) => {
-              const fileIndex = i + batchIndex;
-              const file =
-                files.find((f) => f.cloudflareUrl === ocrResult.url) ||
-                files[fileIndex];
+      logger.debug(`✅ Import batch terminé en ${elapsed}s`);
+      logger.debug(`   - Succès: ${successCount}/${files.length}`);
+      logger.debug(`   - Depuis cache: ${cacheHits}`);
+      logger.debug(`   - Erreurs: ${errorCount}`);
 
-              try {
-                // Extraire les données avec le service d'extraction
-                let invoiceData;
-
-                if (ocrResult.result?.transaction_data) {
-                  invoiceData = transformOcrToInvoiceDataV2(
-                    ocrResult.result,
-                    ocrResult.result,
-                  );
-                } else {
-                  const extractionResult =
-                    await invoiceExtractionService.extractInvoiceData(
-                      ocrResult.result,
-                    );
-                  invoiceData = transformOcrToInvoiceDataV2(
-                    ocrResult.result,
-                    extractionResult,
-                  );
-                }
-                await resolveImportedClient(invoiceData, workspaceId);
-
-                // Doublons + enregistrement OCR en parallèle
-                const [duplicates] = await Promise.all([
-                  ImportedInvoice.findPotentialDuplicates(
-                    workspaceId,
-                    invoiceData.originalInvoiceNumber,
-                    invoiceData.vendor?.name,
-                    invoiceData.totalTTC,
-                  ),
-                  recordOcrUsage(user.id, workspaceId, plan, {
-                    documentId: null,
-                    fileName: file.fileName,
-                    provider: ocrResult.result?.provider || "claude-vision",
-                    success: true,
-                  }),
-                ]);
-
-                const isDuplicate = duplicates.length > 0;
-
-                const importedInvoice = new ImportedInvoice({
-                  workspaceId,
-                  importedBy: user.id,
-                  ...invoiceData,
-                  file: {
-                    url: file.cloudflareUrl,
-                    cloudflareKey: file.cloudflareKey,
-                    originalFileName: file.fileName,
-                    mimeType: file.mimeType,
-                    fileSize: file.fileSize || 0,
-                  },
-                  isDuplicate,
-                  duplicateOf: isDuplicate ? duplicates[0]._id : null,
-                });
-
-                await importedInvoice.save();
-
-                // Automatisations fire-and-forget
-                documentAutomationService
-                  .executeAutomationsForExpense(
-                    "INVOICE_IMPORTED",
-                    workspaceId,
-                    {
-                      documentId: importedInvoice._id.toString(),
-                      documentType: "importedInvoice",
-                      documentNumber:
-                        importedInvoice.originalInvoiceNumber || "",
-                      clientName:
-                        importedInvoice.vendor?.name ||
-                        importedInvoice.client?.name ||
-                        "",
-                      cloudflareUrl: file.cloudflareUrl,
-                      mimeType: file.mimeType,
-                      fileExtension: file.fileName?.split(".").pop() || "pdf",
-                      issueDate:
-                        importedInvoice.invoiceDate ||
-                        importedInvoice.createdAt,
-                      clientId: importedInvoice.client?._id || null,
-                    },
-                    user.id,
-                  )
-                  .catch((err) =>
-                    console.error(
-                      "Erreur automatisation facture importée (batch):",
-                      err,
-                    ),
-                  );
-
-                return {
-                  success: true,
-                  invoice: importedInvoice,
-                  error: null,
-                  isDuplicate,
-                  fromCache: ocrResult.fromCache,
-                };
-              } catch (error) {
-                return {
-                  success: false,
-                  invoice: null,
-                  error: error.message,
-                  isDuplicate: false,
-                };
-              }
-            }),
-          );
-
-          // Compiler les résultats du batch
-          batchResults.forEach((result) => {
-            if (result.success) {
-              successCount++;
-            } else {
-              errorCount++;
-              errors.push(`Sauvegarde échouée: ${result.error}`);
-            }
-            results.push(result);
-          });
-        }
-
-        // ========== Résumé ==========
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        const cacheHits = successfulOcr.filter((r) => r.fromCache).length;
-
-        logger.debug(`✅ Import batch terminé en ${elapsed}s`);
-        logger.debug(`   - Succès: ${successCount}/${files.length}`);
-        logger.debug(`   - Depuis cache: ${cacheHits}`);
-        logger.debug(`   - Erreurs: ${errorCount}`);
-
-        return {
-          success: errorCount === 0,
-          totalProcessed: files.length,
-          successCount,
-          errorCount,
-          results,
-          errors,
-        };
-      },
-    ),
+      return {
+        success: errorCount === 0,
+        totalProcessed: files.length,
+        successCount,
+        errorCount,
+        results,
+        errors,
+      };
+    }),
 
     /**
      * Met à jour une facture importée
@@ -1793,7 +1797,10 @@ const importedInvoiceResolvers = {
      * Note: Cette mutation enregistre l'achat. L'intégration Stripe est à implémenter
      * selon votre configuration de paiement existante.
      */
-    purchaseExtraOcrImports: requireWrite("importedInvoices")(
+    purchaseExtraOcrImports: requireAction(
+      "importedInvoices",
+      "import",
+    )(
       async (
         _,
         { workspaceId: inputWorkspaceId, quantity, paymentId },

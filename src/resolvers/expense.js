@@ -10,6 +10,8 @@ import { processFileWithOCR } from "../utils/ocrProcessor.js";
 import cloudflareService from "../services/cloudflareService.js";
 // ✅ Import des wrappers RBAC
 import {
+  assertPermissionAction,
+  requireAction,
   requireRead,
   requireWrite,
   requireDelete,
@@ -122,6 +124,9 @@ const saveUploadedFile = async (file, userId) => {
       });
   });
 };
+
+// Création : action « create » de la page Factures d'achat
+const requireCreate = requireAction("expenses", "create");
 
 const expenseResolvers = {
   Query: {
@@ -346,7 +351,7 @@ const expenseResolvers = {
   Mutation: {
     // Créer une nouvelle dépense
     // ✅ Protégé par RBAC - nécessite la permission "create" sur "expenses"
-    createExpense: requireWrite("expenses")(async (_, { input }, context) => {
+    createExpense: requireCreate(async (_, { input }, context) => {
       const { user } = context;
       const workspaceId = resolveWorkspaceId(
         input.workspaceId,
@@ -577,8 +582,14 @@ const expenseResolvers = {
 
     // Changer le statut d'une dépense
     // ✅ Protégé par RBAC - nécessite la permission "edit" sur "expenses"
-    changeExpenseStatus: requireWrite("expenses")(
+    // Passer payée : « Marquer comme payée » ; autres statuts : « Modifier »
+    changeExpenseStatus: requireAction("expenses", ["edit", "markPaid"])(
       async (_, { id, status, workspaceId: inputWorkspaceId }, context) => {
+        assertPermissionAction(
+          context,
+          "expenses",
+          status === "PAID" ? "markPaid" : "edit",
+        );
         const { user, userRole } = context;
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,

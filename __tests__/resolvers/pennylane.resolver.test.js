@@ -104,7 +104,7 @@ describe("pennylane.Mutation.testPennylaneConnection", () => {
       buildContext({ userId: memberUserId, organizationId }),
     );
     expect(out.success).toBe(false);
-    expect(out.message).toMatch(/propriétaires et administrateurs/i);
+    expect(out.message).toMatch(/Votre rôle ne permet pas/i);
   });
 
   it("delegates to pennylaneService.testConnection for owner", async () => {

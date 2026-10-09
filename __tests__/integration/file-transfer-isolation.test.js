@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import mongoose from "mongoose";
 
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
-import { buildContext } from "../helpers/auth.js";
+import { buildContext, seedOrgMembership } from "../helpers/auth.js";
 import { buildUserId } from "../factories/index.js";
+import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 
 import FileTransfer from "../../src/models/FileTransfer.js";
 import fileTransferResolvers from "../../src/resolvers/fileTransfer.js";
@@ -38,18 +39,17 @@ async function insertTransferIn({ userId, options = {} }) {
   return doc;
 }
 
+// Les deux utilisateurs sont membres du même espace (rôles avec tous les
+// droits sur les transferts) : l'isolation testée est bien celle par auteur.
 function ctxFor(userId) {
-  return buildContext({
-    userId,
-    organizationId: new mongoose.Types.ObjectId(),
-  });
+  return buildContext({ userId, organizationId });
 }
 
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 
-let userA, userB;
+let userA, userB, organizationId;
 
 beforeAll(async () => {
   await startMongo();
@@ -61,8 +61,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await clearMongo();
+  invalidateOrgCache();
   userA = buildUserId();
   userB = buildUserId();
+  organizationId = new mongoose.Types.ObjectId();
+  await seedOrgMembership({ userId: userA, organizationId, role: "admin" });
+  await seedOrgMembership({ userId: userB, organizationId, role: "owner" });
 });
 
 // ---------------------------------------------------------------------------
@@ -108,6 +112,34 @@ describe("FileTransfer — user-level isolation", () => {
     const stillExists = await FileTransfer.findById(docB._id);
     expect(stillExists).not.toBeNull();
     expect(stillExists.status).toBe("active");
+  });
+
+  // Test 3b — rôle sans droit de suppression sur les transferts
+  it("a read-only member cannot delete even their own transfer", async () => {
+    const viewer = buildUserId();
+    await seedOrgMembership({ userId: viewer, organizationId, role: "viewer" });
+    const doc = await insertTransferIn({ userId: viewer });
+
+    await expect(
+      fileTransferResolvers.Mutation.deleteFileTransfer(
+        null,
+        { id: doc._id.toString() },
+        ctxFor(viewer),
+      ),
+    ).rejects.toThrow(
+      "Vous n'avez pas la permission d'effectuer cette action.",
+    );
+
+    const stillExists = await FileTransfer.findById(doc._id);
+    expect(stillExists.status).toBe("active");
+
+    // La lecture reste permise
+    const list = await fileTransferResolvers.Query.myFileTransfers(
+      null,
+      { page: 1, limit: 10 },
+      ctxFor(viewer),
+    );
+    expect(list.totalItems).toBe(1);
   });
 
   // Test 4 — getFileTransferByLink wrong accessKey

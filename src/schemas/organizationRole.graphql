@@ -1,0 +1,117 @@
+# Rôles d'un espace : rôles prédéfinis (ajustables par le super admin) et
+# rôles personnalisés. Les droits sont une grille page → actions permises
+# (voir, créer, modifier, supprimer…), voir src/config/rolePermissions.js.
+# `levels` (none, read, write, delete) est le niveau équivalent par page,
+# gardé pour les écrans d'avant les actions.
+
+type RoleCatalogAction {
+  key: String!
+  label: String!
+  description: String
+}
+
+type RoleCatalogGroup {
+  key: String!
+  label: String!
+}
+
+type RoleCatalogModule {
+  key: String!
+  group: String!
+  # "level" (aucun / lecture / écriture / suppression) ou "feature" (oui / non)
+  kind: String!
+  # Page dont ce module est une fonctionnalité (sous-ligne de l'éditeur)
+  parent: String
+  label: String!
+  description: String
+  # Actions qu'on peut cocher pour cette page
+  actions: [RoleCatalogAction!]!
+  # Ancien sélecteur par niveau (déprécié)
+  levels: [String!]!
+}
+
+type RoleCatalog {
+  groups: [RoleCatalogGroup!]!
+  modules: [RoleCatalogModule!]!
+  defaultInviteRole: String!
+}
+
+type OrganizationRole {
+  key: String!
+  name: String!
+  description: String
+  predefined: Boolean!
+  editable: Boolean!
+  # Rôle prédéfini dont le super admin a modifié les droits
+  customized: Boolean!
+  # { invoices: ["view", "create", …], … }
+  actions: JSON!
+  # Niveau équivalent par page (déprécié) : { invoices: "write", … }
+  levels: JSON!
+  memberCount: Int!
+  invitationCount: Int!
+  updatedAt: DateTime
+}
+
+type MyPermissions {
+  organizationId: ID!
+  role: String!
+  roleName: String!
+  isOwner: Boolean!
+  actions: JSON!
+  levels: JSON!
+}
+
+type DeleteOrganizationRoleResult {
+  success: Boolean!
+  reassignedMembers: Int!
+  reassignedInvitations: Int!
+}
+
+type TransferOrganizationOwnershipResult {
+  success: Boolean!
+}
+
+type RequestModuleAccessResult {
+  success: Boolean!
+  # Super admin prévenu
+  ownerName: String
+  # Même demande déjà envoyée il y a moins de 10 minutes
+  alreadyRequested: Boolean!
+}
+
+input OrganizationRoleInput {
+  name: String
+  description: String
+  # { invoices: ["view", "create"], … } ; `levels` = ancien format
+  actions: JSON
+  levels: JSON
+}
+
+extend type Query {
+  roleCatalog: RoleCatalog!
+  organizationRoles: [OrganizationRole!]!
+  myPermissions: MyPermissions!
+}
+
+extend type Mutation {
+  createOrganizationRole(input: OrganizationRoleInput!): OrganizationRole!
+  updateOrganizationRole(
+    key: String!
+    input: OrganizationRoleInput!
+  ): OrganizationRole!
+  resetOrganizationRole(key: String!): OrganizationRole!
+  deleteOrganizationRole(
+    key: String!
+    fallbackRole: String
+  ): DeleteOrganizationRoleResult!
+  transferOrganizationOwnership(
+    memberId: ID!
+  ): TransferOrganizationOwnershipResult!
+  # Demande au super admin l'accès à une page refusée par le rôle
+  # (action : view, create ou edit)
+  requestModuleAccess(
+    module: String!
+    action: String
+  ): RequestModuleAccessResult!
+}

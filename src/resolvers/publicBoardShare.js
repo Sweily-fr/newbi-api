@@ -5,7 +5,6 @@ import PublicBoardShare, {
 import { timingSafeStringEqual } from "../utils/timing-safe.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { getPubSub, cacheDel } from "../config/redis.js";
@@ -14,7 +13,11 @@ import {
   sendShareAccessApprovedEmail,
   sendShareAccessRejectedEmail,
 } from "../utils/mailer.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import {
   maybeTriggerClaudeDev,
   claudeDevApplies,
@@ -45,7 +48,7 @@ const getBaseUrl = () => process.env.FRONTEND_URL || "http://localhost:3000";
 const resolvers = {
   Query: {
     // Récupérer les liens de partage d'un tableau (utilisateurs connectés)
-    getPublicShares: withWorkspace(
+    getPublicShares: requireWorkspaceLevel("kanban", "read")(
       async (
         _,
         { boardId, workspaceId },
@@ -519,7 +522,7 @@ const resolvers = {
 
   Mutation: {
     // Créer un lien de partage
-    createPublicShare: withWorkspace(
+    createPublicShare: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { input, workspaceId },
@@ -578,7 +581,7 @@ const resolvers = {
     ),
 
     // Mettre à jour un lien de partage
-    updatePublicShare: withWorkspace(
+    updatePublicShare: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { input, workspaceId },
@@ -617,7 +620,7 @@ const resolvers = {
     ),
 
     // Supprimer un lien de partage
-    deletePublicShare: withWorkspace(
+    deletePublicShare: requireWorkspaceAction("kanban", "share")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -631,7 +634,7 @@ const resolvers = {
     ),
 
     // Révoquer un lien de partage (désactiver sans supprimer)
-    revokePublicShare: withWorkspace(
+    revokePublicShare: requireWorkspaceAction("kanban", "share")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -646,7 +649,7 @@ const resolvers = {
     ),
 
     // Réactiver un lien de partage désactivé
-    reactivatePublicShare: withWorkspace(
+    reactivatePublicShare: requireWorkspaceAction("kanban", "share")(
       async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
@@ -661,7 +664,7 @@ const resolvers = {
     ),
 
     // Révoquer l'accès d'un visiteur spécifique (le bannit)
-    revokeVisitorAccess: withWorkspace(
+    revokeVisitorAccess: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, visitorEmail, reason, workspaceId },
@@ -738,7 +741,7 @@ const resolvers = {
     ),
 
     // Débannir un visiteur
-    unbanVisitor: withWorkspace(
+    unbanVisitor: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, visitorEmail, workspaceId },
@@ -876,7 +879,7 @@ const resolvers = {
     },
 
     // Approuver une demande d'accès
-    approveAccessRequest: withWorkspace(
+    approveAccessRequest: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, requestId, workspaceId },
@@ -963,7 +966,7 @@ const resolvers = {
     ),
 
     // Rejeter une demande d'accès
-    rejectAccessRequest: withWorkspace(
+    rejectAccessRequest: requireWorkspaceAction("kanban", "share")(
       async (
         _,
         { shareId, requestId, workspaceId },

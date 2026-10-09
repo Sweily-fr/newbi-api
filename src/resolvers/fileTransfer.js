@@ -3,9 +3,13 @@ import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { createOwnerDownloadToken } from "../utils/ownerDownloadToken.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  assertPermissionLevel,
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import {
   saveUploadedFile,
   saveBase64File,
@@ -74,10 +78,37 @@ async function getMaxFileSize(userId) {
   }
 }
 
+// Droits du module « fileTransfers ». Les transferts restent filtrés sur
+// leur auteur (userId) et rattachés à un espace (workspaceId) : on contrôle
+// le rôle dans l'espace demandé (args.workspaceId, sinon l'en-tête), avec
+// requireWorkspaceLevel qui laisse passer telles quelles les erreurs du
+// resolver (messages UserInputError affichés par l'application).
+const requireTransferLevel = (level) =>
+  requireWorkspaceLevel("fileTransfers", level);
+// Action précise de la page (« create », « edit » = renommer)
+const requireTransferAction = (action) =>
+  requireWorkspaceAction("fileTransfers", action);
+
+// Création classique : l'espace du transfert arrive dans input.workspaceId.
+// On le présente comme args.workspaceId pour que le rôle contrôlé soit celui
+// de l'espace où le transfert est enregistré.
+const requireTransferActionFromInput = (action) => (fn) => {
+  const guarded = requireTransferAction(action)(fn);
+  return (parent, args, context, info) =>
+    guarded(
+      parent,
+      args?.input?.workspaceId
+        ? { ...args, workspaceId: args.input.workspaceId }
+        : args,
+      context,
+      info,
+    );
+};
+
 const fileTransferResolvers = {
   Query: {
     // Obtenir les transferts de fichiers de l'utilisateur connecté avec pagination
-    myFileTransfers: isAuthenticated(
+    myFileTransfers: requireTransferLevel("read")(
       async (_, { workspaceId, page = 1, limit = 10 }, { user }) => {
         try {
           // S'assurer que page et limit sont des nombres positifs
@@ -147,34 +178,36 @@ const fileTransferResolvers = {
     ),
 
     // Obtenir les informations d'un transfert de fichiers par son ID
-    fileTransferById: isAuthenticated(async (_, { id }, { user }) => {
-      try {
-        const fileTransfer = await FileTransfer.findOne({
-          _id: id,
-          userId: user.id,
-          status: { $ne: "deleted" },
-        });
+    fileTransferById: requireTransferLevel("read")(
+      async (_, { id }, { user }) => {
+        try {
+          const fileTransfer = await FileTransfer.findOne({
+            _id: id,
+            userId: user.id,
+            status: { $ne: "deleted" },
+          });
 
-        if (!fileTransfer) {
-          throw new UserInputError("Transfert de fichiers non trouvé");
+          if (!fileTransfer) {
+            throw new UserInputError("Transfert de fichiers non trouvé");
+          }
+
+          return fileTransfer;
+        } catch (error) {
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+
+          console.error(
+            "Erreur lors de la récupération du transfert de fichiers:",
+            error,
+          );
+          throw new ApolloError(
+            "Une erreur est survenue lors de la récupération du transfert de fichiers.",
+            "FILE_TRANSFER_FETCH_ERROR",
+          );
         }
-
-        return fileTransfer;
-      } catch (error) {
-        if (error instanceof UserInputError) {
-          throw error;
-        }
-
-        console.error(
-          "Erreur lors de la récupération du transfert de fichiers:",
-          error,
-        );
-        throw new ApolloError(
-          "Une erreur est survenue lors de la récupération du transfert de fichiers.",
-          "FILE_TRANSFER_FETCH_ERROR",
-        );
-      }
-    }),
+      },
+    ),
 
     // Obtenir les informations d'un transfert de fichiers par son lien de partage et sa clé d'accès
     getFileTransferByLink: async (_, { shareLink, accessKey }) => {
@@ -291,7 +324,7 @@ const fileTransferResolvers = {
 
   Mutation: {
     // Créer un nouveau transfert de fichiers
-    createFileTransfer: isAuthenticated(
+    createFileTransfer: requireTransferActionFromInput("create")(
       async (_, { files, input = {} }, { user }) => {
         try {
           // Vérifier que des fichiers ont été fournis
@@ -388,85 +421,89 @@ const fileTransferResolvers = {
 
     // Supprimer un transfert de fichiers
     // Renommer un transfert (titre personnalisé)
-    renameFileTransfer: isAuthenticated(async (_, { id, title }, { user }) => {
-      try {
-        const trimmed = (title || "").trim();
-        if (!trimmed) {
-          throw new UserInputError("Le titre ne peut pas être vide");
-        }
-        if (trimmed.length > 255) {
-          throw new UserInputError(
-            "Le titre est trop long (255 caractères max)",
+    renameFileTransfer: requireTransferAction("edit")(
+      async (_, { id, title }, { user }) => {
+        try {
+          const trimmed = (title || "").trim();
+          if (!trimmed) {
+            throw new UserInputError("Le titre ne peut pas être vide");
+          }
+          if (trimmed.length > 255) {
+            throw new UserInputError(
+              "Le titre est trop long (255 caractères max)",
+            );
+          }
+
+          const fileTransfer = await FileTransfer.findOne({
+            _id: id,
+            userId: user.id,
+          });
+
+          if (!fileTransfer) {
+            throw new UserInputError("Transfert de fichiers non trouvé");
+          }
+
+          fileTransfer.title = trimmed;
+          await fileTransfer.save();
+
+          return fileTransfer;
+        } catch (error) {
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+          console.error(
+            "Erreur lors du renommage du transfert de fichiers:",
+            error,
+          );
+          throw new ApolloError(
+            "Une erreur est survenue lors du renommage du transfert de fichiers.",
+            "FILE_TRANSFER_RENAME_ERROR",
           );
         }
+      },
+    ),
 
-        const fileTransfer = await FileTransfer.findOne({
-          _id: id,
-          userId: user.id,
-        });
+    deleteFileTransfer: requireTransferLevel("delete")(
+      async (_, { id }, { user }) => {
+        try {
+          const fileTransfer = await FileTransfer.findOne({
+            _id: id,
+            userId: user.id,
+          });
 
-        if (!fileTransfer) {
-          throw new UserInputError("Transfert de fichiers non trouvé");
+          if (!fileTransfer) {
+            throw new UserInputError("Transfert de fichiers non trouvé");
+          }
+
+          // Marquer comme supprimé plutôt que de supprimer réellement
+          fileTransfer.status = "deleted";
+          await fileTransfer.save();
+
+          // Supprimer les fichiers physiquement (optionnel, peut être fait par un job de nettoyage)
+          for (const file of fileTransfer.files) {
+            deleteFile(file.filePath);
+          }
+
+          return true;
+        } catch (error) {
+          if (error instanceof UserInputError) {
+            throw error;
+          }
+
+          console.error(
+            "Erreur lors de la suppression du transfert de fichiers:",
+            error,
+          );
+          throw new ApolloError(
+            "Une erreur est survenue lors de la suppression du transfert de fichiers.",
+            "FILE_TRANSFER_DELETION_ERROR",
+          );
         }
-
-        fileTransfer.title = trimmed;
-        await fileTransfer.save();
-
-        return fileTransfer;
-      } catch (error) {
-        if (error instanceof UserInputError) {
-          throw error;
-        }
-        console.error(
-          "Erreur lors du renommage du transfert de fichiers:",
-          error,
-        );
-        throw new ApolloError(
-          "Une erreur est survenue lors du renommage du transfert de fichiers.",
-          "FILE_TRANSFER_RENAME_ERROR",
-        );
-      }
-    }),
-
-    deleteFileTransfer: isAuthenticated(async (_, { id }, { user }) => {
-      try {
-        const fileTransfer = await FileTransfer.findOne({
-          _id: id,
-          userId: user.id,
-        });
-
-        if (!fileTransfer) {
-          throw new UserInputError("Transfert de fichiers non trouvé");
-        }
-
-        // Marquer comme supprimé plutôt que de supprimer réellement
-        fileTransfer.status = "deleted";
-        await fileTransfer.save();
-
-        // Supprimer les fichiers physiquement (optionnel, peut être fait par un job de nettoyage)
-        for (const file of fileTransfer.files) {
-          deleteFile(file.filePath);
-        }
-
-        return true;
-      } catch (error) {
-        if (error instanceof UserInputError) {
-          throw error;
-        }
-
-        console.error(
-          "Erreur lors de la suppression du transfert de fichiers:",
-          error,
-        );
-        throw new ApolloError(
-          "Une erreur est survenue lors de la suppression du transfert de fichiers.",
-          "FILE_TRANSFER_DELETION_ERROR",
-        );
-      }
-    }),
+      },
+    ),
 
     // Créer un nouveau transfert de fichiers avec des fichiers en base64
-    createFileTransferBase64: isAuthenticated(
+    createFileTransferBase64: requireTransferActionFromInput("create")(
       async (_, { files, input = {} }, { user }) => {
         try {
           // Vérifier que des fichiers ont été fournis
@@ -651,12 +688,16 @@ const fileTransferResolvers = {
     },
 
     // Créer un transfert de fichiers à partir de documents partagés (ZIP unique)
-    createFileTransferFromSharedDocuments: isAuthenticated(
+    createFileTransferFromSharedDocuments: requireTransferAction("create")(
       async (
         _,
         { documentIds = [], folderIds = [], workspaceId, input = {} },
-        { user },
+        context,
       ) => {
+        const { user } = context;
+        // Le ZIP reprend des documents partagés de l'espace : il faut aussi
+        // pouvoir les consulter
+        assertPermissionLevel(context, "sharedDocuments", "read");
         try {
           // Valider qu'au moins un document ou dossier est sélectionné
           if (

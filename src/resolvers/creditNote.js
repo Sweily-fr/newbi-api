@@ -9,7 +9,6 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import Event from "../models/Event.js";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   requireCompanyInfo,
   getOrganizationInfo,
@@ -17,6 +16,8 @@ import {
 import {
   requireWrite,
   requireDelete,
+  requireAction,
+  requireWorkspaceLevel,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
@@ -33,7 +34,8 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
-// withWorkspace imported from better-auth-jwt.js (centralized, with membership verification)
+// Lectures : requireWorkspaceLevel("creditNotes", "read") remplace withWorkspace
+// (même choix d'espace, appartenance vérifiée, rôle contrôlé)
 
 /**
  * Calcule les totaux d'un avoir
@@ -109,10 +111,12 @@ const calculateCreditNoteTotals = (
   };
 };
 
+const readCreditNotes = requireWorkspaceLevel("creditNotes", "read");
+
 const creditNoteResolvers = {
   Query: {
     // URL d'aperçu de l'avoir archivé (R2) — null si pas encore archivé
-    creditNoteDocumentUrl: withWorkspace(
+    creditNoteDocumentUrl: readCreditNotes(
       async (parent, { creditNoteId }, { workspaceId }) => {
         return documentUrl({
           Model: CreditNote,
@@ -123,7 +127,7 @@ const creditNoteResolvers = {
         });
       },
     ),
-    creditNote: withWorkspace(async (parent, { id }, { workspaceId }) => {
+    creditNote: readCreditNotes(async (parent, { id }, { workspaceId }) => {
       const creditNote = await CreditNote.findOne({
         _id: id,
         workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -136,7 +140,7 @@ const creditNoteResolvers = {
       return creditNote;
     }),
 
-    creditNotes: withWorkspace(async (parent, args, context) => {
+    creditNotes: readCreditNotes(async (parent, args, context) => {
       const { startDate, endDate, status, search, page = 1, limit = 10 } = args;
       const { workspaceId } = context;
 
@@ -181,7 +185,7 @@ const creditNoteResolvers = {
       };
     }),
 
-    creditNotesByInvoice: withWorkspace(
+    creditNotesByInvoice: readCreditNotes(
       async (parent, { invoiceId }, { workspaceId }) => {
         const creditNotes = await CreditNote.find({
           originalInvoice: new mongoose.Types.ObjectId(invoiceId),
@@ -194,7 +198,7 @@ const creditNoteResolvers = {
       },
     ),
 
-    creditNoteStats: withWorkspace(async (parent, _args, { workspaceId }) => {
+    creditNoteStats: readCreditNotes(async (parent, _args, { workspaceId }) => {
       const stats = await CreditNote.aggregate([
         {
           $match: {
@@ -222,7 +226,7 @@ const creditNoteResolvers = {
       );
     }),
 
-    nextCreditNoteNumber: withWorkspace(
+    nextCreditNoteNumber: readCreditNotes(
       async (parent, { prefix, isDraft }, { workspaceId }) => {
         const number = await generateCreditNoteNumber(prefix, {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -249,7 +253,10 @@ const creditNoteResolvers = {
       },
     ),
     createCreditNote: requireCompanyInfo(
-      requireWrite("creditNotes")(async (parent, { input }, context) => {
+      requireAction(
+        "creditNotes",
+        "create",
+      )(async (parent, { input }, context) => {
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {

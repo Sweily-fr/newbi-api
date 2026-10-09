@@ -1,33 +1,42 @@
 import ProductCustomField from "../models/ProductCustomField.js";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
+
+// Champs personnalisés du catalogue : rôle contrôlé sur le module
+// « products » dans l'espace args.workspaceId (celui que lisent les
+// resolvers). requireWorkspaceLevel laisse passer les messages d'erreur des
+// resolvers tels quels (« Un champ avec ce nom existe déjà »…).
+const readProducts = requireWorkspaceLevel("products", "read");
+// Créer, modifier, réordonner et supprimer : action « customFields »
+const manageCustomFields = requireWorkspaceAction("products", "customFields");
 
 export const productCustomFieldResolvers = {
   Query: {
     // Récupère tous les champs personnalisés produits d'un workspace
-    productCustomFields: isAuthenticated(
-      async (_, { workspaceId }, context) => {
-        try {
-          const fields = await ProductCustomField.find({ workspaceId }).sort({
-            order: 1,
-            createdAt: 1,
-          });
+    productCustomFields: readProducts(async (_, { workspaceId }, context) => {
+      try {
+        const fields = await ProductCustomField.find({ workspaceId }).sort({
+          order: 1,
+          createdAt: 1,
+        });
 
-          return fields;
-        } catch (error) {
-          console.error(
-            "Erreur lors de la récupération des champs personnalisés produits:",
-            error,
-          );
-          throw new Error(
-            "Impossible de récupérer les champs personnalisés produits",
-          );
-        }
-      },
-    ),
+        return fields;
+      } catch (error) {
+        console.error(
+          "Erreur lors de la récupération des champs personnalisés produits:",
+          error,
+        );
+        throw new Error(
+          "Impossible de récupérer les champs personnalisés produits",
+        );
+      }
+    }),
 
     // Récupère un champ personnalisé produit par ID
-    productCustomField: isAuthenticated(
+    productCustomField: readProducts(
       async (_, { workspaceId, id }, context) => {
         try {
           const field = await ProductCustomField.findOne({
@@ -53,7 +62,7 @@ export const productCustomFieldResolvers = {
 
   Mutation: {
     // Créer un nouveau champ personnalisé produit
-    createProductCustomField: isAuthenticated(
+    createProductCustomField: manageCustomFields(
       async (_, { workspaceId, input }, context) => {
         try {
           const userId = context.user.id;
@@ -95,7 +104,7 @@ export const productCustomFieldResolvers = {
     ),
 
     // Modifier un champ personnalisé produit
-    updateProductCustomField: isAuthenticated(
+    updateProductCustomField: manageCustomFields(
       async (_, { workspaceId, id, input }, context) => {
         try {
           // Vérifier si un autre champ avec le même nom existe
@@ -133,7 +142,7 @@ export const productCustomFieldResolvers = {
     ),
 
     // Supprimer un champ personnalisé produit
-    deleteProductCustomField: isAuthenticated(
+    deleteProductCustomField: manageCustomFields(
       async (_, { workspaceId, id }, context) => {
         try {
           const result = await ProductCustomField.findOneAndDelete({
@@ -157,7 +166,7 @@ export const productCustomFieldResolvers = {
     ),
 
     // Réordonner les champs personnalisés produits
-    reorderProductCustomFields: isAuthenticated(
+    reorderProductCustomFields: manageCustomFields(
       async (_, { workspaceId, fieldIds }, context) => {
         try {
           // Mettre à jour l'ordre de chaque champ

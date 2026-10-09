@@ -24,9 +24,12 @@ import Invoice from "../models/Invoice.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import {
+  assertStatusChangeAllowed,
+  STATUS_CHANGE_ACTIONS,
   requireWrite,
   requireRead,
   requireDelete,
+  requireAction,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -519,7 +522,7 @@ const purchaseOrderResolvers = {
       },
     ),
     createPurchaseOrder: requireCompanyInfo(
-      requireWrite("purchaseOrders")(
+      requireAction("purchaseOrders", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
@@ -1065,8 +1068,16 @@ const purchaseOrderResolvers = {
     ),
 
     changePurchaseOrderStatus: requireCompanyInfo(
-      requireWrite("purchaseOrders")(
+      requireAction("purchaseOrders", STATUS_CHANGE_ACTIONS)(
         async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
+          // Valider le brouillon (confirmer) = créer ou modifier ; autres
+          // statuts = « status »
+          assertStatusChangeAllowed(
+            context,
+            "purchaseOrders",
+            status,
+            "CONFIRMED",
+          );
           const { user, workspaceId } = context;
           const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 
@@ -1272,7 +1283,8 @@ const purchaseOrderResolvers = {
       ),
     ),
 
-    convertQuoteToPurchaseOrder: requireWrite("purchaseOrders")(
+    // Transformer un devis : action « convert » de la page Devis
+    convertQuoteToPurchaseOrder: requireAction("quotes", "convert")(
       async (_, { quoteId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const quote = await Quote.findOne({ _id: quoteId, workspaceId });
@@ -1381,7 +1393,7 @@ const purchaseOrderResolvers = {
       },
     ),
 
-    convertPurchaseOrderToInvoice: requireWrite("purchaseOrders")(
+    convertPurchaseOrderToInvoice: requireAction("purchaseOrders", "convert")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
@@ -1553,7 +1565,7 @@ const purchaseOrderResolvers = {
       },
     ),
 
-    sendPurchaseOrder: requireWrite("purchaseOrders")(
+    sendPurchaseOrder: requireAction("purchaseOrders", "send")(
       async (_, { id, workspaceId: inputWorkspaceId, email }, context) => {
         const { user, workspaceId } = context;
         const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
