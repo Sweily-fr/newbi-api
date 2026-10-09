@@ -160,7 +160,8 @@ describe('ROLE_PERMISSIONS structure', () => {
 
   it('admin should manage everything except members and subscription', () => {
     expect(ROLE_PERMISSIONS.admin.importedInvoices).toBe('delete');
-    expect(ROLE_PERMISSIONS.admin.banking).toBe('delete');
+    // Transactions : pas d'action « supprimer », toutes les autres
+    expect(hasPermission('admin', 'banking', 'reconcile')).toBe(true);
     expect(ROLE_PERMISSIONS.admin.orgSettings).toBe('write');
     expect(ROLE_PERMISSIONS.admin.team).toBe('read');
     expect(ROLE_PERMISSIONS.admin.billing).toBe('read');
@@ -174,22 +175,38 @@ describe('ROLE_PERMISSIONS structure', () => {
   });
 
   it('accountant keeps the rights it had before custom roles', () => {
-    const a = ROLE_PERMISSIONS.accountant;
-    expect(a.invoices).toBe('read');
-    expect(a.invoicePayments).toBe('write');
-    expect(a.importedInvoices).toBe('write');
-    expect(a.importedQuotes).toBe('write');
-    expect(a.quotes).toBe('read');
-    expect(a.purchaseInvoices).toBe('read');
-    expect(a.clients).toBe('read');
-    expect(a.clientLists).toBe('delete');
-    expect(a.banking).toBe('delete');
-    expect(a.calendar).toBe('delete');
-    expect(a.sharedDocuments).toBe('delete');
-    expect(a.kanban).toBe('none');
-    expect(a.signatures).toBe('none');
-    expect(a.integrations).toBe('read');
-    expect(a.orgSettings).toBe('read');
+    const can = (resource, action) => hasPermission('accountant', resource, action);
+    expect(can('invoices', 'view')).toBe(true);
+    expect(can('invoices', 'create')).toBe(false);
+    expect(can('invoices', 'mark-paid')).toBe(true);
+    expect(can('importedInvoices', 'import')).toBe(true);
+    expect(can('importedQuotes', 'edit')).toBe(true);
+    expect(can('quotes', 'edit')).toBe(false);
+    expect(can('purchaseInvoices', 'create')).toBe(false);
+    expect(can('clients', 'edit')).toBe(false);
+    expect(can('clientLists', 'delete')).toBe(true);
+    expect(can('banking', 'reconcile')).toBe(true);
+    expect(can('calendar', 'delete')).toBe(true);
+    expect(can('sharedDocuments', 'delete')).toBe(true);
+    expect(can('kanban', 'view')).toBe(false);
+    expect(can('signatures', 'view')).toBe(false);
+    expect(can('integrations', 'view')).toBe(true);
+    expect(can('integrations', 'manage')).toBe(false);
+    expect(can('orgSettings', 'edit')).toBe(false);
+  });
+
+  it('member (Éditeur) works on documents without cancelling invoices', () => {
+    expect(hasPermission('member', 'invoices', 'send')).toBe(true);
+    expect(hasPermission('member', 'invoices', 'mark-paid')).toBe(true);
+    expect(hasPermission('member', 'invoices', 'status')).toBe(false);
+    expect(hasPermission('member', 'invoices', 'reminders')).toBe(false);
+    expect(hasPermission('member', 'products', 'customFields')).toBe(false);
+    expect(hasPermission('member', 'signatures', 'delete')).toBe(true);
+  });
+
+  it('viewer (Membre) only views, without export', () => {
+    expect(hasPermission('viewer', 'invoices', 'view')).toBe(true);
+    expect(hasPermission('viewer', 'invoices', 'export')).toBe(false);
   });
 
   it('viewer should only read business modules', () => {
