@@ -3,6 +3,11 @@ import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
+  loadWorkspaceInvoice,
+  loadWorkspaceInvoices,
+  loadWorkspaceQuote,
+} from "../utils/workspaceDocumentLoaders.js";
+import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
 } from "../utils/clientDocumentFields.js";
@@ -190,11 +195,11 @@ const itemsForInvoice = async (items = [], workspaceId) => {
     const unitPrice =
       item.unitPrice !== undefined && item.unitPrice !== null
         ? item.unitPrice
-        : product?.unitPrice ?? 0;
+        : (product?.unitPrice ?? 0);
     const vatRate =
       item.vatRate !== undefined && item.vatRate !== null
         ? item.vatRate
-        : product?.vatRate ?? 20;
+        : (product?.vatRate ?? 20);
     const line = {
       description: item.description,
       details: item.details || "",
@@ -268,7 +273,12 @@ const deliveryNoteResolvers = {
           if (dn.companyInfo && dn.companyInfo.name) return dn.companyInfo;
           return {
             name: "",
-            address: { street: "", city: "", postalCode: "", country: "France" },
+            address: {
+              street: "",
+              city: "",
+              postalCode: "",
+              country: "France",
+            },
           };
         }
       }
@@ -315,26 +325,23 @@ const deliveryNoteResolvers = {
       if (dn.createdBy._id) return dn.createdBy;
       return await User.findById(dn.createdBy);
     },
-    sourceQuote: async (dn) => {
+    // Documents liés via les DataLoaders de la requête (une requête pour toute
+    // la liste au lieu d'une par bon de livraison).
+    sourceQuote: async (dn, _args, context) => {
       if (!dn.sourceQuote) return null;
-      return await Quote.findOne({
-        _id: dn.sourceQuote,
-        workspaceId: dn.workspaceId,
-      });
+      return loadWorkspaceQuote(context, dn.sourceQuote, dn.workspaceId);
     },
-    sourceInvoice: async (dn) => {
+    sourceInvoice: async (dn, _args, context) => {
       if (!dn.sourceInvoice) return null;
-      return await Invoice.findOne({
-        _id: dn.sourceInvoice,
-        workspaceId: dn.workspaceId,
-      });
+      return loadWorkspaceInvoice(context, dn.sourceInvoice, dn.workspaceId);
     },
-    linkedInvoices: async (dn) => {
+    linkedInvoices: async (dn, _args, context) => {
       if (dn.linkedInvoices && dn.linkedInvoices.length > 0) {
-        return await Invoice.find({
-          _id: { $in: dn.linkedInvoices },
-          workspaceId: dn.workspaceId,
-        });
+        return loadWorkspaceInvoices(
+          context,
+          dn.linkedInvoices,
+          dn.workspaceId,
+        );
       }
       return [];
     },
@@ -364,9 +371,10 @@ const deliveryNoteResolvers = {
           inputWorkspaceId,
           context.workspaceId,
         );
-        const dn = await DeliveryNote.findOne({ _id: id, workspaceId }).populate(
-          "createdBy",
-        );
+        const dn = await DeliveryNote.findOne({
+          _id: id,
+          workspaceId,
+        }).populate("createdBy");
         if (!dn) throw createNotFoundError("Bon de livraison");
         return dn;
       },
@@ -580,10 +588,7 @@ const deliveryNoteResolvers = {
           }
 
           const isDraft = !input.status || input.status === "DRAFT";
-          if (
-            !isDraft &&
-            input.status !== "PENDING"
-          ) {
+          if (!isDraft && input.status !== "PENDING") {
             throw createValidationError(
               "Un bon de livraison se crée en brouillon ou « À expédier »",
               {
@@ -855,7 +860,8 @@ const deliveryNoteResolvers = {
 
             if (!input.number || !input.prefix) {
               let prefix = input.prefix || dn.prefix;
-              if (!prefix) prefix = buildDefaultPrefix(dn.issueDate || new Date());
+              if (!prefix)
+                prefix = buildDefaultPrefix(dn.issueDate || new Date());
 
               updateData.number = await generateDeliveryNoteNumber(prefix, {
                 workspaceId: dn.workspaceId,
@@ -885,7 +891,10 @@ const deliveryNoteResolvers = {
                 "deliveryNote",
                 normalizedNumber,
                 input.prefix,
-                { workspaceId: dn.workspaceId, autoNumbering: DN_AUTO_NUMBERING },
+                {
+                  workspaceId: dn.workspaceId,
+                  autoNumbering: DN_AUTO_NUMBERING,
+                },
               );
               if (!sequenceCheck.isValid) {
                 throw new AppError(
@@ -1187,7 +1196,8 @@ const deliveryNoteResolvers = {
             headerTextColor: organization?.documentHeaderTextColor || "#ffffff",
             headerBgColor: organization?.documentHeaderBgColor || "#5b50FF",
           },
-          clientPositionRight: organization?.documentClientPositionRight || false,
+          clientPositionRight:
+            organization?.documentClientPositionRight || false,
         });
 
         await deliveryNote.save();
@@ -1239,7 +1249,8 @@ const deliveryNoteResolvers = {
             headerTextColor: organization?.documentHeaderTextColor || "#ffffff",
             headerBgColor: organization?.documentHeaderBgColor || "#5b50FF",
           },
-          clientPositionRight: organization?.documentClientPositionRight || false,
+          clientPositionRight:
+            organization?.documentClientPositionRight || false,
         });
 
         await deliveryNote.save();
@@ -1250,7 +1261,10 @@ const deliveryNoteResolvers = {
     createInvoiceFromDeliveryNote: requireWrite("invoices")(
       async (_, { deliveryNoteId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
-        const dn = await DeliveryNote.findOne({ _id: deliveryNoteId, workspaceId });
+        const dn = await DeliveryNote.findOne({
+          _id: deliveryNoteId,
+          workspaceId,
+        });
 
         if (!dn) throw createNotFoundError("Bon de livraison");
 

@@ -387,6 +387,8 @@ const quoteSchema = new mongoose.Schema(
 quoteSchema.index({ workspaceId: 1, "client.name": 1 });
 quoteSchema.index({ workspaceId: 1, status: 1 });
 quoteSchema.index({ workspaceId: 1, issueDate: -1 });
+// Tri de la liste des devis (quotes : workspaceId + createdAt décroissant)
+quoteSchema.index({ workspaceId: 1, createdAt: -1 });
 // Index legacy pour la migration et audit trail
 quoteSchema.index({ createdBy: 1 });
 
