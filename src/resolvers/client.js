@@ -21,6 +21,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import mongoose from "mongoose";
+import { workspaceKey } from "../dataloaders/index.js";
 import { isInternationalEntity } from "../utils/validators.js";
 import { automationService } from "./clientAutomation.js";
 
@@ -105,17 +106,17 @@ const clientResolvers = {
         const currentPage = parseInt(page, 10);
         const itemsPerPage = parseInt(limit, 10);
 
-        // Calculer le nombre total de clients correspondant à la requête
-        const totalItems = await Client.countDocuments(query);
+        // Nombre total de clients et page demandée, lus en parallèle
+        const [totalItems, items] = await Promise.all([
+          Client.countDocuments(query),
+          Client.find(query)
+            .sort({ name: 1 })
+            .skip((currentPage - 1) * itemsPerPage)
+            .limit(itemsPerPage),
+        ]);
 
         // Calculer le nombre total de pages
         const totalPages = Math.ceil(totalItems / itemsPerPage);
-
-        // Récupérer les clients pour la page demandée
-        const items = await Client.find(query)
-          .sort({ name: 1 })
-          .skip((currentPage - 1) * itemsPerPage)
-          .limit(itemsPerPage);
 
         return {
           items,
@@ -964,9 +965,25 @@ const clientResolvers = {
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
     blockedAt: (parent) =>
       parent.blockedAt?.toISOString?.() || parent.blockedAt,
-    hasDocuments: async (parent) => {
+    invoiceCount: async (parent, _args, context) => {
       const clientId = parent._id?.toString() || parent.id;
       const workspaceId = parent.workspaceId;
+      if (!clientId || !mongoose.isValidObjectId(workspaceId)) return 0;
+      const loader = context?.loaders?.clientInvoiceCount;
+      if (loader) return loader.load(workspaceKey(workspaceId, clientId));
+      return Invoice.countDocuments({ "client.id": clientId, workspaceId });
+    },
+    hasDocuments: async (parent, _args, context) => {
+      const clientId = parent._id?.toString() || parent.id;
+      const workspaceId = parent.workspaceId;
+
+      // Lecture groupée pour toute la page ; un client sans espace valide
+      // (donnée ancienne) garde le calcul unitaire, pour ne pas faire échouer
+      // le lot entier.
+      const loader = context?.loaders?.clientHasDocuments;
+      if (loader && mongoose.isValidObjectId(workspaceId)) {
+        return loader.load(workspaceKey(workspaceId, clientId));
+      }
 
       const [invoiceCount, quoteCount, purchaseOrderCount] = await Promise.all([
         Invoice.countDocuments({ "client.id": clientId, workspaceId }),

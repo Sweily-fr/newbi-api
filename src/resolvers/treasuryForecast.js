@@ -383,47 +383,15 @@ const treasuryForecastResolvers = {
         const endMonth = endDate.substring(0, 7);
         const monthRange = getMonthRange(startMonth, endMonth);
 
-        // 1. Get current bank balance
+        // Requêtes du calcul : modèles, compte(s) bancaire(s) et bornes de dates
         const AccountBanking = mongoose.model("AccountBanking");
         const accountQuery = { workspaceId: wId, status: "active" };
         if (accountId) {
           accountQuery._id = new mongoose.Types.ObjectId(accountId);
         }
-        const accounts = await AccountBanking.find(accountQuery).lean();
-        const currentBalance = accounts.reduce((sum, a) => {
-          // Use same logic as GraphQL resolver: balance is stored as Number in MongoDB
-          const bal =
-            typeof a.balance === "number"
-              ? a.balance
-              : (a.balance?.current ?? a.balance?.available ?? 0);
-          return sum + bal;
-        }, 0);
 
-        // 2. Pending receivables (unpaid client invoices)
         const Invoice = mongoose.model("Invoice");
-        const pendingReceivablesAgg = await Invoice.aggregate([
-          {
-            $match: {
-              workspaceId: wId,
-              status: { $in: ["PENDING", "OVERDUE"] },
-            },
-          },
-          { $group: { _id: null, total: { $sum: "$finalTotalTTC" } } },
-        ]);
-        const pendingReceivables = pendingReceivablesAgg[0]?.total || 0;
-
-        // 3. Pending payables (unpaid purchase invoices)
         const PurchaseInvoice = mongoose.model("PurchaseInvoice");
-        const pendingPayablesAgg = await PurchaseInvoice.aggregate([
-          {
-            $match: {
-              workspaceId: wId,
-              status: { $in: ["TO_PAY", "PENDING", "OVERDUE"] },
-            },
-          },
-          { $group: { _id: null, total: { $sum: "$amountTTC" } } },
-        ]);
-        const pendingPayables = pendingPayablesAgg[0]?.total || 0;
 
         // 4. Actual flows from bank transactions (sole source of truth)
         const Transaction = mongoose.model("Transaction");
@@ -442,42 +410,120 @@ const treasuryForecastResolvers = {
           deletedAt: null,
         };
 
-        // 4a. Income: all positive-amount transactions
-        const bankIncomeTx = await Transaction.aggregate([
-          { $match: { ...bankTxBaseMatch, amount: { $gt: 0 } } },
-          { $addFields: { _effectiveDate: effectiveDateField } },
-          { $match: { _effectiveDate: { $gte: txStartDate, $lt: txEndDate } } },
-          {
-            $group: {
-              _id: {
-                $dateToString: { format: "%Y-%m", date: "$_effectiveDate" },
+        // Lectures indépendantes lancées ensemble (elles étaient faites l'une
+        // après l'autre : 9 allers-retours Mongo en série). Mêmes requêtes.
+        const Quote = mongoose.model("Quote");
+        const [
+          accounts,
+          pendingReceivablesAgg,
+          pendingPayablesAgg,
+          bankIncomeTx,
+          bankExpenseTx,
+          forecasts,
+          signedQuotes,
+          recurrenceDocs,
+          manualEntries,
+        ] = await Promise.all([
+          AccountBanking.find(accountQuery).lean(),
+          Invoice.aggregate([
+            {
+              $match: {
+                workspaceId: wId,
+                status: { $in: ["PENDING", "OVERDUE"] },
               },
-              total: { $sum: "$amount" },
             },
-          },
+            { $group: { _id: null, total: { $sum: "$finalTotalTTC" } } },
+          ]),
+          PurchaseInvoice.aggregate([
+            {
+              $match: {
+                workspaceId: wId,
+                status: { $in: ["TO_PAY", "PENDING", "OVERDUE"] },
+              },
+            },
+            { $group: { _id: null, total: { $sum: "$amountTTC" } } },
+          ]),
+          Transaction.aggregate([
+            { $match: { ...bankTxBaseMatch, amount: { $gt: 0 } } },
+            { $addFields: { _effectiveDate: effectiveDateField } },
+            {
+              $match: { _effectiveDate: { $gte: txStartDate, $lt: txEndDate } },
+            },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: "%Y-%m", date: "$_effectiveDate" },
+                },
+                total: { $sum: "$amount" },
+              },
+            },
+          ]),
+          Transaction.aggregate([
+            { $match: { ...bankTxBaseMatch, amount: { $lt: 0 } } },
+            { $addFields: { _effectiveDate: effectiveDateField } },
+            {
+              $match: { _effectiveDate: { $gte: txStartDate, $lt: txEndDate } },
+            },
+            {
+              $group: {
+                _id: {
+                  month: {
+                    $dateToString: { format: "%Y-%m", date: "$_effectiveDate" },
+                  },
+                  category: { $ifNull: ["$expenseCategory", "OTHER"] },
+                },
+                total: { $sum: "$amount" },
+              },
+            },
+          ]),
+          TreasuryForecast.find({
+            workspaceId: wId,
+            month: { $gte: startMonth, $lte: endMonth },
+          }).lean(),
+          Quote.find({
+            workspaceId: wId,
+            status: "COMPLETED",
+            $or: [
+              { convertedToInvoice: { $exists: false } },
+              { convertedToInvoice: null },
+            ],
+            issueDate: { $gte: txStartDate, $lt: txEndDate },
+          })
+            .select("issueDate finalTotalTTC")
+            .lean(),
+          DetectedRecurrence.find(
+            projectableRecurrenceFilter(wId, overlay),
+          ).lean(),
+          ManualCashflowEntry.find({
+            workspaceId: wId,
+            startDate: { $lt: txEndDate },
+            ...overlay.manualEntryFilter(),
+          }).lean(),
         ]);
+
+        // 1. Current bank balance
+        const currentBalance = accounts.reduce((sum, a) => {
+          // Use same logic as GraphQL resolver: balance is stored as Number in MongoDB
+          const bal =
+            typeof a.balance === "number"
+              ? a.balance
+              : (a.balance?.current ?? a.balance?.available ?? 0);
+          return sum + bal;
+        }, 0);
+
+        // 2. Pending receivables (unpaid client invoices)
+        const pendingReceivables = pendingReceivablesAgg[0]?.total || 0;
+
+        // 3. Pending payables (unpaid purchase invoices)
+        const pendingPayables = pendingPayablesAgg[0]?.total || 0;
+
+        // 4a. Income: all positive-amount transactions
         const incomeMap = {};
         for (const item of bankIncomeTx) {
           incomeMap[item._id] = item.total;
         }
 
         // 4b. Expenses: all negative-amount transactions (stored as absolute values)
-        const bankExpenseTx = await Transaction.aggregate([
-          { $match: { ...bankTxBaseMatch, amount: { $lt: 0 } } },
-          { $addFields: { _effectiveDate: effectiveDateField } },
-          { $match: { _effectiveDate: { $gte: txStartDate, $lt: txEndDate } } },
-          {
-            $group: {
-              _id: {
-                month: {
-                  $dateToString: { format: "%Y-%m", date: "$_effectiveDate" },
-                },
-                category: { $ifNull: ["$expenseCategory", "OTHER"] },
-              },
-              total: { $sum: "$amount" },
-            },
-          },
-        ]);
         const expenseMap = {};
         for (const item of bankExpenseTx) {
           const month = item._id.month;
@@ -543,10 +589,6 @@ const treasuryForecastResolvers = {
         }
 
         // 6. Manual forecasts
-        const forecasts = await TreasuryForecast.find({
-          workspaceId: wId,
-          month: { $gte: startMonth, $lte: endMonth },
-        }).lean();
         // forecastMap[month] = { income: { CAT: amount }, expense: { CAT: amount } }
         const forecastMap = {};
         for (const f of forecasts) {
@@ -562,18 +604,6 @@ const treasuryForecastResolvers = {
         // 6b. Signed quotes not yet converted to invoice — projected as SALES income
         // on their issueDate month (quote model has no execution date).
         // Amounts are TTC (aligned with bank transactions).
-        const Quote = mongoose.model("Quote");
-        const signedQuotes = await Quote.find({
-          workspaceId: wId,
-          status: "COMPLETED",
-          $or: [
-            { convertedToInvoice: { $exists: false } },
-            { convertedToInvoice: null },
-          ],
-          issueDate: { $gte: txStartDate, $lt: txEndDate },
-        })
-          .select("issueDate finalTotalTTC")
-          .lean();
         const quoteIncomeMap = {};
         for (const q of signedQuotes) {
           if (!q.issueDate || !q.finalTotalTTC) continue;
@@ -585,22 +615,29 @@ const treasuryForecastResolvers = {
         // 6b2. Auto-detected recurrences (from monthly cron) — project active
         // ones for future months (état effectif dans le scénario). Skip months
         // where a matching purchase invoice already exists (deduplication).
-        const activeRecurrences = (
-          await DetectedRecurrence.find(
-            projectableRecurrenceFilter(wId, overlay),
-          ).lean()
-        ).filter((rec) => overlay.isRecurrenceProjected(rec));
+        const activeRecurrences = recurrenceDocs.filter((rec) =>
+          overlay.isRecurrenceProjected(rec),
+        );
         const recurrenceIncomeMap = {};
         const recurrenceExpenseMap = {};
         if (activeRecurrences.length > 0) {
           // Fetch future PurchaseInvoice occurrences to dedupe by (supplier, category, month).
-          const PurchaseInvoice = mongoose.model("PurchaseInvoice");
-          const futurePurchaseInvoices = await PurchaseInvoice.find({
-            workspaceId: wId,
-            issueDate: { $gte: new Date(currentMonth + "-01") },
-          })
-            .select("supplierName category issueDate")
-            .lean();
+          // Also dedupe INCOME against future client Invoice docs. Les deux
+          // lectures sont indépendantes : lancées ensemble.
+          const [futurePurchaseInvoices, futureInvoices] = await Promise.all([
+            PurchaseInvoice.find({
+              workspaceId: wId,
+              issueDate: { $gte: new Date(currentMonth + "-01") },
+            })
+              .select("supplierName category issueDate")
+              .lean(),
+            Invoice.find({
+              workspaceId: wId,
+              issueDate: { $gte: new Date(currentMonth + "-01") },
+            })
+              .select("client issueDate")
+              .lean(),
+          ]);
           const existingPurchaseKeys = new Set();
           for (const pi of futurePurchaseInvoices) {
             const d = new Date(pi.issueDate);
@@ -608,14 +645,6 @@ const treasuryForecastResolvers = {
             const key = `${normalizeParty(pi.supplierName)}::${pi.category || "OTHER"}::${m}`;
             existingPurchaseKeys.add(key);
           }
-          // Also dedupe INCOME against future client Invoice docs.
-          const InvoiceModel = mongoose.model("Invoice");
-          const futureInvoices = await InvoiceModel.find({
-            workspaceId: wId,
-            issueDate: { $gte: new Date(currentMonth + "-01") },
-          })
-            .select("client issueDate")
-            .lean();
           const existingInvoiceKeys = new Set();
           for (const inv of futureInvoices) {
             const name =
@@ -706,11 +735,6 @@ const treasuryForecastResolvers = {
 
         // 6c. Manual cashflow entries (with recurrence) — expand each entry
         // into occurrences within the horizon and bucket by month.
-        const manualEntries = await ManualCashflowEntry.find({
-          workspaceId: wId,
-          startDate: { $lt: txEndDate },
-          ...overlay.manualEntryFilter(),
-        }).lean();
         const manualIncomeMap = {};
         const manualExpenseMap = {};
         for (const entry of manualEntries) {

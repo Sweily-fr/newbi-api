@@ -340,6 +340,8 @@ purchaseOrderSchema.index({ workspaceId: 1, issueDate: -1 });
 purchaseOrderSchema.index({ workspaceId: 1, createdAt: -1 });
 // BC dérivés d'un devis (Quote.linkedPurchaseOrders / hasPurchaseOrderInvoices)
 purchaseOrderSchema.index({ workspaceId: 1, sourceQuoteId: 1 });
+// Documents d'un client (Client.hasDocuments, fiche client)
+purchaseOrderSchema.index({ workspaceId: 1, "client.id": 1 });
 purchaseOrderSchema.index({ createdBy: 1 });
 
 /**

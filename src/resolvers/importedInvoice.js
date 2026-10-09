@@ -834,10 +834,13 @@ const importedInvoiceResolvers = {
 
         const skip = (page - 1) * limit;
         const [invoices, total] = await Promise.all([
+          // Réponse OCR brute et analyse financière : jamais exposées en
+          // GraphQL, mais lourdes ; exclues de la liste (jusqu'à 1 000 lignes).
           ImportedInvoice.find(query)
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
+            .select("-ocrData.rawData -ocrData.financialAnalysis")
             .lean(),
           ImportedInvoice.countDocuments(query),
         ]);
@@ -1949,15 +1952,32 @@ const importedInvoiceResolvers = {
     linkedExpenseId: (parent) => parent.linkedExpenseId?.toString() || null,
     linkedTransactionIds: (parent) =>
       (parent.linkedTransactionIds || []).map((id) => id.toString()),
-    linkedTransactions: async (parent) => {
+    linkedTransactions: async (parent, _args, context) => {
       const ids = parent.linkedTransactionIds || [];
       if (ids.length === 0) return [];
       try {
         const Transaction = mongoose.model("Transaction");
-        return await Transaction.find({
-          _id: { $in: ids },
-          workspaceId: String(parent.workspaceId),
-        }).sort({ date: -1 });
+        const loader = context?.loaders?.transactionById;
+        if (!loader) {
+          return await Transaction.find({
+            _id: { $in: ids },
+            workspaceId: String(parent.workspaceId),
+          }).sort({ date: -1 });
+        }
+        // DataLoader de la requête : une lecture pour toute la liste des
+        // factures importées au lieu d'une par facture. Même filtre d'espace
+        // et même tri (date décroissante, sans date en dernier).
+        const docs = await loader.loadMany(ids.map(String));
+        const time = (tx) =>
+          tx.date ? new Date(tx.date).getTime() : -Infinity;
+        return docs
+          .filter(
+            (tx) =>
+              tx &&
+              !(tx instanceof Error) &&
+              String(tx.workspaceId) === String(parent.workspaceId),
+          )
+          .sort((a, b) => time(b) - time(a));
       } catch (error) {
         logger.error("[ImportedInvoice.linkedTransactions] Erreur:", error);
         return [];
