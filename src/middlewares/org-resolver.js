@@ -29,7 +29,12 @@ export async function getActiveOrganization(userId, requestedOrgId = null) {
     const userObjectId =
       typeof userId === "string" ? new ObjectId(userId) : userId;
 
+    const organizationCollection = db.collection("organization");
+    // Seuls les champs renvoyés ci-dessous.
+    const orgProjection = { name: 1, slug: 1, metadata: 1, createdAt: 1 };
+
     let member;
+    let organization;
 
     if (requestedOrgId) {
       const requestedOrgObjectId =
@@ -37,10 +42,17 @@ export async function getActiveOrganization(userId, requestedOrgId = null) {
           ? new ObjectId(requestedOrgId)
           : requestedOrgId;
 
-      member = await memberCollection.findOne({
-        userId: userObjectId,
-        organizationId: requestedOrgObjectId,
-      });
+      // Adhésion et organisation lues en parallèle (elles étaient enchaînées).
+      [member, organization] = await Promise.all([
+        memberCollection.findOne({
+          userId: userObjectId,
+          organizationId: requestedOrgObjectId,
+        }),
+        organizationCollection.findOne(
+          { _id: requestedOrgObjectId },
+          { projection: orgProjection },
+        ),
+      ]);
 
       if (!member) {
         logger.warn(
@@ -70,22 +82,24 @@ export async function getActiveOrganization(userId, requestedOrgId = null) {
           userId: userObjectId,
         });
       }
+
+      if (!member) {
+        logger.debug(
+          `Aucune organisation trouvée pour l'utilisateur: ${userId}`,
+        );
+        return null;
+      }
+
+      const orgObjectId =
+        typeof member.organizationId === "string"
+          ? new ObjectId(member.organizationId)
+          : member.organizationId;
+
+      organization = await organizationCollection.findOne(
+        { _id: orgObjectId },
+        { projection: orgProjection },
+      );
     }
-
-    if (!member) {
-      logger.debug(`Aucune organisation trouvée pour l'utilisateur: ${userId}`);
-      return null;
-    }
-
-    const organizationCollection = db.collection("organization");
-    const orgObjectId =
-      typeof member.organizationId === "string"
-        ? new ObjectId(member.organizationId)
-        : member.organizationId;
-
-    const organization = await organizationCollection.findOne({
-      _id: orgObjectId,
-    });
 
     if (!organization) {
       logger.warn(
