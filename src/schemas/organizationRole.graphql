@@ -72,6 +72,14 @@ type TransferOrganizationOwnershipResult {
   success: Boolean!
 }
 
+type RequestModuleAccessResult {
+  success: Boolean!
+  # Super admin prévenu
+  ownerName: String
+  # Même demande déjà envoyée il y a moins de 10 minutes
+  alreadyRequested: Boolean!
+}
+
 input OrganizationRoleInput {
   name: String
   description: String
@@ -100,4 +108,10 @@ extend type Mutation {
   transferOrganizationOwnership(
     memberId: ID!
   ): TransferOrganizationOwnershipResult!
+  # Demande au super admin l'accès à une page refusée par le rôle
+  # (action : view, create ou edit)
+  requestModuleAccess(
+    module: String!
+    action: String
+  ): RequestModuleAccessResult!
 }

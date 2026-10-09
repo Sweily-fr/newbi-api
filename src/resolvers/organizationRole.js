@@ -10,6 +10,7 @@ import {
   deleteOrganizationRole,
   listOrganizationRoles,
   loadOrganizationRoles,
+  requestModuleAccess,
   resetOrganizationRole,
   roleLabel,
   transferOrganizationOwnership,
@@ -80,6 +81,22 @@ const organizationRoleResolvers = {
   },
 
   Mutation: {
+    // Tout membre peut demander l'accès à une page refusée par son rôle
+    requestModuleAccess: withOrganization(
+      async (_, { module, action }, context) => {
+        const result = await requestModuleAccess(
+          {
+            organizationId: context.organizationId,
+            organizationName: context.organization?.name,
+            user: context.user,
+            userRole: context.userRole,
+          },
+          { module, action: action || "view" },
+        );
+        return { success: true, ...result };
+      },
+    ),
+
     createOrganizationRole: requireOwner((_, { input }, context) =>
       createOrganizationRole(
         context.organizationId,

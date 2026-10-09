@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import logger from "../utils/logger.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import {
+  MODULES,
   CUSTOM_ROLE_PREFIX,
   PREDEFINED_ROLES,
   PREDEFINED_ROLE_KEYS,
@@ -470,4 +471,120 @@ export async function transferOrganizationOwnership(
     `organizationRole: super admin de org=${organizationId} transféré de user=${current.userId} à user=${target.userId}`,
   );
   return { previousOwnerUserId: current.userId, newOwnerUserId: target.userId };
+}
+
+// Libellé de la demande selon l'action refusée
+const ACCESS_REQUEST_LABELS = {
+  view: "l'accès à",
+  create: "le droit de créer dans",
+  edit: "le droit de modifier dans",
+};
+
+// Une demande identique n'est renvoyée qu'après ce délai
+const ACCESS_REQUEST_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Demande d'accès à une page refusée par le rôle : notification dans
+ * l'application et e-mail au super admin de l'espace, avec un lien vers
+ * Paramètres > Membres > Rôles. Une même demande (membre, page, action)
+ * n'est envoyée qu'une fois toutes les 10 minutes.
+ *
+ * @returns {Promise<{ownerName: string|null, alreadyRequested: boolean}>}
+ */
+export async function requestModuleAccess(
+  { organizationId, organizationName, user, userRole },
+  { module: moduleKey, action = "view" },
+) {
+  const module = MODULES.find((m) => m.key === moduleKey);
+  if (!module) {
+    throw new AppError("Page inconnue", ERROR_CODES.INVALID_INPUT);
+  }
+  const actionLabel = ACCESS_REQUEST_LABELS[action];
+  if (!actionLabel) {
+    throw new AppError("Action inconnue", ERROR_CODES.INVALID_INPUT);
+  }
+
+  const orgId = toObjectId(organizationId);
+  const ownerMember = await db()
+    .collection("member")
+    .findOne({
+      organizationId: orgId,
+      role: { $regex: /(^|,)\s*owner\s*(,|$)/i },
+    });
+  if (!ownerMember) {
+    throw new AppError(
+      "Aucun super admin trouvé pour cet espace",
+      ERROR_CODES.NOT_FOUND,
+    );
+  }
+  const requesterId = String(user._id);
+  if (String(ownerMember.userId) === requesterId) {
+    throw new AppError(
+      "Vous êtes le super admin de cet espace",
+      ERROR_CODES.INVALID_INPUT,
+    );
+  }
+  const owner = await db()
+    .collection("user")
+    .findOne(
+      { _id: toObjectId(ownerMember.userId) },
+      { projection: { name: 1, email: 1 } },
+    );
+  const ownerName = owner?.name || owner?.email || null;
+
+  const { default: Notification } = await import("../models/Notification.js");
+  const requesterName = user.name || user.email;
+  const message = `${requesterName} demande ${actionLabel} « ${module.label} »`;
+  const recent = await Notification.findOne({
+    userId: ownerMember.userId,
+    workspaceId: orgId,
+    type: "ACCESS_REQUESTED",
+    "data.actorId": user._id,
+    message,
+    createdAt: { $gte: new Date(Date.now() - ACCESS_REQUEST_COOLDOWN_MS) },
+  }).lean();
+  if (recent) return { ownerName, alreadyRequested: true };
+
+  const rolesUrl = `${process.env.FRONTEND_URL || ""}/dashboard?parametres=roles`;
+  const notification = await Notification.createAccessRequestedNotification({
+    userId: ownerMember.userId,
+    workspaceId: orgId,
+    actorId: user._id,
+    actorName: requesterName,
+    actorImage: user.avatar || user.image || null,
+    pageLabel: module.label,
+    actionLabel,
+    url: rolesUrl,
+  });
+  try {
+    const { publishNotification } =
+      await import("../resolvers/notification.js");
+    await publishNotification(notification);
+  } catch (error) {
+    logger.warn(
+      `Demande d'accès : notification temps réel non publiée (${error.message})`,
+    );
+  }
+
+  if (owner?.email) {
+    const { sendAccessRequestEmail } = await import("../utils/mailer.js");
+    const stored = await loadOrganizationRoles(organizationId);
+    await sendAccessRequestEmail(owner.email, {
+      requesterName,
+      requesterEmail: user.email,
+      pageLabel: module.label,
+      actionLabel,
+      roleName: String(userRole || "")
+        .split(",")
+        .map((r) => roleLabel(r.trim(), stored))
+        .join(", "),
+      workspaceName: organizationName,
+      rolesUrl,
+    });
+  }
+
+  logger.info(
+    `Demande d'accès : user=${requesterId} → ${moduleKey}/${action} dans org=${organizationId}`,
+  );
+  return { ownerName, alreadyRequested: false };
 }
