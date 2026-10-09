@@ -381,6 +381,9 @@ transactionSchema.index({ provider: 1, externalId: 1 }, { unique: true });
 transactionSchema.index({ fromAccount: 1, createdAt: -1 });
 transactionSchema.index({ toAccount: 1, createdAt: -1 });
 transactionSchema.index({ workspaceId: 1, date: -1, amount: 1 });
+// Tri des listes de transactions ({ date: -1, createdAt: -1 }) : sans cet
+// index, chaque page triait tout l'historique de l'espace en mémoire.
+transactionSchema.index({ workspaceId: 1, date: -1, createdAt: -1 });
 // Filtre par compte + tri par date de la liste paginée (transactionsPage)
 transactionSchema.index({ workspaceId: 1, fromAccount: 1, date: -1 });
 

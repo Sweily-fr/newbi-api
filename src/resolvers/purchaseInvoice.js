@@ -383,14 +383,8 @@ const purchaseInvoiceResolvers = {
           "receiptFiles.0": { $exists: false },
         };
 
-        const unmatchedCount = await Transaction.countDocuments(reconcileQuery);
-        const unmatchedTransactions = await Transaction.find(reconcileQuery)
-          .sort({ date: -1 })
-          .limit(50)
-          .lean();
-
         // Factures d'achat non payées / non rapprochées.
-        const pendingInvoices = await PurchaseInvoice.find({
+        const pendingInvoiceQuery = {
           workspaceId: wsId,
           deletedAt: null,
           isReconciled: { $ne: true },
@@ -399,9 +393,37 @@ const purchaseInvoiceResolvers = {
             { linkedTransactionIds: { $exists: false } },
             { linkedTransactionIds: { $size: 0 } },
           ],
-        })
+        };
+
+        const [unmatchedCount, unmatchedTransactions] = await Promise.all([
+          Transaction.countDocuments(reconcileQuery),
+          Transaction.find(reconcileQuery)
+            .sort({ date: -1 })
+            .limit(50)
+            .select("amount description date reconciliationStatus")
+            .lean(),
+        ]);
+
+        // Rien à rapprocher (cas courant, calcul sondé par chaque onglet
+        // ouvert) : pas de chargement des factures. Même plafond de 500 que
+        // la liste ci-dessous pour pendingInvoicesCount.
+        if (unmatchedTransactions.length === 0) {
+          return {
+            success: true,
+            suggestions: [],
+            unmatchedCount,
+            pendingInvoicesCount: await PurchaseInvoice.countDocuments(
+              pendingInvoiceQuery,
+              { limit: 500 },
+            ),
+          };
+        }
+
+        // Seuls les champs lus par evaluate() et renvoyés au front.
+        const pendingInvoices = await PurchaseInvoice.find(pendingInvoiceQuery)
           .sort({ issueDate: -1 })
           .limit(500)
+          .select("amountTTC supplierName invoiceNumber issueDate status")
           .lean();
 
         const normalizeRef = (s) =>

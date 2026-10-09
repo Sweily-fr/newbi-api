@@ -336,6 +336,10 @@ const purchaseOrderSchema = new mongoose.Schema(
 purchaseOrderSchema.index({ workspaceId: 1, "client.name": 1 });
 purchaseOrderSchema.index({ workspaceId: 1, status: 1 });
 purchaseOrderSchema.index({ workspaceId: 1, issueDate: -1 });
+// Tri de la liste des bons de commande (workspaceId + createdAt décroissant)
+purchaseOrderSchema.index({ workspaceId: 1, createdAt: -1 });
+// BC dérivés d'un devis (Quote.linkedPurchaseOrders / hasPurchaseOrderInvoices)
+purchaseOrderSchema.index({ workspaceId: 1, sourceQuoteId: 1 });
 purchaseOrderSchema.index({ createdBy: 1 });
 
 /**

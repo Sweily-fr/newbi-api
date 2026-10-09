@@ -6,6 +6,10 @@ import {
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
+  loadWorkspaceInvoices,
+  loadWorkspaceQuote,
+} from "../utils/workspaceDocumentLoaders.js";
+import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
 } from "../utils/clientDocumentFields.js";
@@ -223,7 +227,10 @@ const purchaseOrderResolvers = {
               siret: freshClient.siret,
               vatNumber: freshClient.vatNumber,
               isInternational: freshClient.isInternational,
-              documentFields: await buildClientDocumentFields(freshClient, context),
+              documentFields: await buildClientDocumentFields(
+                freshClient,
+                context,
+              ),
               firstName: freshClient.firstName,
               lastName: freshClient.lastName,
               hasDifferentShippingAddress:
@@ -245,19 +252,19 @@ const purchaseOrderResolvers = {
       if (!po.createdBy) return null;
       return await User.findById(po.createdBy);
     },
-    sourceQuote: async (po) => {
+    // Documents liés via les DataLoaders de la requête (une requête pour toute
+    // la liste au lieu d'une par bon de commande).
+    sourceQuote: async (po, _args, context) => {
       if (!po.sourceQuoteId) return null;
-      return await Quote.findOne({
-        _id: po.sourceQuoteId,
-        workspaceId: po.workspaceId,
-      });
+      return loadWorkspaceQuote(context, po.sourceQuoteId, po.workspaceId);
     },
-    linkedInvoices: async (po) => {
+    linkedInvoices: async (po, _args, context) => {
       if (po.linkedInvoices && po.linkedInvoices.length > 0) {
-        return await Invoice.find({
-          _id: { $in: po.linkedInvoices },
-          workspaceId: po.workspaceId,
-        });
+        return loadWorkspaceInvoices(
+          context,
+          po.linkedInvoices,
+          po.workspaceId,
+        );
       }
       return [];
     },
@@ -985,7 +992,10 @@ const purchaseOrderResolvers = {
                     freshClient.hasDifferentShippingAddress,
                   shippingAddress: freshClient.shippingAddress,
                   isInternational: freshClient.isInternational,
-                  documentFields: await buildClientDocumentFields(freshClient, context),
+                  documentFields: await buildClientDocumentFields(
+                    freshClient,
+                    context,
+                  ),
                   siret: freshClient.siret,
                   vatNumber: freshClient.vatNumber,
                 };
@@ -1142,7 +1152,10 @@ const purchaseOrderResolvers = {
                         freshClient.hasDifferentShippingAddress,
                       shippingAddress: freshClient.shippingAddress,
                       isInternational: freshClient.isInternational,
-                      documentFields: await buildClientDocumentFields(freshClient, context),
+                      documentFields: await buildClientDocumentFields(
+                        freshClient,
+                        context,
+                      ),
                       siret: freshClient.siret,
                       vatNumber: freshClient.vatNumber,
                     };
