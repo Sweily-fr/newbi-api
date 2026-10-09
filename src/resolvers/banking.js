@@ -20,6 +20,12 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 import { buildPageQuery } from "../utils/transaction-page-query.js";
 import {
+  LINKED_INVOICE_FIELDS,
+  LINKED_PURCHASE_INVOICE_FIELDS,
+  LINKED_IMPORTED_INVOICE_FIELDS,
+  LINK_USER_FIELDS,
+} from "../dataloaders/index.js";
+import {
   getMappingTable,
   getAllPCGAccounts,
   PCG,
@@ -44,6 +50,20 @@ const readTransactionList = requireWorkspaceLevel(
 );
 const writeBanking = requireWorkspaceLevel("banking", "write");
 const manageBankAccounts = requireWorkspaceLevel("integrations", "write");
+
+// Documents liés d'une transaction lus via un DataLoader de la requête : une
+// requête par type pour toute la liste au lieu d'une par transaction (mêmes
+// champs, mêmes documents). Repli en find($in) hors contexte GraphQL.
+async function loadLinkedDocs(context, loaderName, Model, ids, fields) {
+  const loader = context?.loaders?.[loaderName];
+  if (!loader) {
+    return Model.find({ _id: { $in: ids } })
+      .select(fields)
+      .lean();
+  }
+  const docs = await loader.loadMany(ids.map(String));
+  return docs.filter((doc) => doc && !(doc instanceof Error));
+}
 
 const bankingResolvers = {
   Upload: GraphQLUpload,
@@ -80,10 +100,13 @@ const bankingResolvers = {
         }
         if (filters.accountId) query.fromAccount = filters.accountId;
 
+        // raw (réponse brute du fournisseur bancaire) n'est ni exposé ni lu :
+        // exclu pour ne pas le transférer depuis Mongo à chaque liste.
         return await Transaction.find(query)
           .sort({ date: -1, createdAt: -1 })
           .limit(limit)
           .skip(offset)
+          .select("-raw")
           .lean();
       },
     ),
@@ -106,19 +129,29 @@ const bankingResolvers = {
             buildPageQuery(workspaceId, filters, tabName, now),
           );
 
-        const [items, totalCount, all, lastMonth, toReconcile, missingReceipt] =
+        const [items, all, lastMonth, toReconcile, missingReceipt] =
           await Promise.all([
             Transaction.find(pageQuery)
               .sort({ date: -1, createdAt: -1 })
               .skip((safePage - 1) * safeLimit)
               .limit(safeLimit)
+              .select("-raw")
               .lean(),
-            Transaction.countDocuments(pageQuery),
             countFor("ALL"),
             countFor("LAST_MONTH"),
             countFor("TO_RECONCILE"),
             countFor("MISSING_RECEIPT"),
           ]);
+        // Le total de l'onglet affiché est l'un des quatre compteurs : plus de
+        // 5e countDocuments identique (repli si l'onglet est inconnu).
+        const tabTotals = {
+          ALL: all,
+          LAST_MONTH: lastMonth,
+          TO_RECONCILE: toReconcile,
+          MISSING_RECEIPT: missingReceipt,
+        };
+        const totalCount =
+          tabTotals[tab] ?? (await Transaction.countDocuments(pageQuery));
 
         return {
           items,
@@ -568,7 +601,14 @@ const bankingResolvers = {
     confirmTransactionReceiptInvoice: writeBanking(
       async (
         parent,
-        { transactionId, workspaceId, fileId, action, values, purchaseInvoiceId },
+        {
+          transactionId,
+          workspaceId,
+          fileId,
+          action,
+          values,
+          purchaseInvoiceId,
+        },
         { user },
       ) => {
         try {
@@ -1183,12 +1223,18 @@ const bankingResolvers = {
     },
     reconciliationDate: (parent) => parent.reconciliationDate || null,
     // Resolver pour les factures liées (charge les détails).
-    linkedInvoices: async (parent) => {
+    linkedInvoices: async (parent, _args, context) => {
       const ids = parent.linkedInvoiceIds || [];
       if (ids.length === 0) return [];
       try {
         const Invoice = (await import("../models/Invoice.js")).default;
-        const invoices = await Invoice.find({ _id: { $in: ids } }).lean();
+        const invoices = await loadLinkedDocs(
+          context,
+          "linkedInvoiceSummaryById",
+          Invoice,
+          ids,
+          LINKED_INVOICE_FIELDS,
+        );
         return invoices.map((invoice) => ({
           id: invoice._id.toString(),
           number: invoice.number,
@@ -1210,15 +1256,17 @@ const bankingResolvers = {
     // Factures d'achat liées (lien par référence, justificatif inclus).
     linkedPurchaseInvoiceIds: (parent) =>
       (parent.linkedPurchaseInvoiceIds || []).map((id) => id.toString()),
-    linkedPurchaseInvoices: async (parent) => {
+    linkedPurchaseInvoices: async (parent, _args, context) => {
       const ids = parent.linkedPurchaseInvoiceIds || [];
       if (ids.length === 0) return [];
       try {
-        const PurchaseInvoice = (await import("../models/PurchaseInvoice.js"))
-          .default;
-        const invoices = await PurchaseInvoice.find({
-          _id: { $in: ids },
-        }).lean();
+        const invoices = await loadLinkedDocs(
+          context,
+          "linkedPurchaseInvoiceSummaryById",
+          PurchaseInvoice,
+          ids,
+          LINKED_PURCHASE_INVOICE_FIELDS,
+        );
         return invoices.map((inv) => ({
           id: inv._id.toString(),
           invoiceNumber: inv.invoiceNumber,
@@ -1244,15 +1292,19 @@ const bankingResolvers = {
     },
     linkedImportedInvoiceIds: (parent) =>
       (parent.linkedImportedInvoiceIds || []).map((id) => id.toString()),
-    linkedImportedInvoices: async (parent) => {
+    linkedImportedInvoices: async (parent, _args, context) => {
       const ids = parent.linkedImportedInvoiceIds || [];
       if (ids.length === 0) return [];
       try {
         const ImportedInvoice = (await import("../models/ImportedInvoice.js"))
           .default;
-        const invoices = await ImportedInvoice.find({
-          _id: { $in: ids },
-        }).lean();
+        const invoices = await loadLinkedDocs(
+          context,
+          "linkedImportedInvoiceSummaryById",
+          ImportedInvoice,
+          ids,
+          LINKED_IMPORTED_INVOICE_FIELDS,
+        );
         return invoices.map((inv) => ({
           id: inv._id.toString(),
           number: inv.originalInvoiceNumber || null,
@@ -1279,7 +1331,7 @@ const bankingResolvers = {
       }
     },
     // Origine des liens de rapprochement + nom de l'utilisateur (best-effort).
-    reconciliationLinks: async (parent) => {
+    reconciliationLinks: async (parent, _args, context) => {
       const links = parent.reconciliationLinks || [];
       if (links.length === 0) return [];
       const userIds = [
@@ -1289,9 +1341,13 @@ const bankingResolvers = {
       if (userIds.length > 0) {
         try {
           const User = (await import("../models/User.js")).default;
-          const users = await User.find({ _id: { $in: userIds } })
-            .select("profile.firstName profile.lastName email")
-            .lean();
+          const users = await loadLinkedDocs(
+            context,
+            "linkUserById",
+            User,
+            userIds,
+            LINK_USER_FIELDS,
+          );
           for (const u of users) {
             const name = [u.profile?.firstName, u.profile?.lastName]
               .filter(Boolean)

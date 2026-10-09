@@ -389,6 +389,8 @@ quoteSchema.index({ workspaceId: 1, status: 1 });
 quoteSchema.index({ workspaceId: 1, issueDate: -1 });
 // Tri de la liste des devis (quotes : workspaceId + createdAt décroissant)
 quoteSchema.index({ workspaceId: 1, createdAt: -1 });
+// Documents d'un client (Client.hasDocuments, fiche client)
+quoteSchema.index({ workspaceId: 1, "client.id": 1 });
 // Index legacy pour la migration et audit trail
 quoteSchema.index({ createdBy: 1 });
 
