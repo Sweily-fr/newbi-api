@@ -1,6 +1,7 @@
 import ClientSegment from "../models/ClientSegment.js";
 import Client from "../models/Client.js";
 import {
+  requireAction,
   requireRead,
   requireWrite,
   requireDelete,
@@ -96,6 +97,9 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
   return query;
 }
 
+// Création : action « create » de la page Segments
+const requireCreate = requireAction("clientSegments", "create");
+
 export const clientSegmentResolvers = {
   Query: {
     clientSegments: requireRead("clientSegments")(
@@ -186,7 +190,7 @@ export const clientSegmentResolvers = {
   },
 
   Mutation: {
-    createClientSegment: requireWrite("clientSegments")(
+    createClientSegment: requireCreate(
       async (_, { workspaceId: inputWorkspaceId, input }, context) => {
         const { user } = context;
         const workspaceId = resolveWorkspaceId(

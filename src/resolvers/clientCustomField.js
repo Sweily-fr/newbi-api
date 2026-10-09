@@ -1,9 +1,8 @@
 import ClientCustomField from "../models/ClientCustomField.js";
 import { buildDocumentFieldsForClientId } from "../utils/clientDocumentFields.js";
 import {
+  requireAction,
   requireRead,
-  requireWrite,
-  requireDelete,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
@@ -24,10 +23,10 @@ const scopedQuery = (fn) =>
     ),
   );
 
-// level : « write » (créer, modifier, réordonner) ou « delete » (supprimer).
-// Le contrôle d'abonnement reste ici.
-const makeScopedMutation = (level) => (fn) =>
-  (level === "delete" ? requireDelete : requireWrite)("clientCustomFields", {
+// action : « create » (créer), « edit » (modifier, réordonner) ou
+// « delete » (supprimer). Le contrôle d'abonnement reste ici.
+const makeScopedMutation = (action) => (fn) =>
+  requireAction("clientCustomFields", action, {
     skipSubscriptionCheck: true,
   })(async (parent, args, context, info) => {
     await checkSubscriptionActive(context);
@@ -42,7 +41,8 @@ const makeScopedMutation = (level) => (fn) =>
     );
   });
 
-const scopedMutation = makeScopedMutation("write");
+const scopedCreateMutation = makeScopedMutation("create");
+const scopedMutation = makeScopedMutation("edit");
 const scopedDeleteMutation = makeScopedMutation("delete");
 
 export const clientCustomFieldResolvers = {
@@ -100,7 +100,7 @@ export const clientCustomFieldResolvers = {
 
   Mutation: {
     // Créer un nouveau champ personnalisé
-    createClientCustomField: scopedMutation(
+    createClientCustomField: scopedCreateMutation(
       async (_, { workspaceId, input }, context) => {
         try {
           const userId = context.user.id;

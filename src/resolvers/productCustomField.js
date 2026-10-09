@@ -2,6 +2,7 @@ import ProductCustomField from "../models/ProductCustomField.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceLevel,
+  requireWorkspaceAction,
 } from "../middlewares/rbac.js";
 
 // Champs personnalisés du catalogue : rôle contrôlé sur le module
@@ -9,8 +10,8 @@ import {
 // resolvers). requireWorkspaceLevel laisse passer les messages d'erreur des
 // resolvers tels quels (« Un champ avec ce nom existe déjà »…).
 const readProducts = requireWorkspaceLevel("products", "read");
-const writeProducts = requireWorkspaceLevel("products", "write");
-const deleteProducts = requireWorkspaceLevel("products", "delete");
+// Créer, modifier, réordonner et supprimer : action « customFields »
+const manageCustomFields = requireWorkspaceAction("products", "customFields");
 
 export const productCustomFieldResolvers = {
   Query: {
@@ -61,7 +62,7 @@ export const productCustomFieldResolvers = {
 
   Mutation: {
     // Créer un nouveau champ personnalisé produit
-    createProductCustomField: writeProducts(
+    createProductCustomField: manageCustomFields(
       async (_, { workspaceId, input }, context) => {
         try {
           const userId = context.user.id;
@@ -103,7 +104,7 @@ export const productCustomFieldResolvers = {
     ),
 
     // Modifier un champ personnalisé produit
-    updateProductCustomField: writeProducts(
+    updateProductCustomField: manageCustomFields(
       async (_, { workspaceId, id, input }, context) => {
         try {
           // Vérifier si un autre champ avec le même nom existe
@@ -141,7 +142,7 @@ export const productCustomFieldResolvers = {
     ),
 
     // Supprimer un champ personnalisé produit
-    deleteProductCustomField: deleteProducts(
+    deleteProductCustomField: manageCustomFields(
       async (_, { workspaceId, id }, context) => {
         try {
           const result = await ProductCustomField.findOneAndDelete({
@@ -165,7 +166,7 @@ export const productCustomFieldResolvers = {
     ),
 
     // Réordonner les champs personnalisés produits
-    reorderProductCustomFields: writeProducts(
+    reorderProductCustomFields: manageCustomFields(
       async (_, { workspaceId, fieldIds }, context) => {
         try {
           // Mettre à jour l'ordre de chaque champ

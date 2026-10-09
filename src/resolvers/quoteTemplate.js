@@ -3,12 +3,14 @@ import QuoteTemplate from "../models/quoteTemplate.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceLevel,
+  requireWorkspaceAction,
 } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
 
 // Modèles : mêmes droits que le module « quotes »
 const readTemplates = requireWorkspaceLevel("quotes", "read");
-const writeTemplates = requireWorkspaceLevel("quotes", "write");
+// Enregistrer un document comme modèle : action « create »
+const createTemplates = requireWorkspaceAction("quotes", "create");
 const deleteTemplates = requireWorkspaceLevel("quotes", "delete");
 
 const quoteTemplateResolvers = {
@@ -24,7 +26,7 @@ const quoteTemplateResolvers = {
   },
 
   Mutation: {
-    saveQuoteAsTemplate: writeTemplates(
+    saveQuoteAsTemplate: createTemplates(
       async (
         _,
         { input, workspaceId },

@@ -11,6 +11,7 @@ import {
   requireRead,
   requireWrite,
   requireDelete,
+  requireAction,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -224,8 +225,10 @@ const productResolvers = {
   },
 
   Mutation: {
-    // ✅ Protégé par RBAC - nécessite la permission "create" sur "products"
-    createProduct: requireWrite("products")(async (_, { input }, context) => {
+    // Création d'un produit : « Créer », ou « Importer » (l'import crée les
+    // produits un à un)
+    createProduct: requireAction("products", ["create", "import"])(
+      async (_, { input }, context) => {
       const { user } = context;
       const workspaceId = resolveWorkspaceId(
         input.workspaceId,
@@ -316,7 +319,8 @@ const productResolvers = {
     // comme modification), l'URL renvoyée est ensuite passée dans imageUrl.
     // Les anciennes images ne sont jamais supprimées de R2 : les documents
     // déjà émis gardent une copie de l'URL sur leurs lignes.
-    uploadProductImage: requireWrite("products")(
+    // Image d'un produit en cours de création ou de modification
+    uploadProductImage: requireAction("products", ["create", "edit"])(
       async (_, { workspaceId: inputWorkspaceId, file }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,

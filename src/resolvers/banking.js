@@ -1,6 +1,7 @@
 import { bankingService } from "../services/banking/BankingService.js";
 import {
   checkSubscriptionActive,
+  requireWorkspaceAction,
   requireWorkspaceLevel,
 } from "../middlewares/rbac.js";
 import Transaction from "../models/Transaction.js";
@@ -42,7 +43,11 @@ const readTransactionList = requireWorkspaceLevel(
   ["banking", "overview", "analytics"],
   "read",
 );
-const writeBanking = requireWorkspaceLevel("banking", "write");
+// Actions de la page Transactions : modifier (catégorie, description),
+// justificatifs, synchronisation des comptes
+const writeBanking = requireWorkspaceAction("banking", "edit");
+const manageReceipts = requireWorkspaceAction("banking", "receipts");
+const syncBanking = requireWorkspaceAction("banking", "sync");
 const manageBankAccounts = requireWorkspaceLevel("integrations", "write");
 
 const bankingResolvers = {
@@ -404,7 +409,7 @@ const bankingResolvers = {
     ),
 
     // Upload de justificatifs (multi-fichiers) pour une transaction
-    uploadTransactionReceipt: writeBanking(
+    uploadTransactionReceipt: manageReceipts(
       async (parent, { transactionId, workspaceId, files }, { user }) => {
         try {
           const transaction = await Transaction.findOne({
@@ -565,7 +570,7 @@ const bankingResolvers = {
     // Décision de l'utilisateur sur la facture d'achat proposée pour un
     // justificatif : rien n'est créé par l'analyse tant qu'il n'a pas
     // confirmé les valeurs lues.
-    confirmTransactionReceiptInvoice: writeBanking(
+    confirmTransactionReceiptInvoice: manageReceipts(
       async (
         parent,
         { transactionId, workspaceId, fileId, action, values, purchaseInvoiceId },
@@ -616,7 +621,7 @@ const bankingResolvers = {
     ),
 
     // Suppression d'un justificatif spécifique d'une transaction
-    removeTransactionReceiptFile: writeBanking(
+    removeTransactionReceiptFile: manageReceipts(
       async (parent, { transactionId, workspaceId, fileId }) => {
         try {
           const transaction = await Transaction.findOne({
@@ -898,7 +903,7 @@ const bankingResolvers = {
       },
     ),
 
-    syncAccountBalance: writeBanking(
+    syncAccountBalance: syncBanking(
       async (parent, { accountId }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -927,7 +932,7 @@ const bankingResolvers = {
       },
     ),
 
-    syncTransactionHistory: writeBanking(
+    syncTransactionHistory: syncBanking(
       async (parent, { accountId }, { user, workspaceId }) => {
         try {
           await bankingService.initialize();
@@ -953,7 +958,7 @@ const bankingResolvers = {
      * @param {string} input.until - Date de fin YYYY-MM-DD (optionnel, défaut aujourd'hui)
      * @param {boolean} input.fullSync - Force sync complète sans limite de pages
      */
-    syncAllTransactions: writeBanking(
+    syncAllTransactions: syncBanking(
       async (parent, { input = {} }, { user, workspaceId }) => {
         try {
           await bankingService.initialize("bridge");

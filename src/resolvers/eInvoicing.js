@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
-import { requireRead, requireWrite } from "../middlewares/rbac.js";
+import {
+  requireRead,
+  requireWrite,
+  requireAction,
+} from "../middlewares/rbac.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import superPdpService from "../services/superPdpService.js";
 import eInvoiceRoutingService from "../services/eInvoiceRoutingService.js";
@@ -344,86 +348,84 @@ const eInvoicingResolvers = {
     /**
      * Renvoyer une facture à SuperPDP (en cas d'erreur précédente)
      */
-    resendInvoiceToSuperPdp: requireWrite("invoices")(
-      async (_, { workspaceId, invoiceId }, context) => {
-        try {
-          // Vérifier que l'e-invoicing est activé
-          const isEnabled =
-            await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
-          if (!isEnabled) {
-            throw new AppError(
-              "La facturation électronique n'est pas activée",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
-
-          // Récupérer la facture
-          const invoice = await Invoice.findOne({
-            _id: invoiceId,
-            workspaceId: workspaceId,
-          });
-
-          if (!invoice) {
-            throw new AppError("Facture non trouvée", ERROR_CODES.NOT_FOUND);
-          }
-
-          // Vérifier que la facture n'est pas un brouillon
-          if (invoice.status === "DRAFT") {
-            throw new AppError(
-              "Les brouillons ne peuvent pas être envoyés en facturation électronique",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
-
-          // Envoyer à SuperPDP
-          const result = await superPdpService.sendInvoice(
-            workspaceId,
-            invoice,
-          );
-
-          if (result.success) {
-            // Mettre à jour la facture (statut dérivé + historique brut SuperPDP)
-            invoice.superPdpInvoiceId = result.superPdpInvoiceId;
-            invoice.eInvoiceStatus = result.status;
-            invoice.eInvoiceLastCode = result.lastCode || null;
-            invoice.eInvoiceEvents = result.events || [];
-            invoice.eInvoiceSentAt = new Date();
-            invoice.eInvoiceError = null;
-            invoice.facturXData = {
-              xmlGenerated: true,
-              profile: "EN16931",
-              generatedAt: new Date(),
-            };
-            await invoice.save();
-
-            return {
-              success: true,
-              message: "Facture envoyée avec succès à SuperPDP",
-              superPdpInvoiceId: result.superPdpInvoiceId,
-              status: invoice.eInvoiceStatus,
-            };
-          } else {
-            // Enregistrer l'erreur
-            invoice.eInvoiceStatus = "ERROR";
-            invoice.eInvoiceError = result.error;
-            await invoice.save();
-
-            return {
-              success: false,
-              message: result.error,
-              superPdpInvoiceId: null,
-              status: "ERROR",
-            };
-          }
-        } catch (error) {
-          logger.error("Erreur renvoi facture SuperPDP:", error);
+    resendInvoiceToSuperPdp: requireAction(
+      "invoices",
+      "send",
+    )(async (_, { workspaceId, invoiceId }, context) => {
+      try {
+        // Vérifier que l'e-invoicing est activé
+        const isEnabled =
+          await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
+        if (!isEnabled) {
           throw new AppError(
-            error.message || "Erreur lors du renvoi de la facture",
-            ERROR_CODES.INTERNAL_ERROR,
+            "La facturation électronique n'est pas activée",
+            ERROR_CODES.VALIDATION_ERROR,
           );
         }
-      },
-    ),
+
+        // Récupérer la facture
+        const invoice = await Invoice.findOne({
+          _id: invoiceId,
+          workspaceId: workspaceId,
+        });
+
+        if (!invoice) {
+          throw new AppError("Facture non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+
+        // Vérifier que la facture n'est pas un brouillon
+        if (invoice.status === "DRAFT") {
+          throw new AppError(
+            "Les brouillons ne peuvent pas être envoyés en facturation électronique",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
+        // Envoyer à SuperPDP
+        const result = await superPdpService.sendInvoice(workspaceId, invoice);
+
+        if (result.success) {
+          // Mettre à jour la facture (statut dérivé + historique brut SuperPDP)
+          invoice.superPdpInvoiceId = result.superPdpInvoiceId;
+          invoice.eInvoiceStatus = result.status;
+          invoice.eInvoiceLastCode = result.lastCode || null;
+          invoice.eInvoiceEvents = result.events || [];
+          invoice.eInvoiceSentAt = new Date();
+          invoice.eInvoiceError = null;
+          invoice.facturXData = {
+            xmlGenerated: true,
+            profile: "EN16931",
+            generatedAt: new Date(),
+          };
+          await invoice.save();
+
+          return {
+            success: true,
+            message: "Facture envoyée avec succès à SuperPDP",
+            superPdpInvoiceId: result.superPdpInvoiceId,
+            status: invoice.eInvoiceStatus,
+          };
+        } else {
+          // Enregistrer l'erreur
+          invoice.eInvoiceStatus = "ERROR";
+          invoice.eInvoiceError = result.error;
+          await invoice.save();
+
+          return {
+            success: false,
+            message: result.error,
+            superPdpInvoiceId: null,
+            status: "ERROR",
+          };
+        }
+      } catch (error) {
+        logger.error("Erreur renvoi facture SuperPDP:", error);
+        throw new AppError(
+          error.message || "Erreur lors du renvoi de la facture",
+          ERROR_CODES.INTERNAL_ERROR,
+        );
+      }
+    }),
 
     /**
      * Vérifier si un destinataire peut recevoir des factures électroniques

@@ -4,6 +4,7 @@ import { AuthenticationError } from "apollo-server-express";
 import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   checkSubscriptionActive,
+  requireWorkspaceAction,
   requireWorkspaceLevel,
   withRBAC,
 } from "../middlewares/rbac.js";
@@ -1258,7 +1259,7 @@ const resolvers = {
     ),
 
     // Board mutations
-    createBoard: requireWorkspaceLevel("kanban", "write")(
+    createBoard: requireWorkspaceAction("kanban", "create")(
       async (
         _,
         { input, workspaceId },
@@ -1431,7 +1432,7 @@ const resolvers = {
     ),
 
     // Column mutations
-    createColumn: requireWorkspaceLevel("kanban", "write")(
+    createColumn: requireWorkspaceAction("kanban", "create")(
       async (
         _,
         { input, workspaceId },
@@ -1586,7 +1587,7 @@ const resolvers = {
     ),
 
     // Task mutations
-    createTask: requireWorkspaceLevel("kanban", "write")(
+    createTask: requireWorkspaceAction("kanban", "create")(
       async (
         _,
         { input, workspaceId },
@@ -2908,7 +2909,7 @@ const resolvers = {
     ),
 
     // Ajouter un commentaire
-    addComment: requireWorkspaceLevel("kanban", "write")(
+    addComment: requireWorkspaceAction("kanban", "comment")(
       async (
         _,
         { taskId, input, workspaceId },
@@ -3196,7 +3197,7 @@ const resolvers = {
     ),
 
     // Modifier un commentaire
-    updateComment: requireWorkspaceLevel("kanban", "write")(
+    updateComment: requireWorkspaceAction("kanban", "comment")(
       async (
         _,
         { taskId, commentId, content, mentionedUserIds, workspaceId },
@@ -3360,7 +3361,7 @@ const resolvers = {
     ),
 
     // Supprimer un commentaire
-    deleteComment: requireWorkspaceLevel("kanban", "write")(
+    deleteComment: requireWorkspaceAction("kanban", "comment")(
       async (
         _,
         { taskId, commentId, workspaceId },

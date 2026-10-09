@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import cloudflareService from "../services/cloudflareService.js";
-import { requireWrite, resolveWorkspaceId } from "../middlewares/rbac.js";
+import { requireAction, resolveWorkspaceId } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import {
@@ -75,11 +75,12 @@ const uploadAnnex = async (_, { workspaceId: inputWorkspaceId, file }, context) 
 };
 
 // Un résolveur RBAC par type de document : envoyer une annexe de devis exige
-// le droit d'écriture sur les devis, etc.
+// de pouvoir créer ou modifier des devis (l'annexe est choisie pendant la
+// saisie, document nouveau ou existant), etc.
 const uploadAnnexByType = Object.fromEntries(
   Object.entries(ANNEX_DOCUMENT_RESOURCES).map(([type, resource]) => [
     type,
-    requireWrite(resource)(uploadAnnex),
+    requireAction(resource, ["create", "edit"])(uploadAnnex),
   ]),
 );
 

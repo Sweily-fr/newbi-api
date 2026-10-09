@@ -5,6 +5,7 @@ import Client from "../models/Client.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import {
+  requireAction,
   requireWrite,
   requireRead,
   requireDelete,
@@ -349,6 +350,9 @@ export const automationService = {
 const readAutomations = requireRead("automations", {
   preferArgsWorkspace: true,
 });
+const createAutomations = requireAction("automations", "create", {
+  preferArgsWorkspace: true,
+});
 const writeAutomations = requireWrite("automations", {
   preferArgsWorkspace: true,
 });
@@ -400,7 +404,7 @@ const clientAutomationResolvers = {
   },
 
   Mutation: {
-    createClientAutomation: writeAutomations(
+    createClientAutomation: createAutomations(
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
 

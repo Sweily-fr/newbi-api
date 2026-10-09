@@ -12,10 +12,13 @@ import Client from "../models/Client.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import Transaction from "../models/Transaction.js";
 import {
+  assertStatusChangeAllowed,
+  STATUS_CHANGE_ACTIONS,
   requireWrite,
   requireRead,
   requireDelete,
   requirePermission,
+  requireAction,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
@@ -1182,7 +1185,7 @@ const invoiceResolvers = {
 
   Mutation: {
     createInvoice: requireCompanyInfo(
-      requireWrite("invoices")(
+      requireAction("invoices", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
@@ -1197,7 +1200,7 @@ const invoiceResolvers = {
             );
           }
 
-          // ✅ Les permissions sont déjà vérifiées par requireWrite("invoices")
+          // ✅ Les permissions sont déjà vérifiées par requireAction (création)
 
           // Récupérer les informations de l'organisation
           const organization = await getOrganizationInfo(workspaceId);
@@ -2852,8 +2855,12 @@ const invoiceResolvers = {
       },
     ),
 
-    changeInvoiceStatus: requireWrite("invoices")(
+    // Action exigée selon le statut visé (assertStatusChangeAllowed) :
+    // valider le brouillon = créer ou modifier, payée = « markPaid »,
+    // annuler = « status »
+    changeInvoiceStatus: requireAction("invoices", STATUS_CHANGE_ACTIONS)(
       async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
+        assertStatusChangeAllowed(context, "invoices", status, "PENDING");
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -2881,7 +2888,8 @@ const invoiceResolvers = {
           );
         }
 
-        // ✅ Les permissions d'écriture sont déjà vérifiées par requireWrite("invoices")
+        // ✅ Les permissions sont déjà vérifiées par requireAction et
+        // assertPermissionAction ci-dessus
 
         // Vérifier si le changement de statut est autorisé
         if (invoice.status === status) {
@@ -3298,7 +3306,7 @@ const invoiceResolvers = {
       },
     ),
 
-    sendInvoice: requireWrite("invoices")(
+    sendInvoice: requireAction("invoices", "send")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
@@ -3320,7 +3328,7 @@ const invoiceResolvers = {
       },
     ),
 
-    createLinkedInvoice: requireWrite("invoices")(
+    createLinkedInvoice: requireAction("invoices", "create")(
       async (
         _,
         { quoteId, amount, isDeposit, workspaceId: inputWorkspaceId },

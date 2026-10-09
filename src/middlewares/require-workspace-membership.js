@@ -1,6 +1,7 @@
 import { betterAuthJWTMiddleware } from "./better-auth-jwt.js";
 import {
   userBelongsToWorkspace,
+  userHasWorkspaceAction,
   userHasWorkspaceLevel,
 } from "../utils/workspace-membership.js";
 import logger from "../utils/logger.js";
@@ -52,18 +53,13 @@ export async function requireWorkspaceMembership(req, res, next) {
 }
 
 /**
- * requireWorkspaceMembership + niveau du rôle sur un module (grille des
- * rôles). Réponse 403 si le rôle ne le permet pas.
+ * requireWorkspaceMembership puis contrôle du rôle (`check(userId,
+ * workspaceId)`). Réponse 403 si le rôle ne le permet pas.
  */
-export function requireWorkspacePermission(moduleKey, level) {
+function requireWorkspaceRoleCheck(check) {
   return (req, res, next) =>
     requireWorkspaceMembership(req, res, async () => {
-      const allowed = await userHasWorkspaceLevel(
-        String(req.user._id),
-        req.workspaceId,
-        moduleKey,
-        level,
-      );
+      const allowed = await check(String(req.user._id), req.workspaceId);
       if (!allowed) {
         return res.status(403).json({
           error: "FORBIDDEN",
@@ -72,4 +68,24 @@ export function requireWorkspacePermission(moduleKey, level) {
       }
       return next();
     });
+}
+
+/**
+ * requireWorkspaceMembership + niveau du rôle sur un module (grille des
+ * rôles). Réponse 403 si le rôle ne le permet pas.
+ */
+export function requireWorkspacePermission(moduleKey, level) {
+  return requireWorkspaceRoleCheck((userId, workspaceId) =>
+    userHasWorkspaceLevel(userId, workspaceId, moduleKey, level),
+  );
+}
+
+/**
+ * requireWorkspaceMembership + action précise du rôle sur un module
+ * (`reconcile`, `sync`…, une liste : l'une suffit). Réponse 403 sinon.
+ */
+export function requireWorkspaceActionPermission(moduleKey, action) {
+  return requireWorkspaceRoleCheck((userId, workspaceId) =>
+    userHasWorkspaceAction(userId, workspaceId, moduleKey, action),
+  );
 }

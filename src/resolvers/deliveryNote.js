@@ -18,9 +18,12 @@ import Product from "../models/Product.js";
 import User from "../models/User.js";
 import Client from "../models/Client.js";
 import {
+  assertStatusChangeAllowed,
+  STATUS_CHANGE_ACTIONS,
   requireWrite,
   requireRead,
   requireDelete,
+  requireAction,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -545,7 +548,7 @@ const deliveryNoteResolvers = {
     ),
 
     createDeliveryNote: requireCompanyInfo(
-      requireWrite("deliveryNotes")(
+      requireAction("deliveryNotes", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
@@ -973,8 +976,11 @@ const deliveryNoteResolvers = {
     ),
 
     changeDeliveryNoteStatus: requireCompanyInfo(
-      requireWrite("deliveryNotes")(
+      requireAction("deliveryNotes", STATUS_CHANGE_ACTIONS)(
         async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
+          // Émettre le brouillon = créer ou modifier ; autres statuts =
+          // « status »
+          assertStatusChangeAllowed(context, "deliveryNotes", status, "PENDING");
           const { user, workspaceId } = context;
           const dn = await DeliveryNote.findOne({ _id: id, workspaceId });
 
@@ -1104,7 +1110,7 @@ const deliveryNoteResolvers = {
     ),
 
     recordDeliveryNoteReception: requireCompanyInfo(
-      requireWrite("deliveryNotes")(
+      requireAction("deliveryNotes", "status")(
         async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
           const { workspaceId } = context;
           const dn = await DeliveryNote.findOne({ _id: id, workspaceId });
@@ -1142,7 +1148,7 @@ const deliveryNoteResolvers = {
       ),
     ),
 
-    createDeliveryNoteFromQuote: requireWrite("deliveryNotes")(
+    createDeliveryNoteFromQuote: requireAction("deliveryNotes", "create")(
       async (_, { quoteId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const quote = await Quote.findOne({ _id: quoteId, workspaceId });
@@ -1195,7 +1201,7 @@ const deliveryNoteResolvers = {
       },
     ),
 
-    createDeliveryNoteFromInvoice: requireWrite("deliveryNotes")(
+    createDeliveryNoteFromInvoice: requireAction("deliveryNotes", "create")(
       async (_, { invoiceId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
@@ -1247,7 +1253,8 @@ const deliveryNoteResolvers = {
       },
     ),
 
-    createInvoiceFromDeliveryNote: requireWrite("invoices")(
+    // Facturer un bon de livraison : action « convert » de la page
+    createInvoiceFromDeliveryNote: requireAction("deliveryNotes", "convert")(
       async (_, { deliveryNoteId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const dn = await DeliveryNote.findOne({ _id: deliveryNoteId, workspaceId });
@@ -1375,7 +1382,7 @@ const deliveryNoteResolvers = {
       },
     ),
 
-    sendDeliveryNote: requireWrite("deliveryNotes")(
+    sendDeliveryNote: requireAction("deliveryNotes", "send")(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
         const { workspaceId } = context;
         const dn = await DeliveryNote.findOne({ _id: id, workspaceId });

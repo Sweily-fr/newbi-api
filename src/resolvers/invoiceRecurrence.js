@@ -3,7 +3,7 @@ import Invoice from "../models/Invoice.js";
 import InvoiceRecurrence from "../models/InvoiceRecurrence.js";
 import {
   requireRead,
-  requireWrite,
+  requireAction,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -130,7 +130,10 @@ const invoiceRecurrenceResolvers = {
   },
 
   Mutation: {
-    saveInvoiceRecurrence: requireWrite("invoices")(
+    saveInvoiceRecurrence: requireAction(
+      "invoices",
+      "recurring",
+    )(
       async (
         _,
         { workspaceId: inputWorkspaceId, invoiceId, input },
@@ -195,55 +198,56 @@ const invoiceRecurrenceResolvers = {
       },
     ),
 
-    setInvoiceRecurrenceStatus: requireWrite("invoices")(
-      async (_, { workspaceId: inputWorkspaceId, id, status }, context) => {
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
-        const recurrence = await InvoiceRecurrence.findOne({
-          _id: id,
-          workspaceId: toObjectId(workspaceId),
-        }).lean();
-        if (!recurrence) throw createNotFoundError("Récurrence");
+    setInvoiceRecurrenceStatus: requireAction(
+      "invoices",
+      "recurring",
+    )(async (_, { workspaceId: inputWorkspaceId, id, status }, context) => {
+      const workspaceId = resolveWorkspaceId(
+        inputWorkspaceId,
+        context.workspaceId,
+      );
+      const recurrence = await InvoiceRecurrence.findOne({
+        _id: id,
+        workspaceId: toObjectId(workspaceId),
+      }).lean();
+      if (!recurrence) throw createNotFoundError("Récurrence");
 
-        const update = { status };
-        if (status === "ACTIVE") {
-          if (recurrence.status === "ENDED") {
-            throw new AppError(
-              "Cette récurrence est terminée : programmez-en une nouvelle depuis la facture",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
-          const source = await Invoice.findById(recurrence.sourceInvoiceId)
-            .select("status isDeposit invoiceType recurrenceOrigin")
-            .lean();
-          const ineligible = getRecurrenceIneligibility(source);
-          if (ineligible) {
-            throw new AppError(ineligible, ERROR_CODES.VALIDATION_ERROR);
-          }
-          // Reprise : les échéances manquées pendant la pause sont sautées
-          update.nextRunDate = computeNextRunDate(recurrence);
-          if (!update.nextRunDate) {
-            update.status = "ENDED";
-          }
-          update.userId = context.user._id;
-          update.failureCount = 0;
-          update.lastError = null;
-          update.lastErrorAt = null;
-        } else if (status === "ENDED") {
-          update.nextRunDate = null;
+      const update = { status };
+      if (status === "ACTIVE") {
+        if (recurrence.status === "ENDED") {
+          throw new AppError(
+            "Cette récurrence est terminée : programmez-en une nouvelle depuis la facture",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
         }
+        const source = await Invoice.findById(recurrence.sourceInvoiceId)
+          .select("status isDeposit invoiceType recurrenceOrigin")
+          .lean();
+        const ineligible = getRecurrenceIneligibility(source);
+        if (ineligible) {
+          throw new AppError(ineligible, ERROR_CODES.VALIDATION_ERROR);
+        }
+        // Reprise : les échéances manquées pendant la pause sont sautées
+        update.nextRunDate = computeNextRunDate(recurrence);
+        if (!update.nextRunDate) {
+          update.status = "ENDED";
+        }
+        update.userId = context.user._id;
+        update.failureCount = 0;
+        update.lastError = null;
+        update.lastErrorAt = null;
+      } else if (status === "ENDED") {
+        update.nextRunDate = null;
+      }
 
-        const updated = await InvoiceRecurrence.findOneAndUpdate(
-          { _id: recurrence._id },
-          { $set: update },
-          { new: true },
-        ).lean();
+      const updated = await InvoiceRecurrence.findOneAndUpdate(
+        { _id: recurrence._id },
+        { $set: update },
+        { new: true },
+      ).lean();
 
-        return withSource(updated);
-      },
-    ),
+      return withSource(updated);
+    }),
   },
 };
 

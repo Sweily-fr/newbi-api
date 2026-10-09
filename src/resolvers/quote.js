@@ -18,9 +18,12 @@ import Client from "../models/Client.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import DeliveryNote from "../models/DeliveryNote.js";
 import {
+  assertStatusChangeAllowed,
+  STATUS_CHANGE_ACTIONS,
   requireWrite,
   requireRead,
   requireDelete,
+  requireAction,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -711,7 +714,7 @@ const quoteResolvers = {
       },
     ),
     createQuote: requireCompanyInfo(
-      requireWrite("quotes")(
+      requireAction("quotes", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
@@ -1478,7 +1481,10 @@ const quoteResolvers = {
     ),
 
     changeQuoteStatus: requireCompanyInfo(
-      requireWrite("quotes")(async (_, { id, status }, context) => {
+      requireAction("quotes", STATUS_CHANGE_ACTIONS)(async (_, { id, status }, context) => {
+        // Valider le brouillon = créer ou modifier ; accepter, refuser,
+        // annuler = « status »
+        assertStatusChangeAllowed(context, "quotes", status, "PENDING");
         const { user } = context;
         const workspaceId = context.workspaceId || context.organizationId;
         // ✅ FIX: Utiliser workspaceId au lieu de createdBy
@@ -1805,7 +1811,7 @@ const quoteResolvers = {
       }),
     ),
 
-    convertQuoteToInvoice: requireWrite("quotes")(
+    convertQuoteToInvoice: requireAction("quotes", "convert")(
       async (_, { id, distribution, isDeposit, skipValidation }, context) => {
         const { user, workspaceId } = context;
         // ✅ FIX: Utiliser workspaceId au lieu de createdBy
@@ -2158,7 +2164,7 @@ const quoteResolvers = {
       },
     ),
 
-    sendQuote: requireWrite("quotes")(
+    sendQuote: requireAction("quotes", "send")(
       async (_, { id /* email */ }, context) => {
         const { user, workspaceId } = context;
         // ✅ FIX: Utiliser workspaceId au lieu de createdBy

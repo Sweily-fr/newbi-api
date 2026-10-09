@@ -3,6 +3,7 @@ import CrmEmailAutomationLog from '../models/CrmEmailAutomationLog.js';
 import ClientCustomField from '../models/ClientCustomField.js';
 import Client from '../models/Client.js';
 import {
+  requireAction,
   requireWrite,
   requireRead,
   requireDelete,
@@ -44,7 +45,7 @@ const crmEmailAutomationResolvers = {
   },
 
   Mutation: {
-    createCrmEmailAutomation: requireWrite('automations', { preferArgsWorkspace: true })(async (_, { workspaceId, input }, context) => {
+    createCrmEmailAutomation: requireAction('automations', 'create', { preferArgsWorkspace: true })(async (_, { workspaceId, input }, context) => {
       // Vérifier que le champ personnalisé existe et est de type DATE
       const customField = await ClientCustomField.findOne({ 
         _id: input.customFieldId, 

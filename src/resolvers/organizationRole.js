@@ -2,8 +2,8 @@ import { invalidateOrgCache, withOrganization } from "../middlewares/rbac.js";
 import {
   DEFAULT_INVITE_ROLE,
   MODULE_GROUPS,
-  MODULES,
-  allowedLevels,
+  catalogModules,
+  levelsFromActions,
 } from "../config/rolePermissions.js";
 import {
   createOrganizationRole,
@@ -42,14 +42,12 @@ const requireOwner = (resolver) =>
 
 const catalog = {
   groups: MODULE_GROUPS,
-  modules: MODULES.map((m) => ({
-    key: m.key,
-    group: m.group,
-    kind: m.kind || "level",
-    parent: m.parent || null,
-    label: m.label,
-    description: m.description || null,
-    levels: allowedLevels(m.key),
+  // kind / levels : champs des écrans d'avant les actions (compatibilité
+  // pendant un déploiement API puis front)
+  modules: catalogModules().map((m) => ({
+    ...m,
+    kind: "level",
+    levels: ["none", "read", "write", "delete"],
   })),
   defaultInviteRole: DEFAULT_INVITE_ROLE,
 };
@@ -75,7 +73,8 @@ const organizationRoleResolvers = {
         role: context.userRole,
         roleName: roles.map((r) => roleLabel(r, storedRoles)).join(", "),
         isOwner: isOwner(context),
-        levels: context.permissionLevels,
+        actions: context.permissionLevels,
+        levels: levelsFromActions(context.permissionLevels),
       };
     }),
   },

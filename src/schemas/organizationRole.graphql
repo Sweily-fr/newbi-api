@@ -1,6 +1,14 @@
 # Rôles d'un espace : rôles prédéfinis (ajustables par le super admin) et
-# rôles personnalisés. Les droits sont une grille module → niveau
-# (none, read, write, delete), voir src/config/rolePermissions.js.
+# rôles personnalisés. Les droits sont une grille page → actions permises
+# (voir, créer, modifier, supprimer…), voir src/config/rolePermissions.js.
+# `levels` (none, read, write, delete) est le niveau équivalent par page,
+# gardé pour les écrans d'avant les actions.
+
+type RoleCatalogAction {
+  key: String!
+  label: String!
+  description: String
+}
 
 type RoleCatalogGroup {
   key: String!
@@ -16,7 +24,9 @@ type RoleCatalogModule {
   parent: String
   label: String!
   description: String
-  # Niveaux proposés pour ce module (les modules du compte n'ont pas « delete »)
+  # Actions qu'on peut cocher pour cette page
+  actions: [RoleCatalogAction!]!
+  # Ancien sélecteur par niveau (déprécié)
   levels: [String!]!
 }
 
@@ -34,7 +44,9 @@ type OrganizationRole {
   editable: Boolean!
   # Rôle prédéfini dont le super admin a modifié les droits
   customized: Boolean!
-  # { invoices: "write", quotes: "read", … }
+  # { invoices: ["view", "create", …], … }
+  actions: JSON!
+  # Niveau équivalent par page (déprécié) : { invoices: "write", … }
   levels: JSON!
   memberCount: Int!
   invitationCount: Int!
@@ -46,6 +58,7 @@ type MyPermissions {
   role: String!
   roleName: String!
   isOwner: Boolean!
+  actions: JSON!
   levels: JSON!
 }
 
@@ -62,6 +75,8 @@ type TransferOrganizationOwnershipResult {
 input OrganizationRoleInput {
   name: String
   description: String
+  # { invoices: ["view", "create"], … } ; `levels` = ancien format
+  actions: JSON
   levels: JSON
 }
 

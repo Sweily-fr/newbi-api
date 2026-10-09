@@ -1,6 +1,6 @@
 import {
+  requireAction,
   requireRead,
-  requireWrite,
   checkSubscriptionActive,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -37,10 +37,12 @@ const importedInvoiceSummary = (inv, score) => ({
   ...(score !== undefined ? { score } : {}),
 });
 
-// Rapprochement = module Transactions (banking). L'abonnement des mutations
-// est déjà contrôlé (fail-closed) par l'enveloppe en bas de fichier, d'où
-// skipSubscriptionCheck : pas de second contrôle ici.
-const writeBanking = requireWrite("banking", { skipSubscriptionCheck: true });
+// Rapprochement = action « reconcile » du module Transactions (banking).
+// L'abonnement des mutations est déjà contrôlé (fail-closed) par l'enveloppe
+// en bas de fichier, d'où skipSubscriptionCheck : pas de second contrôle ici.
+const reconcileBanking = requireAction("banking", "reconcile", {
+  skipSubscriptionCheck: true,
+});
 
 const reconciliationResolvers = {
   Query: {
@@ -274,7 +276,7 @@ const reconciliationResolvers = {
   },
 
   Mutation: {
-    linkTransactionToInvoice: writeBanking(
+    linkTransactionToInvoice: reconcileBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId, invoiceId } = input;
@@ -395,7 +397,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    unlinkTransactionFromInvoice: writeBanking(
+    unlinkTransactionFromInvoice: reconcileBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId, invoiceId } = input;
@@ -474,7 +476,7 @@ const reconciliationResolvers = {
     // Facture client importée (Qonto, OCR, Gmail) ↔ transaction. Même
     // sémantique que linkTransactionToInvoice : $addToSet des deux côtés,
     // la facture est considérée encaissée (COMPLETED) à la date du virement.
-    linkTransactionToImportedInvoice: writeBanking(
+    linkTransactionToImportedInvoice: reconcileBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId, importedInvoiceId } = input;
@@ -571,7 +573,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    unlinkTransactionFromImportedInvoice: writeBanking(
+    unlinkTransactionFromImportedInvoice: reconcileBanking(
       async (parent, { input }, { workspaceId }) => {
         try {
           const { transactionId, importedInvoiceId } = input;
@@ -640,7 +642,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    ignoreTransaction: writeBanking(
+    ignoreTransaction: reconcileBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId } = input;
@@ -670,7 +672,7 @@ const reconciliationResolvers = {
       },
     ),
 
-    unignoreTransaction: writeBanking(
+    unignoreTransaction: reconcileBanking(
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId } = input;

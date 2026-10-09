@@ -1,6 +1,9 @@
 import mongoose from "mongoose";
 import logger from "./logger.js";
-import { levelsAllowLevel } from "../config/rolePermissions.js";
+import {
+  levelsAllowAction,
+  levelsAllowLevel,
+} from "../config/rolePermissions.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 
 /**
@@ -37,6 +40,23 @@ export async function userBelongsToWorkspace(userId, workspaceId) {
 }
 
 /**
+ * Rôle (en minuscules) et grille effective de l'utilisateur dans le
+ * workspace (rôles prédéfinis ou personnalisés), null s'il n'est pas membre.
+ */
+async function workspaceMemberGrid(userId, workspaceId) {
+  const { ObjectId } = mongoose.Types;
+  const member = await mongoose.connection.db.collection("member").findOne({
+    organizationId:
+      typeof workspaceId === "string" ? new ObjectId(workspaceId) : workspaceId,
+    userId: typeof userId === "string" ? new ObjectId(userId) : userId,
+  });
+  if (!member) return null;
+  const role = String(member.role || "").toLowerCase();
+  const grid = await getEffectiveLevelsFor(String(workspaceId), role);
+  return { role: member.role, grid };
+}
+
+/**
  * Le rôle de l'utilisateur dans le workspace donne-t-il ce niveau sur ce
  * module (grille des rôles, prédéfinis ou personnalisés) ? `false` si
  * l'utilisateur n'est pas membre. Pour les routes REST, qui ne passent pas
@@ -49,20 +69,9 @@ export async function userHasWorkspaceLevel(
   level,
 ) {
   try {
-    const { ObjectId } = mongoose.Types;
-    const member = await mongoose.connection.db.collection("member").findOne({
-      organizationId:
-        typeof workspaceId === "string"
-          ? new ObjectId(workspaceId)
-          : workspaceId,
-      userId: typeof userId === "string" ? new ObjectId(userId) : userId,
-    });
+    const member = await workspaceMemberGrid(userId, workspaceId);
     if (!member) return false;
-    const levels = await getEffectiveLevelsFor(
-      String(workspaceId),
-      String(member.role || "").toLowerCase(),
-    );
-    const allowed = levelsAllowLevel(levels, moduleKey, level);
+    const allowed = levelsAllowLevel(member.grid, moduleKey, level);
     if (!allowed) {
       logger.warn(
         `userHasWorkspaceLevel: refus user=${userId} workspace=${workspaceId} (${member.role}) ${level} sur ${moduleKey}`,
@@ -71,6 +80,35 @@ export async function userHasWorkspaceLevel(
     return allowed;
   } catch (err) {
     logger.warn(`userHasWorkspaceLevel: validation failed (${err.message})`);
+    return false;
+  }
+}
+
+/**
+ * Comme userHasWorkspaceLevel, pour une action précise de la page
+ * (`create`, `reconcile`, `sync`…). Une liste d'actions : l'une suffit.
+ */
+export async function userHasWorkspaceAction(
+  userId,
+  workspaceId,
+  moduleKey,
+  action,
+) {
+  try {
+    const member = await workspaceMemberGrid(userId, workspaceId);
+    if (!member) return false;
+    const actions = Array.isArray(action) ? action : [action];
+    const allowed = actions.some((a) =>
+      levelsAllowAction(member.grid, moduleKey, a),
+    );
+    if (!allowed) {
+      logger.warn(
+        `userHasWorkspaceAction: refus user=${userId} workspace=${workspaceId} (${member.role}) ${actions.join("|")} sur ${moduleKey}`,
+      );
+    }
+    return allowed;
+  } catch (err) {
+    logger.warn(`userHasWorkspaceAction: validation failed (${err.message})`);
     return false;
   }
 }

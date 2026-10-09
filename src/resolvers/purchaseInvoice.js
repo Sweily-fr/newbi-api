@@ -7,6 +7,8 @@ import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
 import {
+  assertPermissionAction,
+  requireAction,
   requireRead,
   requireWrite,
   requireDelete,
@@ -93,6 +95,11 @@ const deletePurchaseInvoiceFilesFromR2 = async (files, workspaceId) => {
     }
   }
 };
+
+// Actions précises de la page « Factures d'achat » (éditeur de rôles)
+const requireCreatePurchases = requireAction("expenses", "create");
+const requireMarkPurchasesPaid = requireAction("expenses", "markPaid");
+const requireReconcilePurchases = requireAction("expenses", "reconcile");
 
 const purchaseInvoiceResolvers = {
   Query: {
@@ -637,7 +644,7 @@ const purchaseInvoiceResolvers = {
   },
 
   Mutation: {
-    createPurchaseInvoice: requireWrite("expenses")(
+    createPurchaseInvoice: requireCreatePurchases(
       async (_, { input }, context) => {
         const workspaceId = resolveWorkspaceId(
           input.workspaceId,
@@ -754,6 +761,10 @@ const purchaseInvoiceResolvers = {
       async (_, { id, input }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
+        // Passer la facture payée : case « Marquer comme payée »
+        if (input?.status === "PAID" && invoice.status !== "PAID") {
+          assertPermissionAction(context, "expenses", "markPaid");
+        }
 
         const oldStatus = invoice.status;
         const oldCategory = invoice.category;
@@ -1250,7 +1261,7 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
-    addPurchaseInvoiceFile: requireWrite("expenses")(
+    addPurchaseInvoiceFile: requireCreatePurchases(
       async (_, { purchaseInvoiceId, input }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
@@ -1356,7 +1367,7 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
-    markPurchaseInvoiceAsPaid: requireWrite("expenses")(
+    markPurchaseInvoiceAsPaid: requireMarkPurchasesPaid(
       async (_, { id, paymentDate, paymentMethod }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
@@ -1418,8 +1429,17 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
-    bulkUpdatePurchaseInvoiceStatus: requireWrite("expenses")(
+    // Passer payées : « Marquer comme payée » ; autres statuts : « Modifier »
+    bulkUpdatePurchaseInvoiceStatus: requireAction("expenses", [
+      "edit",
+      "markPaid",
+    ])(
       async (_, { ids, status }, context) => {
+        assertPermissionAction(
+          context,
+          "expenses",
+          status === "PAID" ? "markPaid" : "edit",
+        );
         const workspaceId = new mongoose.Types.ObjectId(
           context.workspaceId || context.organizationId,
         );
@@ -1537,7 +1557,7 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
-    reconcilePurchaseInvoice: requireWrite("expenses")(
+    reconcilePurchaseInvoice: requireReconcilePurchases(
       async (_, { purchaseInvoiceId, transactionIds, origin }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
@@ -1594,7 +1614,7 @@ const purchaseInvoiceResolvers = {
     // Déliaison unitaire (facture d'achat, transaction) : contrepartie de la
     // sémantique additive de reconcilePurchaseInvoice. unreconcilePurchaseInvoice
     // reste la déliaison globale (toutes les transactions).
-    unlinkPurchaseInvoiceFromTransaction: requireWrite("expenses")(
+    unlinkPurchaseInvoiceFromTransaction: requireReconcilePurchases(
       async (_, { purchaseInvoiceId, transactionId }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const wsId = new mongoose.Types.ObjectId(workspaceId);
@@ -1655,7 +1675,7 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
-    unreconcilePurchaseInvoice: requireWrite("expenses")(
+    unreconcilePurchaseInvoice: requireReconcilePurchases(
       async (_, { purchaseInvoiceId }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
@@ -1683,7 +1703,7 @@ const purchaseInvoiceResolvers = {
       },
     ),
 
-    createSupplier: requireWrite("expenses")(async (_, { input }, context) => {
+    createSupplier: requireCreatePurchases(async (_, { input }, context) => {
       const workspaceId = resolveWorkspaceId(
         input.workspaceId,
         context.workspaceId,
@@ -1794,7 +1814,7 @@ const purchaseInvoiceResolvers = {
     // Synchronisation e-invoicing (SuperPDP)
     // ============================================================
 
-    syncPurchaseInvoicesFromSuperPdp: requireWrite("expenses")(
+    syncPurchaseInvoicesFromSuperPdp: requireCreatePurchases(
       async (_, { workspaceId: inputWorkspaceId, since }, context) => {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,

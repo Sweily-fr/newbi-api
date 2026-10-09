@@ -7,15 +7,14 @@
  * catalogue via GraphQL (`roleCatalog`, `organizationRoles`, `myPermissions`),
  * il n'en garde pas de copie.
  *
- * Modèle : pour chaque module (une page ou une fonctionnalité), un niveau
- * parmi `none` < `read` < `write` < `delete`.
- *   - read   : voir, exporter, télécharger
- *   - write  : read + créer, modifier, envoyer, importer, convertir…
- *   - delete : write + supprimer
- * Les modules du groupe « Compte » n'ont que none / read / write (« Gérer »),
- * et write y couvre aussi les suppressions. Les fonctionnalités
- * (`kind: "feature"`, ex. encaissement des factures) sont oui / non :
- * none / write.
+ * Modèle : pour chaque page du menu (module), la liste des actions permises
+ * (voir, créer, modifier, supprimer, envoyer, exporter…), chacune cochée
+ * indépendamment dans l'éditeur de rôles. Une page sans « Voir »
+ * n'apparaît pas du tout ; cocher une autre action ajoute « Voir ».
+ *
+ * Les contrôles par niveau encore utilisés (`requireRead/Write/Delete`)
+ * sont dérivés des actions : lire = « view », écrire = action d'écriture du
+ * module (« edit » par défaut), supprimer = « delete ».
  *
  * Rôles prédéfinis (clés techniques inchangées pour ne migrer aucun membre) :
  *   owner      → « Super admin »     : tout, non modifiable, unique
@@ -24,6 +23,10 @@
  *   viewer     → « Membre »          : lecture seule
  *   accountant → « Comptable »       : droits d'avant les rôles
  *                                       personnalisés, siège gratuit
+ * Leurs droits par défaut sont décrits par niveaux (none < read < write <
+ * delete), convertis en actions : chaque action porte le niveau qui
+ * l'accordait. Les rôles enregistrés avant les actions (champ `levels`)
+ * sont convertis de la même façon.
  * Le super admin peut ajuster les droits des rôles prédéfinis (sauf le sien)
  * et créer des rôles personnalisés (collection `organizationRole`, partagée
  * avec le plugin organisation de Better Auth côté front).
@@ -33,9 +36,22 @@ export const LEVELS = ["none", "read", "write", "delete"];
 
 const LEVEL_RANK = { none: 0, read: 1, write: 2, delete: 3 };
 
-export const ACCOUNT_LEVELS = ["none", "read", "write"];
+const action = (key, label, level = "write", extra = {}) => ({
+  key,
+  label,
+  level,
+  ...extra,
+});
 
-export const FEATURE_LEVELS = ["none", "write"];
+// Actions communes : clé, libellé, niveau qui l'accordait avant les actions
+const VIEW = action("view", "Voir", "read");
+const EXPORT = action("export", "Exporter", "read");
+const CREATE = action("create", "Créer");
+const EDIT = action("edit", "Modifier");
+const DELETE = action("delete", "Supprimer", "delete");
+const SEND = action("send", "Envoyer par e-mail");
+const IMPORT = action("import", "Importer");
+const CRUD = [VIEW, CREATE, EDIT, DELETE];
 
 // Sections du menu de l'application, dans le même ordre
 export const MODULE_GROUPS = [
@@ -50,9 +66,9 @@ export const MODULE_GROUPS = [
 ];
 
 /**
- * Une entrée par page du menu ; `parent` = fonctionnalité d'une page
- * (sous-ligne de l'éditeur de rôles). Sans aucun droit sur une page, elle
- * n'apparaît pas du tout pour le membre.
+ * Une entrée par page du menu ; `parent` = partie d'une page, affichée
+ * dans son menu déroulant. `writeAction` : action qui vaut « écrire » pour
+ * les contrôles par niveau (« edit » par défaut).
  */
 export const MODULES = [
   // Pilotage
@@ -60,162 +76,317 @@ export const MODULES = [
     key: "banking",
     group: "pilotage",
     label: "Transactions",
-    description: "Transactions bancaires, justificatifs et rapprochement",
+    actions: [
+      VIEW,
+      EXPORT,
+      action("edit", "Modifier (catégorie, description)"),
+      action("receipts", "Ajouter et retirer des justificatifs"),
+      action("reconcile", "Rapprocher avec des factures"),
+      action("sync", "Synchroniser les comptes bancaires"),
+    ],
   },
   {
     key: "overview",
     group: "pilotage",
     label: "Vue d'ensemble",
-    description: "Chiffre d'affaires, dépenses et trésorerie",
+    actions: [VIEW],
   },
   {
     key: "forecast",
     group: "pilotage",
     label: "Prévision",
-    description: "Prévision de trésorerie et scénarios",
+    actions: [
+      VIEW,
+      action("create", "Ajouter des prévisions et des scénarios"),
+      action("edit", "Modifier les prévisions et les récurrences"),
+      DELETE,
+    ],
   },
   {
     key: "analytics",
     group: "pilotage",
     label: "Analytiques",
-    description: "Analyses des ventes, des clients et des dépenses",
+    actions: [VIEW],
   },
   // Ventes
   {
     key: "invoices",
     group: "sales",
     label: "Factures clients",
-    description: "Factures, relances, facturation électronique",
-  },
-  {
-    key: "invoicePayments",
-    group: "sales",
-    parent: "invoices",
-    kind: "feature",
-    label: "Encaissement",
-    description: "Marquer une facture comme payée",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      SEND,
+      EXPORT,
+      action("markPaid", "Marquer comme payée", "write", {
+        // Fonctionnalité séparée avant les actions (module invoicePayments)
+        legacyModule: "invoicePayments",
+      }),
+      action("status", "Annuler une facture"),
+      action("recurring", "Programmer des factures récurrentes"),
+      action("reminders", "Régler les relances automatiques"),
+    ],
   },
   {
     key: "creditNotes",
     group: "sales",
     parent: "invoices",
     label: "Avoirs",
-    description: "Avoirs créés depuis une facture",
+    actions: [VIEW, CREATE, EDIT, DELETE, SEND],
   },
   {
     key: "importedInvoices",
     group: "sales",
     parent: "invoices",
     label: "Factures importées",
-    description: "Factures importées depuis un autre logiciel",
+    actions: [VIEW, IMPORT, EDIT, DELETE],
   },
-  { key: "quotes", group: "sales", label: "Devis" },
+  {
+    key: "quotes",
+    group: "sales",
+    label: "Devis",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      SEND,
+      EXPORT,
+      action("status", "Accepter, refuser ou annuler"),
+      action("convert", "Transformer en facture ou bon de commande"),
+      action("sign", "Faire signer électroniquement"),
+    ],
+  },
   {
     key: "importedQuotes",
     group: "sales",
     parent: "quotes",
     label: "Devis importés",
+    actions: [VIEW, IMPORT, EDIT, DELETE],
   },
-  { key: "purchaseOrders", group: "sales", label: "Bons de commande" },
+  {
+    key: "purchaseOrders",
+    group: "sales",
+    label: "Bons de commande",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      SEND,
+      EXPORT,
+      action("status", "Changer le statut"),
+      action("convert", "Transformer en facture"),
+    ],
+  },
   {
     key: "importedPurchaseOrders",
     group: "sales",
     parent: "purchaseOrders",
     label: "Bons de commande importés",
+    actions: [VIEW, IMPORT, EDIT, DELETE],
   },
-  { key: "deliveryNotes", group: "sales", label: "Bons de livraison" },
+  {
+    key: "deliveryNotes",
+    group: "sales",
+    label: "Bons de livraison",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      SEND,
+      EXPORT,
+      action("status", "Changer le statut et noter la réception"),
+      action("convert", "Facturer"),
+    ],
+  },
   {
     key: "products",
     group: "sales",
     label: "Catalogue",
-    description: "Produits, services et leurs champs personnalisés",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      IMPORT,
+      EXPORT,
+      action("customFields", "Gérer les champs personnalisés"),
+    ],
   },
   // Clients
   {
     key: "clients",
     group: "clients",
     label: "Mes clients",
-    description: "Fiches clients et clients bloqués",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      IMPORT,
+      EXPORT,
+      action("block", "Bloquer et débloquer"),
+      action("assign", "Assigner des membres"),
+      action("notes", "Ajouter des notes"),
+    ],
   },
   {
     key: "clientCustomFields",
     group: "clients",
     parent: "clients",
     label: "Champs personnalisés",
-    description: "Champs ajoutés aux fiches clients",
+    actions: CRUD,
   },
-  { key: "clientLists", group: "clients", label: "Listes" },
+  {
+    key: "clientLists",
+    group: "clients",
+    label: "Listes",
+    actions: [
+      VIEW,
+      CREATE,
+      action("edit", "Modifier et ajouter ou retirer des contacts"),
+      DELETE,
+    ],
+  },
   {
     key: "automations",
     group: "clients",
     parent: "clientLists",
     label: "Automatisations",
-    description: "Automatisations des listes et e-mails automatiques",
+    actions: CRUD,
   },
-  { key: "clientSegments", group: "clients", label: "Segments" },
+  {
+    key: "clientSegments",
+    group: "clients",
+    label: "Segments",
+    actions: CRUD,
+  },
   // Achats
   {
     key: "purchaseInvoices",
     group: "purchases",
     label: "Factures d'achat",
-    description: "Factures d'achat, dépenses et fournisseurs",
+    actions: [
+      VIEW,
+      action("create", "Ajouter (saisie, import, justificatif)"),
+      EDIT,
+      DELETE,
+      EXPORT,
+      action("markPaid", "Marquer comme payée"),
+      action("reconcile", "Rapprocher avec une transaction"),
+    ],
   },
   // Organisation
-  { key: "calendar", group: "organisation", label: "Calendrier" },
+  {
+    key: "calendar",
+    group: "organisation",
+    label: "Calendrier",
+    actions: CRUD,
+  },
   {
     key: "kanban",
     group: "organisation",
     label: "Kanban",
-    description: "Tableaux, tâches et partages publics",
+    actions: [
+      VIEW,
+      action("create", "Créer des tableaux, colonnes et tâches"),
+      action("edit", "Modifier et déplacer"),
+      DELETE,
+      action("comment", "Commenter"),
+      action("share", "Partager un tableau par lien public"),
+    ],
   },
   // Documents
-  { key: "fileTransfers", group: "documents", label: "Transfert de fichiers" },
+  {
+    key: "fileTransfers",
+    group: "documents",
+    label: "Transfert de fichiers",
+    actions: [VIEW, CREATE, action("edit", "Renommer"), DELETE],
+  },
   {
     key: "sharedDocuments",
     group: "documents",
     label: "Documents partagés",
-    description: "Documents, dossiers et automatisations de classement",
+    actions: [
+      VIEW,
+      action("create", "Ajouter des documents et des dossiers"),
+      action("edit", "Renommer, déplacer, classer"),
+      DELETE,
+    ],
   },
   // Communication
-  { key: "signatures", group: "communication", label: "Signature de mail" },
+  {
+    key: "signatures",
+    group: "communication",
+    label: "Signature de mail",
+    actions: CRUD,
+  },
   // Compte
   {
     key: "team",
     group: "account",
     label: "Membres",
-    description: "Inviter, retirer des membres et changer leur rôle",
+    writeAction: "invite",
+    actions: [
+      action("view", "Voir les membres", "read"),
+      action("invite", "Inviter des membres"),
+      action("changeRole", "Changer les rôles"),
+      action("remove", "Retirer des membres"),
+    ],
   },
   {
     key: "billing",
     group: "account",
     label: "Abonnement Newbi",
-    description: "Offre, moyens de paiement et factures Newbi",
+    writeAction: "manage",
+    actions: [
+      action("view", "Voir l'abonnement", "read"),
+      action("manage", "Gérer l'abonnement et les moyens de paiement"),
+    ],
   },
   {
     key: "orgSettings",
     group: "account",
     label: "Informations de l'entreprise",
-    description:
-      "Infos générales et légales, coordonnées bancaires, paramètres des documents et des e-mails",
+    actions: [
+      action("view", "Voir les informations", "read"),
+      action(
+        "edit",
+        "Modifier (infos, coordonnées bancaires, paramètres des documents)",
+      ),
+    ],
   },
   {
     key: "integrations",
     group: "account",
     label: "Applications et banques",
-    description:
-      "Connexion des banques, Qonto, Stripe, Pennylane, Abby, facturation électronique",
+    writeAction: "manage",
+    actions: [
+      action("view", "Voir les applications", "read"),
+      action("manage", "Connecter et configurer (banques, Qonto, Stripe…)"),
+    ],
   },
 ];
 
 export const MODULE_KEYS = MODULES.map((m) => m.key);
 
+const MODULES_BY_KEY = new Map(MODULES.map((m) => [m.key, m]));
+
 const ACCOUNT_MODULES = new Set(
   MODULES.filter((m) => m.group === "account").map((m) => m.key),
 );
 
-const FEATURE_MODULES = new Set(
-  MODULES.filter((m) => m.kind === "feature").map((m) => m.key),
-);
+export function moduleActions(moduleKey) {
+  return MODULES_BY_KEY.get(moduleKey)?.actions.map((a) => a.key) || [];
+}
+
+function writeActionOf(moduleKey) {
+  return MODULES_BY_KEY.get(moduleKey)?.writeAction || "edit";
+}
 
 /**
  * Anciens noms de ressources encore utilisés par les resolvers
@@ -229,48 +400,109 @@ export const RESOURCE_ALIASES = {
 };
 
 /**
- * Actions portées par une fonctionnalité plutôt que par le niveau du module
- * (`requirePermission("invoices", "mark-paid")`).
+ * Ancienne fonctionnalité devenue action d'une page : `requireWrite(
+ * "invoicePayments")` ou `can("invoicePayments", "write")` = marquer payé.
  */
-const ACTION_MODULES = {
-  invoices: { "mark-paid": "invoicePayments" },
+const LEGACY_FEATURES = {
+  invoicePayments: { module: "invoices", action: "markPaid" },
 };
 
-/**
- * Niveau minimal requis par action. Une action inconnue exige `write`
- * (fermé par défaut plutôt qu'ouvert).
- */
-const ACTION_LEVEL = {
-  view: "read",
-  read: "read",
-  export: "read",
-  download: "read",
-  delete: "delete",
+/** Anciens noms d'actions (`requirePermission`) → action du catalogue. */
+const ACTION_ALIASES = {
+  read: "view",
+  download: "view",
+  "mark-paid": "markPaid",
+  "set-default": "edit",
+  approve: "edit",
+  ocr: "create",
   remove: "delete",
 };
 
-export function allowedLevels(moduleKey) {
-  if (FEATURE_MODULES.has(moduleKey)) return FEATURE_LEVELS;
-  return ACCOUNT_MODULES.has(moduleKey) ? ACCOUNT_LEVELS : LEVELS;
-}
-
-/** Ramène un niveau dans ceux autorisés pour le module. */
-export function clampLevel(moduleKey, level) {
+/** Niveaux permis pour un module (ancienne grille, rôles prédéfinis). */
+function clampLevel(moduleKey, level) {
   if (!LEVEL_RANK[level] && level !== "none") return "none";
-  if (FEATURE_MODULES.has(moduleKey)) {
-    // Oui / non : la lecture seule d'une fonctionnalité n'existe pas
-    return level === "write" || level === "delete" ? "write" : "none";
-  }
   if (ACCOUNT_MODULES.has(moduleKey) && level === "delete") return "write";
   return level;
 }
 
 function fill(level, overrides = {}) {
   const levels = {};
-  for (const key of MODULE_KEYS) {
+  for (const key of [...MODULE_KEYS, "invoicePayments"]) {
     levels[key] = clampLevel(key, overrides[key] ?? level);
   }
   return levels;
+}
+
+export function levelAllows(granted, required) {
+  return (LEVEL_RANK[granted] ?? 0) >= (LEVEL_RANK[required] ?? 99);
+}
+
+/**
+ * Pages séparées d'un module plus large dans une version précédente de la
+ * grille : une grille enregistrée avant la séparation reprend le niveau de
+ * l'ancien module.
+ */
+const LEGACY_LEVEL_KEYS = {
+  overview: "analytics",
+  forecast: "analytics",
+  clientCustomFields: "clientLists",
+  clientSegments: "clients",
+};
+
+/**
+ * Grille par niveaux (rôles prédéfinis, rôles enregistrés avant les
+ * actions) → grille d'actions : chaque action est accordée si le niveau de
+ * son module (ou de son ancien module) atteint le niveau de l'action.
+ * `base` complète les modules absents.
+ */
+export function actionsFromLevels(levels = {}, base = null) {
+  const grid = {};
+  for (const module of MODULES) {
+    const legacyKey = LEGACY_LEVEL_KEYS[module.key];
+    const moduleLevel =
+      levels?.[module.key] ??
+      (legacyKey ? levels?.[legacyKey] : undefined) ??
+      base?.[module.key] ??
+      "none";
+    grid[module.key] = module.actions
+      .filter((a) => {
+        const source = a.legacyModule
+          ? (levels?.[a.legacyModule] ?? base?.[a.legacyModule] ?? "none")
+          : moduleLevel;
+        return levelAllows(
+          clampLevel(module.key, source),
+          clampLevel(module.key, a.level),
+        );
+      })
+      .map((a) => a.key);
+  }
+  return grid;
+}
+
+/**
+ * Normalise une grille d'actions reçue (création/modification de rôle) :
+ * actions inconnues ignorées, « Voir » ajouté dès qu'une autre action est
+ * cochée, parties d'une page vidées si la page n'est pas visible. Modules
+ * absents : repris de `base` (ou aucune action).
+ */
+export function normalizeActions(input = {}, base = null) {
+  const grid = {};
+  for (const module of MODULES) {
+    const raw = Array.isArray(input?.[module.key])
+      ? input[module.key]
+      : base?.[module.key] || [];
+    const kept = module.actions
+      .map((a) => a.key)
+      .filter((key) => raw.includes(key));
+    if (kept.length && !kept.includes("view")) kept.unshift("view");
+    grid[module.key] = kept;
+  }
+  for (const module of MODULES) {
+    if (module.parent && !grid[module.parent]?.includes("view")) {
+      grid[module.key] = [];
+    }
+  }
+  return grid;
 }
 
 const READ_ONLY = fill("read", {
@@ -278,73 +510,82 @@ const READ_ONLY = fill("read", {
   billing: "none",
   orgSettings: "read",
   integrations: "none",
+  invoicePayments: "none",
+});
+
+const PREDEFINED_LEVELS = {
+  owner: fill("delete"),
+  admin: fill("delete", { team: "read", billing: "read" }),
+  member: fill("write", {
+    // Signatures de mail : documents personnels, chacun supprime les
+    // siennes (les suppressions sont filtrées sur l'auteur)
+    signatures: "delete",
+    team: "read",
+    billing: "none",
+    orgSettings: "read",
+    integrations: "none",
+  }),
+  viewer: READ_ONLY,
+  // Droits d'avant les rôles personnalisés, à l'identique (ancienne matrice
+  // de rbac.js + ce que permettaient les resolvers sans contrôle de rôle) :
+  // banque, rapprochement, calendrier, documents partagés et listes de
+  // clients étaient ouverts à tout membre. Kanban et signatures lui étaient
+  // fermés à l'écran. Transferts : création depuis les documents partagés.
+  accountant: fill("read", {
+    invoicePayments: "write",
+    importedInvoices: "write",
+    importedQuotes: "write",
+    importedPurchaseOrders: "write",
+    clientLists: "delete",
+    clientCustomFields: "delete",
+    banking: "delete",
+    calendar: "delete",
+    kanban: "none",
+    fileTransfers: "write",
+    sharedDocuments: "delete",
+    signatures: "none",
+    team: "read",
+    billing: "read",
+    orgSettings: "read",
+    integrations: "read",
+  }),
+};
+
+const predefined = (key, label, description, editable = true) => ({
+  label,
+  description,
+  editable,
+  levels: PREDEFINED_LEVELS[key],
+  actions: actionsFromLevels(PREDEFINED_LEVELS[key]),
 });
 
 export const PREDEFINED_ROLES = {
-  owner: {
-    label: "Super admin",
-    description:
-      "Tous les droits, y compris les membres, les rôles et l'abonnement. Un seul par espace.",
-    editable: false,
-    levels: fill("delete"),
-  },
-  admin: {
-    label: "Administrateur",
-    description:
-      "Crée, modifie et supprime partout. Ne gère ni les membres ni l'abonnement.",
-    editable: true,
-    levels: fill("delete", { team: "read", billing: "read" }),
-  },
-  member: {
-    label: "Éditeur",
-    description:
-      "Crée et modifie les documents, sans pouvoir supprimer ni toucher au compte.",
-    editable: true,
-    levels: fill("write", {
-      // Signatures de mail : documents personnels, chacun supprime les
-      // siennes (les suppressions sont filtrées sur l'auteur)
-      signatures: "delete",
-      team: "read",
-      billing: "none",
-      orgSettings: "read",
-      integrations: "none",
-    }),
-  },
-  viewer: {
-    label: "Membre",
-    description: "Consulte tout, sans rien pouvoir modifier.",
-    editable: true,
-    levels: READ_ONLY,
-  },
-  accountant: {
-    label: "Comptable",
-    description:
-      "Consulte les ventes, encaisse les factures, importe des documents, gère les transactions et les documents partagés. Siège gratuit, nombre limité selon l'offre.",
-    editable: true,
-    // Droits d'avant les rôles personnalisés, à l'identique (ancienne matrice
-    // de rbac.js + ce que permettaient les resolvers sans contrôle de rôle) :
-    // banque, rapprochement, calendrier, documents partagés et listes de
-    // clients étaient ouverts à tout membre. Kanban et signatures lui étaient
-    // fermés à l'écran. Transferts : création depuis les documents partagés.
-    levels: fill("read", {
-      invoicePayments: "write",
-      importedInvoices: "write",
-      importedQuotes: "write",
-      importedPurchaseOrders: "write",
-      clientLists: "delete",
-      clientCustomFields: "delete",
-      banking: "delete",
-      calendar: "delete",
-      kanban: "none",
-      fileTransfers: "write",
-      sharedDocuments: "delete",
-      signatures: "none",
-      team: "read",
-      billing: "read",
-      orgSettings: "read",
-      integrations: "read",
-    }),
-  },
+  owner: predefined(
+    "owner",
+    "Super admin",
+    "Tous les droits, y compris les membres, les rôles et l'abonnement. Un seul par espace.",
+    false,
+  ),
+  admin: predefined(
+    "admin",
+    "Administrateur",
+    "Crée, modifie et supprime partout. Ne gère ni les membres ni l'abonnement.",
+  ),
+  member: predefined(
+    "member",
+    "Éditeur",
+    "Crée et modifie les documents, sans pouvoir supprimer ni toucher au compte.",
+  ),
+  viewer: predefined(
+    "viewer",
+    "Membre",
+    "Consulte tout, sans rien pouvoir modifier.",
+  ),
+  accountant: predefined(
+    "accountant",
+    "Comptable",
+    "Consulte les ventes, encaisse les factures, importe des documents, gère les transactions et les documents partagés. Siège gratuit, nombre limité selon l'offre.",
+  ),
 };
 
 export const PREDEFINED_ROLE_KEYS = Object.keys(PREDEFINED_ROLES);
@@ -364,45 +605,34 @@ export function resolveModule(resource) {
 }
 
 /**
- * Pages séparées d'un module plus large dans une version précédente de la
- * grille : une grille enregistrée avant la séparation reprend le niveau de
- * l'ancien module.
+ * Grille d'actions d'un document `organizationRole` : champ `actions`, ou
+ * ancien champ `levels` converti. Rôle prédéfini ajusté : `defaults` (ses
+ * droits par défaut) complète les modules absents.
  */
-const LEGACY_LEVEL_KEYS = {
-  overview: "analytics",
-  forecast: "analytics",
-  clientCustomFields: "clientLists",
-  clientSegments: "clients",
-};
-
-/**
- * Normalise une grille reçue (création/modification de rôle) : modules
- * inconnus ignorés, niveaux invalides ramenés à `none`, modules absents
- * complétés par `base` (ou `none`).
- */
-export function normalizeLevels(input = {}, base = null) {
-  const levels = {};
-  for (const key of MODULE_KEYS) {
-    const legacyKey = LEGACY_LEVEL_KEYS[key];
-    const raw =
-      input?.[key] ??
-      (legacyKey ? input?.[legacyKey] : undefined) ??
-      base?.[key] ??
-      "none";
-    levels[key] = clampLevel(key, raw);
+export function storedRoleActions(stored, defaults = null) {
+  if (!stored) return null;
+  if (stored.actions) {
+    return normalizeActions(stored.actions, defaults?.actions);
   }
-  return levels;
+  if (stored.levels) {
+    return normalizeActions(
+      actionsFromLevels(stored.levels, defaults?.levels),
+      defaults?.actions,
+    );
+  }
+  return null;
 }
 
 /**
  * Grille effective d'un rôle (ou de plusieurs, séparés par des virgules
- * comme le permet Better Auth : on garde le niveau le plus haut).
+ * comme le permet Better Auth : union des actions).
  *
  * @param {string} role - clé du rôle (owner, admin, role_xxx…)
  * @param {Map<string, object>|object} storedRoles - documents
  *   `organizationRole` de l'espace, indexés par clé de rôle
+ * @returns {Record<string, string[]>} module → actions permises
  */
-export function getEffectiveLevels(role, storedRoles = {}) {
+export function getEffectivePermissions(role, storedRoles = {}) {
   const get = (key) =>
     storedRoles instanceof Map ? storedRoles.get(key) : storedRoles[key];
 
@@ -412,85 +642,117 @@ export function getEffectiveLevels(role, storedRoles = {}) {
     .map((r) => r.trim())
     .filter(Boolean);
 
-  const result = fill("none");
+  const result = Object.fromEntries(MODULE_KEYS.map((k) => [k, []]));
   for (const key of keys) {
-    let levels;
+    let grid;
     if (key === "owner") {
-      levels = PREDEFINED_ROLES.owner.levels;
+      grid = PREDEFINED_ROLES.owner.actions;
     } else if (PREDEFINED_ROLES[key]) {
-      const stored = get(key);
-      levels = stored?.levels
-        ? normalizeLevels(stored.levels, PREDEFINED_ROLES[key].levels)
-        : PREDEFINED_ROLES[key].levels;
+      grid =
+        storedRoleActions(get(key), PREDEFINED_ROLES[key]) ||
+        PREDEFINED_ROLES[key].actions;
     } else {
-      const stored = get(key);
-      levels = stored?.levels ? normalizeLevels(stored.levels) : null;
+      grid = storedRoleActions(get(key));
     }
-    if (!levels) continue;
+    if (!grid) continue;
     for (const moduleKey of MODULE_KEYS) {
-      if (LEVEL_RANK[levels[moduleKey]] > LEVEL_RANK[result[moduleKey]]) {
-        result[moduleKey] = levels[moduleKey];
-      }
+      const merged = new Set([
+        ...result[moduleKey],
+        ...(grid[moduleKey] || []),
+      ]);
+      result[moduleKey] = moduleActions(moduleKey).filter((a) => merged.has(a));
     }
   }
   return result;
 }
 
-export function levelAllows(granted, required) {
-  return (LEVEL_RANK[granted] ?? 0) >= (LEVEL_RANK[required] ?? 99);
+/** Ancien nom : la « grille » d'un rôle est désormais sa grille d'actions. */
+export const getEffectiveLevels = getEffectivePermissions;
+
+/** Niveau équivalent d'un module (affichage, anciens contrôles du front). */
+export function levelOf(grid, moduleKey) {
+  const actions = grid?.[moduleKey] || [];
+  if (!actions.includes("view")) return "none";
+  const canWrite = actions.includes(writeActionOf(moduleKey));
+  if (canWrite && actions.includes("delete")) return "delete";
+  return canWrite ? "write" : "read";
 }
 
-/** Niveau requis pour une action sur un module. */
-export function requiredLevelForAction(moduleKey, action) {
-  const level = ACTION_LEVEL[action] || "write";
-  return clampLevel(moduleKey, level);
+export function levelsFromActions(grid) {
+  return Object.fromEntries(MODULE_KEYS.map((k) => [k, levelOf(grid, k)]));
+}
+
+/** La grille permet-elle cette action (`view`, `create`, `markPaid`…) ? */
+export function levelsAllowAction(grid, resource, actionKey) {
+  const legacy = LEGACY_FEATURES[resource];
+  const moduleKey = legacy ? legacy.module : resolveModule(resource);
+  if (!moduleKey || !grid || !Array.isArray(grid[moduleKey])) return false;
+  const wanted = legacy
+    ? legacy.action
+    : actionKey === "manage" || actionKey === "admin"
+      ? writeActionOf(moduleKey)
+      : ACTION_ALIASES[actionKey] || actionKey;
+  return grid[moduleKey].includes(wanted);
 }
 
 /**
- * Vérifie une action précise (`view`, `create`, `delete`, `mark-paid`…)
- * sur une ressource à partir d'une grille effective.
+ * Contrôle par niveau (`read`, `write`, `delete`, `admin`) dérivé des
+ * actions : lire = « view », écrire et `admin` = action d'écriture du
+ * module (« edit » par défaut), supprimer = « delete ».
  */
-export function levelsAllowAction(levels, resource, action) {
-  const featureModule = ACTION_MODULES[resource]?.[action];
-  if (featureModule) {
-    return levelAllows(levels?.[featureModule], "write");
+export function levelsAllowLevel(grid, resource, level) {
+  const legacy = LEGACY_FEATURES[resource];
+  if (legacy) {
+    const actions = grid?.[legacy.module] || [];
+    return level === "read"
+      ? actions.includes("view")
+      : actions.includes(legacy.action);
   }
   const moduleKey = resolveModule(resource);
-  if (!moduleKey || !levels || !(moduleKey in levels)) return false;
-  return levelAllows(
-    levels[moduleKey],
-    requiredLevelForAction(moduleKey, action),
-  );
-}
-
-/**
- * Vérifie un niveau (`read`, `write`, `delete`, `admin`) sur une ressource.
- * `admin` = gestion (anciennement manage/approve/invite…) → write.
- */
-export function levelsAllowLevel(levels, resource, level) {
-  const moduleKey = resolveModule(resource);
-  if (!moduleKey || !levels || !(moduleKey in levels)) return false;
-  const required = level === "admin" ? "write" : level;
-  if (!LEVEL_RANK[required]) return false;
-  return levelAllows(levels[moduleKey], clampLevel(moduleKey, required));
+  if (!moduleKey || !grid || !Array.isArray(grid[moduleKey])) return false;
+  const actions = grid[moduleKey];
+  if (level === "read") return actions.includes("view");
+  if (level === "write" || level === "admin") {
+    return actions.includes(writeActionOf(moduleKey));
+  }
+  if (level === "delete") return actions.includes("delete");
+  return false;
 }
 
 /**
  * Permissions au format Better Auth (`organizationRole.permission`, JSON) :
- * seules les déclarations du plugin organisation comptent pour lui. Un rôle
- * qui peut gérer les membres doit pouvoir inviter, retirer et changer les
- * rôles via les routes Better Auth, et un rôle qui gère les informations de
- * l'entreprise doit pouvoir mettre à jour l'organisation (le front revérifie
- * `team` et `orgSettings` dans ses hooks).
+ * seules les déclarations du plugin organisation comptent pour lui. Inviter,
+ * changer un rôle et retirer un membre passent par ses routes, comme la
+ * mise à jour de l'organisation (le front revérifie chaque action dans ses
+ * hooks).
  */
-export function toBetterAuthPermission(levels) {
+export function toBetterAuthPermission(grid) {
   const permission = {};
-  if (levelAllows(levels?.team, "write")) {
-    permission.member = ["create", "update", "delete"];
-    permission.invitation = ["create", "cancel"];
-  }
-  if (levelAllows(levels?.orgSettings, "write")) {
+  const team = grid?.team || [];
+  const member = [];
+  if (team.includes("invite")) member.push("create");
+  if (team.includes("changeRole")) member.push("update");
+  if (team.includes("remove")) member.push("delete");
+  if (member.length) permission.member = member;
+  if (team.includes("invite")) permission.invitation = ["create", "cancel"];
+  if (grid?.orgSettings?.includes("edit")) {
     permission.organization = ["update"];
   }
   return permission;
+}
+
+/** Catalogue servi au front (éditeur de rôles). */
+export function catalogModules() {
+  return MODULES.map((m) => ({
+    key: m.key,
+    group: m.group,
+    parent: m.parent || null,
+    label: m.label,
+    description: m.description || null,
+    actions: m.actions.map((a) => ({
+      key: a.key,
+      label: a.label,
+      description: a.description || null,
+    })),
+  }));
 }

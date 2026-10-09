@@ -2,6 +2,7 @@ import EmailSignature from "../models/EmailSignature.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 // ✅ Import des wrappers RBAC
 import {
+  requireAction,
   requireRead,
   requireWrite,
   requireDelete,
@@ -33,6 +34,9 @@ const safePublish = (channel, payload, context = "") => {
     logger.error(`❌ [Signatures] Erreur getPubSub ${context}:`, error);
   }
 };
+
+// Création et duplication : action « create » de la page Signature de mail
+const requireCreateSignatures = requireAction("signatures", "create");
 
 const emailSignatureResolvers = {
   Query: {
@@ -74,7 +78,7 @@ const emailSignatureResolvers = {
 
   Mutation: {
     // ✅ Protégé par RBAC - nécessite la permission "create" sur "signatures"
-    createEmailSignature: requireWrite("signatures")(
+    createEmailSignature: requireCreateSignatures(
       async (_, { input }, context) => {
         const { user } = context;
 
@@ -188,7 +192,7 @@ const emailSignatureResolvers = {
     // côté serveur (tous les champs, y compris banner, containerStructure,
     // templateId, séparateurs, réseaux sociaux, etc.) plutôt que de dépendre
     // d'une requête frontend potentiellement incomplète.
-    duplicateEmailSignature: requireWrite("signatures")(
+    duplicateEmailSignature: requireCreateSignatures(
       async (_, { id }, context) => {
         const { user } = context;
 
