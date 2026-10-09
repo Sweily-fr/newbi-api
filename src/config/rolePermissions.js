@@ -505,58 +505,90 @@ export function normalizeActions(input = {}, base = null) {
   return grid;
 }
 
-const READ_ONLY = fill("read", {
+// Toutes les actions de chaque page
+const ALL_ACTIONS = Object.fromEntries(
+  MODULES.map((m) => [m.key, m.actions.map((a) => a.key)]),
+);
+
+/** Grille construite page par page : `pick(module, actions)` → actions. */
+function buildActions(pick) {
+  return Object.fromEntries(
+    MODULES.map((m) => {
+      const all = ALL_ACTIONS[m.key];
+      return [m.key, all.filter((a) => pick(m, a))];
+    }),
+  );
+}
+
+// Pages du compte : réservées au super admin, sauf mention contraire
+const isAccount = (m) => m.group === "account";
+
+/**
+ * Droits par défaut des rôles prédéfinis, action par action :
+ *   - Administrateur : tout, sauf gérer les membres et l'abonnement ;
+ *   - Éditeur : crée, modifie, envoie et fait avancer les documents, sans
+ *     supprimer (sauf ses signatures de mail), ni annuler une facture
+ *     (équivaut à la supprimer), ni régler ce qui vaut pour tout l'espace
+ *     (relances automatiques, champs personnalisés), ni toucher au compte ;
+ *   - Membre : voit tout, sans rien modifier ni exporter ;
+ *   - Comptable : ses droits d'avant les rôles personnalisés, à l'identique
+ *     (ancienne matrice de rbac.js + ce que permettaient les resolvers sans
+ *     contrôle de rôle : banque, rapprochement, calendrier, documents
+ *     partagés et listes de clients ouverts à tout membre ; kanban et
+ *     signatures fermés à l'écran ; transferts créés depuis les documents
+ *     partagés).
+ */
+const EDITOR_EXCLUDED = {
+  invoices: ["status", "reminders"],
+  products: ["customFields"],
+  clientCustomFields: ["create", "edit", "delete"],
+};
+
+const ACCOUNTANT_LEVELS = fill("read", {
+  invoicePayments: "write",
+  importedInvoices: "write",
+  importedQuotes: "write",
+  importedPurchaseOrders: "write",
+  clientLists: "delete",
+  clientCustomFields: "delete",
+  banking: "delete",
+  calendar: "delete",
+  kanban: "none",
+  fileTransfers: "write",
+  sharedDocuments: "delete",
+  signatures: "none",
   team: "read",
-  billing: "none",
+  billing: "read",
   orgSettings: "read",
-  integrations: "none",
-  invoicePayments: "none",
+  integrations: "read",
 });
 
-const PREDEFINED_LEVELS = {
-  owner: fill("delete"),
-  admin: fill("delete", { team: "read", billing: "read" }),
-  member: fill("write", {
-    // Signatures de mail : documents personnels, chacun supprime les
-    // siennes (les suppressions sont filtrées sur l'auteur)
-    signatures: "delete",
-    team: "read",
-    billing: "none",
-    orgSettings: "read",
-    integrations: "none",
+const PREDEFINED_ACTIONS = {
+  owner: ALL_ACTIONS,
+  admin: buildActions(
+    (m, a) => !["team", "billing"].includes(m.key) || a === "view",
+  ),
+  member: buildActions((m, a) => {
+    if (isAccount(m)) {
+      return ["team", "orgSettings"].includes(m.key) && a === "view";
+    }
+    if (EDITOR_EXCLUDED[m.key]?.includes(a)) return false;
+    // Signatures de mail : documents personnels, chacun supprime les siennes
+    return a !== "delete" || m.key === "signatures";
   }),
-  viewer: READ_ONLY,
-  // Droits d'avant les rôles personnalisés, à l'identique (ancienne matrice
-  // de rbac.js + ce que permettaient les resolvers sans contrôle de rôle) :
-  // banque, rapprochement, calendrier, documents partagés et listes de
-  // clients étaient ouverts à tout membre. Kanban et signatures lui étaient
-  // fermés à l'écran. Transferts : création depuis les documents partagés.
-  accountant: fill("read", {
-    invoicePayments: "write",
-    importedInvoices: "write",
-    importedQuotes: "write",
-    importedPurchaseOrders: "write",
-    clientLists: "delete",
-    clientCustomFields: "delete",
-    banking: "delete",
-    calendar: "delete",
-    kanban: "none",
-    fileTransfers: "write",
-    sharedDocuments: "delete",
-    signatures: "none",
-    team: "read",
-    billing: "read",
-    orgSettings: "read",
-    integrations: "read",
-  }),
+  viewer: buildActions(
+    (m, a) => a === "view" && !["billing", "integrations"].includes(m.key),
+  ),
+  accountant: actionsFromLevels(ACCOUNTANT_LEVELS),
 };
 
 const predefined = (key, label, description, editable = true) => ({
   label,
   description,
   editable,
-  levels: PREDEFINED_LEVELS[key],
-  actions: actionsFromLevels(PREDEFINED_LEVELS[key]),
+  actions: PREDEFINED_ACTIONS[key],
+  // Niveau équivalent par page (anciens écrans, conversions)
+  levels: levelsFromActions(PREDEFINED_ACTIONS[key]),
 });
 
 export const PREDEFINED_ROLES = {
@@ -574,12 +606,12 @@ export const PREDEFINED_ROLES = {
   member: predefined(
     "member",
     "Éditeur",
-    "Crée et modifie les documents, sans pouvoir supprimer ni toucher au compte.",
+    "Crée, modifie et envoie les documents, sans pouvoir supprimer, annuler une facture ni toucher au compte.",
   ),
   viewer: predefined(
     "viewer",
     "Membre",
-    "Consulte tout, sans rien pouvoir modifier.",
+    "Consulte tout, sans rien pouvoir modifier ni exporter.",
   ),
   accountant: predefined(
     "accountant",
@@ -615,10 +647,21 @@ export function storedRoleActions(stored, defaults = null) {
     return normalizeActions(stored.actions, defaults?.actions);
   }
   if (stored.levels) {
-    return normalizeActions(
-      actionsFromLevels(stored.levels, defaults?.levels),
-      defaults?.actions,
+    // Seules les pages présentes dans l'ancienne grille sont converties ;
+    // les autres gardent les droits par défaut du rôle
+    const converted = actionsFromLevels(stored.levels);
+    const partial = Object.fromEntries(
+      MODULES.filter(
+        (m) =>
+          m.key in stored.levels ||
+          (LEGACY_LEVEL_KEYS[m.key] &&
+            LEGACY_LEVEL_KEYS[m.key] in stored.levels) ||
+          m.actions.some(
+            (a) => a.legacyModule && a.legacyModule in stored.levels,
+          ),
+      ).map((m) => [m.key, converted[m.key]]),
     );
+    return normalizeActions(partial, defaults?.actions);
   }
   return null;
 }
