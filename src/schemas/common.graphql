@@ -114,6 +114,9 @@ type Client {
   activity: [ClientActivity!]
   # Indique si le client a des documents liés (factures, devis, bons de commande)
   hasDocuments: Boolean!
+  # Nombre de factures du client (tous statuts), calculé en une
+  # requête pour toute la liste de clients.
+  invoiceCount: Int!
   # Métadonnées
   createdBy: ID!
   createdAt: String!

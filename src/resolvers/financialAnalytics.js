@@ -37,7 +37,7 @@ const aggregateTimeByClient = async (
       $in: clientIds.map((id) => new mongoose.Types.ObjectId(id)),
     };
   }
-  const boards = await Board.find(boardQuery).lean();
+  const boards = await Board.find(boardQuery).select("clientId").lean();
   if (boards.length === 0) return new Map();
 
   const boardMap = new Map(); // boardId -> clientId
@@ -54,7 +54,11 @@ const aggregateTimeByClient = async (
       { "timeTracking.isRunning": true },
     ],
   };
-  const tasks = await Task.find(taskQueryWithRunning).lean();
+  // Seuls les champs lus ci-dessous : sans projection, chaque tâche arrivait
+  // avec ses commentaires, son activité et ses pièces jointes.
+  const tasks = await Task.find(taskQueryWithRunning)
+    .select("boardId timeTracking createdAt updatedAt")
+    .lean();
 
   const result = new Map();
   for (const task of tasks) {
@@ -358,11 +362,18 @@ const financialAnalyticsResolvers = {
         // (linkedTransactionIds) sont exclues pour éviter le double comptage
         // avec la facture payée. NB : workspaceId est stocké en String sur
         // Transaction (pas en ObjectId).
-        const linkedTxIds = (
-          await PurchaseInvoice.distinct("linkedTransactionIds", {
+        // Les deux listes ci-dessous (transactions rapprochées, factures
+        // importées converties) sont lues ensemble.
+        const [linkedTxIdsRaw, convertedImportedKeysRaw] = await Promise.all([
+          PurchaseInvoice.distinct("linkedTransactionIds", {
             workspaceId: wId,
-          })
-        ).filter(Boolean);
+          }),
+          PurchaseInvoice.distinct("files.filename", {
+            workspaceId: wId,
+            source: "OCR",
+          }),
+        ]);
+        const linkedTxIds = linkedTxIdsRaw.filter(Boolean);
 
         // Factures importées converties en factures d'achat : la conversion
         // (convertSingleImportedInvoice) les repasse en VALIDATED alors que ce
@@ -370,12 +381,7 @@ const financialAnalyticsResolvers = {
         // factures émises ni dans le CA encaissé. Pas de back-ref en base : on
         // les retrouve par leur clé Cloudflare, recopiée telle quelle dans
         // PurchaseInvoice.files.filename à la conversion (source OCR).
-        const convertedImportedKeys = (
-          await PurchaseInvoice.distinct("files.filename", {
-            workspaceId: wId,
-            source: "OCR",
-          })
-        ).filter(Boolean);
+        const convertedImportedKeys = convertedImportedKeysRaw.filter(Boolean);
         const notConvertedImportedMatch =
           convertedImportedKeys.length > 0
             ? { "file.cloudflareKey": { $nin: convertedImportedKeys } }
@@ -388,6 +394,423 @@ const financialAnalyticsResolvers = {
         };
         if (linkedTxIds.length > 0) outgoingTxMatch._id = { $nin: linkedTxIds };
         if (startDate || endDate) outgoingTxMatch.date = dateQuery;
+
+        // Période N-1 lancée en même temps que les agrégations principales
+        // (elle n'en dépend pas) : une vague d'allers-retours Mongo en moins.
+        // Une erreur N-1 reste non bloquante, traitée plus bas
+        // (previousPeriod = null), comme avant.
+        const previousPeriodQueries = (async () => {
+          const { prevStart, prevEnd } = computePreviousPeriod(
+            startDate,
+            endDate,
+          );
+          const prevDateQuery = { $gte: prevStart, $lte: prevEnd };
+          const prevInvoiceMatch = {
+            workspaceId: wId,
+            status: { $ne: "DRAFT" },
+            issueDate: prevDateQuery,
+          };
+          // Dépenses N-1 : transactions sortantes payées (mêmes règles que la
+          // période courante — montant < 0, status "completed", hors
+          // transactions rapprochées à une facture d'achat).
+          const prevOutgoingTxMatch = {
+            workspaceId: String(workspaceId),
+            amount: { $lt: 0 },
+            status: "completed",
+            deletedAt: null,
+            date: prevDateQuery,
+          };
+          if (linkedTxIds.length > 0) {
+            prevOutgoingTxMatch._id = { $nin: linkedTxIds };
+          }
+          const prevCreditNoteMatch = {
+            workspaceId: wId,
+            issueDate: prevDateQuery,
+          };
+
+          const [
+            prevInv,
+            prevExp,
+            prevCn,
+            prevQuote,
+            prevInvCollected,
+            prevImpCollected,
+            prevInvUnpaid,
+            prevImpUnpaid,
+            prevPurchaseInv,
+            prevImpInvoiced,
+          ] = await Promise.all([
+            Invoice.aggregate([
+              { $match: prevInvoiceMatch },
+              {
+                $facet: {
+                  totals: [
+                    {
+                      $group: {
+                        _id: null,
+                        totalRevenueHT: { $sum: "$finalTotalHT" },
+                        totalRevenueTTC: { $sum: "$finalTotalTTC" },
+                        invoiceCount: { $sum: 1 },
+                        // Count/revenue excluding CANCELED (for collectionRate and DSO)
+                        invoiceCountExclCanceled: {
+                          $sum: {
+                            $cond: [{ $ne: ["$status", "CANCELED"] }, 1, 0],
+                          },
+                        },
+                        revenueTTCExclCanceled: {
+                          $sum: {
+                            $cond: [
+                              { $ne: ["$status", "CANCELED"] },
+                              "$finalTotalTTC",
+                              0,
+                            ],
+                          },
+                        },
+                        clients: { $addToSet: "$client.id" },
+                        completedCount: {
+                          $sum: {
+                            $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0],
+                          },
+                        },
+                      },
+                    },
+                  ],
+                  receivables: [
+                    { $match: { status: { $in: ["PENDING", "OVERDUE"] } } },
+                    {
+                      $group: {
+                        _id: null,
+                        outstandingReceivables: { $sum: "$finalTotalTTC" },
+                      },
+                    },
+                  ],
+                  overdue: [
+                    {
+                      $match: {
+                        status: { $in: ["PENDING", "OVERDUE"] },
+                        dueDate: { $ne: null, $lt: now },
+                      },
+                    },
+                    {
+                      $group: {
+                        _id: null,
+                        amount: { $sum: "$finalTotalTTC" },
+                        count: { $sum: 1 },
+                      },
+                    },
+                  ],
+                  revenueByClient: [
+                    {
+                      $group: {
+                        _id: "$client.id",
+                        totalHT: { $sum: "$finalTotalHT" },
+                      },
+                    },
+                    { $sort: { totalHT: -1 } },
+                  ],
+                },
+              },
+            ]),
+            Transaction.aggregate([
+              { $match: prevOutgoingTxMatch },
+              {
+                $group: {
+                  _id: null,
+                  totalExpensesTTC: { $sum: { $abs: "$amount" } },
+                  totalExpensesVAT: { $sum: 0 },
+                },
+              },
+            ]),
+            // Avoirs N-1 : mêmes règles que la période courante — totals (tous,
+            // KPI) vs cashTotals (facture d'origine encaissée → réduit le CA).
+            CreditNote.aggregate([
+              { $match: prevCreditNoteMatch },
+              {
+                $lookup: {
+                  from: "invoices",
+                  localField: "originalInvoice",
+                  foreignField: "_id",
+                  as: "_origInvoice",
+                },
+              },
+              {
+                $addFields: {
+                  _origStatus: { $arrayElemAt: ["$_origInvoice.status", 0] },
+                },
+              },
+              {
+                $facet: {
+                  totals: [
+                    {
+                      $group: {
+                        _id: null,
+                        totalHT: { $sum: "$finalTotalHT" },
+                      },
+                    },
+                  ],
+                  cashTotals: [
+                    { $match: { _origStatus: "COMPLETED" } },
+                    {
+                      $group: {
+                        _id: null,
+                        totalHT: { $sum: "$finalTotalHT" },
+                      },
+                    },
+                  ],
+                },
+              },
+            ]),
+            Quote.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: ["COMPLETED", "CANCELED", "PENDING"] },
+                  issueDate: prevDateQuery,
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: 1 },
+                  completed: {
+                    $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] },
+                  },
+                },
+              },
+            ]),
+            // Encaissé N-1 (Newbi) — alimente le CA net, le taux de recouvrement
+            // et le DSO N-1. Montants encaissés avec repli paymentDate→issueDate
+            // (cohérent avec la période courante) ; DSO strict (paymentDate réelle).
+            Invoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: "COMPLETED",
+                },
+              },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
+                },
+              },
+              { $match: { _effectiveDate: prevDateQuery } },
+              {
+                $group: {
+                  _id: null,
+                  collectedTTC: { $sum: "$finalTotalTTC" },
+                  collectedHT: { $sum: "$finalTotalHT" },
+                  sumDaysToPay: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$issueDate", null] },
+                          ],
+                        },
+                        {
+                          $divide: [
+                            { $subtract: ["$paymentDate", "$issueDate"] },
+                            86400000,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                  daysToPayCount: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$issueDate", null] },
+                          ],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            ]),
+            // Encaissé N-1 (importées) — mêmes statuts que la période courante
+            // (IMPORTED_REVENUE_STATUSES) + repli paymentDate→invoiceDate,
+            // sinon la comparaison N-1 serait faussée ; DSO strict
+            // (paymentDate réelle).
+            ImportedInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: IMPORTED_REVENUE_STATUSES },
+                  ...notConvertedImportedMatch,
+                },
+              },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$invoiceDate"] },
+                },
+              },
+              { $match: { _effectiveDate: prevDateQuery } },
+              {
+                $group: {
+                  _id: null,
+                  collectedTTC: { $sum: "$totalTTC" },
+                  // totalHT vaut 0 par défaut sur le modèle → fallback TTC
+                  collectedHT: {
+                    $sum: {
+                      $cond: [
+                        { $gt: ["$totalHT", 0] },
+                        "$totalHT",
+                        "$totalTTC",
+                      ],
+                    },
+                  },
+                  sumDaysToPay: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$invoiceDate", null] },
+                          ],
+                        },
+                        {
+                          $divide: [
+                            { $subtract: ["$paymentDate", "$invoiceDate"] },
+                            86400000,
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                  daysToPayCount: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $ne: ["$paymentDate", null] },
+                            { $ne: ["$invoiceDate", null] },
+                          ],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            ]),
+            // Taux de recouvrement N-1 : montant impayé échu sans avoir (Newbi)
+            Invoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: ["PENDING", "OVERDUE"] },
+                  dueDate: {
+                    $ne: null,
+                    $lt: now,
+                    $gte: prevStart,
+                    $lte: prevEnd,
+                  },
+                },
+              },
+              {
+                $lookup: {
+                  from: "creditnotes",
+                  localField: "_id",
+                  foreignField: "originalInvoice",
+                  as: "_creditNotes",
+                },
+              },
+              { $match: { _creditNotes: { $size: 0 } } },
+              { $group: { _id: null, unpaidTTC: { $sum: "$finalTotalTTC" } } },
+            ]),
+            // Taux de recouvrement N-1 : montant impayé échu (importées)
+            ImportedInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: "VALIDATED",
+                  dueDate: {
+                    $ne: null,
+                    $lt: now,
+                    $gte: prevStart,
+                    $lte: prevEnd,
+                  },
+                },
+              },
+              { $group: { _id: null, unpaidTTC: { $sum: "$totalTTC" } } },
+            ]),
+            // Dépenses N-1 : factures d'achat PAYÉES (mêmes règles que la
+            // période courante — par paymentDate, fallback issueDate).
+            PurchaseInvoice.aggregate([
+              { $match: { workspaceId: wId, status: "PAID" } },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
+                },
+              },
+              { $match: { _effectiveDate: prevDateQuery } },
+              {
+                $group: {
+                  _id: null,
+                  amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
+                  amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
+                },
+              },
+            ]),
+            // Factures importées émises N-1 (IMPORTED_REVENUE_STATUSES, par
+            // invoiceDate) — pour « Factures émises » et « Panier moyen » N-1.
+            ImportedInvoice.aggregate([
+              {
+                $match: {
+                  workspaceId: wId,
+                  status: { $in: IMPORTED_REVENUE_STATUSES },
+                },
+              },
+              {
+                $addFields: {
+                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
+                },
+              },
+              { $match: { _effectiveDate: prevDateQuery } },
+              {
+                $group: {
+                  _id: null,
+                  invoicedTTC: { $sum: "$totalTTC" },
+                  invoicedHT: {
+                    $sum: {
+                      $cond: [
+                        { $gt: ["$totalHT", 0] },
+                        "$totalHT",
+                        "$totalTTC",
+                      ],
+                    },
+                  },
+                  invoicedCount: { $sum: 1 },
+                },
+              },
+            ]),
+          ]);
+          return {
+            prevInv,
+            prevExp,
+            prevCn,
+            prevQuote,
+            prevInvCollected,
+            prevImpCollected,
+            prevInvUnpaid,
+            prevImpUnpaid,
+            prevPurchaseInv,
+            prevImpInvoiced,
+          };
+        })();
+        // Rejet géré à l'await ; évite un « rejet non géré » si la vague
+        // principale échoue avant.
+        previousPeriodQueries.catch(() => {});
 
         // ==============================
         // MAIN AGGREGATIONS (parallel)
@@ -1982,31 +2405,7 @@ const financialAnalyticsResolvers = {
             endDate,
           );
 
-          const prevDateQuery = { $gte: prevStart, $lte: prevEnd };
-          const prevInvoiceMatch = {
-            workspaceId: wId,
-            status: { $ne: "DRAFT" },
-            issueDate: prevDateQuery,
-          };
-          // Dépenses N-1 : transactions sortantes payées (mêmes règles que la
-          // période courante — montant < 0, status "completed", hors
-          // transactions rapprochées à une facture d'achat).
-          const prevOutgoingTxMatch = {
-            workspaceId: String(workspaceId),
-            amount: { $lt: 0 },
-            status: "completed",
-            deletedAt: null,
-            date: prevDateQuery,
-          };
-          if (linkedTxIds.length > 0) {
-            prevOutgoingTxMatch._id = { $nin: linkedTxIds };
-          }
-          const prevCreditNoteMatch = {
-            workspaceId: wId,
-            issueDate: prevDateQuery,
-          };
-
-          const [
+          const {
             prevInv,
             prevExp,
             prevCn,
@@ -2017,362 +2416,7 @@ const financialAnalyticsResolvers = {
             prevImpUnpaid,
             prevPurchaseInv,
             prevImpInvoiced,
-          ] = await Promise.all([
-            Invoice.aggregate([
-              { $match: prevInvoiceMatch },
-              {
-                $facet: {
-                  totals: [
-                    {
-                      $group: {
-                        _id: null,
-                        totalRevenueHT: { $sum: "$finalTotalHT" },
-                        totalRevenueTTC: { $sum: "$finalTotalTTC" },
-                        invoiceCount: { $sum: 1 },
-                        // Count/revenue excluding CANCELED (for collectionRate and DSO)
-                        invoiceCountExclCanceled: {
-                          $sum: {
-                            $cond: [{ $ne: ["$status", "CANCELED"] }, 1, 0],
-                          },
-                        },
-                        revenueTTCExclCanceled: {
-                          $sum: {
-                            $cond: [
-                              { $ne: ["$status", "CANCELED"] },
-                              "$finalTotalTTC",
-                              0,
-                            ],
-                          },
-                        },
-                        clients: { $addToSet: "$client.id" },
-                        completedCount: {
-                          $sum: {
-                            $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0],
-                          },
-                        },
-                      },
-                    },
-                  ],
-                  receivables: [
-                    { $match: { status: { $in: ["PENDING", "OVERDUE"] } } },
-                    {
-                      $group: {
-                        _id: null,
-                        outstandingReceivables: { $sum: "$finalTotalTTC" },
-                      },
-                    },
-                  ],
-                  overdue: [
-                    {
-                      $match: {
-                        status: { $in: ["PENDING", "OVERDUE"] },
-                        dueDate: { $ne: null, $lt: now },
-                      },
-                    },
-                    {
-                      $group: {
-                        _id: null,
-                        amount: { $sum: "$finalTotalTTC" },
-                        count: { $sum: 1 },
-                      },
-                    },
-                  ],
-                  revenueByClient: [
-                    {
-                      $group: {
-                        _id: "$client.id",
-                        totalHT: { $sum: "$finalTotalHT" },
-                      },
-                    },
-                    { $sort: { totalHT: -1 } },
-                  ],
-                },
-              },
-            ]),
-            Transaction.aggregate([
-              { $match: prevOutgoingTxMatch },
-              {
-                $group: {
-                  _id: null,
-                  totalExpensesTTC: { $sum: { $abs: "$amount" } },
-                  totalExpensesVAT: { $sum: 0 },
-                },
-              },
-            ]),
-            // Avoirs N-1 : mêmes règles que la période courante — totals (tous,
-            // KPI) vs cashTotals (facture d'origine encaissée → réduit le CA).
-            CreditNote.aggregate([
-              { $match: prevCreditNoteMatch },
-              {
-                $lookup: {
-                  from: "invoices",
-                  localField: "originalInvoice",
-                  foreignField: "_id",
-                  as: "_origInvoice",
-                },
-              },
-              {
-                $addFields: {
-                  _origStatus: { $arrayElemAt: ["$_origInvoice.status", 0] },
-                },
-              },
-              {
-                $facet: {
-                  totals: [
-                    {
-                      $group: {
-                        _id: null,
-                        totalHT: { $sum: "$finalTotalHT" },
-                      },
-                    },
-                  ],
-                  cashTotals: [
-                    { $match: { _origStatus: "COMPLETED" } },
-                    {
-                      $group: {
-                        _id: null,
-                        totalHT: { $sum: "$finalTotalHT" },
-                      },
-                    },
-                  ],
-                },
-              },
-            ]),
-            Quote.aggregate([
-              {
-                $match: {
-                  workspaceId: wId,
-                  status: { $in: ["COMPLETED", "CANCELED", "PENDING"] },
-                  issueDate: prevDateQuery,
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  total: { $sum: 1 },
-                  completed: {
-                    $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] },
-                  },
-                },
-              },
-            ]),
-            // Encaissé N-1 (Newbi) — alimente le CA net, le taux de recouvrement
-            // et le DSO N-1. Montants encaissés avec repli paymentDate→issueDate
-            // (cohérent avec la période courante) ; DSO strict (paymentDate réelle).
-            Invoice.aggregate([
-              {
-                $match: {
-                  workspaceId: wId,
-                  status: "COMPLETED",
-                },
-              },
-              {
-                $addFields: {
-                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
-                },
-              },
-              { $match: { _effectiveDate: prevDateQuery } },
-              {
-                $group: {
-                  _id: null,
-                  collectedTTC: { $sum: "$finalTotalTTC" },
-                  collectedHT: { $sum: "$finalTotalHT" },
-                  sumDaysToPay: {
-                    $sum: {
-                      $cond: [
-                        {
-                          $and: [
-                            { $ne: ["$paymentDate", null] },
-                            { $ne: ["$issueDate", null] },
-                          ],
-                        },
-                        {
-                          $divide: [
-                            { $subtract: ["$paymentDate", "$issueDate"] },
-                            86400000,
-                          ],
-                        },
-                        0,
-                      ],
-                    },
-                  },
-                  daysToPayCount: {
-                    $sum: {
-                      $cond: [
-                        {
-                          $and: [
-                            { $ne: ["$paymentDate", null] },
-                            { $ne: ["$issueDate", null] },
-                          ],
-                        },
-                        1,
-                        0,
-                      ],
-                    },
-                  },
-                },
-              },
-            ]),
-            // Encaissé N-1 (importées) — mêmes statuts que la période courante
-            // (IMPORTED_REVENUE_STATUSES) + repli paymentDate→invoiceDate,
-            // sinon la comparaison N-1 serait faussée ; DSO strict
-            // (paymentDate réelle).
-            ImportedInvoice.aggregate([
-              {
-                $match: {
-                  workspaceId: wId,
-                  status: { $in: IMPORTED_REVENUE_STATUSES },
-                  ...notConvertedImportedMatch,
-                },
-              },
-              {
-                $addFields: {
-                  _effectiveDate: { $ifNull: ["$paymentDate", "$invoiceDate"] },
-                },
-              },
-              { $match: { _effectiveDate: prevDateQuery } },
-              {
-                $group: {
-                  _id: null,
-                  collectedTTC: { $sum: "$totalTTC" },
-                  // totalHT vaut 0 par défaut sur le modèle → fallback TTC
-                  collectedHT: {
-                    $sum: {
-                      $cond: [
-                        { $gt: ["$totalHT", 0] },
-                        "$totalHT",
-                        "$totalTTC",
-                      ],
-                    },
-                  },
-                  sumDaysToPay: {
-                    $sum: {
-                      $cond: [
-                        {
-                          $and: [
-                            { $ne: ["$paymentDate", null] },
-                            { $ne: ["$invoiceDate", null] },
-                          ],
-                        },
-                        {
-                          $divide: [
-                            { $subtract: ["$paymentDate", "$invoiceDate"] },
-                            86400000,
-                          ],
-                        },
-                        0,
-                      ],
-                    },
-                  },
-                  daysToPayCount: {
-                    $sum: {
-                      $cond: [
-                        {
-                          $and: [
-                            { $ne: ["$paymentDate", null] },
-                            { $ne: ["$invoiceDate", null] },
-                          ],
-                        },
-                        1,
-                        0,
-                      ],
-                    },
-                  },
-                },
-              },
-            ]),
-            // Taux de recouvrement N-1 : montant impayé échu sans avoir (Newbi)
-            Invoice.aggregate([
-              {
-                $match: {
-                  workspaceId: wId,
-                  status: { $in: ["PENDING", "OVERDUE"] },
-                  dueDate: {
-                    $ne: null,
-                    $lt: now,
-                    $gte: prevStart,
-                    $lte: prevEnd,
-                  },
-                },
-              },
-              {
-                $lookup: {
-                  from: "creditnotes",
-                  localField: "_id",
-                  foreignField: "originalInvoice",
-                  as: "_creditNotes",
-                },
-              },
-              { $match: { _creditNotes: { $size: 0 } } },
-              { $group: { _id: null, unpaidTTC: { $sum: "$finalTotalTTC" } } },
-            ]),
-            // Taux de recouvrement N-1 : montant impayé échu (importées)
-            ImportedInvoice.aggregate([
-              {
-                $match: {
-                  workspaceId: wId,
-                  status: "VALIDATED",
-                  dueDate: {
-                    $ne: null,
-                    $lt: now,
-                    $gte: prevStart,
-                    $lte: prevEnd,
-                  },
-                },
-              },
-              { $group: { _id: null, unpaidTTC: { $sum: "$totalTTC" } } },
-            ]),
-            // Dépenses N-1 : factures d'achat PAYÉES (mêmes règles que la
-            // période courante — par paymentDate, fallback issueDate).
-            PurchaseInvoice.aggregate([
-              { $match: { workspaceId: wId, status: "PAID" } },
-              {
-                $addFields: {
-                  _effectiveDate: { $ifNull: ["$paymentDate", "$issueDate"] },
-                },
-              },
-              { $match: { _effectiveDate: prevDateQuery } },
-              {
-                $group: {
-                  _id: null,
-                  amountTTC: { $sum: { $ifNull: ["$amountTTC", 0] } },
-                  amountTVA: { $sum: { $ifNull: ["$amountTVA", 0] } },
-                },
-              },
-            ]),
-            // Factures importées émises N-1 (IMPORTED_REVENUE_STATUSES, par
-            // invoiceDate) — pour « Factures émises » et « Panier moyen » N-1.
-            ImportedInvoice.aggregate([
-              {
-                $match: {
-                  workspaceId: wId,
-                  status: { $in: IMPORTED_REVENUE_STATUSES },
-                },
-              },
-              {
-                $addFields: {
-                  _effectiveDate: { $ifNull: ["$invoiceDate", "$createdAt"] },
-                },
-              },
-              { $match: { _effectiveDate: prevDateQuery } },
-              {
-                $group: {
-                  _id: null,
-                  invoicedTTC: { $sum: "$totalTTC" },
-                  invoicedHT: {
-                    $sum: {
-                      $cond: [
-                        { $gt: ["$totalHT", 0] },
-                        "$totalHT",
-                        "$totalTTC",
-                      ],
-                    },
-                  },
-                  invoicedCount: { $sum: 1 },
-                },
-              },
-            ]),
-          ]);
+          } = await previousPeriodQueries;
 
           const prevInvResult = prevInv[0];
           const prevInvTotals = prevInvResult.totals[0] || {
@@ -2711,10 +2755,24 @@ const financialAnalyticsResolvers = {
         }
 
         // Add clients that have time tracked but no paid invoices
+        // Une seule lecture pour tous ces clients (au lieu d'un findById par
+        // client, en série) ; même ordre de parcours qu'avant.
         const Client = mongoose.model("Client");
+        const timeOnlyClientIds = [...clientTimeMap.keys()].filter(
+          (id) => !matchedClientIds.has(id) && mongoose.isValidObjectId(id),
+        );
+        const timeOnlyClients =
+          timeOnlyClientIds.length > 0
+            ? await Client.find({ _id: { $in: timeOnlyClientIds } })
+                .select("type firstName lastName name")
+                .lean()
+            : [];
+        const timeOnlyClientById = new Map(
+          timeOnlyClients.map((c) => [c._id.toString(), c]),
+        );
         for (const [clientIdStr, timeData] of clientTimeMap) {
           if (matchedClientIds.has(clientIdStr)) continue;
-          const client = await Client.findById(clientIdStr).lean();
+          const client = timeOnlyClientById.get(clientIdStr);
           if (!client) continue;
           const clientName =
             client.type === "INDIVIDUAL"

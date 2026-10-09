@@ -366,12 +366,24 @@ const invoiceResolvers = {
     // redirection du backend qui crée une session Checkout fraîche à chaque clic.
     // Renvoyé uniquement si la facture est payable (PENDING) ET que l'organisation a un
     // compte Stripe Connect opérationnel (chargesEnabled). Sinon null → bouton masqué côté front.
-    paymentLink: async (invoice) => {
+    paymentLink: async (invoice, _args, context) => {
       if (invoice.status !== "PENDING") return null;
       try {
-        const account = await StripeConnectAccount.findOne({
-          organizationId: invoice.workspaceId.toString(),
-        });
+        // Compte Stripe Connect lu une fois par organisation et par requête,
+        // et non pour chaque facture en attente de la liste.
+        const organizationId = invoice.workspaceId.toString();
+        const cache = context
+          ? (context._stripeConnectAccountByOrg ??= new Map())
+          : new Map();
+        if (!cache.has(organizationId)) {
+          cache.set(
+            organizationId,
+            StripeConnectAccount.findOne({ organizationId })
+              .select("chargesEnabled")
+              .lean(),
+          );
+        }
+        const account = await cache.get(organizationId);
         if (!account || !account.chargesEnabled) return null;
         const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
         return `${baseUrl}/pay/invoice/${invoice._id.toString()}`;
@@ -528,7 +540,10 @@ const invoiceResolvers = {
               siret: freshClient.siret,
               vatNumber: freshClient.vatNumber,
               isInternational: freshClient.isInternational,
-              documentFields: await buildClientDocumentFields(freshClient, context),
+              documentFields: await buildClientDocumentFields(
+                freshClient,
+                context,
+              ),
               firstName: freshClient.firstName,
               lastName: freshClient.lastName,
               hasDifferentShippingAddress:
@@ -619,13 +634,15 @@ const invoiceResolvers = {
         // (pas de filtre par createdBy pour les viewers)
 
         const skip = (page - 1) * limit;
-        const totalCount = await Invoice.countDocuments(query);
-
-        const invoices = await Invoice.find(query)
-          .populate("createdBy")
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limit);
+        // Comptage et page lus en parallèle (ils étaient enchaînés).
+        const [totalCount, invoices] = await Promise.all([
+          Invoice.countDocuments(query),
+          Invoice.find(query)
+            .populate("createdBy")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit),
+        ]);
 
         return {
           invoices,
@@ -2372,7 +2389,10 @@ const invoiceResolvers = {
                       freshClient.hasDifferentShippingAddress,
                     shippingAddress: freshClient.shippingAddress,
                     isInternational: freshClient.isInternational,
-                    documentFields: await buildClientDocumentFields(freshClient, context),
+                    documentFields: await buildClientDocumentFields(
+                      freshClient,
+                      context,
+                    ),
                     siret: freshClient.siret,
                     vatNumber: freshClient.vatNumber,
                   };
@@ -2465,7 +2485,10 @@ const invoiceResolvers = {
                       freshClient.hasDifferentShippingAddress,
                     shippingAddress: freshClient.shippingAddress,
                     isInternational: freshClient.isInternational,
-                    documentFields: await buildClientDocumentFields(freshClient, context),
+                    documentFields: await buildClientDocumentFields(
+                      freshClient,
+                      context,
+                    ),
                     siret: freshClient.siret,
                     vatNumber: freshClient.vatNumber,
                   };
@@ -2964,7 +2987,10 @@ const invoiceResolvers = {
                     freshClient.hasDifferentShippingAddress,
                   shippingAddress: freshClient.shippingAddress,
                   isInternational: freshClient.isInternational,
-                  documentFields: await buildClientDocumentFields(freshClient, context),
+                  documentFields: await buildClientDocumentFields(
+                    freshClient,
+                    context,
+                  ),
                   siret: freshClient.siret,
                   vatNumber: freshClient.vatNumber,
                 };

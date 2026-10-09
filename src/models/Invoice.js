@@ -633,6 +633,8 @@ invoiceSchema.index({ issueDate: -1 });
 invoiceSchema.index({ workspaceId: 1, issueDate: -1 });
 // Index pour les factures de situation (situationInvoicedTotal dans quote resolver)
 invoiceSchema.index({ workspaceId: 1, invoiceType: 1, purchaseOrderNumber: 1 });
+// Documents d'un client (Client.hasDocuments, fiche client)
+invoiceSchema.index({ workspaceId: 1, "client.id": 1 });
 // Factures générées par une récurrence (idempotence d'une échéance)
 invoiceSchema.index(
   {

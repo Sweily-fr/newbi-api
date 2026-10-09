@@ -171,7 +171,15 @@ const purchaseInvoiceResolvers = {
 
       const skip = (page - 1) * limit;
       const [items, totalCount] = await Promise.all([
-        PurchaseInvoice.find(query).sort(sort).skip(skip).limit(limit).lean(),
+        // Données OCR brutes et XML e-invoicing exclus de la liste : lourds et
+        // demandés seulement par la fiche (purchaseInvoice), ni par la liste du
+        // web ni par celle de l'app mobile.
+        PurchaseInvoice.find(query)
+          .sort(sort)
+          .skip(skip)
+          .limit(limit)
+          .select("-ocrData -rawExtractedText -eInvoiceRawData -files.ocrData")
+          .lean(),
         PurchaseInvoice.countDocuments(query),
       ]);
 
