@@ -821,3 +821,109 @@ describe("PurchaseInvoice Resolver - Query.suppliers (recherche)", () => {
     expect(result.items[0].name).toBe("Orange (Business)");
   });
 });
+
+describe("PurchaseInvoice Resolver - Mutation.addPurchaseInvoiceFile (données OCR)", () => {
+  const resolver = purchaseInvoiceResolvers.Mutation.addPurchaseInvoiceFile;
+  const fileInput = {
+    cloudflareUrl: "https://test.r2.dev/justificatif.pdf",
+    fileName: "justificatif.pdf",
+    mimeType: "application/pdf",
+    fileSize: 1234,
+  };
+
+  it("remplit ocrMetadata depuis le JSON OCR brut envoyé par le desktop", async () => {
+    const { insertedId } = await insertPurchaseInvoice({ currency: "EUR" });
+
+    // Forme renvoyée par processDocumentOcr (financialAnalysis)
+    const ocrData = {
+      transaction_data: {
+        vendor_name: "Figma Inc",
+        document_number: "INV-2026-42",
+        transaction_date: "2026-09-15",
+        due_date: "15/10/2026",
+        amount: 120,
+        amount_ht: 100,
+        tax_amount: 20,
+        tax_rate: 20,
+        currency: "USD",
+      },
+      extracted_fields: {
+        vendor_siret: "12345678901234",
+        vendor_vat_number: "FR12345678901",
+        vendor_address: "1 Market St",
+        payment_details: { iban: "FR7612345", bic: "BNPAFRPP" },
+      },
+      document_analysis: { confidence: 0.92 },
+    };
+
+    const result = await resolver(
+      null,
+      {
+        purchaseInvoiceId: insertedId.toString(),
+        input: { ...fileInput, ocrData },
+      },
+      ctx(),
+    );
+
+    const meta = result.ocrMetadata;
+    expect(meta.supplierName).toBe("Figma Inc");
+    expect(meta.invoiceNumber).toBe("INV-2026-42");
+    expect(meta.amountTTC).toBe(120);
+    expect(meta.currency).toBe("USD");
+    expect(meta.amountHT).toBe(100);
+    expect(meta.amountTVA).toBe(20);
+    expect(meta.vatRate).toBe(20);
+    expect(meta.supplierSiret).toBe("12345678901234");
+    expect(meta.supplierVatNumber).toBe("FR12345678901");
+    expect(meta.iban).toBe("FR7612345");
+    expect(meta.bic).toBe("BNPAFRPP");
+    expect(meta.confidenceScore).toBe(0.92);
+    expect(meta.invoiceDate.toISOString().slice(0, 10)).toBe("2026-09-15");
+    expect(meta.dueDate.toISOString().slice(0, 10)).toBe("2026-10-15");
+    expect(result.files).toHaveLength(1);
+  });
+
+  it("lit encore l'ancienne forme à plat (camelCase)", async () => {
+    const { insertedId } = await insertPurchaseInvoice();
+
+    const result = await resolver(
+      null,
+      {
+        purchaseInvoiceId: insertedId.toString(),
+        input: {
+          ...fileInput,
+          ocrData: JSON.stringify({
+            supplierName: "Acme",
+            invoiceNumber: "F-1",
+            amountTTC: 60,
+            currency: "GBP",
+          }),
+        },
+      },
+      ctx(),
+    );
+
+    expect(result.ocrMetadata.supplierName).toBe("Acme");
+    expect(result.ocrMetadata.invoiceNumber).toBe("F-1");
+    expect(result.ocrMetadata.amountTTC).toBe(60);
+    expect(result.ocrMetadata.currency).toBe("GBP");
+  });
+
+  it("n'efface rien quand les données OCR sont vides ou illisibles", async () => {
+    const { insertedId } = await insertPurchaseInvoice({
+      ocrMetadata: { supplierName: "Déjà lu", amountTTC: 99 },
+    });
+
+    const result = await resolver(
+      null,
+      {
+        purchaseInvoiceId: insertedId.toString(),
+        input: { ...fileInput, ocrData: "pas du JSON" },
+      },
+      ctx(),
+    );
+
+    expect(result.ocrMetadata.supplierName).toBe("Déjà lu");
+    expect(result.ocrMetadata.amountTTC).toBe(99);
+  });
+});

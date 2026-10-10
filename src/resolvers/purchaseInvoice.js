@@ -2,6 +2,7 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import { resolveSupplier } from "../utils/supplierResolution.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { ocrMetadataFromOcrData } from "../utils/purchaseInvoiceOcrMetadata.js";
 import mongoose from "mongoose";
 import cloudflareService from "../services/cloudflareService.js";
 import superPdpService from "../services/superPdpService.js";
@@ -1353,27 +1354,19 @@ const purchaseInvoiceResolvers = {
 
         invoice.files.push(fileData);
 
-        // Apply OCR data if provided
+        // Données OCR du justificatif : le desktop envoie le JSON brut de
+        // l'analyse (transaction_data, extracted_fields…), l'ancienne forme
+        // était à plat en camelCase. Lire seulement la seconde laissait
+        // ocrMetadata vide, donc sans montant ni devise d'origine.
         if (input.ocrData) {
-          const ocr =
-            typeof input.ocrData === "string"
-              ? JSON.parse(input.ocrData)
-              : input.ocrData;
-          if (ocr.supplierName)
-            invoice.ocrMetadata.supplierName = ocr.supplierName;
-          if (ocr.invoiceNumber)
-            invoice.ocrMetadata.invoiceNumber = ocr.invoiceNumber;
-          if (ocr.invoiceDate)
-            invoice.ocrMetadata.invoiceDate = new Date(ocr.invoiceDate);
-          if (ocr.dueDate) invoice.ocrMetadata.dueDate = new Date(ocr.dueDate);
-          if (ocr.amountHT) invoice.ocrMetadata.amountHT = ocr.amountHT;
-          if (ocr.amountTVA) invoice.ocrMetadata.amountTVA = ocr.amountTVA;
-          if (ocr.vatRate) invoice.ocrMetadata.vatRate = ocr.vatRate;
-          if (ocr.amountTTC) invoice.ocrMetadata.amountTTC = ocr.amountTTC;
-          if (ocr.iban) invoice.ocrMetadata.iban = ocr.iban;
-          if (ocr.bic) invoice.ocrMetadata.bic = ocr.bic;
-          if (ocr.confidenceScore)
-            invoice.ocrMetadata.confidenceScore = ocr.confidenceScore;
+          const metadata = ocrMetadataFromOcrData(input.ocrData);
+          if (Object.keys(metadata).length > 0) {
+            if (!invoice.ocrMetadata) invoice.ocrMetadata = {};
+            Object.entries(metadata).forEach(([key, value]) => {
+              invoice.ocrMetadata[key] = value;
+            });
+            invoice.markModified("ocrMetadata");
+          }
         }
 
         await invoice.save();
