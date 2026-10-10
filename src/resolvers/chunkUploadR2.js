@@ -23,9 +23,13 @@ import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 // pouvait donc créer des transferts depuis le desktop ou l'app mobile.
 const requireTransferCreate = requireTransferActionFromInput("create");
 
-// Cache temporaire pour stocker les métadonnées des fichiers uploadés (avec TTL)
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-const CACHE_TTL_SECONDS = 30 * 60; // idem en secondes pour Redis
+// Cache temporaire pour stocker les métadonnées des fichiers uploadés (avec TTL).
+// Le transfert n'est créé qu'une fois TOUS les fichiers envoyés : sur un lot
+// de grosses vidéos envoyé en 4G, le premier fichier pouvait sortir du cache
+// (30 min auparavant) avant la fin du dernier, et la création échouait
+// (FILE_NOT_FOUND). 24 h couvre les envois les plus longs.
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 heures
+const CACHE_TTL_SECONDS = 24 * 60 * 60; // idem en secondes pour Redis
 // Cache mémoire L1 (rapide, mais local à l'instance PM2)
 const fileMetadataCache = new Map();
 const cacheTimers = new Map();
