@@ -16,7 +16,7 @@ import { ObjectId } from "mongodb";
 import { sendTaskAssignmentEmail, sendMentionEmail } from "../utils/mailer.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "./notification.js";
-import { sendPushToUser } from "../services/pushNotificationService.js";
+import { sendNotificationPush } from "../services/notificationPushService.js";
 import Client from "../models/Client.js";
 import {
   listTaskPresence,
@@ -1848,11 +1848,12 @@ const resolvers = {
                         );
 
                         // Envoyer la notification push sur l'appareil
-                        sendPushToUser(memberId, {
+                        // (titre, corps et clés boardId/taskId inchangés :
+                        // l'app mobile les lit déjà)
+                        sendNotificationPush(notification, {
                           title: "Nouvelle tâche assignée",
                           body: `${notifAssignerName} vous a assigné à « ${savedTask.title || "Sans titre"} »`,
                           data: {
-                            type: "TASK_ASSIGNED",
                             boardId: String(savedTask.boardId),
                             taskId: String(savedTask._id),
                           },
@@ -2316,11 +2317,12 @@ const resolvers = {
                             );
 
                             // Envoyer la notification push sur l'appareil
-                            sendPushToUser(memberId, {
+                            // (titre, corps et clés boardId/taskId inchangés :
+                            // l'app mobile les lit déjà)
+                            sendNotificationPush(notification, {
                               title: "Nouvelle tâche assignée",
                               body: `${assignerName} vous a assigné à « ${oldTask.title || "Sans titre"} »`,
                               data: {
-                                type: "TASK_ASSIGNED",
                                 boardId: String(oldTask.boardId),
                                 taskId: String(id),
                               },
@@ -2989,6 +2991,8 @@ const resolvers = {
           }
 
           await task.save();
+          // Identifiant du commentaire créé (transmis au push de mention)
+          const newCommentId = task.comments[task.comments.length - 1]?._id;
 
           // Enrichir la tâche avec les infos utilisateur
           const enrichedTask = await enrichTaskWithUserInfo(task);
@@ -3149,6 +3153,12 @@ const resolvers = {
                           logger.info(
                             `🔔 [Mention] Notification publiée en temps réel pour ${memberData.email}`,
                           );
+
+                          // Push sur l'appareil (même préférence que la
+                          // notification in-app : kanban_mention.push)
+                          sendNotificationPush(notification, {
+                            data: { commentId: newCommentId },
+                          });
                         } catch (notifError) {
                           logger.error(
                             "❌ [Mention] Erreur création notification:",
@@ -3328,6 +3338,12 @@ const resolvers = {
                               url: taskUrl,
                             });
                           await publishNotification(notification);
+
+                          // Push sur l'appareil (même préférence que la
+                          // notification in-app : kanban_mention.push)
+                          sendNotificationPush(notification, {
+                            data: { commentId },
+                          });
                         } catch (notifError) {
                           logger.error(
                             "❌ [Mention-Update] Erreur notification:",
