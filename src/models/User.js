@@ -432,6 +432,10 @@ const userSchema = new mongoose.Schema(
         email: { type: Boolean, default: true },
         push: { type: Boolean, default: true },
       },
+      kanban_mention: {
+        email: { type: Boolean, default: true },
+        push: { type: Boolean, default: true },
+      },
     },
 
     // Tokens de notifications push (Expo) — un par appareil
