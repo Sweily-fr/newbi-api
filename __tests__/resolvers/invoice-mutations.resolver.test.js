@@ -441,4 +441,24 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
     expect(result.finalTotalVAT).toBeCloseTo(190, 10);
     expect(result.finalTotalTTC).toBeCloseTo(1140, 10);
   });
+
+  it("oublie le PDF en cache des envois quand la facture est modifiée", async () => {
+    const { insertedId } = await insertInvoice({
+      cachedPdf: {
+        key: "cache/invoice.pdf",
+        url: "https://r2.example/invoice.pdf",
+        generatedAt: new Date(),
+      },
+    });
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
+      ctx(),
+    );
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.cachedPdf?.url ?? null).toBeNull();
+    expect(stored.cachedPdf?.key ?? null).toBeNull();
+  });
 });

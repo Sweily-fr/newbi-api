@@ -809,4 +809,29 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
     expect(result.finalTotalHT).toBe(1000);
     expect(result.finalTotalTTC).toBe(1200);
   });
+
+  it("oublie le PDF en cache des envois quand le devis est modifié", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0012",
+        prefix: "D-102026",
+        cachedPdf: {
+          key: "cache/quote.pdf",
+          url: "https://r2.example/quote.pdf",
+          generatedAt: new Date(),
+        },
+      }),
+    );
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { items: items1000 } },
+      ctx(),
+    );
+
+    const stored = await Quote.collection.findOne({ _id: insertedId });
+    expect(stored.cachedPdf?.url).toBeUndefined();
+    expect(stored.cachedPdf?.key).toBeUndefined();
+  });
 });

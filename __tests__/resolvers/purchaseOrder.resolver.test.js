@@ -597,6 +597,31 @@ describe("PurchaseOrder Resolver — updatePurchaseOrder (bon de commande modifi
     expect(updated.finalTotalHT).toBe(1000);
     expect(updated.finalTotalTTC).toBe(1200);
   });
+
+  it("oublie le PDF en cache des envois quand le bon de commande est modifié", async () => {
+    const po = await create(null, { input: buildPOInput() }, ctx());
+    await PurchaseOrder.collection.updateOne(
+      { _id: po._id },
+      {
+        $set: {
+          cachedPdf: {
+            key: "cache/po.pdf",
+            url: "https://r2.example/po.pdf",
+            generatedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    await update(
+      null,
+      { id: po._id.toString(), input: { headerNotes: "Modifié" } },
+      ctx(),
+    );
+
+    const stored = await PurchaseOrder.collection.findOne({ _id: po._id });
+    expect(stored.cachedPdf?.url).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

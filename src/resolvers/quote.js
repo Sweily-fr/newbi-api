@@ -1,5 +1,4 @@
 import logger from "../utils/logger.js";
-import { isAnnexChange } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import {
   computeDocumentTotals,
@@ -1364,11 +1363,12 @@ const quoteResolvers = {
         }
 
         const statusBeforeUpdate = quote.status;
-        // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
-        // envois et automatisations : elle ne contient pas la nouvelle annexe.
-        const annexChanged = isAnnexChange(quote.annex, updateData);
         Object.assign(quote, updateData);
-        if (annexChanged) {
+        // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+        // envois sans PDF joint (relances, automatisations, mobile) : elle
+        // date d'avant la modification (lignes, remise, client, annexe…).
+        // On l'oublie, le prochain envoi régénère le PDF à jour.
+        if (quote.cachedPdf?.key || quote.cachedPdf?.url) {
           quote.cachedPdf = undefined;
         }
 

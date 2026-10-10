@@ -404,6 +404,36 @@ describe("CreditNote Resolver — updateCreditNote", () => {
     expect(updated.discount).toBe(0);
     expect(updated.finalTotalTTC).toBeCloseTo(-600, 2);
   });
+
+  it("oublie le PDF en cache des envois quand l'avoir est modifié", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    await CreditNote.collection.updateOne(
+      { _id: cn._id },
+      {
+        $set: {
+          cachedPdf: {
+            key: "cache/cn.pdf",
+            url: "https://r2.example/cn.pdf",
+            generatedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      { id: cn._id.toString(), input: { headerNotes: "Modifié" } },
+      ctx(),
+    );
+
+    const stored = await CreditNote.collection.findOne({ _id: cn._id });
+    expect(stored.cachedPdf?.url).toBeUndefined();
+  });
 });
 
 describe("CreditNote Resolver — deleteCreditNote", () => {

@@ -194,6 +194,37 @@ describe("DeliveryNote Resolver — createDeliveryNote", () => {
   });
 });
 
+describe("DeliveryNote Resolver — updateDeliveryNote (BL finalisé modifié)", () => {
+  it("oublie le PDF en cache des envois quand le BL est modifié", async () => {
+    const dn = await Mutation.createDeliveryNote(
+      null,
+      { input: buildDNInput({ status: "PENDING" }) },
+      ctx(),
+    );
+    await DeliveryNote.collection.updateOne(
+      { _id: dn._id },
+      {
+        $set: {
+          cachedPdf: {
+            key: "cache/dn.pdf",
+            url: "https://r2.example/dn.pdf",
+            generatedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    await Mutation.updateDeliveryNote(
+      null,
+      { id: dn._id.toString(), input: { carrier: "Chronopost" } },
+      ctx(),
+    );
+
+    const stored = await DeliveryNote.collection.findOne({ _id: dn._id });
+    expect(stored.cachedPdf?.url).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Tests — statuts
 // ---------------------------------------------------------------------------

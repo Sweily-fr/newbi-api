@@ -1,8 +1,5 @@
 import logger from "../utils/logger.js";
-import {
-  getOrganizationDefaultAnnex,
-  isAnnexChange,
-} from "../utils/documentAnnex.js";
+import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import {
   computeDocumentTotals,
@@ -970,10 +967,12 @@ const purchaseOrderResolvers = {
           }
 
           const statusBeforeUpdate = po.status;
-          // Copie PDF des emails (cachedPdf) : sans la nouvelle annexe
-          const annexChanged = isAnnexChange(po.annex, updateData);
           Object.assign(po, updateData);
-          if (annexChanged) {
+          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+          // envois sans PDF joint (relances, automatisations, mobile) : elle
+          // date d'avant la modification (lignes, remise, client, annexe…).
+          // On l'oublie, le prochain envoi régénère le PDF à jour.
+          if (po.cachedPdf?.key || po.cachedPdf?.url) {
             po.cachedPdf = undefined;
           }
 

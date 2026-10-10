@@ -1,8 +1,5 @@
 import Invoice from "../models/Invoice.js";
-import {
-  getOrganizationDefaultAnnex,
-  isAnnexChange,
-} from "../utils/documentAnnex.js";
+import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
@@ -2534,8 +2531,10 @@ const invoiceResolvers = {
           });
 
           // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
-          // envois et automatisations : elle ne contient pas la nouvelle annexe.
-          if (isAnnexChange(invoiceData.annex, updatedInput)) {
+          // envois sans PDF joint (relances, automatisations, mobile) : elle
+          // date d'avant la modification (lignes, remise, client, annexe…).
+          // On l'oublie, le prochain envoi régénère le PDF à jour.
+          if (invoiceData.cachedPdf?.key || invoiceData.cachedPdf?.url) {
             updateData["cachedPdf.key"] = null;
             updateData["cachedPdf.url"] = null;
             updateData["cachedPdf.generatedAt"] = null;

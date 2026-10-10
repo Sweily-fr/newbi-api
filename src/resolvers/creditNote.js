@@ -624,6 +624,11 @@ const creditNoteResolvers = {
 
           // Mettre à jour l'avoir
           Object.assign(creditNote, input, totals);
+          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+          // envois sans PDF joint : elle date d'avant la modification.
+          if (creditNote.cachedPdf?.key || creditNote.cachedPdf?.url) {
+            creditNote.cachedPdf = undefined;
+          }
           await creditNote.save();
 
           // Créer un événement

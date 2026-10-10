@@ -940,6 +940,11 @@ const deliveryNoteResolvers = {
 
           const statusBeforeUpdate = dn.status;
           Object.assign(dn, updateData);
+          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+          // envois sans PDF joint : elle date d'avant la modification.
+          if (dn.cachedPdf?.key || dn.cachedPdf?.url) {
+            dn.cachedPdf = undefined;
+          }
 
           // BL finalisé dont le contenu change : l'archive PDF ne reflète
           // plus le document, le client web la réécrit après (même logique
