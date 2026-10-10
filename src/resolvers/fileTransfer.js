@@ -92,8 +92,10 @@ const requireTransferAction = (action) =>
 
 // Création classique : l'espace du transfert arrive dans input.workspaceId.
 // On le présente comme args.workspaceId pour que le rôle contrôlé soit celui
-// de l'espace où le transfert est enregistré.
-const requireTransferActionFromInput = (action) => (fn) => {
+// de l'espace où le transfert est enregistré. Sans espace dans l'input,
+// l'en-tête x-workspace-id / x-organization-id fait foi.
+// Exporté pour les mutations d'envoi en morceaux (chunkUpload*.js).
+export const requireTransferActionFromInput = (action) => (fn) => {
   const guarded = requireTransferAction(action)(fn);
   return (parent, args, context, info) =>
     guarded(
