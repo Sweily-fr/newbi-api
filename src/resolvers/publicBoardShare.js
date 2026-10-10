@@ -6,6 +6,7 @@ import { timingSafeStringEqual } from "../utils/timing-safe.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
 import logger from "../utils/logger.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
 import { getPubSub, cacheDel } from "../config/redis.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -28,6 +29,36 @@ import {
 // Événements de subscription (même que kanban.js)
 const TASK_UPDATED = "TASK_UPDATED";
 const PUBLIC_VISITOR_UPDATED = "PUBLIC_VISITOR_UPDATED";
+
+/**
+ * 🔐 Subscriptions côté propriétaire (demandes d'accès, présence des
+ * visiteurs) : elles exposent e-mails et noms des visiteurs. Réservées aux
+ * membres de l'espace du tableau ayant la lecture du kanban, comme les
+ * subscriptions de kanban.js. Les subscriptions des visiteurs
+ * (publicTaskUpdated, accessApproved, accessRevoked) restent ouvertes aux
+ * connexions anonymes : elles sont gardées par le jeton de partage.
+ */
+const subscribeAsBoardMember =
+  (subscribe) => async (parent, args, context, info) => {
+    if (!context?.user) {
+      throw new AppError(
+        "Vous devez être connecté pour effectuer cette action",
+        ERROR_CODES.UNAUTHENTICATED,
+      );
+    }
+    const board = mongoose.isValidObjectId(args?.boardId)
+      ? await Board.findById(args.boardId).select("workspaceId").lean()
+      : null;
+    if (!board?.workspaceId) {
+      throw new AppError("Tableau non trouvé", ERROR_CODES.NOT_FOUND);
+    }
+    return requireWorkspaceLevel("kanban", "read")(subscribe)(
+      parent,
+      { ...args, workspaceId: String(board.workspaceId) },
+      context,
+      info,
+    );
+  };
 
 // Fonction utilitaire pour publier en toute sécurité
 const safePublish = (channel, payload, context = "") => {
@@ -2279,7 +2310,7 @@ const resolvers = {
 
     // Subscription pour notifier le propriétaire d'une nouvelle demande d'accès
     accessRequested: {
-      subscribe: async (_, { boardId }) => {
+      subscribe: subscribeAsBoardMember(async (_, { boardId }) => {
         try {
           const pubsub = getPubSub();
           logger.debug(
@@ -2294,7 +2325,7 @@ const resolvers = {
           );
           throw error;
         }
-      },
+      }),
       resolve: (payload, { boardId }) => {
         // Filtrer pour ne retourner que si c'est le bon boardId
         if (payload.accessRequested.boardId === boardId) {
@@ -2309,7 +2340,7 @@ const resolvers = {
 
     // Subscription pour voir les visiteurs connectés en temps réel
     visitorPresence: {
-      subscribe: async (_, { boardId }) => {
+      subscribe: subscribeAsBoardMember(async (_, { boardId }) => {
         try {
           const pubsub = getPubSub();
           logger.debug(
@@ -2324,7 +2355,7 @@ const resolvers = {
           );
           throw error;
         }
-      },
+      }),
       resolve: (payload, { boardId }) => {
         // Filtrer pour ne retourner que si c'est le bon boardId
         if (payload.visitorPresence.boardId === boardId) {
