@@ -134,6 +134,32 @@ describe("Client Resolver - Query.clients", () => {
     expect(result.items[0].name).toBe("Acme Corp");
   });
 
+  it("cherche une saisie avec parenthèses sans planter", async () => {
+    await Client.create(
+      buildClientDoc({
+        workspaceId: organizationId,
+        createdBy: userId,
+        name: "Acme (France)",
+      }),
+    );
+    await Client.create(
+      buildClientDoc({
+        workspaceId: organizationId,
+        createdBy: userId,
+        name: "Acme Corp",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      { page: 1, limit: 10, search: "Acme (" },
+      ctx(),
+    );
+
+    expect(result.totalItems).toBe(1);
+    expect(result.items[0].name).toBe("Acme (France)");
+  });
+
   it("scopes results to the active workspace", async () => {
     const otherOrg = buildOrganizationId();
     await Client.create(

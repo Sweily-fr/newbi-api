@@ -12,6 +12,7 @@ import cloudflareService from "./cloudflareService.js";
 import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "../resolvers/notification.js";
+import { sendNotificationPush } from "./notificationPushService.js";
 import { applyInvoicePaid } from "../resolvers/invoice.js";
 import { cancelActiveQuoteSignatures } from "./quoteSignatureSync.js";
 import { syncQuoteIfNeeded as syncQuoteToPennylane } from "./pennylaneSyncHelper.js";
@@ -184,6 +185,7 @@ export async function importClientInvoices(account, userId) {
               workspaceId,
               documentType: "INVOICE",
               documentId: pushedInvoice._id,
+              documentModel: "Invoice",
               documentNumber: `${pushedInvoice.prefix || ""}${pushedInvoice.number || ""}`,
               counterpartName: pushedInvoice.client?.name,
               amountTTC: pushedInvoice.finalTotalTTC,
@@ -227,6 +229,7 @@ export async function importClientInvoices(account, userId) {
                 workspaceId,
                 documentType: "INVOICE",
                 documentId: existing._id,
+                documentModel: "ImportedInvoice",
                 documentNumber: existing.originalInvoiceNumber,
                 counterpartName: existing.client?.name,
                 amountTTC: existing.totalTTC,
@@ -326,6 +329,7 @@ export async function importClientInvoices(account, userId) {
           workspaceId,
           documentType: "INVOICE",
           documentId: createdInvoice._id,
+          documentModel: "ImportedInvoice",
           documentNumber: ci.number,
           counterpartName: clientDisplayName(client),
           amountTTC: totalTTC,
@@ -405,6 +409,7 @@ export async function importSupplierInvoices(account, userId) {
               workspaceId,
               documentType: "PURCHASE_INVOICE",
               documentId: pushedPurchase._id,
+              documentModel: "PurchaseInvoice",
               documentNumber: pushedPurchase.invoiceNumber,
               counterpartName: pushedPurchase.supplierName,
               amountTTC: pushedPurchase.amountTTC,
@@ -481,6 +486,7 @@ export async function importSupplierInvoices(account, userId) {
                 workspaceId,
                 documentType: "PURCHASE_INVOICE",
                 documentId: existing._id,
+                documentModel: "PurchaseInvoice",
                 documentNumber: existing.invoiceNumber,
                 counterpartName: existing.supplierName,
                 amountTTC: existing.amountTTC,
@@ -651,6 +657,7 @@ export async function importSupplierInvoices(account, userId) {
           workspaceId,
           documentType: "PURCHASE_INVOICE",
           documentId: createdPurchase._id,
+          documentModel: "PurchaseInvoice",
           documentNumber: invoiceNumber,
           counterpartName: supplierName,
           amountTTC,
@@ -721,6 +728,10 @@ async function notifyImported({
   amountTTC,
   url,
   event = "IMPORTED",
+  // Modèle du document (Invoice, ImportedInvoice, Quote, ImportedQuote,
+  // PurchaseInvoice) : indique à l'app mobile quelle fiche ouvrir au tap
+  // (cloche et push)
+  documentModel,
 }) {
   try {
     const notification = await Notification.createDocumentImportedNotification({
@@ -734,8 +745,12 @@ async function notifyImported({
       amountTTC,
       url,
       event,
+      documentModel,
     });
     await publishNotification(notification);
+    // Push sur l'appareil (ne lève jamais d'erreur) : l'événement et le
+    // modèle du document sont stockés dans la notification
+    sendNotificationPush(notification);
   } catch (error) {
     logger.warn(
       `[QONTO-IMPORT] notification non envoyée (${documentType} ${documentNumber || documentId}): ${error.message}`,
@@ -955,6 +970,7 @@ export async function importQuotes(account, userId) {
           workspaceId,
           documentType: "QUOTE",
           documentId: created._id,
+          documentModel: "ImportedQuote",
           documentNumber: q.number,
           counterpartName: clientDisplayName(client),
           amountTTC: totalTTC,
@@ -1013,6 +1029,7 @@ export async function importQuotes(account, userId) {
           workspaceId,
           documentType: "QUOTE",
           documentId: doc._id,
+          documentModel: "ImportedQuote",
           documentNumber: doc.originalQuoteNumber,
           counterpartName: doc.client?.name,
           amountTTC: doc.totalTTC,
@@ -1049,6 +1066,7 @@ export async function importQuotes(account, userId) {
           workspaceId,
           documentType: "QUOTE",
           documentId: quote._id,
+          documentModel: "Quote",
           documentNumber: `${quote.prefix || ""}${quote.number || ""}`,
           counterpartName: quote.client?.name,
           amountTTC: quote.finalTotalTTC,

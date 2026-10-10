@@ -19,6 +19,9 @@ const defaultNotificationPreferences = {
   document_shared: { email: false, push: true },
   // Kanban
   kanban_task_assigned: { email: true, push: true },
+  // Mention dans un commentaire de tâche (absente = activée, comme la
+  // lecture faite par le resolver kanban)
+  kanban_mention: { email: true, push: true },
 };
 
 const notificationPreferencesResolvers = {
@@ -52,7 +55,7 @@ const notificationPreferencesResolvers = {
       } catch (error) {
         logger.error(
           "Erreur lors de la récupération des préférences de notifications:",
-          error
+          error,
         );
         throw error;
       }
@@ -86,7 +89,7 @@ const notificationPreferencesResolvers = {
           const result = await User.findByIdAndUpdate(
             user._id,
             { $set: updateObj },
-            { new: true, runValidators: false }
+            { new: true, runValidators: false },
           );
 
           if (!result) {
@@ -97,7 +100,7 @@ const notificationPreferencesResolvers = {
           }
 
           logger.info(
-            `✅ Préférences de notifications mises à jour pour l'utilisateur ${user._id}`
+            `✅ Préférences de notifications mises à jour pour l'utilisateur ${user._id}`,
           );
 
           return {
@@ -107,14 +110,14 @@ const notificationPreferencesResolvers = {
         } catch (error) {
           logger.error(
             "Erreur lors de la mise à jour des préférences de notifications:",
-            error
+            error,
           );
           return {
             success: false,
             message: error.message || "Erreur lors de la mise à jour",
           };
         }
-      }
+      },
     ),
   },
 };

@@ -16,6 +16,12 @@ import {
 import crypto from "crypto";
 import exchangeRateService from "./exchangeRateService.js";
 import {
+  normalizeCurrency,
+  parseOcrDate,
+  toNonNegativeNumber,
+  toPositiveNumber,
+} from "../utils/purchaseInvoiceOcrMetadata.js";
+import {
   vatBreakdownFromOcr,
   scaleVatBreakdown,
   summarizeVatBreakdown,
@@ -99,45 +105,6 @@ function isExpenseTransaction(transaction) {
     return true;
   }
   return transaction.type === "debit";
-}
-
-function parseOcrDate(value) {
-  if (!value) return null;
-  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
-  const str = String(value).trim();
-  // Format français DD/MM/YYYY (ou DD-MM-YYYY, DD.MM.YYYY)
-  const frMatch = str.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
-  if (frMatch) {
-    const [, day, month, year] = frMatch;
-    const d = new Date(
-      `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T00:00:00.000Z`,
-    );
-    return isNaN(d.getTime()) ? null : d;
-  }
-  const d = new Date(str);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-function toPositiveNumber(value) {
-  const n = typeof value === "string" ? parseFloat(value) : value;
-  if (typeof n !== "number" || isNaN(n) || n <= 0) return null;
-  return n;
-}
-
-function toNonNegativeNumber(value) {
-  const n = typeof value === "string" ? parseFloat(value) : value;
-  if (typeof n !== "number" || isNaN(n) || n < 0) return null;
-  return n;
-}
-
-const CURRENCY_SYMBOLS = { "€": "EUR", $: "USD", US$: "USD", "£": "GBP" };
-
-function normalizeCurrency(value) {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (CURRENCY_SYMBOLS[raw]) return CURRENCY_SYMBOLS[raw];
-  const code = raw.toUpperCase();
-  return /^[A-Z]{3}$/.test(code) ? code : null;
 }
 
 const round2 = (n) => Math.round(n * 100) / 100;

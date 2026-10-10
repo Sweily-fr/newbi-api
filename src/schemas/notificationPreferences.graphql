@@ -21,6 +21,7 @@ type NotificationPreferences {
   document_shared: NotificationPreference
   # Kanban
   kanban_task_assigned: NotificationPreference
+  kanban_mention: NotificationPreference
 }
 
 input NotificationPreferenceInput {
@@ -44,6 +45,7 @@ input NotificationPreferencesInput {
   document_shared: NotificationPreferenceInput
   # Kanban
   kanban_task_assigned: NotificationPreferenceInput
+  kanban_mention: NotificationPreferenceInput
 }
 
 type NotificationPreferencesResponse {

@@ -373,6 +373,67 @@ describe("CreditNote Resolver — updateCreditNote", () => {
     // 2 * 100 = 200 HT, VAT = 40, TTC = 240 → stored as -240
     expect(updated.finalTotalTTC).toBeCloseTo(-240, 0);
   });
+
+  it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      {
+        input: buildCreditNoteInput(inv._id, {
+          discount: 10,
+          discountType: "PERCENTAGE",
+        }),
+      },
+      ctx(),
+    );
+    // 500 − 10 % = 450 HT → 540 TTC
+    expect(cn.finalTotalTTC).toBeCloseTo(-540, 2);
+
+    const updated = await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      {
+        id: cn._id.toString(),
+        input: {
+          items: buildCreditNoteInput(inv._id).items,
+          discount: 0,
+        },
+      },
+      ctx(),
+    );
+
+    expect(updated.discount).toBe(0);
+    expect(updated.finalTotalTTC).toBeCloseTo(-600, 2);
+  });
+
+  it("oublie le PDF en cache des envois quand l'avoir est modifié", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    await CreditNote.collection.updateOne(
+      { _id: cn._id },
+      {
+        $set: {
+          cachedPdf: {
+            key: "cache/cn.pdf",
+            url: "https://r2.example/cn.pdf",
+            generatedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      { id: cn._id.toString(), input: { headerNotes: "Modifié" } },
+      ctx(),
+    );
+
+    const stored = await CreditNote.collection.findOne({ _id: cn._id });
+    expect(stored.cachedPdf?.url).toBeUndefined();
+  });
 });
 
 describe("CreditNote Resolver — deleteCreditNote", () => {

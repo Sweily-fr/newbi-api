@@ -7,6 +7,7 @@ import path from "path";
 import crypto from "crypto";
 import { promisify } from "util";
 import { processFileWithOCR } from "../utils/ocrProcessor.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import cloudflareService from "../services/cloudflareService.js";
 // ✅ Import des wrappers RBAC
 import {
@@ -197,11 +198,13 @@ const expenseResolvers = {
 
         // Recherche textuelle
         if (search) {
+          // Saisie échappée : « ( » ou « + » faisaient planter la recherche
+          const safeSearch = escapeRegex(search);
           query.$or = [
-            { title: { $regex: search, $options: "i" } },
-            { description: { $regex: search, $options: "i" } },
-            { vendor: { $regex: search, $options: "i" } },
-            { invoiceNumber: { $regex: search, $options: "i" } },
+            { title: { $regex: safeSearch, $options: "i" } },
+            { description: { $regex: safeSearch, $options: "i" } },
+            { vendor: { $regex: safeSearch, $options: "i" } },
+            { invoiceNumber: { $regex: safeSearch, $options: "i" } },
           ];
         }
 

@@ -23,6 +23,7 @@ import {
 import mongoose from "mongoose";
 import { workspaceKey } from "../dataloaders/index.js";
 import { isInternationalEntity } from "../utils/validators.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import { automationService } from "./clientAutomation.js";
 
 // Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
@@ -88,17 +89,19 @@ const clientResolvers = {
         };
 
         if (search) {
+          // Saisie échappée : « ( » ou « + » faisaient planter la recherche
+          const safeSearch = escapeRegex(search);
           query.$or = [
-            { name: { $regex: search, $options: "i" } },
-            { email: { $regex: search, $options: "i" } },
-            { "address.city": { $regex: search, $options: "i" } },
-            { "address.country": { $regex: search, $options: "i" } },
-            { "address.postalCode": { $regex: search, $options: "i" } },
-            { "address.street": { $regex: search, $options: "i" } },
-            { firstName: { $regex: search, $options: "i" } },
-            { lastName: { $regex: search, $options: "i" } },
-            { siret: { $regex: search, $options: "i" } },
-            { vatNumber: { $regex: search, $options: "i" } },
+            { name: { $regex: safeSearch, $options: "i" } },
+            { email: { $regex: safeSearch, $options: "i" } },
+            { "address.city": { $regex: safeSearch, $options: "i" } },
+            { "address.country": { $regex: safeSearch, $options: "i" } },
+            { "address.postalCode": { $regex: safeSearch, $options: "i" } },
+            { "address.street": { $regex: safeSearch, $options: "i" } },
+            { firstName: { $regex: safeSearch, $options: "i" } },
+            { lastName: { $regex: safeSearch, $options: "i" } },
+            { siret: { $regex: safeSearch, $options: "i" } },
+            { vatNumber: { $regex: safeSearch, $options: "i" } },
           ];
         }
 

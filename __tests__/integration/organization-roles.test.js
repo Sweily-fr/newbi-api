@@ -18,6 +18,14 @@ vi.mock("../../src/utils/mailer.js", () => ({
   }),
 }));
 
+// Push mobile au super admin : capturé, pas d'envoi Expo réel
+const sentPushes = [];
+vi.mock("../../src/services/pushNotificationService.js", () => ({
+  sendPushToUser: vi.fn(async (userId, payload) => {
+    sentPushes.push({ userId, payload });
+  }),
+}));
+
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
@@ -470,6 +478,7 @@ describe("Rôles d'un espace", () => {
       { _id: viewer, name: "Membre Test", email: "membre@test.fr" },
     ]);
     sentAccessEmails.length = 0;
+    sentPushes.length = 0;
     const context = {
       ...ctx(viewer),
       user: {
@@ -500,6 +509,25 @@ describe("Rôles d'un espace", () => {
     expect(sentAccessEmails).toHaveLength(1);
     expect(sentAccessEmails[0].to).toBe("owner@test.fr");
 
+    // Push au super admin : même titre et message que la notification
+    await vi.waitFor(() => expect(sentPushes).toHaveLength(1));
+    expect(sentPushes[0]).toEqual({
+      userId: String(owner),
+      payload: {
+        title: "Demande d'accès",
+        body: notification.message,
+        data: {
+          type: "ACCESS_REQUESTED",
+          workspaceId: String(organizationId),
+          notificationId: String(notification._id),
+          actorId: String(viewer),
+          url: notification.data.url,
+          module: "invoices",
+          action: "create",
+        },
+      },
+    });
+
     // Même demande dans les 10 minutes : pas de doublon
     const second = await Mutation.requestModuleAccess(
       null,
@@ -508,6 +536,7 @@ describe("Rôles d'un espace", () => {
     );
     expect(second.alreadyRequested).toBe(true);
     expect(sentAccessEmails).toHaveLength(1);
+    expect(sentPushes).toHaveLength(1);
   });
 
   it("refuse une demande d'accès sur une page inconnue", async () => {

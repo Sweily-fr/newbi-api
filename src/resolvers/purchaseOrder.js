@@ -1,9 +1,10 @@
 import logger from "../utils/logger.js";
-import {
-  getOrganizationDefaultAnnex,
-  isAnnexChange,
-} from "../utils/documentAnnex.js";
+import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import {
+  computeDocumentTotals,
+  inputOrStored,
+} from "../utils/documentTotals.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
   loadWorkspaceInvoices,
@@ -12,6 +13,7 @@ import {
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import mongoose from "mongoose";
 import PurchaseOrder from "../models/PurchaseOrder.js";
@@ -95,73 +97,23 @@ const renameConflictingDrafts = async (
   );
 };
 
-// Fonction utilitaire pour calculer les totaux
+// Fonction utilitaire pour calculer les totaux (règles communes aux documents
+// de vente : voir utils/documentTotals.js, remise globale sur les articles
+// seulement, frais de port ajoutés après)
 const calculatePurchaseOrderTotals = (
   items,
   discount = 0,
   discountType = "FIXED",
   shipping = null,
-) => {
-  let totalHT = 0;
-  let totalVAT = 0;
-
-  items.forEach((item) => {
-    let itemHT = item.quantity * item.unitPrice;
-
-    if (item.discount) {
-      if (
-        item.discountType === "PERCENTAGE" ||
-        item.discountType === "percentage"
-      ) {
-        const discountPercent = Math.min(item.discount, 100);
-        itemHT = itemHT * (1 - discountPercent / 100);
-      } else {
-        itemHT = Math.max(0, itemHT - item.discount);
-      }
-    }
-
-    const itemVAT = itemHT * (item.vatRate / 100);
-    totalHT += itemHT;
-    totalVAT += itemVAT;
+  isReverseCharge = false,
+) =>
+  computeDocumentTotals({
+    items,
+    discount,
+    discountType,
+    shipping,
+    isReverseCharge,
   });
-
-  if (shipping && shipping.billShipping) {
-    const shippingHT = shipping.shippingAmountHT || 0;
-    const shippingVAT = shippingHT * (shipping.shippingVatRate / 100);
-    totalHT += shippingHT;
-    totalVAT += shippingVAT;
-  }
-
-  const totalTTC = totalHT + totalVAT;
-
-  let discountAmount = 0;
-  if (discount) {
-    if (discountType === "PERCENTAGE" || discountType === "percentage") {
-      const discountPercent = Math.min(discount, 100);
-      discountAmount = (totalHT * discountPercent) / 100;
-    } else {
-      discountAmount = discount;
-    }
-  }
-
-  const finalTotalHT = totalHT - discountAmount;
-
-  let finalTotalVAT = 0;
-  if (finalTotalHT > 0 && totalHT > 0) {
-    finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
-  }
-  const finalTotalTTC = finalTotalHT + finalTotalVAT;
-
-  return {
-    totalHT,
-    totalVAT,
-    totalTTC,
-    finalTotalHT,
-    finalTotalVAT,
-    finalTotalTTC,
-    discountAmount,
-  };
-};
 
 const purchaseOrderResolvers = {
   PurchaseOrder: {
@@ -639,6 +591,7 @@ const purchaseOrderResolvers = {
             input.discount,
             input.discountType,
             input.shipping,
+            input.isReverseCharge,
           );
 
           const clientData = input.client;
@@ -850,13 +803,16 @@ const purchaseOrderResolvers = {
             }
           }
 
-          // Si des items sont fournis, recalculer les totaux
+          // Si des items sont fournis, recalculer les totaux. Chaque valeur
+          // vient de l'input dès qu'il la porte, sinon du bon de commande
+          // enregistré (le pre-save du modèle recalcule avec les mêmes règles).
           if (input.items) {
             const totals = calculatePurchaseOrderTotals(
               input.items,
-              input.discount !== undefined ? input.discount : po.discount,
-              input.discountType || po.discountType,
-              input.shipping !== undefined ? input.shipping : po.shipping,
+              inputOrStored(input, po, "discount"),
+              inputOrStored(input, po, "discountType"),
+              inputOrStored(input, po, "shipping"),
+              inputOrStored(input, po, "isReverseCharge"),
             );
             input = { ...input, ...totals };
           }
@@ -1011,11 +967,34 @@ const purchaseOrderResolvers = {
             }
           }
 
+          // Bon de commande non brouillon (ou finalisé par cette modification)
+          // dont l'input renvoie le client : ClientInput ne porte pas les
+          // champs personnalisés affichés sur le document. Les recalculer au
+          // lieu de les effacer en remplaçant le client figé.
+          const statusAfterUpdate = updateData.status || po.status;
+          if (
+            statusAfterUpdate !== "DRAFT" &&
+            updateData.client &&
+            !Array.isArray(updateData.client.documentFields)
+          ) {
+            updateData.client = {
+              ...updateData.client,
+              documentFields: await documentFieldsForEditedClient(
+                updateData.client,
+                po.client,
+                po.workspaceId,
+                context,
+              ),
+            };
+          }
+
           const statusBeforeUpdate = po.status;
-          // Copie PDF des emails (cachedPdf) : sans la nouvelle annexe
-          const annexChanged = isAnnexChange(po.annex, updateData);
           Object.assign(po, updateData);
-          if (annexChanged) {
+          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+          // envois sans PDF joint (relances, automatisations, mobile) : elle
+          // date d'avant la modification (lignes, remise, client, annexe…).
+          // On l'oublie, le prochain envoi régénère le PDF à jour.
+          if (po.cachedPdf?.key || po.cachedPdf?.url) {
             po.cachedPdf = undefined;
           }
 

@@ -25,6 +25,12 @@ import dotenv from "dotenv";
 // Charger les variables d'environnement
 dotenv.config();
 
+// Validité des URL présignées des parts d'un envoi multipart. Toutes les URL
+// sont remises au démarrage du fichier : à 1 h, les dernières parts d'une
+// grosse vidéo envoyée en 4G recevaient un 403. 12 h, sous le plafond de 7
+// jours des URL signées SigV4 (S3 comme R2).
+const MULTIPART_PART_URL_TTL_SECONDS = 12 * 60 * 60;
+
 class CloudflareTransferService {
   constructor() {
     // Configuration Cloudflare R2 (compatible S3)
@@ -313,7 +319,7 @@ class CloudflareTransferService {
             const presignedUrl = await getSignedUrl(
               this.client,
               uploadPartCommand,
-              { expiresIn: 3600 },
+              { expiresIn: MULTIPART_PART_URL_TTL_SECONDS },
             );
 
             return { partNumber, uploadUrl: presignedUrl };

@@ -137,3 +137,38 @@ export const buildDocumentFieldsForClientId = async (
     return undefined;
   }
 };
+
+/**
+ * Champs à figer sur un document non brouillon dont la modification renvoie
+ * le client : ClientInput ne porte pas `documentFields`, remplacer le client
+ * figé par l'input les effaçait du document. On les recalcule depuis la fiche
+ * client, comme à la finalisation. Sans fiche exploitable (client saisi à la
+ * main, supprimé), on garde ceux déjà figés si le client n'a pas changé.
+ *
+ * @param {object} inputClient - client reçu dans l'input de modification
+ * @param {object} storedClient - client actuellement figé dans le document
+ * @param {string} workspaceId
+ * @param {object} [context] - contexte GraphQL, pour le cache par requête
+ * @returns {Promise<Array<{label: string, value: string}>>}
+ */
+export const documentFieldsForEditedClient = async (
+  inputClient,
+  storedClient,
+  workspaceId,
+  context,
+) => {
+  const fresh = await buildDocumentFieldsForClientId(
+    inputClient?.id,
+    workspaceId,
+    context,
+  );
+  if (fresh !== undefined) return fresh;
+
+  const sameClient =
+    String(inputClient?.id || "") === String(storedClient?.id || "");
+  if (!sameClient) return [];
+  return (storedClient?.documentFields || []).map(({ label, value }) => ({
+    label,
+    value,
+  }));
+};

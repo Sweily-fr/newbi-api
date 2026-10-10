@@ -1,6 +1,9 @@
 import logger from "../utils/logger.js";
-import { isAnnexChange } from "../utils/documentAnnex.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import {
+  computeDocumentTotals,
+  inputOrStored,
+} from "../utils/documentTotals.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
   loadQuoteDeliveryNotes,
@@ -11,6 +14,7 @@ import {
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
@@ -57,80 +61,22 @@ import { syncQuoteIfNeeded as syncQuoteToAbbyIfNeeded } from "../services/abbySy
 import { cancelActiveQuoteSignatures } from "../services/quoteSignatureSync.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
+// (règles communes aux documents de vente : voir utils/documentTotals.js,
+// remise globale sur les articles seulement, frais de port ajoutés après)
 export const calculateQuoteTotals = (
   items,
   discount = 0,
   discountType = "FIXED",
   shipping = null,
-) => {
-  let totalHT = 0;
-  let totalVAT = 0;
-
-  items.forEach((item) => {
-    let itemHT = item.quantity * item.unitPrice;
-
-    // Appliquer la remise au niveau de l'item si elle existe
-    if (item.discount) {
-      if (
-        item.discountType === "PERCENTAGE" ||
-        item.discountType === "percentage"
-      ) {
-        // Limiter la remise à 100% maximum
-        const discountPercent = Math.min(item.discount, 100);
-        itemHT = itemHT * (1 - discountPercent / 100);
-      } else {
-        itemHT = Math.max(0, itemHT - item.discount);
-      }
-    }
-
-    const itemVAT = itemHT * (item.vatRate / 100);
-    totalHT += itemHT;
-    totalVAT += itemVAT;
+  isReverseCharge = false,
+) =>
+  computeDocumentTotals({
+    items,
+    discount,
+    discountType,
+    shipping,
+    isReverseCharge,
   });
-
-  // Ajouter les frais de livraison si facturés
-  if (shipping && shipping.billShipping) {
-    const shippingHT = shipping.shippingAmountHT || 0;
-    const shippingVAT = shippingHT * (shipping.shippingVatRate / 100);
-
-    totalHT += shippingHT;
-    totalVAT += shippingVAT;
-  }
-
-  const totalTTC = totalHT + totalVAT;
-
-  let discountAmount = 0;
-  if (discount) {
-    if (discountType === "PERCENTAGE" || discountType === "percentage") {
-      // Limiter la remise à 100% maximum
-      const discountPercent = Math.min(discount, 100);
-      discountAmount = (totalHT * discountPercent) / 100;
-    } else {
-      discountAmount = discount;
-    }
-  }
-
-  const finalTotalHT = totalHT - discountAmount;
-
-  // Recalculer la TVA après application de la remise globale
-  // La TVA doit être proportionnelle au montant final HT
-  // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
-  let finalTotalVAT = 0;
-  if (finalTotalHT > 0 && totalHT > 0) {
-    finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
-  }
-  const finalTotalTTC = finalTotalHT + finalTotalVAT;
-
-  return {
-    totalHT,
-    totalVAT,
-    totalTTC,
-    finalTotalHT,
-    finalTotalVAT,
-    finalTotalTTC,
-    discountAmount,
-  };
-};
 
 const quoteResolvers = {
   Quote: {
@@ -866,6 +812,7 @@ const quoteResolvers = {
             input.discount,
             input.discountType,
             input.shipping,
+            input.isReverseCharge,
           );
 
           // Vérifier si le client a une adresse de livraison différente
@@ -1173,13 +1120,16 @@ const quoteResolvers = {
           }
         }
 
-        // Si des items sont fournis, recalculer les totaux
+        // Si des items sont fournis, recalculer les totaux. Chaque valeur
+        // vient de l'input dès qu'il la porte, sinon du devis enregistré (le
+        // pre-save du modèle recalcule de toute façon avec les mêmes règles).
         if (input.items) {
           const totals = calculateQuoteTotals(
             input.items,
-            input.discount !== undefined ? input.discount : quote.discount,
-            input.discountType || quote.discountType,
-            input.shipping !== undefined ? input.shipping : quote.shipping,
+            inputOrStored(input, quote, "discount"),
+            inputOrStored(input, quote, "discountType"),
+            inputOrStored(input, quote, "shipping"),
+            inputOrStored(input, quote, "isReverseCharge"),
           );
           input = { ...input, ...totals };
         }
@@ -1413,12 +1363,34 @@ const quoteResolvers = {
           }
         }
 
+        // Devis non brouillon (ou finalisé par cette modification) dont
+        // l'input renvoie le client : ClientInput ne porte pas les champs
+        // personnalisés affichés sur le document. Les recalculer au lieu de
+        // les effacer en remplaçant le client figé.
+        const statusAfterUpdate = updateData.status || quote.status;
+        if (
+          statusAfterUpdate !== "DRAFT" &&
+          updateData.client &&
+          !Array.isArray(updateData.client.documentFields)
+        ) {
+          updateData.client = {
+            ...updateData.client,
+            documentFields: await documentFieldsForEditedClient(
+              updateData.client,
+              quote.client,
+              quote.workspaceId,
+              context,
+            ),
+          };
+        }
+
         const statusBeforeUpdate = quote.status;
-        // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
-        // envois et automatisations : elle ne contient pas la nouvelle annexe.
-        const annexChanged = isAnnexChange(quote.annex, updateData);
         Object.assign(quote, updateData);
-        if (annexChanged) {
+        // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+        // envois sans PDF joint (relances, automatisations, mobile) : elle
+        // date d'avant la modification (lignes, remise, client, annexe…).
+        // On l'oublie, le prochain envoi régénère le PDF à jour.
+        if (quote.cachedPdf?.key || quote.cachedPdf?.url) {
           quote.cachedPdf = undefined;
         }
 

@@ -571,8 +571,11 @@ async function startServer() {
           }
         }
 
-        // Permettre les connexions sans authentification pour les subscriptions publiques
-        // Le resolver de la subscription publique vérifiera le token de partage
+        // Connexion sans authentification conservée pour les pages publiques
+        // du kanban partagé : publicTaskUpdated, accessApproved et
+        // accessRevoked, gardées par le jeton de partage. Toutes les autres
+        // subscriptions refusent un contexte sans utilisateur (contrôle dans
+        // chaque resolver : appartenance à l'espace ou au compte demandé).
         logger.info(
           "ℹ️ [WebSocket] Connexion sans authentification (page publique)",
         );

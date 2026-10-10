@@ -10,6 +10,7 @@ import {
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import mongoose from "mongoose";
 import DeliveryNote from "../models/DeliveryNote.js";
@@ -938,8 +939,34 @@ const deliveryNoteResolvers = {
             }
           }
 
+          // BL non brouillon (ou finalisé par cette modification) dont
+          // l'input renvoie le client : ClientInput ne porte pas les champs
+          // personnalisés affichés sur le document. Les recalculer au lieu
+          // de les effacer en remplaçant le client figé.
+          const statusAfterUpdate = updateData.status || dn.status;
+          if (
+            statusAfterUpdate !== "DRAFT" &&
+            updateData.client &&
+            !Array.isArray(updateData.client.documentFields)
+          ) {
+            updateData.client = {
+              ...updateData.client,
+              documentFields: await documentFieldsForEditedClient(
+                updateData.client,
+                dn.client,
+                dn.workspaceId,
+                context,
+              ),
+            };
+          }
+
           const statusBeforeUpdate = dn.status;
           Object.assign(dn, updateData);
+          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+          // envois sans PDF joint : elle date d'avant la modification.
+          if (dn.cachedPdf?.key || dn.cachedPdf?.url) {
+            dn.cachedPdf = undefined;
+          }
 
           // BL finalisé dont le contenu change : l'archive PDF ne reflète
           // plus le document, le client web la réécrit après (même logique

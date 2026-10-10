@@ -1,5 +1,6 @@
 import logger from "../utils/logger.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { inputOrStored } from "../utils/documentTotals.js";
 import CreditNote from "../models/CreditNote.js";
 import {
   archiveDocumentPdf,
@@ -578,10 +579,12 @@ const creditNoteResolvers = {
               throw createNotFoundError("Facture originale non trouvée");
             }
 
+            // Valeur de l'input dès qu'il la porte (une remise remise à 0
+            // reste à 0), sinon celle de l'avoir enregistré
             totals = calculateCreditNoteTotals(
               input.items,
-              input.discount || creditNote.discount,
-              input.discountType || creditNote.discountType,
+              inputOrStored(input, creditNote, "discount") ?? 0,
+              inputOrStored(input, creditNote, "discountType") ?? "FIXED",
               originalInvoice.isReverseCharge || false,
             );
 
@@ -621,6 +624,11 @@ const creditNoteResolvers = {
 
           // Mettre à jour l'avoir
           Object.assign(creditNote, input, totals);
+          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+          // envois sans PDF joint : elle date d'avant la modification.
+          if (creditNote.cachedPdf?.key || creditNote.cachedPdf?.url) {
+            creditNote.cachedPdf = undefined;
+          }
           await creditNote.save();
 
           // Créer un événement

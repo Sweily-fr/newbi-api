@@ -734,4 +734,153 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
     expect(result.headerNotes).toBe("Note ajoutée");
     expect(result.footerNotes).toBe(longFooter);
   });
+
+  // --- Devis en attente modifié (audit 10/2026)
+
+  const shippingInput = {
+    billShipping: true,
+    shippingAmountHT: 50,
+    shippingVatRate: 20,
+    shippingAddress: {
+      fullName: "Jean Dupont",
+      street: "3 rue de la Livraison",
+      city: "Lyon",
+      postalCode: "69001",
+      country: "France",
+    },
+  };
+  const items1000 = [
+    { description: "Prestation", quantity: 1, unitPrice: 1000, vatRate: 20 },
+  ];
+
+  it("enregistre le TTC avec les frais de port, remise % hors port", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0010",
+        prefix: "D-102026",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: {
+          items: items1000,
+          discount: 10,
+          discountType: "PERCENTAGE",
+          shipping: shippingInput,
+        },
+      },
+      ctx(),
+    );
+
+    // Comme l'aperçu PDF : 1000 − 10 % = 900, + 50 de port ;
+    // TVA 180 + 10 ; le pre-save n'écrase plus le port
+    expect(result.discountAmount).toBe(100);
+    expect(result.finalTotalHT).toBe(950);
+    expect(result.finalTotalVAT).toBe(190);
+    expect(result.finalTotalTTC).toBe(1140);
+    const stored = await Quote.collection.findOne({ _id: insertedId });
+    expect(stored.finalTotalTTC).toBe(1140);
+  });
+
+  it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0011",
+        prefix: "D-102026",
+        items: items1000,
+        discount: 15,
+        discountType: "PERCENTAGE",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { items: items1000, discount: 0 } },
+      ctx(),
+    );
+
+    expect(result.discount).toBe(0);
+    expect(result.discountAmount).toBe(0);
+    expect(result.finalTotalHT).toBe(1000);
+    expect(result.finalTotalTTC).toBe(1200);
+  });
+
+  it("oublie le PDF en cache des envois quand le devis est modifié", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0012",
+        prefix: "D-102026",
+        cachedPdf: {
+          key: "cache/quote.pdf",
+          url: "https://r2.example/quote.pdf",
+          generatedAt: new Date(),
+        },
+      }),
+    );
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { items: items1000 } },
+      ctx(),
+    );
+
+    const stored = await Quote.collection.findOne({ _id: insertedId });
+    expect(stored.cachedPdf?.url).toBeUndefined();
+    expect(stored.cachedPdf?.key).toBeUndefined();
+  });
+
+  it("recalcule les champs client affichés sur un devis en attente modifié", async () => {
+    const db = mongoose.connection.db;
+    const { insertedId: fieldId } = await db
+      .collection("clientcustomfields")
+      .insertOne({
+        workspaceId: organizationId,
+        name: "Code client",
+        fieldType: "TEXT",
+        showOnDocuments: true,
+        isActive: true,
+        order: 0,
+      });
+    const { insertedId: clientId } = await db.collection("clients").insertOne({
+      workspaceId: organizationId,
+      name: "Acme",
+      email: "acme@test.fr",
+      type: "COMPANY",
+      customFields: [{ fieldId, value: "C-042" }],
+    });
+
+    const base = finalizableDraftData();
+    const { insertedId } = await insertQuote({
+      ...base,
+      status: "PENDING",
+      number: "0013",
+      prefix: "D-102026",
+      client: {
+        ...base.client,
+        id: clientId.toString(),
+        documentFields: [{ label: "Code client", value: "C-042" }],
+      },
+    });
+
+    // ClientInput (desktop et mobile) ne porte pas documentFields
+    const clientInput = { ...base.client, id: clientId.toString() };
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { client: clientInput } },
+      ctx(),
+    );
+
+    expect(
+      result.client.documentFields.map(({ label, value }) => ({
+        label,
+        value,
+      })),
+    ).toEqual([{ label: "Code client", value: "C-042" }]);
+  });
 });

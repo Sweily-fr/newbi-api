@@ -151,6 +151,17 @@ function computeItemHT(item) {
   return itemHT;
 }
 
+/**
+ * HT des articles avant remise globale, hors frais de livraison : base de la
+ * remise globale (la livraison n'est jamais remisée, comme sur le PDF).
+ */
+function itemsSubtotalHT(items) {
+  return Math.max(
+    0,
+    (items || []).reduce((sum, item) => sum + computeItemHT(item), 0),
+  );
+}
+
 const pennylaneService = {
   /**
    * Teste la connexion avec un token API
@@ -294,13 +305,14 @@ const pennylaneService = {
 
       // Remise globale → ligne négative
       if (invoice.discount && invoice.discount > 0) {
-        // Calculer le sous-total HT (items + shipping) avant remise globale
-        const subtotalHT = invoice.totalHT || 0;
+        // Remise calculée sur le HT des articles, hors frais de livraison
+        // (même règle que le PDF et utils/documentTotals.js)
+        const subtotalHT = itemsSubtotalHT(items);
         let discountAmount;
         if (invoice.discountType === "PERCENTAGE") {
           discountAmount = (subtotalHT * Math.min(invoice.discount, 100)) / 100;
         } else {
-          discountAmount = invoice.discount;
+          discountAmount = Math.min(invoice.discount, subtotalHT);
         }
 
         if (discountAmount > 0) {
@@ -546,12 +558,13 @@ const pennylaneService = {
 
       // Remise globale → ligne négative
       if (quote.discount && quote.discount > 0) {
-        const subtotalHT = quote.totalHT || 0;
+        // Remise calculée sur le HT des articles, hors frais de livraison
+        const subtotalHT = itemsSubtotalHT(items);
         let discountAmount;
         if (quote.discountType === "PERCENTAGE") {
           discountAmount = (subtotalHT * Math.min(quote.discount, 100)) / 100;
         } else {
-          discountAmount = quote.discount;
+          discountAmount = Math.min(quote.discount, subtotalHT);
         }
         if (discountAmount > 0) {
           const mainVatRate = items.length > 0 ? items[0].vatRate || 20 : 20;

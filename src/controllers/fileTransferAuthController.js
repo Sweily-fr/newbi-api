@@ -5,6 +5,7 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import logger from "../utils/logger.js";
 import { registerTransferDownload } from "../services/transferDownloadService.js";
+import { checkTransferRecipientAccess } from "../utils/transferAccess.js";
 
 // 🔐 Comparaison à temps constant du secret de partage (shareLink / accessKey).
 function timingSafeEq(a, b) {
@@ -96,6 +97,19 @@ export const authorizeDownload = async (req, res) => {
       return res
         .status(secretErr.status)
         .json({ success: false, error: secretErr.error });
+    }
+
+    // 🔐 Ces URL signées donnent le fichier lui-même : mot de passe (jeton de
+    // verify-password) et filigrane contrôlés comme sur /api/files/download.
+    // Le paiement est traité plus bas.
+    const denied = checkTransferRecipientAccess(fileTransfer, req, {
+      usage: "download",
+      payment: false,
+    });
+    if (denied) {
+      return res
+        .status(denied.status)
+        .json({ success: false, code: denied.code, error: denied.error });
     }
 
     // Si pas de paiement requis, autoriser directement

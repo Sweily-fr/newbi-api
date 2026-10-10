@@ -4,7 +4,7 @@ import TransferDownloadLock from "../models/TransferDownloadLock.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
 import { sendDownloadNotificationEmail } from "../utils/mailer.js";
-import { verifyOwnerDownloadToken } from "../utils/ownerDownloadToken.js";
+import { isTransferOwnerRequest } from "../utils/transferAccess.js";
 
 // Fenêtre de validité du verrou lorsqu'une session de téléchargement est
 // fournie : l'identifiant étant unique par clic, elle sert seulement à borner
@@ -58,9 +58,7 @@ function getSessionId(req, explicitSessionId) {
  * au seul propriétaire authentifié (voir ownerDownloadToken).
  */
 function isOwnerDownload(fileTransfer, req) {
-  const token =
-    req?.query?.ownerToken || req?.headers?.["x-owner-download-token"];
-  return verifyOwnerDownloadToken(token, fileTransfer._id, fileTransfer.userId);
+  return isTransferOwnerRequest(fileTransfer, req);
 }
 
 /**

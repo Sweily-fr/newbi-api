@@ -1,6 +1,6 @@
 import logger from "../utils/logger.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { requireTransferActionFromInput } from "./fileTransfer.js";
 import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 import {
   saveChunkToR2,
@@ -16,9 +16,20 @@ import { v4 as uuidv4 } from "uuid";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 
-// Cache temporaire pour stocker les métadonnées des fichiers uploadés (avec TTL)
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-const CACHE_TTL_SECONDS = 30 * 60; // idem en secondes pour Redis
+// 🔐 Envoi des fichiers et création du transfert : même droit que
+// createFileTransfer (« Créer » du module Transferts dans l'espace du
+// transfert : input.workspaceId, sinon l'en-tête x-organization-id). Ces
+// mutations n'exigeaient qu'un utilisateur connecté, un rôle sans ce droit
+// pouvait donc créer des transferts depuis le desktop ou l'app mobile.
+const requireTransferCreate = requireTransferActionFromInput("create");
+
+// Cache temporaire pour stocker les métadonnées des fichiers uploadés (avec TTL).
+// Le transfert n'est créé qu'une fois TOUS les fichiers envoyés : sur un lot
+// de grosses vidéos envoyé en 4G, le premier fichier pouvait sortir du cache
+// (30 min auparavant) avant la fin du dernier, et la création échouait
+// (FILE_NOT_FOUND). 24 h couvre les envois les plus longs.
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 heures
+const CACHE_TTL_SECONDS = 24 * 60 * 60; // idem en secondes pour Redis
 // Cache mémoire L1 (rapide, mais local à l'instance PM2)
 const fileMetadataCache = new Map();
 const cacheTimers = new Map();
@@ -108,7 +119,7 @@ const getFileInfoByTransferId = async (fileId) => {
 const chunkUploadR2Resolvers = {
   Mutation: {
     // Démarrer un multipart upload natif S3/R2
-    startMultipartUpload: isAuthenticated(
+    startMultipartUpload: requireTransferCreate(
       async (
         _,
         { transferId, fileId, fileName, fileSize, mimeType, totalParts },
@@ -182,7 +193,7 @@ const chunkUploadR2Resolvers = {
     ),
 
     // Compléter un multipart upload
-    completeMultipartUpload: isAuthenticated(
+    completeMultipartUpload: requireTransferCreate(
       async (_, { uploadId, key, parts, transferId, fileId }, { user }) => {
         try {
           if (!uploadId || !key || !parts || parts.length === 0) {
@@ -262,7 +273,7 @@ const chunkUploadR2Resolvers = {
     ),
 
     // Générer des URLs signées pour upload direct vers R2
-    generatePresignedUploadUrls: isAuthenticated(
+    generatePresignedUploadUrls: requireTransferCreate(
       async (_, { fileId, totalChunks, fileName }, { user }) => {
         try {
           if (!fileId || !fileName || !totalChunks) {
@@ -335,7 +346,7 @@ const chunkUploadR2Resolvers = {
     ),
 
     // Confirmer qu'un chunk a été uploadé directement vers R2
-    confirmChunkUploadedToR2: isAuthenticated(
+    confirmChunkUploadedToR2: requireTransferCreate(
       async (
         _,
         { fileId, chunkIndex, totalChunks, fileName, fileSize },
@@ -433,7 +444,7 @@ const chunkUploadR2Resolvers = {
     ),
 
     // Uploader un chunk de fichier vers R2
-    uploadFileChunkToR2: isAuthenticated(
+    uploadFileChunkToR2: requireTransferCreate(
       async (
         _,
         { chunk, fileId, chunkIndex, totalChunks, fileName, fileSize },
@@ -564,7 +575,7 @@ const chunkUploadR2Resolvers = {
     ),
 
     // Créer un transfert de fichier à partir des IDs de fichiers déjà uploadés en chunks sur R2
-    createFileTransferWithIdsR2: isAuthenticated(
+    createFileTransferWithIdsR2: requireTransferCreate(
       async (_, { fileIds, input }, { user }) => {
         try {
           // Vérifier que les IDs de fichiers sont fournis
@@ -761,7 +772,7 @@ const chunkUploadR2Resolvers = {
     ),
 
     // Upload direct d'un fichier vers R2
-    uploadFileDirectToR2: isAuthenticated(
+    uploadFileDirectToR2: requireTransferCreate(
       async (_, { file, transferId }, { user }) => {
         try {
           if (!file) {
@@ -804,7 +815,7 @@ const chunkUploadR2Resolvers = {
     ),
 
     // Upload d'un fichier base64 vers R2
-    uploadBase64FileToR2: isAuthenticated(
+    uploadBase64FileToR2: requireTransferCreate(
       async (_, { fileInput, transferId }, { user }) => {
         try {
           if (!fileInput) {

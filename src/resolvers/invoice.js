@@ -1,8 +1,5 @@
 import Invoice from "../models/Invoice.js";
-import {
-  getOrganizationDefaultAnnex,
-  isAnnexChange,
-} from "../utils/documentAnnex.js";
+import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
@@ -28,10 +25,15 @@ import {
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import {
+  computeDocumentTotals,
+  inputOrStored,
+} from "../utils/documentTotals.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import {
@@ -219,9 +221,10 @@ export async function applyInvoicePaid(
 }
 
 /**
- * Calcule les totaux d'une facture
+ * Calcule les totaux d'une facture (règles communes aux documents de vente :
+ * voir utils/documentTotals.js, alignées sur l'aperçu PDF)
  * @param {Array} items - Articles de la facture
- * @param {Number} discount - Remise globale
+ * @param {Number} discount - Remise globale (appliquée aux articles, pas aux frais de port)
  * @param {String} discountType - Type de remise (FIXED ou PERCENTAGE)
  * @param {Object} shipping - Informations de livraison
  * @param {Boolean} isReverseCharge - Indique si la facture est soumise à l'auto-liquidation (TVA = 0)
@@ -233,89 +236,14 @@ export const calculateInvoiceTotals = (
   discountType = "FIXED",
   shipping = null,
   isReverseCharge = false,
-) => {
-  let totalHT = 0;
-  let totalVAT = 0;
-
-  // Calculer les totaux des articles
-  items.forEach((item) => {
-    let itemHT = item.quantity * item.unitPrice;
-
-    // Appliquer le pourcentage d'avancement pour les factures de situation
-    const progressPercentage =
-      item.progressPercentage !== undefined && item.progressPercentage !== null
-        ? item.progressPercentage
-        : 100;
-    itemHT = itemHT * (progressPercentage / 100);
-
-    // Appliquer la remise au niveau de l'item si elle existe
-    if (item.discount) {
-      if (
-        item.discountType === "PERCENTAGE" ||
-        item.discountType === "percentage"
-      ) {
-        // Limiter la remise à 100% maximum
-        const discountPercent = Math.min(item.discount, 100);
-        itemHT = itemHT * (1 - discountPercent / 100);
-      } else {
-        itemHT = Math.max(0, itemHT - item.discount);
-      }
-    }
-
-    // Auto-liquidation : TVA = 0 si isReverseCharge = true
-    const itemVAT = isReverseCharge ? 0 : itemHT * (item.vatRate / 100);
-    totalHT += itemHT;
-    totalVAT += itemVAT;
+) =>
+  computeDocumentTotals({
+    items,
+    discount,
+    discountType,
+    shipping,
+    isReverseCharge,
   });
-
-  // Ajouter les frais de livraison si facturés
-  if (shipping && shipping.billShipping) {
-    const shippingHT = shipping.shippingAmountHT || 0;
-    // Auto-liquidation : TVA = 0 si isReverseCharge = true
-    const shippingVAT = isReverseCharge
-      ? 0
-      : shippingHT * (shipping.shippingVatRate / 100);
-
-    totalHT += shippingHT;
-    totalVAT += shippingVAT;
-  }
-
-  const totalTTC = totalHT + totalVAT;
-
-  // Calculer la remise globale
-  let discountAmount = 0;
-  if (discount) {
-    if (discountType === "PERCENTAGE" || discountType === "percentage") {
-      // Limiter la remise à 100% maximum
-      const discountPercent = Math.min(discount, 100);
-      discountAmount = (totalHT * discountPercent) / 100;
-    } else {
-      discountAmount = discount;
-    }
-  }
-
-  const finalTotalHT = totalHT - discountAmount;
-
-  // Recalculer la TVA après application de la remise globale
-  // La TVA doit être proportionnelle au montant final HT
-  // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
-  // Auto-liquidation : TVA = 0 si isReverseCharge = true
-  let finalTotalVAT = 0;
-  if (!isReverseCharge && finalTotalHT > 0 && totalHT > 0) {
-    finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
-  }
-  const finalTotalTTC = finalTotalHT + finalTotalVAT;
-
-  return {
-    totalHT,
-    totalVAT,
-    totalTTC,
-    finalTotalHT,
-    finalTotalVAT,
-    finalTotalTTC,
-    discountAmount,
-  };
-};
 
 /**
  * Valide que la date d'émission d'une facture n'est pas antérieure
@@ -2331,16 +2259,24 @@ const invoiceResolvers = {
             }
           }
 
-          // Si les items sont modifiés, recalculer les totaux
-          if (updatedInput.items) {
+          // Si les items, la remise, la livraison ou l'auto-liquidation sont
+          // modifiés, recalculer les totaux. Chaque valeur vient de l'input
+          // dès qu'il la porte (une remise remise à 0 reste à 0), sinon de la
+          // facture enregistrée.
+          const totalsFields = [
+            "items",
+            "discount",
+            "discountType",
+            "shipping",
+            "isReverseCharge",
+          ];
+          if (totalsFields.some((key) => updatedInput[key] !== undefined)) {
             const totals = calculateInvoiceTotals(
-              updatedInput.items,
-              updatedInput.discount || invoiceData.discount,
-              updatedInput.discountType || invoiceData.discountType,
-              updatedInput.shipping || invoiceData.shipping,
-              updatedInput.isReverseCharge !== undefined
-                ? updatedInput.isReverseCharge
-                : invoiceData.isReverseCharge,
+              inputOrStored(updatedInput, invoiceData, "items") || [],
+              inputOrStored(updatedInput, invoiceData, "discount"),
+              inputOrStored(updatedInput, invoiceData, "discountType"),
+              inputOrStored(updatedInput, invoiceData, "shipping"),
+              inputOrStored(updatedInput, invoiceData, "isReverseCharge"),
             );
             updatedInput = { ...updatedInput, ...totals };
           }
@@ -2443,6 +2379,15 @@ const invoiceResolvers = {
                   ...updatedInput.client.shippingAddress,
                 };
               }
+              // Champs personnalisés affichés sur le document : la fusion
+              // gardait ceux de l'ancien client même quand il est remplacé.
+              updateData.client.documentFields =
+                await documentFieldsForEditedClient(
+                  updateData.client,
+                  invoiceData.client,
+                  workspaceId,
+                  context,
+                );
             }
           }
 
@@ -2596,8 +2541,10 @@ const invoiceResolvers = {
           });
 
           // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
-          // envois et automatisations : elle ne contient pas la nouvelle annexe.
-          if (isAnnexChange(invoiceData.annex, updatedInput)) {
+          // envois sans PDF joint (relances, automatisations, mobile) : elle
+          // date d'avant la modification (lignes, remise, client, annexe…).
+          // On l'oublie, le prochain envoi régénère le PDF à jour.
+          if (invoiceData.cachedPdf?.key || invoiceData.cachedPdf?.url) {
             updateData["cachedPdf.key"] = null;
             updateData["cachedPdf.url"] = null;
             updateData["cachedPdf.generatedAt"] = null;

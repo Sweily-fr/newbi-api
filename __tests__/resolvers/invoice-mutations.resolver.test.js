@@ -370,3 +370,170 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
     expect(untouched.status).toBe("PENDING");
   });
 });
+
+describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifiée)", () => {
+  const resolver = invoiceResolvers.Mutation.updateInvoice;
+  const items = [
+    { description: "Service", quantity: 1, unitPrice: 1000, vatRate: 20 },
+  ];
+  const shipping = {
+    billShipping: true,
+    shippingAmountHT: 50,
+    shippingVatRate: 20,
+    shippingAddress: {
+      fullName: "Jean Dupont",
+      street: "3 rue de la Livraison",
+      city: "Lyon",
+      postalCode: "69001",
+      country: "France",
+    },
+  };
+
+  it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
+    const { insertedId } = await insertInvoice({
+      discount: 10,
+      discountType: "PERCENTAGE",
+      finalTotalHT: 900,
+      finalTotalVAT: 180,
+      finalTotalTTC: 1080,
+    });
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { items, discount: 0 } },
+      ctx(),
+    );
+
+    expect(result.discount).toBe(0);
+    expect(result.finalTotalHT).toBe(1000);
+    expect(result.finalTotalTTC).toBe(1200);
+  });
+
+  it("recalcule les totaux quand seule la remise change", async () => {
+    const { insertedId } = await insertInvoice();
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { discount: 10, discountType: "PERCENTAGE" },
+      },
+      ctx(),
+    );
+
+    expect(result.finalTotalHT).toBe(900);
+    expect(result.finalTotalTTC).toBe(1080);
+  });
+
+  it("n'applique pas la remise en % aux frais de port", async () => {
+    const { insertedId } = await insertInvoice();
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { items, discount: 10, discountType: "PERCENTAGE", shipping },
+      },
+      ctx(),
+    );
+
+    expect(result.finalTotalHT).toBe(950);
+    expect(result.finalTotalVAT).toBeCloseTo(190, 10);
+    expect(result.finalTotalTTC).toBeCloseTo(1140, 10);
+  });
+
+  it("oublie le PDF en cache des envois quand la facture est modifiée", async () => {
+    const { insertedId } = await insertInvoice({
+      cachedPdf: {
+        key: "cache/invoice.pdf",
+        url: "https://r2.example/invoice.pdf",
+        generatedAt: new Date(),
+      },
+    });
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
+      ctx(),
+    );
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.cachedPdf?.url ?? null).toBeNull();
+    expect(stored.cachedPdf?.key ?? null).toBeNull();
+  });
+
+  it("ne garde pas les champs client de l'ancien client quand il est remplacé", async () => {
+    const { insertedId } = await insertInvoice({
+      client: {
+        id: "client-1",
+        name: "Acme",
+        email: "client@test.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+        documentFields: [{ label: "Code client", value: "ACME-1" }],
+      },
+    });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: {
+          client: {
+            id: "client-2",
+            name: "Beta",
+            email: "beta@test.fr",
+            address: {
+              street: "2 rue Test",
+              city: "Paris",
+              postalCode: "75002",
+              country: "France",
+            },
+          },
+        },
+      },
+      ctx(),
+    );
+
+    expect(result.client.name).toBe("Beta");
+    expect(result.client.documentFields).toHaveLength(0);
+  });
+
+  it("garde les champs client figés quand le même client est renvoyé sans eux", async () => {
+    const { insertedId } = await insertInvoice({
+      client: {
+        id: "client-1",
+        name: "Acme",
+        email: "client@test.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+        documentFields: [{ label: "Code client", value: "ACME-1" }],
+      },
+    });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { client: { id: "client-1", name: "Acme SAS" } },
+      },
+      ctx(),
+    );
+
+    expect(result.client.name).toBe("Acme SAS");
+    expect(
+      result.client.documentFields.map(({ label, value }) => ({
+        label,
+        value,
+      })),
+    ).toEqual([{ label: "Code client", value: "ACME-1" }]);
+  });
+});
