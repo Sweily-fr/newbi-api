@@ -1,11 +1,18 @@
 import path from "path";
 import fs from "fs";
+import mongoose from "mongoose";
 import FileTransfer from "../models/FileTransfer.js";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import { registerTransferDownload } from "../services/transferDownloadService.js";
 import Stripe from "stripe";
 import archiver from "archiver";
 import { makeUniqueFileNames } from "../utils/uniqueFileNames.js";
+import { timingSafeStringEqual } from "../utils/timing-safe.js";
+import {
+  checkTransferRecipientAccess,
+  toPublicTransferFiles,
+} from "../utils/transferAccess.js";
+import { createTransferAccessToken } from "../utils/transferAccessToken.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const logger = console; // Utilisation de console comme logger de base
@@ -188,6 +195,18 @@ const downloadFile = async (req, res) => {
       });
     }
 
+    // 🔐 Destinataire : paiement, mot de passe (jeton de verify-password) et
+    // filigrane, qui interdit le téléchargement. Le propriétaire passe avec
+    // son ownerToken.
+    const denied = checkTransferRecipientAccess(fileTransfer, req, {
+      usage: "download",
+    });
+    if (denied) {
+      return res
+        .status(denied.status)
+        .json({ success: false, code: denied.code, message: denied.error });
+    }
+
     // Trouver le fichier demandé
     const file = fileTransfer.files.find((f) => f._id.toString() === fileId);
 
@@ -357,6 +376,19 @@ const downloadAllFiles = async (req, res) => {
         message:
           "Accès refusé. Le paiement est requis ou le transfert a expiré.",
       });
+    }
+
+    // 🔐 Le ZIP ne contrôlait ni le paiement, ni le mot de passe, ni le
+    // filigrane : le lien seul suffisait à tout récupérer. Mêmes règles que le
+    // téléchargement unitaire (/api/files/download) ; le propriétaire passe
+    // avec son ownerToken.
+    const denied = checkTransferRecipientAccess(fileTransfer, req, {
+      usage: "download",
+    });
+    if (denied) {
+      return res
+        .status(denied.status)
+        .json({ success: false, code: denied.code, message: denied.error });
     }
 
     // Vérifier si des fichiers existent
@@ -614,10 +646,13 @@ const validatePayment = async (req, res) => {
   }
 };
 
-// Vérifier le mot de passe d'un transfert
+// Vérifier le mot de passe d'un transfert. En cas de succès, remet le jeton
+// d'accès exigé par les routes de téléchargement et d'aperçu, avec la liste
+// des fichiers et le message de l'expéditeur, que la requête publique
+// getFileTransferByLink ne donne plus avant le mot de passe.
 const verifyTransferPassword = async (req, res) => {
   try {
-    const { transferId, password } = req.body;
+    const { transferId, password, link, key } = req.body;
 
     if (!transferId || !password) {
       return res.status(400).json({
@@ -626,12 +661,36 @@ const verifyTransferPassword = async (req, res) => {
       });
     }
 
-    const fileTransfer = await FileTransfer.findById(transferId);
+    const fileTransfer = mongoose.isValidObjectId(transferId)
+      ? await FileTransfer.findById(transferId)
+      : null;
 
     if (!fileTransfer) {
       return res.status(404).json({
         success: false,
         message: "Transfert non trouvé",
+      });
+    }
+
+    // 🔐 Secret de partage exigé : sans lui, le seul transferId permettait
+    // d'essayer des mots de passe sur n'importe quel transfert
+    if (
+      !timingSafeStringEqual(
+        String(link || ""),
+        fileTransfer.shareLink || "",
+      ) ||
+      !timingSafeStringEqual(String(key || ""), fileTransfer.accessKey || "")
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Lien ou clé d'accès invalide",
+      });
+    }
+
+    if (!fileTransfer.isAccessible()) {
+      return res.status(410).json({
+        success: false,
+        message: "Ce transfert a expiré",
       });
     }
 
@@ -646,9 +705,20 @@ const verifyTransferPassword = async (req, res) => {
     const isPasswordValid = await fileTransfer.verifyPassword(password);
 
     if (isPasswordValid) {
+      const access = createTransferAccessToken(fileTransfer);
+      if (!access) {
+        return res.status(500).json({
+          success: false,
+          message: "Erreur lors de la vérification du mot de passe",
+        });
+      }
       return res.json({
         success: true,
         message: "Mot de passe correct",
+        accessToken: access.token,
+        expiresAt: new Date(access.expiresAt).toISOString(),
+        files: toPublicTransferFiles(fileTransfer),
+        transferMessage: fileTransfer.message || null,
       });
     } else {
       return res.status(401).json({

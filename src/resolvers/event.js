@@ -18,6 +18,7 @@ import {
 import { publishCalendarEventsChanged } from "../services/calendar/CalendarWebhookService.js";
 import { getPubSub } from "../config/redis.js";
 import logger from "../utils/logger.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 const CALENDAR_EVENTS_CHANGED = "CALENDAR_EVENTS_CHANGED";
 
@@ -814,7 +815,22 @@ const eventResolvers = {
 
   Subscription: {
     calendarEventsChanged: {
-      subscribe: (_, { userId }) => {
+      // 🔐 Canal propre à un utilisateur : seul cet utilisateur, connecté,
+      // peut s'y abonner (un client anonyme suivait l'agenda de n'importe qui)
+      subscribe: (_, { userId }, context) => {
+        if (!context?.user) {
+          throw new AppError(
+            "Vous devez être connecté pour effectuer cette action",
+            ERROR_CODES.UNAUTHENTICATED,
+          );
+        }
+        const currentUserId = String(context.user._id || context.user.id);
+        if (String(userId) !== currentUserId) {
+          throw new AppError(
+            "Vous n'avez pas la permission d'effectuer cette action.",
+            ERROR_CODES.FORBIDDEN,
+          );
+        }
         const pubsub = getPubSub();
         return pubsub.asyncIterableIterator([
           `${CALENDAR_EVENTS_CHANGED}_${userId}`,

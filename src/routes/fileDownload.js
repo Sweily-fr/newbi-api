@@ -11,6 +11,7 @@ import { readPsd, initializeCanvas } from "ag-psd";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
 import { registerTransferDownload } from "../services/transferDownloadService.js";
+import { checkTransferRecipientAccess } from "../utils/transferAccess.js";
 
 const router = express.Router();
 
@@ -25,17 +26,13 @@ function timingSafeEq(a, b) {
  * 🔐 Autorise l'accès à un transfert servi par /api/files (routes publiques).
  * Sans ce contrôle, le seul `transferId` (ObjectId devinable) suffisait à
  * télécharger/prévisualiser n'importe quel transfert — y compris expiré. On
- * exige désormais le vrai secret de partage (shareLink + accessKey, 128 bits)
- * + expiration/statut + paiement. shareLink/accessKey acceptés en query OU header.
- *
- * NB mot de passe : cette route est partagée par le destinataire public ET le
- * propriétaire (dashboard), qui ne détient que le hash bcrypt. Exiger le mot de
- * passe ici casserait le téléchargement par le propriétaire. La vérification du
- * mot de passe reste donc gérée en amont (page publique) ; un enforcement
- * serveur complet nécessiterait un jeton signé émis par verify-password
- * (chantier séparé pour ne pas casser le flux propriétaire).
+ * exige le vrai secret de partage (shareLink + accessKey, 128 bits)
+ * + expiration/statut, puis pour un destinataire le paiement, le mot de passe
+ * (jeton remis par verify-password) et, en téléchargement, l'absence de
+ * filigrane (voir checkTransferRecipientAccess). Le propriétaire passe avec
+ * son ownerToken. shareLink/accessKey acceptés en query OU header.
  */
-async function authorizeTransferAccess(fileTransfer, req) {
+async function authorizeTransferAccess(fileTransfer, req, usage) {
   const link = req.query.link || req.headers["x-transfer-link"];
   const key = req.query.key || req.headers["x-transfer-key"];
 
@@ -57,8 +54,9 @@ async function authorizeTransferAccess(fileTransfer, req) {
     };
   }
 
-  if (fileTransfer.isPaymentRequired && !fileTransfer.isPaid) {
-    return { ok: false, status: 402, error: "Paiement requis" };
+  const denied = checkTransferRecipientAccess(fileTransfer, req, { usage });
+  if (denied) {
+    return { ok: false, status: denied.status, error: denied.error };
   }
 
   return { ok: true };
@@ -136,7 +134,7 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
     }
 
     // 🔐 Autorisation : shareLink + accessKey + expiration + mot de passe
-    const auth = await authorizeTransferAccess(fileTransfer, req);
+    const auth = await authorizeTransferAccess(fileTransfer, req, "download");
     if (!auth.ok) {
       return res.status(auth.status).json({ error: auth.error });
     }
@@ -235,7 +233,8 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
     }
 
     // 🔐 Autorisation : shareLink + accessKey + expiration + mot de passe
-    const auth = await authorizeTransferAccess(fileTransfer, req);
+    // (le filigrane n'empêche pas l'aperçu, affiché par-dessus)
+    const auth = await authorizeTransferAccess(fileTransfer, req, "preview");
     if (!auth.ok) {
       return res.status(auth.status).json({ error: auth.error });
     }

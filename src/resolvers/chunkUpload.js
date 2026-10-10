@@ -1,5 +1,5 @@
 import { ApolloError, UserInputError } from "apollo-server-express";
-import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { requireTransferActionFromInput } from "./fileTransfer.js";
 import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
 import {
   saveChunk,
@@ -9,6 +9,10 @@ import {
 } from "../utils/chunkUploadUtils.js";
 import FileTransfer from "../models/FileTransfer.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+
+// 🔐 Même droit que createFileTransfer (« Créer » du module Transferts),
+// contrôlé dans l'espace du transfert (input.workspaceId, sinon l'en-tête)
+const requireTransferCreate = requireTransferActionFromInput("create");
 
 // Fonction utilitaire pour récupérer les informations d'un fichier temporaire par son ID
 const getFileInfoByTransferId = async (fileId) => {
@@ -71,7 +75,7 @@ const getFileInfoByTransferId = async (fileId) => {
 const chunkUploadResolvers = {
   Mutation: {
     // Uploader un chunk de fichier
-    uploadFileChunk: isAuthenticated(
+    uploadFileChunk: requireTransferCreate(
       async (
         _,
         { chunk, fileId, chunkIndex, totalChunks, fileName, fileSize },
@@ -199,7 +203,7 @@ const chunkUploadResolvers = {
     ),
 
     // Créer un transfert de fichier à partir des IDs de fichiers déjà uploadés en chunks
-    createFileTransferWithIds: isAuthenticated(
+    createFileTransferWithIds: requireTransferCreate(
       async (_, { fileIds, input }, { user }) => {
         try {
           // Vérifier que les IDs de fichiers sont fournis

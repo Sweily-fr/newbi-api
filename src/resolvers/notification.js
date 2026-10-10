@@ -1,9 +1,27 @@
+import { withFilter } from "graphql-subscriptions";
 import { isAuthenticated } from "../middlewares/better-auth.js";
+import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import Notification from "../models/Notification.js";
 import logger from "../utils/logger.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getPubSub } from "../config/redis.js";
 
 const NOTIFICATION_RECEIVED = "NOTIFICATION_RECEIVED";
+
+// Identifiant de l'utilisateur de la connexion WebSocket (document Mongoose
+// côté serveur, objet simple dans les tests)
+const subscriberId = (context) =>
+  String(context?.user?._id || context?.user?.id || "");
+
+/**
+ * Une notification publiée sur le canal de l'espace ne part qu'à son
+ * destinataire.
+ */
+export const isNotificationForSubscriber = (payload, context) => {
+  const recipientId = payload?.notificationReceived?.userId;
+  const userId = subscriberId(context);
+  return !!recipientId && !!userId && String(recipientId) === userId;
+};
 
 const notificationResolvers = {
   Query: {
@@ -172,12 +190,38 @@ const notificationResolvers = {
 
   Subscription: {
     notificationReceived: {
-      subscribe: (_, { workspaceId }) => {
-        const pubsub = getPubSub();
-        return pubsub.asyncIterableIterator([
-          `${NOTIFICATION_RECEIVED}_${workspaceId}`,
-        ]);
-      },
+      // 🔐 Le canal est celui de l'espace : sans contrôle, n'importe quel
+      // client WebSocket (même anonyme) connaissant un workspaceId recevait
+      // les titres et messages des notifications de tous ses membres.
+      // On exige un utilisateur membre de l'espace, puis on ne lui transmet
+      // que ses propres notifications.
+      subscribe: withFilter(
+        async (_, { workspaceId }, context) => {
+          if (!context?.user) {
+            throw new AppError(
+              "Vous devez être connecté pour effectuer cette action",
+              ERROR_CODES.UNAUTHENTICATED,
+            );
+          }
+          // Sans espace demandé, getActiveOrganization retomberait sur
+          // l'espace par défaut de l'utilisateur
+          const org = workspaceId
+            ? await getActiveOrganization(subscriberId(context), workspaceId)
+            : null;
+          if (!org) {
+            throw new AppError(
+              "Vous n'êtes pas membre de cette organisation.",
+              ERROR_CODES.FORBIDDEN,
+            );
+          }
+          const pubsub = getPubSub();
+          return pubsub.asyncIterableIterator([
+            `${NOTIFICATION_RECEIVED}_${workspaceId}`,
+          ]);
+        },
+        (payload, _args, context) =>
+          isNotificationForSubscriber(payload, context),
+      ),
     },
   },
 };
