@@ -6,6 +6,7 @@ import superPdpService from "./superPdpService.js";
 import cloudflareService from "./cloudflareService.js";
 import EInvoicingSettingsService from "./eInvoicingSettingsService.js";
 import { publishNotification } from "../resolvers/notification.js";
+import { sendNotificationPush } from "./notificationPushService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -247,6 +248,8 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
               url: `/dashboard/outils/factures-achat?invoice=${created._id}`,
             });
           await publishNotification(notification);
+          // Push sur l'appareil (ne lève jamais d'erreur)
+          sendNotificationPush(notification);
         } catch (notifErr) {
           logger.warn(
             `[reception] notification non envoyée pour ${purchaseInvoiceData.invoiceNumber}: ${notifErr.message}`,

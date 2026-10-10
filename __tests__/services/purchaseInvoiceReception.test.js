@@ -44,6 +44,12 @@ vi.mock("../../src/resolvers/notification.js", () => ({
   publishNotification: (...a) => publishNotification(...a),
 }));
 
+// Push mobile : capturé, pas d'envoi Expo réel
+const sendPushToUser = vi.fn().mockResolvedValue(undefined);
+vi.mock("../../src/services/pushNotificationService.js", () => ({
+  sendPushToUser: (...a) => sendPushToUser(...a),
+}));
+
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
@@ -73,6 +79,7 @@ beforeEach(async () => {
   uploadImage.mockReset();
   transformReceivedInvoiceToPurchaseInvoice.mockReset();
   publishNotification.mockClear();
+  sendPushToUser.mockClear();
 });
 
 const detailFor = (id) => ({
@@ -191,6 +198,51 @@ describe("importReceivedInvoices — notification d'arrivée", () => {
     expect(notif.data.supplierName).toBe("Acme Telecom");
     expect(notif.data.purchaseInvoiceId).toBe(pi._id.toString());
     expect(publishNotification).toHaveBeenCalledTimes(1);
+
+    // Push : même titre et message que la notification, ids de navigation
+    await vi.waitFor(() => expect(sendPushToUser).toHaveBeenCalledTimes(1));
+    expect(sendPushToUser).toHaveBeenCalledWith(userId.toString(), {
+      title: notif.title,
+      body: notif.message,
+      data: {
+        type: "PURCHASE_INVOICE_RECEIVED",
+        workspaceId: workspaceId.toString(),
+        notificationId: notif._id.toString(),
+        purchaseInvoiceId: pi._id.toString(),
+        url: `/dashboard/outils/factures-achat?invoice=${pi._id}`,
+      },
+    });
+  });
+
+  it("importe la facture même si le push échoue", async () => {
+    sendPushToUser.mockRejectedValueOnce(new Error("Expo indisponible"));
+    getReceivedInvoices.mockResolvedValue({
+      invoices: [{ id: "sp-2" }],
+      hasAfter: false,
+    });
+    getReceivedInvoiceDetail.mockResolvedValue(detailFor("sp-2"));
+    transformReceivedInvoiceToPurchaseInvoice.mockReturnValue({
+      supplierName: "Acme Telecom",
+      invoiceNumber: "FA-2026-002",
+      amountTTC: 100,
+      currency: "EUR",
+      status: "TO_PROCESS",
+      source: "SUPERPDP",
+      superPdpInvoiceId: "sp-2",
+      eInvoiceStatus: "RECEIVED",
+      eInvoiceReceivedAt: new Date(),
+      ocrMetadata: {},
+      workspaceId,
+      createdBy: userId,
+    });
+
+    const res = await importReceivedInvoices(
+      workspaceId.toString(),
+      userId.toString(),
+    );
+
+    expect(res).toMatchObject({ imported: 1, errors: 0 });
+    await vi.waitFor(() => expect(sendPushToUser).toHaveBeenCalledTimes(1));
   });
 
   it("est idempotent : ignore une facture déjà importée (pas de doublon ni notif)", async () => {
@@ -218,6 +270,7 @@ describe("importReceivedInvoices — notification d'arrivée", () => {
     expect(res.imported).toBe(0);
     expect(res.skipped).toBe(1);
     expect(publishNotification).not.toHaveBeenCalled();
+    expect(sendPushToUser).not.toHaveBeenCalled();
     expect(
       await Notification.countDocuments({ type: "PURCHASE_INVOICE_RECEIVED" }),
     ).toBe(0);

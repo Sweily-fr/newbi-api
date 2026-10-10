@@ -11,6 +11,10 @@
 //   événement TASK_UPDATED pour les autres écrans, entrée d'activité
 //   dédoublonnée.
 // - Les 4 instances PM2 partagent les documents via l'extension Redis.
+// - Description modifiée hors collab (updateTask : app mobile, éditeur de
+//   repli) pendant qu'un document est ouvert : la nouvelle valeur est
+//   appliquée au document en mémoire (voir syncExternalDescription), sinon
+//   il l'écraserait au prochain enregistrement.
 import crypto from "node:crypto";
 import IORedis from "ioredis";
 import * as Y from "yjs";
@@ -26,7 +30,7 @@ import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { publishTaskUpdated } from "../resolvers/kanban.js";
-import { redisConfig } from "../config/redis.js";
+import { getCacheClient, getPubSub, redisConfig } from "../config/redis.js";
 import logger from "../utils/logger.js";
 
 export const COLLAB_PATH = "/collab";
@@ -218,7 +222,209 @@ const storeDocument = async ({ documentName, document, lastContext }) => {
   );
 };
 
+// Remplace le contenu du champ Yjs par le HTML donné, avec la même
+// conversion que loadDocument. Les nœuds sont clonés depuis un document
+// temporaire (un type Yjs ne peut pas changer de document). Renvoie false
+// quand le document contient déjà ce HTML.
+export const replaceDocumentHtml = (document, html) => {
+  const source = new Y.Doc();
+  try {
+    Y.applyUpdate(source, htmlToYdocUpdate(html));
+    if (ydocToHtml(document) === ydocToHtml(source)) return false;
+    const nodes = source
+      .getXmlFragment(FIELD)
+      .toArray()
+      .map((node) => node.clone());
+    const fragment = document.getXmlFragment(FIELD);
+    document.transact(() => {
+      fragment.delete(0, fragment.length);
+      fragment.insert(0, nodes);
+    });
+    return true;
+  } finally {
+    source.destroy();
+  }
+};
+
 let hocuspocus = null;
+
+// --- Description modifiée hors collaboration ---------------------------------
+//
+// En cluster PM2, le document peut être ouvert sur une autre instance que
+// celle qui reçoit la mutation : le changement est diffusé à toutes les
+// instances par le PubSub Redis de l'API. Seule une instance qui a déjà le
+// document en mémoire l'applique (verrou Redis quand plusieurs l'ont : deux
+// remplacements concurrents dupliqueraient le texte à la fusion), et jamais
+// en le chargeant : rechargé depuis la base, il serait reconstruit avec une
+// autre histoire Yjs que celui ouvert ailleurs, et l'extension Redis
+// fusionnerait les deux en doublant le contenu. Document fermé partout :
+// rien à faire, l'empreinte htmlHash ne correspond plus et il sera
+// reconstruit depuis task.description à la prochaine ouverture.
+const EXTERNAL_DESCRIPTION_CHANNEL = "KANBAN_COLLAB_EXTERNAL_DESCRIPTION";
+const EXTERNAL_LOCK_PREFIX = "kanban-collab:external-description:";
+const EXTERNAL_LOCK_TTL_MS = 30 * 1000;
+let externalSubscription = null;
+
+const isDocumentInMemory = (documentName) =>
+  !!hocuspocus &&
+  (hocuspocus.documents.has(documentName) ||
+    hocuspocus.loadingDocuments.has(documentName));
+
+// Une seule instance applique un message donné. Sans Redis (développement
+// local, PubSub en mémoire) il n'y a qu'une instance : pas de verrou.
+const acquireExternalLock = async (messageId) => {
+  const client = getCacheClient();
+  if (!client || !messageId) return true;
+  try {
+    const result = await client.set(
+      `${EXTERNAL_LOCK_PREFIX}${messageId}`,
+      String(process.pid),
+      "PX",
+      EXTERNAL_LOCK_TTL_MS,
+      "NX",
+    );
+    return result === "OK";
+  } catch (error) {
+    // Mieux vaut ne pas appliquer que risquer un double remplacement
+    logger.warn(
+      "[Collab] Verrou de description externe indisponible:",
+      error.message,
+    );
+    return false;
+  }
+};
+
+/**
+ * Applique une description modifiée hors collab au document de la tâche s'il
+ * est en mémoire sur cette instance (sans jamais le charger), puis
+ * l'enregistre aussitôt : task.description (HTML normalisé par l'éditeur) et
+ * KanbanCollabDoc.htmlHash restent alignés sur le document.
+ * @returns {Promise<"applied"|"unchanged"|"not-loaded">}
+ */
+export const applyExternalDescription = async (taskId, html) => {
+  if (!hocuspocus || !taskId) return "not-loaded";
+  const documentName = `${DOCUMENT_PREFIX}${taskId}`;
+  const loading = hocuspocus.loadingDocuments.get(documentName);
+  if (loading) await loading.catch(() => null);
+  // Pas d'await entre ce test et l'ouverture : createDocument renvoie le
+  // document déjà en mémoire sans passer par onLoadDocument
+  if (!hocuspocus?.documents.has(documentName)) return "not-loaded";
+  const connection = await hocuspocus.openDirectConnection(documentName, {
+    externalDescription: true,
+  });
+  let changed = false;
+  try {
+    await connection.transact((document) => {
+      changed = replaceDocumentHtml(document, html || "");
+    });
+  } finally {
+    // Enregistrement immédiat (pas d'utilisateur dans le contexte : pas
+    // d'entrée d'activité, updateTask a déjà tracé la modification)
+    await connection.disconnect();
+  }
+  return changed ? "applied" : "unchanged";
+};
+
+/**
+ * Traite un message de description externe reçu par cette instance.
+ * @returns {Promise<"applied"|"unchanged"|"not-loaded"|"locked">}
+ */
+export const handleExternalDescriptionMessage = async (message) => {
+  const taskId = message?.taskId;
+  if (!taskId || !isDocumentInMemory(`${DOCUMENT_PREFIX}${taskId}`)) {
+    return "not-loaded";
+  }
+  if (!(await acquireExternalLock(message.id))) return "locked";
+  const status = await applyExternalDescription(taskId, message.html);
+  if (status === "applied") {
+    logger.info(
+      `[Collab] Description de ${taskId} modifiée hors collab, appliquée au document ouvert`,
+    );
+  }
+  return status;
+};
+
+/**
+ * À appeler après l'écriture de task.description hors collab (updateTask) :
+ * transmet la nouvelle valeur au document ouvert, quelle que soit
+ * l'instance PM2 qui l'a en mémoire. Ne lève jamais d'erreur.
+ */
+export const syncExternalDescription = async (taskId, html) => {
+  const message = {
+    id: crypto.randomUUID(),
+    taskId: String(taskId),
+    html: html || "",
+  };
+  try {
+    let pubsub = null;
+    try {
+      pubsub = getPubSub();
+    } catch {
+      pubsub = null;
+    }
+    if (pubsub) {
+      try {
+        await pubsub.publish(EXTERNAL_DESCRIPTION_CHANNEL, message);
+        return;
+      } catch (error) {
+        logger.warn(
+          "[Collab] Diffusion de la description impossible, application locale:",
+          error.message,
+        );
+      }
+    }
+    await handleExternalDescriptionMessage(message);
+  } catch (error) {
+    logger.warn(
+      `[Collab] Description externe de ${taskId} non appliquée:`,
+      error.message,
+    );
+  }
+};
+
+// Abonnement de cette instance aux descriptions externes, pris avec le
+// serveur collab : une instance sans serveur collab n'a aucun document ouvert
+const subscribeExternalDescriptions = () => {
+  if (externalSubscription) return;
+  try {
+    const pubsub = getPubSub();
+    externalSubscription = Promise.resolve(
+      pubsub.subscribe(EXTERNAL_DESCRIPTION_CHANNEL, (message) => {
+        handleExternalDescriptionMessage(message).catch((error) => {
+          logger.warn(
+            "[Collab] Description externe non appliquée:",
+            error.message,
+          );
+        });
+      }),
+    ).catch((error) => {
+      logger.warn(
+        "[Collab] Abonnement aux descriptions externes impossible:",
+        error.message,
+      );
+      return null;
+    });
+  } catch (error) {
+    logger.warn(
+      "[Collab] PubSub indisponible, descriptions externes appliquées localement seulement:",
+      error.message,
+    );
+  }
+};
+
+const unsubscribeExternalDescriptions = async () => {
+  if (!externalSubscription) return;
+  const subscription = externalSubscription;
+  externalSubscription = null;
+  try {
+    const subscriptionId = await subscription;
+    if (subscriptionId !== null && subscriptionId !== undefined) {
+      getPubSub().unsubscribe(subscriptionId);
+    }
+  } catch (error) {
+    logger.debug("[Collab] Désabonnement:", error.message);
+  }
+};
 
 // `authenticate` injectable pour les tests (pas de JWT sous la main)
 export const createKanbanCollabServer = ({ authenticate: authFn } = {}) => {
@@ -261,6 +467,8 @@ export const createKanbanCollabServer = ({ authenticate: authFn } = {}) => {
     onStoreDocument: storeDocument,
   });
 
+  subscribeExternalDescriptions();
+
   return hocuspocus;
 };
 
@@ -294,6 +502,7 @@ export const handleCollabConnection = (ws, req) => {
 };
 
 export const destroyKanbanCollabServer = async () => {
+  await unsubscribeExternalDescriptions();
   if (!hocuspocus) return;
   try {
     await hocuspocus.destroy();

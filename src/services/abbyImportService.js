@@ -14,6 +14,7 @@ import abbyService, {
 import cloudflareService from "./cloudflareService.js";
 import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
 import { publishNotification } from "../resolvers/notification.js";
+import { sendNotificationPush } from "./notificationPushService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -146,6 +147,9 @@ async function notifyImported({
   amountTTC,
   url,
   event = "IMPORTED",
+  // Modèle du document (Invoice, ImportedInvoice, Quote, ImportedQuote,
+  // PurchaseInvoice) : indique à l'app mobile quelle fiche ouvrir au tap
+  documentModel,
 }) {
   try {
     const notification = await Notification.createDocumentImportedNotification({
@@ -161,6 +165,8 @@ async function notifyImported({
       event,
     });
     await publishNotification(notification);
+    // Push sur l'appareil (ne lève jamais d'erreur)
+    sendNotificationPush(notification, { data: { event, documentModel } });
   } catch (error) {
     logger.warn(
       `[ABBY-IMPORT] notification non envoyée (${documentType} ${documentNumber || documentId}): ${error.message}`,
@@ -233,6 +239,7 @@ export async function importClientInvoices(account, userId) {
               workspaceId,
               documentType: "INVOICE",
               documentId: existing._id,
+              documentModel: "ImportedInvoice",
               documentNumber: existing.originalInvoiceNumber,
               counterpartName: existing.client?.name,
               amountTTC: existing.totalTTC,
@@ -312,6 +319,7 @@ export async function importClientInvoices(account, userId) {
         workspaceId,
         documentType: "INVOICE",
         documentId: created._id,
+        documentModel: "ImportedInvoice",
         documentNumber: doc.number,
         counterpartName: clientName,
         amountTTC: totals.totalTTC,
@@ -429,6 +437,7 @@ export async function importQuotes(account, userId) {
             workspaceId,
             documentType: "QUOTE",
             documentId: pushed._id,
+            documentModel: "Quote",
             documentNumber: `${pushed.prefix || ""}${pushed.number || ""}`,
             counterpartName: pushed.client?.name,
             amountTTC: pushed.finalTotalTTC,
@@ -450,6 +459,7 @@ export async function importQuotes(account, userId) {
             workspaceId,
             documentType: "QUOTE",
             documentId: existing._id,
+            documentModel: "ImportedQuote",
             documentNumber: existing.originalQuoteNumber,
             counterpartName: existing.client?.name,
             amountTTC: existing.totalTTC,
@@ -523,6 +533,7 @@ export async function importQuotes(account, userId) {
         workspaceId,
         documentType: "QUOTE",
         documentId: created._id,
+        documentModel: "ImportedQuote",
         documentNumber: doc.number,
         counterpartName: customerDisplayName(customer),
         amountTTC: totals.totalTTC,
@@ -570,6 +581,7 @@ export async function importQuotes(account, userId) {
           workspaceId,
           documentType: "QUOTE",
           documentId: doc._id,
+          documentModel: "ImportedQuote",
           documentNumber: doc.originalQuoteNumber,
           counterpartName: doc.client?.name,
           amountTTC: doc.totalTTC,

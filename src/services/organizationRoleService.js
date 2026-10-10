@@ -566,6 +566,18 @@ export async function requestModuleAccess(
     );
   }
 
+  // Push sur l'appareil du super admin (sans attendre : un push raté ne
+  // bloque pas la demande)
+  try {
+    const { sendNotificationPush } =
+      await import("./notificationPushService.js");
+    sendNotificationPush(notification, {
+      data: { module: moduleKey, action },
+    });
+  } catch (error) {
+    logger.warn(`Demande d'accès : push non envoyé (${error.message})`);
+  }
+
   if (owner?.email) {
     const { sendAccessRequestEmail } = await import("../utils/mailer.js");
     const stored = await loadOrganizationRoles(organizationId);
