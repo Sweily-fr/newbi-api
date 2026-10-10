@@ -1,4 +1,5 @@
 import BlogPost from '../models/BlogPost.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 const blogResolvers = {
   Query: {
@@ -137,13 +138,16 @@ const blogResolvers = {
     // Rechercher des articles
     searchBlogPosts: async (_, { query, limit = 10 }) => {
       try {
+        // Saisie échappée : « ( » faisait planter la recherche (et une
+        // regex libre sur une route publique ouvrait la porte au ReDoS)
+        const safeQuery = escapeRegex(query);
         const posts = await BlogPost.find({
           published: true,
           $or: [
-            { title: { $regex: query, $options: 'i' } },
-            { summary: { $regex: query, $options: 'i' } },
-            { content: { $regex: query, $options: 'i' } },
-            { tags: { $regex: query, $options: 'i' } },
+            { title: { $regex: safeQuery, $options: 'i' } },
+            { summary: { $regex: safeQuery, $options: 'i' } },
+            { content: { $regex: safeQuery, $options: 'i' } },
+            { tags: { $regex: safeQuery, $options: 'i' } },
           ],
         })
           .sort({ publishedAt: -1 })

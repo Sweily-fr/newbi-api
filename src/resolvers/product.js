@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Product from "../models/Product.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import {
   PRODUCT_IMAGE_MAX_BYTES,
   isAcceptedProductImage,
@@ -175,7 +176,8 @@ const productResolvers = {
 
         if (search && search.trim() !== "") {
           const trimmed = search.trim();
-          const searchRegex = new RegExp(trimmed, "i");
+          // Saisie échappée : « ( » ou « + » faisaient planter la recherche
+          const searchRegex = new RegExp(escapeRegex(trimmed), "i");
 
           query.$or = [
             { name: searchRegex },

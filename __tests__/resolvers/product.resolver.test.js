@@ -126,6 +126,21 @@ describe("Product Resolver - Query.products", () => {
     expect(result.products[0].name).toBe("SEO Audit");
   });
 
+  it("cherche une saisie avec parenthèses ou « + » sans planter", async () => {
+    await insertProduct({ name: "Audit (complet)", reference: "A+B" });
+    await insertProduct({ name: "Audit simple", reference: "AB" });
+
+    for (const search of ["(complet", "A+B", "("]) {
+      const result = await resolver(
+        null,
+        { workspaceId: organizationId.toString(), search, page: 1, limit: 10 },
+        ctx(),
+      );
+      expect(result.totalCount).toBe(1);
+      expect(result.products[0].name).toBe("Audit (complet)");
+    }
+  });
+
   it("filters by category", async () => {
     await insertProduct({ name: "Audit", category: "Service" });
     await insertProduct({ name: "Lampe", category: "Product" });

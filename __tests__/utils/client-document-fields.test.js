@@ -21,6 +21,7 @@ import {
   buildDocumentFields,
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../../src/utils/clientDocumentFields.js";
 
 const def = (overrides) => ({
@@ -169,5 +170,46 @@ describe("buildDocumentFieldsForClientId", () => {
     expect(await buildDocumentFieldsForClientId("c1", "w1")).toEqual([
       { label: "Code client", value: "C-042" },
     ]);
+  });
+});
+
+describe("documentFieldsForEditedClient", () => {
+  beforeEach(() => {
+    findDefinitions.mockReset();
+    findClient.mockReset();
+  });
+
+  const stored = {
+    id: "c1",
+    documentFields: [{ label: "Code client", value: "ANCIEN" }],
+  };
+
+  it("recalcule les champs depuis la fiche client (ClientInput n'en porte pas)", async () => {
+    findClient.mockResolvedValue({
+      workspaceId: "w1",
+      customFields: [{ fieldId: "a", value: "C-042" }],
+    });
+    findDefinitions.mockResolvedValue([def({ _id: "a", name: "Code client" })]);
+
+    expect(
+      await documentFieldsForEditedClient({ id: "c1" }, stored, "w1"),
+    ).toEqual([{ label: "Code client", value: "C-042" }]);
+  });
+
+  it("garde les champs figés du même client sans fiche exploitable", async () => {
+    findClient.mockResolvedValue(null);
+    expect(
+      await documentFieldsForEditedClient({ id: "c1" }, stored, "w1"),
+    ).toEqual([{ label: "Code client", value: "ANCIEN" }]);
+  });
+
+  it("n'hérite pas des champs de l'ancien client quand il est remplacé", async () => {
+    findClient.mockResolvedValue(null);
+    expect(
+      await documentFieldsForEditedClient({ id: "c2" }, stored, "w1"),
+    ).toEqual([]);
+    expect(
+      await documentFieldsForEditedClient({ name: "Saisi" }, stored, "w1"),
+    ).toEqual([]);
   });
 });

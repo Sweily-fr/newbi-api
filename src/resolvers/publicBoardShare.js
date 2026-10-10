@@ -3,6 +3,7 @@ import PublicBoardShare, {
   hasPasswordProtection,
 } from "../models/PublicBoardShare.js";
 import { timingSafeStringEqual } from "../utils/timing-safe.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
 import logger from "../utils/logger.js";
@@ -1572,7 +1573,9 @@ const resolvers = {
           const updateResult = await Task.updateMany(
             {
               boardId: share.boardId,
-              "comments.userEmail": { $regex: new RegExp(`^${email}$`, "i") },
+              "comments.userEmail": {
+                $regex: new RegExp(`^${escapeRegex(email, 320)}$`, "i"),
+              },
               "comments.visitorId": { $exists: false }, // Seulement les anciens commentaires
             },
             {
@@ -1583,7 +1586,11 @@ const resolvers = {
             },
             {
               arrayFilters: [
-                { "elem.userEmail": { $regex: new RegExp(`^${email}$`, "i") } },
+                {
+                  "elem.userEmail": {
+                    $regex: new RegExp(`^${escapeRegex(email, 320)}$`, "i"),
+                  },
+                },
               ],
             },
           );

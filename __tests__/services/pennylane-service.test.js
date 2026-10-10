@@ -140,3 +140,45 @@ describe("pennylaneService.syncCustomer", () => {
     expect(out.success).toBe(false);
   });
 });
+
+describe("pennylaneService.syncCustomerInvoice — remise globale", () => {
+  it("calcule la remise sur les articles seulement, pas sur la livraison", async () => {
+    stubFetch({ id: 99 });
+    const customerSpy = vi
+      .spyOn(pennylaneService, "_findOrCreateCustomer")
+      .mockResolvedValue("cust-1");
+
+    const out = await pennylaneService.syncCustomerInvoice("tok", {
+      _id: "inv-1",
+      prefix: "F-",
+      number: "0001",
+      status: "DRAFT",
+      issueDate: new Date("2026-10-01"),
+      items: [
+        { description: "Service", quantity: 1, unitPrice: 1000, vatRate: 20 },
+      ],
+      shipping: {
+        billShipping: true,
+        shippingAmountHT: 50,
+        shippingVatRate: 20,
+      },
+      discount: 10,
+      discountType: "PERCENTAGE",
+      // Totaux enregistrés : HT avant remise, livraison comprise
+      totalHT: 1050,
+      client: { name: "Acme" },
+    });
+
+    expect(out.success).toBe(true);
+    const createCall = fetch.mock.calls.find(([url]) =>
+      String(url).endsWith("/customer_invoices"),
+    );
+    const payload = JSON.parse(createCall[1].body);
+    const discountLine = payload.invoice_lines.find((line) =>
+      line.label.startsWith("Remise globale"),
+    );
+    // 10 % de 1000 (articles), pas de 1050
+    expect(discountLine.raw_currency_unit_price).toBe("-100.00");
+    customerSpy.mockRestore();
+  });
+});

@@ -537,6 +537,147 @@ describe("PurchaseOrder Resolver — updatePurchaseOrder (numérotation)", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Tests — updatePurchaseOrder (bon de commande modifié)
+// ---------------------------------------------------------------------------
+
+describe("PurchaseOrder Resolver — updatePurchaseOrder (bon de commande modifié)", () => {
+  const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
+  const update = purchaseOrderResolvers.Mutation.updatePurchaseOrder;
+  const shipping = {
+    billShipping: true,
+    shippingAmountHT: 50,
+    shippingVatRate: 20,
+    shippingAddress: {
+      fullName: "Dest",
+      street: "5 rue Livraison",
+      city: "Paris",
+      postalCode: "75001",
+      country: "France",
+    },
+  };
+
+  it("enregistre le TTC avec les frais de port, remise % hors port", async () => {
+    const po = await create(
+      null,
+      {
+        input: buildPOInput({
+          discount: 10,
+          discountType: "PERCENTAGE",
+          shipping,
+        }),
+      },
+      ctx(),
+    );
+
+    // 2 × 500 = 1000 − 10 % = 900, + 50 de port ; TVA 180 + 10
+    expect(po.discountAmount).toBe(100);
+    expect(po.finalTotalHT).toBe(950);
+    expect(po.finalTotalVAT).toBe(190);
+    expect(po.finalTotalTTC).toBe(1140);
+  });
+
+  it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
+    const po = await create(
+      null,
+      { input: buildPOInput({ discount: 10, discountType: "PERCENTAGE" }) },
+      ctx(),
+    );
+    expect(po.finalTotalHT).toBe(900);
+
+    const updated = await update(
+      null,
+      {
+        id: po._id.toString(),
+        input: { items: buildPOInput().items, discount: 0 },
+      },
+      ctx(),
+    );
+
+    expect(updated.discount).toBe(0);
+    expect(updated.finalTotalHT).toBe(1000);
+    expect(updated.finalTotalTTC).toBe(1200);
+  });
+
+  it("oublie le PDF en cache des envois quand le bon de commande est modifié", async () => {
+    const po = await create(null, { input: buildPOInput() }, ctx());
+    await PurchaseOrder.collection.updateOne(
+      { _id: po._id },
+      {
+        $set: {
+          cachedPdf: {
+            key: "cache/po.pdf",
+            url: "https://r2.example/po.pdf",
+            generatedAt: new Date(),
+          },
+        },
+      },
+    );
+
+    await update(
+      null,
+      { id: po._id.toString(), input: { headerNotes: "Modifié" } },
+      ctx(),
+    );
+
+    const stored = await PurchaseOrder.collection.findOne({ _id: po._id });
+    expect(stored.cachedPdf?.url).toBeUndefined();
+  });
+
+  it("fige les champs client affichés quand l'éditeur renvoie le client", async () => {
+    const db = mongoose.connection.db;
+    const { insertedId: fieldId } = await db
+      .collection("clientcustomfields")
+      .insertOne({
+        workspaceId: organizationId,
+        name: "Code client",
+        fieldType: "TEXT",
+        showOnDocuments: true,
+        isActive: true,
+        order: 0,
+      });
+    const { insertedId: clientId } = await db.collection("clients").insertOne({
+      workspaceId: organizationId,
+      name: "Fournisseur Test",
+      email: "fournisseur@test.fr",
+      type: "COMPANY",
+      customFields: [{ fieldId, value: "F-007" }],
+    });
+    const clientInput = {
+      ...buildPOInput().client,
+      id: clientId.toString(),
+    };
+
+    // Brouillon finalisé par l'éditeur avec le client dans l'input
+    const draft = await create(
+      null,
+      { input: buildPOInput({ client: clientInput }) },
+      ctx(),
+    );
+    const confirmed = await update(
+      null,
+      {
+        id: draft._id.toString(),
+        input: { status: "CONFIRMED", client: clientInput },
+      },
+      ctx(),
+    );
+    const fields = (doc) =>
+      doc.client.documentFields.map(({ label, value }) => ({ label, value }));
+    expect(fields(confirmed)).toEqual([
+      { label: "Code client", value: "F-007" },
+    ]);
+
+    // Puis modification du bon de commande confirmé
+    const edited = await update(
+      null,
+      { id: draft._id.toString(), input: { client: clientInput } },
+      ctx(),
+    );
+    expect(fields(edited)).toEqual([{ label: "Code client", value: "F-007" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — deletePurchaseOrder
 // ---------------------------------------------------------------------------
 
