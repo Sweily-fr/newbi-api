@@ -32,6 +32,12 @@ const sendPushToUser = vi.fn(async () => {});
 vi.mock("../../src/services/pushNotificationService.js", () => ({
   sendPushToUser: (...a) => sendPushToUser(...a),
 }));
+// Transmission de la description au serveur collab (testée à part)
+const syncExternalDescription = vi.fn(async () => {});
+vi.mock("../../src/collab/kanbanCollabServer.js", () => ({
+  syncExternalDescription: (...a) => syncExternalDescription(...a),
+}));
+
 import { Board, Column, Task } from "../../src/models/kanban.js";
 import Notification from "../../src/models/Notification.js";
 import kanbanResolvers from "../../src/resolvers/kanban.js";
@@ -69,6 +75,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await clearMongo();
   sendPushToUser.mockClear();
+  syncExternalDescription.mockClear();
   sendMentionEmail.mockClear();
   await mongoose.connection.db.collection("user").insertMany([
     { _id: alice, email: "alice@test.fr", name: "Alice" },
@@ -217,5 +224,43 @@ describe("Push MENTION", () => {
       taskId: task._id.toString(),
       commentId,
     });
+  });
+});
+
+describe("updateTask : description et édition collaborative", () => {
+  it("transmet une description modifiée au serveur collab", async () => {
+    const task = await makeTask({ description: "<p>Avant</p>" });
+
+    await Mutation.updateTask(
+      null,
+      { input: { id: task._id.toString(), description: "<p>Après</p>" } },
+      ctx,
+    );
+
+    await vi.waitFor(() =>
+      expect(syncExternalDescription).toHaveBeenCalledTimes(1),
+    );
+    const [taskId, html] = syncExternalDescription.mock.calls[0];
+    expect(String(taskId)).toBe(task._id.toString());
+    expect(html).toBe("<p>Après</p>");
+  });
+
+  it("ne transmet rien quand la description ne change pas", async () => {
+    // Le mobile renvoie la description rognée même si seul le titre change
+    const task = await makeTask({ description: "<p>Même</p>\n" });
+
+    await Mutation.updateTask(
+      null,
+      { input: { id: task._id.toString(), description: "<p>Même</p>" } },
+      ctx,
+    );
+    await Mutation.updateTask(
+      null,
+      { input: { id: task._id.toString(), priority: "high" } },
+      ctx,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(syncExternalDescription).not.toHaveBeenCalled();
   });
 });

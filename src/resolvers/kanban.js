@@ -2575,6 +2575,29 @@ const resolvers = {
         );
         if (!task) throw new Error("Task not found");
 
+        // Description modifiée hors édition collaborative (app mobile,
+        // éditeur de repli) : la transmettre au document Yjs s'il est ouvert,
+        // sinon les éditeurs connectés l'écraseraient à la frappe suivante.
+        // Comparaison sans les espaces de bord, comme l'activité : le mobile
+        // renvoie la description (rognée) même quand seul le titre change, et
+        // la réappliquer effacerait la frappe pas encore enregistrée.
+        // Import dynamique : le serveur collab importe déjà ce fichier.
+        if (
+          updates.description !== undefined &&
+          (oldTask.description || "").trim() !== (task.description || "").trim()
+        ) {
+          import("../collab/kanbanCollabServer.js")
+            .then(({ syncExternalDescription }) =>
+              syncExternalDescription(task._id, task.description),
+            )
+            .catch((error) =>
+              logger.warn(
+                "[UpdateTask] Description non transmise à l'édition collaborative:",
+                error.message,
+              ),
+            );
+        }
+
         logger.debug("📝 [UpdateTask] Task après sauvegarde:", {
           dueDate: task.dueDate,
           dueDateType: typeof task.dueDate,
